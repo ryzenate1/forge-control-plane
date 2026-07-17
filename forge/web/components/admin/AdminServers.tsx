@@ -584,7 +584,7 @@ function ServerAllocationsTab({ server, allocations }: { server: ApiServer; allo
   const query = useQuery({ queryKey: ["server-allocations", server.id], queryFn: () => fetchServerAllocations(server.id) });
   const assigned = query.data ?? [];
   const assignedIds = new Set(assigned.map((allocation) => allocation.id));
-  const available = allocations.filter((allocation) => !allocation.server && !assignedIds.has(allocation.id) && (allocation.node === server.nodeId || allocation.node === server.node));
+  const available = allocations.filter((allocation) => !allocation.server && !assignedIds.has(allocation.id) && allocation.node === server.node);
   const [allocationId, setAllocationId] = useState("");
   const refresh = () => { void qc.invalidateQueries({ queryKey: ["server-allocations", server.id] }); void qc.invalidateQueries({ queryKey: ["allocations"] }); void qc.invalidateQueries({ queryKey: ["server", server.id] }); };
   const assignMut = useMutation({ mutationFn: () => assignServerAllocation(server.id, allocationId), onSuccess: () => { setAllocationId(""); refresh(); } });
@@ -755,7 +755,7 @@ function ServerManageTab({ server, reinstallMut, suspendMut, unsuspendMut, nodes
   const [targetNodeId, setTargetNodeId] = useState(server.transferTargetNodeId ?? "");
   const [primaryAllocationId, setPrimaryAllocationId] = useState("");
   const targetAllocations = allocations.filter((allocation) => allocation.node === targetNodeId && !allocation.server);
-  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, { targetNodeId, primaryAllocationId } as any), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); } });
+  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); } });
   const cancelMut = useMutation({ mutationFn: () => cancelServerTransfer(server.id), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); } });
   const transfer = transferQuery.data;
   return (

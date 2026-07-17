@@ -353,6 +353,7 @@ export function AdminMounts() {
                   <tr className="text-left text-xs text-slate-500 uppercase tracking-wider">
                     <th className="px-4 py-3">ID</th>
                     <th className="px-4 py-3">Name</th>
+                    <th className="px-4 py-3">FQDN</th>
                     <th className="px-4 py-3" />
                   </tr>
                 </thead>

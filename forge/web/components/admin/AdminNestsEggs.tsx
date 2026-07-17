@@ -105,7 +105,7 @@ export function AdminNestsEggs() {
      nestId: selectedNest!.id,
      name: `${egg.name} Copy`,
      description: egg.description,
-     dockerImages: dockerImages.length > 0 ? dockerImages : dockerImageLines(egg.dockerImage),
+      dockerImages: dockerImages.length > 0 ? dockerImages : (egg.dockerImage ? [egg.dockerImage] : []),
      startup: egg.startup ?? egg.startupCommand ?? "",
      config: isRecord(egg.config) ? egg.config : {},
      installScript: egg.installScript,
