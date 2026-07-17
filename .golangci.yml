@@ -1,0 +1,32 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+  settings:
+    misspell:
+      locale: US
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters: [errcheck]
+      - path: reference/
+        linters: [errcheck, govet, staticcheck, unused]
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

@@ -1,0 +1,23 @@
+{
+  "name": "forge-gamepanel",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Forge Control Plane — game server orchestration platform.",
+  "scripts": {
+    "dev:start": "./scripts/start-dev.sh",
+    "dev:stop": "./scripts/stop-dev.sh",
+    "dev:status": "./scripts/status.sh",
+    "dev:logs": "./scripts/logs.sh",
+    "dev": "npm --workspace @forge/web run dev",
+    "build": "npm --workspace @forge/web run build",
+    "lint": "npm --workspace @forge/web run lint",
+    "typecheck": "npm --workspace @forge/web run typecheck"
+  },
+  "workspaces": [
+    "forge/web",
+    "packages/*"
+  ],
+  "engines": {
+    "node": ">=20"
+  }
+}

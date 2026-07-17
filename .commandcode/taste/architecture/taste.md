@@ -1,0 +1,15 @@
+# Architecture
+- Study Pterodactyl Panel, Pelican Panel, PufferPanel, and Pterodactyl Wings as primary architectural references before making major changes. Confidence: 0.85
+- Copy complete page flows (CRUD forms, modals, data tables, permission gates, API routing, backend connections) from reference panels — do NOT invent or restructure, copy PHP implementations to Next.js directly. Confidence: 0.85
+- Focus on understanding architecture, workflows, permissions, provisioning, node management, allocations, startup variables, scheduling, backups, networking, databases, and daemon communication from reference sources. Confidence: 0.80
+- Design backend to support all database types (not just PostgreSQL), not hardcode for a single database. Confidence: 0.55
+- For frontend: combine and adapt UI patterns from all three reference panels (Pterodactyl, Pelican, PufferPanel) rather than copying from just one. Confidence: 0.60
+- Copying production-level worktree structure and naming conventions from reference repos is acceptable (10x easier than inventing). Confidence: 0.70
+- User is okay with aggressive worktree restructuring: move files, rename directories, delete noise, reorganize freely. Confidence: 0.75
+- Project branding: use "Forge Control Plane" as the overall project name, "Beacon Runtime" or "beacon" for the daemon/agent, "plane" for the frontend UI. Confidence: 0.85
+- Organize API handlers by the three-surface pattern: admin (management API), client (user-facing API), remote (daemon-to-panel communication), with each having its own handler package. Confidence: 0.60
+- Use singular Go package names: service/ (not services/), handler/ (not handlers/), event/ (not events/), model/ (not models/), store/query/ (not store/store_*.go). Confidence: 0.60
+- Organize web frontend components by feature subdirectories under their domain: server/console/, server/files/, server/backups/, etc. Confidence: 0.60
+- Use separate go.mod files for api/ and daemon/ with a root go.work workspace file for shared module resolution. Confidence: 0.60
+- Use Go Fiber framework for the backend API (lightning-fast, high concurrency, replaces any existing HTTP framework). Confidence: 0.70
+- User grants full decision-making autonomy: delete, rework, copy, restructure freely with no restrictions or time constraints. Proceed without seeking permission on implementation details. Confidence: 0.70

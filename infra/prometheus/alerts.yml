@@ -1,0 +1,45 @@
+groups:
+  - name: gamepanel.rules
+    rules:
+      - alert: GamePanelAPIDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Forge API is down"
+          description: "Prometheus cannot scrape the Forge API."
+
+      - alert: GamePanelDaemonDown
+        expr: up{job="daemon"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beacon daemon is down"
+          description: "Prometheus cannot scrape the beacon daemon."
+
+      - alert: GamePanelHighMemory
+        expr: game_panel_api_memory_alloc_bytes > 1073741824
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forge API using > 1 GB heap"
+
+      - alert: GamePanelHighGoroutines
+        expr: game_panel_api_goroutines > 10000
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forge API goroutine count high"
+
+      - alert: GamePanelDaemonRuntimeDisabled
+        expr: game_panel_daemon_runtime_enabled == 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beacon container runtime is disabled"
+          description: "Beacon is responding, but its Docker runtime is unavailable; server lifecycle operations will fail."

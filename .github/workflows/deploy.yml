@@ -1,0 +1,22 @@
+name: Deploy
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and push Docker images
+        run: |
+          echo "Building Docker images for tag ${{ github.ref_name }}"
+          # Your Docker build/push commands here
+
+      - name: Deploy to production
+        run: |
+          echo "Deploying ${{ github.ref_name }} to production"
+          # Your deployment commands here

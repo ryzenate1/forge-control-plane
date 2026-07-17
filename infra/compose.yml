@@ -1,0 +1,181 @@
+# Forge Control Plane — Docker Compose
+# Copy .env.example to .env and set every required value before use.
+# Demo seeding is disabled by default and cannot be enabled in production.
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-gamepanel}
+      POSTGRES_USER: ${POSTGRES_USER:-gamepanel}
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
+    expose:
+      - "5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-gamepanel} -d ${POSTGRES_DB:-gamepanel}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  redis:
+    image: redis:7-alpine
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - backend
+
+  api:
+    build:
+      context: ../forge/api
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      API_ADDR: ${API_ADDR:-:8080}
+      APP_ENV: ${APP_ENV:-development}
+      API_AUTH_SECRET: "${API_AUTH_SECRET:?Set API_AUTH_SECRET in infra/.env}"
+      DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL in infra/.env}"
+      MIGRATIONS_DIR: /migrations
+      REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
+      PANEL_URL: ${PANEL_URL:-http://localhost:3000}
+      API_SEED_DEMO: "false"
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/api", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - frontend
+      - backend
+
+  daemon:
+    build:
+      context: ../beacon
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      DAEMON_ADDR: ${DAEMON_ADDR:-:9090}
+      APP_ENV: ${APP_ENV:-development}
+      DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set DAEMON_NODE_ID in infra/.env}"
+      DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
+      PANEL_API_URL: ${PANEL_API_URL:-http://api:8080/api/v1}
+      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-:2022}
+      DAEMON_ALLOW_MOCK_RUNTIME: ${DAEMON_ALLOW_MOCK_RUNTIME:-false}
+      DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
+      BACKUP_ADAPTER: ${BACKUP_ADAPTER:-local}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PREFIX: ${S3_PREFIX:-}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+    ports:
+      - "9090:9090"
+      - "2022:2022"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - game-servers:${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+    healthcheck:
+      test: ["CMD", "/daemon", "--healthcheck"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+    networks:
+      - frontend
+      - backend
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    ports:
+      - "9091:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+    depends_on:
+      api:
+        condition: service_healthy
+      daemon:
+        condition: service_healthy
+    networks:
+      - backend
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks:
+      - backend
+    depends_on:
+      - prometheus
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in infra/.env}"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3001:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+    depends_on:
+      - prometheus
+    networks:
+      - frontend
+      - backend
+
+
+
+  web:
+    build:
+      context: ../forge/web
+      args:
+        API_INTERNAL_URL: ${API_INTERNAL_URL:-http://api:8080}
+    env_file:
+      - path: .env
+        required: false
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+    networks:
+      - frontend
+
+volumes:
+  postgres-data:
+  game-servers:
+  grafana-data:
+
+networks:
+  frontend:
+    driver: bridge
+  backend:
+    driver: bridge

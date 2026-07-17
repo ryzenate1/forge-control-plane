@@ -1,0 +1,17 @@
+# Default owners
+* @anomalyco
+
+# API code
+/forge/api/ @anomalyco
+
+# Beacon/daemon code
+/beacon/ @anomalyco
+
+# Frontend code
+/forge/web/ @anomalyco
+
+# Documentation
+/docs/ @anomalyco
+
+# Infrastructure
+/infra/ @anomalyco

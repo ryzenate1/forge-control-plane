@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  forge-api:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_DB: gamepanel_ci
+          POSTGRES_USER: gamepanel_ci
+          POSTGRES_PASSWORD: gamepanel_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U gamepanel_ci -d gamepanel_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      DATABASE_URL: postgres://gamepanel_ci:gamepanel_ci@127.0.0.1:5432/gamepanel_ci?sslmode=disable
+      MIGRATIONS_DIR: migrations
+      API_AUTH_SECRET: ci-api-secret-not-for-production
+      DAEMON_NODE_TOKEN: 0123456789abcdef.0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: forge/api/go.sum
+      - name: golangci-lint (Forge API)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: forge/api
+          args: --timeout 5m
+      - name: Build Forge API
+        working-directory: forge/api
+        run: go build ./...
+      - name: Test Forge API
+        working-directory: forge/api
+        run: go test ./...
+      - name: Validate migration bootstrap
+        run: bash infra/ci/validate-api-migrations.sh
+
+  beacon:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+          cache-dependency-path: beacon/go.sum
+      - name: golangci-lint (Beacon)
+        uses: golangci/golangci-lint-action@v9
+        with:
+          version: v2.12.2
+          working-directory: beacon
+          args: --timeout 5m
+      - name: Build Beacon
+        working-directory: beacon
+        run: go build ./...
+      - name: Test Beacon
+        working-directory: beacon
+        run: go test ./...
+
+  forge-web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: forge/web/package-lock.json
+      - name: Install dependencies
+        run: cd forge/web && npm ci
+      - name: npm audit (non-blocking)
+        run: cd forge/web && npm audit --omit=dev || true
+      - name: Build
+        run: cd forge/web && npm run build
+      - name: Typecheck
+        run: cd forge/web && npm run typecheck
+      - name: Lint
+        run: cd forge/web && npm run lint
