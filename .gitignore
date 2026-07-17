@@ -1,0 +1,52 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+.next/
+dist/
+build/
+coverage/
+
+# Env files
+.env
+.env.*
+!.env.example
+
+# Temp files
+tmp/
+*.log
+*.exe
+*.exe~
+*.tsbuildinfo
+*.dll
+
+# Go build cache
+.gocache/
+__debug_bin*
+
+# Dev runtime
+.dev-pids/
+.dev-logs/
+.dev-data/
+
+# OS junk
+.DS_Store
+**/.DS_Store
+**/Thumbs.db
+
+# Archive
+_archive/
+
+# Compiled binaries
+/forge/api/api
+/beacon/daemon
+
+# macOS junk
+__MACOSX/
+._*
+*.orig
+# Compiled binaries
+api
+daemon
+forge/api/api
+beacon/daemon

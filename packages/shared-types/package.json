@@ -1,0 +1,15 @@
+{
+  "name": "@forge/shared-types",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Shared TypeScript types for GamePanel frontend and SDK",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  }
+}

@@ -1,0 +1,48 @@
+"use client";
+
+import { useEffect, useMemo, useState } from "react";
+import { CheckCircle2, Container, Lock, Save, Terminal } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { type ApiServer, type ApiStartupVariable, fetchServerStartup, updateServer, updateServerStartupVariable } from "@/lib/api";
+import { hasServerPermission, useOptionalServerContext } from "./server-context";
+import { errorMessage } from "@/lib/utils";
+
+function rules(variable: ApiStartupVariable) { return variable.rules.split("|").map((rule) => rule.trim()).filter(Boolean); }
+function validate(variable: ApiStartupVariable, value: string) {
+  const list = rules(variable);
+  if (list.includes("required") && !value.trim()) return "A value is required.";
+  if (!value && list.includes("nullable")) return "";
+  if ((list.includes("integer") || list.includes("numeric")) && !Number.isFinite(Number(value))) return "Enter a valid number.";
+  const min = list.find((rule) => rule.startsWith("min:")); if (min) { const expected = Number(min.slice(4)); const actual = list.includes("integer") || list.includes("numeric") ? Number(value) : value.length; if (actual < expected) return `Minimum value is ${expected}.`; }
+  const max = list.find((rule) => rule.startsWith("max:")); if (max) { const expected = Number(max.slice(4)); const actual = list.includes("integer") || list.includes("numeric") ? Number(value) : value.length; if (actual > expected) return `Maximum value is ${expected}.`; }
+  const allowed = list.find((rule) => rule.startsWith("in:"))?.slice(3).split(","); if (allowed && !allowed.includes(value)) return "Choose one of the allowed values.";
+  return "";
+}
+function message(error: unknown) { return errorMessage(error, "Startup variable update failed."); }
+const input = "h-10 w-full rounded-lg border border-white/10 bg-[#111722] px-3 text-sm text-white outline-none focus:border-red-500 disabled:cursor-not-allowed disabled:opacity-60";
+
+export function StartupView({ server }: { server?: ApiServer }) {
+  const context = useOptionalServerContext();
+  const access = context?.access ?? { user: null, permissions: [], isAdmin: true, isOwner: true };
+  const canUpdate = hasServerPermission(access, "startup.update");
+  const canUpdateImage = hasServerPermission(access, "startup.docker-image");
+  const qc = useQueryClient();
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const [commandDraft, setCommandDraft] = useState(server?.startupCommand ?? "");
+  const [saved, setSaved] = useState("");
+  const query = useQuery({ queryKey: ["server-startup", server?.id], queryFn: () => fetchServerStartup(server?.id ?? ""), enabled: Boolean(server?.id) });
+  const update = useMutation({ mutationFn: ({ key, value }: { key: string; value: string }) => updateServerStartupVariable(server?.id ?? "", key, value), onSuccess: (_, input) => { setDrafts((current) => { const next = { ...current }; delete next[input.key]; return next; }); setSaved(input.key); void qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); }, onError: () => setSaved("") });
+  const configUpdate = useMutation({ mutationFn: (input: { startupCommand?: string; dockerImage?: string }) => updateServer(server?.id ?? "", input), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); await context?.refreshServer(); } });
+  const startup = query.data;
+  const images = useMemo(() => Object.entries(startup?.docker_images ?? {}), [startup?.docker_images]);
+  useEffect(() => { setCommandDraft(server?.startupCommand ?? startup?.raw_startup_command ?? ""); }, [server?.startupCommand, startup?.raw_startup_command]);
+  useEffect(() => { if (!saved) return; const timer = window.setTimeout(() => setSaved(""), 2500); return () => window.clearTimeout(timer); }, [saved]);
+
+  if (query.isLoading) return <div className="rounded-xl border border-white/10 bg-[#151b27] p-8 text-center text-sm text-slate-400">Loading startup configuration…</div>;
+  if (query.isError) return <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-5 text-sm text-red-200" role="alert"><p>{message(query.error)}</p><button className="mt-3 underline" onClick={() => void query.refetch()} type="button">Retry</button></div>;
+
+  return <div className="space-y-5"><div className="grid gap-4 lg:grid-cols-[2fr_1fr]"><section className="rounded-xl border border-white/[0.07] bg-[#151b27] p-5"><h2 className="flex items-center gap-2 font-bold text-white"><Terminal size={18} />Startup command</h2><textarea aria-label="Startup command" className="mt-4 min-h-24 w-full rounded-lg border border-white/10 bg-[#080c13] p-4 font-mono text-sm text-slate-200 outline-none focus:border-red-500 disabled:opacity-60" disabled={!canUpdate || configUpdate.isPending} onChange={(event) => setCommandDraft(event.target.value)} value={commandDraft} />{startup?.startup_command ? <p className="mt-3 text-xs text-slate-500">Resolved command: <code>{startup.startup_command}</code></p> : null}<div className="mt-3 flex justify-end"><button className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40" disabled={!canUpdate || !commandDraft.trim() || commandDraft === (server?.startupCommand ?? startup?.raw_startup_command ?? "") || configUpdate.isPending} onClick={() => configUpdate.mutate({ startupCommand: commandDraft.trim() })} type="button"><Save size={14} />Save command</button></div></section><section className="rounded-xl border border-white/[0.07] bg-[#151b27] p-5"><h2 className="flex items-center gap-2 font-bold text-white"><Container size={18} />Container image</h2><select aria-label="Container image" className={`${input} mt-4`} disabled={!canUpdateImage || configUpdate.isPending || images.length === 0} onChange={(event) => configUpdate.mutate({ dockerImage: event.target.value })} value={server?.dockerImage ?? server?.image ?? images[0]?.[1] ?? ""}>{images.map(([label, value]) => <option key={value} value={value}>{label} · {value}</option>)}</select><p className="mt-3 text-xs text-slate-400">{!canUpdateImage ? "You do not have permission to change the container image." : images.length > 0 ? `${images.length} image${images.length === 1 ? " is" : "s are"} allowed by this egg.` : "No allowed images were returned by the egg configuration."}</p></section></div>
+    {(update.error || configUpdate.error) ? <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200" role="alert">{message(update.error ?? configUpdate.error)}</div> : null}
+    <div><h2 className="text-lg font-bold text-white">Variables</h2><p className="mt-1 text-sm text-slate-400">Validation metadata is enforced before values are sent.</p></div><div className="grid gap-4 md:grid-cols-2">{((startup?.variables && Array.isArray(startup.variables) ? startup.variables : [])).map((variable: ApiStartupVariable) => { const value = drafts[variable.env_variable ?? ""] ?? variable.server_value ?? variable.default_value ?? ""; const validation = validate(variable, value); const allowed = rules(variable).find((rule) => rule.startsWith("in:"))?.slice(3).split(","); const editable = variable.is_editable && canUpdate; const changed = value !== (variable.server_value ?? variable.default_value ?? ""); return <section className="rounded-xl border border-white/[0.07] bg-[#151b27] p-5" key={variable.env_variable ?? ""}><div className="flex items-start justify-between gap-3"><div><h3 className="font-bold text-white">{variable.name}</h3><code className="mt-1 block text-xs text-slate-500">{variable.env_variable}</code></div>{!editable ? <span className="inline-flex items-center gap-1 rounded-full bg-slate-700 px-2 py-1 text-[10px] font-bold uppercase text-slate-300"><Lock size={10} />Locked</span> : saved === variable.env_variable ? <span className="inline-flex items-center gap-1 text-xs text-emerald-300"><CheckCircle2 size={14} />Saved</span> : null}</div><div className="mt-4">{allowed?.length ? <select aria-label={variable.name} className={input} disabled={!editable || update.isPending} onChange={(event) => setDrafts((current) => ({ ...current, [variable.env_variable ?? ""]: event.target.value }))} value={value}>{allowed.map((option) => <option key={option} value={option}>{option}</option>)}</select> : <input aria-label={variable.name} className={input} disabled={!editable || update.isPending} onChange={(event) => setDrafts((current) => ({ ...current, [variable.env_variable ?? ""]: event.target.value }))} value={value} />}</div><p className="mt-3 text-sm text-slate-400">{variable.description || "No description provided."}</p><p className="mt-2 break-words font-mono text-[11px] text-slate-500">Rules: {variable.rules || "none provided"}</p>{validation ? <p className="mt-2 text-xs text-red-300">{validation}</p> : null}<div className="mt-4 flex justify-end"><button className="inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-xs font-bold text-white disabled:opacity-40" disabled={!editable || !changed || Boolean(validation) || update.isPending} onClick={() => update.mutate({ key: variable.env_variable ?? "", value })} type="button"><Save size={14} />{update.isPending && update.variables?.key === (variable.env_variable ?? "") ? "Saving…" : "Save variable"}</button></div></section>; })}</div>{!(startup?.variables && Array.isArray(startup.variables) && startup.variables.length) ? <div className="rounded-xl border border-white/10 bg-[#151b27] p-6 text-sm text-slate-400">No startup variables are defined for this server.</div> : null}
+  </div>;
+}

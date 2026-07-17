@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Exec(go get)",
+      "Exec(go build)",
+      "Exec(grep)"
+    ]
+  }
+}
