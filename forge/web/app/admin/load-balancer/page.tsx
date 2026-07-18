@@ -71,7 +71,7 @@ export default function AdminLoadBalancerPage() {
 
   const groupsQuery = useQuery({
     queryKey: ["admin", "load-balancer", "groups"],
-    queryFn: async () => (await fetchJSON<ApiResponse<TargetGroup[]>>("/admin/load-balancer/groups")).data,
+    queryFn: () => fetchJSON<TargetGroup[]>("/admin/load-balancer/groups"),
   });
 
   const groups = useMemo(() => groupsQuery.data ?? [], [groupsQuery.data]);
