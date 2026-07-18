@@ -31,10 +31,6 @@ type ScalingPolicy = {
   updatedAt: string;
 };
 
-type ApiResponse<T> = {
-  data: T;
-};
-
 type AutoscalerMetrics = {
   scaleUpEventsTotal: number;
   scaleDownEventsTotal: number;
@@ -63,13 +59,13 @@ export default function AdminAutoscalerPage() {
 
   const policiesQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'policies'],
-    queryFn: async () =>
-      (await fetchJSON<ApiResponse<ScalingPolicy[]>>('/admin/autoscaler/policies')).data,
+    queryFn: () =>
+      fetchJSON<ScalingPolicy[]>('/admin/autoscaler/policies'),
   });
   const metricsQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'metrics'],
-    queryFn: async () =>
-      (await fetchJSON<ApiResponse<AutoscalerMetrics>>('/admin/autoscaler/metrics')).data,
+    queryFn: () =>
+      fetchJSON<AutoscalerMetrics>('/admin/autoscaler/metrics'),
   });
 
   const policies = useMemo(() => policiesQuery.data ?? [], [policiesQuery.data]);
