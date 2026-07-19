@@ -1,6 +1,7 @@
 "use client";
+/* eslint-disable @next/next/no-img-element -- previews use authenticated, short-lived file URLs */
 
-import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import dynamic from "next/dynamic";
 import { Archive, ArrowUpDown, CheckSquare, ChevronRight, Download, File, Folder, FolderInput, Grid2X2, List, MoreHorizontal, Save, Search, ShieldX, Trash2, Upload, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -47,7 +48,6 @@ export function FilesView({ server }: { server?: ApiServer }) {
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
   const [preview, setPreview] = useState<{ url: string; name: string } | null>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; entry: ApiFileEntry } | null>(null);
-  const previewRef = useRef<HTMLAnchorElement>(null);
 
   const refresh = useCallback(async () => { await queryClient.invalidateQueries({ queryKey: ["server-files", server?.id] }); }, [queryClient, server?.id]);
   const run = useCallback(async (label: string, action: () => Promise<void>) => { setBusy(true); setError(""); setStatus(label); try { await action(); setStatus(`${label} complete`); } catch (actionError) { setError(errorMessage(actionError, `${label} failed.`)); setStatus("Action failed"); } finally { setBusy(false); } }, []);
@@ -101,14 +101,14 @@ export function FilesView({ server }: { server?: ApiServer }) {
   const upload = async (event: FormEvent<HTMLInputElement>) => { const input = event.currentTarget; const uploadFiles = Array.from(input.files ?? []); input.value = ""; if (!server?.id || !uploadFiles.length) return; await run("Uploading", async () => { for (let index = 0; index < uploadFiles.length; index += 1) { const file = uploadFiles[index]; await uploadFileChunked(server.id, join(directory, file.name), file, (progress) => setUploadProgress(Math.round(((index + progress / 100) / uploadFiles.length) * 100))); } setUploadProgress(null); await refresh(); }); };
   const fromUrl = () => { const raw = window.prompt("Public file URL to download")?.trim(); if (!raw) return; let parsed: URL; try { parsed = new URL(raw); if (!/^https?:$/.test(parsed.protocol)) throw new Error(); } catch { setError("Enter a valid HTTP or HTTPS URL."); return; } const name = decodeURIComponent(parsed.pathname.split("/").filter(Boolean).pop() || "downloaded-file"); void run("Downloading URL", async () => { await downloadFileToServer(server!.id, raw, join(directory, name)); await refresh(); }); };
   const rename = (entry: ApiFileEntry) => { const name = window.prompt("Rename to", entry.name)?.trim(); if (!name || name === entry.name) return; if (name.includes("/")) { setError("The new name cannot contain a slash."); return; } void run("Renaming", async () => { await renameServerFiles(server!.id, [{ from: entry.path, to: join(directory, name) }]); await refresh(); }); };
-  const remove = (items: ApiFileEntry[]) => { if (!items.length || !window.confirm(`Permanently delete ${items.length} selected item${items.length === 1 ? "" : "s"}?`)) return; void run("Deleting", async () => { try { await deleteServerFiles(server!.id, items.map((item) => item.path)); setSelected([]); } finally { await refresh(); } }); };
+  const remove = useCallback((items: ApiFileEntry[]) => { if (!items.length || !window.confirm(`Permanently delete ${items.length} selected item${items.length === 1 ? "" : "s"}?`)) return; void run("Deleting", async () => { try { await deleteServerFiles(server!.id, items.map((item) => item.path)); setSelected([]); } finally { await refresh(); } }); }, [refresh, run, server]);
   const move = (items: ApiFileEntry[]) => { const destination = window.prompt("Move selected items to directory (relative to container root)", directory)?.replace(/^\/+|\/+$/g, ""); if (destination == null) return; void run("Moving", async () => { try { await renameServerFiles(server!.id, items.map((item) => ({ from: item.path, to: join(destination, item.name) }))); setSelected([]); } finally { await refresh(); } }); };
   const copy = (items: ApiFileEntry[]) => { if (items.some((item) => item.directory)) { setError("Directory copying is not supported; select regular files only."); return; } const destination = window.prompt("Copy selected files to directory (relative to container root)", directory)?.replace(/^\/+|\/+$/g, ""); if (destination == null) return; void run("Copying", async () => { for (const item of items) await copyServerFile(server!.id, item.path, join(destination, item.name)); setSelected([]); await refresh(); }); };
   const chmod = (items: ApiFileEntry[]) => { const mode = window.prompt("Apply octal permissions to selected items", "0644")?.trim(); if (mode == null) return; if (!/^[0-7]{3,4}$/.test(mode)) { setError("Permissions must contain three or four octal digits, for example 0644."); return; } void run("Updating permissions", async () => { for (const item of items) await chmodServerFile(server!.id, item.path, parseInt(mode, 8)); setSelected([]); await refresh(); }); };
   const download = (entry: ApiFileEntry) => void run("Starting download", async () => { const { url } = await getServerFileDownloadURL(server!.id, entry.path); const anchor = document.createElement("a"); anchor.href = url; anchor.download = entry.name; anchor.rel = "noreferrer"; anchor.click(); });
   const archive = (entry: ApiFileEntry) => void run("Preparing archive download", async () => { const blob = await archiveServerFile(server!.id, entry.path); const href = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = href; anchor.download = `${entry.name}.tar.gz`; anchor.click(); URL.revokeObjectURL(href); });
   const extract = (entry: ApiFileEntry) => void run("Extracting archive", async () => { await decompressServerFiles(server!.id, entry.path); await refresh(); });
-  const selectedEntries = (files.data ?? []).filter((entry: ApiFileEntry) => selected.includes(entry.path));
+  const selectedEntries = useMemo(() => (files.data ?? []).filter((entry: ApiFileEntry) => selected.includes(entry.path)), [files.data, selected]);
 
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {

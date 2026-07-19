@@ -36,7 +36,7 @@ export default function AdminCloudPage() {
   const queryClient = useQueryClient();
   const [showProvision, setShowProvision] = useState(false);
   const [selectedProvider, setSelectedProvider] = useState("");
-  const [form, setForm] = useState({ name: "", instanceType: "", image: "", nodeId: "" });
+  const [form, setForm] = useState({ name: "", instanceType: "", image: "", nodeId: "", beaconImage: "", subnetId: "", securityGroupIds: "", iamInstanceProfile: "", diskGb: "" });
 
   const providersQuery = useQuery({
     queryKey: ["admin", "cloud", "providers"],
@@ -68,6 +68,11 @@ export default function AdminCloudPage() {
         region: provider?.region ?? "",
         instanceType: form.instanceType.trim(),
         image: form.image.trim(),
+        beaconImage: form.beaconImage.trim() || undefined,
+        subnetId: form.subnetId.trim() || undefined,
+        securityGroupIds: form.securityGroupIds.split(",").map((value) => value.trim()).filter(Boolean),
+        iamInstanceProfile: form.iamInstanceProfile.trim() || undefined,
+        diskGb: form.diskGb ? Number(form.diskGb) : undefined,
       },
       nodeId: form.nodeId || undefined,
     }),
@@ -75,7 +80,7 @@ export default function AdminCloudPage() {
       void queryClient.invalidateQueries({ queryKey: ["admin", "cloud", "instances", selectedProvider] });
       void queryClient.invalidateQueries({ queryKey: ["admin", "cloud", "links"] });
       setShowProvision(false);
-      setForm({ name: "", instanceType: "", image: "", nodeId: "" });
+      setForm({ name: "", instanceType: "", image: "", nodeId: "", beaconImage: "", subnetId: "", securityGroupIds: "", iamInstanceProfile: "", diskGb: "" });
     },
   });
 
@@ -97,7 +102,7 @@ export default function AdminCloudPage() {
     <div className="space-y-6">
       <SectionHeader
         title="Cloud Providers"
-        sub="Provision provider instances. A linked panel node records ownership only; install and connect Beacon separately."
+        sub="Provision provider instances and bootstrap linked Beacon nodes automatically."
         action={<Btn tone="primary" onClick={() => setShowProvision(true)} disabled={providers.length === 0}><Plus size={14} /> Provision Instance</Btn>}
       />
 
@@ -133,8 +138,13 @@ export default function AdminCloudPage() {
         <Input label="Instance type" value={form.instanceType} onChange={(value) => setForm({ ...form, instanceType: value })} placeholder="t3.medium" />
         <Input label="Image ID" value={form.image} onChange={(value) => setForm({ ...form, image: value })} placeholder="ami-…" />
         <div className="block text-sm"><span className="mb-1.5 block font-medium text-slate-300">Configured region</span><p className="rounded-lg border border-white/10 bg-[#161b28] px-3 py-2 text-sm text-slate-400">{provider?.region ?? "Select a provider"}</p></div>
-        <label className="block text-sm"><span className="mb-1.5 block font-medium text-slate-300">Link to existing panel node (optional)</span><select value={form.nodeId} onChange={(event) => setForm({ ...form, nodeId: event.target.value })} className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100"><option value="">Do not link</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
-        <p className="text-xs text-slate-500">Provisioning does not install Beacon, create a node, or prove network connectivity. It only requests the provider instance and optionally stores a panel-node association.</p>
+        <label className="block text-sm"><span className="mb-1.5 block font-medium text-slate-300">Bootstrap as panel node</span><select value={form.nodeId} onChange={(event) => setForm({ ...form, nodeId: event.target.value })} className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100"><option value="">Provision compute only</option>{nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <Input label="Beacon container image" value={form.beaconImage} onChange={(value) => setForm({ ...form, beaconImage: value })} placeholder="configured AWS_BEACON_IMAGE" />
+        <Input label="Subnet ID (optional)" value={form.subnetId} onChange={(value) => setForm({ ...form, subnetId: value })} placeholder="subnet-…" />
+        <Input label="Security group IDs (comma-separated)" value={form.securityGroupIds} onChange={(value) => setForm({ ...form, securityGroupIds: value })} placeholder="sg-…" />
+        <Input label="IAM instance profile (optional)" value={form.iamInstanceProfile} onChange={(value) => setForm({ ...form, iamInstanceProfile: value })} placeholder="gamepanel-beacon" />
+        <Input label="Root disk GB (optional)" type="number" value={form.diskGb} onChange={(value) => setForm({ ...form, diskGb: value })} placeholder="50" />
+        <p className="text-xs text-slate-500">When linked, Ubuntu cloud-init installs Docker and starts Beacon with the selected node credential. Use a private panel API URL and an IAM role for shared backup access.</p>
         {provisionMutation.isError ? <ApiError message={`Provisioning failed: ${provisionMutation.error.message}`} /> : null}
       </div><ModalFooter onCancel={() => setShowProvision(false)} onConfirm={() => provisionMutation.mutate()} confirmLabel={provisionMutation.isPending ? "Provisioning…" : "Provision"} disabled={provisionMutation.isPending || !canProvision} /></Modal> : null}
     </div>

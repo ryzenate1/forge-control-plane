@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   assignServerMount, changePassword, connectServerWebSocket, createAdminOAuthClient, createDatabaseHost, createMigration, createNode, createRole, createServer, createServerScheduleTask,
   exportAdminActivity, fetchActivityLogs, fetchAdminActivity, fetchAllocationNodes, fetchBackups, fetchCurrentUser, fetchHealthStatus, fetchNodes, fetchPermissions, fetchPlugins, fetchRecoveryPlans, fetchReservations, fetchServer, fetchServerStartup, fetchUsers,
-  fetchWebhookDeliveries, getServerFileDownloadURL, getToken, login, loginCheckpoint, logout, reinstallServer, serverWebSocketURL, setAllocationAlias, setStoredToken, updateNode, updateServer, updateServerScheduleTask,
+  fetchWebhookDeliveries, getServerFileDownloadURL, login, loginCheckpoint, logout, reinstallServer, serverWebSocketURL, setAllocationAlias, updateNode, updateServer, updateServerScheduleTask,
   deleteAllocations, deleteAllocationsBulk, deleteServerDatabase, fetchOrphanRemediations, previewEvacuation, createEvacuationPlan, createRecoveryPlan, executeRecoveryPlan, fetchRecoveryPlan, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation, startRecoveryPlan, cancelRecoveryPlan, setAdminAllocationAlias, testDatabaseHostConnection,
 } from "@/lib/api";
 import { jsonResponse, mockFetch, requestJSON } from "@/test/fetch-mock";
@@ -10,41 +10,33 @@ import { jsonResponse, mockFetch, requestJSON } from "@/test/fetch-mock";
 
 
 describe("authentication contracts", () => {
-  it("persists tokens only after login and 2FA checkpoint completion", async () => {
+  it("uses cookie sessions without persisting login or checkpoint tokens", async () => {
     const { calls } = mockFetch(
       jsonResponse({ complete: false, confirmationToken: "checkpoint" }),
       jsonResponse({ complete: true, token: "jwt-final", user: { id: "u1", email: "a@example.com", role: "user" } }),
     );
     const first = await login("a@example.com", "secret");
     expect(first.confirmationToken).toBe("checkpoint");
-    expect(getToken()).toBeNull();
     await loginCheckpoint("checkpoint", "123456");
-    expect(getToken()).toBe("jwt-final");
     expect(requestJSON(calls[1])).toEqual({ confirmationToken: "checkpoint", code: "123456" });
   });
 
-  it("does not clear a session for a transient /auth/me failure", async () => {
-    setStoredToken("keep-me");
+  it("reports a transient /auth/me failure without treating it as unauthorized", async () => {
     mockFetch(jsonResponse({ message: "gateway unavailable" }, 503));
-    await expect(fetchCurrentUser()).rejects.toThrow("503");
-    expect(getToken()).toBe("keep-me");
+    await expect(fetchCurrentUser()).rejects.toThrow("gateway unavailable");
   });
 
-  it("clears a session only for an explicit unauthorized /auth/me response", async () => {
-    setStoredToken("expired");
+  it("returns null only for an explicit unauthorized /auth/me response", async () => {
     mockFetch(jsonResponse({}, 401));
     await expect(fetchCurrentUser()).resolves.toBeNull();
-    expect(getToken()).toBeNull();
   });
 
-  it("revokes the backend session before clearing the browser token", async () => {
-    setStoredToken("session-token");
+  it("revokes the backend cookie session", async () => {
     const { calls } = mockFetch(new Response(null, { status: 204 }));
     await logout();
     expect(calls[0].url).toContain("/auth/logout");
     expect(calls[0].init?.method).toBe("POST");
-    expect(new Headers(calls[0].init?.headers).get("Authorization")).toBe("Bearer session-token");
-    expect(getToken()).toBeNull();
+    expect(new Headers(calls[0].init?.headers).get("Authorization")).toBeNull();
   });
 
   it("sends reinstall requests to the permission-scoped endpoint", async () => {
@@ -55,7 +47,6 @@ describe("authentication contracts", () => {
 
   it("sends the password contract field names", async () => {
     const { calls } = mockFetch(jsonResponse({ status: "ok" }));
-    setStoredToken("token");
     await changePassword("old", "new-password");
     expect(requestJSON(calls[0])).toEqual({ currentPassword: "old", newPassword: "new-password" });
   });
@@ -84,7 +75,6 @@ describe("monitoring response contracts", () => {
 
 describe("WebSocket ticket contract", () => {
   it("uses a short-lived ticket in the URL and never places the JWT in the query", async () => {
-    setStoredToken("long-lived-jwt");
     mockFetch(jsonResponse({ token: "short-ticket", expiresAt: "soon", server: "srv", stream: "console" }));
     const sockets: Array<{ url: string; protocols?: string | string[] }> = [];
     class FakeWebSocket {
@@ -94,32 +84,28 @@ describe("WebSocket ticket contract", () => {
     vi.stubGlobal("WebSocket", FakeWebSocket);
     await connectServerWebSocket("server/id", "console");
     expect(sockets[0].url).toContain("/servers/server%2Fid/ws/console?token=short-ticket");
-    expect(sockets[0].url).not.toContain("long-lived-jwt");
     expect(sockets[0].protocols).toBeUndefined(); // JWT removed from subprotocol for security
   });
 
   it("reports ticket issuance failures without opening a socket", async () => {
-    setStoredToken("jwt");
     mockFetch(jsonResponse({ message: "daemon unavailable" }, 503));
     const socket = vi.fn();
     vi.stubGlobal("WebSocket", socket);
-    await expect(connectServerWebSocket("srv", "console")).rejects.toThrow("Unable to issue a console WebSocket ticket");
+    await expect(connectServerWebSocket("srv", "console")).rejects.toThrow("daemon unavailable");
     expect(socket).not.toHaveBeenCalled();
   });
 
   it("constructs relative API websocket URLs", () => {
-    expect(serverWebSocketURL("srv", "stats")).toBe("ws://localhost:3000/api/v1/servers/srv/ws/stats");
+    expect(serverWebSocketURL("srv", "stats")).toBe("/api/v1/servers/srv/ws/stats");
   });
 });
 
 describe("file download contracts", () => {
   it("uses a short-lived ticket URL instead of placing the session token in the download URL", async () => {
-    setStoredToken("long-lived-session");
-    const { calls } = mockFetch(jsonResponse({ token: "single-use-ticket", expiresAt: "soon" }));
+    const { calls } = mockFetch(jsonResponse({ url: "/api/v1/download/file?token=single-use-ticket", expires: "soon" }));
     const url = await getServerFileDownloadURL("server/id", "mods/game.bin");
-    expect(requestJSON(calls[0])).toEqual({ path: "mods/game.bin" });
+    expect(calls[0].url).toContain("/servers/server%2Fid/files/download-url?path=mods%2Fgame.bin");
     expect(url).toContain("/download/file?token=single-use-ticket");
-    expect(url).not.toContain("long-lived-session");
   });
 });
 
@@ -168,7 +154,7 @@ describe("backend DTO and mutation field names", () => {
     expect(await fetchServerStartup("s1")).toEqual(startup);
     expect(await fetchServer("s1")).toEqual(server);
     expect((await fetchUsers())[0]).toEqual(user);
-    expect((await fetchNodes())[0]).toMatchObject({ ...node, cpu: 0, memory: 0, disk: 0, servers: 0 });
+    expect((await fetchNodes())[0]).toEqual(node);
   });
 
   it("sends the admin server create payload with backend names and numeric values", async () => {

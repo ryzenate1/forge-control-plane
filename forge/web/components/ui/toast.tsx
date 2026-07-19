@@ -12,7 +12,7 @@ let nextToastId = 1;
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const timeoutsRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  const timeoutsRef = useRef<Map<number, number>>(new Map());
   const dismiss = useCallback((id: number) => {
     setToasts((items) => items.filter((item) => item.id !== id));
     const tid = timeoutsRef.current.get(id);

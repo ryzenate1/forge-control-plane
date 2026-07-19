@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import {
   Activity, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Database,
-  FileText, GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
+  GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
   Map, MapPin, Network, Plug, Scale, Server, ShieldCheck, SlidersHorizontal,
   Users, Workflow,
 } from "lucide-react";

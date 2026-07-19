@@ -2,19 +2,40 @@ package backup_test
 
 import (
 	"context"
+	"database/sql"
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yourorg/gamepanel/beacon/internal/backup"
+	"gamepanel/beacon/internal/backup"
 )
 
 func TestRetentionPolicy(t *testing.T) {
-	// Setup test store
-	store := &backup.SQLiteStore{db: setupTestDB(t)}
+	db, err := sql.Open("sqlite3", ":memory:")
+	require.NoError(t, err)
+	defer db.Close()
 
-	// Create test backups
+	_, err = db.Exec(`
+        CREATE TABLE backups (
+            id TEXT PRIMARY KEY,
+            server_id TEXT,
+            started_at DATETIME,
+            completed_at DATETIME,
+            status TEXT,
+            size_bytes INTEGER,
+            files INTEGER,
+            duration INTEGER,
+            adapter TEXT,
+            path TEXT,
+            error TEXT
+        );
+    `)
+	require.NoError(t, err)
+
+	store := backup.NewSQLiteStore(db)
+
 	now := time.Now()
 	backups := []backup.Backup{
 		{ID: "1", ServerID: "server-1", CompletedAt: now.Add(-24 * time.Hour), Status: backup.BackupStatusCompleted},
@@ -27,7 +48,6 @@ func TestRetentionPolicy(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	// Test retention policy
 	policy := backup.RetentionPolicy{
 		MaxBackups:  2,
 		MaxAge:      48 * time.Hour,
@@ -36,10 +56,9 @@ func TestRetentionPolicy(t *testing.T) {
 		KeepMonthly: 0,
 	}
 
-	err := policy.Apply(context.Background(), store, "server-1")
+	err = policy.Apply(context.Background(), store, "server-1")
 	assert.NoError(t, err)
 
-	// Verify only the most recent backup remains
 	remaining, err := store.List(context.Background(), "server-1", 0)
 	assert.NoError(t, err)
 	assert.Len(t, remaining, 1)

@@ -3,8 +3,8 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, GanttChart, Globe, Plus, RefreshCw, Shield, ShieldCheck,
-  ShieldOff, SlidersHorizontal, Trash2, Users, Zap,
+  GanttChart, Globe, Plus, RefreshCw, Shield, ShieldCheck,
+  ShieldOff, SlidersHorizontal, Trash2, Zap,
 } from "lucide-react";
 import { fetchJSON, postJSON, patchJSON, deleteJSON } from "@/lib/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";

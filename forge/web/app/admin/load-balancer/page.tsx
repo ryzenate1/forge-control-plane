@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GanttChart, HeartPulse, Network, Plus, Target, Trash2, Zap, type LucideIcon } from "lucide-react";
-import { deleteJSON, fetchJSON, postJSON, putJSON } from "@/lib/api";
+import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "@/lib/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
 type Algorithm = "round_robin" | "least_connections" | "ip_hash" | "weighted_round_robin";
@@ -130,6 +130,12 @@ export default function AdminLoadBalancerPage() {
     onSuccess: refreshGroups,
   });
 
+  const targetStatusMutation = useMutation({
+    mutationFn: ({ groupId, targetId, status }: { groupId: string; targetId: string; status: TargetStatus }) =>
+      patchJSON(`/admin/load-balancer/groups/${encodeURIComponent(groupId)}/targets/${encodeURIComponent(targetId)}`, { status }),
+    onSuccess: refreshGroups,
+  });
+
   const testSelectionMutation = useMutation({
     mutationFn: (groupId: string) =>
       fetchJSON<ApiResponse<Target>>(`/admin/load-balancer/groups/${encodeURIComponent(groupId)}/next`),
@@ -137,7 +143,7 @@ export default function AdminLoadBalancerPage() {
   });
 
   const groupError = groupsQuery.isError ? errorMessage(groupsQuery.error) : null;
-  const mutationError = [createGroupMutation, updateGroupMutation, deleteGroupMutation, addTargetMutation, removeTargetMutation, testSelectionMutation]
+  const mutationError = [createGroupMutation, updateGroupMutation, deleteGroupMutation, addTargetMutation, removeTargetMutation, targetStatusMutation, testSelectionMutation]
     .find((mutation) => mutation.isError)?.error;
 
   return (
@@ -188,7 +194,7 @@ export default function AdminLoadBalancerPage() {
           <CardHeader title={selectedGroup ? `Targets: ${selectedGroup.name}` : "Select a Group"} action={selectedGroup ? <div className="flex gap-2"><Btn size="sm" tone="ghost" onClick={() => testSelectionMutation.mutate(selectedGroup.id)} disabled={testSelectionMutation.isPending}><Zap size={12} /> Test Next</Btn><Btn size="sm" tone="primary" onClick={() => { setTargetForm({ ...defaultTargetForm, port: selectedGroup.port }); setShowAddTarget(true); }}><Plus size={12} /> Add Target</Btn></div> : null} />
           {!selectedGroup ? <EmptyState icon={Network} message="Select a target group to manage its targets." /> : selectedGroup.targets?.length === 0 ? <EmptyState icon={Target} message="No targets in this group." /> : (
             <div className="divide-y divide-white/[0.04]">
-              {selectedGroup.targets.map((target) => <TargetRow key={target.id} target={target} onRemove={() => removeTargetMutation.mutate({ groupId: selectedGroup.id, targetId: target.id })} removing={removeTargetMutation.isPending} />)}
+              {selectedGroup.targets.map((target) => <TargetRow key={target.id} target={target} onStatus={(status) => targetStatusMutation.mutate({ groupId: selectedGroup.id, targetId: target.id, status })} onRemove={() => removeTargetMutation.mutate({ groupId: selectedGroup.id, targetId: target.id })} removing={removeTargetMutation.isPending || targetStatusMutation.isPending} />)}
             </div>
           )}
           {testResult && <div className="border-t border-white/[0.06] px-4 py-3"><p className="text-xs text-slate-400">Next target selected: <span className="font-mono text-emerald-400">{testResult.ip}:{testResult.port}</span><button className="ml-2 text-slate-500 hover:text-slate-200" onClick={() => setTestResult(null)}>✕</button></p></div>}
@@ -208,9 +214,9 @@ function MetricCard({ icon: Icon, label, value, tone = "text-slate-100" }: { ico
 
 function Loading({ message }: { message: string }) { return <div className="p-8 text-center text-sm text-slate-500">{message}</div>; }
 
-function TargetRow({ target, onRemove, removing }: { target: Target; onRemove: () => void; removing: boolean }) {
+function TargetRow({ target, onStatus, onRemove, removing }: { target: Target; onStatus: (status: TargetStatus) => void; onRemove: () => void; removing: boolean }) {
   const color = target.status === "healthy" ? "bg-emerald-400" : target.status === "draining" ? "bg-amber-400" : "bg-red-400";
-  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div>;
+  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><div className="flex items-center gap-2"><select aria-label="Target status" className="h-8 rounded-md border border-white/10 bg-[#161b28] px-2 text-xs text-slate-200" disabled={removing} value={target.status} onChange={(event) => onStatus(event.target.value as TargetStatus)}><option value="healthy">Healthy</option><option value="draining">Draining</option><option value="unhealthy">Unhealthy</option></select><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div></div>;
 }
 
 function TargetGroupFormModal({ title, form, onChange, onSave, onClose, saving }: { title: string; form: GroupForm; onChange: (form: GroupForm) => void; onSave: () => void; onClose: () => void; saving: boolean }) {

@@ -147,6 +147,8 @@ func (m *MockBackup) Restore(ctx context.Context, backupDir, name, serverRoot st
 	return nil
 }
 
+func (m *MockBackup) SetProgressCallback(fn ProgressFunc) {}
+
 func (m *MockBackup) Download(backupDir, name string) (io.ReadCloser, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

@@ -47,6 +47,8 @@ export function AdminAllocations() {
  const [nodeId, setNodeId] = useState("");
  const [ip, setIp] = useState("0.0.0.0");
  const [ports, setPorts] = useState("25565");
+ const [containerPort, setContainerPort] = useState("");
+ const [protocol, setProtocol] = useState<"tcp" | "udp">("tcp");
  const [alias, setAlias] = useState("");
  const [notes, setNotes] = useState("");
  const [createError, setCreateError] = useState<string | null>(null);
@@ -58,7 +60,7 @@ export function AdminAllocations() {
 
   const createMut = useMutation({
     mutationFn: () => {
-      return createAllocation({ nodeId: nodeId || nodes[0]?.id || "", ip, ports, alias, notes });
+      return createAllocation({ nodeId: nodeId || nodes[0]?.id || "", ip, ports, containerPort: containerPort ? Number(containerPort) : undefined, protocol, alias, notes });
     },
     onSuccess: (created) => { qc.invalidateQueries({ queryKey: ["allocations"] }); setModal(false); setCreateError(null); toast({ tone: "success", title: `${created.length} allocation${created.length === 1 ? "" : "s"} created` }); },
     onError: (e: Error) => { console.error("Failed to create allocations:", e); setCreateError(e.message || "Unknown error"); toast({ tone: "error", title: "Failed to create allocations", message: e.message || "Unknown error" }); },
@@ -181,7 +183,7 @@ export function AdminAllocations() {
  <tr className="border-b border-white/[0.06] text-left text-xs text-slate-500 uppercase tracking-wider">
  <th className="px-4 py-3">Node</th>
  <th className="px-4 py-3">Select</th>
- <th className="px-4 py-3">IP : Port</th>
+ <th className="px-4 py-3">IP : Port / Protocol</th>
  <th className="px-4 py-3">Alias</th>
  <th className="px-4 py-3">Server</th>
  <th className="px-4 py-3" />
@@ -198,6 +200,7 @@ export function AdminAllocations() {
  <span className="text-slate-300">{alloc.ip}</span>
  <span className="text-slate-500">:</span>
  <span className="text-[#dc2626] font-bold">{alloc.port}</span>
+ <span className="ml-2 text-[10px] font-bold uppercase text-slate-500">{alloc.protocol ?? "tcp"}{alloc.containerPort && alloc.containerPort !== alloc.port ? ` → ${alloc.containerPort}` : ""}</span>
  </td>
  <td className="px-4 py-3 text-xs text-slate-500">{alloc.alias || "-"}</td>
  <td className="px-4 py-3">
@@ -256,6 +259,13 @@ export function AdminAllocations() {
  <Input label="Ports (single, range 25565-25580, or comma list)" value={ports} onChange={setPorts} placeholder="25565" mono />
  <p className="mt-1 text-xs text-slate-500">e.g. 25565 or 25565-25580 or 25565,25566,25570</p>
  </div>
+ <div>
+ <label className="block text-sm font-medium text-slate-300 mb-1.5">Protocol</label>
+ <select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100" value={protocol} onChange={(event) => setProtocol(event.target.value as "tcp" | "udp")}>
+ <option value="tcp">TCP</option><option value="udp">UDP</option>
+ </select>
+ </div>
+ <Input label="Container port (optional; single host port only)" value={containerPort} onChange={setContainerPort} placeholder="same as host port" mono />
  <Input label="Alias (optional)" value={alias} onChange={setAlias} placeholder="minecraft.local" />
  <Input label="Notes (optional)" value={notes} onChange={setNotes} placeholder="" />
  {createError ? <div className="md:col-span-2 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}

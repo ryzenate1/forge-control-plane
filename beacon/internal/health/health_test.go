@@ -7,23 +7,10 @@ import (
 	"time"
 )
 
-// MockHealthChecker is a mock implementation of HealthChecker for testing
-type MockHealthChecker struct {
-	shouldFail bool
-}
-
-func (m *MockHealthChecker) Check(ctx context.Context) error {
-	if m.shouldFail {
-		return errors.New("health check failed")
-	}
-	return nil
-}
-
 func TestCompositeHealthChecker(t *testing.T) {
-	// Test with all checkers passing
-	checkers := []HealthChecker{
-		&MockHealthChecker{shouldFail: false},
-		&MockHealthChecker{shouldFail: false},
+	checkers := []ComponentHealthChecker{
+		{Name: "ok1", Checker: func(ctx context.Context) error { return nil }},
+		{Name: "ok2", Checker: func(ctx context.Context) error { return nil }},
 	}
 	composite := &CompositeHealthChecker{checkers: checkers}
 
@@ -34,11 +21,10 @@ func TestCompositeHealthChecker(t *testing.T) {
 		t.Errorf("Expected no error, got %v", err)
 	}
 
-	// Test with one checker failing
-	checkers = []HealthChecker{
-		&MockHealthChecker{shouldFail: false},
-		&MockHealthChecker{shouldFail: true},
-		&MockHealthChecker{shouldFail: false},
+	checkers = []ComponentHealthChecker{
+		{Name: "ok", Checker: func(ctx context.Context) error { return nil }},
+		{Name: "fail", Checker: func(ctx context.Context) error { return errors.New("health check failed") }},
+		{Name: "ok2", Checker: func(ctx context.Context) error { return nil }},
 	}
 	composite = &CompositeHealthChecker{checkers: checkers}
 

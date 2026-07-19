@@ -131,7 +131,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
   const power = useMutation({ mutationFn: (signal: "start" | "stop" | "restart" | "kill") => sendPowerSignal(server.id, signal), onSuccess: () => void refreshServer() });
   const install = useMutation({ mutationFn: () => reinstallServer(server.id), onSuccess: () => void refreshServer() });
 
-  useEffect(() => { if (autoScroll) requestAnimationFrame(() => outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight })); }, [lines]);
+  useEffect(() => { if (autoScroll) requestAnimationFrame(() => outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight })); }, [autoScroll, lines]);
   useEffect(() => {
     if (!canConsole) { setConnection("error"); setConnectionError("You do not have permission to access this server console."); return; }
     let closed = false;

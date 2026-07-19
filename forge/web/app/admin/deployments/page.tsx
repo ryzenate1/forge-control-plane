@@ -34,7 +34,6 @@ const statusConfig: Record<string, { tone: "green" | "yellow" | "red" | "blue" |
 
 export default function AdminDeploymentsPage() {
   const router = useRouter();
-  const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [strategyFilter, setStrategyFilter] = useState<string>("");
