@@ -8,20 +8,22 @@ import (
 	"time"
 
 	"gamepanel/forge/internal/events"
+
+	"github.com/google/uuid"
 )
 
-const defaultBatchSize = 100
+const defaultBatchSize = 10
 
 type Relay struct {
-	store         *EventStore
-	pollInterval  time.Duration
-	subscribers   []func(context.Context, events.Envelope) error
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
-	mu            sync.RWMutex
-	started       bool
-	maxRetries    int
-	eventTimeout  time.Duration
+	store        *EventStore
+	pollInterval time.Duration
+	subscribers  []func(context.Context, events.Envelope) error
+	cancel       context.CancelFunc
+	wg           sync.WaitGroup
+	mu           sync.RWMutex
+	started      bool
+	maxRetries   int
+	eventTimeout time.Duration
 }
 
 func NewRelay(store *EventStore, pollInterval time.Duration) *Relay {
@@ -85,7 +87,7 @@ func (r *Relay) pollLoop(ctx context.Context) {
 }
 
 func (r *Relay) processBatch(ctx context.Context) {
-	pending, err := r.store.Pending(ctx, defaultBatchSize)
+	pending, err := r.store.ClaimPending(ctx, defaultBatchSize, uuid.NewString(), time.Duration(defaultBatchSize+1)*r.eventTimeout)
 	if err != nil {
 		return
 	}

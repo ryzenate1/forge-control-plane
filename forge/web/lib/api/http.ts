@@ -1,11 +1,14 @@
 // HTTP helper functions for API calls
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ??
-  (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");
+  (process.env.NODE_ENV === 'development' ? 'http://localhost:8080/api/v1' : '/api/v1');
 export const LEGACY_TOKEN_KEY = 'modern-game-panel-token';
 
 export class ApiError extends Error {
-  constructor(message: string, readonly status: number) {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
     super(message);
     this.name = 'ApiError';
   }

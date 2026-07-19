@@ -163,19 +163,26 @@ func (s *Service) reconcileServer(ctx context.Context, server store.Server, corr
 		return err
 	}
 	storeActual := store.ServerActualState(actualState)
+	// Refresh desired state after the remote observation. A user request may
+	// have advanced the generation while the node call was in flight; acting
+	// on the stale list snapshot could otherwise undo the newer request.
+	current, err := s.store.GetServer(ctx, server.ID)
+	if err != nil {
+		return err
+	}
 	s.publish(ctx, events.EventActualStateChanged, "server", server.ID, map[string]any{
 		"actualState":   storeActual,
 		"reason":        "reconciler comparison",
 		"correlationId": correlationID,
 	})
 	switch {
-	case server.DesiredState == store.ServerDesiredStateRunning && storeActual == store.ServerActualStateStopped:
+	case current.DesiredState == store.ServerDesiredStateRunning && storeActual == store.ServerActualStateStopped:
 		_, err := s.clusterManager.StartServer(ctx, server.ID)
 		return err
-	case server.DesiredState == store.ServerDesiredStateStopped && storeActual == store.ServerActualStateRunning:
+	case current.DesiredState == store.ServerDesiredStateStopped && storeActual == store.ServerActualStateRunning:
 		_, err := s.clusterManager.StopServer(ctx, server.ID)
 		return err
-	case server.DesiredState == store.ServerDesiredStateRunning && storeActual == store.ServerActualStateCrashed:
+	case current.DesiredState == store.ServerDesiredStateRunning && storeActual == store.ServerActualStateCrashed:
 		_, err := s.clusterManager.RestartServer(ctx, server.ID)
 		return err
 	default:

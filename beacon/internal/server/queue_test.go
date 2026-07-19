@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -166,5 +167,53 @@ func TestQueueAllOperationTypes(t *testing.T) {
 		if op.Type != ot {
 			t.Fatalf("expected type %s, got %s", ot, op.Type)
 		}
+	}
+}
+
+func TestPersistentQueueReplaysAndDeduplicatesCommands(t *testing.T) {
+	journal := filepath.Join(t.TempDir(), "operations.db")
+	q1, err := NewPersistentOperationQueue(journal, 1, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op, err := q1.EnqueueCommand(context.Background(), "command-1", "srv-1", OpRestart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q1.Shutdown()
+
+	var executions atomic.Int32
+	q2, err := NewPersistentOperationQueue(journal, 1, func(context.Context, *Operation) error {
+		executions.Add(1)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	q2.Start(context.Background())
+	defer q2.Shutdown()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		status, getErr := q2.GetStatus(op.ID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		if status.Status == StatusCompleted {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("operation was not replayed: %+v", status)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	duplicate, err := q2.EnqueueCommand(context.Background(), "command-1", "srv-1", OpRestart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if duplicate.ID != op.ID {
+		t.Fatalf("duplicate command created a new operation: %s != %s", duplicate.ID, op.ID)
+	}
+	if executions.Load() != 1 {
+		t.Fatalf("command executed %d times", executions.Load())
 	}
 }
