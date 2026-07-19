@@ -29,12 +29,13 @@ type FailoverMetrics = {
   notificationsSent: number;
 };
 
-type PolicyForm = Pick<FailoverPolicy, "nodeId" | "maxFailures" | "failureWindowSec" | "action" | "enabled">;
+type PolicyForm = Pick<FailoverPolicy, "nodeId" | "maxFailures" | "failureWindowSec" | "cooldownSec" | "action" | "enabled">;
 
 const defaultForm: PolicyForm = {
   nodeId: "",
   maxFailures: 3,
   failureWindowSec: 300,
+  cooldownSec: 600,
   action: "evacuate",
   enabled: true,
 };
@@ -100,6 +101,7 @@ export default function AdminFailoverPage() {
       nodeId: policy.nodeId,
       maxFailures: policy.maxFailures,
       failureWindowSec: policy.failureWindowSec,
+      cooldownSec: policy.cooldownSec,
       action: policy.action,
       enabled: policy.enabled,
     });
@@ -188,9 +190,10 @@ export default function AdminFailoverPage() {
             <label className="flex items-center gap-2 pt-6 text-sm font-medium text-slate-300"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} className="rounded border-white/10 bg-[#161b28]" /> Enabled</label>
             <Input label="Max Failures" type="number" value={String(form.maxFailures)} onChange={(value) => setForm({ ...form, maxFailures: Number(value) })} />
             <Input label="Failure Window (seconds)" type="number" value={String(form.failureWindowSec)} onChange={(value) => setForm({ ...form, failureWindowSec: Number(value) })} />
+            <Input label="Cooldown (seconds)" type="number" value={String(form.cooldownSec)} onChange={(value) => setForm({ ...form, cooldownSec: Number(value) })} />
             <div className="sm:col-span-2"><label className="mb-1.5 block text-sm font-medium text-slate-300">Action</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30" value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value as FailoverAction })}><option value="evacuate">Evacuate</option><option value="restart">Restart</option><option value="notify">Notify</option></select></div>
           </div>
-          <ModalFooter onCancel={closeModal} onConfirm={() => showCreate ? createMutation.mutate() : updateMutation.mutate()} confirmLabel="Save" disabled={createMutation.isPending || updateMutation.isPending || !form.nodeId.trim() || form.maxFailures < 1 || form.failureWindowSec < 1} />
+          <ModalFooter onCancel={closeModal} onConfirm={() => showCreate ? createMutation.mutate() : updateMutation.mutate()} confirmLabel="Save" disabled={createMutation.isPending || updateMutation.isPending || !form.nodeId.trim() || form.maxFailures < 1 || form.failureWindowSec < 1 || form.cooldownSec < 1} />
         </Modal>
       )}
     </div>

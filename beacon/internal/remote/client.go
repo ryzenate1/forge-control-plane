@@ -29,6 +29,8 @@ type Client interface {
 	ReportEvacuationProgress(ctx context.Context, evacuationID string, progress EvacuationProgress) error
 	SetInstallationStatus(ctx context.Context, serverID string, successful bool) error
 	SendCrashEvent(ctx context.Context, serverID string, exitCode int, oomKilled bool, autoRestart bool) error
+	SendBackupStatus(ctx context.Context, serverID string, req BackupStatusRequest) error
+	SendRestoreStatus(ctx context.Context, serverID string, req RestoreStatusRequest) error
 }
 
 type client struct {
@@ -229,4 +231,14 @@ func (c *client) SendCrashEvent(ctx context.Context, serverID string, exitCode i
 		"auto_restart": autoRestart,
 	}
 	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/crash", body)
+}
+
+// SendBackupStatus notifies the panel that a backup completed.
+func (c *client) SendBackupStatus(ctx context.Context, serverID string, req BackupStatusRequest) error {
+	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/backups/status", req)
+}
+
+// SendRestoreStatus notifies the panel that a restore completed.
+func (c *client) SendRestoreStatus(ctx context.Context, serverID string, req RestoreStatusRequest) error {
+	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/backups/restore-status", req)
 }

@@ -1,10 +1,5 @@
-services:
-  postgres:
-    ports:
-      - "5432:5432"
-    environment:
-      POSTGRES_PASSWORD: gamepanel
-  
-  redis:
-    ports:
-      - "6379:6379"
+# Local overrides intentionally do not publish PostgreSQL or Redis. Use
+# `docker compose exec postgres psql ...` and `docker compose exec redis
+# redis-cli ...` for development access. Publishing these ports by default is
+# unsafe on developer laptops and VPS hosts alike.
+services: {}

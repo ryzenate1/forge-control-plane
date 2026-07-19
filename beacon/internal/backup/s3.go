@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -47,6 +48,8 @@ type S3Backup struct {
 	uploader  s3Uploader
 	local     *LocalBackup
 	retryBase time.Duration
+	mu        sync.Mutex
+	progress  ProgressFunc
 }
 
 // NewS3Backup fails closed: a selected S3 adapter is never returned without a
@@ -80,6 +83,11 @@ func NewS3Backup(config *S3Config) (*S3Backup, error) {
 }
 
 func (s *S3Backup) Type() AdapterType { return S3Adapter }
+
+func (s *S3Backup) SetProgressCallback(fn ProgressFunc) {
+	s.progress = fn
+	s.local.SetProgressCallback(fn)
+}
 
 func (s *S3Backup) Create(ctx context.Context, serverRoot, namespace, name string, ignored []string) (*BackupInfo, error) {
 	localBackup, err := s.local.Create(ctx, serverRoot, namespace, name, ignored)

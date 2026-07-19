@@ -39,8 +39,14 @@ func TestCreateAllowsOnlyConfiguredMountSources(t *testing.T) {
 			if rec.Code != test.status {
 				t.Fatalf("expected status %d, got %d: %s", test.status, rec.Code, rec.Body.String())
 			}
-			if test.status == http.StatusAccepted && (len(rt.createReq.Mounts) != 1 || rt.createReq.Mounts[0].Source != allowedChild) {
-				t.Fatalf("unexpected runtime mounts: %#v", rt.createReq.Mounts)
+			if test.status == http.StatusAccepted {
+				resolved, err := filepath.EvalSymlinks(allowedChild)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(rt.createReq.Mounts) != 1 || rt.createReq.Mounts[0].Source != resolved {
+					t.Fatalf("unexpected runtime mounts: %#v (want %v)", rt.createReq.Mounts, resolved)
+				}
 			}
 		})
 	}
@@ -55,14 +61,18 @@ func TestRuntimeRequestFromConfigurationParsesAndValidatesMounts(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	resolved, err := filepath.EvalSymlinks(allowed)
+	if err != nil {
+		t.Fatal(err)
+	}
 	req, ok, err := server.runtimeRequestFromConfiguration(testServerID, map[string]any{
 		"mounts": []any{map[string]any{"source": allowed, "target": "/mnt/data", "read_only": true}},
 	})
 	if err != nil || !ok {
 		t.Fatalf("runtime request: ok=%v err=%v", ok, err)
 	}
-	if len(req.Mounts) != 1 || req.Mounts[0].Source != allowed || !req.Mounts[0].ReadOnly {
-		t.Fatalf("unexpected mounts: %#v", req.Mounts)
+	if len(req.Mounts) != 1 || req.Mounts[0].Source != resolved || !req.Mounts[0].ReadOnly {
+		t.Fatalf("unexpected mounts: %#v (want %v)", req.Mounts, resolved)
 	}
 
 	_, _, err = server.runtimeRequestFromConfiguration(testServerID, map[string]any{

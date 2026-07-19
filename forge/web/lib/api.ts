@@ -205,7 +205,8 @@ export async function fetchSetupStatus(): Promise<ApiSetupStatus> {
     credentials: "include",
   });
   if (!response.ok) {
-    return { required: false, hasAdmin: false, appVersion: "unknown" };
+    const errorMessage = await getErrorMessage(response, "Setup status request failed with");
+    throw new Error(errorMessage);
   }
   return response.json() as Promise<ApiSetupStatus>;
 }
@@ -1102,12 +1103,9 @@ export async function exportAdminActivity(format: "csv" | "json", filter: AdminA
   return response.blob();
 }
 
-export async function fetchPermissions(): Promise<
-  { permissions: string[]; roles: { key: string; name: string; isAdmin: boolean }[] }
-> {
-  return apiFetch<{ permissions: string[]; roles: { key: string; name: string; isAdmin: boolean }[] }>(
-    "/permissions",
-  );
+export async function fetchPermissions(): Promise<Record<string, Record<string, string>>> {
+  const result = await apiFetch<{ permissions: Record<string, Record<string, string>> }>("/permissions");
+  return result.permissions;
 }
 
 export async function searchUsers(query: string): Promise<ApiUser[]> {
@@ -1219,7 +1217,7 @@ export async function fetchWSTicket(
   stream: string,
 ): Promise<ApiWSTicket> {
   return apiFetch<ApiWSTicket>(
-    `/servers/${serverId}/ws-ticket?stream=${encodeURIComponent(stream)}`,
+    `/servers/${encodeURIComponent(serverId)}/ws/ticket?stream=${encodeURIComponent(stream)}`,
     { method: "POST" },
   );
 }
@@ -1972,11 +1970,18 @@ export async function fetchServerActivity(
   page = 1,
   perPage = 50,
 ): Promise<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }> {
-  return apiFetch<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
+  const result = await apiFetch<ApiAuditEvent[] | { data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
     `/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
     {},
     true,
   );
+  if (Array.isArray(result)) {
+    return {
+      data: result,
+      pagination: { page: 1, per_page: result.length, total: result.length, total_pages: 1 },
+    };
+  }
+  return result;
 }
 
 export async function fetchServerUsers(serverId: string): Promise<ApiServerSubuser[]> {
@@ -2084,7 +2089,7 @@ export async function updateServerStartupVariable(
   value: string,
 ): Promise<void> {
   await putJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/variable`, {
-    variableId,
+    key: variableId,
     value,
   });
 }

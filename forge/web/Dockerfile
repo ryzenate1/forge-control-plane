@@ -1,6 +1,8 @@
 FROM node:20-alpine AS deps
 WORKDIR /src
 COPY package.json package-lock.json ./
+COPY forge/web/package.json ./forge/web/package.json
+COPY packages ./packages
 RUN npm ci
 
 FROM node:20-alpine AS build
@@ -9,12 +11,16 @@ ARG API_INTERNAL_URL=http://api:8080
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
 COPY --from=deps /src/node_modules ./node_modules
 COPY . .
-RUN npm run build
+RUN npm --workspace @forge/web run build
 
 FROM node:20-alpine AS runner
 WORKDIR /app
 ENV NODE_ENV=production
-COPY --from=build /src/.next/standalone ./
-COPY --from=build /src/.next/static ./.next/static
+ENV HOSTNAME=0.0.0.0
+ENV PORT=3000
+COPY --from=build /src/forge/web/.next/standalone ./
+COPY --from=build /src/forge/web/.next/static ./forge/web/.next/static
+USER node
 EXPOSE 3000
-CMD ["node", "server.js"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
+CMD ["node", "forge/web/server.js"]

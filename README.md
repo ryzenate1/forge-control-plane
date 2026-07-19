@@ -1,555 +1,461 @@
-# ⚔️ Forge Control Plane
+<div align="center">
 
-<p align="center">
-  <img src="https://img.shields.io/badge/status-active_development-2ecc71?style=for-the-badge&logo=netlify&logoColor=white" alt="Status">
-  <img src="https://img.shields.io/badge/version-0.1.0-3498db?style=for-the-badge&logo=semver&logoColor=white" alt="Version">
-  <img src="https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white" alt="Go">
-  <img src="https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=next.js&logoColor=white" alt="Next.js">
-  <img src="https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React">
-  <img src="https://img.shields.io/badge/TypeScript-5.7-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript">
-  <img src="https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white" alt="PostgreSQL">
-  <img src="https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?style=for-the-badge&logo=tailwindcss&logoColor=white" alt="Tailwind CSS">
-  <img src="https://img.shields.io/badge/license-proprietary-e74c3c?style=for-the-badge&logo=github&logoColor=white" alt="License">
-</p>
+# ⚔️ GamePanel
 
-<p align="center">
-  <b>Cloud-native game server orchestration — modern, scalable, and built for serious hosting providers.</b>
-</p>
+### Forge Control Plane · Beacon Node Agent
 
-<p align="center">
-  <i>Replaces traditional PHP-based panels (Pterodactyl, Pelican, PufferPanel) with a high-performance Go + Next.js stack.</i>
-</p>
+A modern, self-hosted game-server control plane built with Go, Next.js,
+PostgreSQL, Redis, and Docker.
 
-<hr>
+[![Status](https://img.shields.io/badge/status-active_development-22c55e?style=for-the-badge)](#project-status)
+[![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
+[![Next.js](https://img.shields.io/badge/Next.js-15-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=for-the-badge&logo=react&logoColor=111827)](https://react.dev/)
+[![PostgreSQL](https://img.shields.io/badge/PostgreSQL-16-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://www.postgresql.org/)
+[![Docker](https://img.shields.io/badge/Docker-ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://www.docker.com/)
 
-## ✨ Features at a Glance
+[Quick start](#quick-start-for-development) ·
+[Ubuntu deployment](#production-deployment-on-ubuntu) ·
+[Documentation](#documentation) ·
+[Architecture](#architecture) ·
+[Testing](#testing-and-quality-checks)
 
-| 🚀 **Performance** | 🔒 **Security** | 🎮 **Game Server Mgmt** | ☁️ **Orchestration** |
-|---|---|---|---|
-| Go + Fiber async HTTP | WebAuthn / Passkeys | Console WebSocket + power | Placement engine |
-| Next.js 15 App Router | 2FA / TOTP | File CRUD + archive/extract | Multi-region capacity |
-| React 19 + TanStack Query | JWT + API keys (scoped) | SFTP (native, delegated auth) | Migration planner |
-| PostgreSQL 16 + Redis 7 | HMAC-signed heartbeats | Backups (local zip + S3) | Evacuation planner |
-| Docker / containerd / k8s | Container hardening | Schedules + databases | Recovery coordinator |
-| Prometheus + Grafana | AES-256-GCM at rest | Mounts + webhooks | Auto-scaling |
-| Multi-arch Docker images | Path-traversal protection | Eggs / nests / templates | Reservations system |
-| i18n in **8 languages** | CSRF + security headers | Startup variables | Resource quotas |
+</div>
 
 ---
 
-## 🏗️ Architecture
+## What is GamePanel?
 
-```
-┌─────────────┐     ┌──────────────┐     ┌───────────────┐     ┌─────────┐
-│   Browser   │ ──▶ │  forge/web   │ ──▶ │  forge/api    │ ──▶ │  beacon │
-│  (Next.js)  │     │  (React 19)  │     │  (Go + Fiber) │     │ (Go daemon)│
-└─────────────┘     └──────────────┘     └───────┬───────┘     └────┬────┘
-                                                 │                  │
-                                          ┌──────┴──────┐    ┌─────┴─────┐
-                                          │ PostgreSQL   │    │  Docker   │
-                                          │   Redis      │    │ containerd│
-                                          └─────────────┘    │  k8s      │
-                                                              │ Firecracker│
-                                                              └───────────┘
-```
+GamePanel manages game servers across one or more Linux machines. The **Forge**
+control plane provides the web dashboard, API, scheduling, placement, recovery,
+and administration features. A **Beacon** agent runs on each game node and
+controls its Docker workloads, files, console, backups, networking, and SFTP.
 
-### 🧩 Component Breakdown
+It can begin as an all-in-one Ubuntu VPS and grow into a multi-node deployment
+with planned evacuation, shared S3-compatible backups, recovery, AWS EC2 node
+bootstrap, and TCP/UDP load balancing.
 
-| Component | Path | Language | Role |
-|---|---|---|---|
-| **Forge API** | `forge/api/` | **Go 1.26** + Fiber v2 | REST API, auth, database, orchestration, placement |
-| **Forge Web** | `forge/web/` | **Next.js 15** + React 19 | Admin dashboard, server management, real-time console |
-| **Beacon** | `beacon/` | **Go 1.26** | Per-node agent: runtime, backups, SFTP, health |
-| **Shared SDK** | `packages/sdk/` | TypeScript | Forge API client SDK |
-| **Shared Types** | `packages/shared-types/` | TypeScript | Cross-package type definitions |
-| **Shared UI** | `packages/ui/` | TypeScript + React | Reusable UI primitives |
+> [!IMPORTANT]
+> The recommended production runtime is Docker on Ubuntu. Kubernetes,
+> containerd, and Firecracker adapters exist in the codebase, but the documented
+> and verified deployment path in this repository is Docker Compose plus Beacon.
 
----
+## Highlights
 
-## 🚀 Quick Start
-
-### Prerequisites
-
-- [Go](https://go.dev/dl/) 1.26+
-- [Node.js](https://nodejs.org/) 20+
-- [Docker](https://www.docker.com/) + [Compose](https://docs.docker.com/compose/)
-- A terminal and 10 minutes ☕
-
-### 1️⃣ Start Infrastructure
-
-```bash
-cd infra && docker compose up -d postgres redis && cd ..
-```
-
-### 2️⃣ Start the API
-
-```bash
-cd forge/api && go run ./cmd/api
-```
-
-> Migrations run automatically on first boot. The API listens on `:8080`.
-
-### 3️⃣ Start the Web UI
-
-```bash
-cd forge/web && npm install && npm run dev
-```
-
-> Opens on `http://localhost:3000` — you'll be greeted by the setup wizard.
-
-### 4️⃣ Start a Beacon (Node Agent)
-
-```bash
-cd beacon && go run ./cmd/daemon
-```
-
-> Needs a node token from the panel. Listens on `:9090` (API) + `:2022` (SFTP).
-
-### 5️⃣ One-Shot Dev Launcher
-
-```bash
-./start-dev.sh
-```
-
-> Starts everything — infra, API, web, beacon — with a single command. 🎯
-
-### 🔗 Service URLs
-
-| Service | URL |
+| Area | Included capabilities |
 |---|---|
-| Web UI | `http://localhost:3000` |
-| API | `http://localhost:8080/api/v1` |
-| API Docs | `http://localhost:8080/api/v1/docs` |
-| Beacon Health | `http://localhost:9090/health` |
+| 🎮 Game management | Server lifecycle, console, files, SFTP, schedules, databases, mounts, eggs and startup variables |
+| 🌐 Networking | TCP and UDP allocations, container-port remapping, real L4 TCP/UDP target groups and draining |
+| 🧭 Orchestration | Placement, reservations, migrations, evacuation, recovery, reconciliation and failover policies |
+| 💾 Backups | Local and S3-compatible game backups, verification, retention and PostgreSQL dumps |
+| 🔐 Security | First-run setup, sessions, API keys, roles/scopes, TOTP, WebAuthn, rate limits and encryption at rest |
+| ☁️ Cloud | AWS EC2 provisioning with automatic Beacon cloud-init bootstrap |
+| 📈 Operations | Health endpoints, Prometheus, Grafana, Alertmanager, activity logs and audit events |
+| 🌍 Interface | Responsive Next.js dashboard and translations for eight languages |
+
+## Architecture
+
+```mermaid
+flowchart LR
+    Player["Players<br/>TCP / UDP"]
+    Browser["Browser"]
+    Proxy["Nginx + TLS"]
+    Web["Forge Web<br/>Next.js"]
+    API["Forge API<br/>Go + Fiber"]
+    DB[("PostgreSQL")]
+    Cache[("Redis")]
+    S3[("S3-compatible<br/>backup storage")]
+    BeaconA["Beacon A"]
+    BeaconB["Beacon B"]
+    GamesA["Docker game<br/>containers"]
+    GamesB["Docker game<br/>containers"]
+
+    Browser --> Proxy
+    Proxy --> Web
+    Proxy --> API
+    API --> DB
+    API --> Cache
+    API --> BeaconA
+    API --> BeaconB
+    BeaconA --> GamesA
+    BeaconB --> GamesB
+    BeaconA --> S3
+    BeaconB --> S3
+    Player --> GamesA
+    Player --> GamesB
+    Player --> API
+```
+
+| Component | Location | Purpose |
+|---|---|---|
+| Forge API | [`forge/api/`](./forge/api/) | REST API, authentication, persistence and orchestration |
+| Forge Web | [`forge/web/`](./forge/web/) | User and administrator dashboard |
+| Beacon | [`beacon/`](./beacon/) | Per-node Docker, filesystem, console, backup and SFTP agent |
+| Infrastructure | [`infra/`](./infra/) | Compose, Nginx, monitoring, bootstrap and backup configuration |
+| Shared packages | [`packages/`](./packages/) | TypeScript SDK, API types and UI primitives |
+| Documentation | [`docs/`](./docs/) | Architecture, operations, API, development and historical audits |
+
+## Choose your installation
+
+| Goal | Recommended method | What you need |
+|---|---|---|
+| Evaluate or contribute locally | Development launcher | Go, Node.js, npm and Docker Desktop/Engine |
+| Host everything on one VPS | Production Compose | Ubuntu, Docker Engine, Compose v2, domain and TLS |
+| Add game capacity | Standalone Beacon | A second Linux VPS, Docker and a panel-issued node credential |
+| Test offline recovery | Two Beacons + shared object storage | S3-compatible bucket accessible from both nodes |
+| Provision AWS nodes | Forge cloud module | AWS credentials/role, VPC settings and a published Beacon image |
+
+## Requirements and downloads
+
+### For local development
+
+- [Git](https://git-scm.com/downloads)
+- [Go 1.26 or newer](https://go.dev/dl/)
+- [Node.js 20 LTS or newer](https://nodejs.org/en/download)
+- npm, included with Node.js
+- [Docker Desktop](https://www.docker.com/products/docker-desktop/) on macOS/Windows, or [Docker Engine](https://docs.docker.com/engine/install/) on Linux
+- Docker Compose v2
+
+Recommended: 4 CPU cores, 8 GiB RAM, 20 GiB free disk space, `curl`, and
+OpenSSL.
+
+### For an Ubuntu production host
+
+- Ubuntu 24.04 LTS, 64-bit
+- Docker Engine and Docker Compose **2.24.4+**
+- Git, curl, ca-certificates, OpenSSL, Nginx and Certbot
+- A domain name with an `A`/`AAAA` record pointing to the VPS
+- SMTP credentials if password-reset email is required
+- An S3-compatible bucket for multi-node disaster recovery
+
+| Deployment | Suggested minimum |
+|---|---|
+| Small all-in-one panel and a few light servers | 4 vCPU, 8 GiB RAM, 80 GiB SSD |
+| Dedicated control plane | 2–4 vCPU, 4–8 GiB RAM, 40 GiB SSD |
+| Beacon game node | Determined by the games; reserve at least 1 GiB RAM for the OS and Beacon |
+
+Game workloads consume most of the memory and storage. Size nodes for peak
+player load, backups, world growth, and container image cache—not only idle use.
+
+## Quick start for development
+
+### 1. Download the source and dependencies
+
+```bash
+git clone <repository-url> gamepanel
+cd gamepanel
+npm ci
+go work sync
+```
+
+### 2. Start the development stack
+
+Make sure Docker is running, then use the managed launcher:
+
+```bash
+npm run dev:start
+```
+
+The launcher starts PostgreSQL and Redis in Docker, then runs Forge API, Beacon,
+and Forge Web from source. Open [http://localhost:3000/setup](http://localhost:3000/setup)
+to create the first administrator.
+
+```bash
+npm run dev:status   # show component status
+npm run dev:logs     # follow development logs
+npm run dev:stop     # stop managed development processes
+```
+
+If PostgreSQL and Redis already run locally, use:
+
+```bash
+./scripts/start-dev.sh native
+```
+
+### Local service addresses
+
+| Service | Address |
+|---|---|
+| Web dashboard | `http://localhost:3000` |
+| First-run setup | `http://localhost:3000/setup` |
+| Forge API | `http://localhost:8080/api/v1` |
+| API health | `http://localhost:8080/api/v1/health/ready` |
+| Swagger UI | `http://localhost:8080/api/docs` |
+| Beacon health | `http://localhost:9090/health` |
+| Beacon SFTP | `localhost:2022` |
 | PostgreSQL | `localhost:5432` |
 | Redis | `localhost:6379` |
-| Prometheus | `http://localhost:9091` |
-| Grafana | `http://localhost:3001` (`admin` / `admin`) |
 
----
+## Production deployment on Ubuntu
 
-## 📁 Repository Structure
+The complete copy-and-paste installation, firewall, TLS, second-node, AWS,
+load-balancer, evacuation and recovery instructions live in the
+**[Ubuntu production deployment runbook](./docs/operations/production-deployment.md)**.
 
-```
-gamepanel/
-│
-├── 📦 forge/                        # Control plane (the "Forge" brand)
-│   ├── 🦾 api/                      # Go + Fiber REST API
-│   │   ├── cmd/api/                 #   Entry point
-│   │   ├── config/                  #   Typed configuration
-│   │   ├── internal/                #   Core logic
-│   │   │   ├── auth/                #     Auth (sessions, JWT, WebAuthn, scopes)
-│   │   │   ├── domain/              #     Domain models
-│   │   │   ├── events/              #     Pub/sub event system
-│   │   │   ├── eventstore/          #     Event sourcing
-│   │   │   ├── http/                #     HTTP handlers, middleware, routing
-│   │   │   ├── orchestrator/        #     Deployment, suspension, views
-│   │   │   ├── placement/           #     Placement strategies & scoring
-│   │   │   ├── runtime/             #     Runtime adapters (Docker, k8s, etc.)
-│   │   │   ├── secrets/             #     AES-256-GCM keyring
-│   │   │   ├── services/            #     Business logic services
-│   │   │   └── store/               #     Database layer (PG/MySQL/SQLite)
-│   │   ├── migrations/              #     SQL migrations (001 → 072+)
-│   │   └── docs/                    #     OpenAPI spec, Swagger UI
-│   │
-│   └── 🎨 web/                      # Next.js 15 dashboard
-│       ├── app/                     #   App Router pages
-│       │   ├── admin/               #     Admin panels (32+ pages)
-│       │   ├── server/[id]/         #     Server detail views
-│       │   └── setup/               #     First-run wizard
-│       ├── components/              #   React components
-│       │   ├── admin/               #     Admin UI components
-│       │   ├── server/              #     Server management UI
-│       │   └── ui/                  #     Primitives (shell, auth, theme)
-│       ├── lib/                     #   API client, contract tests
-│       ├── stores/                  #   Zustand state management
-│       └── test/                    #   Vitest test files
-│
-├── 📡 beacon/                       # Node agent (the "Beacon" brand)
-│   ├── cmd/daemon/                  #   Entry point
-│   ├── config/                      #   Config (YAML / env / flags)
-│   └── internal/                    #   Core logic
-│       ├── api/                     #     HTTP handlers, middleware
-│       ├── auth/                    #     OAuth2, scopes, sessions
-│       ├── backup/                  #     Local zip + S3 backups
-│       ├── installer/               #     Server software installer
-│       ├── runtime/                 #     Docker, containerd, k8s, Firecracker
-│       ├── server/                  #     Server lifecycle, console, stats
-│       ├── sftpserver/              #     Native SFTP server
-│       ├── system/                  #     Atomic ops, rate limiter, lock
-│       ├── tokens/                  #     WebSocket token management
-│       └── transfer/                #     Server transfer protocol
-│
-├── 🐳 infra/                        # Infrastructure
-│   ├── compose.yml                  #   Full stack Docker Compose
-│   ├── nginx.conf                   #   Production reverse proxy
-│   ├── prometheus.yml               #   Metrics scraping config
-│   ├── grafana/                     #   Grafana dashboards
-│   └── ci/                          #   CI helper scripts
-│
-├── 📚 docs/                         # Documentation
-│   ├── architecture/                #   Architecture & domain model
-│   ├── development/                 #   Development setup guide
-│   ├── operations/                  #   Deployment & security runbooks
-│   ├── planning/                    #   Roadmap & vision
-│   └── adr/                         #   Architecture Decision Records
-│
-├── 📦 packages/                     # Shared npm workspaces
-│   ├── sdk/                         #   @forge/sdk — API client SDK
-│   ├── shared-types/                #   @forge/shared-types
-│   └── ui/                          #   @forge/ui — design system
-│
-├── 📜 scripts/                      # Dev/test/lint helpers
-├── 🌐 lang/                         # i18n translations (8 languages)
-│
-├── 📄 .github/                      # CI/CD, Dependabot, templates
-├── 📄 Makefile                      # Build/test/lint/format targets
-├── 📄 go.work                       # Go workspace
-└── 📄 README.md                     # ← You are here
-```
-
----
-
-## 🎯 What's Implemented
-
-### 🔐 Authentication & Security
-- [x] **Sessions** — secure cookie-based auth
-- [x] **JWT** — stateless API authentication
-- [x] **2FA / TOTP** — two-factor authentication
-- [x] **WebAuthn / Passkeys** — passwordless authentication
-- [x] **API Keys** — scoped, revocable, rate-limited
-- [x] **OAuth2** — social login providers
-- [x] **CSRF Protection** — token-based cross-site mitigation
-- [x] **Security Headers** — HSTS, X-Frame-Options, X-Content-Type-Options
-- [x] **Rate Limiting** — per-endpoint, per-user throttling
-- [x] **Encryption at Rest** — AES-256-GCM master key keyring
-
-### 👥 User Management
-- [x] **First-run wizard** — `/setup` + `POST /api/v1/setup`
-- [x] **Users & Subusers** — hierarchical account management
-- [x] **Roles & Permissions** — admin vs. non-admin, granular scopes
-- [x] **Password Reset** — email-based recovery flow
-
-### 🖥️ Server Management
-- [x] **Nodes** — add, configure, monitor game server nodes
-- [x] **Allocations** — IP/port assignment with regions
-- [x] **Servers** — full CRUD with resource limits
-- [x] **Eggs / Nests / Templates** — pre-configured server blueprints
-- [x] **Startup Variables** — per-server environment configuration
-- [x] **Console WebSocket** — real-time terminal with xterm.js
-- [x] **Power Actions** — start, stop, restart, kill
-- [x] **Logs** — streaming and historical log access
-
-### 📁 File System
-- [x] **File CRUD** — create, read, update, delete files
-- [x] **Archive / Extract** — zip/unzip with path-traversal protection
-- [x] **SFTP** — native server (not chroot proxy) with panel-delegated auth
-- [x] **Secure Paths** — `safePath` + `safeJoin` traversal guards
-
-### 💾 Backups
-- [x] **Local Backups** — zip archive on node storage
-- [x] **S3 Backups** — AWS S3 with configurable retention
-- [x] **`.pteroignore` Support** — exclude patterns honored
-- [x] **Backup Verification** — integrity checks after creation
-- [x] **Scheduled Backups** — cron-based automation
-
-### 📅 Schedules & Automation
-- [x] **Cron Schedules** — time-based task automation
-- [x] **Databases** — server database provisioning
-- [x] **Mounts** — shared filesystem mounts
-- [x] **Webhooks** — event-driven HTTP callbacks
-
-### 📡 Orchestration (Advanced)
-- [x] **Placement Engine** — intelligent server placement with constraints
-- [x] **Reservations** — resource reservation system
-- [x] **Migration Planner** — server migration orchestration
-- [x] **Evacuation Planner** — graceful node evacuation
-- [x] **Recovery Coordinator** — automated failure recovery
-- [x] **Multi-Region Capacity** — cross-datacenter orchestration
-- [x] **Auto-Scaler** — dynamic resource scaling
-- [x] **Reconciler** — desired-state reconciliation loop
-
-### 🏥 Observability
-- [x] **Prometheus Metrics** — API (`:8080`) + Beacon (`:9090`)
-- [x] **Grafana Dashboards** — pre-provisioned visualizations
-- [x] **Health Endpoints** — comprehensive health checks
-- [x] **Activity Logs** — detailed audit trail
-- [x] **Alerting** — Prometheus Alertmanager integration
-
-### 🌍 Internationalization
-- [x] **English** 🇬🇧 | **German** 🇩🇪 | **Spanish** 🇪🇸 | **French** 🇫🇷
-- [x] **Japanese** 🇯🇵 | **Portuguese** 🇧🇷 | **Russian** 🇷🇺 | **Chinese** 🇨🇳
-- [x] **Crowdin Integration** — community-driven translations
-
-### 🐳 Runtime Support
-- [x] **Docker** — primary container runtime
-- [x] **containerd** — direct OCI runtime
-- [x] **Kubernetes** — orchestrated deployments
-- [x] **Podman** — daemonless containers
-- [x] **Firecracker** — microVM sandboxing
-
----
-
-## 🧪 Verification Status
-
-| Component | `go build ./...` | `go vet ./...` | `go test ./...` |
-|---|---|---|---|
-| `forge/api` | ✅ PASS | ✅ PASS | ✅ PASS (100+ tests) |
-| `beacon` | ✅ PASS | ✅ PASS | ✅ PASS (100+ tests) |
-
-| Component | `npm run typecheck` | `npm run build` | `npm run lint` |
-|---|---|---|---|
-| `forge/web` | ✅ PASS | ✅ PASS | ✅ PASS |
-
-### 📊 Test Coverage
-
-```
-forge/api   → http handlers, store integration, services, placement, auth
-beacon      → server lifecycle, runtime, sftpserver, backup, installer, tokens
-forge/web   → components, API client contracts, auth flows, UI contracts
-```
-
-> Run all tests with a single command: `make test`
-
----
-
-## 🛠️ Development
-
-### Available Commands
-
-| Command | Description |
-|---|---|
-| `make dev` | Start full dev environment |
-| `make build` | Build all 3 components |
-| `make test` | Run all Go + JS tests |
-| `make lint` | Lint all code (Go + JS + Docker) |
-| `make format` | Format all code |
-| `make api-test` | Run `forge/api` tests only |
-| `make beacon-test` | Run `beacon` tests only |
-| `make web-test` | Run `forge/web` tests only |
-| `make clean` | Clean build artifacts |
-
-### Scripts
-
-| Script | Description |
-|---|---|
-| `./scripts/start-dev.sh` | Launch full dev environment |
-| `./scripts/stop-dev.sh` | Stop dev environment |
-| `./scripts/status.sh` | Check dev service status |
-| `./scripts/logs.sh` | View dev logs |
-| `./scripts/test.sh` | Run all tests |
-| `./scripts/lint.sh` | Run all linters |
-| `./scripts/format.sh` | Format all code |
-| `./scripts/diagnose.sh` | System diagnostics |
-| `./scripts/bench.sh` | Run benchmarks |
-
-### 🐳 Docker Build
+The short version is:
 
 ```bash
-# Build all images
-docker compose -f infra/compose.yml build
-
-# Multi-arch build (for production)
-docker buildx build --platform linux/amd64,linux/arm64 ...
-```
-
-> CI automatically builds multi-arch images on push and publishes to **GHCR**.
-
----
-
-## 🌐 CI/CD Pipeline
-
-```mermaid
-graph LR
-    A[Push / PR] --> B{CI Workflow}
-    B --> C[forge/api: lint + build + test + migrations]
-    B --> D[beacon: lint + build + test]
-    B --> E[forge/web: lint + typecheck + build + audit]
-    C --> F[All Green?]
-    D --> F
-    E --> F
-    F -->|main or v* tag| G[Docker Build & Push]
-    G --> H[GHCR Images]
-    H --> I[Release]
-```
-
-- ✅ **CI** — `.github/workflows/ci.yml` — runs on every push/PR
-- 🐳 **Docker** — `.github/workflows/docker.yml` — multi-arch builds
-- 🚀 **Deploy** — `.github/workflows/deploy.yml` — production deploy
-- 📦 **Release** — `.github/workflows/release.yml` — auto-generated release notes
-- 🤖 **Dependabot** — weekly dependency updates (Go, npm, Docker, Actions)
-
----
-
-## 🏭 Production Deployment
-
-### Docker Compose (Recommended)
-
-```bash
-# 1. Clone and configure
-git clone https://github.com/your-org/gamepanel.git
+git clone <repository-url> gamepanel
 cd gamepanel/infra
-cp .env.example .env   # Edit with your secrets
 
-# 2. Deploy the full stack
-docker compose up -d
+# Generates API, database, encryption, node and Grafana secrets.
+PANEL_DOMAIN=panel.example.com ./gen-env.sh .env
+
+sudo install -d -o "$USER" -g "$USER" \
+  /srv/game-panel/servers \
+  /var/backups/gamepanel/postgres
+
+./bootstrap-control-plane.sh
 ```
 
-### Manual Deployment
+The bootstrap intentionally starts the database, API, and web interface first.
+Until HTTPS is configured, reach the loopback-only web interface with an SSH
+tunnel (`ssh -L 3000:127.0.0.1:3000 user@your-vps`) and open
+`http://localhost:3000/setup`. Create the local node in **Admin → Nodes**, and
+replace
+`DAEMON_NODE_ID` and `DAEMON_NODE_TOKEN` in `infra/.env` with the values issued
+by the panel. Then start the complete production stack:
 
-```yaml
-# infra/compose.yml deploys:
-services:
-  postgres:    # PostgreSQL 16 (primary database)
-  redis:       # Redis 7 (cache, sessions, pub/sub)
-  api:         # Forge API (Go, port 8080)
-  daemon:      # Beacon agent (Go, port 9090)
-  web:         # Next.js UI (Node, port 3000)
-  prometheus:  # Metrics collection
-  grafana:     # Visualization dashboards
-  alertmanager:# Alert routing
+```bash
+docker compose \
+  -f compose.yml \
+  -f compose.production.yml \
+  --env-file .env \
+  up -d --build
+
+docker compose \
+  -f compose.yml \
+  -f compose.production.yml \
+  --env-file .env \
+  ps
 ```
 
-> **Infrastructure as Code** — everything lives in `infra/` with nginx, TLS, and monitoring pre-configured.
+Production Compose keeps PostgreSQL, Redis, Forge Web, Forge API, Beacon API,
+Prometheus, Grafana, and Alertmanager private or loopback-only. Nginx terminates
+public HTTPS. Only explicitly selected SFTP, game, and load-balancer ports
+should be exposed.
 
----
+> [!CAUTION]
+> Never deploy `infra/compose.yml` by itself on a public host. Always include
+> `infra/compose.production.yml`, protect `infra/.env`, use TLS, configure a
+> firewall, and store database/game backups off the VPS.
 
-## 🔒 Security
+### Deploy the first game
 
-### Built-in Protections
+A fresh installation contains a **Minecraft Java** egg using
+`itzg/minecraft-server:java21`.
 
-| Protection | Implementation |
+1. Create the Beacon node.
+2. Add a TCP allocation such as `0.0.0.0:25565` with container port `25565`.
+3. Create a server in **Admin → Servers** using **Games → Minecraft Java**.
+4. Start it from the server console.
+5. Confirm it with `docker ps`, container logs, and a Minecraft client.
+
+UDP games are supported: select `udp` on the allocation and provide the actual
+container port. TCP and UDP may use the same numeric host port because they are
+separate transports.
+
+### Add another Beacon
+
+Create another node in the panel, copy its UUID and credential into a
+node-specific `infra/.env` on the additional Ubuntu host, then run:
+
+```bash
+cd gamepanel/infra
+./bootstrap-beacon.sh
+curl --fail http://127.0.0.1:9090/health
+```
+
+See the runbook for the required firewall rules and S3 settings. Planned
+evacuation and offline recovery require at least two usable nodes; offline
+recovery additionally requires a verified backup accessible from the
+destination node.
+
+## Configuration
+
+Do not handcraft production secrets. Generate the environment file with
+[`infra/gen-env.sh`](./infra/gen-env.sh) or
+[`infra/gen-env.ps1`](./infra/gen-env.ps1), then review it.
+
+| Variable | Purpose |
 |---|---|
-| **Encryption at Rest** | AES-256-GCM with master key keyring |
-| **Container Hardening** | `CapDrop: ALL`, `ReadonlyRootfs`, `no-new-privileges` |
-| **Path Traversal** | `safePath` + `safeJoin` validation |
-| **Heartbeat Auth** | HMAC-SHA256 with constant-time compare |
-| **Auth** | Sessions + JWT + WebAuthn + 2FA + API keys (scoped) |
-| **CSRF** | Token-based cross-site protection |
-| **Headers** | HSTS, X-Frame-Options, X-Content-Type-Options |
-| **Rate Limiting** | Per-endpoint and per-user throttling |
-| **WebSocket** | Ticket-based authentication |
+| `PANEL_URL` | Public HTTPS address used by the panel |
+| `API_AUTH_SECRET` | API signing/authentication secret |
+| `APP_KEY` | Application-level secret |
+| `DATABASE_URL` | Forge PostgreSQL connection string |
+| `FORGE_MASTER_KEY` | Encryption-at-rest master key |
+| `DAEMON_NODE_ID` | Node UUID created in Forge |
+| `DAEMON_NODE_TOKEN` | Panel-issued Beacon credential |
+| `PANEL_API_URL` | Forge API address reachable from Beacon |
+| `GAME_SERVERS_HOST_DIR` | Persistent host directory for game data |
+| `BACKUP_ADAPTER` | `local` or `s3` game backup storage |
+| `S3_*` | S3 bucket, region, endpoint, prefix and credentials/role settings |
+| `LOAD_BALANCER_PORT_MIN/MAX` | Reserved listener range for Forge L4 proxy groups |
+| `AWS_*` | Optional EC2 provisioning and Beacon bootstrap settings |
 
-### 📋 Production Checklist
+The complete template is [`infra/.env.example`](./infra/.env.example).
 
-- [x] Dockerfiles — hardened multi-stage builds
-- [x] CI/CD — automated build + test + security checks
-- [x] Docker Compose — full production stack
-- [x] Environment config — `.env.example` for all modules
-- [x] Reverse proxy — nginx with TLS (Let's Encrypt)
-- [x] Monitoring — Prometheus + Grafana + Alertmanager
-- [x] Session auth — secure cookie configuration
-- [x] First-run wizard — secure initial admin setup
+### Default production ports
 
----
+| Port | Protocol | Use | Recommended exposure |
+|---|---|---|---|
+| 80 / 443 | TCP | HTTP redirect and HTTPS | Public |
+| 2022 | TCP | Beacon SFTP | Trusted networks where possible |
+| 25565 | TCP | Example Minecraft allocation | Public when used |
+| 30000–30100 | TCP/UDP | Integrated load-balancer listeners | Public when used |
+| 3000 / 8080 | TCP | Web and API upstreams | Loopback only |
+| 9090 | TCP | Beacon API | Private control-plane network only |
+| 3001 / 9091 / 9093 | TCP | Grafana, Prometheus, Alertmanager | Loopback/VPN only |
+| 5432 / 6379 | TCP | PostgreSQL and Redis | Never public |
 
-## 🗺️ Roadmap
+Do not assign direct game ports inside the configured load-balancer range on
+the same control-plane host.
 
-```
-Phase 1  ████████████████░░░░░  Core platform (current)
-Phase 2  ██████████░░░░░░░░░░░  SDK + plugin system
-Phase 3  ████████░░░░░░░░░░░░  Marketplace
-Phase 4  ██████░░░░░░░░░░░░░░  Advanced analytics
-```
+## Testing and quality checks
 
-### 🔜 Upcoming
+Before submitting or deploying a change:
 
-- [ ] **WebSocket** `CheckOrigin` allowlist
-- [ ] **Short-lived WebSocket tickets** (replace JWT in URL)
-- [ ] **Fine-grained permissions** (`requirePermission` middleware)
-- [ ] **SDK packages** — `@forge/sdk`, `@forge/shared-types`, `@forge/ui`
-- [ ] **Plugin system** — extensible server types & integrations
-- [ ] **Marketplace** — one-click egg/template installation
-- [ ] **Analytics** — usage metrics & billing integration
+```bash
+npm run lint
+npm run typecheck
+npm test
+npm run build
 
----
-
-## 🤝 Contributing
-
-We welcome contributions! Here's how to get started:
-
-### 📋 Guidelines
-
-1. **Read the docs** — start with `docs/` for architecture and conventions
-2. **Check the roadmap** — see `docs/planning/` for what's coming
-3. **Follow the style** — the codebase has strict linting:
-   - Go: `gofmt` + `golangci-lint`
-   - TypeScript: Prettier + ESLint
-   - Markdown: markdownlint
-   - Docker: hadolint
-4. **Write tests** — new features must include tests
-5. **Run the checks** — `make lint && make test` before submitting
-
-### 🚦 PR Process
-
-```mermaid
-graph LR
-    A[Fork] --> B[Branch]
-    B --> C[Code]
-    C --> D[Test]
-    D --> E[Lint]
-    E --> F[PR]
-    F --> G[Review]
-    G --> H[Merge]
+(cd forge/api && go test ./... && go vet ./...)
+(cd beacon && go test ./... && go vet ./...)
 ```
 
-### 📜 Code of Conduct
+Or use the Makefile:
 
-Please be kind, respectful, and constructive. We're building something awesome together. 🚀
-
----
-
-## 📚 Documentation
-
-The full documentation lives in the [`docs/`](./docs/) directory:
-
-| Directory | Contents |
+| Command | Action |
 |---|---|
-| `docs/architecture/` | System architecture, domain model, runtime reports |
-| `docs/development/` | Developer setup, conventions, workflows |
-| `docs/operations/` | Deployment, security, integration runbooks |
-| `docs/planning/` | Roadmap, phase plans, vision & tasks |
-| `docs/adr/` | Architecture Decision Records |
-| `docs/audits/` | Comprehensive technical security audits |
-| `docs/recovery/` | Disaster recovery plans |
+| `make build` | Build Forge API, Beacon and Forge Web |
+| `make test` | Run backend, Beacon and frontend tests |
+| `make lint` | Run repository lint checks |
+| `make format` | Format supported source files |
+| `make api-test` | Run Forge API tests only |
+| `make beacon-test` | Run Beacon tests only |
+| `make web-test` | Run frontend tests only |
+| `make clean` | Remove generated build artifacts |
 
-### 📖 API Documentation
+CI definitions are under [`.github/workflows/`](./.github/workflows/). The API
+migration validation workflow starts a fresh PostgreSQL database and verifies
+that every SQL migration is recorded.
 
-- **OpenAPI Spec**: `forge/api/docs/openapi.json`
-- **Swagger UI**: `http://localhost:8080/api/v1/docs` (dev)
-- **API Base**: `/api/v1`
+## Repository layout
+
+```text
+gamepanel/
+├── forge/
+│   ├── api/                 # Go control-plane API and SQL migrations
+│   └── web/                 # Next.js dashboard
+├── beacon/                  # Go node agent
+├── infra/                   # Compose, Nginx, monitoring and bootstraps
+├── packages/
+│   ├── sdk/                 # TypeScript API SDK
+│   ├── shared-types/        # Shared contracts
+│   └── ui/                  # Shared UI primitives
+├── lang/                    # Translation catalogs
+├── docs/                    # Maintainer and operator documentation
+├── scripts/                 # Development, validation and operations helpers
+├── reference/               # Upstream research; not shipped runtime code
+├── Makefile
+├── go.work
+└── package.json
+```
+
+## Documentation
+
+| Start here | Description |
+|---|---|
+| [Documentation index](./docs/README.md) | Map of the documentation tree |
+| [Production deployment](./docs/operations/production-deployment.md) | Ubuntu, TLS, Docker, games, multi-node, AWS and backups |
+| [Security operations](./docs/operations/security.md) | Security controls and operator guidance |
+| [Architecture overview](./docs/architecture/architecture-overview.md) | System components and boundaries |
+| [Current architecture](./docs/architecture/current-architecture.md) | Implemented runtime architecture |
+| [Domain model](./docs/architecture/domain-model.md) | Core orchestration entities and relationships |
+| [Developer setup](./docs/development/development.md) | Source development workflow |
+| [API guide](./docs/api/api.md) | API conventions and usage |
+| [API contracts](./docs/api/API_CONTRACTS.md) | Shared request and response contracts |
+| [Server lifecycle](./forge/api/docs/server-lifecycle.md) | Provisioning and runtime lifecycle |
+| [Encryption at rest](./forge/api/docs/encryption-at-rest.md) | Master-key management and rotation |
+| [OpenAPI specification](./forge/api/docs/openapi.json) | Machine-readable API schema |
+| [Architecture decisions](./docs/adr/README.md) | Important technical decisions |
+
+Documents in `docs/archive/`, `docs/audits/`, `docs/comparative-audit/`, and
+`reference/` preserve research and historical state. For current deployment
+instructions, prefer `docs/operations/production-deployment.md`.
+
+## Security checklist
+
+- Generate secrets; never reuse development values.
+- Keep `infra/.env` outside version control and back it up securely.
+- Put Forge Web and Forge API behind HTTPS.
+- Restrict Beacon port 9090 to the control-plane network or VPN.
+- Never expose PostgreSQL, Redis, Prometheus, or Grafana directly.
+- Use an IAM role or narrowly scoped S3 credentials for backups.
+- Store PostgreSQL dumps and verified game backups off-host.
+- Test recovery before relying on it.
+- Review image tags and dependency updates before production rollout.
+- Run [`scripts/production-guard.sh`](./scripts/production-guard.sh) against the
+  loaded production environment before deployment.
+
+Report security-sensitive problems privately to the repository owner instead
+of publishing credentials or exploit details in a public issue.
+
+## Troubleshooting
+
+| Problem | Check |
+|---|---|
+| Docker command cannot connect | Start Docker Desktop/Engine and verify `docker info` |
+| API does not become ready | Inspect `docker compose logs api postgres` and validate all required secrets |
+| Beacon stays offline | Confirm node UUID/token, `PANEL_API_URL`, time sync and private firewall rules |
+| Game port is unreachable | Check allocation protocol, container port, Docker publishing, VPS firewall and provider security group |
+| Recovery has no target | Bring a second Beacon online, add capacity/allocations and verify a shared backup exists |
+| Load-balancer group does not listen | Enable it, choose a port inside the reserved range and ensure the port is not already allocated |
+| Web UI cannot reach API | Verify Nginx routing and `NEXT_PUBLIC_API_URL` for source builds |
+
+Useful commands:
+
+```bash
+./scripts/diagnose.sh
+./scripts/status.sh
+./scripts/logs.sh
+
+cd infra
+docker compose -f compose.yml -f compose.production.yml --env-file .env ps
+docker compose -f compose.yml -f compose.production.yml --env-file .env logs --tail 200
+```
+
+## Project status
+
+GamePanel is under active development. The Docker Compose production path,
+TCP/UDP allocations, integrated L4 proxy, multi-node evacuation, shared-backup
+recovery, and AWS Beacon bootstrap are implemented. Operators should still use
+staged upgrades, off-host backups, monitoring, and recovery drills before
+hosting critical workloads.
+
+## Contributing
+
+1. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+2. Create a focused branch.
+3. Add or update tests with the change.
+4. Run the checks in [Testing and quality checks](#testing-and-quality-checks).
+5. Document operational or configuration changes.
+6. Open a pull request with a concise explanation and verification evidence.
+
+## License
+
+This repository is proprietary software. All rights are reserved unless the
+repository owner provides a separate license. Material under `reference/` keeps
+the licensing terms of its respective upstream project.
 
 ---
 
-## 💬 Community
+<div align="center">
 
-- 🐛 **Issues** — [GitHub Issues](https://github.com/anomalyco/gamepanel/issues)
-- 💡 **Feature Requests** — open an issue with the `enhancement` label
-- 🤔 **Questions** — open a discussion
-- 🔒 **Security Issues** — email the maintainers (see `CODEOWNERS`)
+Made with ❤️ by **Riyaz**
 
----
+<sub>Go · Next.js · React · TypeScript · PostgreSQL · Redis · Docker</sub>
 
-## 🏆 Acknowledgments
-
-- **Pterodactyl** — inspiration and ecosystem reference
-- **Pelican / PufferPanel** — comparative design insights
-- **All contributors** — every PR, bug report, and feature suggestion helps!
-
----
-
-## ⚖️ License
-
-This project is proprietary software. All rights reserved.
-
-> **Note:** Reference implementations in `reference/` are licensed under their respective upstream licenses (Apache-2.0).
-
----
-
-<p align="center">
-  Made with ❤️ by <a href="https://github.com/anomalyco">@anomalyco</a>
-</p>
-
-<p align="center">
-  <sub>Built with Go, Next.js, React, TypeScript, PostgreSQL, Redis, Docker, and lots of ☕</sub>
-</p>
+</div>

@@ -8,6 +8,7 @@ import (
 
 type Database interface {
 	Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row
 	Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error)
 	BeginTx(ctx context.Context) (*sql.Tx, error)
 	Close() error
@@ -33,6 +34,10 @@ func NewSQLiteDatabase(dsn string) (*SQLiteDatabase, error) {
 
 func (s *SQLiteDatabase) Query(ctx context.Context, query string, args ...interface{}) (*sql.Rows, error) {
 	return s.db.QueryContext(ctx, query, args...)
+}
+
+func (s *SQLiteDatabase) QueryRow(ctx context.Context, query string, args ...interface{}) *sql.Row {
+	return s.db.QueryRowContext(ctx, query, args...)
 }
 
 func (s *SQLiteDatabase) Exec(ctx context.Context, query string, args ...interface{}) (sql.Result, error) {

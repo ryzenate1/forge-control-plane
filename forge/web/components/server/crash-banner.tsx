@@ -11,7 +11,7 @@ interface CrashBannerProps {
 }
 
 export function CrashBanner({ serverId }: CrashBannerProps) {
-  const { access, refreshServer } = useServerContext();
+  const { refreshServer } = useServerContext();
   const queryClient = useQueryClient();
 
   const { data: crashes, isLoading } = useQuery({

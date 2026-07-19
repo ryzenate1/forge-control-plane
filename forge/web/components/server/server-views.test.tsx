@@ -21,8 +21,8 @@ describe("server database secrets", () => {
   it("reveals a newly created password once and sends connection limits", async () => {
     const mocked = mockFetch(
       jsonResponse([]),
-      jsonResponse({ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12, password: "one-time-secret" }),
-      jsonResponse([{ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12 }]),
+      jsonResponse({ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12, provisioningState: "ready", password: "one-time-secret" }),
+      jsonResponse([{ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12, provisioningState: "ready" }]),
     );
     renderWithQuery(<DatabasesView server={server} />);
     await screen.findByText("No databases have been created.");

@@ -54,6 +54,15 @@ func (m *mockPanelClient) ReportEvacuationProgress(ctx context.Context, evacuati
 func (m *mockPanelClient) SetInstallationStatus(ctx context.Context, serverID string, successful bool) error {
 	return nil
 }
+func (m *mockPanelClient) SendCrashEvent(ctx context.Context, serverID string, exitCode int, oomKilled bool, autoRestart bool) error {
+	return nil
+}
+func (m *mockPanelClient) SendBackupStatus(ctx context.Context, serverID string, req remote.BackupStatusRequest) error {
+	return nil
+}
+func (m *mockPanelClient) SendRestoreStatus(ctx context.Context, serverID string, req remote.RestoreStatusRequest) error {
+	return nil
+}
 
 type mockServerManager struct {
 	mu        sync.Mutex

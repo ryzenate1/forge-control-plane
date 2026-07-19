@@ -58,7 +58,6 @@ export default function AdminSchedulerPage() {
   const [tab, setTab] = useState<"scores" | "affinity" | "constraints">("scores");
   const [showCreateAffinity, setShowCreateAffinity] = useState(false);
   const [affinityForm, setAffinityForm] = useState(defaultAffinityForm);
-  const [editingAffinity, setEditingAffinity] = useState<AffinityRule | null>(null);
   const [showCreateConstraint, setShowCreateConstraint] = useState(false);
   const [constraintForm, setConstraintForm] = useState(defaultConstraintForm);
 

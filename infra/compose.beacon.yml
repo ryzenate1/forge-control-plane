@@ -1,0 +1,33 @@
+# Standalone game-node deployment. Copy the repository and a node-specific
+# .env to each Ubuntu game VPS, then run:
+# docker compose -f compose.beacon.yml --env-file .env up -d --build
+services:
+  beacon:
+    build:
+      context: ../beacon
+    restart: unless-stopped
+    network_mode: host
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      APP_ENV: production
+      DAEMON_ADDR: ${DAEMON_ADDR:-:9090}
+      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-:2022}
+      DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set the panel node UUID}"
+      DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set the panel-issued node credential}"
+      PANEL_API_URL: "${PANEL_API_URL:?Set the reachable panel API URL}"
+      DAEMON_ALLOW_MOCK_RUNTIME: "false"
+      DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
+      BACKUP_ADAPTER: ${BACKUP_ADAPTER:-local}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PREFIX: ${S3_PREFIX:-}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}

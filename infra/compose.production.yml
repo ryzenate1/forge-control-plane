@@ -1,0 +1,30 @@
+# Production-only port bindings. Invoke explicitly:
+# docker compose -f compose.yml -f compose.production.yml --env-file .env up -d
+# Requires Docker Compose 2.24.4+ for !override.
+services:
+  api:
+    ports: !override
+      - "127.0.0.1:8080:8080"
+      - "30000-30100:30000-30100/tcp"
+      - "30000-30100:30000-30100/udp"
+
+  web:
+    ports: !override
+      - "127.0.0.1:3000:3000"
+
+  daemon:
+    ports: !override
+      - "127.0.0.1:9090:9090"
+      - "0.0.0.0:2022:2022"
+
+  prometheus:
+    ports: !override
+      - "127.0.0.1:9091:9090"
+
+  alertmanager:
+    ports: !override
+      - "127.0.0.1:9093:9093"
+
+  grafana:
+    ports: !override
+      - "127.0.0.1:3001:3000"

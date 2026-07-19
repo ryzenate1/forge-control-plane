@@ -9,14 +9,24 @@
     "dev:status": "./scripts/status.sh",
     "dev:logs": "./scripts/logs.sh",
     "dev": "npm --workspace @forge/web run dev",
-    "build": "npm --workspace @forge/web run build",
+    "build:packages": "npm --workspace @forge/shared-types run build && npm --workspace @forge/sdk run build && npm --workspace @forge/ui run build",
+    "build": "npm run build:packages && npm --workspace @forge/web run build",
     "lint": "npm --workspace @forge/web run lint",
-    "typecheck": "npm --workspace @forge/web run typecheck"
+    "typecheck": "npm run build:packages && npm --workspace @forge/web run typecheck",
+    "test": "npm --workspace @forge/web test"
   },
   "workspaces": [
     "forge/web",
     "packages/*"
   ],
+  "overrides": {
+    "monaco-editor": {
+      "dompurify": "3.4.12"
+    },
+    "next": {
+      "postcss": "8.5.20"
+    }
+  },
   "engines": {
     "node": ">=20"
   }

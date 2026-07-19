@@ -34,6 +34,7 @@ import (
 	"gamepanel/beacon/internal/rootfs"
 	"gamepanel/beacon/internal/runtime"
 	"gamepanel/beacon/internal/serverid"
+	"gamepanel/beacon/internal/tokens"
 	"gamepanel/beacon/internal/transfer"
 
 	"github.com/docker/docker/pkg/stdcopy"
@@ -48,6 +49,8 @@ var (
 // ConsoleOutputEvent is the topic name used on the per-server event bus for
 // console output lines. WebSocket clients subscribe to this topic.
 const ConsoleOutputEvent = "console output"
+
+const BackupProgressEvent = "backup progress"
 
 type Server struct {
 	runtime           runtime.Runtime
@@ -65,6 +68,8 @@ type Server struct {
 	consoles          *consoleManager
 	pullClientFactory func(context.Context, *url.URL) (*http.Client, error)
 	transferProtocol  *transfer.Engine
+	operations        *OperationQueue
+	tokenGenerator    *tokens.Generator
 	ctx               context.Context
 	cancel            context.CancelFunc
 }
@@ -73,6 +78,11 @@ type Server struct {
 // notifications can be sent after installation completes.
 func (s *Server) SetPanelClient(c remote.Client) {
 	s.panelClient = c
+}
+
+// SetTokenGenerator wires the JWT token generator for direct download tokens.
+func (s *Server) SetTokenGenerator(g *tokens.Generator) {
+	s.tokenGenerator = g
 }
 
 // SetAllowedMounts configures the host paths that panel-supplied mounts may
@@ -222,6 +232,20 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		}
 	}, server.consoles.Stop)
 	manager.StartEventWatcher(serverCtx)
+	operationHandler := func(ctx context.Context, op *Operation) error {
+		if rt == nil {
+			return errRuntimeUnavailable
+		}
+		return manager.HandlePower(ctx, op.ServerID, string(op.Type))
+	}
+	journalPath := filepath.Join(filepath.Dir(dataDir), "journal", "operations.db")
+	operationQueue, journalErr := NewPersistentOperationQueue(journalPath, 2, operationHandler)
+	if journalErr != nil {
+		log.Printf("[beacon] persistent command journal unavailable, using memory queue: %v", journalErr)
+		operationQueue = NewOperationQueue(2, operationHandler)
+	}
+	server.operations = operationQueue
+	server.operations.Start(serverCtx)
 	if rt == nil {
 		server.dockerState = "error"
 	}
@@ -236,6 +260,8 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /servers/{id}/install/ws", server.installWS)
 	mux.HandleFunc("POST /servers/{id}/reinstall", server.reinstall)
 	mux.HandleFunc("POST /servers/{id}/power", server.power)
+	mux.HandleFunc("GET /servers/{id}/operations", server.listOperations)
+	mux.HandleFunc("GET /operations/{id}", server.getOperation)
 	mux.HandleFunc("GET /servers/{id}/stats", server.stats)
 	mux.HandleFunc("GET /servers/{id}/logs", server.logs)
 	mux.HandleFunc("POST /servers/{id}/backups", server.createBackup)
@@ -247,6 +273,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /servers/{id}/ws/stats", server.statsWS)
 	mux.HandleFunc("GET /servers/{id}/ws/logs", server.logsWS)
 	mux.HandleFunc("GET /servers/{id}/ws/console", server.consoleWS)
+	mux.HandleFunc("GET /servers/{id}/ws/backup", server.backupProgressWS)
 	mux.HandleFunc("GET /servers/{id}/files", server.listFiles)
 	mux.HandleFunc("DELETE /servers/{id}/files", server.deleteFile)
 	mux.HandleFunc("POST /servers/{id}/files/mkdir", server.makeDir)
@@ -281,6 +308,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /api/system", server.getSystem)
 	mux.HandleFunc("POST /api/update", server.postUpdate)
 	mux.HandleFunc("POST /api/deauthorize-user", server.postDeauthorizeUser)
+	mux.HandleFunc("GET /download/backup", server.downloadBackupWithToken)
 	return server, requestTimeout(server.authenticate(mux))
 }
 
@@ -311,6 +339,9 @@ func (s *Server) Shutdown() {
 		return
 	}
 	s.cancel()
+	if s.operations != nil {
+		s.operations.Shutdown()
+	}
 	s.consoles.Close()
 	s.eventBus.Destroy()
 }
@@ -583,13 +614,34 @@ func (s *Server) runtimeRequestFromConfiguration(serverID string, payload map[st
 		req.OOMKillDisabled = value
 	}
 	allocations, _ := payload["allocations"].(map[string]any)
-	mappings, _ := allocations["mappings"].(map[string]any)
 	ports := make([]runtime.PortBinding, 0)
-	for ip, raw := range mappings {
-		if values, ok := raw.([]any); ok {
-			for _, value := range values {
-				port := int(anyInt64(value))
-				ports = append(ports, runtime.PortBinding{HostIP: ip, HostPort: port, ContainerPort: port, Protocol: "tcp"})
+	if detailed, ok := allocations["ports"].([]any); ok {
+		for _, raw := range detailed {
+			entry, ok := raw.(map[string]any)
+			if !ok {
+				continue
+			}
+			hostPort := int(anyInt64(firstMapValue(entry, "port", "hostPort")))
+			containerPort := int(anyInt64(firstMapValue(entry, "containerPort")))
+			if containerPort == 0 {
+				containerPort = hostPort
+			}
+			protocol, _ := firstMapValue(entry, "protocol").(string)
+			if protocol == "" {
+				protocol = "tcp"
+			}
+			hostIP, _ := firstMapValue(entry, "ip", "hostIP").(string)
+			ports = append(ports, runtime.PortBinding{HostIP: hostIP, HostPort: hostPort, ContainerPort: containerPort, Protocol: protocol})
+		}
+	}
+	if len(ports) == 0 {
+		mappings, _ := allocations["mappings"].(map[string]any)
+		for ip, raw := range mappings {
+			if values, ok := raw.([]any); ok {
+				for _, value := range values {
+					port := int(anyInt64(value))
+					ports = append(ports, runtime.PortBinding{HostIP: ip, HostPort: port, ContainerPort: port, Protocol: "tcp"})
+				}
 			}
 		}
 	}
@@ -913,15 +965,58 @@ func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 	}
 	switch body.Signal {
 	case "start", "stop", "restart", "kill":
-		mode, err := s.applyPower(r, serverID, body.Signal)
-		if err != nil {
-			http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+		if s.runtime == nil {
+			http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": mode})
+		commandID := strings.TrimSpace(r.Header.Get("X-Forge-Command-ID"))
+		if commandID == "" {
+			commandID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		}
+		op, err := s.operations.EnqueueCommand(r.Context(), commandID, serverID, OperationType(body.Signal))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		// Preserve the existing error contract while execution continues on the
+		// server context if the caller disconnects.
+		for {
+			status, statusErr := s.operations.GetStatus(op.ID)
+			if statusErr != nil {
+				http.Error(w, statusErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			switch status.Status {
+			case StatusCompleted:
+				writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": "docker", "operationId": op.ID})
+				return
+			case StatusFailed:
+				err := errors.New(status.Error)
+				http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 	default:
 		http.Error(w, "invalid power signal", http.StatusBadRequest)
 	}
+}
+
+func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
+	op, err := s.operations.GetStatus(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (s *Server) listOperations(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.operations.ListByServer(r.PathValue("id")))
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
@@ -1011,20 +1106,42 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 		ignored = append(ignored, reqBody.IgnoredFiles...)
 	}
 
+	if s.eventBus != nil {
+		s.backups.SetProgressCallback(func(p backup.BackupProgress) {
+			s.eventBus.Publish(BackupProgressEvent+":"+serverID, p)
+		})
+	}
+
 	info, err := s.backups.Create(r.Context(), root, serverID, name, ignored)
 	if err != nil {
 		http.Error(w, err.Error(), backupErrorStatus(err))
 		return
 	}
+
+	if s.panelClient != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.panelClient.SendBackupStatus(ctx, serverID, remote.BackupStatusRequest{
+				BackupUUID: info.UUID,
+				ServerUUID: serverID,
+				Checksum:   info.Checksum,
+				Size:       info.Size,
+				Successful: true,
+			})
+		}()
+	}
+
 	writeJSON(w, http.StatusCreated, map[string]any{
-		"uuid":        info.UUID,
-		"name":        info.Name,
-		"checksum":    info.Checksum,
-		"size":        info.Size,
-		"status":      info.Status,
-		"created":     info.Created.Format(time.RFC3339),
-		"completedAt": info.CompletedAt.Format(time.RFC3339),
-		"adapter":     info.Adapter,
+		"uuid":         info.UUID,
+		"name":         info.Name,
+		"checksum":     info.Checksum,
+		"size":         info.Size,
+		"status":       info.Status,
+		"created":      info.Created.Format(time.RFC3339),
+		"completedAt":  info.CompletedAt.Format(time.RFC3339),
+		"adapter":      info.Adapter,
+		"ignoredFiles": info.IgnoredFiles,
 	})
 }
 
@@ -1072,6 +1189,55 @@ func (s *Server) downloadBackup(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.Copy(w, reader)
 }
 
+func (s *Server) downloadBackupWithToken(w http.ResponseWriter, r *http.Request) {
+	if s.backups == nil {
+		http.Error(w, "backup adapter unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	if s.tokenGenerator == nil {
+		http.Error(w, "token generator not configured", http.StatusInternalServerError)
+		return
+	}
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		http.Error(w, "token is required", http.StatusBadRequest)
+		return
+	}
+	claims, err := s.tokenGenerator.Validate(tokenStr)
+	if err != nil {
+		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+	if claims.Scope != tokens.ScopeBackupDownload {
+		http.Error(w, "invalid token scope", http.StatusForbidden)
+		return
+	}
+	serverID := claims.ServerID
+	backupUUID := claims.BackupID
+	if backupUUID == "" {
+		http.Error(w, "invalid token: missing backup id", http.StatusBadRequest)
+		return
+	}
+	name := backupUUID + ".zip"
+	if !safeBackupName(name) {
+		http.Error(w, "invalid backup name", http.StatusBadRequest)
+		return
+	}
+	if _, err := s.safePath(serverID, ""); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	reader, err := s.backups.Download(serverID, name)
+	if err != nil {
+		http.Error(w, err.Error(), backupErrorStatus(err))
+		return
+	}
+	defer reader.Close()
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
+	_, _ = io.Copy(w, reader)
+}
+
 func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 	if s.backups == nil {
 		http.Error(w, "backup adapter unavailable", http.StatusServiceUnavailable)
@@ -1096,9 +1262,34 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.backups.Restore(r.Context(), serverID, body.Name, root, body.Truncate); err != nil {
+		if s.panelClient != nil {
+			go func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+				defer cancel()
+				_ = s.panelClient.SendRestoreStatus(ctx, serverID, remote.RestoreStatusRequest{
+					BackupUUID: strings.TrimSuffix(body.Name, ".zip"),
+					ServerUUID: serverID,
+					Successful: false,
+					Error:      err.Error(),
+				})
+			}()
+		}
 		http.Error(w, err.Error(), backupErrorStatus(err))
 		return
 	}
+
+	if s.panelClient != nil {
+		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			_ = s.panelClient.SendRestoreStatus(ctx, serverID, remote.RestoreStatusRequest{
+				BackupUUID: strings.TrimSuffix(body.Name, ".zip"),
+				ServerUUID: serverID,
+				Successful: true,
+			})
+		}()
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "name": body.Name, "status": "restored"})
 }
 
@@ -1299,6 +1490,42 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 	<-errs
+}
+
+func (s *Server) backupProgressWS(w http.ResponseWriter, r *http.Request) {
+	if s.backups == nil {
+		http.Error(w, "backup adapter unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	conn, err := websocketUpgrader.Upgrade(w, r, nil)
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	defer s.trackWebSocket(r, conn)()
+	configureWebSocket(conn)
+	writer := &webSocketWriter{conn: conn}
+	done := make(chan struct{})
+	defer close(done)
+	go pingWebSocket(writer, done)
+
+	serverID := r.PathValue("id")
+	ch := s.eventBus.Subscribe(BackupProgressEvent + ":" + serverID)
+	defer s.eventBus.Unsubscribe(BackupProgressEvent+":"+serverID, ch)
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg, ok := <-ch:
+			if !ok {
+				return
+			}
+			if _, err := writer.Write(msg); err != nil {
+				return
+			}
+		}
+	}
 }
 
 func (s *Server) listFiles(w http.ResponseWriter, r *http.Request) {
@@ -2629,7 +2856,7 @@ func configureWebSocket(conn *websocket.Conn) {
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.token == "" || r.URL.Path == "/health" || r.URL.Path == "/metrics" || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
+		if s.token == "" || r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/download/backup" || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
 			next.ServeHTTP(w, r)
 			return
 		}

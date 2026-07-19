@@ -23,10 +23,22 @@ const (
 )
 
 var (
-	ErrInvalidNamespace = errors.New("invalid backup namespace")
-	ErrInvalidName      = errors.New("invalid backup name")
-	ErrChecksumMismatch = errors.New("backup checksum mismatch")
+	ErrInvalidNamespace  = errors.New("invalid backup namespace")
+	ErrInvalidName       = errors.New("invalid backup name")
+	ErrChecksumMismatch  = errors.New("backup checksum mismatch")
+	ErrBackupInProgress  = errors.New("backup already in progress for this namespace")
+	ErrRestoreInProgress = errors.New("restore already in progress for this namespace")
 )
+
+// BackupProgress reports the current state of a backup or restore operation.
+type BackupProgress struct {
+	BytesProcessed int64  `json:"bytesProcessed"`
+	TotalBytes     int64  `json:"totalBytes"`
+	Phase          string `json:"phase"`
+}
+
+// ProgressFunc is an optional callback for reporting progress.
+type ProgressFunc func(progress BackupProgress)
 
 // BackupInfo contains metadata about a completed backup.
 type BackupInfo struct {
@@ -39,6 +51,7 @@ type BackupInfo struct {
 	CompletedAt time.Time   `json:"completedAt"`
 	Adapter     AdapterType `json:"adapter"`
 	RemotePath  string      `json:"remotePath,omitempty"`
+	IgnoredFiles []string   `json:"ignored_files,omitempty"`
 }
 
 // BackupInterface stores backups by a validated server namespace. The
@@ -52,6 +65,7 @@ type BackupInterface interface {
 	Restore(ctx context.Context, backupDir, name, serverRoot string, truncate bool) error
 	Download(backupDir, name string) (io.ReadCloser, error)
 	Type() AdapterType
+	SetProgressCallback(fn ProgressFunc)
 }
 
 // BackupManager manages backup operations and metrics

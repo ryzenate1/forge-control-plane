@@ -5,6 +5,16 @@ import (
     "go.uber.org/zap/zapcore"
 )
 
+type noopLogger struct{}
+
+func (n *noopLogger) Debug(msg string, fields ...Field)  {}
+func (n *noopLogger) Info(msg string, fields ...Field)   {}
+func (n *noopLogger) Warn(msg string, fields ...Field)   {}
+func (n *noopLogger) Error(msg string, fields ...Field)  {}
+func (n *noopLogger) WithFields(fields ...Field) Logger  { return n }
+
+func NewNoopLogger() *noopLogger { return &noopLogger{} }
+
 // Logger defines an interface for structured logging
 type Logger interface {
     Debug(msg string, fields ...Field)

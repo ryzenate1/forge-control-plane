@@ -23,9 +23,10 @@ import (
 const metadataSuffix = ".metadata.json"
 
 type localMetadata struct {
-	Checksum string    `json:"checksum"`
-	Size     int64     `json:"size"`
-	Created  time.Time `json:"created"`
+	Checksum    string    `json:"checksum"`
+	Size        int64     `json:"size"`
+	Created     time.Time `json:"created"`
+	IgnoredFiles []string `json:"ignored_files,omitempty"`
 }
 
 type restoreJournal struct {
@@ -40,6 +41,7 @@ type LocalBackup struct {
 	backupRoot     string
 	legacyDataRoot string
 	migrationMu    sync.Mutex
+	progress       ProgressFunc
 }
 
 // NewLocalBackup configures daemon-owned storage. legacyDataRoot is optional;
@@ -62,6 +64,16 @@ func NewLocalBackup(backupRoot string, legacyDataRoot ...string) (*LocalBackup, 
 }
 
 func (l *LocalBackup) Type() AdapterType { return LocalAdapter }
+
+func (l *LocalBackup) SetProgressCallback(fn ProgressFunc) {
+	l.progress = fn
+}
+
+func (l *LocalBackup) reportProgress(bytesProcessed, totalBytes int64, phase string) {
+	if l.progress != nil {
+		l.progress(BackupProgress{BytesProcessed: bytesProcessed, TotalBytes: totalBytes, Phase: phase})
+	}
+}
 
 func (l *LocalBackup) namespaceDir(namespace string, create bool) (string, error) {
 	if !validNamespace(namespace) {
@@ -182,6 +194,7 @@ func (l *LocalBackup) archivePath(namespace, name string, createDir bool) (strin
 }
 
 func (l *LocalBackup) Create(ctx context.Context, serverRoot, namespace, name string, ignored []string) (*BackupInfo, error) {
+	l.reportProgress(0, 0, "creating backup")
 	canonicalRoot, err := canonicalDirectory(serverRoot, false)
 	if err != nil {
 		return nil, fmt.Errorf("canonicalize server root: %w", err)
@@ -212,6 +225,8 @@ func (l *LocalBackup) Create(ctx context.Context, serverRoot, namespace, name st
 	} else if !errors.Is(openErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("open .pteroignore: %w", openErr)
 	}
+
+	l.reportProgress(0, 0, "archiving files")
 
 	temp, err := os.OpenFile(backupPath+".partial", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
 	if err != nil {
@@ -331,11 +346,12 @@ func (l *LocalBackup) Create(ctx context.Context, serverRoot, namespace, name st
 		_ = os.Remove(backupPath)
 		return nil, err
 	}
-	metadata := localMetadata{Checksum: checksum, Size: info.Size(), Created: info.ModTime().UTC()}
+	metadata := localMetadata{Checksum: checksum, Size: info.Size(), Created: info.ModTime().UTC(), IgnoredFiles: patterns}
 	if err := writeMetadata(backupPath, metadata); err != nil {
 		_ = os.Remove(backupPath)
 		return nil, err
 	}
+	l.reportProgress(info.Size(), info.Size(), "completed")
 	return backupInfo(name, metadata, LocalAdapter, ""), nil
 }
 
@@ -393,6 +409,8 @@ func (l *LocalBackup) Delete(namespace, name string) error {
 }
 
 func (l *LocalBackup) Restore(ctx context.Context, namespace, name, serverRoot string, truncate bool) error {
+	l.reportProgress(0, 0, "restoring backup")
+	defer l.reportProgress(0, 0, "completed")
 	backupPath, err := l.archivePath(namespace, name, false)
 	if err != nil {
 		return err
@@ -697,6 +715,7 @@ func backupInfo(name string, metadata localMetadata, adapter AdapterType, remote
 		UUID: strings.TrimSuffix(name, ".zip"), Name: name, Checksum: metadata.Checksum,
 		Size: metadata.Size, Status: "completed", Created: metadata.Created,
 		CompletedAt: metadata.Created, Adapter: adapter, RemotePath: remotePath,
+		IgnoredFiles: metadata.IgnoredFiles,
 	}
 }
 

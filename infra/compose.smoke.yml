@@ -1,0 +1,24 @@
+# Loopback-only ephemeral port bindings for production-image smoke tests.
+services:
+  api:
+    image: infra-api:latest
+    ports: !override
+      - "127.0.0.1::8080"
+  web:
+    image: infra-web:latest
+    ports: !override
+      - "127.0.0.1::3000"
+  daemon:
+    image: infra-daemon:latest
+    ports: !override
+      - "127.0.0.1::9090"
+      - "127.0.0.1::2022"
+  prometheus:
+    ports: !override
+      - "127.0.0.1::9090"
+  alertmanager:
+    ports: !override
+      - "127.0.0.1::9093"
+  grafana:
+    ports: !override
+      - "127.0.0.1::3000"

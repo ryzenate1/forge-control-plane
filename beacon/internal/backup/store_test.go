@@ -6,9 +6,10 @@ import (
 	"testing"
 	"time"
 
+	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/yourorg/gamepanel/beacon/internal/backup"
+	"gamepanel/beacon/internal/backup"
 )
 
 func TestSQLiteStore(t *testing.T) {
@@ -35,7 +36,7 @@ func TestSQLiteStore(t *testing.T) {
     `)
 	require.NoError(t, err)
 
-	store := &backup.SQLiteStore{db: db}
+	store := backup.NewSQLiteStore(db)
 
 	// Test Create and Get
 	testBackup := backup.Backup{

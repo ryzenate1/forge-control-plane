@@ -57,6 +57,23 @@ type BackupRequest struct {
 	Parts        []BackupPart `json:"parts,omitempty"`
 }
 
+// BackupStatusRequest is sent to the panel when a backup completes.
+type BackupStatusRequest struct {
+	BackupUUID string `json:"backup_uuid"`
+	ServerUUID string `json:"server_uuid"`
+	Checksum   string `json:"checksum"`
+	Size       int64  `json:"size"`
+	Successful bool   `json:"successful"`
+}
+
+// RestoreStatusRequest is sent to the panel when a restore completes.
+type RestoreStatusRequest struct {
+	BackupUUID string `json:"backup_uuid"`
+	ServerUUID string `json:"server_uuid"`
+	Successful bool   `json:"successful"`
+	Error      string `json:"error,omitempty"`
+}
+
 // Activity represents an activity log
 type Activity struct {
 	ID        int                    `json:"id"`
