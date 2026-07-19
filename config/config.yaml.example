@@ -1,0 +1,52 @@
+app:
+  env: development
+  name: GamePanel
+  url: http://localhost:3000
+  debug: true
+  version: 0.1.0
+  locale: en
+  fallback_locale: en
+  migrations_dir: migrations
+
+server:
+  addr: ":8080"
+  read_timeout: 5s
+  panel_url: http://localhost:3000
+
+db:
+  driver: postgres
+  url: postgres://gamepanel:password@127.0.0.1:5432/gamepanel?sslmode=disable
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 3600
+
+redis:
+  enabled: false
+  addr: 127.0.0.1:6379
+  password: ""
+  db: 0
+
+auth:
+  secret: ""  # set via GAMEPANEL_AUTH_SECRET env in production
+  token_ttl: 24h
+  session_limit: 10
+  password_min_length: 8
+  two_factor_policy: none
+
+mail:
+  driver: log
+  host: 127.0.0.1
+  port: 587
+  encryption: tls
+  from_address: noreply@gamepanel.local
+  from_name: GamePanel
+
+backup:
+  driver: s3
+  retention_days: 30
+  max_backups: 10
+
+log:
+  level: info
+  format: text
+  output: stdout
