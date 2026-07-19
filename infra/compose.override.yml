@@ -1,0 +1,5 @@
+# Local overrides intentionally do not publish PostgreSQL or Redis. Use
+# `docker compose exec postgres psql ...` and `docker compose exec redis
+# redis-cli ...` for development access. Publishing these ports by default is
+# unsafe on developer laptops and VPS hosts alike.
+services: {}
