@@ -5,7 +5,7 @@ import { DragEvent, FormEvent, useCallback, useEffect, useMemo, useState } from 
 import dynamic from "next/dynamic";
 import { Archive, ArrowUpDown, CheckSquare, ChevronRight, Download, File, Folder, FolderInput, Grid2X2, List, MoreHorizontal, Save, Search, ShieldX, Trash2, Upload, X } from "lucide-react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ApiFileEntry, type ApiServer, chmodServerFile, downloadFileToServer, fetchServerFiles, writeServerFile } from "@/lib/api";
+import { type ApiFileEntry, type ApiServer, chmodServerFile, downloadFileToServer, fetchServerFiles, writeServerFile } from "@/modules/gameservers/api";
 import { archiveServerFile, copyServerFile, createServerDirectory, deleteServerFiles, decompressServerFiles, getServerFileDownloadURL, readServerFile, renameServerFiles, uploadFileChunked } from "@/lib/api/files";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage, formatBytes } from "@/lib/utils";

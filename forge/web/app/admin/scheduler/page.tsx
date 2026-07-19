@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   Activity, BarChart3, Cpu, GanttChart, HardDrive, Network, Plus, Trash2, Zap,
 } from "lucide-react";
-import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
+import { fetchJSON, postJSON, deleteJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 
 type NodeScore = {

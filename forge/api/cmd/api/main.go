@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"gamepanel/forge/internal/bootstrap"
 	"gamepanel/forge/internal/cloud"
 	"gamepanel/forge/internal/config"
 	"gamepanel/forge/internal/daemon"
@@ -88,6 +89,19 @@ func main() {
 		Format: env("LOG_FORMAT", "text"),
 		Output: env("LOG_OUTPUT", "stdout"),
 	})
+	moduleRegistry, err := bootstrap.ModuleRegistry()
+	if err != nil {
+		log.Fatalf("register platform modules: %v", err)
+	}
+	if err := moduleRegistry.Start(ctx); err != nil {
+		log.Fatalf("start platform modules: %v", err)
+	}
+	registeredModules := moduleRegistry.Modules()
+	moduleNames := make([]string, 0, len(registeredModules))
+	for _, module := range registeredModules {
+		moduleNames = append(moduleNames, module.Name())
+	}
+	slogLogger.Info("platform modules registered", slog.Any("modules", moduleNames))
 
 	var db *store.Store
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {

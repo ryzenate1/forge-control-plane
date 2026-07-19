@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Folder } from "lucide-react";
-import { type ApiMount, type ApiServer, fetchServerMounts } from "@/lib/api";
+import { type ApiMount, type ApiServer, fetchServerMounts } from "@/modules/gameservers/api";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage as message } from "@/lib/utils";
 

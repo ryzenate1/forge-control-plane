@@ -5,7 +5,7 @@ import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser, logout } from "@/lib/api";
+import { fetchCurrentUser, logout } from "@/modules/infrastructure/api";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
 import { adminPagesForRole } from "./admin-registry";

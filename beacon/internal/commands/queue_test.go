@@ -1,4 +1,4 @@
-package server
+package commands
 
 import (
 	"context"
@@ -16,16 +16,16 @@ func TestQueueEnqueueAndProcess(t *testing.T) {
 		return nil
 	}
 
-	q := NewOperationQueue(1, handler)
+	q := NewQueue(1, handler)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	q.Start(ctx)
 
-	op, err := q.Enqueue(ctx, "srv-1", OpStart)
+	op, err := q.Enqueue(ctx, "srv-1", Start)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if op.ServerID != "srv-1" || op.Type != OpStart {
+	if op.ServerID != "srv-1" || op.Type != Start {
 		t.Fatalf("unexpected op: %+v", op)
 	}
 
@@ -48,12 +48,12 @@ func TestQueueHandlerError(t *testing.T) {
 		return errors.New("boom")
 	}
 
-	q := NewOperationQueue(1, handler)
+	q := NewQueue(1, handler)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	q.Start(ctx)
 
-	op, err := q.Enqueue(ctx, "srv-1", OpStop)
+	op, err := q.Enqueue(ctx, "srv-1", Stop)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,26 +73,26 @@ func TestQueueHandlerError(t *testing.T) {
 }
 
 func TestQueueConcurrency(t *testing.T) {
-	q := NewOperationQueue(5, nil)
+	q := NewQueue(5, nil)
 	if q.concurrency != 4 {
 		t.Fatalf("expected max concurrency 4, got %d", q.concurrency)
 	}
 
-	q2 := NewOperationQueue(0, nil)
+	q2 := NewQueue(0, nil)
 	if q2.concurrency != 1 {
 		t.Fatalf("expected min concurrency 1, got %d", q2.concurrency)
 	}
 }
 
 func TestQueueListByServer(t *testing.T) {
-	q := NewOperationQueue(1, nil)
+	q := NewQueue(1, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	q.Start(ctx)
 
-	q.Enqueue(ctx, "srv-1", OpStart)
-	q.Enqueue(ctx, "srv-1", OpStop)
-	q.Enqueue(ctx, "srv-2", OpRestart)
+	q.Enqueue(ctx, "srv-1", Start)
+	q.Enqueue(ctx, "srv-1", Stop)
+	q.Enqueue(ctx, "srv-2", Restart)
 
 	time.Sleep(150 * time.Millisecond)
 
@@ -113,7 +113,7 @@ func TestQueueListByServer(t *testing.T) {
 }
 
 func TestQueueGetStatusNotFound(t *testing.T) {
-	q := NewOperationQueue(1, nil)
+	q := NewQueue(1, nil)
 	_, err := q.GetStatus("nonexistent")
 	if !errors.Is(err, ErrOperationNotFound) {
 		t.Fatalf("expected ErrOperationNotFound, got %v", err)
@@ -127,14 +127,14 @@ func TestQueueShutdown(t *testing.T) {
 		return nil
 	}
 
-	q := NewOperationQueue(1, handler)
+	q := NewQueue(1, handler)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	q.Start(ctx)
 
-	q.Enqueue(ctx, "srv-1", OpStart)
-	q.Enqueue(ctx, "srv-1", OpStop)
-	q.Enqueue(ctx, "srv-1", OpRestart)
+	q.Enqueue(ctx, "srv-1", Start)
+	q.Enqueue(ctx, "srv-1", Stop)
+	q.Enqueue(ctx, "srv-1", Restart)
 
 	time.Sleep(50 * time.Millisecond)
 	close(blockCh)
@@ -153,8 +153,8 @@ func TestQueueShutdown(t *testing.T) {
 }
 
 func TestQueueAllOperationTypes(t *testing.T) {
-	types := []OperationType{OpStart, OpStop, OpRestart, OpInstall, OpReinstall}
-	q := NewOperationQueue(1, nil)
+	types := []Type{Start, Stop, Restart, Install, Reinstall}
+	q := NewQueue(1, nil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	q.Start(ctx)
@@ -172,18 +172,18 @@ func TestQueueAllOperationTypes(t *testing.T) {
 
 func TestPersistentQueueReplaysAndDeduplicatesCommands(t *testing.T) {
 	journal := filepath.Join(t.TempDir(), "operations.db")
-	q1, err := NewPersistentOperationQueue(journal, 1, nil)
+	q1, err := NewPersistentQueue(journal, 1, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	op, err := q1.EnqueueCommand(context.Background(), "command-1", "srv-1", OpRestart)
+	op, err := q1.EnqueueCommand(context.Background(), "command-1", "srv-1", Restart)
 	if err != nil {
 		t.Fatal(err)
 	}
 	q1.Shutdown()
 
 	var executions atomic.Int32
-	q2, err := NewPersistentOperationQueue(journal, 1, func(context.Context, *Operation) error {
+	q2, err := NewPersistentQueue(journal, 1, func(context.Context, *Operation) error {
 		executions.Add(1)
 		return nil
 	})
@@ -206,7 +206,7 @@ func TestPersistentQueueReplaysAndDeduplicatesCommands(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	duplicate, err := q2.EnqueueCommand(context.Background(), "command-1", "srv-1", OpRestart)
+	duplicate, err := q2.EnqueueCommand(context.Background(), "command-1", "srv-1", Restart)
 	if err != nil {
 		t.Fatal(err)
 	}

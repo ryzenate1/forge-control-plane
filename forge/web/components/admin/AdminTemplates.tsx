@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, Cpu, HardDrive, Plus, Terminal } from "lucide-react";
-import { createTemplate, fetchTemplates } from "@/lib/api";
+import { createTemplate, fetchTemplates } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow } from "./admin-ui";
 
 export function AdminTemplates() {

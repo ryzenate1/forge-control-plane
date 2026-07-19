@@ -19,12 +19,12 @@ type ServerStats struct {
 }
 
 type StatsCollector struct {
-	mu          sync.Mutex
-	runtime     runtime.Runtime
-	history     map[string][]ServerStats
-	maxHistory  int
-	serverIDs   map[string]bool
-	startTime   time.Time
+	mu         sync.Mutex
+	runtime    runtime.Runtime
+	history    map[string][]ServerStats
+	maxHistory int
+	serverIDs  map[string]bool
+	startTime  time.Time
 }
 
 func NewStatsCollector(rt runtime.Runtime, maxHistory int) *StatsCollector {

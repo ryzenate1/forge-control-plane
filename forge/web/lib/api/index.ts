@@ -54,4 +54,4 @@ export {
   createUser, deleteUser, updateUser,
   cancelTransfer, fetchServerTransferStatus,
   getToken, setStoredToken,
-} from '../api';
+} from './legacy';

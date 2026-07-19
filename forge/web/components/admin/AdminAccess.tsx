@@ -6,7 +6,7 @@ import { KeyRound, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import {
   createAdminOAuthClient, createRole, deleteAdminOAuthClient, deleteRole,
   fetchAdminOAuthClients, fetchRoles, fetchUsers, type ApiOAuthClientCreation,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea } from "./admin-ui";
 
 export function AdminRoles() {

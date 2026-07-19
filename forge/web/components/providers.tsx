@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
-import { fetchCurrentUser, migrateToCookieSession, refreshSession } from "@/lib/api";
+import { fetchCurrentUser, migrateToCookieSession, refreshSession } from "@/modules/platform/api";
 import { useServerStore } from "@/stores/use-server-store";
 import { BrandingProvider } from "@/components/branding";
 import { Button } from "@/components/ui/primitives";

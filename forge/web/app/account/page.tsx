@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ArrowLeft, Check, Clock3, Fingerprint, KeyRound, Laptop, LockKeyhole, Plus, ShieldCheck, Trash2, UserRound } from "lucide-react";
-import { changePassword, changeEmail, createApiKey, createMyOAuthClient, createSSHKey, deleteApiKey, deleteMyOAuthClient, deleteSSHKey, disableTwoFactor, enableTwoFactor, fetchActivityLogs, fetchAdminScopes, fetchApiKeys, fetchCurrentUser, fetchMyOAuthClients, fetchSSHKeys, fetchUserSessions, logout, revokeAllUserSessions, revokeUserSession, setupTwoFactor, type ApiActivityLog, type ApiKey, type ApiOAuthClientCreation, type ApiSSHKey, type ApiUser, type ApiUserSession } from "@/lib/api";
+import { changePassword, changeEmail, createApiKey, createMyOAuthClient, createSSHKey, deleteApiKey, deleteMyOAuthClient, deleteSSHKey, disableTwoFactor, enableTwoFactor, fetchActivityLogs, fetchAdminScopes, fetchApiKeys, fetchCurrentUser, fetchMyOAuthClients, fetchSSHKeys, fetchUserSessions, logout, revokeAllUserSessions, revokeUserSession, setupTwoFactor, type ApiActivityLog, type ApiKey, type ApiOAuthClientCreation, type ApiSSHKey, type ApiUser, type ApiUserSession } from "@/modules/platform/api";
 import { useServerStore } from "@/stores/use-server-store";
 import { useBranding } from "@/components/branding";
 import { Alert, Badge, Button, Card, CopyButton, Dialog, EmptyState, Field, Input, Textarea } from "@/components/ui/primitives";

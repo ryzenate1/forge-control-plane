@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Globe, Eye, EyeOff, Save } from 'lucide-react';
-import { fetchJSON, putJSON, type SocialProvider } from '@/lib/api';
+import { fetchJSON, putJSON, type SocialProvider } from '@/modules/infrastructure/api';
 import { Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from '@/components/admin/admin-ui';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';

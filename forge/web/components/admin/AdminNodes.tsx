@@ -11,7 +11,7 @@ import {
   fetchNodeAllocations, fetchNodeServers, fetchNodeLifecycle,
   fetchNodeSystemInformation, setAllocationAlias, deleteAllocationsBulk, getBeaconPanelURL,
   type ApiNode, type ApiAllocation, type ApiLocation, type ApiRegion, type ApiServer,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, SectionHeader, Textarea, cn } from "./admin-ui";
 

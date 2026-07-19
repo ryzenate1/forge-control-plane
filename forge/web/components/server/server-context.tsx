@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useContext } from "react";
-import type { ApiServer, ApiUser } from "@/lib/api";
+import type { ApiServer, ApiUser } from "@/modules/gameservers/api";
 
 export type ServerAccess = {
   user: ApiUser | null;

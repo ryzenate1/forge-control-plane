@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Layers, Play, Loader2,
 } from "lucide-react";
-import { fetchJSON, postJSON } from "@/lib/api";
+import { fetchJSON, postJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, Input, SectionHeader } from "@/components/admin/admin-ui";
 import { Alert } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";

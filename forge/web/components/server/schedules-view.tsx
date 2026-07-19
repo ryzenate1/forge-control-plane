@@ -7,7 +7,7 @@ import {
   type ApiSchedule, type ApiScheduleTask, type ApiServer,
   createServerSchedule, createServerScheduleTask, deleteServerSchedule, deleteServerScheduleTask,
   fetchServerScheduleRuns, fetchServerSchedules, runServerSchedule, updateServerSchedule, updateServerScheduleTask,
-} from "@/lib/api";
+} from "@/modules/gameservers/api";
 import { PanelCard } from "@/components/ui/panel-card";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage as message } from "@/lib/utils";

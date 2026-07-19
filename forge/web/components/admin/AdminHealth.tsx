@@ -21,7 +21,7 @@ import {
   fetchReservations,
   fetchServers,
   type ApiHealthCheck,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "./admin-ui";
 
 type MonitorSection =

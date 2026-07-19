@@ -4,7 +4,7 @@ import { useState } from "react";
 import { Network, Plus, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
-import { type ApiAllocation, type ApiServer, assignServerAllocation, fetchServerAllocations, setPrimaryServerAllocation, unassignServerAllocation, updateAllocation } from "@/lib/api";
+import { type ApiAllocation, type ApiServer, assignServerAllocation, fetchServerAllocations, setPrimaryServerAllocation, unassignServerAllocation, updateAllocation } from "@/modules/gameservers/api";
 
 function isPrimaryAllocation(allocation: ApiAllocation, server?: ApiServer) {
   return allocation.isPrimary === true || allocation.primary === true || server?.primaryAllocationId === allocation.id || server?.allocationId === allocation.id;

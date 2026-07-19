@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { useParams, usePathname } from "next/navigation";
 import { AlertCircle, RefreshCw } from "lucide-react";
-import { fetchCurrentUser, fetchServer, type ApiServer, type ApiUser } from "@/lib/api";
+import { fetchCurrentUser, fetchServer, type ApiServer, type ApiUser } from "@/modules/gameservers/api";
 import { ServerNav, type ServerTab } from "@/components/server/server-nav";
 import { ServerProvider, type ServerAccess, useOptionalServerContext } from "@/components/server/server-context";
 import { errorMessage } from "@/lib/utils";

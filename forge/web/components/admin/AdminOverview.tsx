@@ -2,7 +2,7 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { AlertTriangle, Layers, Network, Server, Shield, Activity, HardDrive, Cpu } from "lucide-react";
-import { fetchAdminAudit, fetchAllServers, fetchHealthStatus, fetchNodes, fetchUsers, type ApiAdminAuditEvent, type ApiHealthCheck, type ApiNode, type ApiServer } from "@/lib/api";
+import { fetchAdminAudit, fetchAllServers, fetchHealthStatus, fetchNodes, fetchUsers, type ApiAdminAuditEvent, type ApiHealthCheck, type ApiNode, type ApiServer } from "@/modules/infrastructure/api";
 import { Card, CardHeader, EmptyState, SectionHeader, StatsRow, Pill } from "./admin-ui";
 
 function SimplePieChart({ data, total }: { data: { label: string; value: number; color: string }[]; total: number }) {

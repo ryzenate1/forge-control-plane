@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
 import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
-import { type ApiServer, logout } from "@/lib/api";
+import { type ApiServer, logout } from "@/modules/gameservers/api";
 import { cn } from "@/lib/utils";
 import { hasServerPermission, type ServerAccess } from "./server-context";
 

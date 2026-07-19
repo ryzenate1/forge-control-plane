@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { Suspense, useState } from "react";
 import { CheckCircle2, Eye, EyeOff } from "lucide-react";
-import { resetPassword } from "@/lib/api";
+import { resetPassword } from "@/modules/platform/api";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input } from "@/components/ui/primitives";
 

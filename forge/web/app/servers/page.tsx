@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { type ApiServer, fetchCurrentUser, fetchServers, logout } from "@/lib/api";
+import { type ApiServer, fetchCurrentUser, fetchServers, logout } from "@/modules/gameservers/api";
 import { useServerStore } from "@/stores/use-server-store";
 import { Cpu, HardDrive, LogOut, MemoryStick, Server, User } from "lucide-react";
 import { useBranding } from "@/components/branding";

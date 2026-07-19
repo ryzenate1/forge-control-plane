@@ -7,7 +7,7 @@ import {
   attachEggsToMount, attachNodesToMount, createMount,
   deleteMount, detachEggFromMount, detachNodeFromMount, fetchEggs, fetchMounts, fetchNests, fetchNodes,
   updateMount, type ApiEgg, type ApiMount, type ApiNode,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader } from "./admin-ui";
 

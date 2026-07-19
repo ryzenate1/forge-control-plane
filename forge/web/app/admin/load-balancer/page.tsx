@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GanttChart, HeartPulse, Network, Plus, Target, Trash2, Zap, type LucideIcon } from "lucide-react";
-import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "@/lib/api";
+import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
 type Algorithm = "round_robin" | "least_connections" | "ip_hash" | "weighted_round_robin";

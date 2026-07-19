@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Plus, Trash2 } from "lucide-react";
-import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, type ApiWebhook, type ApiWebhookDelivery } from "@/lib/api";
+import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, type ApiWebhook, type ApiWebhookDelivery } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 
 type Webhook = ApiWebhook;

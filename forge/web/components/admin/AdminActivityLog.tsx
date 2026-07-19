@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Activity, AlertTriangle, ArrowRightLeft, Download, FileText, RefreshCw, Server, Shield, UserCheck } from "lucide-react";
-import { exportAdminActivity, fetchAdminActivity, type AdminActivityFilter, type ApiActivityLog } from "@/lib/api";
+import { exportAdminActivity, fetchAdminActivity, type AdminActivityFilter, type ApiActivityLog } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from "./admin-ui";
 
 type ActivityEvent = {

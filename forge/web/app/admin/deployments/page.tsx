@@ -7,7 +7,7 @@ import {
   CheckCircle, Clock, Layers, Plus, RefreshCw,
   RotateCcw, XCircle,
 } from "lucide-react";
-import { fetchJSON } from "@/lib/api";
+import { fetchJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 
 type Deployment = {
