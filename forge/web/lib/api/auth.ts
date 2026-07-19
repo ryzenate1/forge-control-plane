@@ -1,11 +1,18 @@
 // Authentication and account management API functions
-import { API_BASE_URL, ApiError, LEGACY_TOKEN_KEY, deleteJSON, fetchJSON, getCSRFToken, patchJSON, postJSON, putJSON } from './http';
+import {
+  API_BASE_URL,
+  ApiError,
+  LEGACY_TOKEN_KEY,
+  deleteJSON,
+  fetchJSON,
+  getCSRFToken,
+  patchJSON,
+  postJSON,
+  putJSON,
+} from './http';
 import type { ApiUser, ApiUserSession, LoginResponse } from './types';
 
-export async function login(
-  email: string,
-  password: string,
-): Promise<LoginResponse> {
+export async function login(email: string, password: string): Promise<LoginResponse> {
   const response = await fetch(`${API_BASE_URL}/auth/login`, {
     method: 'POST',
     headers: {
@@ -18,12 +25,14 @@ export async function login(
   });
 
   if (!response.ok) {
-    if (response.status === 401 || response.status === 404) throw new Error('Invalid email or password.');
-    if (response.status === 429) throw new Error('Too many login attempts. Please try again later.');
+    if (response.status === 401 || response.status === 404)
+      throw new Error('Invalid email or password.');
+    if (response.status === 429)
+      throw new Error('Too many login attempts. Please try again later.');
     throw new Error('Unable to sign in. Please try again.');
   }
 
-  const payload = await response.json() as LoginResponse;
+  const payload = (await response.json()) as LoginResponse;
   return payload;
 }
 
@@ -44,12 +53,14 @@ export async function loginCheckpoint(
   });
 
   if (!response.ok) {
-    if (response.status === 400 || response.status === 401) throw new Error('Invalid authentication code.');
-    if (response.status === 429) throw new Error('Too many verification attempts. Please try again later.');
+    if (response.status === 400 || response.status === 401)
+      throw new Error('Invalid authentication code.');
+    if (response.status === 429)
+      throw new Error('Too many verification attempts. Please try again later.');
     throw new Error('Unable to verify the authentication code.');
   }
 
-  const payload = await response.json() as LoginResponse;
+  const payload = (await response.json()) as LoginResponse;
   return payload;
 }
 
@@ -79,7 +90,8 @@ export async function refreshSession(): Promise<void> {
     headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
     credentials: 'include',
   });
-  if (!response.ok) throw new ApiError(`Session refresh failed with ${response.status}`, response.status);
+  if (!response.ok)
+    throw new ApiError(`Session refresh failed with ${response.status}`, response.status);
 }
 
 export async function migrateToCookieSession(): Promise<boolean> {

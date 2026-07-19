@@ -12,7 +12,10 @@ func (s *Store) SetServerDesiredState(ctx context.Context, serverID string, desi
 	if err := s.db.QueryRow(ctx, `SELECT desired_state::text FROM servers WHERE id = $1`, serverID).Scan(&previous); err != nil {
 		return errors.New("server not found")
 	}
-	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET desired_state = $1::server_desired_state WHERE id = $2`, string(desired), serverID)
+	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET
+		desired_generation = desired_generation + CASE WHEN desired_state IS DISTINCT FROM $1::server_desired_state THEN 1 ELSE 0 END,
+		desired_state = $1::server_desired_state,
+		last_reconcile_error = '' WHERE id = $2`, string(desired), serverID)
 	if err != nil {
 		return err
 	}
@@ -31,7 +34,12 @@ func (s *Store) SetServerActualState(ctx context.Context, serverID string, actua
 		return errors.New("server not found")
 	}
 	status := serverStatusFromActual(actual)
-	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET actual_state = $1::server_actual_state, status = $2 WHERE id = $3`, string(actual), status, serverID)
+	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET actual_state = $1::server_actual_state, status = $2,
+		last_observation_at = NOW(),
+		observed_generation = CASE
+			WHEN (desired_state='running' AND $1::text='running') OR (desired_state='stopped' AND $1::text='stopped')
+			THEN desired_generation ELSE observed_generation END,
+		last_reconcile_error = '' WHERE id = $3`, string(actual), status, serverID)
 	if err != nil {
 		return err
 	}
@@ -54,6 +62,7 @@ func (s *Store) SetNodeDesiredState(ctx context.Context, nodeID string, desired 
 	commandTag, err := s.db.Exec(ctx, `
 		UPDATE nodes
 		SET desired_state = $1::node_desired_state,
+		    desired_generation = desired_generation + CASE WHEN desired_state IS DISTINCT FROM $1::node_desired_state THEN 1 ELSE 0 END,
 		    maintenance_mode = $2,
 		    draining = $3,
 		    status = CASE WHEN $1::text = 'active' THEN actual_state::text ELSE $1::text END
@@ -79,6 +88,8 @@ func (s *Store) SetNodeActualState(ctx context.Context, nodeID string, actual No
 	commandTag, err := s.db.Exec(ctx, `
 		UPDATE nodes
 		SET actual_state = $1::node_actual_state,
+		    last_observation_at = NOW(),
+		    observed_generation = CASE WHEN desired_state='active' AND $1::text='online' THEN desired_generation ELSE observed_generation END,
 		    status = CASE WHEN desired_state = 'active' THEN $1::text ELSE desired_state::text END
 		WHERE id = $2
 	`, string(actual), nodeID)

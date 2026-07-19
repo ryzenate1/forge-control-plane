@@ -58,6 +58,38 @@ type StoredEvent struct {
 	Dispatched    bool
 	FailureCount  int
 	LastError     string
+	ClaimToken    string
+}
+
+// ClaimPending atomically leases a batch to one relay. The lease allows a
+// crashed relay's events to become available again without duplicate claims
+// by healthy replicas.
+func (s *EventStore) ClaimPending(ctx context.Context, limit int, claimToken string, lease time.Duration) ([]StoredEvent, error) {
+	if s.pendingQuery != "" {
+		return s.Pending(ctx, limit)
+	}
+	r, err := s.db.Query(ctx, `WITH candidates AS (
+		SELECT id FROM events WHERE dispatched=false AND failure_count < $1
+		AND (claimed_until IS NULL OR claimed_until < NOW())
+		ORDER BY created_at ASC LIMIT $2 FOR UPDATE SKIP LOCKED)
+		UPDATE events e SET claimed_by=$3, claimed_until=NOW()+$4::interval
+		FROM candidates WHERE e.id=candidates.id
+		RETURNING e.id,e.type,e.source,e.resource_type,e.resource_id,e.correlation_id,e.payload,e.created_at,
+		e.dispatched,e.failure_count,e.last_error,e.claimed_by`, maxFailureCount, limit, claimToken, lease.String())
+	if err != nil {
+		return nil, fmt.Errorf("eventstore claim query: %w", err)
+	}
+	defer r.Close()
+	var out []StoredEvent
+	for r.Next() {
+		var e StoredEvent
+		if err := r.Scan(&e.ID, &e.Type, &e.Source, &e.ResourceType, &e.ResourceID, &e.CorrelationID, &e.Payload,
+			&e.CreatedAt, &e.Dispatched, &e.FailureCount, &e.LastError, &e.ClaimToken); err != nil {
+			return nil, fmt.Errorf("eventstore claim scan: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, r.Err()
 }
 
 type EventStore struct {
@@ -123,7 +155,7 @@ func (s *EventStore) Pending(ctx context.Context, limit int) ([]StoredEvent, err
 }
 
 func (s *EventStore) MarkDispatched(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx, `UPDATE events SET dispatched = true WHERE id = $1`, id)
+	_, err := s.db.Exec(ctx, `UPDATE events SET dispatched = true, claimed_by=NULL, claimed_until=NULL WHERE id = $1`, id)
 	if err != nil {
 		return fmt.Errorf("eventstore mark dispatched: %w", err)
 	}
@@ -132,7 +164,7 @@ func (s *EventStore) MarkDispatched(ctx context.Context, id string) error {
 
 func (s *EventStore) MarkFailed(ctx context.Context, id string, lastErr string) error {
 	_, err := s.db.Exec(ctx,
-		`UPDATE events SET failure_count = failure_count + 1, last_error = $1 WHERE id = $2`,
+		`UPDATE events SET failure_count = failure_count + 1, last_error = $1, claimed_by=NULL, claimed_until=NULL WHERE id = $2`,
 		lastErr, id)
 	if err != nil {
 		return fmt.Errorf("eventstore mark failed: %w", err)

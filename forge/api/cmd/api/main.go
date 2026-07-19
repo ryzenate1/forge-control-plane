@@ -249,6 +249,23 @@ func main() {
 
 		qStore := queue.NewPostgresStore(db.GetDB())
 		queueSvc = queue.New(qStore, 5)
+		registerPowerJob := func(jobType queue.JobType, signal string) {
+			queueSvc.RegisterHandler(jobType, func(ctx context.Context, job *queue.Job) error {
+				commandCtx := daemon.ContextWithCommandID(ctx, job.ID)
+				_, _, err := cm.RequestServerPower(commandCtx, job.ServerID, signal)
+				if err == nil {
+					event := map[string]string{"start": "server:started", "stop": "server:stopped", "restart": "server:restarted", "kill": "server:stopped"}[signal]
+					if event != "" {
+						db.DispatchWebhookEvent(event, map[string]any{"subject_type": "server", "subject_id": job.ServerID, "signal": signal, "operation_id": job.ID})
+					}
+				}
+				return err
+			})
+		}
+		registerPowerJob(queue.JobServerStart, "start")
+		registerPowerJob(queue.JobServerStop, "stop")
+		registerPowerJob(queue.JobServerRestart, "restart")
+		registerPowerJob(queue.JobServerKill, "kill")
 		queueSvc.Start(appCtx)
 
 		runtimeRegistry = runtimesvc.NewRegistry()

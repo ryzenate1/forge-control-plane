@@ -27,6 +27,17 @@ const (
 
 var ErrMissingNodeToken = errors.New("daemon node token is required")
 
+type commandIDContextKey struct{}
+
+func ContextWithCommandID(ctx context.Context, commandID string) context.Context {
+	return context.WithValue(ctx, commandIDContextKey{}, strings.TrimSpace(commandID))
+}
+
+func commandIDFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(commandIDContextKey{}).(string)
+	return value
+}
+
 // isRetryableStatus returns true for status codes where a retry may succeed.
 func isRetryableStatus(status int) bool {
 	switch status {
@@ -128,10 +139,11 @@ func NewClientWithDevelopmentFallback(nodeToken string) *Client {
 }
 
 type PowerResponse struct {
-	ServerID string `json:"serverId"`
-	Signal   string `json:"signal"`
-	Accepted bool   `json:"accepted"`
-	Mode     string `json:"mode,omitempty"`
+	ServerID    string `json:"serverId"`
+	Signal      string `json:"signal"`
+	Accepted    bool   `json:"accepted"`
+	Mode        string `json:"mode,omitempty"`
+	OperationID string `json:"operationId,omitempty"`
 }
 
 type CreateRequest struct {
@@ -544,11 +556,13 @@ func (c *Client) SendPower(ctx context.Context, baseURL, nodeToken, serverID, si
 	if err != nil {
 		return PowerResponse{}, err
 	}
-
 	url := strings.TrimRight(baseURL, "/") + "/servers/" + serverID + "/power"
 	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
 	if err != nil {
 		return PowerResponse{}, err
+	}
+	if commandID := commandIDFromContext(ctx); commandID != "" {
+		req.Header.Set("X-Forge-Command-ID", commandID)
 	}
 
 	res, err := c.httpClient.Do(req)

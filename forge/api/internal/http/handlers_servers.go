@@ -16,6 +16,7 @@ import (
 	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/services/activity"
 	"gamepanel/forge/internal/services/clustermanager"
+	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
@@ -733,59 +734,54 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if err := checkServerPermission(c, cfg, requiredPermission); err != nil {
 				return err
 			}
-			var daemonMode string
-			if cfg.Store != nil {
-				ctx, cancel := requestContext()
-				defer cancel()
-				response, _, err := clusterManager.RequestServerPower(ctx, c.Params("id"), req.Signal)
-				if err != nil {
-					if strings.Contains(err.Error(), "server not found") {
-						return fiber.NewError(fiber.StatusNotFound, err.Error())
-					}
-					if strings.Contains(err.Error(), "suspended server") {
-						return fiber.NewError(fiber.StatusConflict, err.Error())
-					}
-					return fiber.NewError(fiber.StatusBadGateway, err.Error())
-				}
-				daemonMode = response.Mode
-				if response.ServerID == "" {
-					response.ServerID = c.Params("id")
-				}
-				if response.Signal == "" {
-					response.Signal = req.Signal
-				}
-				if !response.Accepted {
-					response.Accepted = true
-				}
+			if cfg.QueueService == nil {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
 			}
-			// Fire webhook for power events.
-			if cfg.Store != nil {
-				event := ""
-				switch req.Signal {
-				case "start":
-					event = "server:started"
-				case "stop", "kill":
-					event = "server:stopped"
-				case "restart":
-					event = "server:restarted"
-				}
-				if event != "" {
-					cfg.Store.DispatchWebhookEvent(event, map[string]any{
-						"subject_type": "server",
-						"subject_id":   c.Params("id"),
-						"signal":       req.Signal,
-					})
-				}
+			jobType := queue.JobServerStart
+			switch req.Signal {
+			case "stop":
+				jobType = queue.JobServerStop
+			case "restart":
+				jobType = queue.JobServerRestart
+			case "kill":
+				jobType = queue.JobServerKill
+			}
+			idempotencyKey := strings.TrimSpace(c.Get("Idempotency-Key"))
+			if idempotencyKey != "" {
+				idempotencyKey = "power:" + c.Params("id") + ":" + req.Signal + ":" + idempotencyKey
+			}
+			ctx, cancel := requestContext()
+			defer cancel()
+			job, err := cfg.QueueService.DispatchIdempotent(ctx, idempotencyKey, jobType, c.Params("id"), "", map[string]any{"signal": req.Signal}, 100)
+			if err != nil {
+				return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 			}
 			return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
-				"serverId": c.Params("id"),
-				"signal":   req.Signal,
-				"accepted": true,
-				"mode":     daemonMode,
+				"serverId":    c.Params("id"),
+				"signal":      req.Signal,
+				"accepted":    true,
+				"mode":        "queued",
+				"operationId": job.ID,
 			})
 		default:
 			return fiber.NewError(fiber.StatusBadRequest, "invalid power signal")
 		}
+	})
+
+	protected.Get("/operations/:id", func(c *fiber.Ctx) error {
+		if cfg.QueueService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		job, err := cfg.QueueService.Get(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if job == nil {
+			return fiber.NewError(fiber.StatusNotFound, "operation not found")
+		}
+		return c.JSON(job)
 	})
 
 	protected.Post("/servers/:id/install", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {

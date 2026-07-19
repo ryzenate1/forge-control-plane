@@ -69,7 +69,9 @@ func setupTestDB(t *testing.T) *sql.DB {
 			created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			dispatched BOOLEAN NOT NULL DEFAULT false,
 			failure_count INTEGER NOT NULL DEFAULT 0,
-			last_error TEXT NOT NULL DEFAULT ''
+			last_error TEXT NOT NULL DEFAULT '',
+			claimed_by TEXT,
+			claimed_until TIMESTAMP
 		)`)
 	require.NoError(t, err)
 	_, err = db.ExecContext(context.Background(), `CREATE INDEX IF NOT EXISTS idx_events_dispatched ON events (dispatched)`)

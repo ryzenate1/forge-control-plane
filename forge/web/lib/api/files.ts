@@ -1,5 +1,12 @@
 // File management API functions
-import { fetchJSON, postJSON, deleteJSON, getAuthHeaders, getCSRFToken, API_BASE_URL } from './http';
+import {
+  fetchJSON,
+  postJSON,
+  deleteJSON,
+  getAuthHeaders,
+  getCSRFToken,
+  API_BASE_URL,
+} from './http';
 
 export async function fetchServerFiles(serverId: string, path?: string): Promise<any[]> {
   const url = path
@@ -23,7 +30,10 @@ export async function downloadServerFile(serverId: string, path: string): Promis
   return response.blob();
 }
 
-export async function getServerFileDownloadURL(serverId: string, path: string): Promise<{ url: string; expires: string }> {
+export async function getServerFileDownloadURL(
+  serverId: string,
+  path: string,
+): Promise<{ url: string; expires: string }> {
   return fetchJSON<{ url: string; expires: string }>(
     `/servers/${encodeURIComponent(serverId)}/files/download-url?path=${encodeURIComponent(path)}`,
   );
@@ -54,7 +64,7 @@ export async function writeServerFile(
       method: 'PUT',
       headers,
       body: content,
-    }
+    },
   );
 
   if (!response.ok) {
@@ -63,7 +73,9 @@ export async function writeServerFile(
 }
 
 export async function deleteServerFile(serverId: string, path: string): Promise<void> {
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/files/delete?path=${encodeURIComponent(path)}`);
+  await deleteJSON(
+    `/servers/${encodeURIComponent(serverId)}/files/delete?path=${encodeURIComponent(path)}`,
+  );
 }
 
 export async function renameServerFile(serverId: string, from: string, to: string): Promise<void> {
@@ -93,13 +105,19 @@ export async function deleteServerFiles(serverId: string, paths: string[]): Prom
   });
 }
 
-export async function renameServerFiles(serverId: string, files: Array<{ from: string; to: string }>): Promise<void> {
+export async function renameServerFiles(
+  serverId: string,
+  files: Array<{ from: string; to: string }>,
+): Promise<void> {
   await postJSON<void>(`/servers/${encodeURIComponent(serverId)}/files/rename-batch`, {
     files,
   });
 }
 
-export async function chmodServerFiles(serverId: string, files: Array<{ path: string; mode: string }>): Promise<void> {
+export async function chmodServerFiles(
+  serverId: string,
+  files: Array<{ path: string; mode: string }>,
+): Promise<void> {
   await postJSON<void>(`/servers/${encodeURIComponent(serverId)}/files/chmod-batch`, {
     files,
   });
@@ -123,17 +141,18 @@ export async function decompressServerFiles(serverId: string, path: string): Pro
   });
 }
 
-export async function pullServerFile(serverId: string, url: string, path?: string): Promise<{ ok: boolean; path: string; size: number }> {
+export async function pullServerFile(
+  serverId: string,
+  url: string,
+  path?: string,
+): Promise<{ ok: boolean; path: string; size: number }> {
   return postJSON<{ ok: boolean; path: string; size: number }>(
     `/servers/${encodeURIComponent(serverId)}/files/pull`,
     { url, path },
   );
 }
 
-export async function readServerFile(
-  serverId: string,
-  path: string,
-): Promise<string> {
+export async function readServerFile(serverId: string, path: string): Promise<string> {
   const response = await fetch(
     `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
     {
@@ -150,10 +169,7 @@ export async function readServerFile(
   return response.text();
 }
 
-export async function archiveServerFile(
-  serverId: string,
-  path: string,
-): Promise<Blob> {
+export async function archiveServerFile(serverId: string, path: string): Promise<Blob> {
   const headers: Record<string, string> = {
     ...getAuthHeaders(),
   };

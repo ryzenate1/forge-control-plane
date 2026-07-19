@@ -68,6 +68,7 @@ type Server struct {
 	consoles          *consoleManager
 	pullClientFactory func(context.Context, *url.URL) (*http.Client, error)
 	transferProtocol  *transfer.Engine
+	operations        *OperationQueue
 	tokenGenerator    *tokens.Generator
 	ctx               context.Context
 	cancel            context.CancelFunc
@@ -231,6 +232,20 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		}
 	}, server.consoles.Stop)
 	manager.StartEventWatcher(serverCtx)
+	operationHandler := func(ctx context.Context, op *Operation) error {
+		if rt == nil {
+			return errRuntimeUnavailable
+		}
+		return manager.HandlePower(ctx, op.ServerID, string(op.Type))
+	}
+	journalPath := filepath.Join(filepath.Dir(dataDir), "journal", "operations.db")
+	operationQueue, journalErr := NewPersistentOperationQueue(journalPath, 2, operationHandler)
+	if journalErr != nil {
+		log.Printf("[beacon] persistent command journal unavailable, using memory queue: %v", journalErr)
+		operationQueue = NewOperationQueue(2, operationHandler)
+	}
+	server.operations = operationQueue
+	server.operations.Start(serverCtx)
 	if rt == nil {
 		server.dockerState = "error"
 	}
@@ -245,6 +260,8 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /servers/{id}/install/ws", server.installWS)
 	mux.HandleFunc("POST /servers/{id}/reinstall", server.reinstall)
 	mux.HandleFunc("POST /servers/{id}/power", server.power)
+	mux.HandleFunc("GET /servers/{id}/operations", server.listOperations)
+	mux.HandleFunc("GET /operations/{id}", server.getOperation)
 	mux.HandleFunc("GET /servers/{id}/stats", server.stats)
 	mux.HandleFunc("GET /servers/{id}/logs", server.logs)
 	mux.HandleFunc("POST /servers/{id}/backups", server.createBackup)
@@ -322,6 +339,9 @@ func (s *Server) Shutdown() {
 		return
 	}
 	s.cancel()
+	if s.operations != nil {
+		s.operations.Shutdown()
+	}
 	s.consoles.Close()
 	s.eventBus.Destroy()
 }
@@ -945,15 +965,58 @@ func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 	}
 	switch body.Signal {
 	case "start", "stop", "restart", "kill":
-		mode, err := s.applyPower(r, serverID, body.Signal)
-		if err != nil {
-			http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+		if s.runtime == nil {
+			http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 			return
 		}
-		writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": mode})
+		commandID := strings.TrimSpace(r.Header.Get("X-Forge-Command-ID"))
+		if commandID == "" {
+			commandID = strings.TrimSpace(r.Header.Get("Idempotency-Key"))
+		}
+		op, err := s.operations.EnqueueCommand(r.Context(), commandID, serverID, OperationType(body.Signal))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			return
+		}
+		// Preserve the existing error contract while execution continues on the
+		// server context if the caller disconnects.
+		for {
+			status, statusErr := s.operations.GetStatus(op.ID)
+			if statusErr != nil {
+				http.Error(w, statusErr.Error(), http.StatusInternalServerError)
+				return
+			}
+			switch status.Status {
+			case StatusCompleted:
+				writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": "docker", "operationId": op.ID})
+				return
+			case StatusFailed:
+				err := errors.New(status.Error)
+				http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+				return
+			}
+			select {
+			case <-r.Context().Done():
+				return
+			case <-time.After(10 * time.Millisecond):
+			}
+		}
 	default:
 		http.Error(w, "invalid power signal", http.StatusBadRequest)
 	}
+}
+
+func (s *Server) getOperation(w http.ResponseWriter, r *http.Request) {
+	op, err := s.operations.GetStatus(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, op)
+}
+
+func (s *Server) listOperations(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.operations.ListByServer(r.PathValue("id")))
 }
 
 func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
