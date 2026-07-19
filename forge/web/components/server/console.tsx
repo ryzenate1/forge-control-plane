@@ -5,7 +5,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
-import { type ApiServer, connectServerWebSocket } from "@/lib/api";
+import { type ApiServer, connectServerWebSocket } from "@/modules/gameservers/api";
 import { Send, Trash2 } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 

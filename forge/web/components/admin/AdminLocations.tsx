@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, MapPin, Plus, Trash2 } from "lucide-react";
-import { type ApiLocation, createLocation, deleteLocation, fetchLocations, updateLocation } from "@/lib/api";
+import { type ApiLocation, createLocation, deleteLocation, fetchLocations, updateLocation } from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 

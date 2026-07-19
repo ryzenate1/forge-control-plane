@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { Check, Database, Eye, EyeOff, ShieldCheck } from "lucide-react";
-import { fetchSetupStatus, runSetup } from "@/lib/api";
+import { fetchSetupStatus, runSetup } from "@/modules/platform/api";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input } from "@/components/ui/primitives";
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { User, Users } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ApiServer, type ApiServerSubuser, deleteServerUser, fetchPermissions, fetchServerUsers, updateServerUser, upsertServerUser } from "@/lib/api";
+import { type ApiServer, type ApiServerSubuser, deleteServerUser, fetchPermissions, fetchServerUsers, updateServerUser, upsertServerUser } from "@/modules/gameservers/api";
 import { PanelCard } from "@/components/ui/panel-card";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 

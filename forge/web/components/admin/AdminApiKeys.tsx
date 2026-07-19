@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, Check, ChevronDown, ChevronUp, Copy, KeyRound, Plus, Shield, Trash2 } from "lucide-react";
-import { createApiKey, deleteApiKey, fetchAdminScopes, fetchApiKeys, verifyBearerToken } from "@/lib/api";
+import { createApiKey, deleteApiKey, fetchAdminScopes, fetchApiKeys, verifyBearerToken } from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from "./admin-ui";
 

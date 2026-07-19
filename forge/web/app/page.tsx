@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, ShieldCheck } from "lucide-react";
-import { fetchSetupStatus, login, loginCheckpoint, type LoginResponse } from "@/lib/api";
+import { fetchSetupStatus, login, loginCheckpoint, type LoginResponse } from "@/modules/platform/api";
 import { useServerStore } from "@/stores/use-server-store";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input } from "@/components/ui/primitives";

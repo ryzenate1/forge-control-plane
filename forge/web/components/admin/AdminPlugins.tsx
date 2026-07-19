@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plug, Plus, Trash2, Zap } from "lucide-react";
-import { deleteJSON, fetchJSON, postJSON, type ApiPlugin } from "@/lib/api";
+import { deleteJSON, fetchJSON, postJSON, type ApiPlugin } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 
 export function AdminPlugins() {

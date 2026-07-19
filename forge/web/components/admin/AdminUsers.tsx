@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Plus, Save, Shield, Trash2, Users } from "lucide-react";
-import { type ApiUser, assignUserRoles, createUser, deleteUser, fetchRoles, fetchServers, fetchUserRoles, fetchUsers, removeUserRoles, updateUser } from "@/lib/api";
+import { type ApiUser, assignUserRoles, createUser, deleteUser, fetchRoles, fetchServers, fetchUserRoles, fetchUsers, removeUserRoles, updateUser } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow } from "./admin-ui";
 import { Skeleton } from "@/components/ui/loading-skeleton";
 import { UserLimitsGrid } from "./user-limits";

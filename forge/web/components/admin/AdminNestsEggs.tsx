@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Box, ChevronRight, Copy, Plus, Settings, Tag, Trash2, Download, Upload } from "lucide-react";
-import { type ApiNest, type ApiEgg, createEgg, createNest, deleteEgg, deleteNest, fetchEggs, fetchNests, updateEgg, updateNest } from "@/lib/api";
+import { type ApiNest, type ApiEgg, createEgg, createNest, deleteEgg, deleteNest, fetchEggs, fetchNests, updateEgg, updateNest } from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn } from "./admin-ui";
 

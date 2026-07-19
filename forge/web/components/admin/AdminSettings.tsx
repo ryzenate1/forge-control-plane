@@ -14,7 +14,7 @@ import {
   type ApiPanelAdvancedSettings,
   type ApiPanelMailSettings,
   type ApiPanelSettings,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, Input, SectionHeader, cn } from "./admin-ui";
 
 type Tab = "general" | "security" | "mail" | "monitoring" | "orchestration" | "backups" | "advanced";

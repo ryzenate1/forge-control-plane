@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { CheckCircle2, Container, Lock, Save, Terminal } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ApiServer, type ApiStartupVariable, fetchServerStartup, updateServer, updateServerStartupVariable } from "@/lib/api";
+import { type ApiServer, type ApiStartupVariable, fetchServerStartup, updateServer, updateServerStartupVariable } from "@/modules/gameservers/api";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage } from "@/lib/utils";
 

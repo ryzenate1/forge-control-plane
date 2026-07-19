@@ -25,7 +25,7 @@ import {
   type ApiEvacuationResult,
   type ApiMigration,
   type ApiRecoveryPlan,
-} from "@/lib/api";
+} from "@/modules/infrastructure/api";
 import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader } from "./admin-ui";
 

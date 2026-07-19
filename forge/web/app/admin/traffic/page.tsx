@@ -6,7 +6,7 @@ import {
   GanttChart, Globe, Plus, RefreshCw, Shield, ShieldCheck,
   ShieldOff, SlidersHorizontal, Trash2, Zap,
 } from "lucide-react";
-import { fetchJSON, postJSON, patchJSON, deleteJSON } from "@/lib/api";
+import { fetchJSON, postJSON, patchJSON, deleteJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
 type RouteRule = {

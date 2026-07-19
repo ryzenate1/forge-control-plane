@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Check, Clipboard, Database, Eye, EyeOff, KeyRound, RefreshCw, Trash2 } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ApiDatabase, type ApiServer, createServerDatabase, deleteServerDatabase, fetchServerDatabases, rotateServerDatabasePassword } from "@/lib/api";
+import { type ApiDatabase, type ApiServer, createServerDatabase, deleteServerDatabase, fetchServerDatabases, rotateServerDatabasePassword } from "@/modules/gameservers/api";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage as message } from "@/lib/utils";
 

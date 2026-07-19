@@ -6,7 +6,7 @@ import {
   Activity, ArrowLeft, CheckCircle, Layers, RefreshCw,
   RotateCcw, Server, XOctagon,
 } from "lucide-react";
-import { fetchJSON, postJSON } from "@/lib/api";
+import { fetchJSON, postJSON } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
 type Deployment = {

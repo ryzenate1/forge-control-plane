@@ -2,7 +2,7 @@
 
 import { createContext, useContext, useEffect, useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { fetchPublicPanelSettings } from "@/lib/api";
+import { fetchPublicPanelSettings } from "@/modules/platform/api";
 import { Button } from "@/components/ui/primitives";
 
 type BrandingContextValue = { companyName: string; browserTitle?: string; footerText?: string; logoUrl?: string; faviconUrl?: string; loginBackgroundUrl?: string; themePreset?: string; defaultLocale: string };

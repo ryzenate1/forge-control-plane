@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Clipboard, KeyRound, Save, Server, Settings, Wrench } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { type ApiNode, type ApiServer, reinstallServer, updateServer } from "@/lib/api";
+import { type ApiNode, type ApiServer, reinstallServer, updateServer } from "@/modules/gameservers/api";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage as message } from "@/lib/utils";
 

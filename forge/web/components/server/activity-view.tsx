@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { Activity, ChevronLeft, ChevronRight, Filter } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
-import { type ApiAuditEvent, type ApiServer, fetchServerActivity } from "@/lib/api";
+import { type ApiAuditEvent, type ApiServer, fetchServerActivity } from "@/modules/gameservers/api";
 
 const PAGE_SIZE = 20;
 function metadata(raw: string | Record<string, unknown> | undefined) { if (!raw) return []; const parsed: Record<string, unknown> = typeof raw === "string" ? (() => { try { return JSON.parse(raw) as Record<string, unknown>; } catch { return null; } })() ?? {} : raw; return Object.entries(parsed).map(([key, value]) => ({ key: key.replace(/[_-]/g, " "), value: typeof value === "object" ? JSON.stringify(value) : String(value) })); }

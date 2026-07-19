@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useState } from "react";
 import { MailCheck } from "lucide-react";
-import { requestPasswordReset } from "@/lib/api";
+import { requestPasswordReset } from "@/modules/platform/api";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input } from "@/components/ui/primitives";
 

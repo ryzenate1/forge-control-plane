@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Map, Plus, Trash2 } from "lucide-react";
-import { createRegion, deleteRegion, fetchRegions, updateRegion, type ApiRegion } from "@/lib/api";
+import { createRegion, deleteRegion, fetchRegions, updateRegion, type ApiRegion } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea } from "./admin-ui";
 
 export function AdminRegions() {

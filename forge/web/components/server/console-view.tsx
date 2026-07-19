@@ -3,7 +3,7 @@
 import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, ArrowDown, Clock, Cpu, Download, MemoryStick, Network, PlugZap, RefreshCw, Search, Send, Server, Trash2, Upload } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
-import { type ApiServer, type ApiStats, connectServerWebSocket, fetchServerLogs, reinstallServer, sendPowerSignal } from "@/lib/api";
+import { type ApiServer, type ApiStats, connectServerWebSocket, fetchServerLogs, reinstallServer, sendPowerSignal } from "@/modules/gameservers/api";
 import { cn, formatBytes } from "@/lib/utils";
 import { hasServerPermission, useServerContext } from "./server-context";
 import { CrashBanner } from "./crash-banner";

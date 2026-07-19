@@ -142,8 +142,8 @@ player load, backups, world growth, and container image cache—not only idle us
 ### 1. Download the source and dependencies
 
 ```bash
-git clone <repository-url> gamepanel
-cd gamepanel
+git clone <repository-url> forge-control-plane
+cd forge-control-plane
 npm ci
 go work sync
 ```
@@ -209,15 +209,15 @@ Log out and back in after adding the Docker group. Then deploy the control
 plane:
 
 ```bash
-git clone <repository-url> gamepanel
-cd gamepanel/infra
+git clone <repository-url> forge-control-plane
+cd forge-control-plane/infra
 
 # Generates API, database, encryption, node and Grafana secrets.
 PANEL_DOMAIN=panel.example.com ./gen-env.sh .env
 
 sudo install -d -o "$USER" -g "$USER" \
   /srv/game-panel/servers \
-  /var/backups/gamepanel/postgres
+  /var/backups/forge-control-plane/postgres
 
 ./bootstrap-control-plane.sh
 ```
@@ -267,7 +267,7 @@ After DNS points to the VPS, obtain a certificate and install the supplied
 Nginx configuration:
 
 ```bash
-cd gamepanel/infra
+cd forge-control-plane/infra
 sudo systemctl stop nginx
 sudo certbot certonly --standalone -d panel.example.com
 sed 's/__PANEL_FQDN__/panel.example.com/g' nginx.conf \
@@ -302,7 +302,7 @@ Create another node in the panel, copy its UUID and credential into a
 node-specific `infra/.env` on the additional Ubuntu host, then run:
 
 ```bash
-cd gamepanel/infra
+cd forge-control-plane/infra
 ./bootstrap-beacon.sh
 curl --fail http://127.0.0.1:9090/health
 ```
@@ -386,11 +386,18 @@ verify that every API migration is applied before an image is promoted.
 ## Repository layout
 
 ```text
-gamepanel/
+forge-control-plane/
 ├── forge/
-│   ├── api/                 # Go control-plane API and SQL migrations
-│   └── web/                 # Next.js dashboard
-├── beacon/                  # Go node agent
+│   ├── api/
+│   │   ├── internal/platform/ # Stable workload, operation and tenancy kernel
+│   │   ├── internal/modules/  # Capability-owned domain and application code
+│   │   └── internal/http/     # API transport and route composition
+│   └── web/
+│       ├── modules/          # Product-mode frontend boundaries
+│       └── lib/api/          # Focused API clients and compatibility facade
+├── beacon/
+│   ├── internal/commands/    # Durable node command journal and workers
+│   └── internal/server/      # Focused HTTP/runtime handlers
 ├── infra/                   # Compose, Nginx, monitoring and bootstraps
 ├── packages/
 │   ├── sdk/                 # TypeScript API SDK
@@ -398,7 +405,6 @@ gamepanel/
 │   └── ui/                  # Shared UI primitives
 ├── lang/                    # Translation catalogs
 ├── scripts/                 # Development, validation and operations helpers
-├── reference/               # Upstream research; not shipped runtime code
 ├── Makefile
 ├── go.work
 └── package.json
@@ -415,9 +421,6 @@ gamepanel/
 | [Testing](#testing-and-quality-checks) | Build, lint, test and validation commands |
 | [Security checklist](#security-checklist) | Minimum production security controls |
 | [Troubleshooting](#troubleshooting) | Common deployment failures |
-| [Server lifecycle](./forge/api/docs/server-lifecycle.md) | Provisioning and runtime lifecycle |
-| [Encryption at rest](./forge/api/docs/encryption-at-rest.md) | Master-key management and rotation |
-| [OpenAPI specification](./forge/api/docs/openapi.json) | Machine-readable API schema |
 
 ## Security checklist
 
@@ -480,8 +483,7 @@ hosting critical workloads.
 ## License
 
 This repository is proprietary software. All rights are reserved unless the
-repository owner provides a separate license. Material under `reference/` keeps
-the licensing terms of its respective upstream project.
+repository owner provides a separate license.
 
 ---
 

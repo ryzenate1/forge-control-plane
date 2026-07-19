@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Activity, AlertTriangle, BarChart3, Plus, Play, Trash2, Zap } from 'lucide-react';
-import { fetchJSON, postJSON, putJSON, deleteJSON } from '@/lib/api';
+import { fetchJSON, postJSON, putJSON, deleteJSON } from '@/modules/infrastructure/api';
 import {
   Btn,
   Card,

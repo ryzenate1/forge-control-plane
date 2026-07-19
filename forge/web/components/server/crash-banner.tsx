@@ -2,7 +2,7 @@
 
 import { AlertTriangle, RefreshCw, Skull } from "lucide-react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { sendPowerSignal } from "@/lib/api";
+import { sendPowerSignal } from "@/modules/gameservers/api";
 import { fetchServerCrashHistory, resetServerCrashState } from "@/lib/api/servers";
 import { useServerContext } from "./server-context";
 

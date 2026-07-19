@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Cloud, Loader2, Plus, Server, Trash2 } from "lucide-react";
-import { deleteJSON, fetchJSON, fetchNodes, postJSON, type ApiNode } from "@/lib/api";
+import { deleteJSON, fetchJSON, fetchNodes, postJSON, type ApiNode } from "@/modules/infrastructure/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
 type CloudProvider = {
