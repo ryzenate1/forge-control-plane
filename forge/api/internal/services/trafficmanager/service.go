@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,18 +15,20 @@ import (
 )
 
 type RoutingRule struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	ServerID   string            `json:"serverId,omitempty"`
-	Domain     string            `json:"domain"`
-	Path       string            `json:"path"`
-	TargetPort int               `json:"targetPort"`
-	Protocol   string            `json:"protocol"`
-	Strategy   string            `json:"strategy"`
-	Weight     int               `json:"weight"`
-	Headers    map[string]string `json:"headers,omitempty"`
-	Enabled    bool              `json:"enabled"`
-	CreatedAt  time.Time         `json:"createdAt"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	ServerID         string            `json:"serverId,omitempty"`
+	Domain           string            `json:"domain"`
+	Path             string            `json:"path"`
+	TargetHost       string            `json:"targetHost,omitempty"`
+	TargetPort       int               `json:"targetPort"`
+	Protocol         string            `json:"protocol"`
+	Strategy         string            `json:"strategy"`
+	Weight           int               `json:"weight"`
+	Headers          map[string]string `json:"headers,omitempty"`
+	Enabled          bool              `json:"enabled"`
+	WebSocket        bool              `json:"webSocketSupport"`
+	CreatedAt        time.Time         `json:"createdAt"`
 }
 
 type TrafficPolicy struct {
@@ -58,7 +61,7 @@ type trafficStore interface {
 }
 
 type ReverseProxy interface {
-	UpdateRoutes(ctx context.Context, rules []*RoutingRule) error
+	UpdateRoutes(ctx context.Context, rules []*RoutingRule, policies map[string]*TrafficPolicy) error
 	RemoveRoutes(ctx context.Context, ruleIDs []string) error
 	GetActiveConnections() map[string]int
 }
@@ -86,6 +89,9 @@ func (s *Service) CreateRoutingRule(ctx context.Context, rule *RoutingRule) erro
 	}
 	if rule.Strategy == "" {
 		rule.Strategy = "round_robin"
+	}
+	if rule.Path == "" {
+		rule.Path = "/"
 	}
 
 	s.mu.Lock()
@@ -246,7 +252,17 @@ func (s *Service) ApplyRoutes(ctx context.Context) error {
 		}
 	}
 
-	return s.proxy.UpdateRoutes(ctx, rules)
+	resolved, err := s.resolveTargets(ctx, rules)
+	if err != nil {
+		return fmt.Errorf("resolve targets: %w", err)
+	}
+
+	policies := make(map[string]*TrafficPolicy, len(s.policies))
+	for k, v := range s.policies {
+		policies[k] = v
+	}
+
+	return s.proxy.UpdateRoutes(ctx, resolved, policies)
 }
 
 func (s *Service) SyncRoutes(ctx context.Context) error {
@@ -261,10 +277,61 @@ func (s *Service) SyncRoutes(ctx context.Context) error {
 			rules = append(rules, rule)
 		}
 	}
+
+	policies := make(map[string]*TrafficPolicy, len(s.policies))
+	for k, v := range s.policies {
+		policies[k] = v
+	}
 	s.mu.RUnlock()
 
-	if err := s.proxy.UpdateRoutes(ctx, rules); err != nil {
+	resolved, err := s.resolveTargets(ctx, rules)
+	if err != nil {
+		return fmt.Errorf("resolve targets: %w", err)
+	}
+
+	if err := s.proxy.UpdateRoutes(ctx, resolved, policies); err != nil {
 		return fmt.Errorf("sync routes: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) resolveTargets(ctx context.Context, rules []*RoutingRule) ([]*RoutingRule, error) {
+	if s.store == nil {
+		return rules, nil
+	}
+
+	resolved := make([]*RoutingRule, len(rules))
+	for i, rule := range rules {
+		clone := *rule
+		if clone.TargetHost == "" {
+			clone.TargetHost = s.resolveTargetHost(ctx, rule)
+		}
+		resolved[i] = &clone
+	}
+	return resolved, nil
+}
+
+func (s *Service) resolveTargetHost(ctx context.Context, rule *RoutingRule) string {
+	if rule.ServerID == "" {
+		return "localhost"
+	}
+
+	server, err := s.store.GetServer(ctx, rule.ServerID)
+	if err != nil || server.NodeID == "" {
+		return "localhost"
+	}
+
+	node, err := s.store.GetNode(ctx, server.NodeID)
+	if err != nil {
+		return "localhost"
+	}
+
+	host := strings.TrimSpace(node.PublicHostname)
+	if host == "" {
+		host = strings.TrimSpace(node.FQDN)
+	}
+	if host == "" {
+		return "localhost"
+	}
+	return host
 }

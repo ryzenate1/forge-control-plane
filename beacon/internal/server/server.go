@@ -70,6 +70,7 @@ type Server struct {
 	transferProtocol  *transfer.Engine
 	operations        *OperationQueue
 	tokenGenerator    *tokens.Generator
+	composeStacks     *composeStack
 	ctx               context.Context
 	cancel            context.CancelFunc
 }
@@ -221,6 +222,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		eventBus:          events.NewBus(),
 		pullClientFactory: securePullClient,
 		transferProtocol:  protocol,
+		composeStacks:     newComposeStackManager(dataDir),
 		ctx:               serverCtx,
 		cancel:            cancel,
 	}
@@ -299,6 +301,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /api/v1/transfers/{id}/source/push", server.pushTransferSource)
 	mux.HandleFunc("GET /api/v1/transfers/{id}/source/status", server.sourceTransferStatus)
 	mux.HandleFunc("POST /api/v1/transfers/{id}/source/cleanup", server.cleanupTransferSource)
+	mux.HandleFunc("POST /mounts/cleanup", server.cleanupMount)
 	mux.HandleFunc("HEAD /api/v1/transfers/{id}/destination/archive", server.destinationTransferOffset)
 	mux.HandleFunc("PATCH /api/v1/transfers/{id}/destination/archive", server.receiveTransferChunk)
 	mux.HandleFunc("POST /api/v1/transfers/{id}/destination/restore", server.restoreTransferDestination)
@@ -309,6 +312,28 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /api/update", server.postUpdate)
 	mux.HandleFunc("POST /api/deauthorize-user", server.postDeauthorizeUser)
 	mux.HandleFunc("GET /download/backup", server.downloadBackupWithToken)
+	mux.HandleFunc("POST /compose/deploy", server.handleComposeDeploy)
+	mux.HandleFunc("POST /compose/{stackId}/stop", server.handleComposeStop)
+	mux.HandleFunc("POST /compose/{stackId}/start", server.handleComposeStart)
+	mux.HandleFunc("POST /compose/{stackId}/restart", server.handleComposeRestart)
+	mux.HandleFunc("DELETE /compose/{stackId}", server.handleComposeDelete)
+	mux.HandleFunc("GET /compose/{stackId}/status", server.handleComposeStatus)
+	mux.HandleFunc("GET /compose/{stackId}/logs", server.handleComposeLogs)
+	mux.HandleFunc("POST /compose/{stackId}/pull", server.handleComposePull)
+	// Git source deployment endpoints
+	mux.HandleFunc("POST /git/clone", server.handleGitClone)
+	mux.HandleFunc("POST /git/build", server.handleGitBuild)
+	mux.HandleFunc("DELETE /git/cleanup", server.handleGitCleanup)
+	// Database container provisioning endpoints
+	mux.HandleFunc("POST /database/provision", server.handleDatabaseProvision)
+	mux.HandleFunc("DELETE /database/provision", server.handleDatabaseDeProvision)
+	mux.HandleFunc("POST /database/backup", server.handleDatabaseBackup)
+	mux.HandleFunc("GET /database/status/{containerId}", server.handleDatabaseStatus)
+	// Build endpoints
+	mux.HandleFunc("POST /build/dockerfile", server.handleDockerfileBuild)
+	mux.HandleFunc("POST /build/nixpacks", server.handleNixpacksBuild)
+	mux.HandleFunc("GET /build/logs", server.handleBuildLogs)
+	mux.HandleFunc("POST /build/cancel", server.handleBuildCancel)
 	return server, requestTimeout(server.authenticate(mux))
 }
 

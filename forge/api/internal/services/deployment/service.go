@@ -33,20 +33,22 @@ const (
 )
 
 type Deployment struct {
-	ID              string     `json:"id"`
-	ServerID        string     `json:"serverId"`
-	Strategy        Strategy   `json:"strategy"`
-	Status          Status     `json:"status"`
-	Image           string     `json:"image"`
-	BlueTargetID    string     `json:"blueTargetId"`
-	GreenTargetID   string     `json:"greenTargetId"`
-	ActiveTarget    string     `json:"activeTarget"`
-	HealthCheckPath string     `json:"healthCheckPath,omitempty"`
-	HealthCheckPort int        `json:"healthCheckPort,omitempty"`
-	CreatedAt       time.Time  `json:"createdAt"`
-	UpdatedAt       time.Time  `json:"updatedAt"`
-	CompletedAt     *time.Time `json:"completedAt,omitempty"`
-	Error           string     `json:"error,omitempty"`
+	ID                 string     `json:"id"`
+	ServerID           string     `json:"serverId"`
+	Strategy           Strategy   `json:"strategy"`
+	Status             Status     `json:"status"`
+	Image              string     `json:"image"`
+	BlueTargetID       string     `json:"blueTargetId"`
+	GreenTargetID      string     `json:"greenTargetId"`
+	ActiveTarget       string     `json:"activeTarget"`
+	HealthCheckPath    string     `json:"healthCheckPath,omitempty"`
+	HealthCheckPort    int        `json:"healthCheckPort,omitempty"`
+	CurrentRevisionID  *string    `json:"currentRevisionId,omitempty"`
+	RolloutStrategy    string     `json:"rolloutStrategy,omitempty"`
+	CreatedAt          time.Time  `json:"createdAt"`
+	UpdatedAt          time.Time  `json:"updatedAt"`
+	CompletedAt        *time.Time `json:"completedAt,omitempty"`
+	Error              string     `json:"error,omitempty"`
 }
 
 type Service struct {
@@ -75,39 +77,43 @@ var (
 
 func toServiceDeployment(d store.Deployment) *Deployment {
 	return &Deployment{
-		ID:              d.ID,
-		ServerID:        d.ServerID,
-		Strategy:        Strategy(d.Strategy),
-		Status:          Status(d.Status),
-		Image:           d.Image,
-		BlueTargetID:    d.BlueTargetID,
-		GreenTargetID:   d.GreenTargetID,
-		ActiveTarget:    d.ActiveTarget,
-		HealthCheckPath: d.HealthCheckPath,
-		HealthCheckPort: d.HealthCheckPort,
-		Error:           d.Error,
-		CreatedAt:       d.CreatedAt,
-		UpdatedAt:       d.UpdatedAt,
-		CompletedAt:     d.CompletedAt,
+		ID:                d.ID,
+		ServerID:          d.ServerID,
+		Strategy:          Strategy(d.Strategy),
+		Status:            Status(d.Status),
+		Image:             d.Image,
+		BlueTargetID:      d.BlueTargetID,
+		GreenTargetID:     d.GreenTargetID,
+		ActiveTarget:      d.ActiveTarget,
+		HealthCheckPath:   d.HealthCheckPath,
+		HealthCheckPort:   d.HealthCheckPort,
+		Error:             d.Error,
+		CurrentRevisionID: d.CurrentRevisionID,
+		RolloutStrategy:   d.RolloutStrategy,
+		CreatedAt:         d.CreatedAt,
+		UpdatedAt:         d.UpdatedAt,
+		CompletedAt:       d.CompletedAt,
 	}
 }
 
 func toStoreDeployment(d *Deployment) *store.Deployment {
 	return &store.Deployment{
-		ID:              d.ID,
-		ServerID:        d.ServerID,
-		Strategy:        string(d.Strategy),
-		Status:          string(d.Status),
-		Image:           d.Image,
-		BlueTargetID:    d.BlueTargetID,
-		GreenTargetID:   d.GreenTargetID,
-		ActiveTarget:    d.ActiveTarget,
-		HealthCheckPath: d.HealthCheckPath,
-		HealthCheckPort: d.HealthCheckPort,
-		Error:           d.Error,
-		CreatedAt:       d.CreatedAt,
-		UpdatedAt:       d.UpdatedAt,
-		CompletedAt:     d.CompletedAt,
+		ID:                d.ID,
+		ServerID:          d.ServerID,
+		Strategy:          string(d.Strategy),
+		Status:            string(d.Status),
+		Image:             d.Image,
+		BlueTargetID:      d.BlueTargetID,
+		GreenTargetID:     d.GreenTargetID,
+		ActiveTarget:      d.ActiveTarget,
+		HealthCheckPath:   d.HealthCheckPath,
+		HealthCheckPort:   d.HealthCheckPort,
+		Error:             d.Error,
+		CurrentRevisionID: d.CurrentRevisionID,
+		RolloutStrategy:   d.RolloutStrategy,
+		CreatedAt:         d.CreatedAt,
+		UpdatedAt:         d.UpdatedAt,
+		CompletedAt:       d.CompletedAt,
 	}
 }
 

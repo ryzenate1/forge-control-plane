@@ -1,12 +1,15 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/services/clustermanager"
 	"gamepanel/forge/internal/services/evacuationplanner"
@@ -1560,8 +1563,41 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		if err := cfg.Store.DeleteMount(ctx, c.Params("id"), actorID); err != nil {
+		mountID := c.Params("id")
+		mount, err := cfg.Store.GetMount(ctx, mountID)
+		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		serverCount, err := cfg.Store.CountServersUsingMount(ctx, mountID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if serverCount > 0 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("cannot delete mount: %d server(s) are still attached; detach them first", serverCount))
+		}
+		nodes, err := cfg.Store.ListNodesForMount(ctx, mountID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if err := cfg.Store.DeleteMount(ctx, mountID, actorID); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if cfg.Daemon != nil {
+			for _, node := range nodes {
+				nodeToken, tokenErr := cfg.Store.GetNodeDaemonToken(ctx, node.ID)
+				if tokenErr != nil {
+					slog.Warn("mount cleanup failed to get node token", "node", node.Name, "error", tokenErr)
+					continue
+				}
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				resp, cleanupErr := cfg.Daemon.CleanupMount(cleanupCtx, node.BaseURL, nodeToken, mount.Source)
+				cleanupCancel()
+				if cleanupErr != nil {
+					slog.Warn("mount cleanup failed for node", "node", node.Name, "source", mount.Source, "error", cleanupErr)
+				} else if resp.OK && !resp.Removed {
+					slog.Info("mount cleanup skipped", "node", node.Name, "source", mount.Source, "reason", resp.Reason)
+				}
+			}
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})

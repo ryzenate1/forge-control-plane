@@ -3,7 +3,7 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import {
-  Activity, ArrowLeft, CheckCircle, Layers, RefreshCw,
+  Activity, ArrowLeft, CheckCircle, GitCommit, Layers, RefreshCw,
   RotateCcw, Server, XOctagon,
 } from "lucide-react";
 import { fetchJSON, postJSON } from "@/lib/api";
@@ -18,6 +18,8 @@ type Deployment = {
   targetGroup?: string;
   healthCheckPath?: string;
   healthCheckPort?: number;
+  currentRevisionId?: string;
+  rolloutStrategy?: string;
   createdAt: string;
   completedAt?: string;
   error?: string;
@@ -94,6 +96,9 @@ export default function AdminDeploymentDetailPage() {
             sub={`Server ${dep.serverId} — ${dep.strategy.replace("_", "-")} strategy`}
             action={
               <div className="flex gap-2">
+                <Btn tone="ghost" onClick={() => router.push(`/admin/deployments/${id}/revisions`)}>
+                  <GitCommit size={14} /> Revisions
+                </Btn>
                 {canRollback && (
                   <Btn tone="warning" onClick={() => rollbackMutation.mutate()} disabled={rollbackMutation.isPending}>
                     <RotateCcw size={14} /> Rollback
@@ -149,6 +154,14 @@ export default function AdminDeploymentDetailPage() {
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Strategy</p>
             <p className="mt-1 text-sm text-slate-200">{dep.strategy.replace("_", "-")}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Rollout Strategy</p>
+            <p className="mt-1 text-sm text-slate-200">{dep.rolloutStrategy ? dep.rolloutStrategy.replace("_", "-") : "—"}</p>
+          </div>
+          <div>
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Current Revision</p>
+            <p className="mt-1 text-sm text-slate-200">{dep.currentRevisionId ? dep.currentRevisionId.slice(0, 8) + "..." : "—"}</p>
           </div>
           <div>
             <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Target Group</p>

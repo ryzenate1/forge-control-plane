@@ -3,6 +3,7 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -74,5 +75,5 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, serverID string) ([]W
 }
 
 func (s *PostgresStore) UpdateStep(ctx context.Context, stepID string, status InstallStatus, errMsg string) error {
-	panic("not implemented")
+	return fmt.Errorf("installer UpdateStep not implemented")
 }

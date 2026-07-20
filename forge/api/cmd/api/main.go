@@ -25,18 +25,24 @@ import (
 	"gamepanel/forge/internal/placement"
 	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/secrets"
+	acmesvc "gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/services/activity"
 	auditlogsvc "gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	buildsvc "gamepanel/forge/internal/services/build"
 	"gamepanel/forge/internal/services/clustermanager"
+	composesvc "gamepanel/forge/internal/services/compose"
 	"gamepanel/forge/internal/services/configvalidator"
 	"gamepanel/forge/internal/services/crashdetector"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
+	dnssvc "gamepanel/forge/internal/services/dns"
+	"gamepanel/forge/internal/services/domains"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
 	"gamepanel/forge/internal/services/health"
+	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
 	"gamepanel/forge/internal/services/loadbalancer"
@@ -53,6 +59,7 @@ import (
 	"gamepanel/forge/internal/services/reservations"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
 	"gamepanel/forge/internal/services/scheduler"
+	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/webhook"
@@ -152,37 +159,46 @@ func main() {
 	// Build the service graph. All services are nil-safe when db == nil;
 	// handler nil-guards already handle the "no database" dev-mode case.
 	var (
-		nr               *noderegistry.Service
-		np               *nodeprobe.Service
-		cm               *clustermanager.Service
-		ep               *evacuationplanner.Service
-		mig              *migration.Service
-		resMgr           *reservations.Manager
-		rcv              *recoverysvc.Coordinator
-		rts              *recoverysvc.TokenService
-		hbm              *heartbeatmonitor.Service
-		obs              *observability.Service
-		rec              *reconciler.Service
-		dbProv           *dbprovisioner.Service
-		whSvc            *webhook.Service
-		mailWorker       *mailservice.Worker
-		mailTriggerSvc   *mailservice.TriggerService
-		actSvc           *activity.Service
-		auditLogSvc      auditlogsvc.AuditLogger
-		pluginSvc        *plugins.Service
-		queueSvc         *queue.Service
-		runtimeRegistry  *runtimesvc.Registry
-		waSvc            *webauthn.Service
-		autoSvc          *autoscaler.Service
-		bkSvc            *backup.Service
-		deploySvc        *deployment.Service
-		cloudMgr         *cloud.Manager
-		lbSvc            *loadbalancer.Service
-		failSvc          *failover.Service
-		crashDetector    *crashdetector.Detector
-		tmSvc            *trafficmanager.Service
-		predictiveScorer *scheduler.PredictiveScorer
-		constraintSched  *scheduler.ConstraintScheduler
+		nr                *noderegistry.Service
+		np                *nodeprobe.Service
+		cm                *clustermanager.Service
+		ep                *evacuationplanner.Service
+		mig               *migration.Service
+		resMgr            *reservations.Manager
+		rcv               *recoverysvc.Coordinator
+		rts               *recoverysvc.TokenService
+		hbm               *heartbeatmonitor.Service
+		obs               *observability.Service
+		rec               *reconciler.Service
+		dbProv            *dbprovisioner.Service
+		whSvc             *webhook.Service
+		mailWorker        *mailservice.Worker
+		mailTriggerSvc    *mailservice.TriggerService
+		actSvc            *activity.Service
+		auditLogSvc       auditlogsvc.AuditLogger
+		pluginSvc         *plugins.Service
+		queueSvc          *queue.Service
+		runtimeRegistry   *runtimesvc.Registry
+		waSvc             *webauthn.Service
+		autoSvc           *autoscaler.Service
+		bkSvc             *backup.Service
+		bkWorker          *backup.Worker
+		dnsSvc            *dnssvc.Service
+		acmeSvc           *acmesvc.Service
+		domainSvc         *domains.Service
+		buildSvc          *buildsvc.Service
+		deploySvc         *deployment.Service
+		cloudMgr          *cloud.Manager
+		lbSvc             *loadbalancer.Service
+		failSvc           *failover.Service
+		crashDetector     *crashdetector.Detector
+		tmSvc             *trafficmanager.Service
+		predictiveScorer  *scheduler.PredictiveScorer
+		constraintSched   *scheduler.ConstraintScheduler
+		healthCheckRunner *healthchecksvc.Service
+		tenancySvc        *tenancy.Service
+		dbContainerSvc    *dbprovisioner.DBContainerService
+		composeLifecycle  *composesvc.Service
 	)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -266,6 +282,26 @@ func main() {
 		registerPowerJob(queue.JobServerStop, "stop")
 		registerPowerJob(queue.JobServerRestart, "restart")
 		registerPowerJob(queue.JobServerKill, "kill")
+		composeLifecycle = composesvc.New(db, outboxPub)
+		composeQH := composesvc.NewQueueHandler(composeLifecycle)
+		queueSvc.RegisterHandler(queue.JobComposeDeploy, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleDeploy(ctx, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobComposeUpdate, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleUpdate(ctx, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobComposeDelete, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleDelete(ctx, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobComposeStart, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleStart(ctx, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobComposeStop, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleStop(ctx, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobComposeRestart, func(ctx context.Context, job *queue.Job) error {
+			return composeQH.HandleRestart(ctx, job.Payload)
+		})
 		queueSvc.Start(appCtx)
 
 		runtimeRegistry = runtimesvc.NewRegistry()
@@ -285,6 +321,10 @@ func main() {
 		deploySvc = deployment.New(db, outboxPub)
 		lbSvc = loadbalancer.New(db, outboxPub)
 		lbSvc.Start(appCtx)
+
+		healthCheckRunner = healthchecksvc.New(db, healthchecksvc.DefaultConfig())
+		healthCheckRunner.Start(appCtx)
+		rec.SetHealthChecker(healthCheckRunner.ReconcilerAdapter())
 		failSvc = failover.New(db, outboxPub)
 		runFailoverAction := func(ctx context.Context, event *failover.Event) error {
 			switch event.Action {
@@ -366,7 +406,16 @@ func main() {
 			))
 		})
 		bkSvc = backup.New(db)
-		tmSvc = trafficmanager.New(db, nil, outboxPub)
+		bkSvc.SetRetentionDays(envInt("BACKUP_RETENTION_DAYS", 30))
+		bkWorker = backup.NewWorker(db, bkSvc, daemonClient)
+		dnsSvc = dnssvc.New(db)
+		caddyProxy := trafficmanager.NewCaddyReverseProxy(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
+		acmeSvc = acmesvc.New(db, slogLogger)
+		domainSvc = domains.New(store.NewDomainAdapter(db), caddyProxy, env("PANEL_IP", ""), outboxPub)
+		buildSvc = buildsvc.NewService(db)
+		tenancySvc = tenancy.New(db)
+		dbContainerSvc = dbprovisioner.NewDBContainerService(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"))
+		tmSvc = trafficmanager.New(db, caddyProxy, outboxPub)
 		predictiveScorer = scheduler.NewPredictiveScorer(predictiveStore{db})
 		constraintSched = scheduler.NewConstraintScheduler(db)
 
@@ -384,7 +433,10 @@ func main() {
 		mailWorker.Start(appCtx)
 		whSvc.Start(appCtx)
 		_ = failSvc.Start(appCtx)
+		bkWorker.Start(appCtx)
 		eventRelay.Start(appCtx)
+		domainSvc.StartReverify(appCtx)
+		acmeSvc.StartAutoRenewal(appCtx)
 	}
 
 	langsDir := env("LANGS_DIR", "lang")
@@ -594,7 +646,15 @@ func main() {
 		PredictiveScorer:     predictiveScorer,
 		ConstraintScheduler:  constraintSched,
 		BackupSvc:            bkSvc,
+		DNSService:           dnsSvc,
+		AcmeService:          acmeSvc,
+		DomainService:        domainSvc,
+		BuildService:         buildSvc,
 		Translator:           translator,
+		GitService:           nil,
+		GitDeployService:     nil,
+		DBContainerService:   dbContainerSvc,
+		TenancyService:       tenancySvc,
 	}
 
 	app := http.NewServer(appCfg)

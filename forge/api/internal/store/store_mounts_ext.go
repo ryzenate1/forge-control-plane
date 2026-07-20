@@ -251,6 +251,14 @@ func (s *Store) DeleteMount(ctx context.Context, mountID string, actorID *string
 	return s.AppendAudit(ctx, actorID, "mount deleted", "mount", &mountID, `{"reason":"admin delete"}`)
 }
 
+func (s *Store) CountServersUsingMount(ctx context.Context, mountID string) (int, error) {
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM mount_server WHERE mount_id = $1`, mountID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Store) AssignMountToServer(ctx context.Context, serverID, mountID string, actorID *string) error {
 	return s.assignMountToServer(ctx, serverID, mountID, actorID)
 }

@@ -12,7 +12,7 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return
 	}
 
-	protected.Get("/servers/:id/backups/policies", func(c *fiber.Ctx) error {
+	protected.Get("/servers/:id/backups/policies", requireRole("admin"), requireAdminScope("backups.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		policies, err := svc.ListPolicies(ctx, c.Params("id"))
@@ -22,7 +22,7 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return c.JSON(fiber.Map{"policies": policies})
 	})
 
-	protected.Post("/servers/:id/backups/policies", mutationLimiter, func(c *fiber.Ctx) error {
+	protected.Post("/servers/:id/backups/policies", mutationLimiter, requireRole("admin"), requireAdminScope("backups.write"), func(c *fiber.Ctx) error {
 		var body struct {
 			Interval      string `json:"interval"`
 			MaxBackups    int    `json:"maxBackups"`
@@ -49,7 +49,7 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return c.JSON(fiber.Map{"policy": policy})
 	})
 
-	protected.Delete("/servers/:id/backups/policies/:policyId", mutationLimiter, func(c *fiber.Ctx) error {
+	protected.Delete("/servers/:id/backups/policies/:policyId", mutationLimiter, requireRole("admin"), requireAdminScope("backups.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeletePolicy(ctx, c.Params("policyId")); err != nil {
@@ -58,7 +58,7 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/servers/:id/backups/cleanup", mutationLimiter, func(c *fiber.Ctx) error {
+	protected.Post("/servers/:id/backups/cleanup", mutationLimiter, requireRole("admin"), requireAdminScope("backups.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		count, err := svc.CleanupExpiredBackups(ctx)

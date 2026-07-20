@@ -181,32 +181,29 @@ func (r *scheduleRunner) runBackupCleanup(ctx context.Context) {
 		return
 	}
 
-	// Get panel settings for retention policy
 	settings, err := r.cfg.Store.GetPanelSettings(ctx)
 	if err != nil {
-		// Log error but don't fail the tick
 		return
 	}
 
-	// Only run cleanup if auto-cleanup is enabled
 	if !settings.BackupAutoCleanup {
 		return
 	}
 
-	// Run global backup cleanup
-	deleted, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup)
-	if err != nil {
-		// Log error but don't fail the tick
-		return
-	}
-
-	// If backups were deleted, this could be logged for monitoring
-	if deleted > 0 {
-		// Could add metrics logging here
+	if r.cfg.BackupSvc != nil {
+		deleted, err := r.cfg.BackupSvc.CleanupExpiredBackups(ctx)
+		if err != nil {
+			return
+		}
+		_ = deleted
+	} else {
+		deleted, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup)
+		if err != nil {
+			return
+		}
 		_ = deleted
 	}
 
-	// Also cleanup expired invitations
 	_, _ = r.cfg.Store.CleanupExpiredInvitations(ctx)
 }
 
