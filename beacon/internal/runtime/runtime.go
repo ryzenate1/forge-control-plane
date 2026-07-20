@@ -7,6 +7,24 @@ import (
 	"time"
 )
 
+type BuildRequest struct {
+	ContextDir     string
+	DockerfilePath string
+	ImageTag       string
+	BuildArgs      map[string]string
+}
+
+type BuildResult struct {
+	Image string
+	Log   string
+}
+
+// Builder is optional because only a Docker-capable Beacon can build
+// Dockerfiles. Other runtime providers continue to expose lifecycle actions.
+type Builder interface {
+	Build(context.Context, BuildRequest) (BuildResult, error)
+}
+
 const (
 	ProviderDocker      = "docker"
 	ProviderContainerd  = "containerd"

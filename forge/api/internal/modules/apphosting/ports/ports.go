@@ -35,6 +35,22 @@ type DeploymentRequest struct {
 	DesiredGeneration int64
 }
 
+type BuildRequest struct {
+	WorkloadID        string
+	NodeID            string
+	RepositoryURL     string
+	Branch            string
+	BaseDirectory     string
+	DockerfilePath    string
+	BuildArgs         map[string]string
+	DesiredGeneration int64
+}
+
+type BuildResult struct {
+	Image  string
+	Commit string
+}
+
 type DeploymentRepository interface {
 	CurrentWorkloadRevision(context.Context, string) (workloads.Revision, error)
 	CreateWorkloadInstance(context.Context, CreateWorkloadInstanceInput) (workloads.Instance, error)
@@ -51,6 +67,7 @@ type CreateWorkloadInstanceInput struct {
 }
 
 type Runtime interface {
+	Build(context.Context, BuildRequest) (BuildResult, error)
 	Deploy(context.Context, DeploymentRequest) error
 	Delete(context.Context, string, string) error
 }

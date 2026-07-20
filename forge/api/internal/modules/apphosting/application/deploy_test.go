@@ -35,6 +35,8 @@ func (s *deploymentRepositoryStub) RecordWorkloadObservation(_ context.Context, 
 
 type runtimeStub struct {
 	deployRequest ports.DeploymentRequest
+	buildRequest  ports.BuildRequest
+	buildCalled   bool
 	deployErr     error
 	deleted       bool
 }
@@ -42,6 +44,35 @@ type runtimeStub struct {
 func (s *runtimeStub) Deploy(_ context.Context, request ports.DeploymentRequest) error {
 	s.deployRequest = request
 	return s.deployErr
+}
+
+func (s *runtimeStub) Build(_ context.Context, request ports.BuildRequest) (ports.BuildResult, error) {
+	s.buildCalled = true
+	s.buildRequest = request
+	if s.deployErr != nil {
+		return ports.BuildResult{}, s.deployErr
+	}
+	return ports.BuildResult{Image: "forge-app-workload:g1", Commit: "abc123"}, nil
+}
+
+func TestDeploymentServiceBuildsGitSourceBeforeDeploy(t *testing.T) {
+	repository := &deploymentRepositoryStub{}
+	runtime := &runtimeStub{}
+	service, err := NewDeploymentService(repository, runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	input := deployInput()
+	input.Application.Source = domain.SourceGit
+	input.Application.Image = ""
+	input.Application.RepositoryURL = "https://github.com/example/api.git"
+	input.Application.DockerfilePath = "Dockerfile"
+	if err := service.Deploy(context.Background(), "workload", input); err != nil {
+		t.Fatal(err)
+	}
+	if !runtime.buildCalled || runtime.buildRequest.RepositoryURL == "" || runtime.deployRequest.Image != "forge-app-workload:g1" {
+		t.Fatalf("expected built image deployment, got build=%#v deploy=%#v", runtime.buildRequest, runtime.deployRequest)
+	}
 }
 
 func (s *runtimeStub) Delete(context.Context, string, string) error {

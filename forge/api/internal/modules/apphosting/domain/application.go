@@ -2,6 +2,8 @@ package domain
 
 import (
 	"errors"
+	"net/url"
+	"path"
 	"strings"
 )
 
@@ -29,6 +31,10 @@ type Application struct {
 	Source          SourceKind        `json:"source"`
 	Image           string            `json:"image,omitempty"`
 	RepositoryURL   string            `json:"repositoryUrl,omitempty"`
+	Branch          string            `json:"branch,omitempty"`
+	BaseDirectory   string            `json:"baseDirectory,omitempty"`
+	DockerfilePath  string            `json:"dockerfilePath,omitempty"`
+	BuildArgs       map[string]string `json:"buildArgs,omitempty"`
 	ComposeFile     string            `json:"composeFile,omitempty"`
 	Command         []string          `json:"command,omitempty"`
 	Environment     map[string]string `json:"environment,omitempty"`
@@ -50,8 +56,8 @@ func (a Application) Validate() error {
 			return errors.New("image is required for image applications")
 		}
 	case SourceGit:
-		if a.RepositoryURL == "" {
-			return errors.New("repository URL is required for git applications")
+		if err := validateGitSource(a.RepositoryURL, a.BaseDirectory, a.DockerfilePath); err != nil {
+			return err
 		}
 	case SourceCompose:
 		if a.ComposeFile == "" {
@@ -75,11 +81,37 @@ func (a Application) Validate() error {
 }
 
 // DeployableNow reports whether Forge has a complete runtime path for the
-// source. Git, Dockerfile, and Compose stay represented in the domain but are
-// rejected until their audited execution drivers are present.
+// source. Image and public Git/Dockerfile sources have execution drivers;
+// Compose remains a validated import until stack execution is available.
 func (a Application) DeployableNow() error {
-	if a.Source != SourceImage {
-		return errors.New("only image applications are deployable in this release")
+	switch a.Source {
+	case SourceImage, SourceGit:
+		return nil
+	case SourceCompose:
+		return errors.New("compose applications must be imported and deployed as a compose project")
+	default:
+		return errors.New("unsupported application source")
+	}
+}
+
+func validateGitSource(repositoryURL, baseDirectory, dockerfilePath string) error {
+	parsed, err := url.Parse(strings.TrimSpace(repositoryURL))
+	if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("git applications require an HTTPS repository URL without embedded credentials")
+	}
+	if err := validateRelativePath(baseDirectory, "base directory"); err != nil {
+		return err
+	}
+	return validateRelativePath(dockerfilePath, "dockerfile path")
+}
+
+func validateRelativePath(value, field string) error {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return nil
+	}
+	if path.IsAbs(value) || value == ".." || strings.HasPrefix(value, "../") || strings.Contains(value, "\\") {
+		return errors.New(field + " must be a relative path inside the repository")
 	}
 	return nil
 }

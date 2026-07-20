@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"strconv"
 	"strings"
 
 	"gamepanel/forge/internal/daemon"
@@ -20,8 +21,28 @@ type NodeCredentials interface {
 }
 
 type Client interface {
+	BuildApplication(context.Context, string, string, daemon.ApplicationBuildRequest) (daemon.ApplicationBuildResponse, error)
 	CreateServer(context.Context, string, string, daemon.CreateRequest) (daemon.CreateResponse, error)
 	DeleteServer(context.Context, string, string, string) (daemon.PowerResponse, error)
+}
+
+func (r *Runtime) Build(ctx context.Context, request ports.BuildRequest) (ports.BuildResult, error) {
+	node, credential, err := r.availableNodeCredential(ctx, request.NodeID)
+	if err != nil {
+		return ports.BuildResult{}, err
+	}
+	imageTag := "forge-app-" + strings.ToLower(request.WorkloadID) + ":g" + strconv.FormatInt(request.DesiredGeneration, 10)
+	result, err := r.client.BuildApplication(ctx, node.BaseURL, credential, daemon.ApplicationBuildRequest{
+		WorkloadID: request.WorkloadID, RepositoryURL: request.RepositoryURL, Branch: request.Branch,
+		BaseDirectory: request.BaseDirectory, DockerfilePath: request.DockerfilePath, BuildArgs: request.BuildArgs, ImageTag: imageTag,
+	})
+	if err != nil {
+		return ports.BuildResult{}, err
+	}
+	if strings.TrimSpace(result.Image) == "" {
+		return ports.BuildResult{}, errors.New("Beacon returned an empty built image reference")
+	}
+	return ports.BuildResult{Image: result.Image, Commit: result.Commit}, nil
 }
 
 type Runtime struct {
@@ -37,20 +58,7 @@ func NewRuntime(nodes NodeCredentials, client Client) (*Runtime, error) {
 }
 
 func (r *Runtime) Deploy(ctx context.Context, request ports.DeploymentRequest) error {
-	node, err := r.nodes.GetNode(ctx, request.NodeID)
-	if err != nil {
-		return err
-	}
-	if node.Maintenance || node.Draining {
-		return errors.New("selected Beacon node is unavailable for placement")
-	}
-	if strings.EqualFold(strings.TrimSpace(node.ActualState), "offline") {
-		return errors.New("selected Beacon node is offline")
-	}
-	if strings.TrimSpace(node.BaseURL) == "" {
-		return errors.New("node has no Beacon endpoint")
-	}
-	credential, err := r.nodes.GetNodeDaemonCredential(ctx, request.NodeID)
+	node, credential, err := r.availableNodeCredential(ctx, request.NodeID)
 	if err != nil {
 		return err
 	}
@@ -68,6 +76,27 @@ func (r *Runtime) Deploy(ctx context.Context, request ports.DeploymentRequest) e
 		NetworkName: "gamepanel", Start: true,
 	})
 	return err
+}
+
+func (r *Runtime) availableNodeCredential(ctx context.Context, nodeID string) (store.Node, string, error) {
+	node, err := r.nodes.GetNode(ctx, nodeID)
+	if err != nil {
+		return store.Node{}, "", err
+	}
+	if node.Maintenance || node.Draining {
+		return store.Node{}, "", errors.New("selected Beacon node is unavailable for placement")
+	}
+	if strings.EqualFold(strings.TrimSpace(node.ActualState), "offline") {
+		return store.Node{}, "", errors.New("selected Beacon node is offline")
+	}
+	if strings.TrimSpace(node.BaseURL) == "" {
+		return store.Node{}, "", errors.New("node has no Beacon endpoint")
+	}
+	credential, err := r.nodes.GetNodeDaemonCredential(ctx, nodeID)
+	if err != nil {
+		return store.Node{}, "", err
+	}
+	return node, credential, nil
 }
 
 func (r *Runtime) Delete(ctx context.Context, workloadID, nodeID string) error {

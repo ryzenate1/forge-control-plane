@@ -46,7 +46,18 @@ func (s *DeploymentService) Deploy(ctx context.Context, workloadID string, input
 	if err != nil {
 		return fmt.Errorf("record workload instance: %w", err)
 	}
-	request := ports.DeploymentRequest{WorkloadID: workloadID, NodeID: input.Application.NodeID, Image: input.Application.Image, Command: input.Application.Command, Environment: input.Application.Environment, MemoryMB: input.Application.MemoryMB, CPUPercent: input.Application.CPUPercent, DiskMB: input.Application.DiskMB, DesiredGeneration: input.DesiredGeneration}
+	image := input.Application.Image
+	buildDetail := ""
+	if input.Application.Source == "git" {
+		build, buildErr := s.runtime.Build(ctx, ports.BuildRequest{WorkloadID: workloadID, NodeID: input.Application.NodeID, RepositoryURL: input.Application.RepositoryURL, Branch: input.Application.Branch, BaseDirectory: input.Application.BaseDirectory, DockerfilePath: input.Application.DockerfilePath, BuildArgs: input.Application.BuildArgs, DesiredGeneration: input.DesiredGeneration})
+		if buildErr != nil {
+			_ = s.recordObservation(ctx, workloadID, input.DesiredGeneration, "failed", "build application source: "+buildErr.Error())
+			return fmt.Errorf("build application source: %w", buildErr)
+		}
+		image = build.Image
+		buildDetail = "built " + build.Commit + " as " + image
+	}
+	request := ports.DeploymentRequest{WorkloadID: workloadID, NodeID: input.Application.NodeID, Image: image, Command: input.Application.Command, Environment: input.Application.Environment, MemoryMB: input.Application.MemoryMB, CPUPercent: input.Application.CPUPercent, DiskMB: input.Application.DiskMB, DesiredGeneration: input.DesiredGeneration}
 	if err := s.runtime.Deploy(ctx, request); err != nil {
 		_ = s.runtime.Delete(ctx, workloadID, input.Application.NodeID)
 		_ = s.repository.SetWorkloadInstanceObservedState(ctx, instance.ID, workloads.ObservedState("failed"))
@@ -56,7 +67,7 @@ func (s *DeploymentService) Deploy(ctx context.Context, workloadID string, input
 	if err := s.repository.SetWorkloadInstanceObservedState(ctx, instance.ID, workloads.ObservedState("running")); err != nil {
 		return err
 	}
-	return s.recordObservation(ctx, workloadID, input.DesiredGeneration, "running", "")
+	return s.recordObservation(ctx, workloadID, input.DesiredGeneration, "running", buildDetail)
 }
 
 func (s *DeploymentService) DeployPayload(ctx context.Context, workloadID string, payload []byte) error {

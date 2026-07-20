@@ -328,6 +328,7 @@ Do not handcraft production secrets. Generate the environment file with
 | `DAEMON_NODE_ID` | Node UUID created in Forge |
 | `DAEMON_NODE_TOKEN` | Panel-issued Beacon credential |
 | `PANEL_API_URL` | Forge API address reachable from Beacon |
+| `DAEMON_GIT_ALLOWED_HOSTS` | Comma-separated public Git host allow-list for Dockerfile builds; defaults to GitHub, GitLab and Bitbucket |
 | `GAME_SERVERS_HOST_DIR` | Persistent host directory for game data |
 | `BACKUP_ADAPTER` | `local` or `s3` game backup storage |
 | `S3_*` | S3 bucket, region, endpoint, prefix and credentials/role settings |
@@ -421,7 +422,7 @@ continue to own Docker, database-host, backup, and gateway integrations.
 
 | Module | Owns now | Runtime path during migration |
 |---|---|---|
-| App hosting | Image workload contract, desired/observed state and node placement | Image deployments use the durable operation worker and authenticated Beacon Docker runtime; Git and Compose remain planned |
+| App hosting | Image and public Git/Dockerfile workload contracts, desired/observed state and node placement | Image and public Git → Dockerfile deployments use the durable operation worker and authenticated Beacon Docker runtime; Compose validation is available, while Compose execution remains planned |
 | Game servers | Game workload boundary and compatibility bridge | Existing Beacon lifecycle, files, console, SFTP and allocations |
 | Databases | Database and cache workload ownership | Existing database-host provisioner |
 | Networking | Routes, gateways and traffic policy ownership | Existing TCP/UDP load-balancer and traffic-manager services |
@@ -434,8 +435,18 @@ records its desired state, and queues a durable deployment operation. The
 worker records a node-specific instance, reconciles the container through the
 authenticated Beacon runtime, starts it, and only then records a `running`
 observation. A failed runtime action is recorded as failed and receives a
-best-effort cleanup request. Git, Dockerfile, Compose, domains, and TLS are
-not part of this initial app-hosting path yet. Beacon command polling and
+best-effort cleanup request.
+
+Public HTTPS Git repositories can also be deployed with a Dockerfile. Beacon
+clones the selected branch into a temporary, isolated build directory, rejects
+symlinks and oversized contexts, builds a node-local image, and deploys that
+image through the same operation. By default, Beacon accepts GitHub, GitLab,
+and Bitbucket; configure `DAEMON_GIT_ALLOWED_HOSTS` for an approved custom
+provider. Private Git credentials, buildpacks, Git webhooks, Compose execution,
+domains, and TLS are not part of this batch yet. Compose manifests can be
+validated in the panel with the official Compose Specification parser, but are
+not executed until the stack lifecycle, storage, networking, and rollback
+policies are complete. Beacon command polling and
 acknowledgements use the node-authenticated remote API
 (`/api/remote/platform/commands`) rather than an administrator credential.
 

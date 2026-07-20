@@ -10,3 +10,14 @@ func TestApplicationValidation(t *testing.T) {
 		t.Fatal("expected missing repository error")
 	}
 }
+
+func TestGitApplicationRequiresSafeHTTPSSource(t *testing.T) {
+	valid := Application{EnvironmentID: "env", NodeID: "node", Name: "api", Source: SourceGit, RepositoryURL: "https://github.com/example/api.git", BaseDirectory: "apps/api", DockerfilePath: "Dockerfile"}
+	if err := valid.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	valid.RepositoryURL = "https://token@github.com/example/api.git"
+	if err := valid.Validate(); err == nil {
+		t.Fatal("expected embedded repository credentials to be rejected")
+	}
+}
