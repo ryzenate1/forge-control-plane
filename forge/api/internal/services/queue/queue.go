@@ -13,15 +13,16 @@ import (
 type JobType string
 
 const (
-	JobServerStart     JobType = "server.start"
-	JobServerStop      JobType = "server.stop"
-	JobServerRestart   JobType = "server.restart"
-	JobServerKill      JobType = "server.kill"
-	JobServerInstall   JobType = "server.install"
-	JobServerUninstall JobType = "server.uninstall"
-	JobBackupCreate    JobType = "backup.create"
-	JobBackupRestore   JobType = "backup.restore"
-	JobServerTransfer  JobType = "server.transfer"
+	JobServerStart       JobType = "server.start"
+	JobServerStop        JobType = "server.stop"
+	JobServerRestart     JobType = "server.restart"
+	JobServerKill        JobType = "server.kill"
+	JobServerInstall     JobType = "server.install"
+	JobServerUninstall   JobType = "server.uninstall"
+	JobBackupCreate      JobType = "backup.create"
+	JobBackupRestore     JobType = "backup.restore"
+	JobServerTransfer    JobType = "server.transfer"
+	JobApplicationDeploy JobType = "application.deploy"
 )
 
 type JobStatus string
@@ -40,6 +41,7 @@ type Job struct {
 	Status         JobStatus       `json:"status"`
 	ServerID       string          `json:"serverId"`
 	NodeID         string          `json:"nodeId"`
+	ResourceType   string          `json:"resourceType"`
 	Payload        json.RawMessage `json:"payload"`
 	Result         json.RawMessage `json:"result,omitempty"`
 	Error          string          `json:"error,omitempty"`
@@ -172,6 +174,12 @@ func (s *Service) Dispatch(ctx context.Context, jobType JobType, serverID, nodeI
 }
 
 func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string, jobType JobType, serverID, nodeID string, payload any, priority int) (*Job, error) {
+	return s.DispatchResourceIdempotent(ctx, idempotencyKey, jobType, "server", serverID, nodeID, payload, priority)
+}
+
+// DispatchResourceIdempotent keeps legacy server jobs compatible while
+// allowing canonical workload modules to reuse the same PostgreSQL worker.
+func (s *Service) DispatchResourceIdempotent(ctx context.Context, idempotencyKey string, jobType JobType, resourceType, resourceID, nodeID string, payload any, priority int) (*Job, error) {
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -181,7 +189,10 @@ func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string,
 		id = uuid.NewSHA1(uuid.NameSpaceURL, []byte("forge-job:"+idempotencyKey)).String()
 	}
 	now := time.Now().UTC()
-	job := &Job{ID: id, Type: jobType, Status: JobStatusPending, ServerID: serverID, NodeID: nodeID,
+	if resourceType == "" {
+		resourceType = "server"
+	}
+	job := &Job{ID: id, Type: jobType, Status: JobStatusPending, ServerID: resourceID, NodeID: nodeID, ResourceType: resourceType,
 		Payload: data, Priority: priority, MaxRetries: 3, IdempotencyKey: idempotencyKey, AvailableAt: now, CreatedAt: now}
 	return job, s.store.Enqueue(ctx, job)
 }

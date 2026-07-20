@@ -28,6 +28,7 @@ type stubRuntime struct {
 	deleteErr    error
 	createCalled bool
 	createReq    runtime.CreateRequest
+	startCalled  bool
 }
 
 func (r *stubRuntime) Create(_ context.Context, req runtime.CreateRequest) error {
@@ -44,7 +45,10 @@ func (r *stubRuntime) Inspect(context.Context, string) (runtime.ContainerState, 
 	return runtime.ContainerState{Exists: true}, nil
 }
 func (r *stubRuntime) List(context.Context) ([]runtime.ContainerState, error) { return nil, nil }
-func (r *stubRuntime) Start(context.Context, string) error                    { return r.startErr }
+func (r *stubRuntime) Start(context.Context, string) error {
+	r.startCalled = true
+	return r.startErr
+}
 func (r *stubRuntime) SendCommand(context.Context, string, string) error {
 	return nil
 }
@@ -144,6 +148,22 @@ func TestCreatePassesCanonicalRootToRuntime(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "mock") {
 		t.Fatalf("unexpected mock response: %s", rec.Body.String())
+	}
+}
+
+func TestCreateStartsRuntimeWhenRequested(t *testing.T) {
+	rt := &stubRuntime{}
+	_, handler := NewServer(rt, t.TempDir())
+	req := httptest.NewRequest(http.MethodPost, "/servers", strings.NewReader(`{"serverId":"`+testServerID+`","image":"busybox","start":true}`))
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !rt.createCalled || !rt.startCalled {
+		t.Fatal("expected create and start runtime calls")
 	}
 }
 

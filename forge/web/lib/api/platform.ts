@@ -54,6 +54,7 @@ export type CreatePlatformWorkloadInput = {
 
 export type CreatePlatformApplicationInput = {
   environmentId: string;
+  nodeId: string;
   name: string;
   source: 'image' | 'git' | 'compose';
   image?: string;
@@ -62,6 +63,11 @@ export type CreatePlatformApplicationInput = {
   deployment?: 'rolling' | 'blue-green' | 'recreate';
   healthCheckPath?: string;
   healthCheckPort?: number;
+  command?: string[];
+  environment?: Record<string, string>;
+  memoryMb?: number;
+  cpuPercent?: number;
+  diskMb?: number;
 };
 
 export async function fetchDefaultPlatformScope(): Promise<PlatformScope> {

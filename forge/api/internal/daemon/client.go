@@ -170,6 +170,7 @@ type CreateRequest struct {
 	NetworkSubnet   string        `json:"networkSubnet,omitempty"`
 	NetworkGateway  string        `json:"networkGateway,omitempty"`
 	NetworkIP       string        `json:"networkIp,omitempty"`
+	Start           bool          `json:"start,omitempty"`
 	RegistryAuth    *RegistryAuth `json:"registryAuth,omitempty"`
 	DiskMB          int64         `json:"diskMb"`
 	Provider        string        `json:"provider,omitempty"`

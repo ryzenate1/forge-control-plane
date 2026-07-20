@@ -3,15 +3,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Boxes, RefreshCw } from "lucide-react";
 import { createPlatformApplication, fetchDefaultPlatformScope, fetchPlatformOperations, fetchPlatformWorkloads } from "@/modules/platform/api";
+import { fetchNodes } from "@/modules/infrastructure/api";
 import { useState } from "react";
 
 export function PlatformWorkloads() {
   const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [image, setImage] = useState("");
+  const [nodeId, setNodeId] = useState("");
   const scope = useQuery({ queryKey: ["platform-default-scope"], queryFn: fetchDefaultPlatformScope });
   const workloads = useQuery({ queryKey: ["platform-workloads"], queryFn: () => fetchPlatformWorkloads() });
   const operations = useQuery({ queryKey: ["platform-operations"], queryFn: () => fetchPlatformOperations() });
+  const nodes = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const createApplication = useMutation({
     mutationFn: createPlatformApplication,
     onSuccess: async () => {
@@ -27,7 +30,7 @@ export function PlatformWorkloads() {
     event.preventDefault();
     const targetEnvironment = scope.data?.environmentId;
     if (!targetEnvironment) return;
-    createApplication.mutate({ environmentId: targetEnvironment, name, image, source: "image", deployment: "rolling" });
+    createApplication.mutate({ environmentId: targetEnvironment, nodeId, name, image, source: "image", deployment: "rolling" });
   };
 
   return (
@@ -36,22 +39,29 @@ export function PlatformWorkloads() {
         <div>
           <p className="text-xs font-bold uppercase tracking-[0.2em] text-red-400">Control plane</p>
           <h1 className="mt-1 text-2xl font-bold text-slate-100">Workloads</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-400">Canonical desired and observed state across applications, games, databases, and future workload modules. New applications are recorded as durable deployment operations until a Beacon runtime driver is assigned.</p>
+          <p className="mt-2 max-w-2xl text-sm text-slate-400">Canonical desired and observed state across applications, games, databases, and future workload modules. Image applications are deployed through a durable Forge operation to the selected Beacon node.</p>
         </div>
         <button className="inline-flex items-center gap-2 rounded-lg border border-white/10 px-3 py-2 text-sm text-slate-200 hover:bg-white/5" onClick={() => void workloads.refetch()} type="button">
           <RefreshCw size={15} className={workloads.isFetching ? "animate-spin" : ""} /> Refresh
         </button>
       </div>
 
-      <form className="grid gap-3 rounded-xl border border-white/10 bg-[#151920] p-4 md:grid-cols-[1fr_2fr_auto]" onSubmit={submit}>
+      <form className="grid gap-3 rounded-xl border border-white/10 bg-[#151920] p-4 md:grid-cols-[1fr_1fr_2fr_auto]" onSubmit={submit}>
         <label className="grid gap-1 text-xs text-slate-400">Application name
           <input required value={name} onChange={(event) => setName(event.target.value)} placeholder="my-api" className="rounded-md border border-white/10 bg-[#0f1419] px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500" />
         </label>
         <label className="grid gap-1 text-xs text-slate-400">Container image
           <input required value={image} onChange={(event) => setImage(event.target.value)} placeholder="ghcr.io/org/my-api:latest" className="rounded-md border border-white/10 bg-[#0f1419] px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500" />
         </label>
-        <button disabled={createApplication.isPending || !scope.data?.environmentId} className="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50" type="submit">{createApplication.isPending ? "Creating…" : "Create app"}</button>
-        {createApplication.isError ? <p className="md:col-span-3 text-sm text-red-300">{createApplication.error instanceof Error ? createApplication.error.message : "Unable to create application"}</p> : null}
+        <label className="grid gap-1 text-xs text-slate-400">Beacon node
+          <select required value={nodeId} onChange={(event) => setNodeId(event.target.value)} className="rounded-md border border-white/10 bg-[#0f1419] px-3 py-2 text-sm text-slate-100 outline-none focus:border-red-500" disabled={nodes.isPending}>
+            <option value="">{nodes.isPending ? "Loading nodes…" : "Select a node"}</option>
+            {nodes.data?.filter((node) => node.actualState !== "offline" && !node.draining && !node.maintenanceMode).map((node) => <option key={node.id} value={node.id}>{node.name}{node.actualState ? ` · ${node.actualState}` : ""}</option>)}
+          </select>
+        </label>
+        <button disabled={createApplication.isPending || !scope.data?.environmentId || !nodeId} className="self-end rounded-md bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50" type="submit">{createApplication.isPending ? "Creating…" : "Deploy app"}</button>
+        {nodes.isError ? <p className="md:col-span-4 text-sm text-amber-200">Unable to load deployable Beacon nodes.</p> : null}
+        {createApplication.isError ? <p className="md:col-span-4 text-sm text-red-300">{createApplication.error instanceof Error ? createApplication.error.message : "Unable to create application"}</p> : null}
       </form>
 
       {workloads.isError ? (

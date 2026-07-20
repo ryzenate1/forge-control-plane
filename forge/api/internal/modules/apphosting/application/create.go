@@ -12,6 +12,11 @@ import (
 	"gamepanel/forge/internal/platform/workloads"
 )
 
+type DeployInput struct {
+	Application       domain.Application `json:"application"`
+	DesiredGeneration int64              `json:"desiredGeneration"`
+}
+
 type Service struct {
 	workloads  ports.Workloads
 	operations ports.Operations
@@ -28,6 +33,9 @@ func (s *Service) Create(ctx context.Context, app domain.Application) (workloads
 	if err := app.Validate(); err != nil {
 		return workloads.Workload{}, operations.Operation{}, err
 	}
+	if err := app.DeployableNow(); err != nil {
+		return workloads.Workload{}, operations.Operation{}, err
+	}
 	if app.Deployment == "" {
 		app.Deployment = domain.StrategyRolling
 	}
@@ -39,7 +47,11 @@ func (s *Service) Create(ctx context.Context, app domain.Application) (workloads
 	if err != nil {
 		return workloads.Workload{}, operations.Operation{}, err
 	}
-	operation, err := s.operations.Dispatch(ctx, operations.Request{Kind: "application.deploy", ResourceType: "workload", ResourceID: workload.ID, IdempotencyKey: workload.ID + ":" + strconv.FormatInt(workload.DesiredGeneration, 10), DesiredGeneration: workload.DesiredGeneration, Input: spec})
+	payload, err := json.Marshal(DeployInput{Application: app, DesiredGeneration: workload.DesiredGeneration})
+	if err != nil {
+		return workloads.Workload{}, operations.Operation{}, err
+	}
+	operation, err := s.operations.Dispatch(ctx, operations.Request{Kind: "application.deploy", ResourceType: "workload", ResourceID: workload.ID, IdempotencyKey: workload.ID + ":" + strconv.FormatInt(workload.DesiredGeneration, 10), DesiredGeneration: workload.DesiredGeneration, Input: payload})
 	if err != nil {
 		return workloads.Workload{}, operations.Operation{}, err
 	}

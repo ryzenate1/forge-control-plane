@@ -22,3 +22,35 @@ type Workloads interface {
 type Operations interface {
 	Dispatch(context.Context, operations.Request) (operations.Operation, error)
 }
+
+type DeploymentRequest struct {
+	WorkloadID        string
+	NodeID            string
+	Image             string
+	Command           []string
+	Environment       map[string]string
+	MemoryMB          int64
+	CPUPercent        int64
+	DiskMB            int64
+	DesiredGeneration int64
+}
+
+type DeploymentRepository interface {
+	CurrentWorkloadRevision(context.Context, string) (workloads.Revision, error)
+	CreateWorkloadInstance(context.Context, CreateWorkloadInstanceInput) (workloads.Instance, error)
+	SetWorkloadInstanceObservedState(context.Context, string, workloads.ObservedState) error
+	RecordWorkloadObservation(context.Context, string, int64, workloads.ObservedState, []byte) error
+}
+
+type CreateWorkloadInstanceInput struct {
+	WorkloadID    string
+	RevisionID    string
+	NodeID        string
+	DesiredState  workloads.DesiredState
+	ObservedState workloads.ObservedState
+}
+
+type Runtime interface {
+	Deploy(context.Context, DeploymentRequest) error
+	Delete(context.Context, string, string) error
+}
