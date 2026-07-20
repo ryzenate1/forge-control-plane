@@ -23,6 +23,9 @@ import (
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/eventstore"
 	"gamepanel/forge/internal/http"
+	apphostingbeacon "gamepanel/forge/internal/modules/apphosting/adapters/beacon"
+	apphostingpostgres "gamepanel/forge/internal/modules/apphosting/adapters/postgres"
+	apphostingapplication "gamepanel/forge/internal/modules/apphosting/application"
 	"gamepanel/forge/internal/placement"
 	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/secrets"
@@ -263,6 +266,17 @@ func main() {
 
 		qStore := queue.NewPostgresStore(db.GetDB())
 		queueSvc = queue.New(qStore, 5)
+		appRuntime, runtimeErr := apphostingbeacon.NewRuntime(db, daemonClient)
+		if runtimeErr != nil {
+			log.Fatalf("configure application runtime: %v", runtimeErr)
+		}
+		appDeployments, deploymentErr := apphostingapplication.NewDeploymentService(apphostingpostgres.NewWorkloads(db), appRuntime)
+		if deploymentErr != nil {
+			log.Fatalf("configure application deployments: %v", deploymentErr)
+		}
+		queueSvc.RegisterHandler(queue.JobApplicationDeploy, func(ctx context.Context, job *queue.Job) error {
+			return appDeployments.DeployPayload(ctx, job.ServerID, job.Payload)
+		})
 		registerPowerJob := func(jobType queue.JobType, signal string) {
 			queueSvc.RegisterHandler(jobType, func(ctx context.Context, job *queue.Job) error {
 				commandCtx := daemon.ContextWithCommandID(ctx, job.ID)

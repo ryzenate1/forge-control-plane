@@ -68,6 +68,60 @@ type CreateAgentCommandRequest struct {
 	Payload         json.RawMessage
 }
 
+type CreateWorkloadInstanceRequest struct {
+	WorkloadID    string
+	RevisionID    string
+	NodeID        string
+	DesiredState  platformworkloads.DesiredState
+	ObservedState platformworkloads.ObservedState
+}
+
+// CreateWorkloadInstance records the selected node before any runtime action.
+// Its unique revision/node key makes a retried operation resume the same
+// placement rather than creating a second application container.
+func (s *Store) CreateWorkloadInstance(ctx context.Context, request CreateWorkloadInstanceRequest) (platformworkloads.Instance, error) {
+	if strings.TrimSpace(request.WorkloadID) == "" || strings.TrimSpace(request.RevisionID) == "" || strings.TrimSpace(request.NodeID) == "" {
+		return platformworkloads.Instance{}, errors.New("workload id, revision id, and node id are required")
+	}
+	if request.DesiredState == "" {
+		request.DesiredState = platformworkloads.DesiredState("running")
+	}
+	if request.ObservedState == "" {
+		request.ObservedState = platformworkloads.ObservedState("unknown")
+	}
+	instance := platformworkloads.Instance{}
+	err := s.db.QueryRow(ctx, `INSERT INTO workload_instances(id,workload_id,revision_id,node_id,desired_state,observed_state)
+		VALUES($1,$2::uuid,$3::uuid,$4::uuid,$5,$6)
+		ON CONFLICT(workload_id,revision_id,node_id) WHERE node_id IS NOT NULL
+		DO UPDATE SET desired_state=EXCLUDED.desired_state,updated_at=now()
+		RETURNING id::text,workload_id::text,revision_id::text,node_id::text,desired_state,observed_state,created_at,updated_at`,
+		uuid.NewString(), request.WorkloadID, request.RevisionID, request.NodeID, request.DesiredState, request.ObservedState).
+		Scan(&instance.ID, &instance.WorkloadID, &instance.RevisionID, &instance.NodeID, &instance.DesiredState, &instance.ObservedState, &instance.CreatedAt, &instance.UpdatedAt)
+	return instance, err
+}
+
+func (s *Store) SetWorkloadInstanceObservedState(ctx context.Context, instanceID string, state platformworkloads.ObservedState) error {
+	if strings.TrimSpace(instanceID) == "" || strings.TrimSpace(string(state)) == "" {
+		return errors.New("instance id and observed state are required")
+	}
+	result, err := s.db.Exec(ctx, `UPDATE workload_instances SET observed_state=$2,updated_at=now() WHERE id=$1::uuid`, instanceID, state)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return errors.New("workload instance not found")
+	}
+	return nil
+}
+
+func (s *Store) CurrentWorkloadRevision(ctx context.Context, workloadID string) (platformworkloads.Revision, error) {
+	revision := platformworkloads.Revision{}
+	err := s.db.QueryRow(ctx, `SELECT r.id::text,r.workload_id::text,r.number,r.schema_version,r.spec,r.created_at
+		FROM workloads w JOIN workload_revisions r ON r.id=w.current_revision_id WHERE w.id=$1::uuid`, workloadID).
+		Scan(&revision.ID, &revision.WorkloadID, &revision.Number, &revision.SchemaVersion, &revision.Spec, &revision.CreatedAt)
+	return revision, err
+}
+
 func (s *Store) CreateOrganization(ctx context.Context, request CreateOrganizationRequest) (tenancy.Organization, error) {
 	name, slug := strings.TrimSpace(request.Name), strings.ToLower(strings.TrimSpace(request.Slug))
 	if name == "" || slug == "" {

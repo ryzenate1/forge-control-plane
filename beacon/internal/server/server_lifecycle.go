@@ -53,6 +53,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		NetworkSubnet   string                `json:"networkSubnet"`
 		NetworkGateway  string                `json:"networkGateway"`
 		NetworkIP       string                `json:"networkIp"`
+		Start           bool                  `json:"start"`
 		RegistryAuth    *runtime.RegistryAuth `json:"registryAuth"`
 		DiskMB          int64                 `json:"diskMb"`
 	}
@@ -106,10 +107,20 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		DNS: body.DNS, NetworkName: body.NetworkName, NetworkSubnet: body.NetworkSubnet, NetworkGateway: body.NetworkGateway,
 		NetworkIP: body.NetworkIP, RegistryAuth: body.RegistryAuth, RootDir: rootDir,
 	}
-	err = s.runtime.Create(r.Context(), createRequest)
+	if reconciler, ok := s.runtime.(runtime.Reconciler); ok {
+		err = reconciler.Reconcile(r.Context(), createRequest)
+	} else {
+		err = s.runtime.Create(r.Context(), createRequest)
+	}
 	if err != nil {
 		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
 		return
+	}
+	if body.Start {
+		if err := s.runtime.Start(r.Context(), body.ServerID); err != nil {
+			http.Error(w, fmt.Sprintf("start workload: %v", err), runtimeErrorStatus(err, http.StatusConflict))
+			return
+		}
 	}
 
 	createRequest.RegistryAuth = nil

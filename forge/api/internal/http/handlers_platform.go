@@ -2,11 +2,12 @@ package http
 
 import (
 	"encoding/json"
+	"strings"
 
+	apphostingoperations "gamepanel/forge/internal/modules/apphosting/adapters/operations"
 	apphostingpostgres "gamepanel/forge/internal/modules/apphosting/adapters/postgres"
 	apphostingapplication "gamepanel/forge/internal/modules/apphosting/application"
 	apphostingdomain "gamepanel/forge/internal/modules/apphosting/domain"
-	platformoperations "gamepanel/forge/internal/platform/operations"
 	"gamepanel/forge/internal/platform/tenancy"
 	"gamepanel/forge/internal/platform/workloads"
 	"gamepanel/forge/internal/store"
@@ -125,6 +126,7 @@ func registerPlatformRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		}
 		var request struct {
 			EnvironmentID   string                      `json:"environmentId"`
+			NodeID          string                      `json:"nodeId"`
 			Name            string                      `json:"name"`
 			Source          apphostingdomain.SourceKind `json:"source"`
 			Image           string                      `json:"image"`
@@ -133,21 +135,35 @@ func registerPlatformRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 			Deployment      apphostingdomain.Strategy   `json:"deployment"`
 			HealthCheckPath string                      `json:"healthCheckPath"`
 			HealthCheckPort int                         `json:"healthCheckPort"`
+			Command         []string                    `json:"command"`
+			Environment     map[string]string           `json:"environment"`
+			MemoryMB        int64                       `json:"memoryMb"`
+			CPUPercent      int64                       `json:"cpuPercent"`
+			DiskMB          int64                       `json:"diskMb"`
 		}
 		if err := c.BodyParser(&request); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		dispatcher, err := platformoperations.NewService(store.NewOperationRepository(cfg.Store))
-		if err != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+		if cfg.QueueService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation worker is unavailable")
 		}
-		service, err := apphostingapplication.New(apphostingpostgres.NewWorkloads(cfg.Store), dispatcher)
-		if err != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+		if strings.TrimSpace(request.NodeID) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "application deployment node is required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		workload, operation, err := service.Create(ctx, apphostingdomain.Application{EnvironmentID: request.EnvironmentID, Name: request.Name, Source: request.Source, Image: request.Image, RepositoryURL: request.RepositoryURL, ComposeFile: request.ComposeFile, Deployment: request.Deployment, HealthCheckPath: request.HealthCheckPath, HealthCheckPort: request.HealthCheckPort})
+		node, err := cfg.Store.GetNode(ctx, request.NodeID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "selected Beacon node was not found")
+		}
+		if node.Maintenance || node.Draining || strings.EqualFold(strings.TrimSpace(node.ActualState), "offline") {
+			return fiber.NewError(fiber.StatusConflict, "selected Beacon node is unavailable for placement")
+		}
+		service, err := apphostingapplication.New(apphostingpostgres.NewWorkloads(cfg.Store), apphostingoperations.NewDispatcher(cfg.QueueService))
+		if err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+		}
+		workload, operation, err := service.Create(ctx, apphostingdomain.Application{EnvironmentID: request.EnvironmentID, NodeID: request.NodeID, Name: request.Name, Source: request.Source, Image: request.Image, RepositoryURL: request.RepositoryURL, ComposeFile: request.ComposeFile, Command: request.Command, Environment: request.Environment, MemoryMB: request.MemoryMB, CPUPercent: request.CPUPercent, DiskMB: request.DiskMB, Deployment: request.Deployment, HealthCheckPath: request.HealthCheckPath, HealthCheckPort: request.HealthCheckPort})
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}

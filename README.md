@@ -421,7 +421,7 @@ continue to own Docker, database-host, backup, and gateway integrations.
 
 | Module | Owns now | Runtime path during migration |
 |---|---|---|
-| App hosting | Image, Git and Compose workload contracts | Durable deployment operation; a Beacon runtime driver is the next delivery milestone |
+| App hosting | Image workload contract, desired/observed state and node placement | Image deployments use the durable operation worker and authenticated Beacon Docker runtime; Git and Compose remain planned |
 | Game servers | Game workload boundary and compatibility bridge | Existing Beacon lifecycle, files, console, SFTP and allocations |
 | Databases | Database and cache workload ownership | Existing database-host provisioner |
 | Networking | Routes, gateways and traffic policy ownership | Existing TCP/UDP load-balancer and traffic-manager services |
@@ -429,11 +429,15 @@ continue to own Docker, database-host, backup, and gateway integrations.
 | Containers | Generic, system-container and VM workload ownership | Runtime adapters are introduced incrementally |
 
 The **Admin → Workloads** screen exposes the canonical workload and durable
-operation views. Creating an image application records its desired state and a
-queued operation; it does not claim deployment success until a Beacon runtime
-driver acknowledges it. Beacon command polling and acknowledgements use the
-node-authenticated remote API (`/api/remote/platform/commands`) rather than an
-administrator credential.
+operation views. Creating an image application requires a healthy Beacon node,
+records its desired state, and queues a durable deployment operation. The
+worker records a node-specific instance, reconciles the container through the
+authenticated Beacon runtime, starts it, and only then records a `running`
+observation. A failed runtime action is recorded as failed and receives a
+best-effort cleanup request. Git, Dockerfile, Compose, domains, and TLS are
+not part of this initial app-hosting path yet. Beacon command polling and
+acknowledgements use the node-authenticated remote API
+(`/api/remote/platform/commands`) rather than an administrator credential.
 
 ## Documentation
 

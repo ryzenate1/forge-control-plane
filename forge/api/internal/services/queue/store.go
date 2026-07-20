@@ -24,15 +24,15 @@ func (s *PostgresStore) Enqueue(ctx context.Context, job *Job) error {
 	}
 	defer tx.Rollback(ctx)
 	_, err = tx.Exec(ctx, `INSERT INTO job_queue
-		(id,type,status,server_id,node_id,payload,priority,max_retries,idempotency_key,available_at,created_at)
-		VALUES ($1,$2,$3,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8,NULLIF($9,''),$10,$11)
+		(id,type,status,server_id,node_id,resource_type,payload,priority,max_retries,idempotency_key,available_at,created_at)
+		VALUES ($1,$2,$3,NULLIF($4,'')::uuid,NULLIF($5,'')::uuid,$6,$7,$8,$9,NULLIF($10,''),$11,$12)
 		ON CONFLICT DO NOTHING`, job.ID, string(job.Type), string(job.Status), job.ServerID, job.NodeID,
-		[]byte(job.Payload), job.Priority, job.MaxRetries, job.IdempotencyKey, job.AvailableAt, job.CreatedAt)
+		job.ResourceType, []byte(job.Payload), job.Priority, job.MaxRetries, job.IdempotencyKey, job.AvailableAt, job.CreatedAt)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO operations(id,kind,resource_type,resource_id,status,idempotency_key,input,created_at,updated_at)
-		VALUES($1,$2,'server',$3,'queued',NULLIF($4,''),$5,$6,$6) ON CONFLICT DO NOTHING`, job.ID, string(job.Type), job.ServerID,
+		VALUES($1,$2,$3,$4,'queued',NULLIF($5,''),$6,$7,$7) ON CONFLICT DO NOTHING`, job.ID, string(job.Type), job.ResourceType, job.ServerID,
 		job.IdempotencyKey, []byte(job.Payload), job.CreatedAt)
 	if err != nil {
 		return err
@@ -59,10 +59,10 @@ func (s *PostgresStore) Dequeue(ctx context.Context, nodeID, workerID string, le
 		locked_until=NOW()+$3::interval,last_heartbeat_at=NOW(),
 		retry_count=j.retry_count+CASE WHEN candidate.status='running' THEN 1 ELSE 0 END
 		FROM candidate WHERE j.id=candidate.id
-		RETURNING j.id,j.type,j.status,COALESCE(j.server_id::text,''),COALESCE(j.node_id::text,''),j.payload,
+		RETURNING j.id,j.type,j.status,COALESCE(j.server_id::text,''),COALESCE(j.node_id::text,''),COALESCE(j.resource_type,'server'),j.payload,
 		j.priority,j.max_retries,j.retry_count,COALESCE(j.idempotency_key,''),j.available_at,j.locked_by,
 		j.locked_until,j.created_at,j.started_at`, nodeID, workerID, lease.String()).Scan(
-		&job.ID, &jobType, &status, &job.ServerID, &job.NodeID, &payload, &job.Priority, &job.MaxRetries,
+		&job.ID, &jobType, &status, &job.ServerID, &job.NodeID, &job.ResourceType, &payload, &job.Priority, &job.MaxRetries,
 		&job.RetryCount, &job.IdempotencyKey, &job.AvailableAt, &job.LockedBy, &job.LockedUntil, &job.CreatedAt, &job.StartedAt)
 	if err != nil {
 		if err == pgx.ErrNoRows {
@@ -141,7 +141,7 @@ func (s *PostgresStore) Heartbeat(ctx context.Context, id, workerID string, leas
 }
 
 func (s *PostgresStore) ListPending(ctx context.Context, nodeID string) ([]Job, error) {
-	rows, err := s.pool.Query(ctx, `SELECT id,type,status,COALESCE(server_id::text,''),COALESCE(node_id::text,''),payload,
+	rows, err := s.pool.Query(ctx, `SELECT id,type,status,COALESCE(server_id::text,''),COALESCE(node_id::text,''),COALESCE(resource_type,'server'),payload,
 		priority,max_retries,retry_count,COALESCE(idempotency_key,''),available_at,created_at FROM job_queue
 		WHERE status='pending' AND ($1='' OR node_id=NULLIF($1,'')::uuid) ORDER BY priority DESC,available_at,created_at`, nodeID)
 	if err != nil {
@@ -153,7 +153,7 @@ func (s *PostgresStore) ListPending(ctx context.Context, nodeID string) ([]Job, 
 		var j Job
 		var typ, status string
 		var payload []byte
-		if err := rows.Scan(&j.ID, &typ, &status, &j.ServerID, &j.NodeID, &payload, &j.Priority, &j.MaxRetries, &j.RetryCount,
+		if err := rows.Scan(&j.ID, &typ, &status, &j.ServerID, &j.NodeID, &j.ResourceType, &payload, &j.Priority, &j.MaxRetries, &j.RetryCount,
 			&j.IdempotencyKey, &j.AvailableAt, &j.CreatedAt); err != nil {
 			return nil, err
 		}
@@ -167,10 +167,10 @@ func (s *PostgresStore) GetJob(ctx context.Context, id string) (*Job, error) {
 	var j Job
 	var typ, status string
 	var payload []byte
-	err := s.pool.QueryRow(ctx, `SELECT id,type,status,COALESCE(server_id::text,''),COALESCE(node_id::text,''),payload,
+	err := s.pool.QueryRow(ctx, `SELECT id,type,status,COALESCE(server_id::text,''),COALESCE(node_id::text,''),COALESCE(resource_type,'server'),payload,
 		priority,max_retries,retry_count,COALESCE(idempotency_key,''),available_at,COALESCE(locked_by,''),locked_until,created_at,
 		started_at,completed_at,COALESCE(error,'') FROM job_queue WHERE id=$1`, id).Scan(&j.ID, &typ, &status, &j.ServerID,
-		&j.NodeID, &payload, &j.Priority, &j.MaxRetries, &j.RetryCount, &j.IdempotencyKey, &j.AvailableAt, &j.LockedBy,
+		&j.NodeID, &j.ResourceType, &payload, &j.Priority, &j.MaxRetries, &j.RetryCount, &j.IdempotencyKey, &j.AvailableAt, &j.LockedBy,
 		&j.LockedUntil, &j.CreatedAt, &j.StartedAt, &j.CompletedAt, &j.Error)
 	if err != nil {
 		if err == pgx.ErrNoRows {
