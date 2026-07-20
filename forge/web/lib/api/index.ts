@@ -6,6 +6,7 @@ export * from './files';
 export * from './types';
 export * from './http';
 export * from './rateLimits';
+export * from './platform';
 
 // Legacy re-exports from api.ts for backward compatibility
 // Admin/management functions that are only defined in the legacy api.ts

@@ -400,6 +400,7 @@ forge-control-plane/
 │   └── internal/server/      # Focused HTTP/runtime handlers
 ├── infra/                   # Compose, Nginx, monitoring and bootstraps
 ├── packages/
+│   ├── agent-protocol/       # Versioned Forge ↔ Beacon command contract
 │   ├── sdk/                 # TypeScript API SDK
 │   ├── shared-types/        # Shared contracts
 │   └── ui/                  # Shared UI primitives
@@ -409,6 +410,30 @@ forge-control-plane/
 ├── go.work
 └── package.json
 ```
+
+## Platform foundations
+
+Forge is evolving from a game-first panel into one control plane with focused
+capability modules. The shared kernel owns organizations, projects,
+environments, workloads, revisions, observations, durable operations, and
+versioned Beacon commands. Modules own workload-specific behavior; adapters
+continue to own Docker, database-host, backup, and gateway integrations.
+
+| Module | Owns now | Runtime path during migration |
+|---|---|---|
+| App hosting | Image, Git and Compose workload contracts | Durable deployment operation; a Beacon runtime driver is the next delivery milestone |
+| Game servers | Game workload boundary and compatibility bridge | Existing Beacon lifecycle, files, console, SFTP and allocations |
+| Databases | Database and cache workload ownership | Existing database-host provisioner |
+| Networking | Routes, gateways and traffic policy ownership | Existing TCP/UDP load-balancer and traffic-manager services |
+| Backups and storage | Artifact, retention and attachment ownership | Existing local/S3 backup service |
+| Containers | Generic, system-container and VM workload ownership | Runtime adapters are introduced incrementally |
+
+The **Admin → Workloads** screen exposes the canonical workload and durable
+operation views. Creating an image application records its desired state and a
+queued operation; it does not claim deployment success until a Beacon runtime
+driver acknowledges it. Beacon command polling and acknowledgements use the
+node-authenticated remote API (`/api/remote/platform/commands`) rather than an
+administrator credential.
 
 ## Documentation
 

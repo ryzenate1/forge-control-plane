@@ -920,6 +920,7 @@ func NewServer(cfg Config) *fiber.App {
 	}))
 
 	remote := app.Group("/api/remote", remoteNodeMiddleware(cfg, nodeRegistry))
+	registerPlatformAgentRoutes(remote, cfg)
 	remote.Get("/servers", func(c *fiber.Ctx) error {
 		node, ok := c.Locals("remoteNode").(store.Node)
 		if !ok {
@@ -1402,6 +1403,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerCrashDetectionRoutes(protected, cfg, cfg.CrashDetector, mutationLimiter)
 	registerBackupRoutes(protected, cfg, cfg.BackupSvc, mutationLimiter)
 	registerMaintenanceRoutes(protected, cfg, mutationLimiter)
+	registerPlatformRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 
 	// Start schedule runner
 	if cfg.Store != nil {

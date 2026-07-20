@@ -20,6 +20,7 @@ export type AdminNavGroup = { title: string; items: AdminNavEntry[] };
 export const adminPageRegistry: AdminNavGroup[] = [
   { title: "Operations", items: [
     { label: "Overview", href: "/admin/overview", icon: Server, requiredRole: "admin", capability: "available", description: "Live control-plane summary" },
+    { label: "Workloads", href: "/admin/platform", icon: Layers, requiredRole: "admin", capability: "available", description: "Canonical desired and observed workload state" },
     { label: "Monitoring", href: "/admin/monitoring", icon: HeartPulse, requiredRole: "admin", capability: "available", description: "Platform and node health" },
     { label: "Activity", href: "/admin/activity", icon: Activity, requiredRole: "admin", capability: "available", description: "Human-readable audit history" },
     { label: "Migrations & Recovery", href: "/admin/operations", icon: Workflow, requiredRole: "admin", capability: "metadata-only", description: "Planning only; no workload executor available" },
