@@ -31,6 +31,24 @@ export type PlatformRevision = {
   createdAt: string;
 };
 
+export type PlatformWorkloadInstance = {
+  id: string;
+  workloadId: string;
+  revisionId: string;
+  nodeId?: string;
+  desiredState: string;
+  observedState: string;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type PlatformApplicationDetail = {
+  application: PlatformWorkload;
+  revision: PlatformRevision;
+  instances: PlatformWorkloadInstance[];
+  operations: PlatformOperation[];
+};
+
 export type PlatformOperation = {
   id: string;
   kind: string;
@@ -89,6 +107,15 @@ export async function fetchDefaultPlatformScope(): Promise<PlatformScope> {
 export async function fetchPlatformWorkloads(environmentId?: string): Promise<PlatformWorkload[]> {
   const query = environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : '';
   return fetchJSON<PlatformWorkload[]>(`/platform/workloads${query}`);
+}
+
+export async function fetchPlatformApplications(environmentId?: string): Promise<PlatformWorkload[]> {
+  const query = environmentId ? `?environmentId=${encodeURIComponent(environmentId)}` : '';
+  return fetchJSON<PlatformWorkload[]>(`/platform/applications${query}`);
+}
+
+export async function fetchPlatformApplication(id: string): Promise<PlatformApplicationDetail> {
+  return fetchJSON<PlatformApplicationDetail>(`/platform/applications/${encodeURIComponent(id)}`);
 }
 
 export async function createPlatformWorkload(input: CreatePlatformWorkloadInput): Promise<{ workload: PlatformWorkload; revision: PlatformRevision }> {
