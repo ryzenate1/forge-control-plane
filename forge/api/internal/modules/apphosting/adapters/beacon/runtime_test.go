@@ -29,6 +29,13 @@ func (s unavailableNodesStub) GetNode(context.Context, string) (store.Node, erro
 
 type clientStub struct{ create daemon.CreateRequest }
 
+func (s *clientStub) BuildApplication(_ context.Context, baseURL, credential string, request daemon.ApplicationBuildRequest) (daemon.ApplicationBuildResponse, error) {
+	if baseURL != "https://beacon.example" || credential != "credential" {
+		return daemon.ApplicationBuildResponse{}, testingError("unexpected Beacon credentials")
+	}
+	return daemon.ApplicationBuildResponse{Image: request.ImageTag, Commit: "abc123"}, nil
+}
+
 func (s *clientStub) CreateServer(_ context.Context, baseURL, credential string, request daemon.CreateRequest) (daemon.CreateResponse, error) {
 	if baseURL != "https://beacon.example" || credential != "credential" {
 		return daemon.CreateResponse{}, testingError("unexpected Beacon credentials")

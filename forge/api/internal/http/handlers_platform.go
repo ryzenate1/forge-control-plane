@@ -7,6 +7,7 @@ import (
 	apphostingoperations "gamepanel/forge/internal/modules/apphosting/adapters/operations"
 	apphostingpostgres "gamepanel/forge/internal/modules/apphosting/adapters/postgres"
 	apphostingapplication "gamepanel/forge/internal/modules/apphosting/application"
+	apphostingcompose "gamepanel/forge/internal/modules/apphosting/compose"
 	apphostingdomain "gamepanel/forge/internal/modules/apphosting/domain"
 	"gamepanel/forge/internal/platform/tenancy"
 	"gamepanel/forge/internal/platform/workloads"
@@ -131,6 +132,10 @@ func registerPlatformRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 			Source          apphostingdomain.SourceKind `json:"source"`
 			Image           string                      `json:"image"`
 			RepositoryURL   string                      `json:"repositoryUrl"`
+			Branch          string                      `json:"branch"`
+			BaseDirectory   string                      `json:"baseDirectory"`
+			DockerfilePath  string                      `json:"dockerfilePath"`
+			BuildArgs       map[string]string           `json:"buildArgs"`
 			ComposeFile     string                      `json:"composeFile"`
 			Deployment      apphostingdomain.Strategy   `json:"deployment"`
 			HealthCheckPath string                      `json:"healthCheckPath"`
@@ -163,11 +168,27 @@ func registerPlatformRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		if err != nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 		}
-		workload, operation, err := service.Create(ctx, apphostingdomain.Application{EnvironmentID: request.EnvironmentID, NodeID: request.NodeID, Name: request.Name, Source: request.Source, Image: request.Image, RepositoryURL: request.RepositoryURL, ComposeFile: request.ComposeFile, Command: request.Command, Environment: request.Environment, MemoryMB: request.MemoryMB, CPUPercent: request.CPUPercent, DiskMB: request.DiskMB, Deployment: request.Deployment, HealthCheckPath: request.HealthCheckPath, HealthCheckPort: request.HealthCheckPort})
+		workload, operation, err := service.Create(ctx, apphostingdomain.Application{EnvironmentID: request.EnvironmentID, NodeID: request.NodeID, Name: request.Name, Source: request.Source, Image: request.Image, RepositoryURL: request.RepositoryURL, Branch: request.Branch, BaseDirectory: request.BaseDirectory, DockerfilePath: request.DockerfilePath, BuildArgs: request.BuildArgs, ComposeFile: request.ComposeFile, Command: request.Command, Environment: request.Environment, MemoryMB: request.MemoryMB, CPUPercent: request.CPUPercent, DiskMB: request.DiskMB, Deployment: request.Deployment, HealthCheckPath: request.HealthCheckPath, HealthCheckPort: request.HealthCheckPort})
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"workload": workload, "operation": operation})
+	})
+	platform.Post("/compose/validate", adminIPAccess, mutationLimiter, func(c *fiber.Ctx) error {
+		var request struct {
+			Content     string            `json:"content"`
+			Environment map[string]string `json:"environment"`
+		}
+		if err := c.BodyParser(&request); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		result, err := apphostingcompose.Validate(ctx, request.Content, request.Environment)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(result)
 	})
 	platform.Get("/operations/:id", func(c *fiber.Ctx) error {
 		if cfg.Store == nil {

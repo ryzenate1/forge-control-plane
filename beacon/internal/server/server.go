@@ -242,6 +242,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /health", server.health)
 	mux.HandleFunc("GET /metrics", server.metrics)
 	mux.HandleFunc("POST /servers", server.create)
+	mux.HandleFunc("POST /applications/builds", server.buildApplication)
 	mux.HandleFunc("DELETE /servers/{id}", server.delete)
 	mux.HandleFunc("GET /servers/{id}/configuration", server.getConfiguration)
 	mux.HandleFunc("PUT /servers/{id}/configuration", server.syncConfiguration)

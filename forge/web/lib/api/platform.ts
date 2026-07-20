@@ -59,6 +59,10 @@ export type CreatePlatformApplicationInput = {
   source: 'image' | 'git' | 'compose';
   image?: string;
   repositoryUrl?: string;
+  branch?: string;
+  baseDirectory?: string;
+  dockerfilePath?: string;
+  buildArgs?: Record<string, string>;
   composeFile?: string;
   deployment?: 'rolling' | 'blue-green' | 'recreate';
   healthCheckPath?: string;
@@ -68,6 +72,14 @@ export type CreatePlatformApplicationInput = {
   memoryMb?: number;
   cpuPercent?: number;
   diskMb?: number;
+};
+
+export type PlatformComposeValidation = {
+  name: string;
+  services: Array<{ name: string; image?: string; build: boolean; dependsOn?: string[]; ports: number }>;
+  networks: string[];
+  volumes: string[];
+  warnings?: string[];
 };
 
 export async function fetchDefaultPlatformScope(): Promise<PlatformScope> {
@@ -85,6 +97,10 @@ export async function createPlatformWorkload(input: CreatePlatformWorkloadInput)
 
 export async function createPlatformApplication(input: CreatePlatformApplicationInput): Promise<{ workload: PlatformWorkload; operation: { id: string; status: string } }> {
   return postJSON('/platform/applications', input);
+}
+
+export async function validatePlatformCompose(input: { content: string; environment?: Record<string, string> }): Promise<PlatformComposeValidation> {
+  return postJSON('/platform/compose/validate', input);
 }
 
 export async function fetchPlatformOperations(resourceId?: string): Promise<PlatformOperation[]> {

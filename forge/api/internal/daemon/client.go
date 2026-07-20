@@ -176,6 +176,24 @@ type CreateRequest struct {
 	Provider        string        `json:"provider,omitempty"`
 }
 
+// ApplicationBuildRequest asks Beacon to clone a public, allow-listed Git
+// source and build a Dockerfile into a node-local image. Authentication and
+// private source credentials are intentionally a separate capability.
+type ApplicationBuildRequest struct {
+	WorkloadID     string            `json:"workloadId"`
+	RepositoryURL  string            `json:"repositoryUrl"`
+	Branch         string            `json:"branch,omitempty"`
+	BaseDirectory  string            `json:"baseDirectory,omitempty"`
+	DockerfilePath string            `json:"dockerfilePath,omitempty"`
+	BuildArgs      map[string]string `json:"buildArgs,omitempty"`
+	ImageTag       string            `json:"imageTag"`
+}
+
+type ApplicationBuildResponse struct {
+	Image  string `json:"image"`
+	Commit string `json:"commit"`
+}
+
 type RegistryAuth struct {
 	Username      string `json:"username,omitempty"`
 	Password      string `json:"password,omitempty"`
@@ -503,6 +521,37 @@ func (c *Client) CreateServer(ctx context.Context, baseURL, nodeToken string, re
 	var payload CreateResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return CreateResponse{}, err
+	}
+	return payload, nil
+}
+
+func (c *Client) BuildApplication(ctx context.Context, baseURL, nodeToken string, reqBody ApplicationBuildRequest) (ApplicationBuildResponse, error) {
+	body, err := json.Marshal(reqBody)
+	if err != nil {
+		return ApplicationBuildResponse{}, err
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/applications/builds"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, endpoint, body)
+	if err != nil {
+		return ApplicationBuildResponse{}, err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return ApplicationBuildResponse{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		message := fmt.Sprintf("daemon application build failed with status %d", res.StatusCode)
+		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
+			if text := strings.TrimSpace(string(details)); text != "" {
+				message += ": " + text
+			}
+		}
+		return ApplicationBuildResponse{}, errors.New(message)
+	}
+	var payload ApplicationBuildResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ApplicationBuildResponse{}, err
 	}
 	return payload, nil
 }
