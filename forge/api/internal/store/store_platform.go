@@ -191,7 +191,18 @@ func (s *Store) CreateWorkload(ctx context.Context, request CreateWorkloadReques
 }
 
 func (s *Store) ListWorkloads(ctx context.Context, environmentID string) ([]platformworkloads.Workload, error) {
-	rows, err := s.db.Query(ctx, `SELECT id::text,environment_id::text,kind,name,desired_generation,observed_generation,desired_state,observed_state,COALESCE(current_revision_id::text,''),last_observation_at,last_reconcile_error,created_at,updated_at FROM workloads WHERE ($1='' OR environment_id=$1::uuid) ORDER BY created_at DESC`, strings.TrimSpace(environmentID))
+	return s.listWorkloads(ctx, environmentID, "")
+}
+
+func (s *Store) ListWorkloadsByKind(ctx context.Context, environmentID string, kind platformworkloads.Kind) ([]platformworkloads.Workload, error) {
+	if err := kind.Validate(); err != nil {
+		return nil, err
+	}
+	return s.listWorkloads(ctx, environmentID, string(kind))
+}
+
+func (s *Store) listWorkloads(ctx context.Context, environmentID, kind string) ([]platformworkloads.Workload, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text,environment_id::text,kind,name,desired_generation,observed_generation,desired_state,observed_state,COALESCE(current_revision_id::text,''),last_observation_at,last_reconcile_error,created_at,updated_at FROM workloads WHERE ($1='' OR environment_id=$1::uuid) AND ($2='' OR kind=$2) ORDER BY created_at DESC`, strings.TrimSpace(environmentID), strings.TrimSpace(kind))
 	if err != nil {
 		return nil, err
 	}
@@ -205,6 +216,30 @@ func (s *Store) ListWorkloads(ctx context.Context, environmentID string) ([]plat
 		result = append(result, value)
 	}
 	return result, rows.Err()
+}
+
+func (s *Store) GetWorkload(ctx context.Context, workloadID string) (platformworkloads.Workload, error) {
+	value := platformworkloads.Workload{}
+	err := s.db.QueryRow(ctx, `SELECT id::text,environment_id::text,kind,name,desired_generation,observed_generation,desired_state,observed_state,COALESCE(current_revision_id::text,''),last_observation_at,last_reconcile_error,created_at,updated_at FROM workloads WHERE id=$1::uuid`, workloadID).
+		Scan(&value.ID, &value.EnvironmentID, &value.Kind, &value.Name, &value.DesiredGeneration, &value.ObservedGeneration, &value.DesiredState, &value.ObservedState, &value.CurrentRevisionID, &value.LastObservationAt, &value.LastReconcileError, &value.CreatedAt, &value.UpdatedAt)
+	return value, err
+}
+
+func (s *Store) ListWorkloadInstances(ctx context.Context, workloadID string) ([]platformworkloads.Instance, error) {
+	rows, err := s.db.Query(ctx, `SELECT id::text,workload_id::text,revision_id::text,COALESCE(node_id::text,''),desired_state,observed_state,created_at,updated_at FROM workload_instances WHERE workload_id=$1::uuid ORDER BY created_at DESC`, workloadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	instances := []platformworkloads.Instance{}
+	for rows.Next() {
+		value := platformworkloads.Instance{}
+		if err := rows.Scan(&value.ID, &value.WorkloadID, &value.RevisionID, &value.NodeID, &value.DesiredState, &value.ObservedState, &value.CreatedAt, &value.UpdatedAt); err != nil {
+			return nil, err
+		}
+		instances = append(instances, value)
+	}
+	return instances, rows.Err()
 }
 
 func (s *Store) RecordWorkloadObservation(ctx context.Context, workloadID string, generation int64, state platformworkloads.ObservedState, details json.RawMessage) error {

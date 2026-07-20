@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Database,
+  Activity, AppWindow, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Database,
   GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
   Map, MapPin, Network, Plug, Scale, Server, ShieldCheck, SlidersHorizontal,
   Users, Workflow,
@@ -20,10 +20,12 @@ export type AdminNavGroup = { title: string; items: AdminNavEntry[] };
 export const adminPageRegistry: AdminNavGroup[] = [
   { title: "Operations", items: [
     { label: "Overview", href: "/admin/overview", icon: Server, requiredRole: "admin", capability: "available", description: "Live control-plane summary" },
-    { label: "Workloads", href: "/admin/platform", icon: Layers, requiredRole: "admin", capability: "available", description: "Canonical desired and observed workload state" },
     { label: "Monitoring", href: "/admin/monitoring", icon: HeartPulse, requiredRole: "admin", capability: "available", description: "Platform and node health" },
     { label: "Activity", href: "/admin/activity", icon: Activity, requiredRole: "admin", capability: "available", description: "Human-readable audit history" },
     { label: "Migrations & Recovery", href: "/admin/operations", icon: Workflow, requiredRole: "admin", capability: "metadata-only", description: "Planning only; no workload executor available" },
+  ]},
+  { title: "App Management", items: [
+    { label: "Applications", href: "/admin/apps", icon: AppWindow, requiredRole: "admin", capability: "available", description: "Image and Git application deployments" },
   ]},
   { title: "Infrastructure", items: [
     { label: "Regions", href: "/admin/regions", icon: Map, requiredRole: "admin", capability: "available", description: "Cluster regions" },

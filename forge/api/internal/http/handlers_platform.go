@@ -95,6 +95,42 @@ func registerPlatformRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		}
 		return c.JSON(values)
 	})
+	platform.Get("/applications", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		values, err := cfg.Store.ListWorkloadsByKind(ctx, c.Query("environmentId"), workloads.KindApplication)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(values)
+	})
+	platform.Get("/applications/:id", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		application, err := cfg.Store.GetWorkload(ctx, c.Params("id"))
+		if err != nil || application.Kind != workloads.KindApplication {
+			return fiber.NewError(fiber.StatusNotFound, "application not found")
+		}
+		revision, err := cfg.Store.CurrentWorkloadRevision(ctx, application.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		instances, err := cfg.Store.ListWorkloadInstances(ctx, application.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		operations, err := cfg.Store.ListOperations(ctx, application.ID, 50)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(fiber.Map{"application": application, "revision": revision, "instances": instances, "operations": operations})
+	})
 	platform.Post("/workloads", adminIPAccess, mutationLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
