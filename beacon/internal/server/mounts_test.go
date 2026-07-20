@@ -95,6 +95,112 @@ func TestConfigurationSyncReconcilesExistingWorkload(t *testing.T) {
 	}
 }
 
+func TestCleanupMountRemovesDirectory(t *testing.T) {
+	allowed := t.TempDir()
+	mountDir := filepath.Join(allowed, "game-data")
+	if err := osMkdirAll(mountDir); err != nil {
+		t.Fatal(err)
+	}
+	dummyFile := filepath.Join(mountDir, "test.txt")
+	if err := os.WriteFile(dummyFile, []byte("test"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := &stubRuntime{}
+	server, handler := NewServer(rt, t.TempDir())
+	server.SetAllowedMounts([]string{allowed})
+
+	body := `{"source":"` + mountDir + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(mountDir); !os.IsNotExist(err) {
+		t.Fatalf("expected mount directory to be removed, but it still exists: %v", err)
+	}
+}
+
+func TestCleanupMountRejectsOutsideAllowed(t *testing.T) {
+	allowed := t.TempDir()
+	outside := t.TempDir()
+	outsideDir := filepath.Join(outside, "external-data")
+	if err := osMkdirAll(outsideDir); err != nil {
+		t.Fatal(err)
+	}
+
+	rt := &stubRuntime{}
+	server, handler := NewServer(rt, t.TempDir())
+	server.SetAllowedMounts([]string{allowed})
+
+	body := `{"source":"` + outsideDir + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", rec.Code, rec.Body.String())
+	}
+
+	if _, err := os.Stat(outsideDir); os.IsNotExist(err) {
+		t.Fatal("outside directory should not have been removed")
+	}
+}
+
+func TestCleanupMountNoAllowedMountsReturnsError(t *testing.T) {
+	rt := &stubRuntime{}
+	_, handler := NewServer(rt, t.TempDir())
+
+	body := `{"source":"/some/path"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCleanupMountDirectoryDoesNotExist(t *testing.T) {
+	allowed := t.TempDir()
+	nonexistent := filepath.Join(allowed, "nonexistent")
+
+	rt := &stubRuntime{}
+	server, handler := NewServer(rt, t.TempDir())
+	server.SetAllowedMounts([]string{allowed})
+
+	body := `{"source":"` + nonexistent + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK for nonexistent directory, got %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestCleanupMountRequiresSource(t *testing.T) {
+	rt := &stubRuntime{}
+	_, handler := NewServer(rt, t.TempDir())
+
+	body := `{"source":""}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 Bad Request for empty source, got %d", rec.Code)
+	}
+}
+
 type mountTestRuntime struct {
 	stubRuntime
 	exists          bool

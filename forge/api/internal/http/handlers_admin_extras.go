@@ -19,7 +19,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 	// GET /admin/users/accounts.json?filter[email]=&page=
 	// Used by select2 user search when creating a server or assigning subusers.
 	// Returns: { data: [ { id, name_first, name_last, email, username, md5 } ] }
-	protected.Get("/admin/users/accounts.json", func(c *fiber.Ctx) error {
+	protected.Get("/admin/users/accounts.json", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0, "per_page": 50, "current_page": 1, "total_pages": 1, "links": fiber.Map{}}}})
 		}
@@ -68,7 +68,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 
 	// GET /admin/nodes/view/{id}/system-information
 	// Server-side proxy that pings the daemon (HMAC) and returns its info.
-	protected.Get("/nodes/:id/system", func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/system", requireRole("admin"), func(c *fiber.Ctx) error {
 		if probe == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"error":  "node probe unavailable",
@@ -87,7 +87,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		return c.JSON(info)
 	})
 
-	protected.Get("/nodes/:id/system-information", func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/system-information", requireRole("admin"), func(c *fiber.Ctx) error {
 		if probe == nil {
 			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
 				"error":  "node probe unavailable",

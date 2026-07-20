@@ -217,6 +217,16 @@ type Mount struct {
 	ReadOnly bool   `json:"read_only"`
 }
 
+type MountCleanupRequest struct {
+	Source string `json:"source"`
+}
+
+type MountCleanupResponse struct {
+	OK      bool   `json:"ok"`
+	Removed bool   `json:"removed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
 type InstallRequest struct {
 	ServerID   string            `json:"serverId"`
 	Image      string            `json:"image"`
@@ -1068,6 +1078,37 @@ func (c *Client) resolveNodeToken(nodeToken string) (string, error) {
 		return c.developmentFallbackToken, nil
 	}
 	return "", ErrMissingNodeToken
+}
+
+func (c *Client) CleanupMount(ctx context.Context, baseURL, nodeToken, mountSource string) (MountCleanupResponse, error) {
+	body, err := json.Marshal(MountCleanupRequest{Source: mountSource})
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/mounts/cleanup"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		message := fmt.Sprintf("daemon mount cleanup failed with status %d", res.StatusCode)
+		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
+			if text := strings.TrimSpace(string(details)); text != "" {
+				message += ": " + text
+			}
+		}
+		return MountCleanupResponse{}, errors.New(message)
+	}
+	var payload MountCleanupResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return MountCleanupResponse{}, err
+	}
+	return payload, nil
 }
 
 func copyHeaders(destination, source http.Header) {

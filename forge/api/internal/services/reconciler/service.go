@@ -14,13 +14,26 @@ import (
 
 const DefaultInterval = 30 * time.Second
 
+type HealthChecker interface {
+	ListUnhealthyTargets(ctx context.Context) []HealthCheckTarget
+}
+
+type HealthCheckTarget struct {
+	TargetID      string
+	ServerID      string
+	Status        string
+	FailureCount  int
+}
+
 type MetricsSnapshot struct {
-	ReconciliationCount       uint64 `json:"reconciliation_count"`
-	ReconciliationFailures    uint64 `json:"reconciliation_failures"`
-	NodeRefreshFailures       uint64 `json:"node_refresh_failures"`
-	ServerSyncFailures        uint64 `json:"server_sync_failures"`
-	ServerReconciliationTotal uint64 `json:"server_reconciliation_total"`
-	NodeReconciliationTotal   uint64 `json:"node_reconciliation_total"`
+	ReconciliationCount         uint64 `json:"reconciliation_count"`
+	ReconciliationFailures      uint64 `json:"reconciliation_failures"`
+	NodeRefreshFailures         uint64 `json:"node_refresh_failures"`
+	ServerSyncFailures          uint64 `json:"server_sync_failures"`
+	ServerReconciliationTotal   uint64 `json:"server_reconciliation_total"`
+	NodeReconciliationTotal     uint64 `json:"node_reconciliation_total"`
+	HealthRecoveryAttempts      uint64 `json:"health_recovery_attempts"`
+	HealthRecoveryFailures      uint64 `json:"health_recovery_failures"`
 }
 
 type Service struct {
@@ -28,6 +41,7 @@ type Service struct {
 	clusterManager *clustermanager.Service
 	publisher      events.Publisher
 	interval       time.Duration
+	healthChecker  HealthChecker
 	mu             sync.Mutex
 	metrics        MetricsSnapshot
 }
@@ -41,6 +55,10 @@ func New(store *store.Store, clusterManager *clustermanager.Service, interval ti
 		publisher = publishers[0]
 	}
 	return &Service{store: store, clusterManager: clusterManager, publisher: publisher, interval: interval}
+}
+
+func (s *Service) SetHealthChecker(hc HealthChecker) {
+	s.healthChecker = hc
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -84,6 +102,7 @@ func (s *Service) RunOnce(ctx context.Context) error {
 		})
 		return err
 	}
+	s.recoverUnhealthyTargets(ctx, correlationID)
 	return nil
 }
 
@@ -195,4 +214,54 @@ func (s *Service) publish(ctx context.Context, eventType events.EventType, resou
 		return
 	}
 	_ = s.publisher.Publish(ctx, events.NewEnvelope(eventType, "reconciler", resourceType, resourceID, payload))
+}
+
+func (s *Service) recoverUnhealthyTargets(ctx context.Context, correlationID string) {
+	if s.healthChecker == nil || s.clusterManager == nil {
+		return
+	}
+	unhealthy := s.healthChecker.ListUnhealthyTargets(ctx)
+	if len(unhealthy) == 0 {
+		return
+	}
+	seenServers := make(map[string]bool)
+	for _, target := range unhealthy {
+		if seenServers[target.ServerID] {
+			continue
+		}
+		seenServers[target.ServerID] = true
+
+		server, err := s.store.GetServer(ctx, target.ServerID)
+		if err != nil {
+			s.increment(func(metrics *MetricsSnapshot) {
+				metrics.HealthRecoveryFailures++
+			})
+			continue
+		}
+
+		if server.DesiredState != store.ServerDesiredStateRunning {
+			continue
+		}
+		if server.Suspended {
+			continue
+		}
+
+		s.increment(func(metrics *MetricsSnapshot) {
+			metrics.HealthRecoveryAttempts++
+		})
+
+		s.publish(ctx, events.EventTargetHealthChanged, "server", server.ID, map[string]any{
+			"status":        "unhealthy",
+			"reason":        "health check failure triggering recovery restart",
+			"targetId":      target.TargetID,
+			"failureCount":  target.FailureCount,
+			"correlationId": correlationID,
+		})
+
+		if _, err := s.clusterManager.RestartServer(ctx, server.ID); err != nil {
+			s.increment(func(metrics *MetricsSnapshot) {
+				metrics.HealthRecoveryFailures++
+			})
+		}
+	}
 }

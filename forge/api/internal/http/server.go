@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	acmesvc "gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/cloud"
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/eventstore"
@@ -24,8 +25,11 @@ import (
 	"gamepanel/forge/internal/services/crashdetector"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
+	dnssvc "gamepanel/forge/internal/services/dns"
+	"gamepanel/forge/internal/services/domains"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
+	gitsvc "gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/services/health"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
@@ -35,6 +39,7 @@ import (
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	"gamepanel/forge/internal/services/observability"
+	"gamepanel/forge/internal/services/build"
 	"gamepanel/forge/internal/services/plugins"
 	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/services/reconciler"
@@ -42,6 +47,7 @@ import (
 	"gamepanel/forge/internal/services/reservations"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
 	"gamepanel/forge/internal/services/scheduler"
+	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/store"
@@ -107,11 +113,20 @@ type Config struct {
 	CrashDetector       *crashdetector.Detector
 	DeploymentSvc       *deployment.Service
 	CloudManager        *cloud.Manager
+	AcmeService         *acmesvc.Service
 	LoadBalancer        *loadbalancer.Service
 	FailoverSvc         *failover.Service
 	TrafficManager      *trafficmanager.Service
+	DomainService       *domains.Service
+	DNSService          *dnssvc.Service
+	DBContainerService  *dbprovisioner.DBContainerService
 	PredictiveScorer    *scheduler.PredictiveScorer
 	ConstraintScheduler *scheduler.ConstraintScheduler
+	GitService          *gitsvc.Service
+	GitDeployService    *gitsvc.DeployService
+	BuildService        *build.Service
+
+	TenancyService *tenancy.Service
 
 	Logger *slog.Logger
 }
@@ -569,6 +584,8 @@ func NewServer(cfg Config) *fiber.App {
 	})
 
 	registerSwaggerRoutes(app)
+
+	registerWellKnownVerifyRoute(app, cfg.DomainService)
 
 	// Panic recovery middleware - catches panics and returns 500 with stack trace
 	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: true}))
@@ -1223,6 +1240,9 @@ func NewServer(cfg Config) *fiber.App {
 	// Social authentication (Discord, Steam, Authentik)
 	registerSocialAuthRoutes(v1, cfg, mutationLimiter)
 
+	// Git webhook endpoints (public, verified by HMAC signatures)
+	registerGitWebhookRoutes(v1, cfg)
+
 	// Set panel origin for CSRF validation
 	v1.Use(func(c *fiber.Ctx) error {
 		if cfg.PanelURL != "" {
@@ -1319,7 +1339,7 @@ func NewServer(cfg Config) *fiber.App {
 		return c.JSON(user)
 	})
 
-	protected.Get("/mounts/:id", func(c *fiber.Ctx) error {
+	protected.Get("/mounts/:id", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -1394,14 +1414,27 @@ func NewServer(cfg Config) *fiber.App {
 	registerWebAuthnRoutes(protected, cfg, mutationLimiter, cfg.WebAuthnService)
 	registerAutoScalerRoutes(protected, cfg, cfg.AutoScaler, adminIPAccess, mutationLimiter)
 	registerDeploymentRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
+	registerRevisionRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
 	registerCloudRoutes(protected, cfg, cfg.CloudManager, adminIPAccess, mutationLimiter)
 	registerLoadBalancerRoutes(protected, cfg, cfg.LoadBalancer, adminIPAccess, mutationLimiter)
 	registerFailoverRoutes(protected, cfg, cfg.FailoverSvc, adminIPAccess, mutationLimiter)
 	registerTrafficManagerRoutes(protected, cfg, cfg.TrafficManager, adminIPAccess, mutationLimiter)
+	registerDomainRoutes(protected, cfg, cfg.DomainService, mutationLimiter)
+	registerCertificateRoutes(protected, cfg, cfg.AcmeService, adminIPAccess, mutationLimiter)
 	registerSchedulerRoutes(protected, cfg, cfg.PredictiveScorer, cfg.ConstraintScheduler, adminIPAccess, mutationLimiter)
 	registerCrashDetectionRoutes(protected, cfg, cfg.CrashDetector, mutationLimiter)
 	registerBackupRoutes(protected, cfg, cfg.BackupSvc, mutationLimiter)
+	registerDNSRoutes(protected, cfg, cfg.DNSService, mutationLimiter)
 	registerMaintenanceRoutes(protected, cfg, mutationLimiter)
+	registerComposeRoutes(protected, cfg, mutationLimiter)
+	registerDBContainerRoutes(protected, cfg, mutationLimiter)
+	registerGitRoutes(protected, cfg, cfg.GitService, cfg.GitDeployService, adminIPAccess, mutationLimiter)
+	registerBuildRoutes(protected, cfg, cfg.BuildService, mutationLimiter)
+
+	// Team tenancy routes (Org → Project → Environment hierarchy)
+	if cfg.TenancyService != nil {
+		registerTenancyRoutes(protected, cfg, cfg.TenancyService)
+	}
 
 	// Start schedule runner
 	if cfg.Store != nil {

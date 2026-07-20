@@ -1774,6 +1774,153 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true, "name": body.Name, "status": "restored"})
 	})
 
+	protected.Get("/servers/:id/backups/verify", requireServerPermission(cfg, store.PermBackupRead), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.Daemon == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and daemon are required")
+		}
+		name := c.Query("name")
+		if name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		target, err := cfg.Store.ServerControlTarget(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		}
+		b, err := cfg.Store.GetBackupByName(ctx, target.ServerID, name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup is not in completed state")
+		}
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer verifyCancel()
+		backups, err := cfg.Daemon.ListBackups(verifyCtx, target.NodeURL, target.NodeToken, target.ServerID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, fmt.Sprintf("failed to list backups on daemon: %v", err))
+		}
+		var found *daemon.BackupEntry
+		for i := range backups {
+			if backups[i].Name == name {
+				found = &backups[i]
+				break
+			}
+		}
+		if found == nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found on daemon")
+		}
+		verified := found.Status == "completed" && found.Size > 0 && found.Checksum != ""
+		checksumMatch := false
+		if b.Checksum != "" && found.Checksum != "" {
+			checksumMatch = strings.EqualFold(b.Checksum, found.Checksum)
+			verified = verified && checksumMatch
+		}
+		return c.JSON(fiber.Map{
+			"ok":               true,
+			"name":             name,
+			"verified":         verified,
+			"checksumMatch":    checksumMatch,
+			"dbChecksum":       b.Checksum,
+			"daemonChecksum":   found.Checksum,
+			"daemonSize":       found.Size,
+			"dbSize":           b.Size,
+			"daemonStatus":     found.Status,
+		})
+	})
+
+	protected.Get("/servers/:id/backups/storage/download", requireServerPermission(cfg, store.PermBackupDownload), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.BackupSvc == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and backup service are required")
+		}
+		name := c.Query("name")
+		if name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		b, err := cfg.Store.GetBackupByName(ctx, c.Params("id"), name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup is not in completed state")
+		}
+		downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer downloadCancel()
+		storagePath := "backups/" + c.Params("id") + "/" + name
+		data, err := cfg.BackupSvc.DownloadFromStorage(downloadCtx, "", storagePath)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		c.Set("Content-Type", "application/octet-stream")
+		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+		c.Set("Content-Length", strconv.Itoa(len(data)))
+		return c.Send(data)
+	})
+
+	protected.Post("/servers/:id/backups/storage/restore", requireServerPermission(cfg, store.PermBackupRestore), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.BackupSvc == nil || cfg.Daemon == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres, backup service, and daemon are required")
+		}
+		var body struct {
+			Name     string `json:"name"`
+			Truncate bool   `json:"truncate"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if body.Name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		serverID := c.Params("id")
+		b, err := cfg.Store.GetBackupByName(ctx, serverID, body.Name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup status is %s, cannot restore", b.Status)
+		}
+		target, err := cfg.Store.ServerControlTarget(ctx, serverID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		}
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer downloadCancel()
+		storagePath := "backups/" + serverID + "/" + body.Name
+		data, err := cfg.BackupSvc.DownloadFromStorage(downloadCtx, "", storagePath)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, fmt.Sprintf("download from storage: %v", err))
+		}
+		if err := cfg.BackupSvc.VerifyChecksum(data, b.Checksum); err != nil {
+			return fiber.NewError(fiber.StatusPreconditionFailed, fmt.Sprintf("checksum verification failed: %v", err))
+		}
+		_ = cfg.Store.MarkBackupStatus(ctx, serverID, body.Name, "restoring", actorID)
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer restoreCancel()
+		if err := cfg.Daemon.RestoreBackup(restoreCtx, target.NodeURL, target.NodeToken, target.ServerID, body.Name, body.Truncate); err != nil {
+			_ = cfg.Store.MarkBackupStatus(ctx, serverID, body.Name, "restore_failed", actorID)
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		if err := cfg.Store.MarkBackupStatus(ctx, serverID, body.Name, "restored", actorID); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"ok":       true,
+			"name":     body.Name,
+			"status":   "restored",
+			"verified": true,
+			"size":     len(data),
+		})
+	})
+
 	protected.Delete("/servers/:id/backups", requireServerPermission(cfg, store.PermBackupDelete), func(c *fiber.Ctx) error {
 		if cfg.Store == nil || cfg.Daemon == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and daemon are required")

@@ -1,6 +1,6 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Database,
+  Activity, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Container, Database,
   GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
   Map, MapPin, Network, Plug, Scale, Server, ShieldCheck, SlidersHorizontal,
   Users, Workflow,
@@ -34,6 +34,7 @@ export const adminPageRegistry: AdminNavGroup[] = [
   ]},
   { title: "Management", items: [
     { label: "Servers", href: "/admin/servers", icon: Layers, requiredRole: "admin", capability: "available", description: "Game server instances" },
+    { label: "Apps", href: "/admin/apps", icon: Box, requiredRole: "admin", capability: "available", description: "Container apps, Git repos, and Compose stacks" },
     { label: "Users", href: "/admin/users", icon: Users, requiredRole: "admin", capability: "available", description: "Accounts and limits" },
     { label: "Roles", href: "/admin/roles", icon: ShieldCheck, requiredRole: "admin", capability: "available", description: "Additional role assignments" },
     { label: "OAuth Clients", href: "/admin/oauth-clients", icon: KeyRound, requiredRole: "admin", capability: "available", description: "User-owned OAuth clients" },
@@ -53,7 +54,9 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Failover", href: "/admin/failover", icon: Bug, requiredRole: "admin", capability: "available", description: "Automatic failover policies and crash simulation" },
     { label: "Load Balancer", href: "/admin/load-balancer", icon: GanttChart, requiredRole: "admin", capability: "available", description: "Target groups and traffic routing" },
     { label: "Traffic", href: "/admin/traffic", icon: Globe, requiredRole: "admin", capability: "available", description: "Route rules and traffic policies" },
+    { label: "Domains", href: "/admin/domains", icon: Globe, requiredRole: "admin", capability: "available", description: "Custom domain management" },
     { label: "Cloud", href: "/admin/cloud", icon: Cloud, requiredRole: "admin", capability: "available", description: "Cloud provider integrations and instance provisioning" },
+    { label: "Compose", href: "/admin/compose", icon: Container, requiredRole: "admin", capability: "available", description: "Docker Compose file import and management" },
     { label: "Social Login", href: "/admin/social", icon: Users, requiredRole: "admin", capability: "available", description: "OAuth social login providers" },
   ]},
 ];

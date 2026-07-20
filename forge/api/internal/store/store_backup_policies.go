@@ -79,6 +79,50 @@ func (s *Store) DeleteBackupPolicy(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Store) ListAllEnabledBackupPolicies(ctx context.Context) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, server_id::text, interval, max_backups, retention_days, storage, enabled, created_at, updated_at
+		FROM backup_policies
+		WHERE enabled = TRUE AND interval != ''
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := rows.Scan(&p.ID, &p.ServerID, &p.Interval, &p.MaxBackups, &p.RetentionDays, &p.Storage, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+func (s *Store) ListAllEnabledPolicies(ctx context.Context) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, server_id::text, interval, max_backups, retention_days, storage, enabled, created_at, updated_at
+		FROM backup_policies
+		WHERE enabled = TRUE
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := rows.Scan(&p.ID, &p.ServerID, &p.Interval, &p.MaxBackups, &p.RetentionDays, &p.Storage, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
 func (s *Store) ListExpiredBackups(ctx context.Context) ([]Backup, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at

@@ -13,15 +13,21 @@ import (
 type JobType string
 
 const (
-	JobServerStart     JobType = "server.start"
-	JobServerStop      JobType = "server.stop"
-	JobServerRestart   JobType = "server.restart"
-	JobServerKill      JobType = "server.kill"
-	JobServerInstall   JobType = "server.install"
-	JobServerUninstall JobType = "server.uninstall"
-	JobBackupCreate    JobType = "backup.create"
-	JobBackupRestore   JobType = "backup.restore"
-	JobServerTransfer  JobType = "server.transfer"
+	JobServerStart        JobType = "server.start"
+	JobServerStop         JobType = "server.stop"
+	JobServerRestart      JobType = "server.restart"
+	JobServerKill         JobType = "server.kill"
+	JobServerInstall      JobType = "server.install"
+	JobServerUninstall    JobType = "server.uninstall"
+	JobBackupCreate       JobType = "backup.create"
+	JobBackupRestore      JobType = "backup.restore"
+	JobServerTransfer     JobType = "server.transfer"
+	JobComposeDeploy      JobType = "compose.deploy"
+	JobComposeUpdate      JobType = "compose.update"
+	JobComposeDelete      JobType = "compose.delete"
+	JobComposeStart       JobType = "compose.start"
+	JobComposeStop        JobType = "compose.stop"
+	JobComposeRestart     JobType = "compose.restart"
 )
 
 type JobStatus string

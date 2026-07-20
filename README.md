@@ -99,11 +99,15 @@ flowchart LR
 
 | Goal | Recommended method | What you need |
 |---|---|---|
+| Quick production install | `./scripts/install.sh` | Ubuntu/Debian server, Docker, domain |
 | Evaluate or contribute locally | Development launcher | Go, Node.js, npm and Docker Desktop/Engine |
 | Host everything on one VPS | Production Compose | Ubuntu, Docker Engine, Compose v2, domain and TLS |
 | Add game capacity | Standalone Beacon | A second Linux VPS, Docker and a panel-issued node credential |
 | Test offline recovery | Two Beacons + shared object storage | S3-compatible bucket accessible from both nodes |
 | Provision AWS nodes | Forge cloud module | AWS credentials/role, VPC settings and a published Beacon image |
+
+See [Installation Guide](./docs/installation.md) for a step-by-step walkthrough
+and [Upgrading](./docs/upgrading.md) for upgrade procedures.
 
 ## Requirements and downloads
 
@@ -119,11 +123,28 @@ flowchart LR
 Recommended: 4 CPU cores, 8 GiB RAM, 20 GiB free disk space, `curl`, and
 OpenSSL.
 
+### OS Support Matrix
+
+| OS | Version | Architectures | Docker | Status |
+|----|---------|--------------|--------|--------|
+| Ubuntu | 24.04 LTS (Noble) | amd64, arm64 | 24.0+ | Supported |
+| Ubuntu | 22.04 LTS (Jammy) | amd64, arm64 | 24.0+ | Supported |
+| Debian | 12 (Bookworm) | amd64, arm64 | 24.0+ | Supported |
+| Windows | 10 / 11 / Server 2019+ | amd64 | Docker Desktop | Supported |
+| macOS | 13+ (Ventura) | amd64, arm64 | Docker Desktop | Development |
+| Ubuntu | 20.04 LTS (Focal) | amd64 | 24.0+ | Untested |
+| Debian | 11 (Bullseye) | amd64 | 24.0+ | Untested |
+
+The installer (`scripts/install.sh`) auto-detects OS, architecture, Docker
+version, available ports, and system resources before beginning. Use
+`--skip-checks` to bypass on untested platforms.
+
 ### For an Ubuntu production host
 
-- Ubuntu 24.04 LTS, 64-bit
-- Docker Engine and Docker Compose **2.24.4+**
+- Ubuntu 22.04 LTS or 24.04 LTS, 64-bit
+- Docker Engine 24.0+ and Docker Compose **2.24.4+**
 - Git, curl, ca-certificates, OpenSSL, Nginx and Certbot
+- 2 vCPU, 2 GiB RAM, 20 GiB free disk (minimum)
 - A domain name with an `A`/`AAAA` record pointing to the VPS
 - SMTP credentials if password-reset email is required
 - An S3-compatible bucket for multi-node disaster recovery
@@ -367,8 +388,10 @@ gamepanel/
 ## Documentation
 
 | Start here | Description |
-|---|---|
+|---|---|---|
 | [Documentation index](./docs/README.md) | Map of the documentation tree |
+| [Installation guide](./docs/installation.md) | Step-by-step installation |
+| [Upgrading](./docs/upgrading.md) | Upgrade procedures and rollback |
 | [Production deployment](./docs/operations/production-deployment.md) | Ubuntu, TLS, Docker, games, multi-node, AWS and backups |
 | [Security operations](./docs/operations/security.md) | Security controls and operator guidance |
 | [Architecture overview](./docs/architecture/architecture-overview.md) | System components and boundaries |

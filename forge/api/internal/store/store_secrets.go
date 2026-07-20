@@ -72,6 +72,10 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 		{"panel_settings", "id::text", "recaptcha_secret_key", "recaptcha_secret_key_encrypted"},
 		{"panel_mail_settings", "id::text", "smtp_password", "smtp_password_encrypted"},
 		{"panel_advanced_settings", "id::text", "recaptcha_secret_key", "recaptcha_secret_key_encrypted"},
+		{"git_credentials", "id", "credential_plaintext", "credential_encrypted"},
+		{"git_provider_tokens", "id", "access_token_plaintext", "access_token_encrypted"},
+		{"git_provider_tokens", "id", "refresh_token_plaintext", "refresh_token_encrypted"},
+		{"git_sources", "id", "webhook_secret_plaintext", "webhook_secret_encrypted"},
 	}
 	for _, spec := range fields {
 		query := fmt.Sprintf("SELECT %s, COALESCE(%s,''), COALESCE(%s,'') FROM %s FOR UPDATE", spec.idColumn, spec.plainColumn, spec.encryptedColumn, spec.table)
@@ -155,6 +159,10 @@ func (s *Store) RestoreOperationalSecrets(ctx context.Context) error {
 		{"panel_settings", "id::text", "recaptcha_secret_key", "recaptcha_secret_key_encrypted"},
 		{"panel_mail_settings", "id::text", "smtp_password", "smtp_password_encrypted"},
 		{"panel_advanced_settings", "id::text", "recaptcha_secret_key", "recaptcha_secret_key_encrypted"},
+		{"git_credentials", "id", "credential_plaintext", "credential_encrypted"},
+		{"git_provider_tokens", "id", "access_token_plaintext", "access_token_encrypted"},
+		{"git_provider_tokens", "id", "refresh_token_plaintext", "refresh_token_encrypted"},
+		{"git_sources", "id", "webhook_secret_plaintext", "webhook_secret_encrypted"},
 	}
 	for _, spec := range fields {
 		rows, err := tx.Query(ctx, fmt.Sprintf("SELECT %s, COALESCE(%s,'') FROM %s WHERE COALESCE(%s,'')<>'' FOR UPDATE", spec.idColumn, spec.encryptedColumn, spec.table, spec.encryptedColumn))

@@ -8,7 +8,9 @@ import (
 
 func TestSFTPCronDeduplication(t *testing.T) {
 	client := &mockPanelClient{}
-	now := time.Now()
+	// Use a fixed minute so the two events cannot accidentally straddle a
+	// minute boundary while this test is running.
+	now := time.Date(2024, 1, 1, 12, 0, 10, 0, time.UTC)
 	manager := &mockServerManager{
 		client: client,
 		events: []ActivityEvent{
