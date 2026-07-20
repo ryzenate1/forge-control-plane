@@ -2,6 +2,10 @@ module gamepanel/forge
 
 go 1.26.0
 
+require github.com/ryzenate1/forge-control-plane/packages/agent-protocol v0.0.0
+
+replace github.com/ryzenate1/forge-control-plane/packages/agent-protocol => ../../packages/agent-protocol
+
 require (
 	cloud.google.com/go/storage v1.63.1
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.22.0

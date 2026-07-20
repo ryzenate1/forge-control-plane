@@ -52,3 +52,38 @@ type Instance struct {
 	CreatedAt     time.Time     `json:"createdAt"`
 	UpdatedAt     time.Time     `json:"updatedAt"`
 }
+
+// Route, VolumeAttachment, SecretReference, and BackupArtifact are shared
+// attachment contracts. Capability modules supply their own semantics while
+// the platform keeps ownership and lifecycle relationships consistent.
+type Route struct {
+	ID         string `json:"id"`
+	WorkloadID string `json:"workloadId"`
+	Host       string `json:"host"`
+	Path       string `json:"path,omitempty"`
+	TargetPort int    `json:"targetPort"`
+	TLS        bool   `json:"tls"`
+}
+
+type VolumeAttachment struct {
+	ID         string `json:"id"`
+	WorkloadID string `json:"workloadId"`
+	VolumeID   string `json:"volumeId"`
+	MountPath  string `json:"mountPath"`
+	ReadOnly   bool   `json:"readOnly"`
+}
+
+type SecretReference struct {
+	ID         string `json:"id"`
+	WorkloadID string `json:"workloadId"`
+	SecretID   string `json:"secretId"`
+	TargetKey  string `json:"targetKey"`
+}
+
+type BackupArtifact struct {
+	ID         string    `json:"id"`
+	WorkloadID string    `json:"workloadId"`
+	Location   string    `json:"location"`
+	Checksum   string    `json:"checksum"`
+	CreatedAt  time.Time `json:"createdAt"`
+}

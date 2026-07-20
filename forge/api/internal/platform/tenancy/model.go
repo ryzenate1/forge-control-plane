@@ -2,6 +2,12 @@ package tenancy
 
 import "time"
 
+const (
+	DefaultOrganizationID = "00000000-0000-0000-0000-000000000001"
+	DefaultProjectID      = "00000000-0000-0000-0000-000000000002"
+	DefaultEnvironmentID  = "00000000-0000-0000-0000-000000000003"
+)
+
 type Organization struct {
 	ID, Name, Slug       string
 	CreatedAt, UpdatedAt time.Time
@@ -23,5 +29,5 @@ type Scope struct {
 }
 
 func DefaultScope() Scope {
-	return Scope{OrganizationID: "default", ProjectID: "default", EnvironmentID: "default"}
+	return Scope{OrganizationID: DefaultOrganizationID, ProjectID: DefaultProjectID, EnvironmentID: DefaultEnvironmentID}
 }

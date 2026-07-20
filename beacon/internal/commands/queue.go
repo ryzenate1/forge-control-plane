@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ryzenate1/forge-control-plane/packages/agent-protocol"
+
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
@@ -36,15 +38,16 @@ const (
 )
 
 type Operation struct {
-	ID          string    `json:"id"`
-	CommandID   string    `json:"commandId,omitempty"`
-	ServerID    string    `json:"serverId"`
-	Type        Type      `json:"type"`
-	Status      Status    `json:"status"`
-	Error       string    `json:"error,omitempty"`
-	CreatedAt   time.Time `json:"createdAt"`
-	StartedAt   time.Time `json:"startedAt,omitempty"`
-	CompletedAt time.Time `json:"completedAt,omitempty"`
+	ID              string    `json:"id"`
+	CommandID       string    `json:"commandId,omitempty"`
+	ProtocolVersion int       `json:"protocolVersion"`
+	ServerID        string    `json:"serverId"`
+	Type            Type      `json:"type"`
+	Status          Status    `json:"status"`
+	Error           string    `json:"error,omitempty"`
+	CreatedAt       time.Time `json:"createdAt"`
+	StartedAt       time.Time `json:"startedAt,omitempty"`
+	CompletedAt     time.Time `json:"completedAt,omitempty"`
 }
 
 type Handler func(context.Context, *Operation) error
@@ -84,7 +87,7 @@ func NewPersistentQueue(path string, concurrency int, handler Handler) (*Queue, 
 	}
 	db.SetMaxOpenConns(1)
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS beacon_operations (
-		id TEXT PRIMARY KEY, command_id TEXT UNIQUE, server_id TEXT NOT NULL, type TEXT NOT NULL,
+		id TEXT PRIMARY KEY, command_id TEXT UNIQUE, protocol_version INTEGER NOT NULL DEFAULT 1, server_id TEXT NOT NULL, type TEXT NOT NULL,
 		status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL,
 		started_at TIMESTAMP, completed_at TIMESTAMP);
 		CREATE INDEX IF NOT EXISTS idx_beacon_operations_status ON beacon_operations(status, created_at);
@@ -92,12 +95,43 @@ func NewPersistentQueue(path string, concurrency int, handler Handler) (*Queue, 
 		db.Close()
 		return nil, fmt.Errorf("migrate command journal: %w", err)
 	}
+	if err := ensureProtocolVersionColumn(db); err != nil {
+		db.Close()
+		return nil, err
+	}
 	q := newQueue(concurrency, handler, db)
 	if err := q.loadJournal(); err != nil {
 		db.Close()
 		return nil, err
 	}
 	return q, nil
+}
+
+func ensureProtocolVersionColumn(db *sql.DB) error {
+	rows, err := db.Query(`PRAGMA table_info(beacon_operations)`)
+	if err != nil {
+		return fmt.Errorf("inspect command journal: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid int
+		var name, columnType string
+		var notNull, primaryKey int
+		var defaultValue any
+		if err := rows.Scan(&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey); err != nil {
+			return err
+		}
+		if name == "protocol_version" {
+			return nil
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	if _, err := db.Exec(`ALTER TABLE beacon_operations ADD COLUMN protocol_version INTEGER NOT NULL DEFAULT 1`); err != nil {
+		return fmt.Errorf("add command protocol version: %w", err)
+	}
+	return nil
 }
 
 func newQueue(concurrency int, handler Handler, db *sql.DB) *Queue {
@@ -112,7 +146,7 @@ func newQueue(concurrency int, handler Handler, db *sql.DB) *Queue {
 }
 
 func (q *Queue) loadJournal() error {
-	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at
+	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),protocol_version,server_id,type,status,error,created_at,started_at,completed_at
 		FROM beacon_operations ORDER BY created_at`)
 	if err != nil {
 		return fmt.Errorf("load command journal: %w", err)
@@ -122,7 +156,7 @@ func (q *Queue) loadJournal() error {
 		var op Operation
 		var typ, status string
 		var started, completed sql.NullTime
-		if err := rows.Scan(&op.ID, &op.CommandID, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed); err != nil {
+		if err := rows.Scan(&op.ID, &op.CommandID, &op.ProtocolVersion, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed); err != nil {
 			return err
 		}
 		op.Type, op.Status = Type(typ), Status(status)
@@ -232,6 +266,16 @@ func (q *Queue) Enqueue(ctx context.Context, serverID string, typ Type) (*Operat
 }
 
 func (q *Queue) EnqueueCommand(ctx context.Context, commandID, serverID string, typ Type) (*Operation, error) {
+	return q.EnqueueVersionedCommand(ctx, commandID, serverID, typ, protocol.CurrentVersion)
+}
+
+// EnqueueVersionedCommand makes the protocol version part of the durable
+// journal, so restart recovery never silently replays a newer command format
+// as an older one.
+func (q *Queue) EnqueueVersionedCommand(ctx context.Context, commandID, serverID string, typ Type, protocolVersion int) (*Operation, error) {
+	if protocolVersion != protocol.CurrentVersion {
+		return nil, fmt.Errorf("unsupported command protocol version: %d", protocolVersion)
+	}
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -251,7 +295,7 @@ func (q *Queue) EnqueueCommand(ctx context.Context, commandID, serverID string, 
 	if q.db == nil {
 		id = fmt.Sprintf("op-%d", q.nextID)
 	}
-	op := &Operation{ID: id, CommandID: commandID, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC()}
+	op := &Operation{ID: id, CommandID: commandID, ProtocolVersion: protocolVersion, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC()}
 	q.operations[id] = op
 	q.serverOps[serverID] = append(q.serverOps[serverID], id)
 	if err := q.persist(op); err != nil {
@@ -276,9 +320,9 @@ func (q *Queue) persist(op *Operation) error {
 	if q.db == nil {
 		return nil
 	}
-	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at)
-		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
-		started_at=excluded.started_at,completed_at=excluded.completed_at`, op.ID, op.CommandID, op.ServerID, string(op.Type), string(op.Status), op.Error,
+	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,protocol_version,server_id,type,status,error,created_at,started_at,completed_at)
+		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
+		protocol_version=excluded.protocol_version,started_at=excluded.started_at,completed_at=excluded.completed_at`, op.ID, op.CommandID, op.ProtocolVersion, op.ServerID, string(op.Type), string(op.Status), op.Error,
 		op.CreatedAt, nullTime(op.StartedAt), nullTime(op.CompletedAt))
 	return err
 }
