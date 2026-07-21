@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, use } from "react";
+import { useState, useEffect, useRef, useCallback, use, Suspense } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
+import { toast, Toaster } from "@/components/ui/sonner";
 import {
   ArrowLeft, Cloud, Cpu, Database, FileText,
   Globe, HardDrive, History, KeyRound, Power,
@@ -32,7 +33,7 @@ const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: "backups", label: "Backups", icon: Database },
 ];
 
-export default function AdminAppDetailPage({ params }: { params: Promise<{ id: string }> }) {
+function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -114,16 +115,46 @@ export default function AdminAppDetailPage({ params }: { params: Promise<{ id: s
       {tab === "console" && <ConsoleTab appId={id} />}
       {tab === "domains" && <DomainsTab appId={id} />}
       {tab === "backups" && <BackupsTab appId={id} />}
+      <Toaster />
     </div>
+  );
+}
+
+export default function AdminAppDetailPage({ params }: { params: Promise<{ id: string }> }) {
+  return (
+    <Suspense fallback={
+      <div className="space-y-6">
+        <SectionHeader title="Application" sub="Loading..." />
+        <div className="p-8 text-center text-sm text-slate-500">Loading application details...</div>
+      </div>
+    }>
+      <AdminAppDetailContent params={params} />
+    </Suspense>
   );
 }
 
 function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
   const qc = useQueryClient();
-  const startMut = useMutation({ mutationFn: () => startApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const stopMut = useMutation({ mutationFn: () => stopApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const restartMut = useMutation({ mutationFn: () => restartApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const triggerMut = useMutation({ mutationFn: () => triggerDeploy(id) });
+  const startMut = useMutation({
+    mutationFn: () => startApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to start app"),
+  });
+  const stopMut = useMutation({
+    mutationFn: () => stopApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to stop app"),
+  });
+  const restartMut = useMutation({
+    mutationFn: () => restartApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to restart app"),
+  });
+  const triggerMut = useMutation({
+    mutationFn: () => triggerDeploy(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to trigger deploy"),
+  });
 
   const cpuUsage = app.cpuUsage ?? 0;
   const cpuLimit = typeof app.resourceLimits?.cpu === "string" ? parseFloat(app.resourceLimits.cpu) : (app.cpuLimit ?? 1);
@@ -214,8 +245,8 @@ function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
         <Card>
           <CardHeader title="Ports" icon={Globe} />
           <div className="divide-y divide-white/[0.06] text-sm">
-            {app.ports.map((port, i) => (
-              <div key={i} className="flex justify-between px-4 py-3">
+            {app.ports.map((port) => (
+              <div key={`${port.protocol}-${port.containerPort}-${port.hostPort}`} className="flex justify-between px-4 py-3">
                 <span className="text-slate-400">{port.name ?? `${port.protocol}/${port.containerPort}`}</span>
                 <span className="font-mono text-xs text-slate-300">{port.hostPort}:{port.containerPort}/{port.protocol}</span>
               </div>
@@ -228,6 +259,7 @@ function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
 }
 
 function DeploymentsTab({ appId }: { appId: string }) {
+  const router = useRouter();
   const { data: deployments = [], isLoading } = useQuery({
     queryKey: ["app-deployments", appId],
     queryFn: () => fetchAppDeployments(appId),
@@ -238,10 +270,19 @@ function DeploymentsTab({ appId }: { appId: string }) {
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title={`${deployments.length} deployment${deployments.length === 1 ? "" : "s"}`} icon={History} />
+        <CardHeader
+          title={`${deployments?.length ?? 0} deployment${deployments?.length === 1 ? "" : "s"}`}
+          icon={History}
+          action={
+            <Btn tone="ghost" size="sm" onClick={() => router.push(`/admin/apps/${appId}/deployments`)}>
+              <History size={12} />
+              View Full History
+            </Btn>
+          }
+        />
         {isLoading ? (
           <div className="p-8 text-center text-sm text-slate-500">Loading deployments...</div>
-        ) : deployments.length === 0 ? (
+        ) : !deployments || deployments.length === 0 ? (
           <EmptyState icon={History} message="No deployments yet." />
         ) : (
           <div className="overflow-x-auto">
@@ -353,6 +394,7 @@ function ConfigurationTab({ app, id }: { app: ApiAppDetail; id: string }) {
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["app", id] });
     },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to update app configuration"),
   });
 
   return (
@@ -422,7 +464,7 @@ function LogsTab({ appId }: { appId: string }) {
     <Card>
       <CardHeader title="Application Logs" icon={FileText} />
       <div className="p-4">
-        <LogViewer logs={logs} loading={isLoading} />
+        <LogViewer logs={logs ?? []} loading={isLoading} />
       </div>
     </Card>
   );
@@ -537,17 +579,19 @@ function DomainsTab({ appId }: { appId: string }) {
       setEnableTls(false);
       void qc.invalidateQueries({ queryKey: ["app-domains", appId] });
     },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to add domain"),
   });
 
   const deleteMut = useMutation({
     mutationFn: (domainId: string) => deleteAppDomain(appId, domainId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-domains", appId] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to delete domain"),
   });
 
   return (
     <div className="space-y-4">
       <Card>
-        <CardHeader title={`${domains.length} domain${domains.length === 1 ? "" : "s"}`} icon={Globe} />
+        <CardHeader title={`${domains?.length ?? 0} domain${domains?.length === 1 ? "" : "s"}`} icon={Globe} />
         <div className="flex flex-wrap items-end gap-3 p-4">
           <div className="flex-1 min-w-[200px]">
             <Input label="New Domain" value={newDomain} onChange={setNewDomain} placeholder="example.com" />
@@ -570,7 +614,7 @@ function DomainsTab({ appId }: { appId: string }) {
         )}
         {isLoading ? (
           <div className="p-8 text-center text-sm text-slate-500">Loading domains...</div>
-        ) : domains.length === 0 ? (
+        ) : !domains || domains.length === 0 ? (
           <EmptyState icon={Globe} message="No domains configured." />
         ) : (
           <div className="overflow-x-auto">
@@ -624,16 +668,19 @@ function BackupsTab({ appId }: { appId: string }) {
   const createMut = useMutation({
     mutationFn: () => createAppBackup(appId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-backups", appId] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to create backup"),
   });
 
   const restoreMut = useMutation({
     mutationFn: (backupId: string) => restoreAppBackup(appId, backupId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-backups", appId] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to restore backup"),
   });
 
   const deleteMut = useMutation({
     mutationFn: (backupId: string) => deleteAppBackup(appId, backupId),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-backups", appId] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to delete backup"),
   });
 
   return (
@@ -645,10 +692,10 @@ function BackupsTab({ appId }: { appId: string }) {
       </div>
 
       <Card>
-        <CardHeader title={`${backups.length} backup${backups.length === 1 ? "" : "s"}`} icon={Database} />
+        <CardHeader title={`${backups?.length ?? 0} backup${backups?.length === 1 ? "" : "s"}`} icon={Database} />
         {isLoading ? (
           <div className="p-8 text-center text-sm text-slate-500">Loading backups...</div>
-        ) : backups.length === 0 ? (
+        ) : !backups || backups.length === 0 ? (
           <EmptyState icon={Database} message="No backups yet." />
         ) : (
           <div className="overflow-x-auto">

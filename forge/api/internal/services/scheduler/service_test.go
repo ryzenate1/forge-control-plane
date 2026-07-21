@@ -125,6 +125,25 @@ func TestHasCapacity(t *testing.T) {
 	}
 }
 
+func TestWithReservations(t *testing.T) {
+	s := New(nil, nil)
+	if s.reservations != nil {
+		t.Fatal("reservations should be nil by default")
+	}
+	s.WithReservations(nil)
+	if s.reservations != nil {
+		t.Fatal("WithReservations(nil) should set field to nil")
+	}
+}
+
+func TestNormalizeRequestPReservesSkipReservation(t *testing.T) {
+	req := domain.PlacementRequest{SkipReservation: true, CPU: 1024}
+	got := normalizeRequest(req)
+	if !got.SkipReservation {
+		t.Fatal("normalizeRequest should preserve SkipReservation flag")
+	}
+}
+
 func TestFirstNonEmpty(t *testing.T) {
 	tests := []struct {
 		name   string

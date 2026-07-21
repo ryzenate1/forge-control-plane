@@ -105,6 +105,120 @@ func (s *Service) RecordHeartbeatFailure(ctx context.Context, nodeID, reason str
 	})
 }
 
+// Node Metrics
+func (s *Service) RecordNodeMetric(ctx context.Context, req store.CreateNodeMetricRequest) (store.NodeMetric, error) {
+	return s.store.CreateNodeMetric(ctx, req)
+}
+
+func (s *Service) ListNodeMetrics(ctx context.Context, nodeID string, limit int, since *time.Time) ([]store.NodeMetric, error) {
+	return s.store.ListNodeMetrics(ctx, nodeID, limit, since)
+}
+
+func (s *Service) ListAllNodeMetricsLatest(ctx context.Context) ([]store.NodeMetric, error) {
+	return s.store.ListNodeMetricsLatest(ctx)
+}
+
+// Workload Metrics
+func (s *Service) RecordWorkloadMetric(ctx context.Context, req store.CreateWorkloadMetricRequest) (store.WorkloadMetric, error) {
+	return s.store.CreateWorkloadMetric(ctx, req)
+}
+
+func (s *Service) ListWorkloadMetrics(ctx context.Context, serverID string, limit int) ([]store.WorkloadMetric, error) {
+	return s.store.ListWorkloadMetrics(ctx, serverID, limit)
+}
+
+// Build Logs
+func (s *Service) RecordBuildLog(ctx context.Context, req store.CreateBuildLogEntryRequest) (store.BuildLogEntry, error) {
+	return s.store.CreateBuildLog(ctx, req)
+}
+
+func (s *Service) BuildLogs(ctx context.Context, buildID string, limit int) ([]store.BuildLogEntry, error) {
+	return s.store.ListBuildLogs(ctx, buildID, limit)
+}
+
+func (s *Service) BuildLogsByCorrelation(ctx context.Context, correlationID string, limit int) ([]store.BuildLogEntry, error) {
+	return s.store.ListBuildLogsByCorrelation(ctx, correlationID, limit)
+}
+
+// Deployment Logs
+func (s *Service) RecordDeploymentLog(ctx context.Context, req store.CreateDeploymentLogEntryRequest) (store.DeploymentLogEntry, error) {
+	return s.store.CreateDeploymentLog(ctx, req)
+}
+
+func (s *Service) DeploymentLogs(ctx context.Context, deploymentID string, limit int) ([]store.DeploymentLogEntry, error) {
+	return s.store.ListDeploymentLogs(ctx, deploymentID, limit)
+}
+
+// Beacon Command Logs
+func (s *Service) RecordBeaconCommandLog(ctx context.Context, req store.CreateBeaconCommandLogRequest) (store.BeaconCommandLog, error) {
+	return s.store.CreateBeaconCommandLog(ctx, req)
+}
+
+func (s *Service) BeaconCommandLogs(ctx context.Context, filter store.BeaconCommandLogFilter) ([]store.BeaconCommandLog, error) {
+	return s.store.ListBeaconCommandLogs(ctx, filter)
+}
+
+func (s *Service) UpdateBeaconCommandStatus(ctx context.Context, commandID, status string, exitCode int, responsePayload map[string]any) error {
+	return s.store.UpdateBeaconCommandLogStatus(ctx, commandID, status, exitCode, responsePayload)
+}
+
+// Correlation Links
+func (s *Service) CreateCorrelationLink(ctx context.Context, req store.CreateCorrelationLinkRequest) (store.CorrelationLink, error) {
+	return s.store.CreateCorrelationLink(ctx, req)
+}
+
+func (s *Service) CorrelationLinks(ctx context.Context, operationID string) ([]store.CorrelationLink, error) {
+	return s.store.GetCorrelationLinks(ctx, operationID)
+}
+
+// Health History
+func (s *Service) RecordHealthCheck(ctx context.Context, rec store.HealthHistoryRecord) error {
+	return s.store.CreateHealthHistory(ctx, rec)
+}
+
+func (s *Service) HealthHistory(ctx context.Context, checkName string, limit int) ([]store.HealthHistoryRecord, error) {
+	return s.store.ListHealthHistory(ctx, checkName, limit)
+}
+
+func (s *Service) AllHealthHistory(ctx context.Context, limit int) ([]store.HealthHistoryRecord, error) {
+	return s.store.ListAllHealthHistory(ctx, limit)
+}
+
+// Retention
+func (s *Service) EnforceRetention(ctx context.Context) (map[string]int64, error) {
+	return s.store.EnforceRetention(ctx)
+}
+
+func (s *Service) RetentionPolicies(ctx context.Context) ([]store.RetentionPolicy, error) {
+	return s.store.ListRetentionPolicies(ctx)
+}
+
+func (s *Service) UpdateRetentionPolicy(ctx context.Context, metricType string, ttlHours, maxRecords int) error {
+	return s.store.UpdateRetentionPolicy(ctx, metricType, ttlHours, maxRecords)
+}
+
+// Dashboard / Monitoring summary
+func (s *Service) MonitoringSummary(ctx context.Context) (map[string]any, error) {
+	summary := map[string]any{}
+
+	latestMetrics, err := s.store.ListNodeMetricsLatest(ctx)
+	if err == nil {
+		summary["nodes"] = latestMetrics
+	}
+
+	alertCount, err := s.store.CountAlerts(ctx, store.AlertFilter{Acknowledged: boolPtr(false), Limit: 1})
+	if err == nil {
+		summary["unacknowledgedAlerts"] = alertCount
+	}
+
+	healthHistory, err := s.store.ListAllHealthHistory(ctx, 50)
+	if err == nil {
+		summary["recentHealthChecks"] = healthHistory
+	}
+
+	return summary, nil
+}
+
 func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 	capacity, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 	if err != nil {
@@ -180,4 +294,8 @@ func statusScore(status string) int {
 	default:
 		return 0
 	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }

@@ -98,9 +98,14 @@ export default function AdminDeploymentsPage() {
         title="Deployments"
         sub="Server and application deployment history across the cluster."
         action={
-          <Btn tone="primary" onClick={() => router.push("/admin/deployments/new")}>
-            <Plus size={14} /> New Blue-Green Deployment
-          </Btn>
+          <div className="flex items-center gap-2">
+            <Btn tone="ghost" onClick={() => router.push("/admin/deployments/history")}>
+              <History size={14} /> History
+            </Btn>
+            <Btn tone="primary" onClick={() => router.push("/admin/deployments/new")}>
+              <Plus size={14} /> New Blue-Green Deployment
+            </Btn>
+          </div>
         }
       />
 
@@ -206,7 +211,7 @@ export default function AdminDeploymentsPage() {
                       <td className="px-4 py-3 text-xs text-slate-400">{dep.targetGroup ?? "—"}</td>
                       <td className="px-4 py-3 text-xs text-slate-500">{formatDate(dep.createdAt)}</td>
                       <td className="px-4 py-3">
-                        <Btn size="sm" tone="ghost" onClick={() => { setSelectedDeployment(dep); setIsAppDeployment(false); }}>
+                        <Btn size="sm" tone="ghost" onClick={() => router.push(`/admin/deployments/${dep.id}`)}>
                           Details
                         </Btn>
                       </td>

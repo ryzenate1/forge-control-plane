@@ -1,0 +1,159 @@
+# Security hardening override — Forge Control Plane.
+# Apply on top of compose.yml for additional container isolation:
+#   docker compose -f compose.yml -f compose.security.yml [command]
+#
+# Adds:
+#   - seccomp default profile on all services
+#   - AppArmor default profile on all services
+#   - Read-only root filesystem with tmpfs for /tmp where possible
+#   - Per-service cap_add for the minimum Linux capabilities required
+#
+# This file is OPTIONAL — compose.yml already includes baseline hardening
+# (init, no-new-privileges, cap_drop ALL, resource limits, logging).
+
+services:
+  postgres:
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/run/postgresql
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  redis:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - SETGID
+      - SETUID
+
+  postgres-backup:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  api:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+
+  daemon:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+
+  prometheus:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  alertmanager:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  grafana:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - SETGID
+      - SETUID
+
+  caddy:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
+
+  web:
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - "no-new-privileges:true"
+      - "seccomp=default"
+      - "apparmor=default"
+    cap_drop:
+      - ALL

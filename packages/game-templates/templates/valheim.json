@@ -1,0 +1,135 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "valheim",
+  "name": "Valheim",
+  "description": "Valheim dedicated server with crossplay support. Explore a Viking purgatory with friends in this brutal survival sandbox.",
+  "version": "1.0.0",
+  "game": "Valheim",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/896660",
+  "image": "ghcr.io/parkervcp/steamcmd:debian",
+  "images": {
+    "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
+  },
+  "startup": "./valheim_server.x86_64 -name \"{{SERVER_NAME}}\" -port {{PORT}} -world \"{{WORLD_NAME}}\" -password {{SERVER_PASSWORD}} -savedir \"{{VALHEIM_SAVEDIR}}\" -public {{PUBLIC}} -crossplay",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Game server connected to Steam"
+    },
+    "stop": "stop",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 2456,
+      "protocol": "udp",
+      "public": true,
+      "description": "Valheim game server port (UDP 2456-2458 used)"
+    },
+    {
+      "port": 2457,
+      "protocol": "udp",
+      "public": true,
+      "description": "Valheim game server port (UDP 2456-2458 used)"
+    },
+    {
+      "port": 2458,
+      "protocol": "udp",
+      "public": true,
+      "description": "Valheim game server port (UDP 2456-2458 used)"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the Steam server browser.",
+      "default_value": "GamePanel Valheim Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "World Name",
+      "env_variable": "WORLD_NAME",
+      "description": "Name for the world save file. Determines the save file created on first run.",
+      "default_value": "Dedicated",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Password required to join the server. Minimum 5 characters.",
+      "default_value": "gamepanel",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|min:5|max:32"
+    },
+    {
+      "name": "Save Directory",
+      "env_variable": "VALHEIM_SAVEDIR",
+      "description": "Path where world saves are stored within the container.",
+      "default_value": "/home/steam/.config/unity3d/IronGate/Valheim/worlds",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string"
+    },
+    {
+      "name": "Public",
+      "env_variable": "PUBLIC",
+      "description": "Whether the server appears in the public server list.",
+      "default_value": "1",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum concurrent players.",
+      "default_value": "10",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:64"
+    },
+    {
+      "name": "Crossplay",
+      "env_variable": "CROSSPLAY",
+      "description": "Enable cross-platform play between Steam and Xbox/Game Pass.",
+      "default_value": "true",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    },
+    {
+      "name": "Update on Boot",
+      "env_variable": "UPDATE_ON_BOOT",
+      "description": "Check for and apply server updates on container start.",
+      "default_value": "true",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 12288,
+    "disk_mb": 10240,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/parkervcp/steamcmd:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Valheim SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Valheim dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 896660 validate +quit\n\necho \"Valheim server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "co-op"],
+  "file_denylist": [],
+  "features": []
+}

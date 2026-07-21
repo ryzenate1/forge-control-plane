@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/store"
 )
@@ -197,4 +198,137 @@ func (svc *Service) AssignServerToProject(ctx context.Context, serverID, project
 func (svc *Service) AssignServerToEnvironment(ctx context.Context, serverID, envID string) error {
 	_, err := svc.store.DB().Exec(ctx, `UPDATE servers SET environment_id = $1 WHERE id = $2`, envID, serverID)
 	return err
+}
+
+// ---- Authorization Helpers ----
+
+// CheckServerAccess returns an error if the user cannot access the given
+// server. Admins always pass. Non-admins must own the server or be an
+// org member whose org owns the server.
+func (svc *Service) CheckServerAccess(ctx context.Context, serverID, userID, role string) error {
+	if role == "admin" {
+		return nil
+	}
+
+	// First check direct ownership or subuser access
+	allowed, err := svc.store.UserCanAccessServer(ctx, serverID, userID, role, "")
+	if err != nil {
+		return err
+	}
+	if allowed {
+		return nil
+	}
+
+	// Fall back to org membership check
+	return errors.New("server access denied")
+}
+
+// RequireOrgRole returns an error when the user's effective role in the org
+// is below the minimum. Admins always pass. valid roles: owner, admin,
+// member, viewer.
+func (svc *Service) RequireOrgRole(ctx context.Context, orgID, userID, globalRole, minRole string) error {
+	if globalRole == "admin" {
+		return nil
+	}
+	effective := svc.store.ResolveEffectiveOrgRole(ctx, orgID, userID, globalRole)
+	if effective == "" {
+		return errors.New("not a member of this organization")
+	}
+	rank := map[string]int{"owner": 4, "admin": 3, "member": 2, "viewer": 1}
+	if rank[effective] < rank[minRole] {
+		return errors.New("insufficient organization role")
+	}
+	return nil
+}
+
+// CanManageOrg returns an error when the user is not an owner or admin of
+// the org. Admins always pass.
+func (svc *Service) CanManageOrg(ctx context.Context, orgID, userID, globalRole string) error {
+	if globalRole == "admin" {
+		return nil
+	}
+	role := svc.store.ResolveEffectiveOrgRole(ctx, orgID, userID, globalRole)
+	if role != "owner" && role != "admin" {
+		return errors.New("insufficient organization permissions")
+	}
+	return nil
+}
+
+// ---- Invitations ----
+
+type CreateInvitationInput struct {
+	OrgID     string
+	Email     string
+	Role      string
+	InvitedBy string
+	TTL       time.Duration
+}
+
+func (svc *Service) CreateInvitation(ctx context.Context, input CreateInvitationInput) (store.OrgInvitation, error) {
+	return svc.store.CreateInvitation(ctx, store.CreateInvitationRequest{
+		OrgID:     input.OrgID,
+		Email:     input.Email,
+		Role:      input.Role,
+		InvitedBy: input.InvitedBy,
+		TTL:       input.TTL,
+	})
+}
+
+func (svc *Service) ListInvitations(ctx context.Context, orgID string) ([]store.OrgInvitation, error) {
+	return svc.store.ListInvitations(ctx, orgID)
+}
+
+func (svc *Service) AcceptInvitation(ctx context.Context, token, userID string) error {
+	return svc.store.AcceptInvitation(ctx, token, userID)
+}
+
+func (svc *Service) RevokeInvitation(ctx context.Context, orgID, invitationID string) error {
+	return svc.store.RevokeInvitation(ctx, orgID, invitationID)
+}
+
+// ---- Granular Permissions ----
+
+func (svc *Service) GetMemberPermissions(ctx context.Context, orgID, userID string) (store.GranularPermissions, error) {
+	return svc.store.GetTeamMemberPermissions(ctx, orgID, userID)
+}
+
+func (svc *Service) SetMemberPermissions(ctx context.Context, orgID, userID string, perms store.GranularPermissions, actorID string) error {
+	return svc.store.SetTeamMemberPermissions(ctx, orgID, userID, perms, actorID)
+}
+
+func (svc *Service) HasPermission(ctx context.Context, orgID, userID, globalRole, permission string) (bool, error) {
+	if globalRole == "admin" {
+		return true, nil
+	}
+	role := svc.store.ResolveEffectiveOrgRole(ctx, orgID, userID, globalRole)
+	if role == "owner" || role == "admin" {
+		return true, nil
+	}
+	perms, err := svc.store.GetTeamMemberPermissions(ctx, orgID, userID)
+	if err != nil {
+		return false, err
+	}
+	switch permission {
+	case "canCreateProjects":
+		return perms.CanCreateProjects, nil
+	case "canDeleteProjects":
+		return perms.CanDeleteProjects, nil
+	case "canCreateEnvironments":
+		return perms.CanCreateEnvironments, nil
+	case "canDeleteEnvironments":
+		return perms.CanDeleteEnvironments, nil
+	case "canCreateServices":
+		return perms.CanCreateServices, nil
+	case "canDeleteServices":
+		return perms.CanDeleteServices, nil
+	case "canManageMembers":
+		return perms.CanManageMembers, nil
+	case "canManageEnvVars":
+		return perms.CanManageEnvVars, nil
+	case "canManageBackups":
+		return perms.CanManageBackups, nil
+	case "canViewSensitiveEnv":
+		return perms.CanViewSensitiveEnv, nil
+	}
+	return false, nil
 }

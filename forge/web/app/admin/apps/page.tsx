@@ -55,6 +55,7 @@ export default function AdminAppsPage() {
   const types: AppType[] = ["image", "git", "compose", "game_server"];
 
   const filtered = useMemo(() => {
+    if (!apps) return [];
     return apps.filter((app) => {
       if (search && !app.name.toLowerCase().includes(search.toLowerCase())) return false;
       if (typeFilter && app.type !== typeFilter) return false;

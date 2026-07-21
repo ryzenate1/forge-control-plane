@@ -159,7 +159,7 @@ export function AdminApiKeys() {
                   {!isFullAccess && scopesQuery.isPending ? (
                     <p className="text-xs text-slate-400">Loading available permissions...</p>
                   ) : !isFullAccess && scopesQuery.isError ? (
-                    <p className="text-xs text-red-300">Available permissions could not be loaded.</p>
+                    <div className="flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-2 text-xs text-red-200"><span>Available permissions could not be loaded: {scopesQuery.error.message}</span><Btn size="sm" tone="ghost" type="button" onClick={() => void scopesQuery.refetch()}>Retry</Btn></div>
                   ) : !isFullAccess && Object.entries(groupedScopes).map(([group, entries]) => {
                     const scopes = entries.map(({ scope }) => scope);
                     return (
@@ -215,7 +215,7 @@ export function AdminApiKeys() {
           <CardHeader title="Existing keys" icon={Shield} />
           {isLoading ? (
             <div className="py-10 text-center text-sm text-slate-500">Loading...</div>
-          ) : keys.length === 0 ? (
+          ) : !keys || keys.length === 0 ? (
             <EmptyState icon={KeyRound} message="No API keys yet." />
           ) : (
             <ul className="divide-y divide-white/[0.04]">

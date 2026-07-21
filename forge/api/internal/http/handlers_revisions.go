@@ -51,6 +51,9 @@ func registerRevisionRoutes(protected fiber.Router, cfg Config, svc *deployment.
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 		req.ServerID = c.Params("id")
+		if err := deployment.ValidateImageRef(req.Image); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
 		d, err := svc.StartRollout(c.Context(), &req)
 		if err != nil {
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})

@@ -14,14 +14,14 @@ import (
 
 type AuditEvent struct {
 	ID           string         `json:"id"`
-	UserID       string         `json:"user_id"`
+	UserID       string         `json:"userId"`
 	Action       string         `json:"action"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   string         `json:"resource_id"`
-	Details      map[string]any `json:"details,omitempty"`
+	ResourceType string         `json:"resource"`
+	ResourceID   string         `json:"resourceId"`
+	Details      map[string]any `json:"metadata,omitempty"`
 	IP           string         `json:"ip"`
-	UserAgent    string         `json:"user_agent"`
-	Timestamp    time.Time      `json:"timestamp"`
+	UserAgent    string         `json:"userAgent"`
+	Timestamp    time.Time      `json:"createdAt"`
 }
 
 type AuditFilter struct {

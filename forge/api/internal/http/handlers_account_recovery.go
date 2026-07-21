@@ -22,6 +22,10 @@ type accountRecoveryResponse struct {
 
 func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fiber.Handler) {
 	v1.Post("/auth/recovery/initiate", authLimiter, func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
 		var req accountRecoveryRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -49,6 +53,10 @@ func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fibe
 	})
 
 	v1.Post("/auth/recovery/verify", authLimiter, func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
 		var req accountRecoveryVerifyRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")

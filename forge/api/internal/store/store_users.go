@@ -837,7 +837,7 @@ func (s *Store) RevokeAllUserSessionsExceptCurrent(ctx context.Context, userID, 
 
 // Password complexity errors
 var (
-	ErrPasswordTooShort  = errors.New("password must be at least 8 characters")
+	ErrPasswordTooShort  = errors.New("password must be at least 12 characters")
 	ErrPasswordNoUpper   = errors.New("password must contain at least one uppercase letter")
 	ErrPasswordNoLower   = errors.New("password must contain at least one lowercase letter")
 	ErrPasswordNoDigit   = errors.New("password must contain at least one digit")
@@ -845,9 +845,9 @@ var (
 )
 
 // ValidatePassword checks password complexity requirements.
-// Requires: minimum 8 chars, at least one uppercase, one lowercase, one digit, and one special character.
+// Requires: minimum 12 chars, at least one uppercase, one lowercase, one digit, and one special character.
 func ValidatePassword(password string) error {
-	if len(password) < 8 {
+	if len(password) < 12 {
 		return ErrPasswordTooShort
 	}
 	var hasUpper, hasLower, hasDigit, hasSpecial bool

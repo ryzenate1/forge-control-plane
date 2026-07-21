@@ -16,6 +16,7 @@ import (
 	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/services/activity"
 	"gamepanel/forge/internal/services/clustermanager"
+	"gamepanel/forge/internal/services/migration"
 	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/store"
 
@@ -595,7 +596,32 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/servers/:id/transfer", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), legacyServerTransferUnavailable)
+	protected.Post("/servers/:id/transfer", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.MigrationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
+		}
+		var req TransferServerRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.TargetNodeID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "targetNodeId is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		m, err := cfg.MigrationService.CreateMigration(ctx, migration.CreateMigrationRequest{
+			ServerID:     c.Params("id"),
+			TargetNodeID: req.TargetNodeID,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		executed, err := cfg.MigrationService.ExecuteMigration(ctx, m.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		return c.Status(fiber.StatusAccepted).JSON(executed)
+	})
 
 	protected.Get("/servers/:id/transfer", requireServerPermission(cfg, store.PermSettingsRename), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -615,7 +641,36 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		})
 	})
 
-	protected.Post("/servers/:id/transfer/cancel", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), legacyServerTransferUnavailable)
+	protected.Post("/servers/:id/transfer/cancel", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.MigrationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
+		}
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		migrations, err := cfg.MigrationService.ListMigrations(ctx)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		var active *store.Migration
+		for _, m := range migrations {
+			if m.ServerID == c.Params("id") && m.Status != string(store.MigrationStatusCompleted) && m.Status != string(store.MigrationStatusFailed) && m.Status != string(store.MigrationStatusCancelled) {
+				cp := m
+				active = &cp
+				break
+			}
+		}
+		if active == nil {
+			return fiber.NewError(fiber.StatusNotFound, "no active transfer found for this server")
+		}
+		cancelled, err := cfg.MigrationService.CancelMigration(ctx, active.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		return c.JSON(cancelled)
+	})
 
 	protected.Post("/servers", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
 		var req CreateServerRequest
@@ -734,6 +789,25 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if err := checkServerPermission(c, cfg, requiredPermission); err != nil {
 				return err
 			}
+			idempotencyKey := strings.TrimSpace(c.Get("Idempotency-Key"))
+			if idempotencyKey != "" {
+				idempotencyKey = "power:" + c.Params("id") + ":" + req.Signal + ":" + idempotencyKey
+			}
+			ctx, cancel := requestContext()
+			defer cancel()
+			if cfg.OperationService != nil {
+				op, err := cfg.OperationService.DispatchPower(ctx, c.Params("id"), req.Signal, idempotencyKey)
+				if err != nil {
+					return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+				}
+				return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+					"serverId":    c.Params("id"),
+					"signal":      req.Signal,
+					"accepted":    true,
+					"mode":        "durable",
+					"operationId": op.ID,
+				})
+			}
 			if cfg.QueueService == nil {
 				return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
 			}
@@ -746,12 +820,6 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			case "kill":
 				jobType = queue.JobServerKill
 			}
-			idempotencyKey := strings.TrimSpace(c.Get("Idempotency-Key"))
-			if idempotencyKey != "" {
-				idempotencyKey = "power:" + c.Params("id") + ":" + req.Signal + ":" + idempotencyKey
-			}
-			ctx, cancel := requestContext()
-			defer cancel()
 			job, err := cfg.QueueService.DispatchIdempotent(ctx, idempotencyKey, jobType, c.Params("id"), "", map[string]any{"signal": req.Signal}, 100)
 			if err != nil {
 				return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
@@ -769,11 +837,21 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	})
 
 	protected.Get("/operations/:id", func(c *fiber.Ctx) error {
+		ctx, cancel := requestContext()
+		defer cancel()
+		if cfg.OperationService != nil {
+			op, err := cfg.OperationService.Get(ctx, c.Params("id"))
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			}
+			if op == nil {
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			return c.JSON(op)
+		}
 		if cfg.QueueService == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
 		}
-		ctx, cancel := requestContext()
-		defer cancel()
 		job, err := cfg.QueueService.Get(ctx, c.Params("id"))
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
@@ -1650,7 +1728,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 		}
 		var req struct {
-			IgnoredFiles []string `json:"ignored_files"`
+			IgnoredFiles []string `json:"ignored"`
 		}
 		_ = c.BodyParser(&req)
 
@@ -3058,8 +3136,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		var req struct {
-			AutoStart   *bool `json:"auto_start"`
-			AutoRestart *bool `json:"auto_restart"`
+			AutoStart   *bool `json:"autoStart"`
+			AutoRestart *bool `json:"autoRestart"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")

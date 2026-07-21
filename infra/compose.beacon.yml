@@ -1,11 +1,32 @@
 # Standalone game-node deployment. Copy the repository and a node-specific
 # .env to each Ubuntu game VPS, then run:
 # docker compose -f compose.beacon.yml --env-file .env up -d --build
+#
+# ╔══════════════════════════════════════════════════════════════════╗
+# ║  SFTP SECURITY NOTICE                                           ║
+# ║  This service uses `network_mode: host`, so containers bind     ║
+# ║  directly to the host network stack.  The SFTP server listens   ║
+# ║  on DAEMON_SFTP_ADDR (default :2022) — on a host-network node   ║
+# ║  this means 0.0.0.0:2022 unless you override the bind address.  ║
+# ║                                                                ║
+# ║  To restrict SFTP to loopback-only, set:                        ║
+# ║    DAEMON_SFTP_BIND_ADDR=127.0.0.1:2022                         ║
+# ║  This env var controls the low-level bind; DAEMON_SFTP_ADDR     ║
+# ║  controls the address the daemon *advertises* in its API.       ║
+# ║  In production, keep SFTP bound to localhost and proxy through  ║
+# ║  nginx's stream module (see nginx.conf) or an SSH tunnel.       ║
+# ╚══════════════════════════════════════════════════════════════════╝
 services:
   beacon:
     build:
       context: ../beacon
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/daemon", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
     network_mode: host
     env_file:
       - path: .env
@@ -14,6 +35,7 @@ services:
       APP_ENV: production
       DAEMON_ADDR: ${DAEMON_ADDR:-:9090}
       DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-:2022}
+      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-127.0.0.1:2022}
       DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
       DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set the panel node UUID}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set the panel-issued node credential}"

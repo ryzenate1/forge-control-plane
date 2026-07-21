@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useTenancyStore } from '@/stores/use-tenancy-store';
+import { fetchOrganizations, createOrganization } from '@/lib/api/tenancy';
 import type { Organization } from '@/lib/api/tenancy';
 
 export default function OrganizationsPage() {
@@ -20,12 +21,10 @@ export default function OrganizationsPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/v1/organizations', { credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
-      const data = await res.json();
+      const data = await fetchOrganizations();
       setOrganizations(data);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -38,17 +37,10 @@ export default function OrganizationsPage() {
     if (!name.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch('/api/v1/organizations', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), slug: slug.trim() || undefined }),
-      });
-      if (!res.ok) throw new Error(await res.text());
-      const org = await res.json();
+      const org = await createOrganization(name.trim(), slug.trim() || undefined);
       router.push(`/organizations/${org.slug}`);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setCreating(false);
     }

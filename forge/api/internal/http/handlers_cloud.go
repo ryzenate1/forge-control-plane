@@ -85,7 +85,7 @@ func registerCloudRoutes(protected fiber.Router, cfg Config, svc *cloud.Manager,
 		}
 		if strings.TrimSpace(req.NodeID) != "" {
 			if cfg.Store == nil {
-				return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required to link a cloud instance to a node")
+				return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 			}
 			if _, err := cfg.Store.GetNode(c.Context(), req.NodeID); err != nil {
 				return fiber.NewError(fiber.StatusBadRequest, "node not found")

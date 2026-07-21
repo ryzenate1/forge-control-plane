@@ -2,13 +2,19 @@ package compose
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"gamepanel/forge/internal/daemon"
+	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/events"
+	"gamepanel/forge/internal/services/reservations"
+	scheduler2 "gamepanel/forge/internal/services/scheduler"
 	"gamepanel/forge/internal/store"
 
 	"github.com/google/uuid"
@@ -17,11 +23,12 @@ import (
 type StackStatus string
 
 const (
-	StackStatusDeploying   StackStatus = "deploying"
-	StackStatusRunning     StackStatus = "running"
-	StackStatusStopped     StackStatus = "stopped"
-	StackStatusDegraded    StackStatus = "degraded"
-	StackStatusUpdating    StackStatus = "updating"
+	StackStatusDeploying      StackStatus = "deploying"
+	StackStatusAwaitingHealth StackStatus = "awaiting_health"
+	StackStatusRunning        StackStatus = "running"
+	StackStatusStopped        StackStatus = "stopped"
+	StackStatusDegraded       StackStatus = "degraded"
+	StackStatusUpdating       StackStatus = "updating"
 	StackStatusRollingBack StackStatus = "rolling_back"
 	StackStatusDeleting    StackStatus = "deleting"
 	StackStatusDeleted     StackStatus = "deleted"
@@ -29,32 +36,64 @@ const (
 )
 
 type ComposeStack struct {
-	ID           string     `json:"id"`
-	UserID       string     `json:"userId"`
-	Name         string     `json:"name"`
-	NodeID       string     `json:"nodeId"`
-	Status       StackStatus `json:"status"`
-	ComposeYAML  string     `json:"composeYaml"`
-	ComposeHash  string     `json:"composeHash"`
-	EnvVars      map[string]string `json:"envVars,omitempty"`
-	MemoryMB     int64      `json:"memoryMb"`
-	CPUShares    int64      `json:"cpuShares"`
-	DiskMB       int64      `json:"diskMb"`
-	Error        string     `json:"error,omitempty"`
-	ReservationID string    `json:"reservationId,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	UpdatedAt    time.Time  `json:"updatedAt"`
+	ID            string            `json:"id"`
+	UserID        string            `json:"userId"`
+	Name          string            `json:"name"`
+	NodeID        string            `json:"nodeId"`
+	Status        StackStatus       `json:"status"`
+	ComposeYAML   string            `json:"composeYaml"`
+	ComposeHash   string            `json:"composeHash"`
+	EnvVars       map[string]string `json:"envVars,omitempty"`
+	MemoryMB      int64             `json:"memoryMb"`
+	CPUShares     int64             `json:"cpuShares"`
+	DiskMB        int64             `json:"diskMb"`
+	Error         string            `json:"error,omitempty"`
+	ReservationID string            `json:"reservationId,omitempty"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
+
+	GitSourceID          string     `json:"gitSourceId,omitempty"`
+	GitRepositoryURL     string     `json:"gitRepositoryUrl,omitempty"`
+	GitRepositoryPath    string     `json:"gitRepositoryPath,omitempty"`
+	ComposePath          string     `json:"composePath,omitempty"`
+	GitBranch            string     `json:"gitBranch,omitempty"`
+	GitCommitSHA         string     `json:"gitCommitSha,omitempty"`
+	GitDesiredCommitSHA  string     `json:"gitDesiredCommitSha,omitempty"`
+	GitPreviousCommitSHA string           `json:"gitPreviousCommitSha,omitempty"`
+	GitPreviousCompose   string           `json:"gitPreviousCompose,omitempty"`
+	GitPreviousManifest  *json.RawMessage `json:"gitPreviousManifest,omitempty"`
+	GitAutoUpdate        bool             `json:"gitAutoUpdate"`
+	GitPollIntervalSec   int        `json:"gitPollIntervalSec,omitempty"`
+	GitWebhookSecret     string     `json:"-"`
+	GitWebhookID         string     `json:"gitWebhookId,omitempty"`
+	GitLastWebhookAt     *time.Time `json:"gitLastWebhookAt,omitempty"`
+	GitUpdateStatus      string     `json:"gitUpdateStatus,omitempty"`
+	GitUpdateError       string     `json:"gitUpdateError,omitempty"`
+	GitReconcileMode     string     `json:"gitReconcileMode,omitempty"`
+	GitFailedSHA         string     `json:"gitFailedSha,omitempty"`
+	GitNextPollAt        *time.Time `json:"gitNextPollAt,omitempty"`
+	GitCredentialID      string     `json:"gitCredentialId,omitempty"`
+	GitUpdateClaimedBy   *string    `json:"-"`
+	GitUpdateClaimedAt   *time.Time `json:"-"`
+	GitLastDeliveryID    string     `json:"-"`
+
+	ComposeType   string `json:"composeType"`
+	SourceType    string `json:"sourceType"`
+	EnvironmentID string `json:"environmentId,omitempty"`
 }
 
 type DeployComposeRequest struct {
-	UserID      string            `json:"userId"`
-	Name        string            `json:"name"`
-	NodeID      string            `json:"nodeId"`
-	ComposeYAML string            `json:"composeYaml"`
-	EnvVars     map[string]string `json:"envVars,omitempty"`
-	MemoryMB    int64             `json:"memoryMb"`
-	CPUShares   int64             `json:"cpuShares"`
-	DiskMB      int64             `json:"diskMb"`
+	UserID        string            `json:"userId"`
+	Name          string            `json:"name"`
+	NodeID        string            `json:"nodeId"`
+	ComposeYAML   string            `json:"composeYaml"`
+	EnvVars       map[string]string `json:"envVars,omitempty"`
+	MemoryMB      int64             `json:"memoryMb"`
+	CPUShares     int64             `json:"cpuShares"`
+	DiskMB        int64             `json:"diskMb"`
+	ComposeType   string            `json:"composeType"`
+	SourceType    string            `json:"sourceType"`
+	EnvironmentID string            `json:"environmentId,omitempty"`
 }
 
 type UpdateComposeRequest struct {
@@ -84,8 +123,10 @@ type StackLogsResponse struct {
 }
 
 type Service struct {
-	store     *store.Store
-	publisher events.Publisher
+	store        *store.Store
+	publisher    events.Publisher
+	reservations *reservations.Manager
+	scheduler    *scheduler2.Scheduler
 }
 
 var (
@@ -96,7 +137,10 @@ var (
 	ErrReservationFailed = errors.New("resource reservation failed")
 )
 
-func New(store *store.Store, publishers ...events.Publisher) *Service {
+func New(store *store.Store, publishers ...events.Publisher) (*Service, error) {
+	if store == nil {
+		return nil, errors.New("store required")
+	}
 	var publisher events.Publisher
 	if len(publishers) > 0 {
 		publisher = publishers[0]
@@ -104,7 +148,17 @@ func New(store *store.Store, publishers ...events.Publisher) *Service {
 	return &Service{
 		store:     store,
 		publisher: publisher,
-	}
+	}, nil
+}
+
+func (s *Service) WithReservationManager(mgr *reservations.Manager) *Service {
+	s.reservations = mgr
+	return s
+}
+
+func (s *Service) WithScheduler(sched *scheduler2.Scheduler) *Service {
+	s.scheduler = sched
+	return s
 }
 
 func (s *Service) getClient() *daemon.Client {
@@ -113,6 +167,67 @@ func (s *Service) getClient() *daemon.Client {
 
 func (s *Service) createStackID() string {
 	return "cps-" + uuid.NewString()[:12]
+}
+
+func (s *Service) WaitForHealthy(ctx context.Context, stackID string, nodeBaseURL string, nodeCredential string, timeout time.Duration) error {
+	client := s.getClient()
+	deadline := time.After(timeout)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
+	prevRestarts := make(map[string]int)
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return fmt.Errorf("health check timed out after %s", timeout)
+		case <-ticker.C:
+			statusResp, err := client.ComposeStatus(ctx, nodeBaseURL, nodeCredential, stackID)
+			if err != nil {
+				continue
+			}
+			if len(statusResp.Services) == 0 {
+				continue
+			}
+			allHealthy := true
+			restarts := make(map[string]int)
+			for _, svc := range statusResp.Services {
+				state := strings.ToLower(strings.TrimSpace(svc.State))
+				status := strings.ToLower(strings.TrimSpace(svc.Status))
+				if state != "running" && status != "up" {
+					allHealthy = false
+					break
+				}
+				restartCount := extractRestartCount(svc.Status)
+				restarts[svc.Name] = restartCount
+				prevRestart, exists := prevRestarts[svc.Name]
+				if exists && restartCount > prevRestart+1 {
+					allHealthy = false
+					break
+				}
+			}
+			prevRestarts = restarts
+			if allHealthy {
+				return nil
+			}
+		}
+	}
+}
+
+func extractRestartCount(status string) int {
+	for _, part := range strings.Split(status, ",") {
+		part = strings.TrimSpace(part)
+		if strings.Contains(part, "restart") {
+			for _, token := range strings.Fields(part) {
+				n := 0
+				fmt.Sscanf(token, "%d", &n)
+				if n > 0 {
+					return n
+				}
+			}
+		}
+	}
+	return 0
 }
 
 func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeRequest) (*ComposeStack, error) {
@@ -125,8 +240,22 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 
 	hash := computeHash(req.ComposeYAML)
 
+	var decision domain.PlacementDecision
+	var placeErr error
 	if req.NodeID == "" {
-		return nil, errors.New("node selection is required for compose deployment")
+		if s.scheduler == nil {
+			return nil, errors.New("node selection is required for compose deployment")
+		}
+		decision, placeErr = s.scheduler.PlaceServer(ctx, domain.PlacementRequest{
+			CPU:       int(req.CPUShares),
+			MemoryMB:  int(req.MemoryMB),
+			DiskMB:    int(req.DiskMB),
+			RegionID:  "",
+		})
+		if placeErr != nil {
+			return nil, fmt.Errorf("scheduler node selection failed: %w", placeErr)
+		}
+		req.NodeID = decision.NodeID
 	}
 
 	node, err := s.store.GetNode(ctx, req.NodeID)
@@ -139,20 +268,54 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 		return nil, fmt.Errorf("node credential not found: %w", err)
 	}
 
-	reservation, err := s.store.CreatePlacementReservation(ctx, store.CreatePlacementReservationRequest{
-		NodeID:          req.NodeID,
-		CPU:             int(req.CPUShares / 100),
-		Memory:          req.MemoryMB,
-		Disk:            req.DiskMB,
-		ReservationType: store.PlacementReservationTypePlacement,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrReservationFailed, err)
+	reservationID := decision.ReservationID
+	var reservation store.PlacementReservation
+	if reservationID == "" {
+		if s.reservations != nil {
+			reservation, err = s.reservations.CreateReservation(ctx, store.CreatePlacementReservationRequest{
+				NodeID:          req.NodeID,
+				CPU:             int(req.CPUShares / 100),
+				Memory:          req.MemoryMB,
+				Disk:            req.DiskMB,
+				ReservationType: store.PlacementReservationTypePlacement,
+			})
+		} else {
+			reservation, err = s.store.CreatePlacementReservation(ctx, store.CreatePlacementReservationRequest{
+				NodeID:          req.NodeID,
+				CPU:             int(req.CPUShares / 100),
+				Memory:          req.MemoryMB,
+				Disk:            req.DiskMB,
+				ReservationType: store.PlacementReservationTypePlacement,
+			})
+		}
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrReservationFailed, err)
+		}
+		reservationID = reservation.ID
+		decision.ReservationID = reservationID
+	} else if s.reservations != nil {
+		reservation, err = s.reservations.GetReservation(ctx, reservationID)
+		if err != nil {
+			return nil, fmt.Errorf("get reservation: %w", err)
+		}
+	} else {
+		reservation, err = s.store.GetPlacementReservation(ctx, reservationID)
+		if err != nil {
+			return nil, fmt.Errorf("get reservation: %w", err)
+		}
 	}
 
 	stackID := s.createStackID()
 	now := time.Now().UTC()
 
+	composeType := req.ComposeType
+	if composeType == "" {
+		composeType = "docker-compose"
+	}
+	sourceType := req.SourceType
+	if sourceType == "" {
+		sourceType = "raw"
+	}
 	stack := &ComposeStack{
 		ID:            stackID,
 		UserID:        req.UserID,
@@ -165,13 +328,16 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 		MemoryMB:      req.MemoryMB,
 		CPUShares:     req.CPUShares,
 		DiskMB:        req.DiskMB,
-		ReservationID: reservation.ID,
+		ReservationID: reservationID,
 		CreatedAt:     now,
 		UpdatedAt:     now,
+		ComposeType:   composeType,
+		SourceType:    sourceType,
+		EnvironmentID: req.EnvironmentID,
 	}
 
 	if err := s.store.CreateComposeStack(ctx, toStoreComposeStack(stack)); err != nil {
-		_, _ = s.store.UpdatePlacementReservationStatus(ctx, reservation.ID, store.PlacementReservationStatusCancelled)
+		s.cancelReservation(ctx, reservationID)
 		return nil, fmt.Errorf("create compose stack record: %w", err)
 	}
 
@@ -183,25 +349,53 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 	})
 
 	if err != nil {
+		s.cancelReservation(ctx, reservationID)
 		s.markFailed(ctx, stack, err.Error())
 		return nil, fmt.Errorf("compose deploy to node: %w", err)
 	}
 
 	_ = deployResp
 
-	stack.Status = StackStatusRunning
+	stack.Status = StackStatusAwaitingHealth
 	stack.UpdatedAt = time.Now().UTC()
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
 
-	_, _ = s.store.UpdatePlacementReservationStatus(ctx, reservation.ID, store.PlacementReservationStatusCompleted)
+	s.confirmReservation(ctx, reservationID)
+
+	if err := s.WaitForHealthy(ctx, stackID, node.BaseURL, nodeCredential, 2*time.Minute); err != nil {
+		stack.Status = StackStatusDegraded
+		stack.Error = "health check failed: " + err.Error()
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	} else {
+		stack.Status = StackStatusRunning
+		stack.Error = ""
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	}
 
 	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, events.NewEnvelope("compose_stack_deployed", "compose", "stack", stackID, map[string]any{
+		_ = s.publisher.Publish(ctx, events.NewEnvelope(events.EventComposeDeployed, "compose", "stack", stackID, map[string]any{
 			"name": req.Name, "nodeId": req.NodeID,
 		}))
 	}
-
 	return stack, nil
+}
+
+func (s *Service) cancelReservation(ctx context.Context, reservationID string) {
+	if s.reservations != nil {
+		_, _ = s.reservations.CancelReservation(ctx, reservationID)
+	} else {
+		_, _ = s.store.UpdatePlacementReservationStatus(ctx, reservationID, store.PlacementReservationStatusCancelled)
+	}
+}
+
+func (s *Service) confirmReservation(ctx context.Context, reservationID string) {
+	if s.reservations != nil {
+		_, _ = s.reservations.ConfirmReservation(ctx, reservationID)
+	} else {
+		_, _ = s.store.UpdatePlacementReservationStatus(ctx, reservationID, store.PlacementReservationStatusCompleted)
+	}
 }
 
 func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req UpdateComposeRequest) (*ComposeStack, error) {
@@ -257,20 +451,6 @@ func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req Up
 
 	client := s.getClient()
 
-	stopResp, stopErr := client.ComposeStop(ctx, node.BaseURL, nodeCredential, stackID)
-	if stopErr != nil {
-		s.rollbackStack(ctx, stack, rollbackYAML, rollbackHash, rollbackEnv)
-		return nil, fmt.Errorf("stop stack for update: %w", stopErr)
-	}
-	_ = stopResp
-
-	deleteResp, delErr := client.ComposeDelete(ctx, node.BaseURL, nodeCredential, stackID)
-	if delErr != nil && !isNotFoundError(delErr) {
-		s.rollbackStack(ctx, stack, rollbackYAML, rollbackHash, rollbackEnv)
-		return nil, fmt.Errorf("delete old stack for update: %w", delErr)
-	}
-	_ = deleteResp
-
 	deployResp, deployErr := client.ComposeDeploy(ctx, node.BaseURL, nodeCredential, daemon.ComposeDeployRequest{
 		StackID:     stackID,
 		ComposeYAML: req.ComposeYAML,
@@ -281,14 +461,26 @@ func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req Up
 		return nil, fmt.Errorf("deploy updated stack: %w", deployErr)
 	}
 
-	stack.Status = StackStatusRunning
+	stack.Status = StackStatusAwaitingHealth
 	stack.Error = ""
 	stack.UpdatedAt = time.Now().UTC()
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
 	_ = deployResp
 
+	if err := s.WaitForHealthy(ctx, stackID, node.BaseURL, nodeCredential, 2*time.Minute); err != nil {
+		stack.Status = StackStatusDegraded
+		stack.Error = "health check failed: " + err.Error()
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	} else {
+		stack.Status = StackStatusRunning
+		stack.Error = ""
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	}
+
 	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, events.NewEnvelope("compose_stack_updated", "compose", "stack", stackID, map[string]any{
+		_ = s.publisher.Publish(ctx, events.NewEnvelope(events.EventComposeUpdated, "compose", "stack", stackID, map[string]any{
 			"nodeId": stack.NodeID,
 		}))
 	}
@@ -334,7 +526,7 @@ func (s *Service) DeleteComposeStack(ctx context.Context, stackID string) error 
 	}
 
 	if stack.ReservationID != "" {
-		_, _ = s.store.UpdatePlacementReservationStatus(ctx, stack.ReservationID, store.PlacementReservationStatusExpired)
+		s.cancelReservation(ctx, stack.ReservationID)
 	}
 
 	stack.Status = StackStatusDeleted
@@ -343,7 +535,7 @@ func (s *Service) DeleteComposeStack(ctx context.Context, stackID string) error 
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
 
 	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, events.NewEnvelope("compose_stack_deleted", "compose", "stack", stackID, map[string]any{
+		_ = s.publisher.Publish(ctx, events.NewEnvelope(events.EventComposeDeleted, "compose", "stack", stackID, map[string]any{
 			"nodeId": stack.NodeID,
 		}))
 	}
@@ -452,9 +644,21 @@ func (s *Service) StartStack(ctx context.Context, stackID string) (*ComposeStack
 		return nil, fmt.Errorf("start compose stack: %w", startErr)
 	}
 
-	stack.Status = StackStatusRunning
+	stack.Status = StackStatusAwaitingHealth
 	stack.UpdatedAt = time.Now().UTC()
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+
+	if err := s.WaitForHealthy(ctx, stackID, node.BaseURL, nodeCredential, 2*time.Minute); err != nil {
+		stack.Status = StackStatusDegraded
+		stack.Error = "health check failed: " + err.Error()
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	} else {
+		stack.Status = StackStatusRunning
+		stack.Error = ""
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+	}
 
 	return stack, nil
 }
@@ -466,7 +670,7 @@ func (s *Service) StopStack(ctx context.Context, stackID string) (*ComposeStack,
 	}
 
 	stack := fromStoreComposeStack(existing)
-	if stack.Status != StackStatusRunning && stack.Status != StackStatusDegraded {
+	if stack.Status != StackStatusRunning {
 		return nil, ErrStackNotRunnable
 	}
 
@@ -592,8 +796,18 @@ func (s *Service) rollbackStack(ctx context.Context, stack *ComposeStack, yaml, 
 		return
 	}
 
-	stack.Status = StackStatusRunning
+	stack.Status = StackStatusAwaitingHealth
 	stack.Error = "rolled back after update failure"
+	stack.UpdatedAt = time.Now().UTC()
+	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+
+	if err := s.WaitForHealthy(ctx, stack.ID, node.BaseURL, nodeCredential, 2*time.Minute); err != nil {
+		stack.Status = StackStatusDegraded
+		stack.Error = "rollback health check failed: " + err.Error()
+	} else {
+		stack.Status = StackStatusRunning
+		stack.Error = "rolled back after update failure"
+	}
 	stack.UpdatedAt = time.Now().UTC()
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
 }
@@ -615,6 +829,33 @@ func toStoreComposeStack(s *ComposeStack) *store.ComposeStack {
 		ReservationID: s.ReservationID,
 		CreatedAt:     s.CreatedAt,
 		UpdatedAt:     s.UpdatedAt,
+		GitSourceID:   s.GitSourceID,
+		GitRepositoryURL: s.GitRepositoryURL,
+		GitRepositoryPath: s.GitRepositoryPath,
+		ComposePath:   s.ComposePath,
+		GitBranch:     s.GitBranch,
+		GitCommitSHA:  s.GitCommitSHA,
+		GitDesiredCommitSHA: s.GitDesiredCommitSHA,
+		GitPreviousCommitSHA: s.GitPreviousCommitSHA,
+		GitPreviousCompose: s.GitPreviousCompose,
+		GitPreviousManifest: s.GitPreviousManifest,
+		GitAutoUpdate: s.GitAutoUpdate,
+		GitPollIntervalSec: s.GitPollIntervalSec,
+		GitWebhookSecret: s.GitWebhookSecret,
+		GitWebhookID:  s.GitWebhookID,
+		GitLastWebhookAt: s.GitLastWebhookAt,
+		GitUpdateStatus: s.GitUpdateStatus,
+		GitUpdateError: s.GitUpdateError,
+		GitReconcileMode: s.GitReconcileMode,
+		GitFailedSHA: s.GitFailedSHA,
+		GitNextPollAt: s.GitNextPollAt,
+		GitCredentialID: s.GitCredentialID,
+		GitUpdateClaimedBy: s.GitUpdateClaimedBy,
+		GitUpdateClaimedAt: s.GitUpdateClaimedAt,
+		GitLastDeliveryID: s.GitLastDeliveryID,
+		ComposeType:   s.ComposeType,
+		SourceType:    s.SourceType,
+		EnvironmentID: s.EnvironmentID,
 	}
 }
 
@@ -635,17 +876,39 @@ func fromStoreComposeStack(s store.ComposeStack) *ComposeStack {
 		ReservationID: s.ReservationID,
 		CreatedAt:     s.CreatedAt,
 		UpdatedAt:     s.UpdatedAt,
+		GitSourceID:   s.GitSourceID,
+		GitRepositoryURL: s.GitRepositoryURL,
+		GitRepositoryPath: s.GitRepositoryPath,
+		ComposePath:   s.ComposePath,
+		GitBranch:     s.GitBranch,
+		GitCommitSHA:  s.GitCommitSHA,
+		GitDesiredCommitSHA: s.GitDesiredCommitSHA,
+		GitPreviousCommitSHA: s.GitPreviousCommitSHA,
+		GitPreviousCompose: s.GitPreviousCompose,
+		GitPreviousManifest: s.GitPreviousManifest,
+		GitAutoUpdate: s.GitAutoUpdate,
+		GitPollIntervalSec: s.GitPollIntervalSec,
+		GitWebhookSecret: s.GitWebhookSecret,
+		GitWebhookID:  s.GitWebhookID,
+		GitLastWebhookAt: s.GitLastWebhookAt,
+		GitUpdateStatus: s.GitUpdateStatus,
+		GitUpdateError: s.GitUpdateError,
+		GitReconcileMode: s.GitReconcileMode,
+		GitFailedSHA: s.GitFailedSHA,
+		GitNextPollAt: s.GitNextPollAt,
+		GitCredentialID: s.GitCredentialID,
+		GitUpdateClaimedBy: s.GitUpdateClaimedBy,
+		GitUpdateClaimedAt: s.GitUpdateClaimedAt,
+		GitLastDeliveryID: s.GitLastDeliveryID,
+		ComposeType:   s.ComposeType,
+		SourceType:    s.SourceType,
+		EnvironmentID: s.EnvironmentID,
 	}
 }
 
 func computeHash(yaml string) string {
-	// Simple FNV-like hash for config change detection
-	h := uint64(14695981039346656037)
-	for i := 0; i < len(yaml); i++ {
-		h ^= uint64(yaml[i])
-		h *= 1099511628211
-	}
-	return fmt.Sprintf("%x", h)
+	h := sha256.Sum256([]byte(yaml))
+	return hex.EncodeToString(h[:])
 }
 
 func mapsEqual(a, b map[string]string) bool {

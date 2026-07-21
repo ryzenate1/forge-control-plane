@@ -1,0 +1,124 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "minecraft-vanilla",
+  "name": "Minecraft (Vanilla)",
+  "description": "Official vanilla Minecraft server from Mojang. Pure, unmodified gameplay experience with automatic version detection and download.",
+  "version": "1.0.0",
+  "game": "Minecraft",
+  "author": "GamePanel",
+  "update_url": "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json",
+  "image": "ghcr.io/pterodactyl/yolks:java_21",
+  "images": {
+    "Java 21": "ghcr.io/pterodactyl/yolks:java_21",
+    "Java 17": "ghcr.io/pterodactyl/yolks:java_17"
+  },
+  "startup": "java -Xms128M -XX:MaxRAMPercentage=95.0 -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
+  "config": {
+    "files": {
+      "server.properties": {
+        "parser": "properties",
+        "find": {
+          "server-ip": "0.0.0.0",
+          "server-port": "{{server.build.default.port}}",
+          "query.port": "{{server.build.default.port}}"
+        }
+      }
+    },
+    "startup": {
+      "done": ")! For help, type \""
+    },
+    "stop": "stop",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 25565,
+      "protocol": "tcp",
+      "public": true,
+      "description": "Minecraft game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Minecraft Version",
+      "env_variable": "MINECRAFT_VERSION",
+      "description": "Minecraft version to download. Set to 'latest' for the most recent release.",
+      "default_value": "latest",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:20"
+    },
+    {
+      "name": "Server Jar File",
+      "env_variable": "SERVER_JARFILE",
+      "description": "File name for the server jar. Must end with .jar.",
+      "default_value": "server.jar",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^([\\w\\d._-]+)(\\.jar)$/"
+    },
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the Minecraft server list.",
+      "default_value": "A GamePanel Minecraft Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:60"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "20",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:100"
+    },
+    {
+      "name": "Difficulty",
+      "env_variable": "DIFFICULTY",
+      "description": "Game difficulty level.",
+      "default_value": "easy",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:easy,normal,hard,peaceful"
+    },
+    {
+      "name": "Gamemode",
+      "env_variable": "GAMEMODE",
+      "description": "Default game mode for new players.",
+      "default_value": "survival",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:survival,creative,adventure,spectator"
+    },
+    {
+      "name": "Download Path",
+      "env_variable": "DL_PATH",
+      "description": "Override download URL for the server jar. Internal use only.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "nullable|string"
+    }
+  ],
+  "resources": {
+    "cpu": 100,
+    "memory_mb": 1024,
+    "memory_max_mb": 6144,
+    "disk_mb": 5120,
+    "cpu_shares": 512,
+    "io_weight": 500,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:alpine",
+    "entrypoint": "ash",
+    "script": "#!/bin/ash\n# Vanilla Minecraft Installation Script\n# Server Files: /mnt/server\n\nUSER_AGENT=\"GamePanel (https://gamepanel.io)\"\n\nif [ -n \"${DL_PATH}\" ]; then\n    echo \"Using supplied download url: ${DL_PATH}\"\n    DOWNLOAD_URL=$(eval echo $(echo ${DL_PATH} | sed -e 's/{{/${/g' -e 's/}}/}/g'))\nelse\n    MANIFEST_URL=\"https://launchermeta.mojang.com/mc/game/version_manifest_v2.json\"\n    MANIFEST=$(curl --user-agent \"${USER_AGENT}\" -s \"${MANIFEST_URL}\")\n\n    if [ \"${MINECRAFT_VERSION}\" = \"latest\" ]; then\n        MINECRAFT_VERSION=$(echo \"${MANIFEST}\" | jq -r '.latest.release')\n    fi\n\n    VERSION_DATA=$(echo \"${MANIFEST}\" | jq -r --arg VER \"${MINECRAFT_VERSION}\" '.versions[] | select(.id == $VER) | .url')\n    if [ -z \"${VERSION_DATA}\" ]; then\n        echo \"Version ${MINECRAFT_VERSION} not found. Using latest release.\"\n        MINECRAFT_VERSION=$(echo \"${MANIFEST}\" | jq -r '.latest.release')\n        VERSION_DATA=$(echo \"${MANIFEST}\" | jq -r --arg VER \"${MINECRAFT_VERSION}\" '.versions[] | select(.id == $VER) | .url')\n    fi\n\n    echo \"Downloading Minecraft server version ${MINECRAFT_VERSION}\"\n    DOWNLOAD_URL=$(curl --user-agent \"${USER_AGENT}\" -s \"${VERSION_DATA}\" | jq -r '.downloads.server.url')\nfi\n\ncd /mnt/server\ncurl --user-agent \"${USER_AGENT}\" -o ${SERVER_JARFILE} -L \"${DOWNLOAD_URL}\"\necho \"Download complete. Downloaded Minecraft ${MINECRAFT_VERSION}.\"\n\necho \"Accepting EULA...\"\necho \"eula=true\" > eula.txt"
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "sandbox", "building"],
+  "file_denylist": [],
+  "features": ["eula", "java_version", "pid_limit"]
+}

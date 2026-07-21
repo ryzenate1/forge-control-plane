@@ -42,7 +42,7 @@ volumes:
   pgdata:
     driver: local
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Equal(t, "3.8", parsed.Version)
@@ -88,7 +88,7 @@ services:
     ports:
       - "3000:3000"
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -109,7 +109,7 @@ services:
     ports:
       - "8080:80"
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.False(t, result.Valid)
 	require.NotEmpty(t, result.Errors)
@@ -133,7 +133,7 @@ volumes:
   vol1:
     driver: local
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.False(t, result.Valid)
 	require.NotEmpty(t, result.Errors)
@@ -142,7 +142,7 @@ volumes:
 }
 
 func TestA1_ValidateEmptyYAML(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(""), "/app")
 	assert.False(t, result.Valid)
 	require.NotEmpty(t, result.Errors)
@@ -150,7 +150,7 @@ func TestA1_ValidateEmptyYAML(t *testing.T) {
 }
 
 func TestA1_ValidateMalformedYAML(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(`services: [[malformed`), "/app")
 	assert.False(t, result.Valid)
 	require.NotEmpty(t, result.Errors)
@@ -170,7 +170,7 @@ services:
   app:
     image: myapp:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -187,7 +187,7 @@ services:
   web:
     image: nginx:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -212,7 +212,7 @@ services:
   redis:
     image: redis:7
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 3)
@@ -243,7 +243,7 @@ services:
     environment:
       DB_HOST: ${DB_HOST}
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -251,8 +251,9 @@ services:
 }
 
 func TestA1_EnvInterpolationDefaultValues(t *testing.T) {
-	os.Setenv("DEFINED_VAR", "resolved-value")
-	defer os.Unsetenv("DEFINED_VAR")
+	envVars := map[string]string{
+		"DEFINED_VAR": "resolved-value",
+	}
 
 	content := `
 services:
@@ -261,8 +262,8 @@ services:
     environment:
       LOG_LEVEL: ${ENV_LOG_LEVEL:-info}
 `
-	svc := New(nil)
-	parsed, err := svc.Parse([]byte(content), "/app")
+	svc, _ := New(nil)
+	parsed, err := svc.ParseComposeYAML([]byte(content), "/app", envVars)
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
 	assert.Equal(t, "resolved-value:latest", parsed.Services[0].Image)
@@ -281,7 +282,7 @@ services:
       - "0.0.0.0:443:443"
       - 9090.0
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -303,7 +304,7 @@ services:
       INT: 42
       BOOL: "true"
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -323,7 +324,7 @@ services:
       - KEY2=VALUE2
       - KEY3
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -346,7 +347,7 @@ services:
         target: /container/config
         read_only: true
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -374,7 +375,7 @@ services:
       - db
       - redis
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -392,7 +393,7 @@ services:
       redis:
         condition: service_started
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -409,7 +410,7 @@ services:
       context: ./backend
       dockerfile: Dockerfile
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/home/project")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -434,7 +435,7 @@ services:
       - monitoring
       - production
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 3)
@@ -471,7 +472,7 @@ services:
   app:
     image: myapp:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -487,7 +488,7 @@ services:
   web:
     image: nginx:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -509,7 +510,7 @@ secrets:
   db_root_password:
     file: ./secrets/db_root_password.txt
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Secrets, 2)
@@ -534,7 +535,7 @@ services:
   app:
     image: myapp:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Secrets, 2)
@@ -562,7 +563,7 @@ secrets:
   db_password:
     file: ./secrets/db_password.txt
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Secrets, 1)
@@ -586,7 +587,7 @@ secrets:
   jwt_secret:
     external: true
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Secrets, 3)
@@ -614,7 +615,7 @@ configs:
   nginx_config:
     file: ./configs/nginx.conf
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Configs, 1)
@@ -631,7 +632,7 @@ services:
   app:
     image: myapp:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Configs, 1)
@@ -656,7 +657,7 @@ configs:
   ssl_certs:
     file: ./nginx/ssl
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Configs, 2)
@@ -688,7 +689,7 @@ configs:
   shared_config:
     external: true
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Configs, 3)
@@ -722,7 +723,7 @@ services:
       retries: 3
       start_period: 5s
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -747,7 +748,7 @@ services:
       timeout: 5s
       retries: 5
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -768,7 +769,7 @@ services:
     healthcheck:
       disable: true
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -787,7 +788,7 @@ services:
       timeout: 3s
       retries: 2
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -807,7 +808,7 @@ services:
     healthcheck:
       disable: true
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -828,7 +829,7 @@ services:
 }
 
 func TestO3_HealthCheckJSONRoundTrip(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(composeWithHealthCheck), "/app")
 	require.NoError(t, err)
 	require.NotNil(t, parsed.Services[0].HealthCheck)
@@ -862,7 +863,7 @@ services:
           cpus: "1.0"
           memory: 256M
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -884,7 +885,7 @@ services:
       mode: replicated
       replicas: 3
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -901,7 +902,7 @@ services:
     deploy:
       mode: global
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -924,7 +925,7 @@ services:
           cpus: "2"
           memory: 1G
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -935,7 +936,7 @@ services:
 }
 
 func TestO4_DeployJSONRoundTrip(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(composeWithDeploy), "/app")
 	require.NoError(t, err)
 	require.NotNil(t, parsed.Services[0].Deploy)
@@ -968,7 +969,7 @@ services:
     profiles:
       - production
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 
@@ -999,7 +1000,7 @@ services:
     profiles:
       - staging
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid, "warnings should not block validation")
 	assert.NotNil(t, result.Summary)
@@ -1029,7 +1030,7 @@ services:
     deploy:
       replicas: 3
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 
@@ -1062,7 +1063,7 @@ secrets:
   file_secret:
     file: ./secrets/secret.txt
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 
@@ -1087,7 +1088,7 @@ configs:
   local_config:
     file: ./configs/local.yml
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 
@@ -1109,7 +1110,7 @@ services:
     profiles:
       - warning-only
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Errors)
@@ -1125,7 +1126,7 @@ services:
     image: node:20
     command: ["node", "server.js", "--port", "3000"]
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -1139,7 +1140,7 @@ services:
     image: node:20
     command: node server.js --port 3000
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -1157,7 +1158,7 @@ networks:
   internal:
     driver: overlay
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Networks, 2)
@@ -1181,7 +1182,7 @@ volumes:
   logs:
     driver: local
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Volumes, 2)
@@ -1201,7 +1202,7 @@ services:
     image: python:3.12
     entrypoint: ["python", "-m", "uvicorn"]
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -1215,7 +1216,7 @@ services:
     image: alpine:latest
     command: echo hi
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Errors)
@@ -1228,7 +1229,7 @@ services:
     build:
       context: .
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Errors)
@@ -1240,7 +1241,7 @@ version: "3.8"
 name: empty-project
 services: {}
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 0)
@@ -1258,7 +1259,7 @@ networks:
       com.example.env: production
       com.example.team: platform
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Networks, 1)
@@ -1273,7 +1274,7 @@ services:
   app:
     image: alpine:3.21
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Equal(t, "2.0", parsed.Version)
@@ -1287,7 +1288,7 @@ services:
   app:
     image: alpine:3.21
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	assert.Equal(t, "3.0", parsed.Version)
@@ -1324,7 +1325,7 @@ services:
       DB_HOST: postgres.local
       DB_PORT: "5432"
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 2)
@@ -1355,7 +1356,7 @@ services:
   app:
     image: alpine:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/home/user/projects/my-app")
 	require.NoError(t, err)
 	assert.Equal(t, "my-app", parsed.Name)
@@ -1368,7 +1369,7 @@ services:
   app:
     image: alpine:latest
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/home/user/projects/some-project")
 	require.NoError(t, err)
 	assert.Equal(t, "explicit-name", parsed.Name)
@@ -1385,7 +1386,7 @@ services:
       - "443:443/udp"
       - "127.0.0.1:8080:8080/tcp"
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 	require.Len(t, parsed.Services, 1)
@@ -1482,7 +1483,7 @@ configs:
     file: ./configs/nginx.conf
 `
 
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(content), "/app")
 	require.NoError(t, err)
 

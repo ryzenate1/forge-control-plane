@@ -60,6 +60,7 @@ type CreateRequest struct {
 	Ports           []PortBinding
 	Mounts          []Mount
 	MemoryMB        int64
+	MemoryOverhead  float64
 	SwapMB          int64
 	CPUShares       int64
 	CPUPercent      int64

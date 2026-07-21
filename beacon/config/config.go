@@ -6,14 +6,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
-	"gopkg.in/yaml.v2"
 )
 
 const EnvPrefix = "DAEMON"
@@ -49,6 +47,12 @@ var (
 	DockerTimezoneEntry              = ConfigEntry[string]{Key: "docker.timezone", Default: "UTC", Description: "timezone used for runtime containers"}
 	DockerNetworkInterfaceEntry      = ConfigEntry[string]{Key: "docker.network.interface", Default: "eth0", Description: "network interface used for runtime networking"}
 	CrashDetectCleanExitAsCrashEntry = ConfigEntry[bool]{Key: "crash_detection.detect_clean_exit_as_crash", Default: false, Description: "treat clean server exits as crashes"}
+
+	DockerMemoryOverheadEntry = ConfigEntry[float64]{Key: "docker.memory_overhead", Default: 10.0, Description: "default memory overhead percentage added to server memory limits"}
+	DockerRootlessEnabledEntry = ConfigEntry[bool]{Key: "docker.rootless_enabled", Default: false, Description: "enable rootless Docker mode (userns=host)"}
+	BackupWriteLimitEntry = ConfigEntry[int64]{Key: "backup.write_limit", Default: 0, Description: "backup I/O write limit in bytes/sec (0 = unlimited)"}
+	LogMaxSizeEntry = ConfigEntry[string]{Key: "log.max_size", Default: "10m", Description: "Docker log driver max-size"}
+	LogMaxFileEntry = ConfigEntry[int]{Key: "log.max_file", Default: 3, Description: "Docker log driver max-file"}
 )
 
 var typedEntries = []interface{ ApplyDefault(*viper.Viper) }{
@@ -64,6 +68,11 @@ var typedEntries = []interface{ ApplyDefault(*viper.Viper) }{
 	DockerTimezoneEntry,
 	DockerNetworkInterfaceEntry,
 	CrashDetectCleanExitAsCrashEntry,
+	DockerMemoryOverheadEntry,
+	DockerRootlessEnabledEntry,
+	BackupWriteLimitEntry,
+	LogMaxSizeEntry,
+	LogMaxFileEntry,
 }
 
 type SftpConfiguration struct {
@@ -95,11 +104,22 @@ type DockerConfiguration struct {
 	Network struct {
 		Interface string `default:"eth0" yaml:"interface"`
 	} `yaml:"network"`
-	Timezone string `default:"UTC" yaml:"timezone"`
+	Timezone        string  `default:"UTC" yaml:"timezone"`
+	MemoryOverhead  float64 `default:"10" yaml:"memory_overhead"`
+	RootlessEnabled bool    `default:"false" yaml:"rootless_enabled"`
 }
 
 type CrashDetectionConfiguration struct {
 	DetectCleanExitAsCrash bool `default:"false" yaml:"detect_clean_exit_as_crash"`
+}
+
+type BackupConfiguration struct {
+	WriteLimit int64 `default:"0" yaml:"write_limit"`
+}
+
+type LogConfiguration struct {
+	MaxSize string `default:"10m" yaml:"max_size"`
+	MaxFile int    `default:"3" yaml:"max_file"`
 }
 
 type Configuration struct {
@@ -115,6 +135,8 @@ type Configuration struct {
 	RemoteQuery    map[string]int              `yaml:"remote_query"`
 	Docker         DockerConfiguration         `yaml:"docker"`
 	CrashDetection CrashDetectionConfiguration `yaml:"crash_detection"`
+	Backup         BackupConfiguration         `yaml:"backup"`
+	Log            LogConfiguration            `yaml:"log"`
 }
 
 var (
@@ -122,42 +144,10 @@ var (
 	config *Configuration
 )
 
-func Get() *Configuration {
-	mu.RLock()
-	defer mu.RUnlock()
-	return config
-}
-
 func setGlobal(cfg *Configuration) {
 	mu.Lock()
 	defer mu.Unlock()
 	config = cfg
-}
-
-func Load(path string) (*Configuration, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg := Default()
-	if err := yaml.Unmarshal(data, cfg); err != nil {
-		return nil, err
-	}
-
-	setGlobal(cfg)
-	return cfg, nil
-}
-
-func Save(path string, cfg *Configuration) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
-		return err
-	}
-	data, err := yaml.Marshal(cfg)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0o600)
 }
 
 func Default() *Configuration {
@@ -180,8 +170,14 @@ func Default() *Configuration {
 		AllowedMounts:  []string{},
 		AllowedOrigins: []string{},
 		RemoteQuery:    map[string]int{},
-		Docker:         DockerConfiguration{Timezone: "UTC"},
+		Docker: DockerConfiguration{
+			Timezone:        "UTC",
+			MemoryOverhead:  10.0,
+			RootlessEnabled: false,
+		},
 		CrashDetection: CrashDetectionConfiguration{DetectCleanExitAsCrash: false},
+		Backup:         BackupConfiguration{WriteLimit: 0},
+		Log:            LogConfiguration{MaxSize: "10m", MaxFile: 3},
 	}
 }
 
@@ -189,10 +185,6 @@ type LoadOptions struct {
 	Path      string
 	EnvPrefix string
 	Flags     *pflag.FlagSet
-}
-
-func LoadFromSources(path string, envPrefix string) (*Configuration, error) {
-	return LoadWithOptions(LoadOptions{Path: path, EnvPrefix: envPrefix})
 }
 
 func LoadWithOptions(opts LoadOptions) (*Configuration, error) {
@@ -384,28 +376,10 @@ func looksLikeUUID(s string) bool {
 	return true
 }
 
-func (c *Configuration) APIConfig() ApiConfiguration {
+func (c *Configuration) BackupConfig() BackupConfiguration {
 	mu.RLock()
 	defer mu.RUnlock()
-	return c.System.API
-}
-
-func (c *Configuration) SFTPConfig() SftpConfiguration {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.System.Sftp
-}
-
-func (c *Configuration) DockerConfig() DockerConfiguration {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.Docker
-}
-
-func (c *Configuration) CrashDetectConfig() CrashDetectionConfiguration {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.CrashDetection
+	return c.Backup
 }
 
 func (c *Configuration) AllowedMountsList() []string {
@@ -417,46 +391,4 @@ func (c *Configuration) AllowedMountsList() []string {
 	out := make([]string, len(c.AllowedMounts))
 	copy(out, c.AllowedMounts)
 	return out
-}
-
-func (c *Configuration) AllowedOriginsList() []string {
-	mu.RLock()
-	defer mu.RUnlock()
-	if c.AllowedOrigins == nil {
-		return []string{}
-	}
-	out := make([]string, len(c.AllowedOrigins))
-	copy(out, c.AllowedOrigins)
-	return out
-}
-
-func (c *Configuration) RemoteQueryList() map[string]int {
-	mu.RLock()
-	defer mu.RUnlock()
-	if c.RemoteQuery == nil {
-		return map[string]int{}
-	}
-	out := make(map[string]int, len(c.RemoteQuery))
-	for k, v := range c.RemoteQuery {
-		out[k] = v
-	}
-	return out
-}
-
-func (c *Configuration) IsDebug() bool {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.Debug
-}
-
-func (c *Configuration) DataDir() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.System.DataDirectory
-}
-
-func (c *Configuration) APIAddr() string {
-	mu.RLock()
-	defer mu.RUnlock()
-	return c.System.API.Host + ":" + strconv.Itoa(c.System.API.Port)
 }

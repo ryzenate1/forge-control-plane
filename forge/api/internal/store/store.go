@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -175,6 +176,8 @@ type Node struct {
 	DaemonSFTPAlias        string           `json:"daemonSftpAlias,omitempty"`
 	DaemonConnect          int              `json:"daemonConnect"`
 	CPUOverallocate        int              `json:"cpuOverallocate"`
+	SchedulerType          string           `json:"schedulerType"`
+	SchedulerConfig        *json.RawMessage `json:"schedulerConfig,omitempty"`
 	Tags                   []string         `json:"tags,omitempty"`
 }
 
@@ -237,6 +240,8 @@ type CreateNodeRequest struct {
 	DaemonConnect       int
 	CPUOverallocate     int
 	Tags                []string
+	SchedulerType       string           `json:"schedulerType,omitempty"`
+	SchedulerConfig     *json.RawMessage `json:"schedulerConfig,omitempty"`
 }
 
 type LabelPair struct {
@@ -306,6 +311,8 @@ type UpdateNodeRequest struct {
 	DaemonConnect        int
 	CPUOverallocate      int
 	Tags                 []string
+	SchedulerType        string           `json:"schedulerType,omitempty"`
+	SchedulerConfig      *json.RawMessage `json:"schedulerConfig,omitempty"`
 }
 
 // NodePatch represents fields the public PATCH endpoint may change. Pointers preserve
@@ -338,6 +345,8 @@ type NodePatch struct {
 	DaemonConnect      *int
 	CPUOverallocate    *int
 	Tags               *[]string
+	SchedulerType      *string           `json:"schedulerType,omitempty"`
+	SchedulerConfig    *json.RawMessage  `json:"schedulerConfig,omitempty"`
 }
 
 type NodeHeartbeatRequest struct {
@@ -445,7 +454,18 @@ type Server struct {
 	InstalledAt          *time.Time         `json:"installedAt,omitempty"`
 	SkipScripts          bool               `json:"skipScripts"`
 	DockerLabels         map[string]string  `json:"dockerLabels,omitempty"`
-	Permissions          []string           `json:"permissions,omitempty"`
+	Permissions         []string           `json:"permissions,omitempty"`
+
+	// Generation is a monotonically increasing counter incremented on each
+	// recovery/evacuation. A server with a lower generation is stale and must
+	// not receive commands or accept writes. Beacon enforces this by rejecting
+	// operations whose generation is older than the control plane's current.
+	Generation int64 `json:"generation"`
+
+	// WorkloadLeaseExpiry is the time after which a workload's lease expires.
+	// After expiry, the workload must be stopped even if the node reports it
+	// as running. Set during recovery to ensure the old instance is fenced.
+	WorkloadLeaseExpiry *time.Time `json:"workloadLeaseExpiry,omitempty"`
 }
 
 type UpdateServerRequest struct {
@@ -694,17 +714,17 @@ type ScheduleTask struct {
 type StartupVariable struct {
 	Name         string `json:"name"`
 	Description  string `json:"description"`
-	EnvVariable  string `json:"env_variable"`
-	DefaultValue string `json:"default_value"`
-	ServerValue  string `json:"server_value"`
-	IsEditable   bool   `json:"is_editable"`
+	EnvVariable  string `json:"envVariable"`
+	DefaultValue string `json:"defaultValue"`
+	ServerValue  string `json:"serverValue"`
+	IsEditable   bool   `json:"isEditable"`
 	Rules        string `json:"rules"`
 }
 
 type StartupDetails struct {
-	StartupCommand    string            `json:"startup_command"`
-	RawStartupCommand string            `json:"raw_startup_command"`
-	DockerImages      map[string]string `json:"docker_images"`
+	StartupCommand    string            `json:"startupCommand"`
+	RawStartupCommand string            `json:"rawStartupCommand"`
+	DockerImages      map[string]string `json:"dockerImages"`
 	Variables         []StartupVariable `json:"variables"`
 }
 
@@ -739,19 +759,72 @@ type Backup struct {
 	StatusCallback *string    `json:"statusCallback,omitempty"`
 	RetryCount     int        `json:"retryCount"`
 	LastRetryAt    *time.Time `json:"lastRetryAt,omitempty"`
+	// Workload-aware fields
+	SourceType       string     `json:"sourceType,omitempty"`
+	SourceID         string     `json:"sourceId,omitempty"`
+	DatabaseType     string     `json:"databaseType,omitempty"`
+	VolumeName       string     `json:"volumeName,omitempty"`
+	Manifest         []byte     `json:"manifest,omitempty"`
+	StorageReceipt   []byte     `json:"storageReceipt,omitempty"`
+	ChecksumVerified bool       `json:"checksumVerified"`
+	RestoreCount     int        `json:"restoreCount"`
+	LastRestoreAt    *time.Time `json:"lastRestoreAt,omitempty"`
+	// Encryption/compression fields
+	Compressed bool   `json:"compressed,omitempty"`
+	Encrypted  bool   `json:"encrypted,omitempty"`
+	Nonce      string `json:"nonce,omitempty"`
 }
 
 type UpsertBackupRequest struct {
-	UUID           string
-	Name           string
-	Checksum       string
-	Size           int64
-	Status         string
-	UploadID       *string
-	CompletedAt    *time.Time
-	StatusMessage  *string
-	StatusCallback *string
-	RetryCount     int
+	UUID             string
+	Name             string
+	Checksum         string
+	Size             int64
+	Status           string
+	UploadID         *string
+	CompletedAt      *time.Time
+	StatusMessage    *string
+	StatusCallback   *string
+	RetryCount       int
+	SourceType       string
+	SourceID         string
+	DatabaseType     string
+	VolumeName       string
+	Manifest         []byte
+	StorageReceipt   []byte
+	ChecksumVerified bool
+	RestoreCount     int
+	LastRestoreAt    *time.Time
+	Compressed       bool
+	Encrypted        bool
+	Nonce            string
+}
+
+// BackupManifest represents the manifest for a backup archive
+type BackupManifest struct {
+	ID                string    `json:"id"`
+	BackupID          string    `json:"backupId"`
+	ManifestVersion   int       `json:"manifestVersion"`
+	ChecksumAlgorithm string    `json:"checksumAlgorithm"`
+	ChecksumValue     string    `json:"checksumValue"`
+	FileCount         int       `json:"fileCount"`
+	TotalSizeBytes    int64     `json:"totalSizeBytes"`
+	Metadata          []byte    `json:"metadata,omitempty"`
+	CreatedAt         time.Time `json:"createdAt"`
+}
+
+// StorageReceipt represents a remote storage verification receipt
+type StorageReceipt struct {
+	ID               string     `json:"id"`
+	BackupID         string     `json:"backupId"`
+	StorageAdapter   string     `json:"storageAdapter"`
+	StoragePath      string     `json:"storagePath"`
+	StorageEtag      string     `json:"storageEtag"`
+	StorageVersionID string     `json:"storageVersionId"`
+	UploadedAt       time.Time  `json:"uploadedAt"`
+	VerifiedAt       *time.Time `json:"verifiedAt,omitempty"`
+	Verified         bool       `json:"verified"`
+	ReceiptData      []byte     `json:"receiptData,omitempty"`
 }
 
 type DatabaseHost struct {
@@ -834,8 +907,8 @@ type ServerMount struct {
 	Name          string `json:"name"`
 	Source        string `json:"source"`
 	Target        string `json:"target"`
-	ReadOnly      bool   `json:"read_only"`
-	UserMountable bool   `json:"user_mountable"`
+	ReadOnly      bool   `json:"readOnly"`
+	UserMountable bool   `json:"userMountable"`
 }
 
 type CreateServerDatabaseRequest struct {
@@ -974,15 +1047,6 @@ func isValidScheduleTaskAction(action string) bool {
 }
 
 func (s *Store) RunMigrations(ctx context.Context, dir string) error {
-	if _, err := s.db.Exec(ctx, `
-		CREATE TABLE IF NOT EXISTS schema_migrations (
-			version TEXT PRIMARY KEY,
-			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
-		)
-	`); err != nil {
-		return fmt.Errorf("ensure schema_migrations: %w", err)
-	}
-
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return err
@@ -993,7 +1057,32 @@ func (s *Store) RunMigrations(ctx context.Context, dir string) error {
 			names = append(names, entry.Name())
 		}
 	}
+	return s.runMigrations(ctx, dir, names)
+}
+
+// RunSelectedMigrations applies explicitly named migrations. It is used for
+// Batch 2 migrations that originated in a separate source directory and must
+// remain part of the same durable schema history in deployed images.
+func (s *Store) RunSelectedMigrations(ctx context.Context, dir string, names []string) error {
+	return s.runMigrations(ctx, dir, names)
+}
+
+func (s *Store) runMigrations(ctx context.Context, dir string, names []string) error {
+	if _, err := s.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+
 	sort.Strings(names)
+
+	if err := validateNoDuplicatePrefixes(names); err != nil {
+		return err
+	}
+
 	for _, name := range names {
 		var applied bool
 		if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`, name).Scan(&applied); err != nil {
@@ -1028,6 +1117,67 @@ func (s *Store) RunMigrations(ctx context.Context, dir string) error {
 	return nil
 }
 
+// Rollback reverts applied migrations to a target version by applying
+// .down.sql files from the rollbacks directory in reverse order.
+func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion string) error {
+	if _, err := s.db.Exec(ctx, `
+		CREATE TABLE IF NOT EXISTS schema_migrations (
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)
+	`); err != nil {
+		return fmt.Errorf("ensure schema_migrations: %w", err)
+	}
+
+	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations WHERE version >= $1 ORDER BY version DESC`, targetVersion)
+	if err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	defer rows.Close()
+
+	var versions []string
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			return err
+		}
+		versions = append(versions, v)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	for _, v := range versions {
+		downFile := filepath.Join(rollbacksDir, strings.TrimSuffix(v, ".sql")+".down.sql")
+		body, err := os.ReadFile(downFile)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return fmt.Errorf("rollback file not found for %s: %w", v, err)
+			}
+			return fmt.Errorf("read rollback %s: %w", v, err)
+		}
+
+		tx, err := s.db.Begin(ctx)
+		if err != nil {
+			return fmt.Errorf("begin rollback %s: %w", v, err)
+		}
+		for _, statement := range splitSQLStatements(string(body)) {
+			if _, err := tx.Exec(ctx, statement); err != nil {
+				_ = tx.Rollback(ctx)
+				return fmt.Errorf("run rollback %s: %w", v, err)
+			}
+		}
+		if _, err := tx.Exec(ctx, `DELETE FROM schema_migrations WHERE version = $1`, v); err != nil {
+			_ = tx.Rollback(ctx)
+			return fmt.Errorf("remove migration record %s: %w", v, err)
+		}
+		if err := tx.Commit(ctx); err != nil {
+			return fmt.Errorf("commit rollback %s: %w", v, err)
+		}
+	}
+	return nil
+}
+
 func (s *Store) Seed(ctx context.Context) error {
 	adminID := "11111111-1111-1111-1111-111111111111"
 	nodeID := "22222222-2222-2222-2222-222222222222"
@@ -1040,21 +1190,6 @@ func (s *Store) Seed(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-
-	if _, err = s.db.Exec(ctx, `
-		INSERT INTO users (id, email, password_hash, role)
-		VALUES ($1, 'admin@example.com', $2, 'admin')
-		ON CONFLICT (email) DO NOTHING
-	`, adminID, string(hash)); err != nil {
-		return err
-	}
-	if _, err = s.db.Exec(ctx, `
-		INSERT INTO user_roles (user_id, role_id)
-		SELECT $1, r.id FROM roles r WHERE r.key = 'admin'
-		ON CONFLICT (user_id, role_id) DO NOTHING
-	`, adminID); err != nil {
-		return err
-	}
 	nodeToken := "dev-node-token"
 	nodeTokenEncrypted, err := s.encryptSecret(nodeToken, secretAAD("nodes", nodeID, "daemon_token"))
 	if err != nil {
@@ -1064,7 +1199,28 @@ func (s *Store) Seed(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO users (id, email, password_hash, role)
+		VALUES ($1, 'admin@example.com', $2, 'admin')
+		ON CONFLICT (email) DO NOTHING
+	`, adminID, string(hash)); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id)
+		SELECT $1, r.id FROM roles r WHERE r.key = 'admin'
+		ON CONFLICT (user_id, role_id) DO NOTHING
+	`, adminID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO nodes (
 			id, uuid, name, region, base_url, fqdn, scheme, status, token_hash,
 			daemon_token_id, daemon_token, daemon_token_encrypted, daemon_listen, daemon_sftp, daemon_base, last_seen_at
@@ -1081,41 +1237,52 @@ func (s *Store) Seed(ctx context.Context) error {
 	`, nodeID, string(nodeTokenHash), nodeTokenEncrypted); err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		INSERT INTO eggs (id, nest_id, name, description, docker_images, startup, config, default_memory_mb)
 		SELECT $1, id, 'Minecraft Java', '', jsonb_build_object('Java', 'itzg/minecraft-server:latest'), '', '{}'::jsonb, 2048
 		FROM nests WHERE name = 'Games'
-		ON CONFLICT (id) DO UPDATE SET
+		ON CONFLICT (nest_id, name) DO UPDATE SET
 			docker_images = EXCLUDED.docker_images,
 			startup = EXCLUDED.startup,
 			default_memory_mb = EXCLUDED.default_memory_mb
 	`, templateID); err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
+	res, err := tx.Exec(ctx, `
 		INSERT INTO servers (id, node_id, owner_id, template_id, egg_id, name, status, memory_mb, cpu_shares, disk_mb)
-		VALUES ($1, $2, $3, $4, $4, 'Survival SMP', 'stopped', 2048, 1024, 10240)
+		SELECT $1, $2, $3, id, id, 'Survival SMP', 'stopped', 2048, 1024, 10240
+		FROM eggs
+		WHERE name = 'Minecraft Java'
+		  AND nest_id = (SELECT id FROM nests WHERE name = 'Games')
 		ON CONFLICT (id) DO NOTHING
-	`, serverID, nodeID, adminID, templateID); err != nil {
+	`, serverID, nodeID, adminID)
+	if err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
-		INSERT INTO allocations (id, node_id, server_id, ip, port, alias, notes)
-		VALUES ($1, $2, $3, '0.0.0.0', 25565, 'minecraft.local', 'default Minecraft Java allocation')
-		ON CONFLICT (node_id, ip, port) DO UPDATE SET server_id = EXCLUDED.server_id, alias = EXCLUDED.alias
+	if n := res.RowsAffected(); n == 0 {
+		return fmt.Errorf("seed: no egg found for 'Minecraft Java' in 'Games' nest; server not created")
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO allocations (id, node_id, server_id, ip, port, protocol, alias, notes)
+		VALUES ($1, $2, $3, '0.0.0.0', 25565, 'tcp', 'minecraft.local', 'default Minecraft Java allocation')
+		ON CONFLICT (node_id, ip, port, protocol) DO UPDATE SET server_id = EXCLUDED.server_id, alias = EXCLUDED.alias
 	`, allocationID, nodeID, serverID); err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
+	if _, err = tx.Exec(ctx, `
 		UPDATE servers SET primary_allocation_id = $1 WHERE id = $2 AND (primary_allocation_id IS NULL OR primary_allocation_id != $1)
 	`, allocationID, serverID); err != nil {
 		return err
 	}
-	if _, err = s.db.Exec(ctx, `
-		INSERT INTO allocations (id, node_id, server_id, ip, port, alias, notes)
-		VALUES ($1, $2, NULL, '0.0.0.0', 25566, 'minecraft-alt.local', 'spare Minecraft Java allocation')
-		ON CONFLICT (node_id, ip, port) DO NOTHING
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO allocations (id, node_id, server_id, ip, port, protocol, alias, notes)
+		VALUES ($1, $2, NULL, '0.0.0.0', 25566, 'tcp', 'minecraft-alt.local', 'spare Minecraft Java allocation')
+		ON CONFLICT (node_id, ip, port, protocol) DO NOTHING
 	`, spareAllocationID, nodeID); err != nil {
+		return err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
 		return err
 	}
 
@@ -1163,7 +1330,8 @@ const (
 	NodeHeartbeatStateSuspected   NodeHeartbeatState = "suspected"
 	NodeHeartbeatStateUnreachable NodeHeartbeatState = "unreachable"
 	NodeHeartbeatStateOffline     NodeHeartbeatState = "offline"
-	NodeHeartbeatStateRecovering  NodeHeartbeatState = "recovering"
+	NodeHeartbeatStateRecovering   NodeHeartbeatState = "recovering"
+	NodeHeartbeatStateReconciling NodeHeartbeatState = "reconciling"
 )
 
 // Migration types
@@ -1398,7 +1566,9 @@ const (
 	RecoveryItemStatusRestored  RecoveryItemStatus = "restored"
 	RecoveryItemStatusCancelled RecoveryItemStatus = "cancelled"
 	RecoveryItemStatusFailed    RecoveryItemStatus = "failed"
-	RecoveryItemStatusSkipped   RecoveryItemStatus = "skipped"
+	RecoveryItemStatusSkipped         RecoveryItemStatus = "skipped"
+	RecoveryItemStatusAwaitingBeacon RecoveryItemStatus = "awaiting_beacon"
+	RecoveryItemStatusHealthGating  RecoveryItemStatus = "health_gating"
 )
 
 type RecoveryItem struct {
@@ -1414,6 +1584,7 @@ type RecoveryItem struct {
 	SourceBackupSize     int64     `json:"sourceBackupSize,omitempty"`
 	Status               string    `json:"status"`
 	Reason               string    `json:"reason,omitempty"`
+	FenceGeneration      int64     `json:"fenceGeneration,omitempty"`
 	CreatedAt            time.Time `json:"createdAt"`
 	UpdatedAt            time.Time `json:"updatedAt"`
 }
@@ -1482,6 +1653,34 @@ type ReservedCapacity struct {
 	Reserved int    `json:"reserved"`
 }
 
+type PlacementIntentStatus string
+
+const (
+	PlacementIntentStatusPending   PlacementIntentStatus = "pending"
+	PlacementIntentStatusCompleting PlacementIntentStatus = "completing"
+	PlacementIntentStatusCompleted PlacementIntentStatus = "completed"
+	PlacementIntentStatusFailed    PlacementIntentStatus = "failed"
+	PlacementIntentStatusExpired   PlacementIntentStatus = "expired"
+	PlacementIntentStatusRolledBack PlacementIntentStatus = "rolled_back"
+)
+
+type PlacementIntent struct {
+	ID            string                 `json:"id"`
+	ServerID      string                 `json:"serverId,omitempty"`
+	NodeID        string                 `json:"nodeId"`
+	AllocationID  string                 `json:"allocationId,omitempty"`
+	ReservationID string                 `json:"reservationId,omitempty"`
+	CPU           int                    `json:"cpu"`
+	MemoryMB      int                    `json:"memoryMb"`
+	DiskMB        int                    `json:"diskMb"`
+	Status        PlacementIntentStatus  `json:"status"`
+	Error         string                 `json:"error,omitempty"`
+	CreatedAt     time.Time              `json:"createdAt"`
+	UpdatedAt     time.Time              `json:"updatedAt"`
+	ConfirmedAt   *time.Time             `json:"confirmedAt,omitempty"`
+	ExpiredAt     *time.Time             `json:"expiredAt,omitempty"`
+}
+
 // Desired State types
 type ServerDesiredState string
 
@@ -1518,7 +1717,8 @@ const (
 type NodeActualState string
 
 const (
-	NodeActualStateOnline   NodeActualState = "online"
-	NodeActualStateDegraded NodeActualState = "degraded"
-	NodeActualStateOffline  NodeActualState = "offline"
+	NodeActualStateOnline      NodeActualState = "online"
+	NodeActualStateDegraded    NodeActualState = "degraded"
+	NodeActualStateOffline     NodeActualState = "offline"
+	NodeActualStateReconciling NodeActualState = "reconciling"
 )

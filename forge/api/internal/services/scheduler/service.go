@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/placement"
+	"gamepanel/forge/internal/services/reservations"
 	"gamepanel/forge/internal/store"
 )
 
@@ -23,19 +26,29 @@ type Service interface {
 	PlaceServer(context.Context, domain.PlacementRequest) (domain.PlacementDecision, error)
 	FilterNodes(context.Context, domain.PlacementRequest, []store.Node) ([]store.Node, error)
 	ScoreNodes(context.Context, domain.PlacementRequest, []store.Node) ([]NodeScore, error)
+	PlaceReplicas(context.Context, domain.PlaceReplicasRequest) ([]domain.PlacementReason, error)
+	ScaleReplicas(context.Context, domain.ScaleRequest) ([]domain.PlacementReason, error)
+	ReplaceFailedInstance(context.Context, domain.ReplaceFailedInstanceRequest) (*domain.PlacementReason, error)
 }
 
 type Scheduler struct {
-	store     *store.Store
-	engine    *placement.Engine
-	publisher events.Publisher
-	mu        sync.Mutex
-	metrics   Metrics
+	store               *store.Store
+	engine              *placement.Engine
+	publisher           events.Publisher
+	predictiveScorer    *PredictiveScorer
+	constraintScheduler *ConstraintScheduler
+	reservations        *reservations.Manager
+	mu                  sync.Mutex
+	metrics             Metrics
 }
 
 type Metrics struct {
 	PlacementRejectionsTotal uint64 `json:"placement_rejections_total"`
 	CapacityExceededTotal    uint64 `json:"capacity_exceeded_total"`
+	ReplicasPlacedTotal      uint64 `json:"replicas_placed_total"`
+	ScaleUpTotal             uint64 `json:"scale_up_total"`
+	ScaleDownTotal           uint64 `json:"scale_down_total"`
+	FailedReplacementsTotal  uint64 `json:"failed_replacements_total"`
 }
 
 func New(store *store.Store, engine *placement.Engine, publishers ...events.Publisher) *Scheduler {
@@ -44,6 +57,21 @@ func New(store *store.Store, engine *placement.Engine, publishers ...events.Publ
 		publisher = publishers[0]
 	}
 	return &Scheduler{store: store, engine: engine, publisher: publisher}
+}
+
+func (s *Scheduler) WithPredictiveScorer(ps *PredictiveScorer) *Scheduler {
+	s.predictiveScorer = ps
+	return s
+}
+
+func (s *Scheduler) WithConstraintScheduler(cs *ConstraintScheduler) *Scheduler {
+	s.constraintScheduler = cs
+	return s
+}
+
+func (s *Scheduler) WithReservations(mgr *reservations.Manager) *Scheduler {
+	s.reservations = mgr
+	return s
 }
 
 func (s *Scheduler) Metrics() Metrics {
@@ -90,26 +118,53 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 	sort.SliceStable(scores, func(i, j int) bool {
 		return scores[i].Score > scores[j].Score
 	})
-	selected := scores[0]
-	regionID := req.RegionID
-	if regionID == "" && selected.Node.RegionID != nil {
-		regionID = *selected.Node.RegionID
+
+	for _, scored := range scores {
+		var reservation store.PlacementReservation
+		var err error
+		if !req.SkipReservation {
+			if s.reservations != nil {
+				reservation, err = s.reservations.CreateReservation(ctx, store.CreatePlacementReservationRequest{
+					NodeID:          scored.Node.ID,
+					ReservationType: store.PlacementReservationTypePlacement,
+					CPU:             req.CPU,
+					Memory:          int64(req.MemoryMB),
+					Disk:            int64(req.DiskMB),
+				})
+			} else {
+				reservation, err = s.store.CreatePlacementReservation(ctx, store.CreatePlacementReservationRequest{
+					NodeID:          scored.Node.ID,
+					ReservationType: store.PlacementReservationTypePlacement,
+					CPU:             req.CPU,
+					Memory:          int64(req.MemoryMB),
+					Disk:            int64(req.DiskMB),
+				})
+			}
+			if err != nil {
+				continue
+			}
+		}
+		regionID := req.RegionID
+		if regionID == "" && scored.Node.RegionID != nil {
+			regionID = *scored.Node.RegionID
+		}
+		return domain.PlacementDecision{
+			RegionID:      regionID,
+			RegionIDRaw:   regionID,
+			NodeID:        scored.Node.ID,
+			NodeIDRaw:     scored.Node.ID,
+			AllocationID:  req.AllocationID,
+			ReservationID: reservation.ID,
+			Manual:        req.RequiredNode != "",
+			Score:         scored.Score,
+			Reasons:       []string{scored.Reason, "reserved capacity on placed node"},
+		}, nil
 	}
-	return domain.PlacementDecision{
-		RegionID:     regionID,
-		RegionIDRaw:  regionID,
-		NodeID:       selected.Node.ID,
-		NodeIDRaw:    selected.Node.ID,
-		AllocationID: req.AllocationID,
-		Manual:       req.RequiredNode != "",
-		Score:        selected.Score,
-		Reasons:      []string{selected.Reason},
-	}, nil
+	return domain.PlacementDecision{}, errors.New("insufficient capacity on all candidate nodes")
 }
 
 func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest, nodes []store.Node) ([]store.Node, error) {
 	req = normalizeRequest(req)
-	// TODO: Wire in ConstraintScheduler.EvaluateConstraints to apply admin-defined scheduling constraints during filtering.
 	regions, err := s.store.ListRegions(ctx)
 	if err != nil {
 		return nil, err
@@ -148,7 +203,17 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 			s.recordCapacityExceeded(ctx, node.ID, "disk", snapshot.AvailableDisk, req.DiskMB)
 			continue
 		}
+		if req.StorageLocality == "local_only" && node.RuntimeProvider != "" && node.RuntimeProvider != "local" {
+			s.recordPlacementRejection()
+			continue
+		}
 		filtered = append(filtered, node)
+	}
+	if s.constraintScheduler != nil {
+		filtered, err = s.constraintScheduler.EvaluateConstraints(ctx, req, filtered)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return filtered, nil
 }
@@ -175,7 +240,6 @@ func (s *Scheduler) recordCapacityExceeded(ctx context.Context, nodeID, resource
 
 func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest, nodes []store.Node) ([]NodeScore, error) {
 	req = normalizeRequest(req)
-	// TODO: Wire in PredictiveScorer to incorporate predictive scores (trend/affinity/anti-affinity) into the scoring pipeline.
 	workload := toWorkloadRequest(req)
 
 	allServers, err := s.store.ListServers(ctx)
@@ -217,9 +281,347 @@ func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest,
 			r.Score += 1e9
 			reason = "preferred node"
 		}
+		if s.predictiveScorer != nil {
+			ps, err := s.predictiveScorer.ScorePredictive(ctx, node.ID, req)
+			if err == nil && ps != nil {
+				r.Score = r.Score*(1+ps.TrendScore) + ps.AffinityScore - ps.AntiAffinityScore
+				reason = reason + "; predictive: trend=" + fmt.Sprintf("%.4f", ps.TrendScore) + " affinity=" + fmt.Sprintf("%.4f", ps.AffinityScore) + " anti-affinity=" + fmt.Sprintf("%.4f", ps.AntiAffinityScore)
+			}
+		}
+		if req.StorageLocality != "" && r.StorageLocality != req.StorageLocality {
+			r.Score -= 1e10
+			reason = reason + "; storage locality mismatch penalty"
+		} else if req.StorageLocality != "" && r.StorageLocality == req.StorageLocality {
+			r.Score += 1e8
+			reason = reason + "; storage locality match bonus"
+		}
 		scores = append(scores, NodeScore{Node: node, Score: r.Score, Reason: reason})
 	}
 	return scores, nil
+}
+
+func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasRequest) ([]domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	app, err := s.store.GetReplicaApp(ctx, req.AppID)
+	if err != nil {
+		return nil, fmt.Errorf("app not found: %w", err)
+	}
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{RegionID: req.RegionID, CPU: req.CPU, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, RequiredNode: req.RequiredNode}, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if req.RuntimeFilter != "" {
+		filtered = filterByRuntimeProvider(filtered, req.RuntimeFilter)
+	}
+	existing, err := s.store.ListInstancesByApp(ctx, req.AppID)
+	if err != nil {
+		return nil, err
+	}
+	existingNodeMap := make(map[string]int)
+	for _, inst := range existing {
+		if inst.Status != "removing" && inst.Status != "failed" {
+			existingNodeMap[inst.NodeID]++
+		}
+	}
+
+	candidates := make([]placement.Candidate, 0, len(filtered))
+	for _, node := range filtered {
+		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, nodeToCandidate(snapshot, node))
+	}
+
+	replicas := make([]placement.ReplicaSpec, req.ReplicaCount)
+	for i := 0; i < req.ReplicaCount; i++ {
+		runtime := app.RuntimeProvider
+		if req.RuntimeFilter != "" {
+			runtime = req.RuntimeFilter
+		}
+		replicas[i] = placement.ReplicaSpec{
+			Index:           i,
+			CPU:             req.CPU,
+			MemoryMB:        req.MemoryMB,
+			DiskMB:          req.DiskMB,
+			RuntimeProvider: runtime,
+		}
+	}
+
+	placementReq := placement.ReplicaPlacementRequest{
+		AppID:           req.AppID,
+		Replicas:        replicas,
+		RegionID:        req.RegionID,
+		RequiredNode:    req.RequiredNode,
+		PreferredNode:   req.PreferredNode,
+		RuntimeFilter:   req.RuntimeFilter,
+		ExistingNodeMap: existingNodeMap,
+	}
+
+	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.metrics.ReplicasPlacedTotal += uint64(len(result.Placements))
+	s.mu.Unlock()
+
+	reasons := make([]domain.PlacementReason, 0, len(result.Placements))
+	for _, p := range result.Placements {
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: "",
+			NodeID:     p.NodeID,
+			Index:      p.Index,
+			Score:      p.Score,
+			Accepted:   true,
+			Reasons:    p.Reasons,
+		})
+	}
+	for _, f := range result.Failures {
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: "",
+			NodeID:     "",
+			Index:      f.Index,
+			Score:      0,
+			Accepted:   false,
+			Reasons:    []string{f.Reason},
+		})
+	}
+	return reasons, nil
+}
+
+func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) ([]domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	app, err := s.store.GetReplicaApp(ctx, req.AppID)
+	if err != nil {
+		return nil, fmt.Errorf("app not found: %w", err)
+	}
+	current, err := s.store.ListInstancesByApp(ctx, req.AppID)
+	if err != nil {
+		return nil, err
+	}
+	activeInstances := 0
+	for _, inst := range current {
+		if inst.Status != "removing" && inst.Status != "failed" {
+			activeInstances++
+		}
+	}
+
+	if req.ReplicaCount == activeInstances {
+		return nil, nil
+	}
+
+	if req.ReplicaCount > activeInstances {
+		// Scale up
+		s.mu.Lock()
+		s.metrics.ScaleUpTotal++
+		s.mu.Unlock()
+
+		extra := req.ReplicaCount - activeInstances
+		allNodes, err := s.store.ListNodes(ctx)
+		if err != nil {
+			return nil, err
+		}
+		filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{RegionID: "", CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, allNodes)
+		if err != nil {
+			return nil, err
+		}
+
+		existingNodeMap := make(map[string]int)
+		for _, inst := range current {
+			if inst.Status != "removing" && inst.Status != "failed" {
+				existingNodeMap[inst.NodeID]++
+			}
+		}
+
+		candidates := make([]placement.Candidate, 0, len(filtered))
+		for _, node := range filtered {
+			snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+			if err != nil {
+				continue
+			}
+			candidates = append(candidates, nodeToCandidate(snapshot, node))
+		}
+
+		startIdx := activeInstances
+		replicas := make([]placement.ReplicaSpec, extra)
+		for i := 0; i < extra; i++ {
+			replicas[i] = placement.ReplicaSpec{
+				Index:           startIdx + i,
+				CPU:             app.CPU,
+				MemoryMB:        app.MemoryMB,
+				DiskMB:          app.DiskMB,
+				RuntimeProvider: app.RuntimeProvider,
+			}
+		}
+
+		placementReq := placement.ReplicaPlacementRequest{
+			AppID:           req.AppID,
+			Replicas:        replicas,
+			ExistingNodeMap: existingNodeMap,
+		}
+		result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+		if err != nil {
+			return nil, err
+		}
+		reasons := make([]domain.PlacementReason, 0, len(result.Placements))
+		for _, p := range result.Placements {
+			reasons = append(reasons, domain.PlacementReason{
+				NodeID:   p.NodeID,
+				Index:    p.Index,
+				Score:    p.Score,
+				Accepted: true,
+				Reasons:  p.Reasons,
+			})
+		}
+		for _, f := range result.Failures {
+			reasons = append(reasons, domain.PlacementReason{
+				Index:    f.Index,
+				Accepted: false,
+				Reasons:  []string{f.Reason},
+			})
+		}
+		_, _ = s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount)
+		return reasons, nil
+	}
+
+	// Scale down
+	s.mu.Lock()
+	s.metrics.ScaleDownTotal++
+	s.mu.Unlock()
+
+	remove := activeInstances - req.ReplicaCount
+	toRemove := make([]store.Instance, 0, remove)
+	for i := len(current) - 1; i >= 0 && len(toRemove) < remove; i-- {
+		if current[i].Status != "removing" && current[i].Status != "failed" {
+			toRemove = append(toRemove, current[i])
+		}
+	}
+	reasons := make([]domain.PlacementReason, 0, len(toRemove))
+	for _, inst := range toRemove {
+		_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "removing")
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: inst.ID,
+			NodeID:     inst.NodeID,
+			Accepted:   true,
+			Reasons:    []string{"scale down - removed instance"},
+		})
+	}
+	_, _ = s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount)
+	return reasons, nil
+}
+
+func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.ReplaceFailedInstanceRequest) (*domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	inst, err := s.store.GetInstance(ctx, req.InstanceID)
+	if err != nil {
+		return nil, fmt.Errorf("instance not found: %w", err)
+	}
+	app, err := s.store.GetReplicaApp(ctx, inst.AppID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Mark current as removing
+	_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "removing")
+
+	// Find replacement node
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered, filterErr := s.FilterNodes(ctx, domain.PlacementRequest{CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, nodes)
+	if filterErr != nil {
+		slog.WarnContext(ctx, "node filtering failed during replacement, falling back to all nodes", "error", filterErr)
+		filtered = nodes
+	} else if filtered == nil {
+		filtered = nodes
+	}
+
+	existing, _ := s.store.ListInstancesByApp(ctx, app.ID)
+	existingNodeMap := make(map[string]int)
+	for _, e := range existing {
+		if e.Status != "removing" && e.Status != "failed" {
+			existingNodeMap[e.NodeID]++
+		}
+	}
+
+	candidates := make([]placement.Candidate, 0, len(filtered))
+	for _, node := range filtered {
+		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, nodeToCandidate(snapshot, node))
+	}
+
+	replicas := []placement.ReplicaSpec{{
+		Index:           inst.Idx,
+		CPU:             app.CPU,
+		MemoryMB:        app.MemoryMB,
+		DiskMB:          app.DiskMB,
+		RuntimeProvider: app.RuntimeProvider,
+	}}
+
+	placementReq := placement.ReplicaPlacementRequest{
+		AppID:           app.ID,
+		Replicas:        replicas,
+		ExistingNodeMap: existingNodeMap,
+	}
+	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+	if err != nil {
+		return nil, err
+	}
+
+	if len(result.Placements) == 0 {
+		// Restore instance
+		_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "failed")
+		s.mu.Lock()
+		s.metrics.FailedReplacementsTotal++
+		s.mu.Unlock()
+		return &domain.PlacementReason{
+			InstanceID: inst.ID,
+			Accepted:   false,
+			Reasons:    []string{"no replacement node found"},
+		}, nil
+	}
+
+	p := result.Placements[0]
+	// Update instance to new node
+	_, _ = s.store.UpdateInstanceNode(ctx, inst.ID, p.NodeID)
+	_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "pending")
+
+	return &domain.PlacementReason{
+		InstanceID: inst.ID,
+		NodeID:     p.NodeID,
+		Score:      p.Score,
+		Accepted:   true,
+		Reasons:    append(p.Reasons, "replaced failed instance"),
+	}, nil
+}
+
+func filterByRuntimeProvider(nodes []store.Node, runtime string) []store.Node {
+	var filtered []store.Node
+	for _, n := range nodes {
+		if n.RuntimeProvider == "" || n.RuntimeProvider == runtime || runtime == "" {
+			filtered = append(filtered, n)
+		}
+	}
+	if len(filtered) == 0 {
+		return nodes
+	}
+	return filtered
 }
 
 func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) placement.Candidate {
@@ -232,6 +634,10 @@ func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) place
 	regionID := ""
 	if node.RegionID != nil {
 		regionID = *node.RegionID
+	}
+	storageLocality := "local"
+	if node.RuntimeProvider == "nfs" || node.RuntimeProvider == "shared" {
+		storageLocality = "shared"
 	}
 	return placement.Candidate{
 		NodeID:          node.ID,
@@ -249,17 +655,19 @@ func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) place
 		Maintenance:     node.Maintenance,
 		Draining:        node.Draining,
 		Status:          status,
+		StorageLocality: storageLocality,
 	}
 }
 
 func toWorkloadRequest(req domain.PlacementRequest) placement.WorkloadRequest {
 	return placement.WorkloadRequest{
-		CPU:           req.CPU,
-		MemoryMB:      req.MemoryMB,
-		DiskMB:        req.DiskMB,
-		PreferredNode: req.PreferredNode,
-		RequiredNode:  req.RequiredNode,
-		RegionID:      req.RegionID,
+		CPU:             req.CPU,
+		MemoryMB:        req.MemoryMB,
+		DiskMB:          req.DiskMB,
+		PreferredNode:   req.PreferredNode,
+		RequiredNode:    req.RequiredNode,
+		RegionID:        req.RegionID,
+		StorageLocality: req.StorageLocality,
 	}
 }
 

@@ -170,6 +170,20 @@ export type UpdateAppInput = {
   autoDeploy?: boolean;
 };
 
+export type AppCertificate = {
+  id: string;
+  domain: string;
+  status: string;
+  issuer: string;
+  expiresAt?: string;
+  issuedAt?: string;
+  autoRenew: boolean;
+};
+
+export function fetchAppCertificates(appId: string): Promise<AppCertificate[]> {
+  return fetchJSON<AppCertificate[]>(`/apps/${encodeURIComponent(appId)}/certificates`);
+}
+
 export type GitSource = {
   repoUrl: string;
   branch: string;
@@ -177,6 +191,7 @@ export type GitSource = {
   commits: GitCommit[];
   webhookUrl: string;
   autoDeploy: boolean;
+  lastBuildStatus?: string;
 };
 
 export type GitCommit = {
@@ -194,109 +209,111 @@ export type AppLogEntry = {
 };
 
 import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON } from "./http";
+import { getAllTemplates } from "@/lib/app-templates-data";
 
 export function fetchApps(): Promise<ApiApp[]> {
-  return fetchJSON<ApiApp[]>("/admin/apps");
+  return fetchJSON<ApiApp[]>("/apps");
 }
 
 export function fetchApp(id: string): Promise<ApiAppDetail> {
-  return fetchJSON<ApiAppDetail>(`/admin/apps/${encodeURIComponent(id)}`);
+  return fetchJSON<ApiAppDetail>(`/apps/${encodeURIComponent(id)}`);
 }
 
 export function createApp(input: CreateAppInput): Promise<ApiApp> {
-  return postJSON<ApiApp>("/admin/apps", input);
+  return postJSON<ApiApp>("/apps", input);
 }
 
 export function updateApp(id: string, input: UpdateAppInput): Promise<ApiApp> {
-  return patchJSON<ApiApp>(`/admin/apps/${encodeURIComponent(id)}`, input);
+  return putJSON<ApiApp>(`/apps/${encodeURIComponent(id)}`, input);
 }
 
 export function deleteApp(id: string): Promise<void> {
-  return deleteJSON(`/admin/apps/${encodeURIComponent(id)}`);
+  return deleteJSON(`/apps/${encodeURIComponent(id)}`);
 }
 
 export function startApp(id: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(id)}/start`);
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(id)}/start`);
 }
 
 export function stopApp(id: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(id)}/stop`);
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(id)}/stop`);
 }
 
 export function restartApp(id: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(id)}/restart`);
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(id)}/restart`);
 }
 
 export function fetchAppDeployments(appId: string): Promise<AppDeployment[]> {
-  return fetchJSON<AppDeployment[]>(`/admin/apps/${encodeURIComponent(appId)}/deployments`);
+  return fetchJSON<AppDeployment[]>(`/apps/${encodeURIComponent(appId)}/deployments`);
 }
 
-export function fetchAllDeployments(): Promise<AppDeployment[]> {
-  return fetchJSON<AppDeployment[]>("/admin/deployments/apps");
+export async function fetchAllDeployments(): Promise<AppDeployment[]> {
+  const res = await fetchJSON<{ data: AppDeployment[] }>("/admin/deployments?type=app");
+  return res.data ?? [];
 }
 
 export function triggerDeploy(appId: string): Promise<AppDeployment> {
-  return postJSON<AppDeployment>(`/admin/apps/${encodeURIComponent(appId)}/deploy`);
+  return postJSON<AppDeployment>(`/apps/${encodeURIComponent(appId)}/deploy`);
 }
 
 export function fetchAppLogs(appId: string): Promise<AppLogEntry[]> {
-  return fetchJSON<AppLogEntry[]>(`/admin/apps/${encodeURIComponent(appId)}/logs`);
+  return fetchJSON<AppLogEntry[]>(`/apps/${encodeURIComponent(appId)}/logs`);
 }
 
 export function fetchAppServiceLogs(appId: string, service: string): Promise<AppLogEntry[]> {
-  return fetchJSON<AppLogEntry[]>(`/admin/apps/${encodeURIComponent(appId)}/compose/services/${encodeURIComponent(service)}/logs`);
+  return fetchJSON<AppLogEntry[]>(`/apps/${encodeURIComponent(appId)}/compose/services/${encodeURIComponent(service)}/logs`);
 }
 
 export function fetchAppDomains(appId: string): Promise<AppDomain[]> {
-  return fetchJSON<AppDomain[]>(`/admin/apps/${encodeURIComponent(appId)}/domains`);
+  return fetchJSON<AppDomain[]>(`/apps/${encodeURIComponent(appId)}/domains`);
 }
 
 export function addAppDomain(appId: string, domain: string, enableTls?: boolean): Promise<AppDomain> {
-  return postJSON<AppDomain>(`/admin/apps/${encodeURIComponent(appId)}/domains`, { domain, enableTls });
+  return postJSON<AppDomain>(`/apps/${encodeURIComponent(appId)}/domains`, { domain, enableTls });
 }
 
 export function deleteAppDomain(appId: string, domainId: string): Promise<void> {
-  return deleteJSON(`/admin/apps/${encodeURIComponent(appId)}/domains/${encodeURIComponent(domainId)}`);
+  return deleteJSON(`/apps/${encodeURIComponent(appId)}/domains/${encodeURIComponent(domainId)}`);
 }
 
 export function fetchAppBackups(appId: string): Promise<AppBackup[]> {
-  return fetchJSON<AppBackup[]>(`/admin/apps/${encodeURIComponent(appId)}/backups`);
+  return fetchJSON<AppBackup[]>(`/apps/${encodeURIComponent(appId)}/backups`);
 }
 
 export function createAppBackup(appId: string, name?: string): Promise<AppBackup> {
-  return postJSON<AppBackup>(`/admin/apps/${encodeURIComponent(appId)}/backups`, { name });
+  return postJSON<AppBackup>(`/apps/${encodeURIComponent(appId)}/backups`, { name });
 }
 
 export function restoreAppBackup(appId: string, backupId: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupId)}/restore`);
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupId)}/restore`);
 }
 
 export function deleteAppBackup(appId: string, backupId: string): Promise<void> {
-  return deleteJSON(`/admin/apps/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupId)}`);
+  return deleteJSON(`/apps/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupId)}`);
 }
 
 export function fetchAppComposeConfig(appId: string): Promise<{ content: string; services: ComposeService[] }> {
-  return fetchJSON<{ content: string; services: ComposeService[] }>(`/admin/apps/${encodeURIComponent(appId)}/compose`);
+  return fetchJSON<{ content: string; services: ComposeService[] }>(`/apps/${encodeURIComponent(appId)}/compose`);
 }
 
 export function updateAppComposeConfig(appId: string, content: string): Promise<{ ok: boolean }> {
-  return putJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(appId)}/compose`, { content });
+  return putJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/compose`, { content });
 }
 
 export function redeployComposeStack(appId: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(appId)}/compose/redeploy`);
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/compose/redeploy`);
 }
 
 export function fetchAppGitSource(appId: string): Promise<GitSource> {
-  return fetchJSON<GitSource>(`/admin/apps/${encodeURIComponent(appId)}/git`);
+  return fetchJSON<GitSource>(`/apps/${encodeURIComponent(appId)}/git`);
 }
 
 export function updateAppGitBranch(appId: string, branch: string): Promise<{ ok: boolean }> {
-  return patchJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(appId)}/git`, { branch });
+  return patchJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/git`, { branch });
 }
 
 export function toggleAppAutoDeploy(appId: string, enabled: boolean): Promise<{ ok: boolean }> {
-  return patchJSON<{ ok: boolean }>(`/admin/apps/${encodeURIComponent(appId)}/git/auto-deploy`, { enabled });
+  return patchJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/git/auto-deploy`, { enabled });
 }
 
 export function fetchAppConsoleWSURL(appId: string): string {
@@ -305,11 +322,15 @@ export function fetchAppConsoleWSURL(appId: string): string {
     (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");
   const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsBase = API_BASE_URL.replace("http:", protocol).replace("https:", protocol);
-  return `${wsBase}/admin/apps/${encodeURIComponent(appId)}/ws/console`;
+  return `${wsBase}/apps/${encodeURIComponent(appId)}/ws/console`;
 }
 
-export function fetchAppTemplates(): Promise<AppTemplate[]> {
-  return fetchJSON<AppTemplate[]>("/admin/app-templates");
+export async function fetchAppTemplates(): Promise<AppTemplate[]> {
+  try {
+    return await fetchJSON<AppTemplate[]>("/admin/app-templates");
+  } catch {
+    return getAllTemplates();
+  }
 }
 
 export function typeLabel(type: AppType): string {
@@ -346,4 +367,16 @@ export function deploymentStatusTone(status: DeploymentStatus): "green" | "red" 
     case "pending": return "yellow";
     default: return "neutral";
   }
+}
+
+export type DNSProvider = {
+  id: string;
+  name: string;
+  provider: string;
+  verificationStatus?: string;
+  createdAt: string;
+};
+
+export function fetchDNSProviders(): Promise<DNSProvider[]> {
+  return fetchJSON<DNSProvider[]>("/dns/providers");
 }

@@ -21,14 +21,14 @@ type CloneResult struct {
 	ProjectType string
 }
 
-type DeployRequest struct {
+type DeployFromGitRequest struct {
 	GitSourceID    string            `json:"gitSourceId"`
 	ImageTag       string            `json:"imageTag"`
 	DockerfilePath string            `json:"dockerfilePath"`
 	BuildArgs      map[string]string `json:"buildArgs"`
 }
 
-type DeployResult struct {
+type DeployFromGitResult struct {
 	GitSource store.GitSource `json:"gitSource"`
 	ImageTag  string          `json:"imageTag"`
 	CommitSHA string          `json:"commitSha"`
@@ -60,16 +60,73 @@ func (d *DeployService) TriggerDeploy(ctx context.Context, sourceID string) erro
 	return err
 }
 
-func (d *DeployService) CloneRepo(ctx context.Context, repoURL, branch, sourceID string) (*CloneResult, error) {
-	if err := validateRepoURL(repoURL); err != nil {
-		return nil, err
+func (d *DeployService) CloneRepo(ctx context.Context, repoURL, branch, sourceID, credentialID string) (*CloneResult, error) {
+	return d.cloneWithOptions(ctx, repoURL, branch, "", sourceID, credentialID)
+}
+
+func (d *DeployService) CloneAtCommit(ctx context.Context, repoURL, branch, commitSHA, sourceID, credentialID string) (*CloneResult, error) {
+	if commitSHA == "" {
+		return nil, fmt.Errorf("commitSHA is required for CloneAtCommit")
 	}
+	return d.cloneWithOptions(ctx, repoURL, branch, commitSHA, sourceID, credentialID)
+}
+
+func (d *DeployService) cloneWithOptions(ctx context.Context, repoURL, branch, commitSHA, sourceID, credentialID string) (*CloneResult, error) {
+	var credential *store.GitCredential
+	var sshKeyFile, askPassFile string
+
+	if credentialID != "" && d.store != nil {
+		cred, err := d.store.GetGitCredentialUnmasked(ctx, credentialID)
+		if err != nil {
+			return nil, fmt.Errorf("get credential: %w", err)
+		}
+		credential = &cred
+
+		if cred.CredentialType == store.GitCredentialSSHKey {
+			keyFile, err := writeSSHKeyFile(cred.Credential)
+			if err != nil {
+				return nil, fmt.Errorf("write ssh key: %w", err)
+			}
+			sshKeyFile = keyFile
+			defer os.Remove(keyFile)
+		} else if cred.CredentialType == store.GitCredentialHTTPSToken {
+			af, err := writeAskPassScript(cred.Credential, "x-oauth-basic")
+			if err != nil {
+				return nil, fmt.Errorf("write askpass script: %w", err)
+			}
+			askPassFile = af
+			defer os.Remove(af)
+		} else if cred.CredentialType == store.GitCredentialHTTPSPass {
+			parts := strings.SplitN(cred.Credential, ":", 2)
+			user, pass := parts[0], ""
+			if len(parts) == 2 {
+				pass = parts[1]
+			}
+			af, err := writeAskPassScript(user, pass)
+			if err != nil {
+				return nil, fmt.Errorf("write askpass script: %w", err)
+			}
+			askPassFile = af
+			defer os.Remove(af)
+		}
+	}
+
+	if credential != nil && credential.CredentialType == store.GitCredentialSSHKey {
+		if err := validateSSHRepoURL(repoURL); err != nil {
+			return nil, err
+		}
+	} else {
+		if err := ValidateRepoURL(repoURL); err != nil {
+			return nil, err
+		}
+	}
+
 	if !validateBranch(branch) {
 		return nil, ErrInvalidBranch
 	}
 
 	targetDir := filepath.Join(d.tempBaseDir, "git-sources", sourceID)
-	safeDir, err := safeClonePath(targetDir)
+	safeDir, err := safeClonePath(targetDir, d.tempBaseDir)
 	if err != nil {
 		return nil, err
 	}
@@ -81,6 +138,14 @@ func (d *DeployService) CloneRepo(ctx context.Context, repoURL, branch, sourceID
 		return nil, fmt.Errorf("create clone parent directory: %w", err)
 	}
 
+	var cleanup bool
+	defer func() {
+		if cleanup {
+			os.RemoveAll(safeDir)
+		}
+	}()
+	cleanup = true
+
 	cloneCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 	defer cancel()
 
@@ -88,20 +153,37 @@ func (d *DeployService) CloneRepo(ctx context.Context, repoURL, branch, sourceID
 		return nil, err
 	}
 
-	cmd := exec.CommandContext(cloneCtx, "git", "clone",
-		"--depth", "1",
-		"--single-branch",
-		"--branch", branch,
-		"--no-tags",
-		"--config", "core.symlinks=false",
-		repoURL, safeDir,
-	)
+	args := []string{"clone", "--depth", "1", "--single-branch", "--branch", branch, "--no-tags", "--config", "core.symlinks=false"}
+
+	args = append(args, repoURL, safeDir)
+
+	cmd := exec.CommandContext(cloneCtx, "git", args...)
 	cmd.Env = append(os.Environ(), "GIT_TERMINAL_PROMPT=0")
+	if sshKeyFile != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_SSH_COMMAND=ssh -i %q -o StrictHostKeyChecking=accept-new", sshKeyFile))
+	}
+	if askPassFile != "" {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("GIT_ASKPASS=%s", askPassFile))
+	}
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return nil, fmt.Errorf("%w: %v (output: %s)", ErrCloneFailed, err, string(out))
 	}
 
-	commitSHA, err := resolveCommitSHA(cloneCtx, safeDir)
+	if commitSHA != "" {
+		fetchCmd := exec.CommandContext(cloneCtx, "git", "-C", safeDir, "fetch", "--depth", "1", "origin", commitSHA)
+		fetchCmd.Env = cmd.Env
+		if out, err := fetchCmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("fetch commit %s: %v (output: %s)", commitSHA, err, string(out))
+		}
+
+		checkoutCmd := exec.CommandContext(cloneCtx, "git", "-C", safeDir, "checkout", commitSHA)
+		checkoutCmd.Env = cmd.Env
+		if out, err := checkoutCmd.CombinedOutput(); err != nil {
+			return nil, fmt.Errorf("checkout commit %s: %v (output: %s)", commitSHA, err, string(out))
+		}
+	}
+
+	resolvedSHA, err := resolveCommitSHA(cloneCtx, safeDir)
 	if err != nil {
 		return nil, err
 	}
@@ -118,12 +200,72 @@ func (d *DeployService) CloneRepo(ctx context.Context, repoURL, branch, sourceID
 		return nil, ErrBuildContextTooBig
 	}
 
+	cleanup = false
 	return &CloneResult{
 		Dir:         safeDir,
-		CommitSHA:   commitSHA,
+		CommitSHA:   resolvedSHA,
 		Branch:      branch,
 		ProjectType: projectType,
 	}, nil
+}
+
+func writeSSHKeyFile(privateKey string) (string, error) {
+	f, err := os.CreateTemp("", "git-ssh-key-*")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if err := os.Chmod(f.Name(), 0600); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+
+	if _, err := f.WriteString(privateKey); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+
+	return f.Name(), nil
+}
+
+func writeAskPassScript(username, password string) (string, error) {
+	script := fmt.Sprintf("#!/bin/sh\ncase \"$1\" in\n    *Username*) echo %s ;;\n    *Password*) echo %s ;;\nesac\n", shellQuote(username), shellQuote(password))
+	f, err := os.CreateTemp("", "git-askpass-*")
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+
+	if err := os.Chmod(f.Name(), 0700); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+
+	if _, err := f.WriteString(script); err != nil {
+		os.Remove(f.Name())
+		return "", err
+	}
+
+	return f.Name(), nil
+}
+
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
+}
+
+func validateSSHRepoURL(repoURL string) error {
+	repoURL = strings.TrimSpace(repoURL)
+	if repoURL == "" {
+		return ErrInvalidRepoURL
+	}
+	if !strings.HasPrefix(repoURL, "git@") {
+		return ValidateRepoURL(repoURL)
+	}
+	if strings.Contains(repoURL, ";") || strings.Contains(repoURL, "`") || strings.Contains(repoURL, "..") {
+		return ErrInvalidRepoURL
+	}
+	return nil
 }
 
 func (d *DeployService) CleanupClone(cloneDir string) error {
@@ -138,13 +280,13 @@ func (d *DeployService) CleanupClone(cloneDir string) error {
 	return nil
 }
 
-func (d *DeployService) DeployFromGit(ctx context.Context, req DeployRequest) (*DeployResult, error) {
+func (d *DeployService) DeployFromGit(ctx context.Context, req DeployFromGitRequest) (*DeployFromGitResult, error) {
 	gs, err := d.store.GetGitSource(ctx, req.GitSourceID)
 	if err != nil {
 		return nil, fmt.Errorf("get git source: %w", err)
 	}
 
-	cloneResult, err := d.CloneRepo(ctx, gs.RepositoryURL, gs.Branch, gs.ID)
+	cloneResult, err := d.CloneRepo(ctx, gs.RepositoryURL, gs.Branch, gs.ID, "")
 	if err != nil {
 		return nil, fmt.Errorf("clone repo: %w", err)
 	}
@@ -174,7 +316,7 @@ func (d *DeployService) DeployFromGit(ctx context.Context, req DeployRequest) (*
 
 	_ = d.store.UpdateGitSourceDeploy(ctx, gs.ID, cloneResult.CommitSHA, "", "")
 
-	return &DeployResult{
+	return &DeployFromGitResult{
 		GitSource: gs,
 		ImageTag:  imageTag,
 		CommitSHA: cloneResult.CommitSHA,
@@ -259,7 +401,7 @@ func validateBranch(branch string) bool {
 	return true
 }
 
-func validateRepoURL(repoURL string) error {
+func ValidateRepoURL(repoURL string) error {
 	repoURL = strings.TrimSpace(repoURL)
 	if repoURL == "" {
 		return ErrInvalidRepoURL
@@ -283,10 +425,9 @@ func validateRepoURL(repoURL string) error {
 	return nil
 }
 
-func safeClonePath(target string) (string, error) {
+func safeClonePath(target, tempBase string) (string, error) {
 	cleaned := filepath.Clean(target)
-	base := os.TempDir()
-	gitSourcesBase := filepath.Join(base, "git-sources")
+	gitSourcesBase := filepath.Join(tempBase, "git-sources")
 	if !strings.HasPrefix(cleaned, gitSourcesBase) {
 		return "", fmt.Errorf("clone path must be under %s", gitSourcesBase)
 	}
@@ -312,16 +453,20 @@ func resolveCommitSHA(ctx context.Context, dir string) (string, error) {
 }
 
 func detectProjectType(dir string) string {
-	entries := map[string]string{
-		"Dockerfile":              "dockerfile",
-		"docker-compose.yml":      "compose",
-		"compose.yml":             "compose",
-		"docker-compose.yaml":     "compose",
-		"compose.yaml":            "compose",
+	type ptEntry struct {
+		filename string
+		pt       string
 	}
-	for relPath, pt := range entries {
-		if fi, err := os.Stat(filepath.Join(dir, relPath)); err == nil && !fi.IsDir() {
-			return pt
+	entries := []ptEntry{
+		{"Dockerfile", "dockerfile"},
+		{"docker-compose.yml", "compose"},
+		{"compose.yml", "compose"},
+		{"docker-compose.yaml", "compose"},
+		{"compose.yaml", "compose"},
+	}
+	for _, e := range entries {
+		if fi, err := os.Stat(filepath.Join(dir, e.filename)); err == nil && !fi.IsDir() {
+			return e.pt
 		}
 	}
 	if fi, err := os.Stat(filepath.Join(dir, "index.html")); err == nil && !fi.IsDir() {
@@ -330,15 +475,36 @@ func detectProjectType(dir string) string {
 	return projectTypeUnknown
 }
 
+func (d *DeployService) TriggerDeployment(ctx context.Context, req *DeployRequest) (*DeployFromGitResult, error) {
+	return d.DeployFromGit(ctx, DeployFromGitRequest{
+		GitSourceID:    req.GitSourceID,
+		ImageTag:       req.ImageTag,
+		DockerfilePath: req.DockerfilePath,
+		BuildArgs:      req.BuildArgs,
+	})
+}
+
+func (d *DeployService) GetDeploymentStatus(ctx context.Context, gitSourceID string) (*store.GitDeployment, error) {
+	return d.store.GetLatestGitDeployment(ctx, gitSourceID)
+}
+
+func (d *DeployService) ListDeployments(ctx context.Context, gitSourceID string, limit int) ([]store.GitDeployment, error) {
+	return d.store.ListGitDeployments(ctx, gitSourceID, limit)
+}
+
+func (d *DeployService) CancelDeployment(ctx context.Context, deploymentID string) error {
+	return d.store.UpdateGitDeployment(ctx, deploymentID, "cancelled", "", "")
+}
+
 func dirSize(dir string) (int64, error) {
 	var size int64
-	err := filepath.Walk(dir, func(_ string, info os.FileInfo, err error) error {
+	err := filepath.Walk(dir, func(walkPath string, info os.FileInfo, err error) error {
 		if err != nil {
 			return err
 		}
 		if !info.IsDir() {
 			if info.Mode()&os.ModeSymlink != 0 {
-				target, readErr := os.Readlink(info.Name())
+				target, readErr := os.Readlink(walkPath)
 				if readErr != nil || !filepath.IsLocal(target) || strings.Contains(target, "..") {
 					return fmt.Errorf("rejected symlink in build context: %q -> %q", info.Name(), target)
 				}

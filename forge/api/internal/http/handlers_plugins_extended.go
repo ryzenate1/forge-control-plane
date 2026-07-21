@@ -1,6 +1,8 @@
 package http
 
 import (
+	"encoding/json"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -10,7 +12,16 @@ func registerPluginRoutes(protected fiber.Router, cfg Config) {
 	pluginGroup := protected.Group("/admin/plugins", requireRole("admin"))
 
 	pluginGroup.Get("/marketplace", func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"marketplace": []any{}})
+		if pluginSvc == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		all, err := pluginSvc.List(ctx)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(fiber.Map{"marketplace": all})
 	})
 
 	pluginGroup.Get("/discover", func(c *fiber.Ctx) error {
@@ -26,11 +37,36 @@ func registerPluginRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(fiber.Map{"plugins": discovered})
 	})
 
-	// These endpoints belong to the planned runtime API. Keep their response
-	// explicit rather than allowing metadata registry state to imply execution.
-	pluginGroup.Post("/install", pluginRuntimeUnavailable("install"))
-	pluginGroup.Post("/:id/enable", pluginRuntimeUnavailable("enable"))
-	pluginGroup.Post("/:id/disable", pluginRuntimeUnavailable("disable"))
-	pluginGroup.Put("/:id/settings", pluginRuntimeUnavailable("settings"))
-	pluginGroup.Get("/:id/hooks", pluginRuntimeUnavailable("hooks"))
+	pluginGroup.Put("/:id/settings", func(c *fiber.Ctx) error {
+		if pluginSvc == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		var raw json.RawMessage
+		if err := c.BodyParser(&raw); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid settings body")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := pluginSvc.UpdateSettings(ctx, c.Params("id"), raw); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		plugin, err := pluginSvc.Get(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		return c.JSON(plugin)
+	})
+
+	pluginGroup.Get("/:id/hooks", func(c *fiber.Ctx) error {
+		if pluginSvc == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		results, err := pluginSvc.ExecuteHook(ctx, "info", map[string]any{"plugin_id": c.Params("id")})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"hooks": results})
+	})
 }

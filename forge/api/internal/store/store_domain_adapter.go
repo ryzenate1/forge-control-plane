@@ -2,10 +2,55 @@ package store
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"gamepanel/forge/internal/services/domains"
 )
+
+type DomainNodeResolver struct {
+	store *Store
+}
+
+func NewDomainNodeResolver(s *Store) *DomainNodeResolver {
+	return &DomainNodeResolver{store: s}
+}
+
+func (r *DomainNodeResolver) ResolveServerTarget(ctx context.Context, serverID string) (string, int, error) {
+	server, err := r.store.GetServer(ctx, serverID)
+	if err != nil {
+		return "", 0, fmt.Errorf("get server %s: %w", serverID, err)
+	}
+	node, err := r.store.GetNode(ctx, server.NodeID)
+	if err != nil {
+		return "", 0, fmt.Errorf("get node %s: %w", server.NodeID, err)
+	}
+	host := strings.TrimSpace(node.PublicHostname)
+	if host == "" {
+		host = strings.TrimSpace(node.FQDN)
+	}
+	if host == "" {
+		host = strings.TrimSpace(node.BaseURL)
+	}
+	if host == "" {
+		return "", 0, fmt.Errorf("node %s has no public hostname, fqdn, or base url", server.NodeID)
+	}
+
+	// Try to get the port from the server's primary allocation.
+	if server.PrimaryAllocationID != nil && *server.PrimaryAllocationID != "" {
+		allocations, err := r.store.ListServerAllocations(ctx, serverID)
+		if err == nil {
+			for _, a := range allocations {
+				if a.ID == *server.PrimaryAllocationID {
+					return host, a.Port, nil
+				}
+			}
+		}
+	}
+
+	return host, 8080, nil
+}
 
 type DomainAdapter struct {
 	store *Store

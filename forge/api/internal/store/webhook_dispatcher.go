@@ -35,7 +35,7 @@ func eventMatchesSubscription(event string, subs []string) bool {
 	return false
 }
 
-func wrapDiscordEmbed(wh Webhook, event string, raw []byte) []byte {
+func WrapDiscordEmbed(wh Webhook, event string, raw []byte) []byte {
 	var base map[string]any
 	_ = json.Unmarshal(raw, &base)
 	title := event

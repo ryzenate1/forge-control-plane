@@ -74,7 +74,7 @@ func setCSRFCookie(w http.ResponseWriter, token string, expires time.Time, cfg S
 		Name:     CSRFCookieName,
 		Value:    token,
 		Path:     "/",
-		HttpOnly: true,
+		HttpOnly: false,
 		Secure:   cfg.Secure,
 		SameSite: cfg.SameSite,
 		Expires:  expires,
@@ -102,7 +102,7 @@ func clearCSRFCookie(w http.ResponseWriter, cfg SessionCookieConfig) {
 		Name:     CSRFCookieName,
 		Value:    "",
 		Path:     "/",
-		HttpOnly: true,
+		HttpOnly: false,
 		Secure:   cfg.Secure,
 		SameSite: cfg.SameSite,
 		MaxAge:   -1,
@@ -181,7 +181,8 @@ func (s *exchangeCodeStore) cleanup() {
 	}
 }
 
-// ExchangeCodeHandler exchanges a single-use code for the session token.
+// ExchangeCodeHandler exchanges a single-use code for the session token and
+// sets HttpOnly cookies directly, so the client never receives the raw JWT.
 // Used by social auth callbacks to avoid placing the session token in the redirect URL.
 func ExchangeCodeHandler() fiber.Handler {
 	return func(c *fiber.Ctx) error {
@@ -198,10 +199,9 @@ func ExchangeCodeHandler() fiber.Handler {
 		if !ok {
 			return fiber.NewError(fiber.StatusNotFound, "invalid or expired exchange code")
 		}
-		return c.JSON(fiber.Map{
-			"token":      token,
-			"csrfToken":  csrfToken,
-		})
+		expires := time.Now().Add(tokenTTL)
+		setSessionCookies(c, token, csrfToken, expires)
+		return c.JSON(fiber.Map{"ok": true})
 	}
 }
 

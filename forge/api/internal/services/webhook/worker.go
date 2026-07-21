@@ -35,15 +35,30 @@ func (s *Service) Start(ctx context.Context) {
 }
 func (s *Service) loop(ctx context.Context) {
 	workerID := "webhook-" + uuid.NewString()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	const (
+		minInterval   = time.Second
+		maxInterval   = 30 * time.Second
+		idleThreshold = 5
+	)
+	interval := minInterval
+	consecutiveIdle := 0
 	for {
 		if !s.processOne(ctx, workerID) {
+			consecutiveIdle++
+			if consecutiveIdle >= idleThreshold {
+				interval = interval * 2
+				if interval > maxInterval {
+					interval = maxInterval
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-time.After(interval):
 			}
+		} else {
+			consecutiveIdle = 0
+			interval = minInterval
 		}
 		if ctx.Err() != nil {
 			return

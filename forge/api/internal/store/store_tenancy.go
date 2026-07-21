@@ -172,6 +172,23 @@ func (s *Store) CreateOrganization(ctx context.Context, req CreateOrganizationRe
 	return o, err
 }
 
+func (s *Store) UpdateOrganization(ctx context.Context, orgID, name, slug string) (Organization, error) {
+	name = strings.TrimSpace(name)
+	slug = strings.TrimSpace(strings.ToLower(slug))
+	if name == "" {
+		return Organization{}, errors.New("name is required")
+	}
+	if slug == "" {
+		slug = generateSlug(name)
+	}
+	if _, err := s.db.Exec(ctx, `
+		UPDATE organizations SET name = $1, slug = $2 WHERE id = $3
+	`, name, slug, orgID); err != nil {
+		return Organization{}, err
+	}
+	return s.GetOrganizationBySlug(ctx, slug)
+}
+
 func (s *Store) DeleteOrganization(ctx context.Context, orgID string, actorID *string) error {
 	tag, err := s.db.Exec(ctx, `DELETE FROM organizations WHERE id = $1`, orgID)
 	if err != nil {
@@ -585,4 +602,53 @@ func (s *Store) CountServersForOrg(ctx context.Context, orgID string) (int, erro
 	var count int
 	err := s.db.QueryRow(ctx, `SELECT count(*) FROM servers WHERE org_id = $1`, orgID).Scan(&count)
 	return count, err
+}
+
+// ---- Cross-Tenant Resource Verification ----
+
+// ServerBelongsToOrg returns true when the server exists under the given org.
+func (s *Store) ServerBelongsToOrg(ctx context.Context, serverID, orgID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id = $1 AND org_id = $2)`, serverID, orgID).Scan(&exists)
+	return exists, err
+}
+
+// BackupBelongsToOrg returns true when the backup's server belongs to the given org.
+func (s *Store) BackupBelongsToOrg(ctx context.Context, backupID, orgID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM backups b
+			JOIN servers s ON s.id = b.server_id
+			WHERE b.uuid = $1 AND s.org_id = $2
+		)
+	`, backupID, orgID).Scan(&exists)
+	return exists, err
+}
+
+// DeploymentBelongsToOrg returns true when the deployment's server belongs to the given org.
+func (s *Store) DeploymentBelongsToOrg(ctx context.Context, deploymentID, orgID string) (bool, error) {
+	var exists bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM deployments d
+			JOIN servers s ON s.id = d.server_id
+			WHERE d.id = $1 AND s.org_id = $2
+		)
+	`, deploymentID, orgID).Scan(&exists)
+	return exists, err
+}
+
+// UserCanAccessOrgResource checks whether a user can access a server-scoped
+// resource within an org. Admins always pass. Non-admins must be org members
+// and the resource server must belong to that org.
+func (s *Store) UserCanAccessOrgResource(ctx context.Context, serverID, orgID, userID, userRole string) (bool, error) {
+	if userRole == "admin" {
+		return true, nil
+	}
+	member, err := s.UserIsOrgMember(ctx, orgID, userID)
+	if err != nil || !member {
+		return false, err
+	}
+	return s.ServerBelongsToOrg(ctx, serverID, orgID)
 }

@@ -2,95 +2,70 @@ package compose
 
 import (
 	"fmt"
-	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
+	"time"
 
 	"go.yaml.in/yaml/v3"
 )
 
-type ParsedCompose struct {
-	Version  string           `json:"version,omitempty"`
-	Name     string           `json:"name,omitempty"`
-	Services []ServiceSummary `json:"services"`
-	Networks []NetworkSummary `json:"networks,omitempty"`
-	Volumes  []VolumeSummary  `json:"volumes,omitempty"`
-	Secrets  []SecretSummary  `json:"secrets,omitempty"`
-	Configs  []ConfigSummary  `json:"configs,omitempty"`
+type GitStackConfig struct {
+	SourceID         string `json:"sourceId,omitempty"`
+	RepositoryURL    string `json:"repositoryUrl,omitempty"`
+	RepositoryPath   string `json:"repositoryPath,omitempty"`
+	Branch           string `json:"branch,omitempty"`
+	CommitSHA        string `json:"commitSha,omitempty"`
+	DesiredCommitSHA string `json:"desiredCommitSha,omitempty"`
+	PreviousCommit   string `json:"previousCommit,omitempty"`
+	PreviousCompose  string `json:"previousCompose,omitempty"`
+	AutoUpdate       bool   `json:"autoUpdate"`
+	PollIntervalSec  int    `json:"pollIntervalSec,omitempty"`
+	WebhookID        string `json:"webhookId,omitempty"`
+	UpdateStatus     string `json:"updateStatus,omitempty"`
+	UpdateError      string `json:"updateError,omitempty"`
+	CredentialID     string `json:"credentialId,omitempty"`
 }
 
-type ServiceSummary struct {
-	Name        string            `json:"name"`
-	Image       string            `json:"image,omitempty"`
-	Build       *BuildSummary     `json:"build,omitempty"`
-	Ports       []string          `json:"ports,omitempty"`
-	Environment map[string]string `json:"environment,omitempty"`
-	Volumes     []string          `json:"volumes,omitempty"`
-	DependsOn   []string          `json:"dependsOn,omitempty"`
-	Profiles    []string          `json:"profiles,omitempty"`
-	Restart     string            `json:"restart,omitempty"`
-	Command     string            `json:"command,omitempty"`
-	Entrypoint  string            `json:"entrypoint,omitempty"`
-	HealthCheck *HealthSummary    `json:"healthcheck,omitempty"`
-	Deploy      *DeploySummary    `json:"deploy,omitempty"`
+type GitUpdatePreview struct {
+	StackID         string    `json:"stackId"`
+	CurrentCommit   string    `json:"currentCommit"`
+	DesiredCommit   string    `json:"desiredCommit"`
+	CurrentBranch   string    `json:"currentBranch"`
+	HasUpdate       bool      `json:"hasUpdate"`
+	ServicesChanged []string  `json:"servicesChanged,omitempty"`
+	PreviewYAML     string    `json:"previewYaml,omitempty"`
+	CheckedAt       time.Time `json:"checkedAt"`
 }
 
-type BuildSummary struct {
-	Context    string            `json:"context,omitempty"`
-	Dockerfile string            `json:"dockerfile,omitempty"`
-	Args       map[string]string `json:"args,omitempty"`
-	Target     string            `json:"target,omitempty"`
+type GitServiceState struct {
+	Name       string `json:"name"`
+	Image      string `json:"image"`
+	Status     string `json:"status"`
+	State      string `json:"state"`
+	Ports      string `json:"ports"`
+	UpdateOK   bool   `json:"updateOk"`
+	UpdateMsg  string `json:"updateMsg,omitempty"`
 }
 
-type HealthSummary struct {
-	Test        []string `json:"test,omitempty"`
-	Interval    string   `json:"interval,omitempty"`
-	Timeout     string   `json:"timeout,omitempty"`
-	Retries     int      `json:"retries,omitempty"`
-	StartPeriod string   `json:"startPeriod,omitempty"`
-	Disable     bool     `json:"disable,omitempty"`
-}
-
-type DeploySummary struct {
-	Mode      string           `json:"mode,omitempty"`
-	Replicas  int              `json:"replicas,omitempty"`
-	Resources *ResourceSummary `json:"resources,omitempty"`
-}
-
-type ResourceSummary struct {
-	Limits       map[string]string `json:"limits,omitempty"`
-	Reservations map[string]string `json:"reservations,omitempty"`
-}
-
-type NetworkSummary struct {
-	Name     string            `json:"name"`
-	Driver   string            `json:"driver,omitempty"`
-	External bool              `json:"external,omitempty"`
-	Labels   map[string]string `json:"labels,omitempty"`
-}
-
-type VolumeSummary struct {
-	Name     string            `json:"name"`
-	Driver   string            `json:"driver,omitempty"`
-	External bool              `json:"external,omitempty"`
-	Labels   map[string]string `json:"labels,omitempty"`
-}
-
-type SecretSummary struct {
-	Name     string `json:"name"`
-	File     string `json:"file,omitempty"`
-	External bool   `json:"external,omitempty"`
-}
-
-type ConfigSummary struct {
-	Name     string `json:"name"`
-	File     string `json:"file,omitempty"`
-	External bool   `json:"external,omitempty"`
+type GitDeployResult struct {
+	StackID      string           `json:"stackId"`
+	CommitSHA    string            `json:"commitSha"`
+	Branch       string            `json:"branch"`
+	Services     []GitServiceState `json:"services,omitempty"`
+	Status       string            `json:"status"`
+	Error        string            `json:"error,omitempty"`
 }
 
 type ValidationError struct {
 	Field   string `json:"field"`
 	Message string `json:"message"`
+}
+
+type ValidationIssue struct {
+	Field    string `json:"field"`
+	Message  string `json:"message"`
+	Severity string `json:"severity"`
 }
 
 type ValidateResult struct {
@@ -157,15 +132,19 @@ type rawInclude struct {
 }
 
 func (s *Service) Parse(content []byte, workingDir string) (*ParsedCompose, error) {
-	return s.ParseComposeYAML(content, workingDir)
+	return s.ParseComposeYAML(content, workingDir, nil)
 }
 
 func (s *Service) Validate(content []byte, workingDir string) *ValidateResult {
 	return s.ValidateCompose(content, workingDir)
 }
 
-func (s *Service) ParseComposeYAML(content []byte, workingDir string) (*ParsedCompose, error) {
-	content = interpolateEnv(content)
+func (s *Service) ParseComposeYAML(content []byte, workingDir string, envVars map[string]string) (*ParsedCompose, error) {
+	var err error
+	content, err = interpolateEnv(content, envVars)
+	if err != nil {
+		return nil, err
+	}
 
 	var raw rawCompose
 	if err := yaml.Unmarshal(content, &raw); err != nil {
@@ -255,7 +234,7 @@ func (s *Service) ParseComposeYAML(content []byte, workingDir string) (*ParsedCo
 func (s *Service) ValidateCompose(content []byte, workingDir string) *ValidateResult {
 	result := &ValidateResult{Valid: true}
 
-	parsed, err := s.ParseComposeYAML(content, workingDir)
+	parsed, err := s.ParseComposeYAML(content, workingDir, nil)
 	if err != nil {
 		result.Valid = false
 		result.Errors = append(result.Errors, ValidationError{
@@ -304,6 +283,25 @@ func (s *Service) ValidateCompose(content []byte, workingDir string) *ValidateRe
 		}
 	}
 
+	var rawMap map[string]interface{}
+	if err := yaml.Unmarshal(content, &rawMap); err == nil {
+		issues := ValidateComposeSecurity(rawMap)
+		for _, issue := range issues {
+			if issue.Severity == "error" {
+				result.Valid = false
+				result.Errors = append(result.Errors, ValidationError{
+					Field:   issue.Field,
+					Message: issue.Message,
+				})
+			} else {
+				result.Warnings = append(result.Warnings, ValidationError{
+					Field:   issue.Field,
+					Message: issue.Message,
+				})
+			}
+		}
+	}
+
 	for _, sec := range parsed.Secrets {
 		if sec.External {
 			result.Warnings = append(result.Warnings, ValidationError{
@@ -326,12 +324,12 @@ func (s *Service) ValidateCompose(content []byte, workingDir string) *ValidateRe
 }
 
 func (s *Service) ImportComposeProject(content []byte, name, workingDir string) (*ParsedCompose, error) {
-	return s.ParseComposeYAML(content, workingDir)
+	return s.ParseComposeYAML(content, workingDir, nil)
 }
 
 func ParseSummary(content []byte, workingDir string) (*ParsedCompose, error) {
 	var s Service
-	return s.ParseComposeYAML(content, workingDir)
+	return s.ParseComposeYAML(content, workingDir, nil)
 }
 
 func ValidateSummary(content []byte, workingDir string) *ValidateResult {
@@ -339,17 +337,305 @@ func ValidateSummary(content []byte, workingDir string) *ValidateResult {
 	return s.ValidateCompose(content, workingDir)
 }
 
-func interpolateEnv(content []byte) []byte {
-	result := string(content)
-	for _, e := range os.Environ() {
-		parts := strings.SplitN(e, "=", 2)
-		if len(parts) != 2 {
+var composeVarRe = regexp.MustCompile(`\$\{([^}]+)\}|\$\$`)
+
+func interpolateEnv(content []byte, envVars map[string]string) ([]byte, error) {
+	if envVars == nil {
+		envVars = map[string]string{}
+	}
+	var err error
+	out := composeVarRe.ReplaceAllFunc(content, func(match []byte) []byte {
+		if err != nil {
+			return nil
+		}
+		if string(match) == "$$" {
+			return []byte("$")
+		}
+		inner := string(match[2 : len(match)-1])
+
+		if idx := strings.Index(inner, ":-"); idx >= 0 {
+			name := inner[:idx]
+			def := inner[idx+2:]
+			if val, ok := envVars[name]; ok && val != "" {
+				return []byte(val)
+			}
+			return []byte(def)
+		}
+
+		if idx := strings.Index(inner, "-"); idx >= 0 {
+			name := inner[:idx]
+			def := inner[idx+1:]
+			if val, ok := envVars[name]; ok {
+				return []byte(val)
+			}
+			return []byte(def)
+		}
+
+		if idx := strings.Index(inner, ":?"); idx >= 0 {
+			name := inner[:idx]
+			msg := inner[idx+2:]
+			if val, ok := envVars[name]; ok && val != "" {
+				return []byte(val)
+			}
+			if msg == "" {
+				err = fmt.Errorf("required variable %q is unset", name)
+			} else {
+				err = fmt.Errorf("%s", msg)
+			}
+			return nil
+		}
+
+		if idx := strings.Index(inner, "?"); idx >= 0 {
+			name := inner[:idx]
+			msg := inner[idx+1:]
+			if val, ok := envVars[name]; ok {
+				return []byte(val)
+			}
+			if msg == "" {
+				err = fmt.Errorf("required variable %q is unset", name)
+			} else {
+				err = fmt.Errorf("%s", msg)
+			}
+			return nil
+		}
+
+		if val, ok := envVars[inner]; ok {
+			return []byte(val)
+		}
+		return []byte("")
+	})
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func ValidateComposeSecurity(rawCompose interface{}) []ValidationIssue {
+	var issues []ValidationIssue
+
+	compose, ok := rawCompose.(map[string]interface{})
+	if !ok {
+		return issues
+	}
+
+	services, ok := compose["services"].(map[string]interface{})
+	if !ok {
+		return issues
+	}
+
+	for name, svcRaw := range services {
+		svc, ok := svcRaw.(map[string]interface{})
+		if !ok {
 			continue
 		}
-		result = strings.ReplaceAll(result, "${"+parts[0]+"}", parts[1])
-		result = strings.ReplaceAll(result, "$"+parts[0], parts[1])
+
+		if privileged, ok := svc["privileged"]; ok {
+			if b, ok := privileged.(bool); ok && b {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.privileged", name),
+					Message:  "privileged mode is not allowed for security reasons",
+					Severity: "error",
+				})
+			}
+		}
+
+		if networkMode, ok := svc["network_mode"]; ok {
+			if mode, ok := networkMode.(string); ok && mode == "host" {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.network_mode", name),
+					Message:  "network_mode 'host' is not allowed for security reasons",
+					Severity: "error",
+				})
+			}
+		}
+
+		if pid, ok := svc["pid"]; ok {
+			if p, ok := pid.(string); ok && p == "host" {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.pid", name),
+					Message:  "pid 'host' is not allowed for security reasons",
+					Severity: "error",
+				})
+			}
+		}
+
+		if ipc, ok := svc["ipc"]; ok {
+			if i, ok := ipc.(string); ok && i == "host" {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.ipc", name),
+					Message:  "ipc 'host' is not allowed for security reasons",
+					Severity: "error",
+				})
+			}
+		}
+
+		checkVolumesSecurity(name, svc["volumes"], &issues)
+		checkCapAddSecurity(name, svc["cap_add"], &issues)
+		checkDevicesSecurity(name, svc["devices"], &issues)
+
+		if _, hasSecOpt := svc["security_opt"]; hasSecOpt {
+			issues = append(issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.security_opt", name),
+				Message:  "security_opt overrides may weaken container isolation",
+				Severity: "warning",
+			})
+		}
+
+		if usernsMode, ok := svc["userns_mode"]; ok {
+			if u, ok := usernsMode.(string); ok && u == "host" {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.userns_mode", name),
+					Message:  "userns_mode 'host' disables user namespace remapping",
+					Severity: "warning",
+				})
+			}
+		}
+
+		if _, hasCN := svc["container_name"]; hasCN {
+			issues = append(issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.container_name", name),
+				Message:  "container_name may conflict with other containers on the node",
+				Severity: "warning",
+			})
+		}
+
+		if restart, ok := svc["restart"]; ok {
+			if r, ok := restart.(string); ok && r == "always" {
+				issues = append(issues, ValidationIssue{
+					Field:    fmt.Sprintf("services.%s.restart", name),
+					Message:  "restart 'always' may conflict with platform lifecycle management",
+					Severity: "warning",
+				})
+			}
+		}
 	}
-	return []byte(result)
+
+	return issues
+}
+
+var dangerousCapabilities = map[string]bool{
+	"SYS_ADMIN":  true,
+	"SYS_RAWIO":  true,
+	"SYS_PTRACE": true,
+	"SYS_MODULE": true,
+	"SYS_BOOT":   true,
+	"NET_ADMIN":  true,
+	"NET_RAW":    true,
+	"ALL":        true,
+}
+
+func checkCapAddSecurity(svcName string, capAdd interface{}, issues *[]ValidationIssue) {
+	if capAdd == nil {
+		return
+	}
+	caps, ok := capAdd.([]interface{})
+	if !ok {
+		return
+	}
+	for _, capItem := range caps {
+		capStr := fmt.Sprintf("%v", capItem)
+		if dangerousCapabilities[capStr] {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.cap_add", svcName),
+				Message:  fmt.Sprintf("cap_add '%s' is not allowed for security reasons", capStr),
+				Severity: "error",
+			})
+		} else {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.cap_add", svcName),
+				Message:  fmt.Sprintf("cap_add '%s' may grant unnecessary privileges", capStr),
+				Severity: "warning",
+			})
+		}
+	}
+}
+
+func checkDevicesSecurity(svcName string, devices interface{}, issues *[]ValidationIssue) {
+	if devices == nil {
+		return
+	}
+	devs, ok := devices.([]interface{})
+	if !ok {
+		return
+	}
+	for _, d := range devs {
+		var path string
+		switch v := d.(type) {
+		case string:
+			path = v
+		case map[string]interface{}:
+			if p, ok := v["source"]; ok {
+				path = fmt.Sprintf("%v", p)
+			}
+		}
+		if strings.HasPrefix(path, "/dev") {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.devices", svcName),
+				Message:  fmt.Sprintf("device mapping '%s' is not allowed for security reasons", path),
+				Severity: "error",
+			})
+		}
+	}
+}
+
+func checkVolumesSecurity(svcName string, volumes interface{}, issues *[]ValidationIssue) {
+	if volumes == nil {
+		return
+	}
+	vols, ok := volumes.([]interface{})
+	if !ok {
+		return
+	}
+	for _, v := range vols {
+		var source string
+		switch val := v.(type) {
+		case string:
+			parts := strings.SplitN(val, ":", 2)
+			if len(parts) > 0 {
+				source = parts[0]
+			}
+		case map[string]interface{}:
+			if s, ok := val["source"]; ok {
+				source = fmt.Sprintf("%v", s)
+			}
+		}
+		if source == "" {
+			continue
+		}
+		lower := strings.ToLower(source)
+		if strings.HasPrefix(lower, "/var/run/docker.sock") || strings.Contains(lower, ":/var/run/docker.sock") {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.volumes", svcName),
+				Message:  "mounting docker.sock is not allowed for security reasons",
+				Severity: "error",
+			})
+		}
+		if strings.HasPrefix(lower, "/proc") || strings.HasPrefix(lower, "/sys") {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.volumes", svcName),
+				Message:  fmt.Sprintf("mounting %s is not allowed for security reasons", source),
+				Severity: "error",
+			})
+		}
+		if strings.HasPrefix(source, "/") && isSensitiveHostPath(source) {
+			*issues = append(*issues, ValidationIssue{
+				Field:    fmt.Sprintf("services.%s.volumes", svcName),
+				Message:  fmt.Sprintf("host path mount '%s' may expose sensitive host files", source),
+				Severity: "warning",
+			})
+		}
+	}
+}
+
+var sensitiveHostPaths = []string{"/", "/root", "/etc", "/home"}
+
+func isSensitiveHostPath(path string) bool {
+	for _, p := range sensitiveHostPaths {
+		if path == p || strings.HasPrefix(path, p+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func normalizePorts(ports []interface{}) []string {
@@ -533,38 +819,6 @@ func isExternal(v interface{}) bool {
 		return true
 	}
 	return false
-}
-
-func stringifyValue(v interface{}) string {
-	switch val := v.(type) {
-	case string:
-		return val
-	case []interface{}:
-		parts := make([]string, len(val))
-		for i, item := range val {
-			parts[i] = fmt.Sprintf("%v", item)
-		}
-		return strings.Join(parts, " ")
-	case []string:
-		return strings.Join(val, " ")
-	}
-	return ""
-}
-
-func intFromInterface(v interface{}) int {
-	switch val := v.(type) {
-	case int:
-		return val
-	case int64:
-		return int(val)
-	case float64:
-		return int(val)
-	case string:
-		var i int
-		fmt.Sscanf(val, "%d", &i)
-		return i
-	}
-	return 0
 }
 
 func stringMap(v interface{}) map[string]string {

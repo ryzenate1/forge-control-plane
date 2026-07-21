@@ -9,6 +9,8 @@ import (
 
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/store"
+
+	"github.com/google/uuid"
 )
 
 type FailoverAction string
@@ -19,6 +21,16 @@ const (
 	FailoverActionNotify   FailoverAction = "notify"
 )
 
+type WorkloadCategory string
+
+const (
+	WorkloadStateless     WorkloadCategory = "stateless"
+	WorkloadStateful      WorkloadCategory = "stateful"
+	WorkloadSharedStorage WorkloadCategory = "shared_storage"
+	WorkloadLocalStorage  WorkloadCategory = "local_storage"
+	WorkloadUnknown       WorkloadCategory = "unknown"
+)
+
 type FailoverEventType string
 
 const (
@@ -26,6 +38,27 @@ const (
 	EventServerCrash        FailoverEventType = "server_crash"
 	EventHealthCheckFailure FailoverEventType = "health_check_failure"
 )
+
+// DetermineFailoverAction returns the safest automatic failover action for a
+// workload given its storage locality, backup status, and replication.
+func DetermineFailoverAction(locality string, hasVerifiedBackup bool, isReplicated bool) FailoverAction {
+	switch {
+	case isReplicated && locality != "local_only":
+		return FailoverActionEvacuate
+	case locality == "shared" || locality == "replicated":
+		return FailoverActionEvacuate
+	case hasVerifiedBackup:
+		return FailoverActionEvacuate
+	case locality == "local_only":
+		return FailoverActionNotify
+	default:
+		return FailoverActionNotify
+	}
+}
+
+// WorkloadClassifier inspects a node's servers and returns the safest
+// automatic failover action based on their storage characteristics.
+type WorkloadClassifier func(ctx context.Context, nodeID string) (FailoverAction, error)
 
 type Policy struct {
 	ID               string         `json:"id"`
@@ -62,18 +95,21 @@ type Metrics struct {
 }
 
 type Service struct {
-	db         *store.Store
-	failures   map[string][]time.Time
-	lastAction map[string]time.Time
-	mu         sync.Mutex
-	publisher  events.Publisher
-	executor   func(context.Context, *Event) error
-	metrics    Metrics
-	stopCh     chan struct{}
-	started    bool
+	db                 *store.Store
+	failures           map[string][]time.Time
+	lastAction         map[string]time.Time
+	mu                 sync.Mutex
+	publisher          events.Publisher
+	executor           func(context.Context, *Event) error
+	workloadClassifier WorkloadClassifier
+	metrics            Metrics
+	stopCh             chan struct{}
+	started            bool
 }
 
 var ErrPolicyNotFound = errors.New("failover policy not found")
+
+const activeIncidentWindow = 10 * time.Minute
 
 func New(db *store.Store, publishers ...events.Publisher) *Service {
 	var publisher events.Publisher
@@ -98,16 +134,146 @@ func (s *Service) SetActionExecutor(executor func(context.Context, *Event) error
 	s.executor = executor
 }
 
-// Handle consumes heartbeat transitions. Suspected, unreachable, and offline
-// transitions count as distinct failure observations for policy thresholds.
+// SetWorkloadClassifier registers a callback that inspects workload
+// characteristics on a node to determine whether automatic evacuation is safe.
+func (s *Service) SetWorkloadClassifier(classifier WorkloadClassifier) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.workloadClassifier = classifier
+}
+
+// Handle consumes heartbeat transitions. Only the definitive Offline event
+// (after the heartbeat monitor has applied all time thresholds) triggers
+// failover. Transition events (Suspected, Unreachable) are observed by the
+// heartbeat monitor but the failover decision is based on the definitive
+// classification.
 func (s *Service) Handle(ctx context.Context, envelope events.Envelope) error {
-	switch envelope.Type {
-	case events.EventNodeSuspected, events.EventNodeUnreachable, events.EventNodeOffline:
-		_, err := s.RecordFailure(ctx, envelope.ResourceID)
-		return err
-	default:
+	if envelope.Type != events.EventNodeOffline {
 		return nil
 	}
+
+	return s.HandleNodeOffline(ctx, envelope.ResourceID, envelope.Payload)
+}
+
+// HandleNodeOffline creates a durable, idempotent incident when a node is
+// confirmed offline by the heartbeat monitor. An active incident record
+// prevents duplicate evacuation/recovery plans for the same failure.
+func (s *Service) HandleNodeOffline(ctx context.Context, nodeID string, payload map[string]any) error {
+	if nodeID == "" {
+		return errors.New("nodeId is required")
+	}
+
+	s.mu.Lock()
+	if s.hasActiveIncidentLocked(ctx, nodeID) {
+		s.mu.Unlock()
+		return nil
+	}
+	s.mu.Unlock()
+
+	policies, err := s.db.ListFailoverPoliciesByNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+
+	var matchingPolicy *Policy
+	for _, sp := range policies {
+		if sp.Enabled {
+			p := fromStorePolicy(sp)
+			matchingPolicy = &p
+			break
+		}
+	}
+
+	if matchingPolicy == nil || matchingPolicy.Action == FailoverActionNotify || matchingPolicy.Action == "" {
+		s.mu.Lock()
+		classifier := s.workloadClassifier
+		s.mu.Unlock()
+		if classifier != nil {
+			action, err := classifier(ctx, nodeID)
+			if err == nil && action != FailoverActionNotify {
+				if matchingPolicy == nil {
+					matchingPolicy = &Policy{
+						ID:          uuid.New().String(),
+						Action:      action,
+						MaxFailures: 1,
+						CooldownSec: 600,
+					}
+				} else {
+					matchingPolicy.Action = action
+				}
+			}
+		}
+		if matchingPolicy == nil || matchingPolicy.Action == FailoverActionNotify || matchingPolicy.Action == "" {
+			// Default to Evacuate for node failure scenarios
+			if matchingPolicy == nil {
+				matchingPolicy = &Policy{
+					ID:          uuid.New().String(),
+					Action:      FailoverActionEvacuate,
+					MaxFailures: 1,
+					CooldownSec: 600,
+				}
+			} else {
+				matchingPolicy.Action = FailoverActionEvacuate
+			}
+		}
+	}
+
+	reason := "node heartbeat classified offline"
+	if payload != nil {
+		if r, ok := payload["reason"].(string); ok && r != "" {
+			reason = r
+		}
+	}
+
+	s.mu.Lock()
+	if s.hasActiveIncidentLocked(ctx, nodeID) {
+		s.mu.Unlock()
+		return nil
+	}
+	incident, err := s.createIncident(ctx, nodeID, matchingPolicy.ID, reason)
+	if err != nil {
+		s.mu.Unlock()
+		return err
+	}
+	s.mu.Unlock()
+
+	_, err = s.executeAction(ctx, matchingPolicy, EventNodeFailure, nodeID, "",
+		fmt.Sprintf("node %s offline incident %s: %s", nodeID, incident, reason))
+	return err
+}
+
+// hasActiveIncidentLocked checks whether a recent failover incident already exists
+// for this node to prevent duplicate evacuation/recovery plans. Caller must hold s.mu.
+func (s *Service) hasActiveIncidentLocked(ctx context.Context, nodeID string) bool {
+	events, err := s.db.ListRecentFailoverEvents(ctx, nodeID, 10)
+	if err != nil || len(events) == 0 {
+		return false
+	}
+	for _, evt := range events {
+		if evt.Status == "detected" || evt.Status == "evacuating" || evt.Status == "restarting" {
+			if time.Since(evt.CreatedAt) < activeIncidentWindow {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// createIncident persists a durable incident record that acts as a lock
+// against duplicate failover actions for the same node failure.
+func (s *Service) createIncident(ctx context.Context, nodeID, policyID, reason string) (string, error) {
+	evt := store.FailoverEvent{
+		PolicyID:  policyID,
+		NodeID:    nodeID,
+		EventType: string(EventNodeFailure),
+		Action:    "incident",
+		Status:    "detected",
+		Message:   reason,
+	}
+	if err := s.db.CreateFailoverEvent(ctx, &evt); err != nil {
+		return "", err
+	}
+	return evt.ID, nil
 }
 
 func (s *Service) CreatePolicy(ctx context.Context, policy *Policy) error {
@@ -167,7 +333,7 @@ func applyPolicyDefaults(policy *Policy) {
 		policy.CooldownSec = 600
 	}
 	if policy.Action == "" {
-		policy.Action = FailoverActionNotify
+		policy.Action = FailoverActionEvacuate
 	}
 }
 

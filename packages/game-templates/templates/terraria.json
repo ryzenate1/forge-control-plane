@@ -1,0 +1,123 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "terraria",
+  "name": "Terraria",
+  "description": "Terraria dedicated server via SteamCMD. Full TShock-compatible server with world size and difficulty configuration.",
+  "version": "1.0.0",
+  "game": "Terraria",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/105600",
+  "image": "ghcr.io/parkervcp/steamcmd:debian",
+  "images": {
+    "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
+  },
+  "startup": "./TerrariaServer.bin.x86_64 -port {{PORT}} -maxplayers {{MAX_PLAYERS}} -world {{WORLD_NAME}}.wld -autocreate {{WORLD_SIZE}} -automigrate true -difficulty {{DIFFICULTY}} -worldname {{WORLD_NAME}} -motd \"{{MOTD}}\" -pass {{SERVER_PASSWORD}} -noupnp",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Server started"
+    },
+    "stop": "exit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 7777,
+      "protocol": "tcp",
+      "public": true,
+      "description": "Terraria game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "World Name",
+      "env_variable": "WORLD_NAME",
+      "description": "Name for the world file. Affects the save file created.",
+      "default_value": "GamePanelWorld",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:32"
+    },
+    {
+      "name": "World Size",
+      "env_variable": "WORLD_SIZE",
+      "description": "Size of the generated world.",
+      "default_value": "2",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:1,2,3"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "8",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:255"
+    },
+    {
+      "name": "Difficulty",
+      "env_variable": "DIFFICULTY",
+      "description": "Difficulty level for world generation (0=Normal, 1=Expert, 2=Master, 3=Journey).",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1,2,3"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Password required to join the server. Leave empty for no password.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "MOTD",
+      "env_variable": "MOTD",
+      "description": "Message of the Day shown to players on join.",
+      "default_value": "Welcome to GamePanel Terraria!",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:256"
+    },
+    {
+      "name": "Autocreate",
+      "env_variable": "AUTOCREATE",
+      "description": "Automatically create world if none exists (1=enable, 0=disable).",
+      "default_value": "1",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|integer|in:0,1"
+    },
+    {
+      "name": "Seed",
+      "env_variable": "SEED",
+      "description": "World generation seed. Leave empty for random seed.",
+      "default_value": "",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:64"
+    }
+  ],
+  "resources": {
+    "cpu": 100,
+    "memory_mb": 1024,
+    "memory_max_mb": 4096,
+    "disk_mb": 5120,
+    "cpu_shares": 512,
+    "io_weight": 500,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/parkervcp/steamcmd:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Terraria SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Terraria dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 105600 validate +quit\n\ncd /mnt/server\n\n# Make server binary executable\nif [ -f TerrariaServer.bin.x86_64 ]; then\n    chmod +x TerrariaServer.bin.x86_64\nelif [ -f Linux/TerrariaServer.bin.x86_64 ]; then\n    cp Linux/TerrariaServer.bin.x86_64 .\n    chmod +x TerrariaServer.bin.x86_64\nfi\n\necho \"Terraria server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["sandbox", "adventure", "survival"],
+  "file_denylist": [],
+  "features": []
+}

@@ -243,20 +243,16 @@ func (s *Store) UpdateServerAllocation(ctx context.Context, serverID, allocation
 		return Allocation{}, errors.New("allocation is not assigned to this server")
 	}
 	_ = s.AppendAudit(ctx, actorID, "server allocation updated", "server", &serverID, fmt.Sprintf(`{"allocationId":"%s","alias":"%s"}`, allocationID, strings.TrimSpace(req.Alias)))
-	for _, allocation := range mustListServerAllocations(ctx, s, serverID) {
+	allocations, err := s.ListServerAllocations(ctx, serverID)
+	if err != nil {
+		return Allocation{}, err
+	}
+	for _, allocation := range allocations {
 		if allocation.ID == allocationID {
 			return allocation, nil
 		}
 	}
 	return Allocation{ID: allocationID, Alias: alias, Notes: notes}, nil
-}
-
-func mustListServerAllocations(ctx context.Context, s *Store, serverID string) []Allocation {
-	allocations, err := s.ListServerAllocations(ctx, serverID)
-	if err != nil {
-		return nil
-	}
-	return allocations
 }
 
 func (s *Store) ListServerAllocations(ctx context.Context, serverID string) ([]Allocation, error) {

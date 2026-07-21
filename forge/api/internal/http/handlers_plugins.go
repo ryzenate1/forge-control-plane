@@ -175,18 +175,58 @@ func pluginRuntimeUnavailable(operation string) fiber.Handler {
 	}
 }
 
-// InstallPlugin is retained for API compatibility. Installing code requires a
-// plugin runtime, so manifests remain registry metadata until that exists.
-func InstallPlugin(_ Config, _ string) fiber.Handler {
-	return pluginRuntimeUnavailable("install")
+func InstallPlugin(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.PluginService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		var req struct {
+			Name     string `json:"name"`
+			Source   string `json:"source"`
+			Manifest string `json:"manifest"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if strings.TrimSpace(req.Name) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		plugin, err := cfg.PluginService.Install(ctx, req.Name, req.Source, req.Manifest)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(plugin)
+	}
 }
 
-func EnablePlugin(_ Config) fiber.Handler {
-	return pluginRuntimeUnavailable("enable")
+func EnablePlugin(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.PluginService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.PluginService.Enable(ctx, c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"status": "enabled"})
+	}
 }
 
-func DisablePlugin(_ Config) fiber.Handler {
-	return pluginRuntimeUnavailable("disable")
+func DisablePlugin(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.PluginService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.PluginService.Disable(ctx, c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"status": "disabled"})
+	}
 }
 
 func UpdatePlugin(cfg Config) fiber.Handler {
@@ -224,8 +264,18 @@ func UpdatePlugin(cfg Config) fiber.Handler {
 	}
 }
 
-func UninstallPlugin(_ Config, _ string) fiber.Handler {
-	return pluginRuntimeUnavailable("uninstall")
+func UninstallPlugin(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.PluginService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "plugin service not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.PluginService.Uninstall(ctx, c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"status": "uninstalled"})
+	}
 }
 
 func DeletePlugin(cfg Config) fiber.Handler {

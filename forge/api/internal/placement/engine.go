@@ -51,7 +51,7 @@ func (e *Engine) Place(ctx context.Context, candidates []Candidate, req Workload
 		}
 		bonus, bonusReasons := e.checker.CheckSoft(c, req.Constraints, req.ConstraintCtx)
 		allReasons := append(scoreReasons, bonusReasons...)
-		results = append(results, ScoreResult{NodeID: c.NodeID, Score: score + bonus, Reasons: allReasons})
+		results = append(results, ScoreResult{NodeID: c.NodeID, Score: score + bonus, Reasons: allReasons, StorageLocality: c.StorageLocality})
 	}
 
 	if len(results) == 0 {
@@ -91,7 +91,7 @@ func (e *Engine) PlaceAll(ctx context.Context, candidates []Candidate, req Workl
 		}
 		bonus, bonusReasons := e.checker.CheckSoft(c, req.Constraints, req.ConstraintCtx)
 		allReasons := append(scoreReasons, bonusReasons...)
-		results = append(results, ScoreResult{NodeID: c.NodeID, Score: score + bonus, Reasons: allReasons})
+		results = append(results, ScoreResult{NodeID: c.NodeID, Score: score + bonus, Reasons: allReasons, StorageLocality: c.StorageLocality})
 	}
 
 	if len(results) == 0 {

@@ -3,6 +3,7 @@ package compose
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 )
 
@@ -10,8 +11,11 @@ type ComposeQueueHandler struct {
 	service *Service
 }
 
-func NewQueueHandler(service *Service) *ComposeQueueHandler {
-	return &ComposeQueueHandler{service: service}
+func NewQueueHandler(service *Service) (*ComposeQueueHandler, error) {
+	if service == nil {
+		return nil, errors.New("compose service required")
+	}
+	return &ComposeQueueHandler{service: service}, nil
 }
 
 type composeDeployPayload struct {

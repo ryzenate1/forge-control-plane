@@ -140,3 +140,26 @@ func (s *Store) UpdateTargetConnections(ctx context.Context, id string, connecti
 	_, err := s.db.Exec(ctx, `UPDATE target_group_targets SET connections = $2 WHERE id = $1`, id, connections)
 	return err
 }
+
+func (s *Store) ListTargetsByNode(ctx context.Context, nodeID string) ([]TargetRow, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, group_id, server_id, node_id, ip, port, weight, status, connections, created_at
+		FROM target_group_targets
+		WHERE node_id = $1
+		ORDER BY id
+	`, nodeID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	targets := make([]TargetRow, 0)
+	for rows.Next() {
+		var t TargetRow
+		if err := rows.Scan(&t.ID, &t.GroupID, &t.ServerID, &t.NodeID, &t.IP, &t.Port, &t.Weight, &t.Status, &t.Connections, &t.CreatedAt); err != nil {
+			return nil, err
+		}
+		targets = append(targets, t)
+	}
+	return targets, rows.Err()
+}

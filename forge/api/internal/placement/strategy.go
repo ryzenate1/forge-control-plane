@@ -37,23 +37,26 @@ type Candidate struct {
 	Maintenance     bool
 	Draining        bool
 	Status          string
+	StorageLocality string
 }
 
 type WorkloadRequest struct {
-	CPU           int
-	MemoryMB      int
-	DiskMB        int
-	PreferredNode string
-	RequiredNode  string
-	RegionID      string
-	Constraints   []Constraint
-	ConstraintCtx ConstraintContext
+	CPU             int
+	MemoryMB        int
+	DiskMB          int
+	PreferredNode   string
+	RequiredNode    string
+	RegionID        string
+	StorageLocality string
+	Constraints     []Constraint
+	ConstraintCtx   ConstraintContext
 }
 
 type ScoreResult struct {
-	NodeID  string
-	Score   float64
-	Reasons []string
+	NodeID          string
+	Score           float64
+	Reasons         []string
+	StorageLocality string
 }
 
 func NewScorer(strategy Strategy) Scorer {

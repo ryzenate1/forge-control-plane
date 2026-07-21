@@ -62,19 +62,56 @@ func testService(t *testing.T) (*Service, func()) {
 func createTestDeployment(t *testing.T, svc *Service, serverID string, strategy Strategy) *Deployment {
 	t.Helper()
 	now := time.Now().UTC()
+	srvID := serverID
+	// Ensure serverID is a valid UUID for DB constraints
+	if _, err := uuid.Parse(serverID); err != nil {
+		srvID = uuid.NewString()
+	}
 	dep := &Deployment{
 		ID:           uuid.NewString(),
-		ServerID:     serverID,
+		ServerID:     srvID,
 		Strategy:     strategy,
 		Status:       StatusCompleted,
-		Image:        "nginx:1.25",
-		BlueTargetID: serverID + "-blue",
+		Image:        "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+		BlueTargetID: srvID + "-blue",
 		CreatedAt:    now,
 		UpdatedAt:    now,
 	}
 	err := svc.store.CreateDeployment(t.Context(), toStoreDeployment(dep))
 	if err != nil {
 		t.Fatalf("create test deployment: %v", err)
+	}
+	return dep
+}
+
+func createTestPendingDeployment(t *testing.T, svc *Service, serverID string, strategy Strategy) *Deployment {
+	t.Helper()
+	now := time.Now().UTC()
+	srvID := serverID
+	// Ensure serverID is a valid UUID for DB constraints
+	if _, err := uuid.Parse(serverID); err != nil {
+		srvID = uuid.NewString()
+	}
+	dep := &Deployment{
+		ID:                   uuid.NewString(),
+		ServerID:             srvID,
+		Strategy:             strategy,
+		Status:               StatusPending,
+		Image:                "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+		BlueTargetID:         srvID + "-blue",
+		TimeoutSeconds:       DefaultTimeoutSeconds,
+		HealthGateEnabled:    true,
+		HealthGateThreshold:  DefaultHealthGateThreshold,
+		HealthGateIntervalMs: DefaultHealthGateIntervalMs,
+		AutoRollbackEnabled:  false,
+		CleanupOnFailure:     true,
+		TargetReplicas:       1,
+		CreatedAt:            now,
+		UpdatedAt:            now,
+	}
+	err := svc.store.CreateDeployment(t.Context(), toStoreDeployment(dep))
+	if err != nil {
+		t.Fatalf("create test pending deployment: %v", err)
 	}
 	return dep
 }
@@ -92,9 +129,24 @@ func createTables(ctx context.Context, pool *pgxpool.Pool) error {
 			active_target TEXT NOT NULL DEFAULT 'blue',
 			health_check_path TEXT NOT NULL DEFAULT '',
 			health_check_port INTEGER NOT NULL DEFAULT 0,
+			health_check_host TEXT NOT NULL DEFAULT '',
 			error TEXT NOT NULL DEFAULT '',
 			current_revision_id UUID,
 			rollout_strategy TEXT NOT NULL DEFAULT 'recreate',
+			timeout_seconds INTEGER NOT NULL DEFAULT 300,
+			health_gate_enabled BOOLEAN NOT NULL DEFAULT false,
+			health_gate_threshold INTEGER NOT NULL DEFAULT 3,
+			health_gate_interval_ms INTEGER NOT NULL DEFAULT 5000,
+			auto_rollback_enabled BOOLEAN NOT NULL DEFAULT false,
+			rollback_on_health_failure BOOLEAN NOT NULL DEFAULT false,
+			cleanup_on_failure BOOLEAN NOT NULL DEFAULT true,
+			target_replicas INTEGER NOT NULL DEFAULT 1,
+			progress_pct INTEGER NOT NULL DEFAULT 0,
+			next_step INTEGER NOT NULL DEFAULT 0,
+			timeout_at TIMESTAMPTZ,
+			version INTEGER NOT NULL DEFAULT 1,
+			executor_id TEXT,
+			execution_lease_until TIMESTAMPTZ,
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			completed_at TIMESTAMPTZ
@@ -111,6 +163,18 @@ func createTables(ctx context.Context, pool *pgxpool.Pool) error {
 			deployed_at TIMESTAMPTZ,
 			description TEXT NOT NULL DEFAULT '',
 			metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+		)`,
+		`CREATE TABLE deployment_steps (
+			id UUID PRIMARY KEY,
+			deployment_id UUID NOT NULL REFERENCES deployments(id) ON DELETE CASCADE,
+			step_number INTEGER NOT NULL,
+			step_name TEXT NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			started_at TIMESTAMPTZ,
+			completed_at TIMESTAMPTZ,
+			error TEXT NOT NULL DEFAULT '',
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 			updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,

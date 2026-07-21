@@ -9,17 +9,10 @@ import {
   useAppToast,
   SpinnerButton,
 } from "@/components/shared";
+import { fetchAppBackups, restoreAppBackup, deleteAppBackup } from "@/lib/api/apps";
+import type { AppBackup } from "@/lib/api/apps";
 import { errorMessage, formatDate, formatBytes } from "@/lib/utils";
 import type { ReactNode } from "react";
-
-type BackupInfo = {
-  uuid: string;
-  name: string;
-  size?: number;
-  createdAt: string;
-  completedAt?: string;
-  inProgress?: boolean;
-};
 
 interface BackupsViewProps {
   appId: string;
@@ -30,25 +23,15 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
   const qc = useQueryClient();
   const { success: showSuccess, error: showError } = useAppToast();
 
-  const query = useQuery<BackupInfo[]>({
+  const query = useQuery<AppBackup[]>({
     queryKey: ["app-backups", appId],
-    queryFn: async () => {
-      const res = await fetch(`/api/v1/servers/${encodeURIComponent(appId)}/backups`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`Failed to load backups: ${res.status}`);
-      return res.json() as Promise<BackupInfo[]>;
-    },
+    queryFn: () => fetchAppBackups(appId),
     enabled: Boolean(appId),
   });
 
   const restoreMut = useMutation({
-    mutationFn: async (backupName: string) => {
-      const res = await fetch(
-        `/api/v1/servers/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupName)}/restore`,
-        { method: "POST", credentials: "include" },
-      );
-      if (!res.ok) throw new Error(`Failed to restore backup: ${res.status}`);
+    mutationFn: async (backupId: string) => {
+      await restoreAppBackup(appId, backupId);
     },
     onSuccess: () => {
       showSuccess("Backup", "restored");
@@ -58,12 +41,8 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
   });
 
   const deleteMut = useMutation({
-    mutationFn: async (backupName: string) => {
-      const res = await fetch(
-        `/api/v1/servers/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupName)}`,
-        { method: "DELETE", credentials: "include" },
-      );
-      if (!res.ok) throw new Error(`Failed to delete backup: ${res.status}`);
+    mutationFn: async (backupId: string) => {
+      await deleteAppBackup(appId, backupId);
     },
     onSuccess: () => {
       showSuccess("Backup", "deleted");
@@ -100,7 +79,7 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
       </div>
       <div className="divide-y divide-white/[0.07]">
         {backups.map((backup) => (
-          <div className="flex flex-wrap items-center gap-4 px-5 py-4" key={backup.uuid}>
+          <div className="flex flex-wrap items-center gap-4 px-5 py-4" key={backup.id}>
             <div className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white/[0.06] text-slate-400">
               <HardDrive size={16} />
             </div>
@@ -109,7 +88,7 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
                 <p className="truncate font-mono text-sm font-semibold text-slate-200">
                   {backup.name}
                 </p>
-                {backup.inProgress ? (
+                {backup.status === "creating" || backup.status === "restoring" ? (
                   <SpinnerButton label="In progress" className="text-amber-400" />
                 ) : null}
               </div>
@@ -121,10 +100,10 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
             <div className="flex gap-2">
               <button
                 className="rounded border border-white/10 px-3 py-1.5 text-xs font-semibold text-slate-300 hover:bg-white/[0.06] disabled:opacity-50"
-                disabled={restoreMut.isPending || Boolean(backup.inProgress)}
+                disabled={restoreMut.isPending || backup.status === "creating" || backup.status === "restoring"}
                 onClick={() => {
                   if (window.confirm(`Restore backup ${backup.name}? This will overwrite current data.`)) {
-                    restoreMut.mutate(backup.name);
+                    restoreMut.mutate(backup.id);
                   }
                 }}
                 type="button"
@@ -136,7 +115,7 @@ export function BackupsView({ appId, action }: BackupsViewProps) {
                 disabled={deleteMut.isPending}
                 onClick={() => {
                   if (window.confirm(`Delete backup ${backup.name}?`)) {
-                    deleteMut.mutate(backup.name);
+                    deleteMut.mutate(backup.id);
                   }
                 }}
                 type="button"

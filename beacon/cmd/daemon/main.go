@@ -17,12 +17,12 @@ import (
 	"time"
 
 	"gamepanel/beacon/config"
+	"gamepanel/beacon/internal/auth"
 	"gamepanel/beacon/internal/backup"
 	"gamepanel/beacon/internal/cron"
+	"gamepanel/beacon/internal/logrotate"
 
-	"gamepanel/beacon/internal/health"
 	"gamepanel/beacon/internal/logging"
-	"gamepanel/beacon/internal/metrics"
 	"gamepanel/beacon/internal/pprof"
 	"gamepanel/beacon/internal/ratelimit"
 	"gamepanel/beacon/internal/remote"
@@ -55,12 +55,6 @@ func main() {
 		logger.Error("failed to load beacon configuration", logging.Field{Key: "error", Value: configErr})
 		log.Fatalf("load Beacon configuration: %v", configErr)
 	}
-
-	metricsCollector := metrics.NewPrometheusCollector()
-	_ = metricsCollector
-
-	healthChecker := &health.CompositeHealthChecker{}
-	_ = healthChecker
 
 	nodeToken := os.Getenv("DAEMON_NODE_TOKEN")
 	if nodeToken == "" {
@@ -125,6 +119,7 @@ func main() {
 		err = fmt.Errorf("firecracker runtime requires additional build tags: go build -tags firecracker")
 	default:
 		log.Printf("unsupported runtime provider '%s', falling back to docker", runtimeProvider)
+		runtimeProvider = "docker"
 		rt, err = runtime.NewDockerRuntime()
 	}
 
@@ -145,6 +140,21 @@ func main() {
 	if err := backup.RecoverRestoreJournals(dataDir); err != nil {
 		log.Fatalf("recover interrupted backup restore: %v", err)
 	}
+
+	if localBackup, ok := backupAdapter.(*backup.LocalBackup); ok {
+		writeLimit := beaconConfig.BackupConfig().WriteLimit
+		if writeLimit > 0 {
+			localBackup.SetWriteLimit(writeLimit)
+			log.Printf("backup I/O write limit set to %d bytes/sec", writeLimit)
+		}
+	}
+
+	if err := logrotate.WriteSystemConfig("/var/log/beacon", "beacon"); err != nil {
+		log.Printf("logrotate config generation skipped (non-fatal): %v", err)
+	} else {
+		log.Printf("logrotate configuration written for /var/log/beacon")
+	}
+
 	server, handler := daemonhttp.NewServerWithBackup(rt, dataDir, backupAdapter, nodeToken)
 	server.SetAllowedMounts(beaconConfig.AllowedMountsList())
 
@@ -172,6 +182,10 @@ func main() {
 	}
 	server.SetTokenGenerator(tokenGen)
 
+	if !allowInsecureNoAuth && nodeToken != "" {
+		handler = auth.NewAuthMiddleware(tokenGen)(handler)
+	}
+
 	cronScheduler, cronErr := cron.NewScheduler("UTC")
 	if cronErr != nil {
 		log.Printf("WARNING: cron scheduler failed: %v", cronErr)
@@ -186,10 +200,18 @@ func main() {
 		}
 	}
 
+	daemonhttp.StartBuildReaper(daemonCtx, dataDir)
+
 	// Wire the remote panel client so install-status notifications work.
 	if panelOnboardingEnabled {
 		panelClient := remote.NewClient(panelAPIURL, nodeToken)
 		server.SetPanelClient(panelClient)
+
+		// Start the edge agent for panel-side edge connectivity/heartbeat
+		// (separate from the node heartbeat loop below).
+		edgeAgent := daemonhttp.NewEdgeAgent(panelAPIURL, nodeToken, nodeID, "beacon-dev")
+		daemonhttp.SetEdgeAgent(edgeAgent)
+		go edgeAgent.Start(daemonCtx)
 
 		// Report crashes to the panel API.
 		server.SetCrashHandler(func(ctx context.Context, serverID string, exitCode int, oomKilled bool) {
@@ -324,6 +346,7 @@ func main() {
 	signal.Stop(stop)
 	cancelDaemon()
 	server.Shutdown()
+	tlsCfg.StopChallengeServer()
 	shutdownManager.Shutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()

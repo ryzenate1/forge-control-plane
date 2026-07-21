@@ -170,6 +170,126 @@ func TestQueueAllOperationTypes(t *testing.T) {
 	}
 }
 
+func TestQueueExpiredCommand(t *testing.T) {
+	var processed int32
+	handler := func(ctx context.Context, op *Operation) error {
+		atomic.AddInt32(&processed, 1)
+		return nil
+	}
+	q := NewOperationQueue(1, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.Start(ctx)
+	op, err := q.EnqueueCommandWithTTL(ctx, "cmd-expired", "srv-1", OpStart, 1*time.Nanosecond)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(150 * time.Millisecond)
+	status, err := q.GetStatus(op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.Status != StatusFailed {
+		t.Fatalf("expected failed (expired), got %s", status.Status)
+	}
+	if status.Error != "command expired" {
+		t.Fatalf("expected 'command expired' error, got %q", status.Error)
+	}
+	if atomic.LoadInt32(&processed) != 0 {
+		t.Fatal("expired command handler should not run")
+	}
+}
+
+func TestQueueDuplicateCommand(t *testing.T) {
+	var processed int32
+	handler := func(ctx context.Context, op *Operation) error {
+		atomic.AddInt32(&processed, 1)
+		return nil
+	}
+	q := NewOperationQueue(1, handler)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.Start(ctx)
+	op1, err := q.EnqueueCommand(ctx, "dup-cmd", "srv-1", OpStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	op2, err := q.EnqueueCommand(ctx, "dup-cmd", "srv-1", OpStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op1.ID != op2.ID {
+		t.Fatalf("duplicate command should return same operation: %s != %s", op1.ID, op2.ID)
+	}
+	time.Sleep(150 * time.Millisecond)
+	if atomic.LoadInt32(&processed) != 1 {
+		t.Fatalf("duplicate command should execute once, got %d", atomic.LoadInt32(&processed))
+	}
+}
+
+func TestQueueSetProgress(t *testing.T) {
+	q := NewOperationQueue(1, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.Start(ctx)
+	op, err := q.Enqueue(ctx, "srv-1", OpStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SetProgress(op.ID, "halfway", 50); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := q.GetStatus(op.ID)
+	if status.Progress != "halfway" {
+		t.Fatalf("expected progress 'halfway', got %q", status.Progress)
+	}
+	if status.ProgressPct != 50 {
+		t.Fatalf("expected progress 50%%, got %d", status.ProgressPct)
+	}
+}
+
+func TestQueueSetResult(t *testing.T) {
+	q := NewOperationQueue(1, nil)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	q.Start(ctx)
+	op, err := q.Enqueue(ctx, "srv-1", OpStart)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := q.SetResult(op.ID, "{\"exitCode\":0}"); err != nil {
+		t.Fatal(err)
+	}
+	status, _ := q.GetStatus(op.ID)
+	if status.ResultData != "{\"exitCode\":0}" {
+		t.Fatalf("expected result data, got %q", status.ResultData)
+	}
+}
+
+func TestQueueExpireExpired(t *testing.T) {
+	q := NewOperationQueue(1, nil)
+	op, _ := q.EnqueueCommand(context.Background(), "ttl-cmd", "srv-1", OpStart)
+	q.mu.Lock()
+	orig := q.operations[op.ID]
+	orig.TTL = 1 * time.Nanosecond
+	orig.CreatedAt = time.Now().Add(-1 * time.Hour)
+	q.persist(orig)
+	q.mu.Unlock()
+	op2, _ := q.EnqueueCommand(context.Background(), "normal-cmd", "srv-1", OpStart)
+	count := q.ExpireExpired()
+	if count != 1 {
+		t.Fatalf("expected 1 expired operation, got %d", count)
+	}
+	status, _ := q.GetStatus(op.ID)
+	if status.Status != StatusFailed || status.Error != "command expired" {
+		t.Fatalf("expected expired command to be failed, got %s/%s", status.Status, status.Error)
+	}
+	status2, _ := q.GetStatus(op2.ID)
+	if status2.Status != StatusPending {
+		t.Fatalf("expected normal command to remain pending, got %s", status2.Status)
+	}
+}
+
 func TestPersistentQueueReplaysAndDeduplicatesCommands(t *testing.T) {
 	journal := filepath.Join(t.TempDir(), "operations.db")
 	q1, err := NewPersistentOperationQueue(journal, 1, nil)

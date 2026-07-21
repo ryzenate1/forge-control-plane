@@ -7,8 +7,8 @@ import (
 )
 
 type ServerFlags struct {
-	AutoStart   bool `json:"auto_start"`
-	AutoRestart bool `json:"auto_restart"`
+	AutoStart   bool `json:"autoStart"`
+	AutoRestart bool `json:"autoRestart"`
 }
 
 func (s *Store) GetServerFlags(ctx context.Context, serverID string) (ServerFlags, error) {

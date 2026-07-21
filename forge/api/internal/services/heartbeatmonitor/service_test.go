@@ -206,28 +206,28 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantReasonSub: "heartbeat remained unreachable",
 		},
 		{
-			name: "Offline stays Offline",
+			name: "Offline stays Offline past unavailable threshold",
 			node: store.Node{
-				LastSeenAt:     ptr(now.Add(-95 * time.Second)),
+				LastSeenAt:     ptr(now.Add(-305 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateOffline),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}},
 			config:        cfg,
 			wantState:     store.NodeHeartbeatStateOffline,
 			wantActual:    store.NodeActualStateOffline,
-			wantReasonSub: "heartbeat remained unreachable",
+			wantReasonSub: "heartbeat expired beyond unavailable threshold",
 		},
 		{
-			name: "Double offline threshold goes directly to Offline",
+			name: "Exceeding UnavailableAfter goes directly to Offline",
 			node: store.Node{
-				LastSeenAt:     ptr(now.Add(-185 * time.Second)),
+				LastSeenAt:     ptr(now.Add(-305 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateHealthy),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}},
 			config:        cfg,
 			wantState:     store.NodeHeartbeatStateOffline,
 			wantActual:    store.NodeActualStateOffline,
-			wantReasonSub: "heartbeat expired beyond offline threshold",
+			wantReasonSub: "heartbeat expired beyond unavailable threshold",
 		},
 		{
 			name: "Offline to Recovering (one heartbeat)",
@@ -243,17 +243,43 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantReasonSub: "recovery threshold not met",
 		},
 		{
-			name: "Recovering to Healthy (threshold met)",
+			name: "Recovering to Reconciling (threshold met)",
 			node: store.Node{
 				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateRecovering),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
 			config:        cfg,
+			wantState:     store.NodeHeartbeatStateReconciling,
+			wantActual:    store.NodeActualStateReconciling,
+			wantRecovery:  2,
+			wantReasonSub: "recovery threshold met",
+		},
+		{
+			name: "Reconciling to Healthy",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateReconciling),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
+			config:        cfg,
 			wantState:     store.NodeHeartbeatStateHealthy,
 			wantActual:    store.NodeActualStateOnline,
 			wantRecovery:  2,
-			wantReasonSub: "recovery threshold satisfied",
+			wantReasonSub: "reconciliation complete",
+		},
+		{
+			name: "Offline to Reconciling with sufficient history",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateOffline),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
+			config:        cfg,
+			wantState:     store.NodeHeartbeatStateReconciling,
+			wantActual:    store.NodeActualStateReconciling,
+			wantRecovery:  2,
+			wantReasonSub: "fast recovery; entering reconciliation",
 		},
 		{
 			name: "Suspected to Recovering on recovery path",
@@ -267,6 +293,18 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantActual:    store.NodeActualStateDegraded,
 			wantRecovery:  1,
 			wantReasonSub: "recovery threshold not met",
+		},
+		{
+			name: "Reconciling with failed heartbeat transitions to Suspected",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-5 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateReconciling),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: false}},
+			config:        cfg,
+			wantState:     store.NodeHeartbeatStateSuspected,
+			wantActual:    store.NodeActualStateDegraded,
+			wantReasonSub: "latest heartbeat reported failure",
 		},
 		{
 			name: "Latest heartbeat failure triggers Suspected even if age is low",
@@ -324,8 +362,8 @@ func TestClassify_RecoveryThresholdBoundary(t *testing.T) {
 
 	t.Run("recovery threshold exactly met with 2 successes", func(t *testing.T) {
 		state, _, count, _, _ := NewWithConfig(nil, nil, cfg).classify(node, []store.NodeHeartbeatHistory{{Success: true}, {Success: true}}, now)
-		if state != store.NodeHeartbeatStateHealthy {
-			t.Fatalf("expected healthy, got %s", state)
+		if state != store.NodeHeartbeatStateReconciling {
+			t.Fatalf("expected reconciling, got %s", state)
 		}
 		if count != 2 {
 			t.Fatalf("expected count 2, got %d", count)
@@ -334,8 +372,8 @@ func TestClassify_RecoveryThresholdBoundary(t *testing.T) {
 
 	t.Run("recovery threshold met with more than needed", func(t *testing.T) {
 		state, _, count, _, _ := NewWithConfig(nil, nil, cfg).classify(node, []store.NodeHeartbeatHistory{{Success: true}, {Success: true}, {Success: true}}, now)
-		if state != store.NodeHeartbeatStateHealthy {
-			t.Fatalf("expected healthy, got %s", state)
+		if state != store.NodeHeartbeatStateReconciling {
+			t.Fatalf("expected reconciling, got %s", state)
 		}
 		if count != 3 {
 			t.Fatalf("expected count 3, got %d", count)

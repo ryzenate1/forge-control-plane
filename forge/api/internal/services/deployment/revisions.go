@@ -94,7 +94,11 @@ func (s *Service) CreateRevision(ctx context.Context, deploymentID string, cfg *
 	hash := configHash(cfg)
 	metaRaw := json.RawMessage("{}")
 	if cfg.Metadata != nil {
-		metaRaw, _ = json.Marshal(cfg.Metadata)
+		var marshalErr error
+		metaRaw, marshalErr = json.Marshal(cfg.Metadata)
+		if marshalErr != nil {
+			metaRaw = json.RawMessage("{}")
+		}
 	}
 
 	rev := &store.DeploymentRevision{
@@ -155,13 +159,20 @@ func (s *Service) RollbackToRevision(ctx context.Context, deploymentID string, r
 		return nil, fmt.Errorf("revision does not belong to this deployment")
 	}
 
+	if err := validateImageRef(targetRev.ImageRef); err != nil {
+		return nil, fmt.Errorf("rollback target revision: %w", err)
+	}
+
 	deployment := toServiceDeployment(sd)
+	if err := s.store.UpdateDeploymentStatusVersioned(ctx, deploymentID, sd.Version, string(StatusInProgress), ""); err != nil {
+		return nil, fmt.Errorf("update deployment status for rollback: %w", err)
+	}
+
 	deployment.Image = targetRev.ImageRef
 	deployment.Status = StatusInProgress
 	deployment.UpdatedAt = time.Now().UTC()
-
 	if err := s.store.UpdateDeployment(ctx, toStoreDeployment(deployment)); err != nil {
-		return nil, fmt.Errorf("update deployment for rollback: %w", err)
+		return nil, fmt.Errorf("update deployment image for rollback: %w", err)
 	}
 
 	if err := s.store.UpdateDeploymentCurrentRevision(ctx, deploymentID, &revisionID); err != nil {

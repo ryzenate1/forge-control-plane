@@ -1,0 +1,121 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://gamepanel.io/schemas/game-template.json",
+  "title": "Game Template",
+  "description": "Schema for Forge game server templates — importable egg definitions for one-click game server deployment",
+  "type": "object",
+  "required": [
+    "id", "name", "description", "version", "game", "image",
+    "startup", "config", "ports", "env", "resources",
+    "install_script", "supported_platforms", "categories"
+  ],
+  "properties": {
+    "$schema": { "type": "string" },
+    "id": {
+      "description": "Unique template identifier in kebab-case",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "name": { "description": "Human-readable display name", "type": "string" },
+    "description": { "description": "Markdown description of the template", "type": "string" },
+    "version": { "description": "Semantic version of this template definition", "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+    "game": { "description": "Game name", "type": "string" },
+    "author": { "type": "string" },
+    "update_url": { "type": "string", "format": "uri" },
+    "image": {
+      "description": "Default Docker image for the server container",
+      "type": "string"
+    },
+    "images": {
+      "description": "Map of label -> image for multiple image choices",
+      "type": "object",
+      "additionalProperties": { "type": "string" }
+    },
+    "startup": {
+      "description": "Startup command with {{VARIABLE}} substitution",
+      "type": "string"
+    },
+    "config": {
+      "type": "object",
+      "required": ["startup", "stop", "logs"],
+      "properties": {
+        "files": { "type": "object" },
+        "startup": {
+          "type": "object",
+          "properties": {
+            "done": { "type": "string" }
+          }
+        },
+        "stop": { "type": "string" },
+        "logs": { "type": "object" }
+      }
+    },
+    "ports": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["port", "protocol", "public"],
+        "properties": {
+          "port": { "type": "integer", "minimum": 1, "maximum": 65535 },
+          "protocol": { "type": "string", "enum": ["tcp", "udp"] },
+          "public": { "type": "boolean" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "env_variable", "default_value", "user_viewable", "user_editable", "rules"],
+        "properties": {
+          "name": { "type": "string" },
+          "env_variable": { "type": "string", "pattern": "^[A-Z][A-Z0-9_]*$" },
+          "description": { "type": "string" },
+          "default_value": { "type": "string" },
+          "user_viewable": { "type": "boolean" },
+          "user_editable": { "type": "boolean" },
+          "rules": { "type": "string" }
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "required": ["cpu", "memory_mb", "disk_mb"],
+      "properties": {
+        "cpu": { "type": "integer", "description": "CPU limit in percentage" },
+        "memory_mb": { "type": "integer", "description": "Default memory allocation in MB" },
+        "memory_max_mb": { "type": "integer", "description": "Maximum memory allocation in MB" },
+        "disk_mb": { "type": "integer", "description": "Disk space in MB" },
+        "cpu_shares": { "type": "integer", "description": "CPU shares weight" },
+        "io_weight": { "type": "integer", "description": "I/O priority weight" },
+        "swap_mb": { "type": "integer", "description": "Swap memory in MB" }
+      }
+    },
+    "install_script": {
+      "type": "object",
+      "required": ["container", "entrypoint", "script"],
+      "properties": {
+        "container": { "type": "string" },
+        "entrypoint": { "type": "string" },
+        "script": { "type": "string" }
+      }
+    },
+    "supported_platforms": {
+      "type": "array",
+      "items": { "type": "string", "enum": ["docker", "podman"] }
+    },
+    "categories": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "file_denylist": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "features": {
+      "type": "array",
+      "items": { "type": "string" }
+    }
+  }
+}

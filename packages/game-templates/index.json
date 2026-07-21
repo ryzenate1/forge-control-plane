@@ -1,0 +1,93 @@
+{
+  "$schema": "./template-schema.json",
+  "version": "1.0.0",
+  "registry": {
+    "minecraft-paper": {
+      "id": "minecraft-paper",
+      "name": "Minecraft (Paper)",
+      "game": "Minecraft",
+      "version": "1.0.0",
+      "categories": ["survival", "sandbox", "building"],
+      "tags": ["java", "papermc", "bukkit"],
+      "source": "https://papermc.io",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "minecraft-vanilla": {
+      "id": "minecraft-vanilla",
+      "name": "Minecraft (Vanilla)",
+      "game": "Minecraft",
+      "version": "1.0.0",
+      "categories": ["survival", "sandbox", "building"],
+      "tags": ["java", "vanilla", "mojang"],
+      "source": "https://minecraft.net",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "palworld": {
+      "id": "palworld",
+      "name": "Palworld",
+      "game": "Palworld",
+      "version": "1.0.0",
+      "categories": ["survival", "open-world", "adventure"],
+      "tags": ["steamcmd", "unreal-engine", "pve"],
+      "source": "https://www.pocketpair.jp/palworld",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "valheim": {
+      "id": "valheim",
+      "name": "Valheim",
+      "game": "Valheim",
+      "version": "1.0.0",
+      "categories": ["survival", "open-world", "co-op"],
+      "tags": ["steamcmd", "unity", "crossplay"],
+      "source": "https://www.valheimgame.com",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "terraria": {
+      "id": "terraria",
+      "name": "Terraria",
+      "game": "Terraria",
+      "version": "1.0.0",
+      "categories": ["sandbox", "adventure", "survival"],
+      "tags": ["steamcmd", "monogame", "2d"],
+      "source": "https://terraria.org",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "enshrouded": {
+      "id": "enshrouded",
+      "name": "Enshrouded",
+      "game": "Enshrouded",
+      "version": "1.0.0",
+      "categories": ["survival", "open-world", "rpg"],
+      "tags": ["steamcmd", "unreal-engine", "co-op"],
+      "source": "https://enshrouded.com",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    },
+    "satisfactory": {
+      "id": "satisfactory",
+      "name": "Satisfactory",
+      "game": "Satisfactory",
+      "version": "1.0.0",
+      "categories": ["sandbox", "building", "simulation"],
+      "tags": ["steamcmd", "unreal-engine", "automation"],
+      "source": "https://www.satisfactorygame.com",
+      "author": "GamePanel",
+      "updatedAt": "2026-07-21T00:00:00Z"
+    }
+  },
+  "categories": {
+    "survival": { "name": "Survival", "description": "Survival and crafting games" },
+    "sandbox": { "name": "Sandbox", "description": "Open-ended sandbox games" },
+    "building": { "name": "Building", "description": "Construction and building focused" },
+    "open-world": { "name": "Open World", "description": "Open world exploration" },
+    "adventure": { "name": "Adventure", "description": "Adventure and exploration" },
+    "co-op": { "name": "Co-op", "description": "Cooperative multiplayer" },
+    "rpg": { "name": "RPG", "description": "Role-playing game elements" },
+    "simulation": { "name": "Simulation", "description": "Simulation and management" }
+  }
+}

@@ -93,7 +93,7 @@ services:
 `
 
 func TestParse_BasicCompose(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(basicCompose), "/app")
 	require.NoError(t, err)
 	assert.Equal(t, "3.8", parsed.Version)
@@ -134,7 +134,7 @@ func TestParse_BasicCompose(t *testing.T) {
 }
 
 func TestParse_MinimalCompose(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(minimalCompose), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -143,7 +143,7 @@ func TestParse_MinimalCompose(t *testing.T) {
 }
 
 func TestValidate_ValidCompose(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(basicCompose), "/app")
 	assert.True(t, result.Valid)
 	assert.Empty(t, result.Errors)
@@ -156,7 +156,7 @@ services:
   broken-svc:
     restart: always
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.False(t, result.Valid)
 	assert.NotEmpty(t, result.Errors)
@@ -169,13 +169,13 @@ networks:
   net1:
     driver: bridge
 `
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(content), "/app")
 	assert.False(t, result.Valid)
 }
 
 func TestValidate_HealthCheckWarning(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(composeWithHealthCheck), "/app")
 	assert.True(t, result.Valid)
 	found := false
@@ -189,7 +189,7 @@ func TestValidate_HealthCheckWarning(t *testing.T) {
 }
 
 func TestValidate_DeployWarning(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(composeWithDeploy), "/app")
 	assert.True(t, result.Valid)
 	found := false
@@ -203,7 +203,7 @@ func TestValidate_DeployWarning(t *testing.T) {
 }
 
 func TestValidate_ProfileWarning(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	result := svc.Validate([]byte(basicCompose), "/app")
 	assert.True(t, result.Valid)
 	found := false
@@ -217,13 +217,13 @@ func TestValidate_ProfileWarning(t *testing.T) {
 }
 
 func TestParse_InvalidYAML(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	_, err := svc.Parse([]byte(`{{invalid-yaml`), "/app")
 	assert.Error(t, err)
 }
 
 func TestParse_SecretsAndConfigs(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(composeWithSecretsConfigs), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Secrets, 1)
@@ -234,7 +234,7 @@ func TestParse_SecretsAndConfigs(t *testing.T) {
 }
 
 func TestParse_Include(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(composeWithInclude), "/app")
 	require.NoError(t, err)
 	assert.Len(t, parsed.Services, 1)
@@ -242,7 +242,7 @@ func TestParse_Include(t *testing.T) {
 }
 
 func TestJSONRoundTrip(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	parsed, err := svc.Parse([]byte(basicCompose), "/app")
 	require.NoError(t, err)
 

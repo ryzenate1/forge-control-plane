@@ -8,6 +8,7 @@ import (
 	"log"
 	"os"
 	"sort"
+	"sync"
 
 	"gamepanel/forge/internal/store"
 
@@ -69,8 +70,11 @@ type Service struct {
 	logger *log.Logger
 }
 
-func New(st *store.Store) *Service {
-	return &Service{store: st}
+func New(st *store.Store) (*Service, error) {
+	if st == nil {
+		return nil, errors.New("store required")
+	}
+	return &Service{store: st}, nil
 }
 
 func (s *Service) SetLogger(logger *log.Logger) {
@@ -600,14 +604,12 @@ func (s *Service) CleanupDNSChallenge(ctx context.Context, domain, txtValue stri
 }
 
 func (s *Service) RegisterWithAcme(register func(name string, factory func(providerName string, credentials map[string]string) (challenge.Provider, error))) {
-	for _, def := range supportedProviders() {
-		providerType := def.Type
-		if provFactory, ok := providerRegistry[providerType]; ok {
-			fn := provFactory
-			register(providerType, func(providerName string, credentials map[string]string) (challenge.Provider, error) {
-				return s.acmeFactory(providerType, credentials, fn)
-			})
-		}
+	// Register all providers from the registry
+	for providerType, provFactory := range providerRegistry {
+		fn := provFactory
+		register(providerType, func(providerName string, credentials map[string]string) (challenge.Provider, error) {
+			return s.acmeFactory(providerType, credentials, fn)
+		})
 	}
 }
 
@@ -645,7 +647,10 @@ func credentialsFromProvider(provider store.DNSProvider) map[string]string {
 	return creds
 }
 
+var envMu sync.Mutex
+
 func setEnvRestore(env map[string]string) func() {
+	envMu.Lock()
 	previous := make(map[string]*string, len(env))
 	for k, v := range env {
 		if existing, ok := os.LookupEnv(k); ok {
@@ -657,6 +662,7 @@ func setEnvRestore(env map[string]string) func() {
 		os.Setenv(k, v)
 	}
 	return func() {
+		defer envMu.Unlock()
 		for k, prev := range previous {
 			if prev != nil {
 				os.Setenv(k, *prev)

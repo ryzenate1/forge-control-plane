@@ -1,0 +1,192 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "palworld",
+  "name": "Palworld",
+  "description": "Palworld dedicated server via SteamCMD. Full dedicated server with configurable difficulty, XP rates, and advanced world settings.",
+  "version": "1.0.0",
+  "game": "Palworld",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/2394010",
+  "image": "ghcr.io/parkervcp/steamcmd:debian",
+  "images": {
+    "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
+  },
+  "startup": "./PalServer.sh -port={{PORT}} -players={{MAX_PLAYERS}} -queryport={{QUERY_PORT}} -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS",
+  "config": {
+    "files": {
+      "Pal/Saved/Config/LinuxServer/GameUserSettings.ini": {
+        "parser": "ini",
+        "find": {
+          "[/Script/Engine.GameSession]": {
+            "MaxPlayers": "{{MAX_PLAYERS}}"
+          },
+          "[/Script/Pal.PalGameWorldSettings]": {
+            "OptionSettings": {
+              "Difficulty": "{{PALWORLD_DIFFICULTY}}",
+              "DayTimeSpeedRate": "{{PALWORLD_DAYTIME_SPEED}}",
+              "NightTimeSpeedRate": "{{PALWORLD_NIGHTTIME_SPEED}}",
+              "ExpRate": "{{PALWORLD_EXP_RATE}}",
+              "PalCaptureRate": "{{PALWORLD_CAPTURE_RATE}}"
+            }
+          }
+        }
+      }
+    },
+    "startup": {
+      "done": "Setting breakpad minidump AppID"
+    },
+    "stop": "shutdown",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 8211,
+      "protocol": "udp",
+      "public": true,
+      "description": "Palworld game server traffic"
+    },
+    {
+      "port": 27015,
+      "protocol": "udp",
+      "public": true,
+      "description": "Steam query port for server browser discovery"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the server browser.",
+      "default_value": "GamePanel Palworld Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server Description",
+      "env_variable": "SERVER_DESCRIPTION",
+      "description": "Description shown in the server browser.",
+      "default_value": "A GamePanel-hosted Palworld experience",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:256"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "16",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:32"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Password required to join the server. Leave empty for no password.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "Admin Password",
+      "env_variable": "ADMIN_PASSWORD",
+      "description": "Password for in-game admin commands.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "Difficulty",
+      "env_variable": "PALWORLD_DIFFICULTY",
+      "description": "Game difficulty level.",
+      "default_value": "None",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:None,Difficulty_Normal,Difficulty_Hard"
+    },
+    {
+      "name": "Daytime Speed",
+      "env_variable": "PALWORLD_DAYTIME_SPEED",
+      "description": "Daytime cycle speed multiplier. Lower values = slower days.",
+      "default_value": "1.000000",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^\\d+\\.\\d+$/"
+    },
+    {
+      "name": "Nighttime Speed",
+      "env_variable": "PALWORLD_NIGHTTIME_SPEED",
+      "description": "Nighttime cycle speed multiplier. Lower values = slower nights.",
+      "default_value": "1.000000",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^\\d+\\.\\d+$/"
+    },
+    {
+      "name": "EXP Rate",
+      "env_variable": "PALWORLD_EXP_RATE",
+      "description": "Experience gain multiplier.",
+      "default_value": "1.000000",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^\\d+\\.\\d+$/"
+    },
+    {
+      "name": "Capture Rate",
+      "env_variable": "PALWORLD_CAPTURE_RATE",
+      "description": "Pal capture rate multiplier.",
+      "default_value": "1.000000",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^\\d+\\.\\d+$/"
+    },
+    {
+      "name": "RCON Enabled",
+      "env_variable": "RCON_ENABLED",
+      "description": "Enable RCON for remote administration.",
+      "default_value": "true",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    },
+    {
+      "name": "Auto Save Span",
+      "env_variable": "AUTO_SAVE_SPAN",
+      "description": "Auto-save interval in minutes.",
+      "default_value": "30",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:5|max:120"
+    },
+    {
+      "name": "Community Server",
+      "env_variable": "COMMUNITY",
+      "description": "Show server in the community server list.",
+      "default_value": "false",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 16384,
+    "disk_mb": 20480,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/parkervcp/steamcmd:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Palworld SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Palworld dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 2394010 validate +quit\n\necho \"Palworld server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "adventure"],
+  "file_denylist": [],
+  "features": []
+}

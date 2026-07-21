@@ -7,11 +7,57 @@ import type {
   ApiOrphanRemediations,
   ApiServerOrphanRemediation,
   CrashEvent,
+  ProcessType,
+  ProcessScalingEvent,
+  OneOffTask,
+  ProcfileEntry,
 } from './types';
-import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput } from './types';
+import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, ApiServerDatabaseDeleteResult, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput } from './types';
+
+type PaginationMetadata = {
+  current: number;
+  total: number;
+  count: number;
+  per_page: number;
+  total_records: number;
+};
+
+type PaginatedEnvelope<T> = {
+  data: T[];
+  meta?: {
+    pagination?: PaginationMetadata;
+  };
+};
+
+async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>> {
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    headers: { Accept: 'application/json', ...getAuthHeaders() },
+    credentials: 'include',
+  });
+  if (!response.ok) {
+    const errMsg = await response.text().catch(() => '');
+    throw new Error(`API GET ${path} failed with ${response.status}: ${errMsg}`);
+  }
+  return response.json();
+}
 
 export async function fetchServers(): Promise<ApiServer[]> {
-  return fetchJSON<ApiServer[]>('/servers');
+  const firstPage = await fetchWithEnvelope<ApiServer>('/servers?page=1&per_page=100');
+  const pagination = firstPage.meta?.pagination;
+  if (!pagination || pagination.total <= 1) {
+    return firstPage.data ?? [];
+  }
+
+  const remainingPages = await Promise.all(
+    Array.from({ length: pagination.total - 1 }, (_, i) =>
+      fetchWithEnvelope<ApiServer>(`/servers?page=${i + 2}&per_page=100`),
+    ),
+  );
+
+  return [
+    ...firstPage.data,
+    ...remainingPages.flatMap((r) => r.data ?? []),
+  ];
 }
 
 export async function fetchServer(id: string): Promise<ApiServer> {
@@ -96,9 +142,9 @@ export async function createServerDatabase(serverId: string, input: DatabaseCrea
   return postJSON<ApiDatabase>(`/servers/${encodeURIComponent(serverId)}/databases`, input);
 }
 
-export async function deleteServerDatabase(serverId: string, databaseId: string, force = false): Promise<void> {
+export async function deleteServerDatabase(serverId: string, databaseId: string, force = false): Promise<ApiServerDatabaseDeleteResult> {
   const query = force ? "?force=true" : "";
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(databaseId)}${query}`);
+  return deleteJSON<ApiServerDatabaseDeleteResult>(`/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(databaseId)}${query}`);
 }
 
 export async function fetchOrphanRemediations(status?: "pending" | "resolved"): Promise<ApiOrphanRemediations> {
@@ -219,14 +265,14 @@ export async function fetchServerStartup(serverId: string): Promise<any> {
 }
 
 export async function updateServerStartupVariable(
-  serverId: string,
-  variableId: string,
-  value: string,
+	serverId: string,
+	key: string,
+	value: string,
 ): Promise<void> {
-  await putJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/variable`, {
-    variableId,
-    value,
-  });
+	await putJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/variable`, {
+		key,
+		value,
+	});
 }
 
 export async function updateServerStartupCommand(serverId: string, command: string): Promise<void> {
@@ -250,9 +296,12 @@ export async function fetchServerActivity(
   page = 1,
   perPage = 50,
 ): Promise<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }> {
-  return fetchJSON<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
-    `/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
-  );
+	return fetchJSON<ApiAuditEvent[] | { data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
+		`/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
+	).then((response) => Array.isArray(response) ? {
+		data: response,
+		pagination: { page: 1, per_page: response.length, total: response.length, total_pages: 1 },
+	} : response);
 }
 
 export async function fetchServerUsers(serverId: string): Promise<ApiServerSubuser[]> {
@@ -329,4 +378,34 @@ export async function transferServer(
     `/servers/${encodeURIComponent(serverId)}/transfer`,
     { targetNodeId },
   );
+}
+
+// Procfile process management
+
+export async function fetchProcesses(serverId: string): Promise<ProcessType[]> {
+  return fetchJSON<ProcessType[]>(`/servers/${encodeURIComponent(serverId)}/processes`);
+}
+
+export async function setProcesses(serverId: string, processes: ProcfileEntry[]): Promise<ProcessType[]> {
+  return postJSON<ProcessType[]>(`/servers/${encodeURIComponent(serverId)}/processes`, { processes });
+}
+
+export async function scaleProcess(serverId: string, processType: string, quantity: number): Promise<ProcessType> {
+  return putJSON<ProcessType>(`/servers/${encodeURIComponent(serverId)}/processes/${encodeURIComponent(processType)}/scale`, { quantity });
+}
+
+export async function runOneOffTask(serverId: string, command: string): Promise<OneOffTask> {
+  return postJSON<OneOffTask>(`/servers/${encodeURIComponent(serverId)}/processes/run`, { command });
+}
+
+export async function fetchOneOffTasks(serverId: string): Promise<OneOffTask[]> {
+  return fetchJSON<OneOffTask[]>(`/servers/${encodeURIComponent(serverId)}/processes/tasks`);
+}
+
+export async function fetchScalingHistory(serverId: string): Promise<ProcessScalingEvent[]> {
+  return fetchJSON<ProcessScalingEvent[]>(`/servers/${encodeURIComponent(serverId)}/processes/history`);
+}
+
+export async function parseProcfile(serverId: string, content: string): Promise<ProcfileEntry[]> {
+  return postJSON<ProcfileEntry[]>(`/servers/${encodeURIComponent(serverId)}/processes/parse-procfile`, { content });
 }

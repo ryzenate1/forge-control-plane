@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"gamepanel/beacon/internal/rootfs"
+	"gamepanel/beacon/internal/server"
 	"gamepanel/beacon/internal/serverid"
 	"gamepanel/beacon/internal/system"
 
@@ -320,7 +321,7 @@ func (s *Server) handleChannel(conn *ssh.ServerConn, accepted ssh.Channel, reque
 			diskMB = fresh.DiskLimitMB
 		}
 		lockValue, _ := s.writeLocks.LoadOrStore(serverID, &sync.Mutex{})
-		h := &handler{root: filepath.Join(s.DataDir, serverID), fsys: fsys, permissions: fresh.Permissions, readOnly: s.ReadOnly || fresh.ReadOnly, quotaBytes: mbBytes(diskMB), writeLock: lockValue.(*sync.Mutex), activity: s.Activity, serverID: serverID, userID: userID, ip: remoteIP(conn.RemoteAddr()), client: sanitizeClient(conn.ClientVersion()), sessionID: sessionID(conn)}
+		h := &handler{root: filepath.Join(s.DataDir, serverID), fsys: fsys, permissions: fresh.Permissions, readOnly: s.ReadOnly || fresh.ReadOnly, quotaBytes: server.MbToBytes(diskMB), writeLock: lockValue.(*sync.Mutex), activity: s.Activity, serverID: serverID, userID: userID, ip: remoteIP(conn.RemoteAddr()), client: sanitizeClient(conn.ClientVersion()), sessionID: sessionID(conn)}
 		requestServer := sftp.NewRequestServer(accepted, h.handlers())
 		_ = requestServer.Serve()
 		_ = requestServer.Close()
@@ -344,13 +345,6 @@ func parseInt64(value string) (int64, error) {
 	_, err := fmt.Sscan(value, &n)
 	return n, err
 }
-func mbBytes(value int64) int64 {
-	if value <= 0 {
-		return 0
-	}
-	return value * 1024 * 1024
-}
-
 func loadOrCreateHostKey(path string) (ssh.Signer, error) {
 	if body, err := os.ReadFile(path); err == nil {
 		return ssh.ParsePrivateKey(body)

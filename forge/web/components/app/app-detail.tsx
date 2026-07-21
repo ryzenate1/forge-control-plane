@@ -3,7 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Server } from "lucide-react";
 import Link from "next/link";
-import { fetchServer, type ApiServer } from "@/lib/api";
+import { fetchApp, type ApiAppDetail } from "@/lib/api/apps";
 import {
   SkeletonDetail,
   ErrorAlert,
@@ -14,13 +14,13 @@ import type { ReactNode } from "react";
 
 interface AppDetailViewProps {
   appId: string;
-  children?: ReactNode | ((app: ApiServer) => ReactNode);
+  children?: ReactNode | ((app: ApiAppDetail) => ReactNode);
 }
 
 export function AppDetailView({ appId, children }: AppDetailViewProps) {
   const query = useQuery({
     queryKey: ["app", appId],
-    queryFn: () => fetchServer(appId),
+    queryFn: () => fetchApp(appId),
     enabled: Boolean(appId),
   });
 

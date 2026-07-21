@@ -7,6 +7,7 @@ import (
 
 	"gamepanel/forge/internal/store"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -18,13 +19,13 @@ func TestCreateRevision(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	rev, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	})
 	require.NoError(t, err)
 	assert.NotEmpty(t, rev.ID)
 	assert.Equal(t, 1, rev.RevisionNumber)
-	assert.Equal(t, "nginx:1.25", rev.ImageRef)
+	assert.Equal(t, "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", rev.ImageRef)
 	assert.Equal(t, string(store.RevisionStatusPending), rev.Status)
 	assert.NotEmpty(t, rev.ConfigHash)
 }
@@ -36,13 +37,13 @@ func TestListRevisions(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	_, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	})
 	require.NoError(t, err)
 
 	_, err = svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.26",
+		ImageRef:    "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456",
 		Description: "version bump",
 	})
 	require.NoError(t, err)
@@ -61,7 +62,7 @@ func TestGetRevision(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	rev, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	})
 	require.NoError(t, err)
@@ -87,13 +88,13 @@ func TestRollbackToRevision(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	rev1, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	})
 	require.NoError(t, err)
 
 	rev2, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.26",
+		ImageRef:    "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456",
 		Description: "version bump",
 	})
 	require.NoError(t, err)
@@ -103,7 +104,7 @@ func TestRollbackToRevision(t *testing.T) {
 
 	result, err := svc.RollbackToRevision(context.Background(), dep.ID, rev1.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "nginx:1.25", result.Image)
+	assert.Equal(t, "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", result.Image)
 	assert.Equal(t, StatusInProgress, result.Status)
 }
 
@@ -114,13 +115,13 @@ func TestRollbackToPrevious(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	_, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	})
 	require.NoError(t, err)
 
 	rev2, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.26",
+		ImageRef:    "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456",
 		Description: "version bump",
 	})
 	require.NoError(t, err)
@@ -130,7 +131,7 @@ func TestRollbackToPrevious(t *testing.T) {
 
 	result, err := svc.RollbackToPrevious(context.Background(), dep.ID)
 	require.NoError(t, err)
-	assert.Equal(t, "nginx:1.25", result.Image)
+	assert.Equal(t, "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", result.Image)
 }
 
 func TestRollbackToPreviousNoRevisions(t *testing.T) {
@@ -150,15 +151,15 @@ func TestCompareRevisions(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	rev1, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
-		Description: "initial deploy",
+		ImageRef:     "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
+		Description:  "initial deploy",
 		GitCommitSHA: "abc123",
 	})
 	require.NoError(t, err)
 
 	rev2, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.26",
-		Description: "version bump",
+		ImageRef:     "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456",
+		Description:  "version bump",
 		GitCommitSHA: "def456",
 	})
 	require.NoError(t, err)
@@ -172,8 +173,8 @@ func TestCompareRevisions(t *testing.T) {
 	var foundImage, foundGit bool
 	for _, ch := range diff.Changes {
 		if ch.Field == "imageRef" {
-			assert.Equal(t, "nginx:1.25", ch.OldValue)
-			assert.Equal(t, "nginx:1.26", ch.NewValue)
+			assert.Equal(t, "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", ch.OldValue)
+			assert.Equal(t, "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456", ch.NewValue)
 			foundImage = true
 		}
 		if ch.Field == "gitCommitSha" {
@@ -193,7 +194,7 @@ func TestCompareRevisionsNoChanges(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyRecreate)
 
 	cfg := &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial deploy",
 	}
 
@@ -208,9 +209,9 @@ func TestCompareRevisionsNoChanges(t *testing.T) {
 }
 
 func TestConfigHash(t *testing.T) {
-	cfg1 := &RevisionConfig{ImageRef: "nginx:1.25", GitCommitSHA: "abc123"}
-	cfg2 := &RevisionConfig{ImageRef: "nginx:1.25", GitCommitSHA: "abc123"}
-	cfg3 := &RevisionConfig{ImageRef: "nginx:1.26", GitCommitSHA: "abc123"}
+	cfg1 := &RevisionConfig{ImageRef: "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", GitCommitSHA: "abc123"}
+	cfg2 := &RevisionConfig{ImageRef: "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd", GitCommitSHA: "abc123"}
+	cfg3 := &RevisionConfig{ImageRef: "nginx:1.26@sha256:def456abc123def456abc123def456abc123def456abc123def456abc123def456", GitCommitSHA: "abc123"}
 
 	h1 := configHash(cfg1)
 	h2 := configHash(cfg2)
@@ -229,7 +230,7 @@ func TestCreateRevisionRevisionNumberSequence(t *testing.T) {
 
 	for i := 1; i <= 5; i++ {
 		rev, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-			ImageRef:    "nginx:latest",
+			ImageRef:    "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 			Description: "revision " + string(rune('0'+i)),
 		})
 		require.NoError(t, err)
@@ -242,7 +243,7 @@ func TestCreateRevisionDeploymentNotFound(t *testing.T) {
 	defer cleanup()
 
 	_, err := svc.CreateRevision(context.Background(), "nonexistent", &RevisionConfig{
-		ImageRef: "nginx:latest",
+		ImageRef: "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 	})
 	assert.ErrorIs(t, err, ErrNotFound)
 }
@@ -255,7 +256,7 @@ func TestRollbackToRevisionMismatchedDeployment(t *testing.T) {
 	dep2 := createTestDeployment(t, svc, "test-server-2", StrategyRecreate)
 
 	rev, err := svc.CreateRevision(context.Background(), dep1.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "initial",
 	})
 	require.NoError(t, err)
@@ -272,7 +273,7 @@ func TestRevisionMetadata(t *testing.T) {
 	dep := createTestDeployment(t, svc, "test-server-id", StrategyCanary)
 
 	rev, err := svc.CreateRevision(context.Background(), dep.ID, &RevisionConfig{
-		ImageRef:    "nginx:1.25",
+		ImageRef:    "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		Description: "canary deploy",
 		Metadata: map[string]any{
 			"canaryPercent": 10,
@@ -304,13 +305,13 @@ func TestStartRollout(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			dep, err := svc.StartRollout(context.Background(), &RolloutRequest{
-				ServerID: "test-server-" + tt.name,
+				ServerID: uuid.NewString(),
 				Strategy: tt.strategy,
-				Image:    "nginx:latest",
+				Image:    "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 			})
 			require.NoError(t, err)
 			assert.Equal(t, tt.strategy, dep.Strategy)
-			assert.Equal(t, StatusInProgress, dep.Status)
+			assert.Equal(t, StatusPending, dep.Status)
 			assert.NotEmpty(t, dep.ID)
 		})
 	}
@@ -320,17 +321,18 @@ func TestStartRolloutDuplicateInProgress(t *testing.T) {
 	svc, cleanup := testService(t)
 	defer cleanup()
 
+	serverID := uuid.NewString()
 	_, err := svc.StartRollout(context.Background(), &RolloutRequest{
-		ServerID: "test-server-dup",
+		ServerID: serverID,
 		Strategy: StrategyRecreate,
-		Image:    "nginx:latest",
+		Image:    "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 	})
 	require.NoError(t, err)
 
 	_, err = svc.StartRollout(context.Background(), &RolloutRequest{
-		ServerID: "test-server-dup",
+		ServerID: serverID,
 		Strategy: StrategyRecreate,
-		Image:    "nginx:latest",
+		Image:    "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 	})
 	assert.ErrorIs(t, err, ErrInProgress)
 }
@@ -358,9 +360,9 @@ func TestStartRolloutBlueGreen(t *testing.T) {
 	defer cleanup()
 
 	dep, err := svc.StartRollout(context.Background(), &RolloutRequest{
-		ServerID:        "test-server-bg",
+		ServerID:        uuid.NewString(),
 		Strategy:        StrategyBlueGreen,
-		Image:           "nginx:latest",
+		Image:           "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		HealthCheckPath: "/health",
 		HealthCheckPort: 8080,
 	})
@@ -376,9 +378,9 @@ func TestCanaryRolloutDefaultPercent(t *testing.T) {
 	defer cleanup()
 
 	dep, err := svc.StartRollout(context.Background(), &RolloutRequest{
-		ServerID: "test-server-canary",
+		ServerID: uuid.NewString(),
 		Strategy: StrategyCanary,
-		Image:    "nginx:latest",
+		Image:    "nginx:latest@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 	})
 	require.NoError(t, err)
 	assert.Equal(t, StrategyCanary, dep.Strategy)

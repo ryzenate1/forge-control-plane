@@ -392,13 +392,13 @@ gamepanel/
 | [Documentation index](./docs/README.md) | Map of the documentation tree |
 | [Installation guide](./docs/installation.md) | Step-by-step installation |
 | [Upgrading](./docs/upgrading.md) | Upgrade procedures and rollback |
-| [Production deployment](./docs/operations/production-deployment.md) | Ubuntu, TLS, Docker, games, multi-node, AWS and backups |
+| [Production deployment](./docs/operations/README.md) | Deployment guide, configuration reference, backup/restore, monitoring, troubleshooting |
 | [Security operations](./docs/operations/security.md) | Security controls and operator guidance |
-| [Architecture overview](./docs/architecture/architecture-overview.md) | System components and boundaries |
+| [Architecture overview](./docs/architecture/README.md) | System components, data flow, API overview, deployment architecture |
 | [Current architecture](./docs/architecture/current-architecture.md) | Implemented runtime architecture |
 | [Domain model](./docs/architecture/domain-model.md) | Core orchestration entities and relationships |
 | [Developer setup](./docs/development/development.md) | Source development workflow |
-| [API guide](./docs/api/api.md) | API conventions and usage |
+| [API guide](./docs/api/README.md) | API reference, auth, endpoints, examples, error codes |
 | [API contracts](./docs/api/API_CONTRACTS.md) | Shared request and response contracts |
 | [Server lifecycle](./forge/api/docs/server-lifecycle.md) | Provisioning and runtime lifecycle |
 | [Encryption at rest](./forge/api/docs/encryption-at-rest.md) | Master-key management and rotation |
@@ -407,7 +407,7 @@ gamepanel/
 
 Documents in `docs/archive/`, `docs/audits/`, `docs/comparative-audit/`, and
 `reference/` preserve research and historical state. For current deployment
-instructions, prefer `docs/operations/production-deployment.md`.
+instructions, prefer `docs/operations/README.md`.
 
 ## Security checklist
 

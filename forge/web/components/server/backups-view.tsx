@@ -7,6 +7,7 @@ import { createBackup, deleteBackup, fetchBackups, lockBackup as lockBackupApi, 
 import { type ApiBackup, type ApiServer } from "@/lib/api/types";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { formatDate } from "@/lib/utils";
+import { fetchBackupProviders } from "@/lib/api/database-containers";
 
 export function formatBackupBytes(value: number) {
   if (!Number.isFinite(value) || value < 0) return "Unknown size";
@@ -35,6 +36,14 @@ export function BackupsView({ server }: { server?: ApiServer }) {
   const [ignoredFiles, setIgnoredFiles] = useState("");
   const [lockOnCreate, setLockOnCreate] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [storageProvider, setStorageProvider] = useState("");
+  const [storageConfig, setStorageConfig] = useState<Record<string, string>>({});
+  const providers = useQuery({
+    queryKey: ["backup-providers"],
+    queryFn: fetchBackupProviders,
+		enabled: showAdvanced,
+    staleTime: 60000,
+  });
   const [currentPage, setCurrentPage] = useState(1);
   const backups = useQuery({
     queryKey: ["server-backups", server?.id, currentPage],
@@ -193,6 +202,45 @@ export function BackupsView({ server }: { server?: ApiServer }) {
             />
             <p className="text-xs text-[#64748b] mt-1">Use .gitignore-style patterns to exclude files from backup</p>
           </div>
+          <div>
+            <label className="block text-sm font-semibold text-slate-100 mb-1">Storage Destination</label>
+            <select
+              className="w-full rounded-lg bg-[#0f141f] border border-white/[0.1] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
+              value={storageProvider}
+              onChange={(e) => { setStorageProvider(e.target.value); setStorageConfig({}); }}
+            >
+              <option value="">Default</option>
+              {(providers.data?.providers ?? []).map((p) => (
+                <option key={p} value={p}>{p.toUpperCase()}</option>
+              ))}
+            </select>
+          </div>
+          {storageProvider === "s3" && (
+            <div className="space-y-3 rounded-lg bg-[#0f141f] p-3">
+              <p className="text-xs font-semibold text-slate-400 uppercase">S3 Configuration</p>
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Bucket" value={storageConfig.bucket ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, bucket: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Region (e.g. us-east-1)" value={storageConfig.region ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, region: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Endpoint (optional)" value={storageConfig.endpoint ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, endpoint: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Access Key ID" value={storageConfig.accessKeyId ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, accessKeyId: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Secret Access Key" type="password" value={storageConfig.secretAccessKey ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, secretAccessKey: e.target.value }))} />
+            </div>
+          )}
+          {storageProvider === "gcs" && (
+            <div className="space-y-3 rounded-lg bg-[#0f141f] p-3">
+              <p className="text-xs font-semibold text-slate-400 uppercase">GCS Configuration</p>
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Bucket Name" value={storageConfig.bucketName ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, bucketName: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Key File Path (optional)" value={storageConfig.keyFile ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, keyFile: e.target.value }))} />
+            </div>
+          )}
+          {storageProvider === "azure" && (
+            <div className="space-y-3 rounded-lg bg-[#0f141f] p-3">
+              <p className="text-xs font-semibold text-slate-400 uppercase">Azure Configuration</p>
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Container Name" value={storageConfig.containerName ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, containerName: e.target.value }))} />
+              <input className="w-full rounded-lg bg-[#161b28] border border-white/[0.1] px-3 py-2 text-sm text-slate-100" placeholder="Connection String" value={storageConfig.connectionString ?? ""} onChange={(e) => setStorageConfig(c => ({ ...c, connectionString: e.target.value }))} />
+            </div>
+          )}
+          {providers.isLoading && <p className="text-xs text-slate-500">Loading providers...</p>}
+          {providers.isError && <p className="text-xs text-red-400">Failed to load providers</p>}
           <div className="flex items-center gap-2">
             <input 
               checked={lockOnCreate}

@@ -18,6 +18,7 @@ import (
 
 	"gamepanel/beacon/internal/ignore"
 	"gamepanel/beacon/internal/rootfs"
+	"golang.org/x/time/rate"
 )
 
 const metadataSuffix = ".metadata.json"
@@ -42,6 +43,8 @@ type LocalBackup struct {
 	legacyDataRoot string
 	migrationMu    sync.Mutex
 	progress       ProgressFunc
+	progressMu     sync.Mutex
+	writeLimit     int64
 }
 
 // NewLocalBackup configures daemon-owned storage. legacyDataRoot is optional;
@@ -66,12 +69,21 @@ func NewLocalBackup(backupRoot string, legacyDataRoot ...string) (*LocalBackup, 
 func (l *LocalBackup) Type() AdapterType { return LocalAdapter }
 
 func (l *LocalBackup) SetProgressCallback(fn ProgressFunc) {
+	l.progressMu.Lock()
+	defer l.progressMu.Unlock()
 	l.progress = fn
 }
 
+func (l *LocalBackup) SetWriteLimit(bytesPerSec int64) {
+	l.writeLimit = bytesPerSec
+}
+
 func (l *LocalBackup) reportProgress(bytesProcessed, totalBytes int64, phase string) {
-	if l.progress != nil {
-		l.progress(BackupProgress{BytesProcessed: bytesProcessed, TotalBytes: totalBytes, Phase: phase})
+	l.progressMu.Lock()
+	fn := l.progress
+	l.progressMu.Unlock()
+	if fn != nil {
+		fn(BackupProgress{BytesProcessed: bytesProcessed, TotalBytes: totalBytes, Phase: phase})
 	}
 }
 
@@ -241,7 +253,12 @@ func (l *LocalBackup) Create(ctx context.Context, serverRoot, namespace, name st
 		}
 	}()
 
-	zipper := zip.NewWriter(temp)
+	var zipTarget io.Writer = temp
+	if l.writeLimit > 0 {
+		limiter := rate.NewLimiter(rate.Limit(l.writeLimit), int(l.writeLimit))
+		zipTarget = &rateLimitedWriter{writer: temp, limiter: limiter, ctx: ctx}
+	}
+	zipper := zip.NewWriter(zipTarget)
 	denylist := ignore.NewIgnoreList(patterns)
 	walkErr := filepath.WalkDir(canonicalRoot, func(filePath string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -904,4 +921,17 @@ func syncDirectory(directory string) error {
 	}
 	defer file.Close()
 	return file.Sync()
+}
+
+type rateLimitedWriter struct {
+	writer  io.Writer
+	limiter *rate.Limiter
+	ctx     context.Context
+}
+
+func (w *rateLimitedWriter) Write(p []byte) (int, error) {
+	if err := w.limiter.WaitN(w.ctx, len(p)); err != nil {
+		return 0, err
+	}
+	return w.writer.Write(p)
 }

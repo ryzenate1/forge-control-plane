@@ -34,7 +34,7 @@ export function StartupView({ server }: { server?: ApiServer }) {
   const update = useMutation({ mutationFn: ({ key, value }: { key: string; value: string }) => updateServerStartupVariable(server?.id ?? "", key, value), onSuccess: (_, input) => { setDrafts((current) => { const next = { ...current }; delete next[input.key]; return next; }); setSaved(input.key); void qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); }, onError: () => setSaved("") });
   const configUpdate = useMutation({ mutationFn: (input: { startupCommand?: string; dockerImage?: string }) => updateServer(server?.id ?? "", input), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); await context?.refreshServer(); } });
   const startup = query.data;
-  const images = useMemo(() => Object.entries(startup?.docker_images ?? {}), [startup?.docker_images]);
+  const images = useMemo(() => Object.entries(startup?.docker_images ?? {}) as Array<[string, string]>, [startup?.docker_images]);
   useEffect(() => { setCommandDraft(server?.startupCommand ?? startup?.raw_startup_command ?? ""); }, [server?.startupCommand, startup?.raw_startup_command]);
   useEffect(() => { if (!saved) return; const timer = window.setTimeout(() => setSaved(""), 2500); return () => window.clearTimeout(timer); }, [saved]);
 

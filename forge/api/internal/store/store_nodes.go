@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -37,7 +38,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 		       COALESCE(n.allowed_ips, '{}'), COALESCE(n.network_interface, ''),
 		       COALESCE(n.daemon_ssl_cert, ''), COALESCE(n.daemon_ssl_key, ''),
 		       n.auto_connect, COALESCE(n.connection_retries, 3), COALESCE(n.heartbeat_interval, 15),
-		       COALESCE(n.cpu_cores, 0), n.cpu_threads,
+		       COALESCE(n.cpu_cores, 0),
 		       COALESCE(n.memory_overallocate, 0), COALESCE(n.disk_overallocate, 0),
 		       COALESCE(n.reserved_memory_mb, 0), COALESCE(n.reserved_disk_mb, 0),
 		       COALESCE(n.default_allocation_ip, '0.0.0.0'),
@@ -56,7 +57,8 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 		   COALESCE(n.draining, false), COALESCE(n.desired_state, 'active'), COALESCE(n.actual_state, 'offline'),
 	       COALESCE(n.heartbeat_state::text, ''), COALESCE(n.heartbeat_recovery_count, 0),
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
-	       COALESCE(n.tags, '[]')
+	       COALESCE(n.tags, '[]'),
+	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text
 		FROM nodes n
 		LEFT JOIN locations l ON l.id = n.location_id
 		ORDER BY n.name
@@ -70,6 +72,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 	nodes := []Node{}
 	for rows.Next() {
 		var node Node
+		var schedulerConfig sql.NullString
 		if err := rows.Scan(
 			&node.ID, &node.UUID, &node.Name, &node.Region, &node.BaseURL,
 			&node.FQDN, &node.Scheme, &node.BehindProxy, &node.Status, &node.Maintenance,
@@ -81,7 +84,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 			&node.ListenPortMin, &node.ListenPortMax, &node.AllowedIPs, &node.NetworkInterface,
 			&node.DaemonSSLCert, &node.DaemonSSLKey,
 			&node.AutoConnect, &node.ConnectionRetries, &node.HeartbeatInterval,
-			&node.CPUCores, &node.CPUThreads,
+			&node.CPUCores,
 			&node.MemoryOverallocate, &node.DiskOverallocate,
 			&node.ReservedMemoryMB, &node.ReservedDiskMB,
 			&node.DefaultAllocationIP, &node.AllocationPortMin, &node.AllocationPortMax,
@@ -94,12 +97,16 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 			&node.MaintenanceMessage, &node.DrainBeforeMaintenance,
 			&node.Labels, &node.ClusterGroupID, &node.Public,
 			&node.Description, &node.LocationID, &node.RegionID, &node.Draining, &node.DesiredState, &node.ActualState,
-			&node.HeartbeatState, &node.HeartbeatRecoveryCount,
-			&node.HeartbeatState, &node.HeartbeatRecoveryCount,
-			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
+		    &node.HeartbeatState, &node.HeartbeatRecoveryCount,
+		    &node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
+			&node.SchedulerType, &schedulerConfig,
 		); err != nil {
 			return nil, err
+		}
+		if schedulerConfig.Valid && schedulerConfig.String != "" {
+			raw := json.RawMessage(schedulerConfig.String)
+			node.SchedulerConfig = &raw
 		}
 		nodes = append(nodes, node)
 	}
@@ -108,6 +115,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 
 func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 	var node Node
+	var schedulerConfig sql.NullString
 	err := s.db.QueryRow(ctx, `
 		SELECT n.id::text, COALESCE(n.uuid, n.id)::text, n.name, COALESCE(l.long, n.region), n.base_url,
 		       COALESCE(n.fqdn, ''), COALESCE(n.scheme, 'http'), n.behind_proxy, n.status, n.maintenance_mode,
@@ -142,7 +150,9 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 		   COALESCE(n.labels, '[]'), COALESCE(n.cluster_group_id, ''),
 		   COALESCE(n.description, ''), n.location_id::text,
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
-	       COALESCE(n.tags, '[]')
+	       COALESCE(n.tags, '[]'),
+	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text,
+	       COALESCE(n.runtime_provider, '')
 	FROM nodes n
 	LEFT JOIN locations l ON l.id = n.location_id
 	WHERE n.id = $1
@@ -174,7 +184,16 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 			&node.Labels, &node.ClusterGroupID, &node.Public, &node.Description, &node.LocationID,
 			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
+			&node.SchedulerType, &schedulerConfig,
+			&node.RuntimeProvider,
 		)
+	if err != nil {
+		return Node{}, err
+	}
+	if schedulerConfig.Valid && schedulerConfig.String != "" {
+		raw := json.RawMessage(schedulerConfig.String)
+		node.SchedulerConfig = &raw
+	}
 	if err != nil {
 		return Node{}, err
 	}
@@ -228,7 +247,8 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 			alert_threshold_cpu, alert_threshold_memory, alert_threshold_disk,
 			maintenance_message, drain_before_maintenance, labels, cluster_group_id,
 			public,
-			daemon_sftp_alias, daemon_connect, cpu_overallocate, tags
+			daemon_sftp_alias, daemon_connect, cpu_overallocate, tags,
+			scheduler_type, scheduler_config
 		)
 		VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'offline', $11,
@@ -242,7 +262,8 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 			$46, $47, $48, $49, $50,
 			$51, $52, $53,
 			$54, $55, $56, $57,
-			$58, $59, $60, $61, $62
+			$58, $59, $60, $61, $62,
+			$63, $64
 		)
 	`, id, nodeUUID, req.Name, strings.TrimSpace(req.Description), req.Region, nullableUUID(req.RegionID), req.BaseURL, req.FQDN, req.Scheme, req.BehindProxy,
 		req.Maintenance,
@@ -257,7 +278,8 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 		req.AlertThresholdCPU, req.AlertThresholdMem, req.AlertThresholdDisk,
 		req.MaintenanceMessage, req.DrainBeforeMaint, req.Labels, req.ClusterGroupID,
 		req.Public,
-		req.DaemonSFTPAlias, req.DaemonConnect, req.CPUOverallocate, req.Tags)
+		req.DaemonSFTPAlias, req.DaemonConnect, req.CPUOverallocate, req.Tags,
+		req.SchedulerType, req.SchedulerConfig)
 	if err != nil {
 		return Node{}, "", err
 	}
@@ -311,7 +333,8 @@ func (s *Store) UpdateNode(ctx context.Context, nodeID string, req UpdateNodeReq
 		    maintenance_message = $51, drain_before_maintenance = $52,
 		public = $56,
 		labels = $53, cluster_group_id = $54, location_id = $55,
-		daemon_sftp_alias = $57, daemon_connect = $58, cpu_overallocate = $59, tags = $60
+		daemon_sftp_alias = $57, daemon_connect = $58, cpu_overallocate = $59, tags = $60,
+		scheduler_type = $61, scheduler_config = $62
 	WHERE id = $18
 `, req.Name, req.Region, nullableUUID(req.RegionID), req.BaseURL, req.FQDN, req.Scheme, req.BehindProxy, req.Maintenance,
 		req.Draining, desiredState,
@@ -333,7 +356,8 @@ func (s *Store) UpdateNode(ctx context.Context, nodeID string, req UpdateNodeReq
 		req.MaintenanceMessage, req.DrainBeforeMaint,
 		req.Labels, req.ClusterGroupID, nullableUUID(req.LocationID),
 		req.Public,
-		req.DaemonSFTPAlias, req.DaemonConnect, req.CPUOverallocate, req.Tags)
+		req.DaemonSFTPAlias, req.DaemonConnect, req.CPUOverallocate, req.Tags,
+		req.SchedulerType, req.SchedulerConfig)
 	if err != nil {
 		return Node{}, err
 	}
@@ -504,6 +528,12 @@ func (s *Store) PatchNode(ctx context.Context, nodeID string, patch NodePatch, a
 	}
 	if patch.Status != nil {
 		add("status", strings.TrimSpace(*patch.Status))
+	}
+	if patch.SchedulerType != nil {
+		add("scheduler_type", *patch.SchedulerType)
+	}
+	if patch.SchedulerConfig != nil {
+		add("scheduler_config", *patch.SchedulerConfig)
 	}
 	if len(sets) == 0 {
 		return current, nil
@@ -972,16 +1002,16 @@ func (s *Store) ServerBelongsToNode(ctx context.Context, serverID, nodeID string
 type NodeConfiguration struct {
 	Debug   bool   `json:"debug"`
 	UUID    string `json:"uuid"`
-	TokenID string `json:"token_id"`
+	TokenID string `json:"tokenId"`
 	// Token is intentionally never populated by this read endpoint. Complete
 	// credentials are revealed only by creation and rotation responses.
 	Token          string         `json:"token,omitempty"`
 	API            map[string]any `json:"api"`
 	System         map[string]any `json:"system"`
 	Remote         string         `json:"remote"`
-	AllowedMounts  []string       `json:"allowed_mounts"`
-	AllowedOrigins []string       `json:"allowed_origins"`
-	RemoteQuery    map[string]int `json:"remote_query"`
+	AllowedMounts  []string       `json:"allowedMounts"`
+	AllowedOrigins []string       `json:"allowedOrigins"`
+	RemoteQuery    map[string]int `json:"remoteQuery"`
 }
 
 func (s *Store) NodeConfiguration(ctx context.Context, nodeID, panelURL string) (NodeConfiguration, error) {
@@ -1248,7 +1278,8 @@ func portFromBaseURL(baseURL, scheme string) int {
 func (s *Store) ListServersForNode(ctx context.Context, nodeID string) ([]Server, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT s.id::text, s.name, s.status, s.memory_mb, s.cpu_shares, s.disk_mb, n.name, u.email, e.name,
-		       COALESCE(s.desired_state::text, ''), COALESCE(s.actual_state::text, '')
+		       COALESCE(s.desired_state::text, ''), COALESCE(s.actual_state::text, ''),
+		       COALESCE(s.generation, 0), s.workload_lease_expiry
 				FROM servers s
 				JOIN nodes n ON n.id = s.node_id
 				JOIN users u ON u.id = s.owner_id
@@ -1263,7 +1294,7 @@ func (s *Store) ListServersForNode(ctx context.Context, nodeID string) ([]Server
 	servers := []Server{}
 	for rows.Next() {
 		var server Server
-		if err := rows.Scan(&server.ID, &server.Name, &server.Status, &server.MemoryMB, &server.CPUShares, &server.DiskMB, &server.Node, &server.Owner, &server.Template, &server.DesiredState, &server.ActualState); err != nil {
+		if err := rows.Scan(&server.ID, &server.Name, &server.Status, &server.MemoryMB, &server.CPUShares, &server.DiskMB, &server.Node, &server.Owner, &server.Template, &server.DesiredState, &server.ActualState, &server.Generation, &server.WorkloadLeaseExpiry); err != nil {
 			return nil, err
 		}
 		servers = append(servers, server)

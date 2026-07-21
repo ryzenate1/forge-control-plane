@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -13,23 +14,39 @@ import (
 	"strings"
 	"time"
 
-	acmesvc "gamepanel/forge/internal/services/acme"
+	"gamepanel/forge/internal/auth"
 	"gamepanel/forge/internal/cloud"
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/eventstore"
+	"gamepanel/forge/internal/services"
+	acmesvc "gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/services/activity"
+	alerting "gamepanel/forge/internal/services/alerting"
+	apphostingsvc "gamepanel/forge/internal/services/apphosting"
+	appstoresvc "gamepanel/forge/internal/services/appstore"
 	"gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	"gamepanel/forge/internal/services/build"
+	buildpacksvc "gamepanel/forge/internal/services/buildpack"
+	cleanupsvc "gamepanel/forge/internal/services/cleanup"
 	"gamepanel/forge/internal/services/clustermanager"
+	"gamepanel/forge/internal/services/clustermembership"
+	composesvc "gamepanel/forge/internal/services/compose"
 	"gamepanel/forge/internal/services/crashdetector"
+	cronjobsvc "gamepanel/forge/internal/services/cronjob"
+	"gamepanel/forge/internal/services/crossnode"
+	dbbackupsvc "gamepanel/forge/internal/services/dbbackup"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
 	dnssvc "gamepanel/forge/internal/services/dns"
 	"gamepanel/forge/internal/services/domains"
+	"gamepanel/forge/internal/services/environments"
+	envvarsvc "gamepanel/forge/internal/services/envvars"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
 	gitsvc "gamepanel/forge/internal/services/git"
+	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
@@ -38,23 +55,30 @@ import (
 	"gamepanel/forge/internal/services/migration"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
+	notificationsvc "gamepanel/forge/internal/services/notification"
+	enhancednotifsvc "gamepanel/forge/internal/services/notifications"
 	"gamepanel/forge/internal/services/observability"
-	"gamepanel/forge/internal/services/build"
+	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/plugins"
+	previewsvc "gamepanel/forge/internal/services/preview"
+	proceduresvc "gamepanel/forge/internal/services/procedure"
+	processsvc "gamepanel/forge/internal/services/process"
 	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/services/reconciler"
 	recoverysvc "gamepanel/forge/internal/services/recovery"
+	replicamanager "gamepanel/forge/internal/services/replicamanager"
 	"gamepanel/forge/internal/services/reservations"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
 	"gamepanel/forge/internal/services/scheduler"
+	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	"gamepanel/forge/internal/services/webauthn"
+	"gamepanel/forge/internal/services/zerodowntime"
 	"gamepanel/forge/internal/store"
 
 	fiberws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/cors"
 	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -102,33 +126,74 @@ type Config struct {
 	DBProvisioner        *dbprovisioner.Service
 	Translator           *i18n.TranslationService
 	HealthService        *health.Service
+	SessionStore         auth.SessionStore
 	MailTriggerService   *mailservice.TriggerService
 	QueueService         *queue.Service
+	OperationService     *operationsvc.Service
 	RuntimeRegistry      *runtimesvc.Registry
 	WebAuthnService      *webauthn.Service
 	EventRelay           *eventstore.Relay
 
-	BackupSvc           *backup.Service
-	AutoScaler          *autoscaler.Service
-	CrashDetector       *crashdetector.Detector
-	DeploymentSvc       *deployment.Service
-	CloudManager        *cloud.Manager
-	AcmeService         *acmesvc.Service
-	LoadBalancer        *loadbalancer.Service
-	FailoverSvc         *failover.Service
-	TrafficManager      *trafficmanager.Service
-	DomainService       *domains.Service
-	DNSService          *dnssvc.Service
-	DBContainerService  *dbprovisioner.DBContainerService
-	PredictiveScorer    *scheduler.PredictiveScorer
-	ConstraintScheduler *scheduler.ConstraintScheduler
-	GitService          *gitsvc.Service
-	GitDeployService    *gitsvc.DeployService
-	BuildService        *build.Service
+	BackupSvc                  *backup.Service
+	AutoScaler                 *autoscaler.Service
+	CrashDetector              *crashdetector.Detector
+	DeploymentSvc              *deployment.Service
+	PreviewDeploymentSvc       *previewsvc.Service
+	CloudManager               *cloud.Manager
+	AcmeService                *acmesvc.Service
+	LoadBalancer               *loadbalancer.Service
+	FailoverSvc                *failover.Service
+	TrafficManager             *trafficmanager.Service
+	DomainService              *domains.Service
+	DNSService                 *dnssvc.Service
+	DBContainerService         *dbprovisioner.DBContainerService
+	DatabaseServiceProvisioner *services.DatabaseServiceProvisioner
+	DBBackupService            *dbbackupsvc.Service
+	PredictiveScorer           *scheduler.PredictiveScorer
+	ConstraintScheduler        *scheduler.ConstraintScheduler
+	GitService                 *gitsvc.Service
+	GitDeployService           *gitsvc.DeployService
+	GitDeployMgmtService       *gitsvc.DeploymentManagementService
+	GitProviderService         *gitprovider.Service
+	ComposeService             *composesvc.Service
+	BuildService               *build.Service
+	BuildpackService           *buildpacksvc.Service
 
-	TenancyService *tenancy.Service
+	TenancyService  *tenancy.Service
+	EnvVarService   *envvarsvc.Service
+	EndpointService *environments.Service
 
-	Logger *slog.Logger
+	AppHostingService *apphostingsvc.Service
+
+	ProcedureService *proceduresvc.Service
+	ReplicaManager   *replicamanager.Manager
+	AppStoreService  *appstoresvc.Service
+
+	AlertService              *alerting.Service
+	NotificationService       *notificationsvc.Service
+	EnhancedNotificationService *enhancednotifsvc.Service
+	CronJobService            *cronjobsvc.Service
+	ProcessService      *processsvc.Service
+	ZeroDowntimeSvc     *zerodowntime.Service
+
+	ClusterMembershipService *clustermembership.Service
+	CleanupService           *cleanupsvc.Service
+
+	// Cross-node routing services
+	ServiceDiscovery    *servicediscovery.Service
+	CrossNodeResolver   *crossnode.Resolver
+	IngressSynchronizer *crossnode.IngressSynchronizer
+
+	MTLSEnabled    bool
+	MTLSCACertPath string
+	MTLSCertPath   string
+	MTLSKeyPath    string
+	MTLSDevBypass  bool
+	CertService    *services.CertService
+	MTLSMigrator   *services.MTLSMigrator
+
+	Logger     *slog.Logger
+	CORSConfig CORSConfig
 }
 
 type PowerRequest struct {
@@ -454,32 +519,52 @@ type EggVariableRequest struct {
 }
 
 type CreateNodeRequest struct {
-	Name               string   `json:"name" validate:"required"`
-	Region             string   `json:"region"`
-	RegionID           string   `json:"regionId"`
-	Description        string   `json:"description"`
-	LocationID         string   `json:"locationId"`
-	BaseURL            string   `json:"baseUrl"`
-	FQDN               string   `json:"fqdn"`
-	Scheme             string   `json:"scheme"`
-	BehindProxy        bool     `json:"behindProxy"`
-	Public             *bool    `json:"public"`
-	MaintenanceMode    *bool    `json:"maintenanceMode"`
-	MemoryMB           int      `json:"memoryMb"`
-	DiskMB             int      `json:"diskMb"`
-	UploadSizeMB       int      `json:"uploadSizeMb"`
-	DaemonBase         string   `json:"daemonBase"`
-	DaemonListen       int      `json:"daemonListen"`
-	DaemonSFTP         int      `json:"daemonSftp"`
-	MemoryOverallocate *int     `json:"memoryOverallocate"`
-	DiskOverallocate   *int     `json:"diskOverallocate"`
-	CPUCores           *int     `json:"cpuCores"`
-	DisplayName        string   `json:"displayName"`
-	PublicHostname     string   `json:"publicHostname"`
-	DaemonSFTPAlias    string   `json:"daemonSftpAlias"`
-	DaemonConnect      *int     `json:"daemonConnect"`
-	CPUOverallocate    *int     `json:"cpuOverallocate"`
-	Tags               []string `json:"tags"`
+	Name                string           `json:"name" validate:"required"`
+	Region              string           `json:"region"`
+	RegionID            string           `json:"regionId"`
+	Description         string           `json:"description"`
+	LocationID          string           `json:"locationId"`
+	BaseURL             string           `json:"baseUrl"`
+	FQDN                string           `json:"fqdn"`
+	Scheme              string           `json:"scheme"`
+	BehindProxy         bool             `json:"behindProxy"`
+	Public              *bool            `json:"public"`
+	MaintenanceMode     *bool            `json:"maintenanceMode"`
+	MemoryMB            int              `json:"memoryMb"`
+	DiskMB              int              `json:"diskMb"`
+	UploadSizeMB        int              `json:"uploadSizeMb"`
+	DaemonBase          string           `json:"daemonBase"`
+	DaemonListen        int              `json:"daemonListen"`
+	DaemonSFTP          int              `json:"daemonSftp"`
+	MemoryOverallocate  *int             `json:"memoryOverallocate"`
+	DiskOverallocate    *int             `json:"diskOverallocate"`
+	CPUCores            *int             `json:"cpuCores"`
+	DisplayName         string           `json:"displayName"`
+	PublicHostname      string           `json:"publicHostname"`
+	DaemonSFTPAlias     string           `json:"daemonSftpAlias"`
+	DaemonConnect       *int             `json:"daemonConnect"`
+	CPUOverallocate     *int             `json:"cpuOverallocate"`
+	Tags                []string         `json:"tags"`
+	SchedulerType       string           `json:"schedulerType,omitempty"`
+	SchedulerConfig     *json.RawMessage `json:"schedulerConfig,omitempty"`
+	AllowedIPs          []string         `json:"allowedIps,omitempty"`
+	NetworkInterface    string           `json:"networkInterface,omitempty"`
+	ReservedMemoryMB    *int             `json:"reservedMemoryMb,omitempty"`
+	ReservedDiskMB      *int             `json:"reservedDiskMb,omitempty"`
+	DefaultAllocationIP string           `json:"defaultAllocationIp,omitempty"`
+	AllocationPortMin   *int             `json:"allocationPortMin,omitempty"`
+	AllocationPortMax   *int             `json:"allocationPortMax,omitempty"`
+	AutoAllocate        *bool            `json:"autoAllocate,omitempty"`
+	EnableHealthChecks  *bool            `json:"enableHealthChecks,omitempty"`
+	EnableMetrics       *bool            `json:"enableMetrics,omitempty"`
+	PrometheusEndpoint  string           `json:"prometheusEndpoint,omitempty"`
+	AlertThresholdCPU   *int             `json:"alertThresholdCpu,omitempty"`
+	AlertThresholdMem   *int             `json:"alertThresholdMemory,omitempty"`
+	AlertThresholdDisk  *int             `json:"alertThresholdDisk,omitempty"`
+	MaintenanceMessage  string           `json:"maintenanceMessage,omitempty"`
+	DrainBeforeMaint    *bool            `json:"drainBeforeMaintenance,omitempty"`
+	TokenRotationPolicy string           `json:"tokenRotationPolicy,omitempty"`
+	TLSSetting          string           `json:"tlsSetting,omitempty"`
 }
 
 // UpdateNodeRequest is a true PATCH DTO. Pointers retain explicit false, zero,
@@ -512,6 +597,8 @@ type UpdateNodeRequest struct {
 	DaemonConnect      *int                    `json:"daemonConnect"`
 	CPUOverallocate    *int                    `json:"cpuOverallocate"`
 	Tags               *[]string               `json:"tags"`
+	SchedulerType      *string                 `json:"schedulerType,omitempty"`
+	SchedulerConfig    *json.RawMessage        `json:"schedulerConfig,omitempty"`
 }
 
 type NodeHeartbeatRequest struct {
@@ -581,14 +668,35 @@ func NewServer(cfg Config) *fiber.App {
 		AppName:           "modern-game-panel-api",
 		ReadTimeout:       cfg.ReadTimeout,
 		StreamRequestBody: true,
+		ErrorHandler: func(c *fiber.Ctx, err error) error {
+			code := fiber.StatusInternalServerError
+			var e *fiber.Error
+			if errors.As(err, &e) {
+				code = e.Code
+			}
+			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+		},
 	})
-
-	registerSwaggerRoutes(app)
-
-	registerWellKnownVerifyRoute(app, cfg.DomainService)
 
 	// Panic recovery middleware - catches panics and returns 500 with stack trace
 	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: true}))
+
+	// CORS middleware — registered before any route-specific middleware so that
+	// preflight (OPTIONS) requests and CORS headers are applied to every route
+	// including swagger, well-known, and health endpoints.
+	corsCfg := cfg.CORSConfig
+	if len(corsCfg.AllowedOrigins) == 0 {
+		if raw := os.Getenv("API_CORS_ALLOWED_ORIGINS"); raw != "" {
+			corsCfg.AllowedOrigins = parseAllowedOrigins(raw)
+			corsCfg.AllowMethods = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
+			corsCfg.AllowHeaders = "Origin,Content-Type,Accept,Authorization,X-CSRF-Token,X-Forge-Session-Mode"
+			corsCfg.AllowCredentials = true
+			corsCfg.MaxAge = 86400
+		} else {
+			corsCfg = DefaultCORSConfig()
+		}
+	}
+	app.Use(CORSMiddleware(corsCfg))
 
 	// Maintenance mode middleware - checks FORGE_MAINTENANCE_MODE env var
 	app.Use(MaintenanceModeMiddleware(cfg))
@@ -601,16 +709,9 @@ func NewServer(cfg Config) *fiber.App {
 		app.Use(StructuredLogger(cfg.Logger))
 	}
 
-	allowedOrigins := os.Getenv("API_CORS_ALLOWED_ORIGINS")
-	if allowedOrigins == "" {
-		allowedOrigins = "http://localhost:3000,http://127.0.0.1:3000,http://localhost:3002,http://127.0.0.1:3002"
-	}
-	app.Use(cors.New(cors.Config{
-		AllowOrigins:     allowedOrigins,
-		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-CSRF-Token,X-Forge-Session-Mode",
-		AllowCredentials: true,
-	}))
+	registerSwaggerRoutes(app)
+
+	registerWellKnownVerifyRoute(app, cfg.DomainService)
 
 	// Internationalization middleware
 	if cfg.Translator != nil {
@@ -628,7 +729,17 @@ func NewServer(cfg Config) *fiber.App {
 	adminIPAccess := IPAccessControl(AdminIPAccessConfig(cfg))
 	apiIPAccess := IPAccessControl(APIIPAccessConfig(cfg))
 
-	v1 := app.Group("/api/v1", apiIPAccess)
+	// mTLS authentication middleware (no-op when disabled)
+	mtlsCfg := MTLSAuthConfig{
+		Enabled:    cfg.MTLSEnabled,
+		CACertPath: cfg.MTLSCACertPath,
+		CertPath:   cfg.MTLSCertPath,
+		KeyPath:    cfg.MTLSKeyPath,
+		DevBypass:  cfg.MTLSDevBypass,
+	}
+	mtlsMw := MTLSAuthMiddleware(mtlsCfg)
+
+	v1 := app.Group("/api/v1", apiIPAccess, mtlsMw)
 	v1.Get("/panel/settings/public", func(c *fiber.Ctx) error {
 		settings := defaultPanelSettings()
 		if cfg.Store != nil {
@@ -675,6 +786,32 @@ func NewServer(cfg Config) *fiber.App {
 			return c.JSON([]string{"en"})
 		}
 		return c.JSON(cfg.Translator.AvailableLocales())
+	})
+
+	// Translation file endpoint — serves locale JSON for the frontend
+	v1.Get("/i18n/:locale", func(c *fiber.Ctx) error {
+		locale := c.Params("locale")
+		if len(locale) != 2 {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid locale")
+		}
+		langsDir := "lang"
+		path := langsDir + "/" + locale + ".json"
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			// Fallback to English
+			path = langsDir + "/en.json"
+			if _, err := os.Stat(path); os.IsNotExist(err) {
+				return fiber.NewError(fiber.StatusNotFound, "translation not found")
+			}
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		var jsonData map[string]any
+		if err := json.Unmarshal(data, &jsonData); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(jsonData)
 	})
 
 	// CSRF token endpoint for clients to fetch CSRF token
@@ -829,9 +966,11 @@ func NewServer(cfg Config) *fiber.App {
 		user, err := cfg.Store.Authenticate(ctx, req.Email, req.Password)
 		if err != nil {
 			recordLoginFailure(ctx, cfg, c, req.Email)
+			_ = cfg.Store.AppendAudit(ctx, nil, "login.failed", "user", nil, safeAuditMeta(map[string]string{"email": req.Email}))
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 		}
 		clearLoginFailures(ctx, cfg, c, req.Email)
+		_ = cfg.Store.AppendAudit(ctx, &user.ID, "login.success", "user", &user.ID, "{}")
 
 		if user.UseTOTP {
 			confToken, err := issue2FAConfirmationToken(cfg.AuthSecret, user.ID)
@@ -850,13 +989,15 @@ func NewServer(cfg Config) *fiber.App {
 		}
 
 		// Always set HttpOnly session and CSRF cookies for browser clients
-		csrfToken, _ := generateCSRFToken()
+		csrfToken, err := generateCSRFToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not generate CSRF token")
+		}
 		expires := time.Now().Add(tokenTTL)
 		setSessionCookies(c, token, csrfToken, expires)
 
 		return c.JSON(fiber.Map{
 			"complete": true,
-			"token":    token,
 			"user":     user,
 		})
 	})
@@ -897,15 +1038,43 @@ func NewServer(cfg Config) *fiber.App {
 		}
 
 		// Always set HttpOnly session and CSRF cookies for browser clients
-		csrfToken, _ := generateCSRFToken()
+		csrfToken, err := generateCSRFToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not generate CSRF token")
+		}
 		expires := time.Now().Add(tokenTTL)
 		setSessionCookies(c, token, csrfToken, expires)
 
 		return c.JSON(fiber.Map{
 			"complete": true,
-			"token":    token,
 			"user":     user,
 		})
+	})
+
+	// Session refresh – re-issue cookie with new expiry
+	v1.Post("/auth/session/refresh", func(c *fiber.Ctx) error {
+		sessionToken, ok := getSessionCookie(c)
+		if !ok || sessionToken == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session cookie")
+		}
+		claims, err := parseToken(cfg.AuthSecret, sessionToken)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid session token")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		current, err := validateCurrentSession(ctx, cfg.Store, claims)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
+		}
+		newToken, err := issueToken(cfg.AuthSecret, store.User{ID: current.Sub, Email: current.Email, Role: current.Role, SessionVersion: current.SessionVersion})
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not issue session token")
+		}
+		csrfToken, _ := generateCSRFToken()
+		expires := time.Now().Add(tokenTTL)
+		setSessionCookies(c, newToken, csrfToken, expires)
+		return c.SendStatus(fiber.StatusNoContent)
 	})
 
 	v1.Get("/servers/:id/ws/stats", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "stats"), fiberws.Config{
@@ -1251,7 +1420,14 @@ func NewServer(cfg Config) *fiber.App {
 		return c.Next()
 	})
 
-	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), requireTwoFactorAuthentication(cfg.Store), csrfMiddleware(LoadSessionCookieConfig()), readLimiter)
+	var sessMw fiber.Handler
+	if cfg.SessionStore != nil {
+		sessMw = auth.SessionMiddleware(cfg.SessionStore)
+	} else {
+		sessMw = func(c *fiber.Ctx) error { return c.Next() }
+	}
+
+	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), sessMw, requireTwoFactorAuthentication(cfg.Store), csrfMiddleware(LoadSessionCookieConfig()), readLimiter)
 	protected.Post("/servers/:id/ws/ticket", IssueWSTicket(cfg, wsTickets))
 	protected.Post("/servers/:id/files/download-ticket", mutationLimiter, issueFileDownloadTicket(cfg, fileDownloadTickets))
 	protected.Post("/servers/:id/backups/download-ticket", mutationLimiter, issueBackupDownloadTicket(cfg, fileDownloadTickets))
@@ -1352,19 +1528,6 @@ func NewServer(cfg Config) *fiber.App {
 		return c.JSON(mount)
 	})
 
-	protected.Get("/database-hosts/:id", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		host, err := cfg.Store.GetDatabaseHost(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "database host not found")
-		}
-		return c.JSON(host)
-	})
-
 	protected.Get("/servers/:id/users/:userId", func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -1376,19 +1539,6 @@ func NewServer(cfg Config) *fiber.App {
 			return fiber.NewError(fiber.StatusNotFound, "subuser not found")
 		}
 		return c.JSON(subuser)
-	})
-
-	protected.Get("/servers/:id/schedules/:scheduleId/tasks", requireServerPermission(cfg, store.PermScheduleRead), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		schedule, err := cfg.Store.GetSchedule(ctx, c.Params("id"), c.Params("scheduleId"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "schedule not found")
-		}
-		return c.JSON(schedule.Tasks)
 	})
 
 	// Register domain-specific route handlers
@@ -1409,18 +1559,28 @@ func NewServer(cfg Config) *fiber.App {
 	registerOrphanRemediationRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerAdminExtras(protected, cfg, nodeProbe)
 	registerObservabilityRoutes(protected, cfg, cfg.Observability, cfg.HeartbeatMonitor)
+	registerAlertRoutes(protected, cfg.AlertService, cfg.Observability)
+	registerNotificationRoutes(protected, cfg.NotificationService)
+	if cfg.EnhancedNotificationService != nil {
+		registerEnhancedNotificationRoutes(protected, cfg.EnhancedNotificationService)
+	}
 	registerMailSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerSFTPRoutes(protected, cfg)
 	registerWebAuthnRoutes(protected, cfg, mutationLimiter, cfg.WebAuthnService)
 	registerAutoScalerRoutes(protected, cfg, cfg.AutoScaler, adminIPAccess, mutationLimiter)
 	registerDeploymentRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
+	registerDeploymentHistoryRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 	registerRevisionRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
+	registerPreviewDeploymentRoutes(protected, cfg, cfg.PreviewDeploymentSvc, adminIPAccess, mutationLimiter)
 	registerCloudRoutes(protected, cfg, cfg.CloudManager, adminIPAccess, mutationLimiter)
 	registerLoadBalancerRoutes(protected, cfg, cfg.LoadBalancer, adminIPAccess, mutationLimiter)
 	registerFailoverRoutes(protected, cfg, cfg.FailoverSvc, adminIPAccess, mutationLimiter)
 	registerTrafficManagerRoutes(protected, cfg, cfg.TrafficManager, adminIPAccess, mutationLimiter)
 	registerDomainRoutes(protected, cfg, cfg.DomainService, mutationLimiter)
 	registerCertificateRoutes(protected, cfg, cfg.AcmeService, adminIPAccess, mutationLimiter)
+	registerCertificateRoutesExt(protected, cfg, adminIPAccess, mutationLimiter)
+	registerAcmeAccountRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	registerMTLSRoutes(protected, cfg, cfg.CertService, cfg.MTLSMigrator, adminIPAccess, mutationLimiter)
 	registerSchedulerRoutes(protected, cfg, cfg.PredictiveScorer, cfg.ConstraintScheduler, adminIPAccess, mutationLimiter)
 	registerCrashDetectionRoutes(protected, cfg, cfg.CrashDetector, mutationLimiter)
 	registerBackupRoutes(protected, cfg, cfg.BackupSvc, mutationLimiter)
@@ -1428,13 +1588,69 @@ func NewServer(cfg Config) *fiber.App {
 	registerMaintenanceRoutes(protected, cfg, mutationLimiter)
 	registerComposeRoutes(protected, cfg, mutationLimiter)
 	registerDBContainerRoutes(protected, cfg, mutationLimiter)
-	registerGitRoutes(protected, cfg, cfg.GitService, cfg.GitDeployService, adminIPAccess, mutationLimiter)
+	registerDatabaseServiceRoutes(protected, cfg, mutationLimiter)
+	registerManagedDatabaseRoutes(protected, cfg, mutationLimiter)
+	registerGitRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	RegisterGitDeploymentRoutes(protected, cfg)
 	registerBuildRoutes(protected, cfg, cfg.BuildService, mutationLimiter)
+	registerBuildpackRoutes(protected, cfg, cfg.BuildpackService, mutationLimiter)
+	registerZeroDowntimeRoutes(protected, cfg, cfg.ZeroDowntimeSvc, mutationLimiter)
+	registerSourceDeploymentRoutes(protected, cfg, mutationLimiter)
+	registerReconcileRoutes(protected, cfg, cfg.Reconciler, adminIPAccess, mutationLimiter)
+
+	// Capability inventory and onboarding token management
+	registerCapabilityRoutes(protected, cfg, cfg.NodeProbe)
 
 	// Team tenancy routes (Org → Project → Environment hierarchy)
 	if cfg.TenancyService != nil {
-		registerTenancyRoutes(protected, cfg, cfg.TenancyService)
+		registerTenancyRoutes(protected, cfg, cfg.TenancyService, cfg.EnvVarService)
 	}
+
+	// Infrastructure endpoint routes (Portainer-style Environment abstraction)
+	registerEndpointRoutes(protected, cfg, cfg.EndpointService)
+
+	// App hosting routes (Application → Service model)
+	registerAppHostingRoutes(protected, cfg, cfg.AppHostingService, mutationLimiter)
+	registerProcedureRoutes(protected, cfg, cfg.ProcedureService, mutationLimiter)
+
+	// Portainer-inspired container/image/network/volume administration
+	registerPortainerRoutes(protected, cfg, mutationLimiter, adminIPAccess)
+	registerAppStoreRoutes(protected, cfg, cfg.AppStoreService, mutationLimiter)
+
+	// Docker management routes (cleaner replacement for Portainer admin routes)
+	registerDockerRoutes(protected, cfg, mutationLimiter, adminIPAccess)
+
+	// Host-level file management and terminal
+	registerHostFileRoutes(protected, cfg, mutationLimiter)
+	registerHostTerminalRoute(protected, cfg)
+
+	// Cron job management
+	if cfg.CronJobService != nil {
+		registerCronJobRoutes(protected, cfg, cfg.CronJobService)
+	}
+
+	// Procfile process management
+	if cfg.ProcessService != nil {
+		registerProcessRoutes(protected, cfg, cfg.ProcessService)
+	}
+
+	// Proxy domain management (reverse proxy level, distinct from per-server domains)
+	registerProxyDomainRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	registerProxyCertificateRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	registerSecurityHeadersRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	registerRedirectRulesRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+
+	// Host management
+	registerHostRoutes(protected, cfg)
+	registerFirewallRoutes(protected, cfg)
+
+	// Cluster membership + cleanup routes
+	registerClusterMembershipRoutes(protected, cfg.ClusterMembershipService)
+	registerCleanupRoutes(protected, cfg.CleanupService)
+
+	// Cross-node routing and service discovery routes
+	registerServiceDiscoveryRoutes(protected, cfg, cfg.ServiceDiscovery, adminIPAccess, mutationLimiter)
+	registerCrossNodeRoutes(protected, cfg, cfg.CrossNodeResolver, cfg.IngressSynchronizer, adminIPAccess, mutationLimiter)
 
 	// Start schedule runner
 	if cfg.Store != nil {

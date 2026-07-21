@@ -103,7 +103,7 @@ describe("WebSocket ticket contract", () => {
 describe("file download contracts", () => {
   it("uses a short-lived ticket URL instead of placing the session token in the download URL", async () => {
     const { calls } = mockFetch(jsonResponse({ url: "/api/v1/download/file?token=single-use-ticket", expires: "soon" }));
-    const url = await getServerFileDownloadURL("server/id", "mods/game.bin");
+    const { url } = await getServerFileDownloadURL("server/id", "mods/game.bin");
     expect(calls[0].url).toContain("/servers/server%2Fid/files/download-url?path=mods%2Fgame.bin");
     expect(url).toContain("/download/file?token=single-use-ticket");
   });
@@ -139,7 +139,7 @@ describe("backend DTO and mutation field names", () => {
 
   it("parses backup, startup, server, user, and node response fields without renaming them", async () => {
     const backup = { uuid: "b1", name: "daily.zip", checksum: "sha256:abc", size: 42, status: "running", createdAt: "2026-01-01T00:00:00Z", completedAt: "" };
-    const startup = { startup_command: "java -jar app.jar", raw_startup_command: "java -jar {{JAR}}", docker_images: { Java: "java:21" }, variables: [{ name: "Jar", description: "", env_variable: "JAR", default_value: "app.jar", server_value: "server.jar", is_editable: true, rules: "required" }] };
+    const startup = { startupCommand: "java -jar app.jar", rawStartupCommand: "java -jar {{JAR}}", dockerImages: { Java: "java:21" }, variables: [{ name: "Jar", description: "", envVariable: "JAR", defaultValue: "app.jar", serverValue: "server.jar", isEditable: true, rules: "required" }] };
     const server = { id: "s1", name: "Server", owner: "owner", ownerId: "u1", template: "egg", node: "node", nodeId: "n1", status: "offline", primaryAllocationId: "a2", memoryMb: 2048, cpuShares: 1024, diskMb: 4096 };
     const user = { id: "u1", email: "u@example.com", role: "user", memoryMbLimit: 8192, serverLimit: 2 };
     const node = { id: "n1", name: "Node", region: "eu", regionId: "r1", status: "online", desiredState: "active", actualState: "active", heartbeatState: "healthy", memoryMb: 16384, diskMb: 50000 };
@@ -150,7 +150,7 @@ describe("backend DTO and mutation field names", () => {
       jsonResponse([user]),
       jsonResponse([node])
     );
-    expect((await fetchBackups("s1"))[0]).toEqual(backup);
+    expect((await fetchBackups("s1")).data[0]).toEqual(backup);
     expect(await fetchServerStartup("s1")).toEqual(startup);
     expect(await fetchServer("s1")).toEqual(server);
     expect((await fetchUsers())[0]).toEqual(user);

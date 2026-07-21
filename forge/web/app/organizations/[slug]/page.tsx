@@ -3,7 +3,16 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
-import type { Organization, Project, TeamMember, Environment } from '@/lib/api/tenancy';
+import {
+  fetchOrganization,
+  fetchProjects,
+  createProject,
+  fetchTeamMembers,
+  addTeamMember,
+  removeTeamMember,
+  deleteOrganization,
+} from '@/lib/api/tenancy';
+import type { Organization, Project, TeamMember } from '@/lib/api/tenancy';
 
 export default function OrganizationDetailPage() {
   const params = useParams<{ slug: string }>();
@@ -19,12 +28,10 @@ export default function OrganizationDetailPage() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`/api/v1/organizations/${params.slug}`, { credentials: 'include' });
-      if (!res.ok) throw new Error('Organization not found');
-      const data = await res.json();
+      const data = await fetchOrganization(params.slug);
       setOrg(data);
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -32,32 +39,31 @@ export default function OrganizationDetailPage() {
 
   useEffect(() => { fetchOrg(); }, [fetchOrg]);
 
-  const fetchProjects = useCallback(async () => {
+  const fetchProjectList = useCallback(async () => {
     if (!org) return;
     try {
-      const res = await fetch(`/api/v1/organizations/${org.id}/projects`, { credentials: 'include' });
-      if (res.ok) setProjects(await res.json());
+      const data = await fetchProjects(org.id);
+      setProjects(data);
     } catch {}
   }, [org]);
 
-  const fetchMembers = useCallback(async () => {
+  const fetchMemberList = useCallback(async () => {
     if (!org) return;
     try {
-      const res = await fetch(`/api/v1/organizations/${org.id}/members`, { credentials: 'include' });
-      if (res.ok) setMembers(await res.json());
+      const data = await fetchTeamMembers(org.id);
+      setMembers(data);
     } catch {}
   }, [org]);
 
-  useEffect(() => { fetchProjects(); fetchMembers(); }, [fetchProjects, fetchMembers]);
+  useEffect(() => { fetchProjectList(); fetchMemberList(); }, [fetchProjectList, fetchMemberList]);
 
   const handleDelete = async () => {
     if (!org || !confirm(`Delete organization "${org.name}"? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`/api/v1/organizations/${org.id}`, { method: 'DELETE', credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
+      await deleteOrganization(org.id);
       router.push('/organizations');
-    } catch (e: any) {
-      setError(e.message);
+    } catch (e: unknown) {
+      setError(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -96,8 +102,8 @@ export default function OrganizationDetailPage() {
         </button>
       </div>
 
-      {tab === 'projects' && <ProjectsTab orgId={org.id} projects={projects} onRefresh={fetchProjects} />}
-      {tab === 'members' && <MembersTab orgId={org.id} members={members} onRefresh={fetchMembers} />}
+      {tab === 'projects' && <ProjectsTab orgId={org.id} projects={projects} onRefresh={fetchProjectList} />}
+      {tab === 'members' && <MembersTab orgId={org.id} members={members} onRefresh={fetchMemberList} />}
     </div>
   );
 }
@@ -112,13 +118,7 @@ function ProjectsTab({ orgId, projects, onRefresh }: { orgId: string; projects: 
     if (!name.trim()) return;
     setCreating(true);
     try {
-      const res = await fetch(`/api/v1/organizations/${orgId}/projects`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: name.trim(), description: desc.trim() }),
-      });
-      if (!res.ok) throw new Error(await res.text());
+      await createProject(orgId, name.trim(), undefined, desc.trim() || undefined);
       setName(''); setDesc(''); onRefresh();
     } catch {}
     setCreating(false);
@@ -163,22 +163,15 @@ function MembersTab({ orgId, members, onRefresh }: { orgId: string; members: Tea
     if (!userId.trim()) return;
     setAdding(true);
     try {
-      const res = await fetch(`/api/v1/organizations/${orgId}/members`, {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: userId.trim(), role }),
-      });
-      if (!res.ok) throw new Error(await res.text());
+      await addTeamMember(orgId, userId.trim(), role);
       setUserId(''); setRole('member'); onRefresh();
     } catch {}
     setAdding(false);
   };
 
-  const handleRemove = async (userId: string) => {
+  const handleRemove = async (memberUserId: string) => {
     try {
-      const res = await fetch(`/api/v1/organizations/${orgId}/members/${userId}`, { method: 'DELETE', credentials: 'include' });
-      if (!res.ok) throw new Error(await res.text());
+      await removeTeamMember(orgId, memberUserId);
       onRefresh();
     } catch {}
   };

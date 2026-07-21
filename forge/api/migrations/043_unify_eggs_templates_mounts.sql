@@ -47,7 +47,7 @@ SELECT
     t.file_denylist,
     t.created_at
 FROM server_templates t
-ON CONFLICT (id) DO UPDATE SET
+ON CONFLICT (nest_id, name) DO UPDATE SET
     docker_images = CASE
         WHEN eggs.docker_images = '{}'::jsonb THEN EXCLUDED.docker_images
         ELSE eggs.docker_images

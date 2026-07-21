@@ -1,0 +1,105 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "satisfactory",
+  "name": "Satisfactory",
+  "description": "Satisfactory dedicated server via SteamCMD. Build massive factories, automate production chains, and explore an alien planet with friends.",
+  "version": "1.0.0",
+  "game": "Satisfactory",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/1690800",
+  "image": "ghcr.io/parkervcp/steamcmd:debian",
+  "images": {
+    "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
+  },
+  "startup": "./FactoryServer.sh -Port={{PORT}} -ServerPassword={{SATISFACTORY_PASSWORD}} -SessionName=\"{{SERVER_NAME}}\" -MaxPlayers={{SATISFACTORY_MAX_PLAYERS}} -AutoSaveInterval={{SATISFACTORY_AUTO_SAVE_INTERVAL}} -DisableSeasonalEvents={{SATISFACTORY_DISABLE_SEASONAL}}",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Bringing online subsystem"
+    },
+    "stop": "stop",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 7777,
+      "protocol": "udp",
+      "public": true,
+      "description": "Satisfactory game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the server browser.",
+      "default_value": "GamePanel Satisfactory Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "SATISFACTORY_MAX_PLAYERS",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "4",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:16"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SATISFACTORY_PASSWORD",
+      "description": "Password required to join the server.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:64"
+    },
+    {
+      "name": "Auto Save Interval",
+      "env_variable": "SATISFACTORY_AUTO_SAVE_INTERVAL",
+      "description": "Interval in seconds between automatic saves.",
+      "default_value": "300",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:30|max:3600"
+    },
+    {
+      "name": "Disable Seasonal Events",
+      "env_variable": "SATISFACTORY_DISABLE_SEASONAL",
+      "description": "Disable seasonal/holiday events in-game.",
+      "default_value": "false",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    },
+    {
+      "name": "Update on Boot",
+      "env_variable": "UPDATE_ON_BOOT",
+      "description": "Check for server updates on container start.",
+      "default_value": "true",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 16384,
+    "disk_mb": 15360,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/parkervcp/steamcmd:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Satisfactory SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Satisfactory dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 1690800 validate +quit\n\ncd /mnt/server\n\n# Make server executable\nif [ -f FactoryServer.sh ]; then\n    chmod +x FactoryServer.sh\nfi\n\necho \"Satisfactory server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["sandbox", "building", "simulation"],
+  "file_denylist": [],
+  "features": []
+}

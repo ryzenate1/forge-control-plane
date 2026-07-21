@@ -34,6 +34,18 @@ func (m *mockScheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequ
 	return nil, errors.New("no scores")
 }
 
+func (m *mockScheduler) PlaceReplicas(_ context.Context, _ domain.PlaceReplicasRequest) ([]domain.PlacementReason, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockScheduler) ScaleReplicas(_ context.Context, _ domain.ScaleRequest) ([]domain.PlacementReason, error) {
+	return nil, errors.New("not implemented")
+}
+
+func (m *mockScheduler) ReplaceFailedInstance(_ context.Context, _ domain.ReplaceFailedInstanceRequest) (*domain.PlacementReason, error) {
+	return nil, errors.New("not implemented")
+}
+
 // mockExecutor implements MigrationExecutor for test purposes.
 type mockExecutor struct {
 	cancelFn func(context.Context, string) error

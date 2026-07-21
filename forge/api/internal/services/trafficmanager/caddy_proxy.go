@@ -4,9 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -19,12 +22,22 @@ type CaddyReverseProxy struct {
 	client          *http.Client
 	mu              sync.Mutex
 	lastValidConfig json.RawMessage
+	healthStatus    map[string]bool
+	resolver        NodeResolver
+}
+
+func (p *CaddyReverseProxy) SetNodeResolver(r NodeResolver) {
+	p.resolver = r
 }
 
 func NewCaddyReverseProxy(adminAddr string) *CaddyReverseProxy {
+	if adminAddr == "" {
+		adminAddr = os.Getenv("CADDY_ADMIN_URL")
+	}
 	return &CaddyReverseProxy{
-		adminAddr: adminAddr,
-		client:    &http.Client{Timeout: 10 * time.Second},
+		adminAddr:    adminAddr,
+		client:       &http.Client{Timeout: 10 * time.Second},
+		healthStatus: make(map[string]bool),
 	}
 }
 
@@ -132,7 +145,368 @@ func (p *CaddyReverseProxy) RemoveCertificate(ctx context.Context, domains []str
 }
 
 func (p *CaddyReverseProxy) GetActiveConnections() map[string]int {
-	return make(map[string]int)
+	result := make(map[string]int)
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	configJSON, err := p.getRunningConfig(context.Background(), addr)
+	if err != nil {
+		return result
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return result
+	}
+
+	apps, _ := cfg["apps"].(map[string]any)
+	if apps == nil {
+		return result
+	}
+	httpCfg, _ := apps["http"].(map[string]any)
+	if httpCfg == nil {
+		return result
+	}
+	servers, _ := httpCfg["servers"].(map[string]any)
+	if servers == nil {
+		return result
+	}
+
+	serverNames := []string{"gamepanel", "gamepanel-domains"}
+	for _, name := range serverNames {
+		srv, _ := servers[name].(map[string]any)
+		if srv == nil {
+			continue
+		}
+		routesRaw, _ := srv["routes"].([]any)
+		for _, rRaw := range routesRaw {
+			route, _ := rRaw.(map[string]any)
+			if route == nil {
+				continue
+			}
+			rid, _ := route["@id"].(string)
+			if rid == "" {
+				continue
+			}
+			count := countUpstreamsInRoute(route)
+			if count > 0 {
+				result[rid] = count
+			}
+		}
+	}
+
+	return result
+}
+
+func countUpstreamsInRoute(route map[string]any) int {
+	handlesRaw, _ := route["handle"].([]any)
+	count := 0
+	for _, hRaw := range handlesRaw {
+		handle, _ := hRaw.(map[string]any)
+		if handle == nil {
+			continue
+		}
+		switch handler, _ := handle["handler"].(string); handler {
+		case "reverse_proxy":
+			upstreamsRaw, _ := handle["upstreams"].([]any)
+			count += len(upstreamsRaw)
+		case "subroute":
+			subRoutesRaw, _ := handle["routes"].([]any)
+			for _, srRaw := range subRoutesRaw {
+				sr, _ := srRaw.(map[string]any)
+				if sr == nil {
+					continue
+				}
+				count += countUpstreamsInRoute(sr)
+			}
+		}
+	}
+	return count
+}
+
+func (p *CaddyReverseProxy) Kind() AdapterKind { return AdapterCaddy }
+
+func (p *CaddyReverseProxy) ValidateConfig(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	config, err := p.getRunningConfig(ctx, addr)
+	if err != nil {
+		return fmt.Errorf("get config for validation: %w", err)
+	}
+	if len(config) == 0 {
+		return errors.New("no running config to validate")
+	}
+
+	return p.validateConfig(ctx, addr, []byte(config))
+}
+
+func (p *CaddyReverseProxy) Reload(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	config, err := p.getRunningConfig(ctx, addr)
+	if err != nil {
+		return fmt.Errorf("get config for reload: %w", err)
+	}
+	if len(config) == 0 {
+		return nil
+	}
+
+	var raw map[string]any
+	if err := json.Unmarshal(config, &raw); err != nil {
+		return fmt.Errorf("unmarshal config for reload: %w", err)
+	}
+
+	return p.applyConfig(ctx, addr, raw)
+}
+
+func (p *CaddyReverseProxy) Rollback(ctx context.Context) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if len(p.lastValidConfig) == 0 {
+		return errors.New("no previous valid config to roll back to")
+	}
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	return p.restoreConfig(ctx, addr, p.lastValidConfig)
+}
+
+func (p *CaddyReverseProxy) CleanupStale(ctx context.Context, activeRuleIDs map[string]bool) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	configJSON, err := p.getRunningConfig(ctx, addr)
+	if err != nil {
+		return fmt.Errorf("get config for cleanup: %w", err)
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return fmt.Errorf("unmarshal config for cleanup: %w", err)
+	}
+
+	apps, _ := cfg["apps"].(map[string]any)
+	if apps == nil {
+		return nil
+	}
+	httpCfg, _ := apps["http"].(map[string]any)
+	if httpCfg == nil {
+		return nil
+	}
+	servers, _ := httpCfg["servers"].(map[string]any)
+	if servers == nil {
+		return nil
+	}
+
+	modified := false
+	serverNames := []string{"gamepanel", "gamepanel-domains"}
+	for _, name := range serverNames {
+		srv, _ := servers[name].(map[string]any)
+		if srv == nil {
+			continue
+		}
+		routesRaw, _ := srv["routes"].([]any)
+		if len(routesRaw) == 0 {
+			continue
+		}
+		var keptRoutes []any
+		for _, rRaw := range routesRaw {
+			route, _ := rRaw.(map[string]any)
+			if route == nil {
+				keptRoutes = append(keptRoutes, rRaw)
+				continue
+			}
+			rid, _ := route["@id"].(string)
+			if rid == "" || !strings.HasPrefix(rid, "gamepanel-") {
+				keptRoutes = append(keptRoutes, rRaw)
+				continue
+			}
+			if rid == "gamepanel-https-redirect" || strings.HasPrefix(rid, "gamepanel-domain-") {
+				keptRoutes = append(keptRoutes, rRaw)
+				continue
+			}
+			ruleID := strings.TrimPrefix(rid, "gamepanel-")
+			if strings.HasSuffix(ruleID, "-group") {
+				ruleID = strings.TrimSuffix(ruleID, "-group")
+			}
+			if !activeRuleIDs[ruleID] {
+				modified = true
+				continue
+			}
+			keptRoutes = append(keptRoutes, rRaw)
+		}
+		srv["routes"] = keptRoutes
+		servers[name] = srv
+	}
+
+	if !modified {
+		return nil
+	}
+
+	return p.applyConfig(ctx, addr, cfg)
+}
+
+func (p *CaddyReverseProxy) Health(ctx context.Context) AdapterHealth {
+	return AdapterHealth{Status: HealthHealthy}
+}
+
+func (p *CaddyReverseProxy) SetUpstreamHealth(ctx context.Context, ruleID string, targetHost string, targetPort int, healthy bool) error {
+	key := ruleID + "|" + targetHost + fmt.Sprintf(":%d", targetPort)
+	targetDial := fmt.Sprintf("%s:%d", targetHost, targetPort)
+
+	p.mu.Lock()
+	prev, exists := p.healthStatus[key]
+	if exists && prev == healthy {
+		p.mu.Unlock()
+		return nil
+	}
+	if healthy {
+		delete(p.healthStatus, key)
+	} else {
+		p.healthStatus[key] = false
+	}
+	p.mu.Unlock()
+
+	if healthy {
+		slog.Info("caddy upstream marked healthy", "ruleID", ruleID, "target", targetDial)
+	} else {
+		slog.Warn("caddy upstream marked unhealthy", "ruleID", ruleID, "target", targetDial)
+	}
+
+	addr := p.adminAddr
+	if addr == "" {
+		addr = "localhost:2019"
+	}
+
+	configJSON, err := p.getRunningConfig(ctx, addr)
+	if err != nil {
+		slog.Warn("caddy not reachable for upstream health update", "error", err)
+		return nil
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return fmt.Errorf("unmarshal config for health update: %w", err)
+	}
+
+	modified := p.modifyCaddyUpstream(cfg, ruleID, targetDial, healthy)
+	if !modified {
+		return nil
+	}
+
+	return p.applyConfig(ctx, addr, cfg)
+}
+
+func (p *CaddyReverseProxy) modifyCaddyUpstream(cfg map[string]any, ruleID, targetDial string, healthy bool) bool {
+	apps, _ := cfg["apps"].(map[string]any)
+	if apps == nil {
+		return false
+	}
+	httpCfg, _ := apps["http"].(map[string]any)
+	if httpCfg == nil {
+		return false
+	}
+	servers, _ := httpCfg["servers"].(map[string]any)
+	if servers == nil {
+		return false
+	}
+
+	modified := false
+	serverNames := []string{"gamepanel", "gamepanel-domains"}
+	for _, name := range serverNames {
+		srv, _ := servers[name].(map[string]any)
+		if srv == nil {
+			continue
+		}
+		routesRaw, _ := srv["routes"].([]any)
+		if len(routesRaw) == 0 {
+			continue
+		}
+		for _, rRaw := range routesRaw {
+			route, _ := rRaw.(map[string]any)
+			if route == nil {
+				continue
+			}
+			rid, _ := route["@id"].(string)
+			if rid == "" || !strings.Contains(rid, ruleID) {
+				continue
+			}
+			if p.modifyUpstreamsInRoute(route, targetDial, healthy) {
+				modified = true
+			}
+		}
+	}
+	return modified
+}
+
+func (p *CaddyReverseProxy) modifyUpstreamsInRoute(route map[string]any, targetDial string, healthy bool) bool {
+	handlesRaw, _ := route["handle"].([]any)
+	if len(handlesRaw) == 0 {
+		return false
+	}
+	modified := false
+	for _, hRaw := range handlesRaw {
+		handle, _ := hRaw.(map[string]any)
+		if handle == nil {
+			continue
+		}
+		if handler, _ := handle["handler"].(string); handler != "reverse_proxy" {
+			continue
+		}
+		upstreamsRaw, _ := handle["upstreams"].([]any)
+		if upstreamsRaw == nil {
+			continue
+		}
+		var newUpstreams []any
+		for _, uRaw := range upstreamsRaw {
+			u, _ := uRaw.(map[string]any)
+			if u == nil {
+				newUpstreams = append(newUpstreams, uRaw)
+				continue
+			}
+			dial, _ := u["dial"].(string)
+			if dial == targetDial {
+				if !healthy {
+					modified = true
+					continue
+				}
+			} else {
+				newUpstreams = append(newUpstreams, u)
+			}
+		}
+		if healthy {
+			newUpstreams = append(newUpstreams, map[string]any{
+				"dial": targetDial,
+			})
+			modified = true
+		}
+		handle["upstreams"] = newUpstreams
+	}
+	return modified
 }
 
 func (p *CaddyReverseProxy) UpdateDomainRoutes(ctx context.Context, domainRoutes []domains.VerifiedDomainRoute) error {
@@ -177,6 +551,15 @@ func (p *CaddyReverseProxy) buildDomainConfig(addr string, domainRoutes []domain
 		if dr.Wildcard {
 			hosts = append(hosts, strings.TrimPrefix(dr.Domain, "*."))
 		}
+		targetHost := dr.TargetHost
+		if targetHost == "" {
+			targetHost = "localhost"
+		}
+		targetPort := dr.TargetPort
+		if targetPort == 0 {
+			targetPort = 8080
+		}
+		dial := fmt.Sprintf("%s:%d", targetHost, targetPort)
 		routes = append(routes, map[string]any{
 			"@id": "gamepanel-domain-" + dr.Domain,
 			"match": []map[string]any{
@@ -194,7 +577,7 @@ func (p *CaddyReverseProxy) buildDomainConfig(addr string, domainRoutes []domain
 									"handler": "reverse_proxy",
 									"upstreams": []map[string]any{
 										{
-											"dial": "localhost:8080",
+											"dial": dial,
 										},
 									},
 									"headers": map[string]any{
@@ -433,51 +816,103 @@ func (p *CaddyReverseProxy) buildPolicyHandles(policy *TrafficPolicy) []map[stri
 }
 
 func (p *CaddyReverseProxy) buildRoutes(rules []*RoutingRule, policies map[string]*TrafficPolicy) []map[string]any {
-	routes := make([]map[string]any, 0, len(rules))
-	for _, rule := range rules {
-		route := p.buildRoute(rule)
+	groups := p.groupRules(rules)
+	routes := make([]map[string]any, 0, len(groups))
+	for _, grp := range groups {
+		route := p.buildGroupedRoute(grp)
 		routes = append(routes, route)
 	}
 	return routes
 }
 
-func (p *CaddyReverseProxy) buildRoute(rule *RoutingRule) map[string]any {
-	targetHost := rule.TargetHost
-	if targetHost == "" {
-		targetHost = "localhost"
+type routeGroup struct {
+	domain   string
+	path     string
+	protocol string
+	rules    []*RoutingRule
+}
+
+func (p *CaddyReverseProxy) groupRules(rules []*RoutingRule) []routeGroup {
+	groups := make(map[string]*routeGroup)
+	var order []string
+
+	for _, rule := range rules {
+		if !rule.Enabled {
+			continue
+		}
+		key := rule.Domain + "|" + rule.Path + "|" + rule.Protocol
+		grp, ok := groups[key]
+		if !ok {
+			grp = &routeGroup{
+				domain:   rule.Domain,
+				path:     rule.Path,
+				protocol: rule.Protocol,
+				rules:    make([]*RoutingRule, 0),
+			}
+			groups[key] = grp
+			order = append(order, key)
+		}
+		grp.rules = append(grp.rules, rule)
 	}
 
+	result := make([]routeGroup, len(order))
+	for i, key := range order {
+		result[i] = *groups[key]
+	}
+	return result
+}
+
+func (p *CaddyReverseProxy) buildGroupedRoute(grp routeGroup) map[string]any {
+	upstreams := make([]map[string]any, 0, len(grp.rules))
+	var webSocket bool
+	var lbPolicy string
+
+	for _, rule := range grp.rules {
+		targetHost := rule.TargetHost
+		if targetHost == "" {
+			targetHost = "localhost"
+		}
+		upstream := map[string]any{
+			"dial": fmt.Sprintf("%s:%d", targetHost, rule.TargetPort),
+		}
+		if rule.Weight > 0 {
+			upstream["weight"] = rule.Weight
+		}
+		upstreams = append(upstreams, upstream)
+		if rule.WebSocket {
+			webSocket = true
+		}
+		if rule.Strategy != "" && rule.Strategy != "round_robin" {
+			lbPolicy = rule.Strategy
+		}
+	}
+
+	groupID := grp.rules[0].ID + "-group"
 	route := map[string]any{
-		"@id": "gamepanel-" + rule.ID,
+		"@id": "gamepanel-" + groupID,
 		"match": []map[string]any{
 			{
-				"host": []string{rule.Domain},
-				"path": []string{rule.Path + "*"},
+				"host": []string{grp.domain},
+				"path": []string{grp.path + "*"},
 			},
 		},
 		"handle": []map[string]any{
 			{
-				"handler": "reverse_proxy",
-				"upstreams": []map[string]any{
-					{
-						"dial": fmt.Sprintf("%s:%d", targetHost, rule.TargetPort),
-					},
-				},
+				"handler":   "reverse_proxy",
+				"upstreams": upstreams,
 			},
 		},
 	}
 
-	if rule.WebSocket {
+	if webSocket {
 		route["handle"].([]map[string]any)[0]["header_up"] = map[string]string{
 			"Connection": "{http.request.header.Connection}",
 			"Upgrade":    "{http.request.header.Upgrade}",
 		}
 	}
 
-	lbPolicy := rule.Strategy
-	if lbPolicy != "" && lbPolicy != "round_robin" {
-		handle := route["handle"].([]map[string]any)[0]
-		handle["lb_policy"] = lbPolicy
+	if lbPolicy != "" {
+		route["handle"].([]map[string]any)[0]["lb_policy"] = lbPolicy
 	}
 
 	return route

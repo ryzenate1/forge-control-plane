@@ -148,3 +148,27 @@ func (s *Store) ListFailoverEvents(ctx context.Context, policyID string, limit i
 	}
 	return events, rows.Err()
 }
+
+func (s *Store) ListRecentFailoverEvents(ctx context.Context, nodeID string, limit int) ([]FailoverEvent, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, COALESCE(policy_id::text, ''), node_id::text, server_id, event_type, action, status, message, created_at
+		FROM failover_events
+		WHERE node_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, nodeID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []FailoverEvent
+	for rows.Next() {
+		var e FailoverEvent
+		if err := rows.Scan(&e.ID, &e.PolicyID, &e.NodeID, &e.ServerID, &e.EventType, &e.Action, &e.Status, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}

@@ -103,6 +103,8 @@ export function LogViewer({ logs, loading }: { logs: AppLogEntry[]; loading?: bo
   );
 }
 
+const ENV_KEY_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
+
 export function EnvVarEditor({
   envVars,
   onChange,
@@ -112,10 +114,21 @@ export function EnvVarEditor({
 }) {
   const [newKey, setNewKey] = useState("");
   const [newValue, setNewValue] = useState("");
+  const [keyError, setKeyError] = useState("");
 
   const add = () => {
-    if (!newKey.trim()) return;
-    onChange({ ...envVars, [newKey.trim()]: newValue });
+    const key = newKey.trim();
+    if (!key) return;
+    if (!ENV_KEY_REGEX.test(key)) {
+      setKeyError("Must start with a letter or underscore, followed by letters, digits, or underscores");
+      return;
+    }
+    setKeyError("");
+    if (key in envVars) {
+      onChange({ ...envVars, [key]: newValue });
+    } else {
+      onChange({ ...envVars, [key]: newValue });
+    }
     setNewKey("");
     setNewValue("");
   };
@@ -147,7 +160,7 @@ export function EnvVarEditor({
         <Input
           mono
           value={newKey}
-          onChange={setNewKey}
+          onChange={(v) => { setNewKey(v); setKeyError(""); }}
           placeholder="NEW_KEY"
         />
         <Input
@@ -160,6 +173,7 @@ export function EnvVarEditor({
           Add
         </Btn>
       </div>
+      {keyError && <p className="text-xs text-red-400">{keyError}</p>}
     </div>
   );
 }
@@ -221,6 +235,18 @@ export function PortMapper({
   );
 }
 
+function validateVolumeSource(source: string): string | null {
+  if (!source.trim()) return "Source path is required";
+  if (source.startsWith("/") || /^[a-zA-Z_][a-zA-Z0-9_.-]*$/.test(source)) return null;
+  return "Source must be an absolute path (/...) or a valid volume name";
+}
+
+function validateVolumeTarget(target: string): string | null {
+  if (!target.trim()) return "Target path is required";
+  if (!target.startsWith("/")) return "Target must be an absolute path (/...)";
+  return null;
+}
+
 export function VolumeEditor({
   volumes,
   onChange,
@@ -245,33 +271,49 @@ export function VolumeEditor({
       {volumes.length === 0 && (
         <p className="text-xs text-slate-500">No volumes configured.</p>
       )}
-      {volumes.map((vol, idx) => (
-        <div key={idx} className="flex items-center gap-2">
-          <input
-            className="h-9 flex-1 rounded-lg border border-white/10 bg-[#161b28] px-2 text-xs font-mono text-slate-100 outline-none"
-            value={vol.source}
-            onChange={(e) => update(idx, { source: e.target.value })}
-            placeholder="/host/path"
-          />
-          <span className="text-xs text-slate-500">:</span>
-          <input
-            className="h-9 flex-1 rounded-lg border border-white/10 bg-[#161b28] px-2 text-xs font-mono text-slate-100 outline-none"
-            value={vol.target}
-            onChange={(e) => update(idx, { target: e.target.value })}
-            placeholder="/container/path"
-          />
-          <label className="flex items-center gap-1 text-xs text-slate-400">
-            <input
-              type="checkbox"
-              checked={vol.readOnly}
-              onChange={(e) => update(idx, { readOnly: e.target.checked })}
-              className="h-3 w-3 rounded border-white/20 bg-[#161b28] accent-[#dc2626]"
-            />
-            RO
-          </label>
-          <Btn tone="danger" size="sm" onClick={() => remove(idx)}>X</Btn>
-        </div>
-      ))}
+      {volumes.map((vol, idx) => {
+        const sourceErr = vol.source ? validateVolumeSource(vol.source) : null;
+        const targetErr = vol.target ? validateVolumeTarget(vol.target) : null;
+        return (
+          <div key={idx} className="flex items-center gap-2">
+            <div className="flex-1">
+              <input
+                className={cn(
+                  "h-9 w-full rounded-lg border bg-[#161b28] px-2 text-xs font-mono text-slate-100 outline-none",
+                  sourceErr ? "border-red-400/70" : "border-white/10",
+                )}
+                value={vol.source}
+                onChange={(e) => update(idx, { source: e.target.value })}
+                placeholder="/host/path"
+              />
+              {sourceErr && <p className="mt-0.5 text-[10px] text-red-400">{sourceErr}</p>}
+            </div>
+            <span className="text-xs text-slate-500">:</span>
+            <div className="flex-1">
+              <input
+                className={cn(
+                  "h-9 w-full rounded-lg border bg-[#161b28] px-2 text-xs font-mono text-slate-100 outline-none",
+                  targetErr ? "border-red-400/70" : "border-white/10",
+                )}
+                value={vol.target}
+                onChange={(e) => update(idx, { target: e.target.value })}
+                placeholder="/container/path"
+              />
+              {targetErr && <p className="mt-0.5 text-[10px] text-red-400">{targetErr}</p>}
+            </div>
+            <label className="flex items-center gap-1 text-xs text-slate-400">
+              <input
+                type="checkbox"
+                checked={vol.readOnly}
+                onChange={(e) => update(idx, { readOnly: e.target.checked })}
+                className="h-3 w-3 rounded border-white/20 bg-[#161b28] accent-[#dc2626]"
+              />
+              RO
+            </label>
+            <Btn tone="danger" size="sm" onClick={() => remove(idx)}>X</Btn>
+          </div>
+        );
+      })}
       <Btn size="sm" tone="ghost" onClick={add}>+ Add Volume</Btn>
     </div>
   );

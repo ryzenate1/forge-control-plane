@@ -41,6 +41,9 @@ import (
 	"github.com/gorilla/websocket"
 )
 
+// Ensure UpgradePayload can be referenced from handlers defined in this file.
+var _ = UpgradePayload{}
+
 var (
 	allowedWebSocketOrigins = loadAllowedWebSocketOrigins()
 	errRuntimeUnavailable   = errors.New("runtime unavailable")
@@ -61,6 +64,7 @@ type Server struct {
 	token             string
 	started           time.Time
 	backups           backup.BackupInterface
+	backupMu          sync.Mutex
 	sessionsReg       *sessionRegistry
 	dockerState       string
 	panelClient       remote.Client
@@ -71,6 +75,7 @@ type Server struct {
 	operations        *OperationQueue
 	tokenGenerator    *tokens.Generator
 	composeStacks     *composeStack
+	enrollmentMgr     *EnrollmentManager
 	ctx               context.Context
 	cancel            context.CancelFunc
 }
@@ -223,6 +228,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		pullClientFactory: securePullClient,
 		transferProtocol:  protocol,
 		composeStacks:     newComposeStackManager(dataDir),
+		enrollmentMgr:     NewEnrollmentManager(filepath.Join(filepath.Dir(dataDir), "enrollment")),
 		ctx:               serverCtx,
 		cancel:            cancel,
 	}
@@ -248,6 +254,19 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	}
 	server.operations = operationQueue
 	server.operations.Start(serverCtx)
+	// Start automatic expiry cleanup for commands with TTL
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				server.operations.ExpireExpired()
+			case <-serverCtx.Done():
+				return
+			}
+		}
+	}()
 	if rt == nil {
 		server.dockerState = "error"
 	}
@@ -309,6 +328,11 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("DELETE /api/v1/transfers/{id}", server.cancelProtocolTransfer)
 	// Global daemon endpoints (/api/*)
 	mux.HandleFunc("GET /api/system", server.getSystem)
+	mux.HandleFunc("GET /api/capabilities", server.handleGetCapabilities)
+	mux.HandleFunc("GET /api/capabilities/delta", server.handleGetCapabilitiesDelta)
+	mux.HandleFunc("POST /api/capabilities", server.handlePostCapabilitiesHeartbeat)
+	mux.HandleFunc("POST /api/enroll", server.handleEnroll)
+	mux.HandleFunc("GET /api/enroll/status", server.handleEnrollmentStatus)
 	mux.HandleFunc("POST /api/update", server.postUpdate)
 	mux.HandleFunc("POST /api/deauthorize-user", server.postDeauthorizeUser)
 	mux.HandleFunc("GET /download/backup", server.downloadBackupWithToken)
@@ -334,6 +358,77 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /build/nixpacks", server.handleNixpacksBuild)
 	mux.HandleFunc("GET /build/logs", server.handleBuildLogs)
 	mux.HandleFunc("POST /build/cancel", server.handleBuildCancel)
+	mux.HandleFunc("GET /build/status", server.handleBuildStatus)
+	mux.HandleFunc("POST /build/cleanup", server.handleBuildCleanup)
+	mux.HandleFunc("POST /image/push", server.handleImagePush)
+	mux.HandleFunc("GET /image/inspect", server.handleImageInspect)
+	mux.HandleFunc("POST /registry/login", server.handleRegistryLogin)
+	// Edge agent and diagnostics endpoints
+	mux.HandleFunc("GET /api/edge/status", server.handleEdgeStatus)
+	mux.HandleFunc("GET /api/edge/stats", server.handleEdgeStats)
+	mux.HandleFunc("POST /api/edge/connect", server.handleEdgeConnect)
+	mux.HandleFunc("GET /api/diagnostics", server.handleDiagnostics)
+	mux.HandleFunc("GET /api/diagnostics/connectivity", server.handleConnectivityDiagnostics)
+	mux.HandleFunc("GET /api/version", server.handleVersionInventory)
+	mux.HandleFunc("POST /api/upgrade", server.handleUpgradeBegin)
+	mux.HandleFunc("GET /api/upgrade/status", server.handleUpgradeStatus)
+	mux.HandleFunc("POST /api/upgrade/apply", server.handleUpgradeApply)
+	mux.HandleFunc("POST /api/upgrade/rollback", server.handleUpgradeRollback)
+	// Command acknowledgement and progress
+	mux.HandleFunc("POST /api/commands/{id}/ack", server.handleCommandAck)
+	mux.HandleFunc("POST /api/commands/{id}/progress", server.handleCommandProgress)
+	mux.HandleFunc("POST /api/commands/{id}/result", server.handleCommandResult)
+	// Command polling (Beacon pulls pending commands per server)
+	mux.HandleFunc("GET /api/commands/pending", server.handlePendingCommands)
+	// Portainer-inspired container/image/network/volume admin
+	mux.HandleFunc("GET /api/admin/containers", server.handleContainerList)
+	mux.HandleFunc("GET /api/admin/containers/{id}", server.handleContainerInspect)
+	mux.HandleFunc("GET /api/admin/containers/{id}/logs", server.handleContainerLogs)
+	mux.HandleFunc("POST /api/admin/containers/{id}/start", server.handleContainerStart)
+	mux.HandleFunc("POST /api/admin/containers/{id}/stop", server.handleContainerStop)
+	mux.HandleFunc("POST /api/admin/containers/{id}/restart", server.handleContainerRestart)
+	mux.HandleFunc("DELETE /api/admin/containers/{id}", server.handleContainerDelete)
+	mux.HandleFunc("POST /api/admin/containers/{id}/exec", server.handleContainerExec)
+	mux.HandleFunc("GET /api/admin/containers/{id}/top", server.handleContainerTop)
+	mux.HandleFunc("GET /api/admin/containers/{id}/changes", server.handleContainerChanges)
+	mux.HandleFunc("GET /api/admin/containers/{id}/stats", server.handleContainerStats)
+	mux.HandleFunc("GET /api/admin/containers/{id}/files", server.handleContainerFilesList)
+	mux.HandleFunc("POST /api/admin/containers/{id}/files/read", server.handleContainerFilesRead)
+	mux.HandleFunc("POST /api/admin/containers/{id}/files/upload", server.handleContainerFilesUpload)
+	mux.HandleFunc("POST /api/admin/containers/{id}/files/delete", server.handleContainerFilesDelete)
+	mux.HandleFunc("GET /api/admin/images", server.handleImageList)
+	mux.HandleFunc("POST /api/admin/images/build", server.handleImageBuild)
+	mux.HandleFunc("POST /api/admin/images/pull", server.handleImagePull)
+	mux.HandleFunc("DELETE /api/admin/images/{id}", server.handleImageDelete)
+	mux.HandleFunc("POST /api/admin/images/{id}/tag", server.handleImageTag)
+	mux.HandleFunc("POST /api/admin/images/prune", server.handleImagePrune)
+	mux.HandleFunc("GET /api/admin/images/search", server.handleImageSearch)
+	mux.HandleFunc("GET /api/admin/networks", server.handleNetworkList)
+	mux.HandleFunc("GET /api/admin/networks/{id}", server.handleNetworkInspect)
+	mux.HandleFunc("GET /api/admin/volumes", server.handleVolumeList)
+	mux.HandleFunc("GET /api/admin/volumes/{id}", server.handleVolumeInspect)
+	mux.HandleFunc("GET /api/admin/volumes/usage", server.handleVolumeUsage)
+
+	// Host system info endpoints (v1 API)
+	mux.HandleFunc("GET /v1/host/info", server.handleHostInfo)
+	mux.HandleFunc("GET /v1/host/disk", server.handleHostDisk)
+	mux.HandleFunc("GET /v1/host/memory", server.handleHostMemory)
+	mux.HandleFunc("GET /v1/host/network", server.handleHostNetwork)
+	mux.HandleFunc("GET /v1/host/processes", server.handleHostProcesses)
+
+	// Firewall management endpoints (v1 API)
+	mux.HandleFunc("GET /v1/firewall/status", server.handleFirewallStatus)
+	mux.HandleFunc("POST /v1/firewall/enable", server.handleFirewallEnable)
+	mux.HandleFunc("POST /v1/firewall/disable", server.handleFirewallDisable)
+	mux.HandleFunc("GET /v1/firewall/rules", server.handleFirewallListRules)
+	mux.HandleFunc("POST /v1/firewall/rules", server.handleFirewallAddRule)
+	mux.HandleFunc("DELETE /v1/firewall/rules/{id}", server.handleFirewallDeleteRule)
+	mux.HandleFunc("PUT /v1/firewall/rules/{id}", server.handleFirewallUpdateRule)
+	mux.HandleFunc("POST /v1/firewall/port", server.handleFirewallPort)
+	mux.HandleFunc("GET /v1/firewall/forward", server.handleFirewallListForwards)
+	mux.HandleFunc("POST /v1/firewall/forward", server.handleFirewallAddForward)
+	mux.HandleFunc("DELETE /v1/firewall/forward/{id}", server.handleFirewallDeleteForward)
+
 	return server, requestTimeout(server.authenticate(mux))
 }
 
@@ -442,6 +537,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		} `json:"ports"`
 		Mounts          []mountConfiguration  `json:"mounts"`
 		MemoryMB        int64                 `json:"memoryMb"`
+		MemoryOverhead  float64               `json:"memoryOverhead"`
 		SwapMB          int64                 `json:"swapMb"`
 		CPUShares       int64                 `json:"cpuShares"`
 		CPUPercent      int64                 `json:"cpuPercent"`
@@ -498,14 +594,20 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	memoryOverhead := body.MemoryOverhead
+	if memoryOverhead <= 0 {
+		memoryOverhead = 10.0
+	}
 	createRequest := runtime.CreateRequest{
-		ServerID: body.ServerID,
-		Image:    body.Image,
-		Command:  body.Command,
-		Env:      s.effectiveEnvList(body.ServerID, body.Env),
-		Ports:    ports,
-		Mounts:   mounts,
-		MemoryMB: body.MemoryMB, SwapMB: body.SwapMB, CPUShares: body.CPUShares, CPUPercent: body.CPUPercent,
+		ServerID:       body.ServerID,
+		Image:          body.Image,
+		Command:        body.Command,
+		Env:            s.effectiveEnvList(body.ServerID, body.Env),
+		Ports:          ports,
+		Mounts:         mounts,
+		MemoryMB:       body.MemoryMB,
+		MemoryOverhead: memoryOverhead,
+		SwapMB:         body.SwapMB, CPUShares: body.CPUShares, CPUPercent: body.CPUPercent,
 		CPUSet: body.CPUSet, IOWeight: body.IOWeight, OOMKillDisabled: body.OOMKillDisabled, PIDLimit: body.PIDLimit,
 		StopSignal: body.StopSignal, StopTimeout: time.Duration(body.StopTimeout) * time.Second, UID: body.UID, GID: body.GID,
 		DNS: body.DNS, NetworkName: body.NetworkName, NetworkSubnet: body.NetworkSubnet, NetworkGateway: body.NetworkGateway,
@@ -824,6 +926,20 @@ func (s *Server) installWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Authenticate WebSocket connection
+	claims, err := s.authenticateWebSocket(w, r)
+	if err != nil {
+		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token scope for install operations
+	if claims.Scope != tokens.ScopeWebsocket {
+		http.Error(w, "invalid token scope for install websocket connection", http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocketUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -832,6 +948,15 @@ func (s *Server) installWS(w http.ResponseWriter, r *http.Request) {
 	defer s.trackWebSocket(r, conn)()
 
 	serverID := r.PathValue("id")
+
+	// Validate that the token is for this specific server
+	if claims.ServerID != serverID {
+		conn.WriteJSON(map[string]interface{}{
+			"type": "error",
+			"data": "token not valid for this server",
+		})
+		return
+	}
 
 	// Send initial status
 	conn.WriteJSON(map[string]interface{}{
@@ -1000,11 +1125,19 @@ func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 		}
 		op, err := s.operations.EnqueueCommand(r.Context(), commandID, serverID, OperationType(body.Signal))
 		if err != nil {
-			http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			// Return operation ID if available, even on error
+			if op != nil {
+				writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error(), "operationId": op.ID})
+			} else {
+				http.Error(w, err.Error(), http.StatusServiceUnavailable)
+			}
 			return
 		}
 		// Preserve the existing error contract while execution continues on the
 		// server context if the caller disconnects.
+		// Add timeout to prevent indefinite blocking
+		waitCtx, waitCancel := context.WithTimeout(r.Context(), 30*time.Second)
+		defer waitCancel()
 		for {
 			status, statusErr := s.operations.GetStatus(op.ID)
 			if statusErr != nil {
@@ -1017,13 +1150,16 @@ func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 				return
 			case StatusFailed:
 				err := errors.New(status.Error)
-				http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+				writeJSON(w, runtimeErrorStatus(err, http.StatusConflict), map[string]any{"error": err.Error(), "operationId": op.ID})
 				return
 			}
 			select {
+			case <-waitCtx.Done():
+				http.Error(w, "operation timeout", http.StatusGatewayTimeout)
+				return
 			case <-r.Context().Done():
 				return
-			case <-time.After(10 * time.Millisecond):
+			case <-time.After(500 * time.Millisecond):
 			}
 		}
 	default:
@@ -1131,6 +1267,7 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 		ignored = append(ignored, reqBody.IgnoredFiles...)
 	}
 
+	s.backupMu.Lock()
 	if s.eventBus != nil {
 		s.backups.SetProgressCallback(func(p backup.BackupProgress) {
 			s.eventBus.Publish(BackupProgressEvent+":"+serverID, p)
@@ -1138,6 +1275,7 @@ func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
 	}
 
 	info, err := s.backups.Create(r.Context(), root, serverID, name, ignored)
+	s.backupMu.Unlock()
 	if err != nil {
 		http.Error(w, err.Error(), backupErrorStatus(err))
 		return
@@ -1349,6 +1487,20 @@ func (s *Server) statsWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Authenticate WebSocket connection
+	claims, err := s.authenticateWebSocket(w, r)
+	if err != nil {
+		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token scope for websocket connections
+	if claims.Scope != tokens.ScopeWebsocket {
+		http.Error(w, "invalid token scope for websocket connection", http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocketUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -1362,6 +1514,12 @@ func (s *Server) statsWS(w http.ResponseWriter, r *http.Request) {
 	go pingWebSocket(writer, done)
 
 	serverID := r.PathValue("id")
+
+	// Validate that the token is for this specific server
+	if claims.ServerID != serverID {
+		writeJSONError(writer, serverID, errors.New("token not valid for this server"))
+		return
+	}
 	stream, err := s.runtime.StatsStream(r.Context(), serverID)
 	if err != nil {
 		writeJSONError(writer, serverID, err)
@@ -1398,6 +1556,20 @@ func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Authenticate WebSocket connection
+	claims, err := s.authenticateWebSocket(w, r)
+	if err != nil {
+		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token scope for websocket connections
+	if claims.Scope != tokens.ScopeWebsocket {
+		http.Error(w, "invalid token scope for websocket connection", http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocketUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -1411,6 +1583,12 @@ func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
 	go pingWebSocket(writer, done)
 
 	serverID := r.PathValue("id")
+
+	// Validate that the token is for this specific server
+	if claims.ServerID != serverID {
+		writeJSONError(writer, serverID, errors.New("token not valid for this server"))
+		return
+	}
 	stream, err := s.runtime.LogsStream(r.Context(), serverID, "100")
 	if err != nil {
 		writeJSONError(writer, serverID, err)
@@ -1455,6 +1633,20 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
+
+	// Authenticate WebSocket connection
+	claims, err := s.authenticateWebSocket(w, r)
+	if err != nil {
+		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token scope for websocket connections
+	if claims.Scope != tokens.ScopeWebsocket {
+		http.Error(w, "invalid token scope for websocket connection", http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocketUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -1468,6 +1660,12 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 	go pingWebSocket(writer, done)
 
 	serverID := r.PathValue("id")
+
+	// Validate that the token is for this specific server
+	if claims.ServerID != serverID {
+		_ = writer.WriteJSON(map[string]any{"type": "error", "data": "token not valid for this server"})
+		return
+	}
 
 	// The manager owns one attach per running server. Every websocket receives
 	// only this server's bounded replay and live output.
@@ -1497,20 +1695,27 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 	// Read commands from the WebSocket and forward to Docker.
 	go func() {
 		for {
-			messageType, payload, err := conn.ReadMessage()
-			if err != nil {
-				errs <- err
+			select {
+			case <-r.Context().Done():
+				errs <- r.Context().Err()
 				return
-			}
-			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-				continue
-			}
-			cmd := strings.TrimSpace(string(payload))
-			if cmd == "" {
-				continue
-			}
-			if err := s.consoles.Write(serverID, cmd); err != nil {
-				_ = writer.WriteJSON(map[string]any{"type": "error", "data": err.Error()})
+			default:
+				conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+				messageType, payload, err := conn.ReadMessage()
+				if err != nil {
+					errs <- err
+					return
+				}
+				if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+					continue
+				}
+				cmd := strings.TrimSpace(string(payload))
+				if cmd == "" {
+					continue
+				}
+				if err := s.consoles.Write(serverID, cmd); err != nil {
+					_ = writer.WriteJSON(map[string]any{"type": "error", "data": err.Error()})
+				}
 			}
 		}
 	}()
@@ -1522,6 +1727,20 @@ func (s *Server) backupProgressWS(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "backup adapter unavailable", http.StatusServiceUnavailable)
 		return
 	}
+
+	// Authenticate WebSocket connection
+	claims, err := s.authenticateWebSocket(w, r)
+	if err != nil {
+		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
+		return
+	}
+
+	// Validate token scope for backup operations
+	if claims.Scope != tokens.ScopeWebsocket && claims.Scope != tokens.ScopeBackupDownload {
+		http.Error(w, "invalid token scope for backup websocket connection", http.StatusForbidden)
+		return
+	}
+
 	conn, err := websocketUpgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -1530,11 +1749,16 @@ func (s *Server) backupProgressWS(w http.ResponseWriter, r *http.Request) {
 	defer s.trackWebSocket(r, conn)()
 	configureWebSocket(conn)
 	writer := &webSocketWriter{conn: conn}
+
+	serverID := r.PathValue("id")
+	// Validate that the token is for this specific server
+	if claims.ServerID != serverID {
+		_ = writer.WriteJSON(map[string]any{"type": "error", "data": "token not valid for this server"})
+		return
+	}
 	done := make(chan struct{})
 	defer close(done)
 	go pingWebSocket(writer, done)
-
-	serverID := r.PathValue("id")
 	ch := s.eventBus.Subscribe(BackupProgressEvent + ":" + serverID)
 	defer s.eventBus.Unsubscribe(BackupProgressEvent+":"+serverID, ch)
 
@@ -2921,6 +3145,35 @@ func isStreamingUpload(r *http.Request) bool {
 	return r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/files/upload")
 }
 
+// authenticateWebSocket validates JWT token for WebSocket connections.
+// Token can be provided via query parameter "token" or Authorization header.
+func (s *Server) authenticateWebSocket(w http.ResponseWriter, r *http.Request) (*tokens.Claims, error) {
+	if s.tokenGenerator == nil {
+		return nil, errors.New("token generator not configured")
+	}
+
+	// Try to get token from query parameter first (common for WebSocket connections)
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		// Fall back to Authorization header
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			tokenStr = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+
+	if tokenStr == "" {
+		return nil, errors.New("missing token")
+	}
+
+	claims, err := s.tokenGenerator.Validate(tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", err)
+	}
+
+	return claims, nil
+}
+
 type webSocketWriter struct {
 	conn *websocket.Conn
 	mu   sync.Mutex
@@ -2941,6 +3194,13 @@ func (w *webSocketWriter) WriteJSON(value any) error {
 	defer w.mu.Unlock()
 	_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	return w.conn.WriteJSON(value)
+}
+
+func (w *webSocketWriter) WriteBinary(data []byte) error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	_ = w.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+	return w.conn.WriteMessage(websocket.BinaryMessage, data)
 }
 
 func (w *webSocketWriter) Ping() error {
@@ -2986,6 +3246,256 @@ func (s *Server) command(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// ---- Edge Agent Handlers ----
+
+var edgeAgent *EdgeAgent
+var edgeAgentMu sync.Mutex
+var upgradeMgr *UpgradeManager
+var upgradeMu sync.Mutex
+
+func (s *Server) handleEdgeStatus(w http.ResponseWriter, r *http.Request) {
+	edgeAgentMu.Lock()
+	if edgeAgent == nil {
+		edgeAgentMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"state": "not-started"})
+		return
+	}
+	state := edgeAgent.State()
+	edgeAgentMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"state": string(state), "service": "edge-agent"})
+}
+
+func (s *Server) handleEdgeStats(w http.ResponseWriter, r *http.Request) {
+	edgeAgentMu.Lock()
+	if edgeAgent == nil {
+		edgeAgentMu.Unlock()
+		writeJSON(w, http.StatusOK, map[string]any{"state": "not-started"})
+		return
+	}
+	stats := edgeAgent.Stats()
+	edgeAgentMu.Unlock()
+	writeJSON(w, http.StatusOK, stats)
+}
+
+func (s *Server) handleEdgeConnect(w http.ResponseWriter, r *http.Request) {
+	edgeAgentMu.Lock()
+	if edgeAgent == nil {
+		edgeAgentMu.Unlock()
+		writeError(w, http.StatusServiceUnavailable, "edge agent not initialized")
+		return
+	}
+	edgeAgent.ConnectNow()
+	edgeAgentMu.Unlock()
+	writeJSON(w, http.StatusOK, map[string]any{"connected": true})
+}
+
+func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
+	diag := s.RunConnectivityDiagnostics(r.Context(), os.Getenv("PANEL_API_URL"))
+	diag.EdgeState = string(EdgeStateDisconnected)
+	edgeAgentMu.Lock()
+	if edgeAgent != nil {
+		diag.EdgeState = string(edgeAgent.State())
+	}
+	edgeAgentMu.Unlock()
+	diag.AgentConnected = s.runtime != nil
+	writeJSON(w, http.StatusOK, diag)
+}
+
+func (s *Server) handleConnectivityDiagnostics(w http.ResponseWriter, r *http.Request) {
+	panelURL := r.URL.Query().Get("url")
+	if panelURL == "" {
+		panelURL = os.Getenv("PANEL_API_URL")
+	}
+	diag := s.RunConnectivityDiagnostics(r.Context(), panelURL)
+	writeJSON(w, http.StatusOK, diag)
+}
+
+// Command acknowledgement: Beacon confirms it received a command.
+func (s *Server) handleCommandAck(w http.ResponseWriter, r *http.Request) {
+	commandID := r.PathValue("id")
+	if commandID == "" {
+		writeError(w, http.StatusBadRequest, "command id is required")
+		return
+	}
+	if err := s.operations.AckCommand(commandID); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"acknowledged": true})
+}
+
+// Command progress: Beacon reports step-level progress for a command.
+func (s *Server) handleCommandProgress(w http.ResponseWriter, r *http.Request) {
+	commandID := r.PathValue("id")
+	if commandID == "" {
+		writeError(w, http.StatusBadRequest, "command id is required")
+		return
+	}
+	var body struct {
+		Progress    string `json:"progress"`
+		ProgressPct int    `json:"progressPct"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid progress payload")
+		return
+	}
+	if err := s.operations.SetProgress(commandID, body.Progress, body.ProgressPct); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"updated": true})
+}
+
+// Command result: Beacon delivers terminal command output.
+func (s *Server) handleCommandResult(w http.ResponseWriter, r *http.Request) {
+	commandID := r.PathValue("id")
+	if commandID == "" {
+		writeError(w, http.StatusBadRequest, "command id is required")
+		return
+	}
+	var body struct {
+		ResultData string `json:"resultData"`
+		Status     string `json:"status,omitempty"`
+		Error      string `json:"error,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid result payload")
+		return
+	}
+	if body.Status == "failed" || body.Error != "" {
+		qErr := s.operations.SetError(commandID, body.Error)
+		if qErr != nil {
+			writeError(w, http.StatusNotFound, qErr.Error())
+			return
+		}
+	}
+	if err := s.operations.SetResult(commandID, body.ResultData); err != nil {
+		writeError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"delivered": true})
+}
+
+// Pending commands: Beacon polls for commands that need to be processed.
+// A serverID query parameter can be provided to filter by server.
+func (s *Server) handlePendingCommands(w http.ResponseWriter, r *http.Request) {
+	serverID := r.URL.Query().Get("serverId")
+	if serverID != "" {
+		writeJSON(w, http.StatusOK, s.operations.ListPendingByServer(serverID))
+		return
+	}
+	all := s.operations.ServersWithPending()
+	result := make(map[string][]Operation)
+	for _, sid := range all {
+		pending := s.operations.ListPendingByServer(sid)
+		if len(pending) > 0 {
+			result[sid] = pending
+		}
+	}
+	writeJSON(w, http.StatusOK, result)
+}
+
+type VersionInventory struct {
+	BeaconVersion string         `json:"beaconVersion"`
+	APIVersion    string         `json:"apiVersion,omitempty"`
+	GoVersion     string         `json:"goVersion"`
+	OS            string         `json:"os"`
+	Architecture  string         `json:"architecture"`
+	Capabilities  []string       `json:"capabilities"`
+	Upgrades      *UpgradeStatus `json:"upgrades,omitempty"`
+	EdgeState     string         `json:"edgeState"`
+	UptimeSeconds int64          `json:"uptimeSeconds"`
+}
+
+func (s *Server) handleVersionInventory(w http.ResponseWriter, r *http.Request) {
+	inv := VersionInventory{
+		BeaconVersion: "beacon-dev",
+		GoVersion:     stdruntime.Version(),
+		OS:            stdruntime.GOOS,
+		Architecture:  stdruntime.GOARCH,
+		Capabilities:  []string{"docker", "sftp", "backups", "transfers", "stats", "console", "files", "compose", "build", "edge-agent", "upgrade"},
+		UptimeSeconds: int64(time.Since(beaconStart).Seconds()),
+		EdgeState:     "unknown",
+	}
+	edgeAgentMu.Lock()
+	if edgeAgent != nil {
+		inv.EdgeState = string(edgeAgent.State())
+	}
+	edgeAgentMu.Unlock()
+	upgradeMu.Lock()
+	if upgradeMgr != nil {
+		status := upgradeMgr.Status()
+		inv.Upgrades = &status
+	}
+	upgradeMu.Unlock()
+	writeJSON(w, http.StatusOK, inv)
+}
+
+func (s *Server) handleUpgradeBegin(w http.ResponseWriter, r *http.Request) {
+	var payload UpgradePayload
+	if err := json.NewDecoder(r.Body).Decode(&payload); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid upgrade payload")
+		return
+	}
+	if payload.Version == "" || payload.DownloadURL == "" {
+		writeError(w, http.StatusBadRequest, "version and downloadUrl are required")
+		return
+	}
+	upgradeMu.Lock()
+	if upgradeMgr == nil {
+		binPath, _ := os.Executable()
+		upgradeMgr = NewUpgradeManager("beacon-dev", binPath, s.dataDir)
+	}
+	upgradeMu.Unlock()
+	if err := upgradeMgr.Begin(r.Context(), payload); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusAccepted, upgradeMgr.Status())
+}
+
+func (s *Server) handleUpgradeStatus(w http.ResponseWriter, r *http.Request) {
+	upgradeMu.Lock()
+	if upgradeMgr == nil {
+		upgradeMu.Unlock()
+		writeJSON(w, http.StatusOK, UpgradeStatus{State: UpgradeStateIdle})
+		return
+	}
+	status := upgradeMgr.Status()
+	upgradeMu.Unlock()
+	writeJSON(w, http.StatusOK, status)
+}
+
+func (s *Server) handleUpgradeApply(w http.ResponseWriter, r *http.Request) {
+	upgradeMu.Lock()
+	if upgradeMgr == nil {
+		upgradeMu.Unlock()
+		writeError(w, http.StatusBadRequest, "no upgrade in progress")
+		return
+	}
+	upgradeMu.Unlock()
+	if err := upgradeMgr.Apply(r.Context()); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, upgradeMgr.Status())
+}
+
+func (s *Server) handleUpgradeRollback(w http.ResponseWriter, r *http.Request) {
+	upgradeMu.Lock()
+	if upgradeMgr == nil {
+		upgradeMu.Unlock()
+		writeError(w, http.StatusBadRequest, "no upgrade to roll back")
+		return
+	}
+	upgradeMu.Unlock()
+	if err := upgradeMgr.Rollback(r.Context()); err != nil {
+		writeError(w, http.StatusConflict, err.Error())
+		return
+	}
+	writeJSON(w, http.StatusOK, upgradeMgr.Status())
 }
 
 func sign(token, method, requestURI, timestamp string, body []byte) string {

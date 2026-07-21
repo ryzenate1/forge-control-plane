@@ -1,0 +1,110 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "enshrouded",
+  "name": "Enshrouded",
+  "description": "Enshrouded dedicated server via SteamCMD. Explore a vast, open-world action RPG with survival crafting elements in a corrupted fantasy realm.",
+  "version": "1.0.0",
+  "game": "Enshrouded",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/2278520",
+  "image": "ghcr.io/parkervcp/steamcmd:debian",
+  "images": {
+    "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
+  },
+  "startup": "./enshrouded_server.x86_64 --server-name \"{{SERVER_NAME}}\" --server-ip 0.0.0.0 --server-port {{PORT}} --max-slots {{ENSHROUDED_SLOT_COUNT}} --disable-gui",
+  "config": {
+    "files": {
+      "enshrouded_server.json": {
+        "parser": "json",
+        "find": {
+          "name": "{{SERVER_NAME}}",
+          "password": "{{ENSHROUDED_PASSWORD}}",
+          "saveDirectory": "./savegame",
+          "logDirectory": "./logs",
+          "ip": "0.0.0.0",
+          "gamePort": "{{PORT}}",
+          "queryPort": "{{PORT}}",
+          "slotCount": "{{ENSHROUDED_SLOT_COUNT}}"
+        }
+      }
+    },
+    "startup": {
+      "done": "Server initialization complete"
+    },
+    "stop": "quit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 15636,
+      "protocol": "udp",
+      "public": true,
+      "description": "Enshrouded game server traffic (game + query on same port)"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the server browser.",
+      "default_value": "GamePanel Enshrouded Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Slot Count",
+      "env_variable": "ENSHROUDED_SLOT_COUNT",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "16",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:16"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "ENSHROUDED_PASSWORD",
+      "description": "Password required to join the server.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "Update on Boot",
+      "env_variable": "UPDATE_ON_BOOT",
+      "description": "Check for server updates on container start.",
+      "default_value": "true",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:true,false"
+    },
+    {
+      "name": "Max Slots",
+      "env_variable": "MAX_SLOTS",
+      "description": "Legacy slot count alias. Prefer ENSHROUDED_SLOT_COUNT.",
+      "default_value": "16",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|integer|min:1|max:16"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 16384,
+    "disk_mb": 20480,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/parkervcp/steamcmd:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Enshrouded SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Enshrouded dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 2278520 validate +quit\n\necho \"Enshrouded server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "rpg"],
+  "file_denylist": [],
+  "features": []
+}

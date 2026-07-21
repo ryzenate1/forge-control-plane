@@ -4,6 +4,8 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useAppToast } from "@/components/shared";
+import { createApp } from "@/lib/api/apps";
+import type { ApiApp } from "@/lib/api/apps";
 import { errorMessage } from "@/lib/utils";
 
 type FormValues = {
@@ -62,25 +64,19 @@ export function CreateAppForm({
 
   const createMut = useMutation({
     mutationFn: async (v: FormValues) => {
-      const res = await fetch("/api/v1/servers", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: v.name.trim(),
-          description: v.description.trim(),
-          region: v.region,
-          template: v.template,
-          limits: { memory: v.memory, disk: v.disk, cpu: v.cpu },
-        }),
-        credentials: "include",
+      const result = await createApp({
+        name: v.name.trim(),
+        type: "image",
+        ports: [],
+        envVars: {},
+        volumes: [],
+        domains: [],
+        enableTls: false,
+        cpuLimit: String(v.cpu),
+        memoryLimit: String(v.memory),
+        diskLimit: String(v.disk),
       });
-
-      if (!res.ok) {
-        const body = await res.text();
-        throw new Error(body || `Request failed with ${res.status}`);
-      }
-      const server = await res.json() as ApiServer;
-      return server;
+      return result;
     },
     onSuccess: (data) => {
       showSuccess("App", "created");
@@ -225,5 +221,3 @@ export function CreateAppForm({
     </div>
   );
 }
-
-import type { ApiServer } from "@/lib/api";

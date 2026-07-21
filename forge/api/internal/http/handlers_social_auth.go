@@ -15,7 +15,6 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type discordUser struct {
@@ -281,11 +280,10 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 		randomPass := make([]byte, 24)
 		rand.Read(randomPass)
 		passStr := hex.EncodeToString(randomPass)
-		hashedPass, _ := bcrypt.GenerateFromPassword([]byte(passStr), store.BcryptCost())
 
 		newUser, err := cfg.Store.CreateUser(c.Context(), store.CreateUserRequest{
 			Email:    email,
-			Password: string(hashedPass),
+			Password: passStr,
 			Role:     "user",
 		}, nil)
 		if err != nil {
@@ -526,6 +524,10 @@ func exchangeAuthentikCode(ctx context.Context, cfg Config, code string) (*authe
 }
 
 func listSocialIdentities(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	claims, ok := c.Locals("user").(tokenClaims)
 	if !ok {
 		return fiber.NewError(fiber.StatusUnauthorized, "missing user")
@@ -608,6 +610,10 @@ func handleSocialLinkRedirect(c *fiber.Ctx, cfg Config) error {
 }
 
 func unlinkSocialIdentity(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	provider := strings.ToLower(c.Params("provider"))
 	claims, ok := c.Locals("user").(tokenClaims)
 	if !ok {
@@ -649,6 +655,10 @@ func socialProviderPublicView(provider store.SocialProvider) socialProviderRespo
 }
 
 func listSocialProviders(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	ctx, cancel := requestContext()
 	defer cancel()
 
@@ -665,6 +675,10 @@ func listSocialProviders(c *fiber.Ctx, cfg Config) error {
 }
 
 func updateSocialProvider(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	var req struct {
 		Enabled      *bool    `json:"enabled"`
 		ClientID     *string  `json:"clientId"`

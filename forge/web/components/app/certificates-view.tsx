@@ -8,18 +8,10 @@ import {
   CertStatus,
   SpinnerInline,
 } from "@/components/shared";
+import { fetchAppCertificates } from "@/lib/api/apps";
+import type { AppCertificate } from "@/lib/api/apps";
 import { formatDate } from "@/lib/utils";
 import type { ReactNode } from "react";
-
-type CertInfo = {
-  id: string;
-  domain: string;
-  status: string;
-  issuer: string;
-  expiresAt?: string;
-  issuedAt?: string;
-  autoRenew: boolean;
-};
 
 interface CertificatesViewProps {
   appId: string;
@@ -27,15 +19,9 @@ interface CertificatesViewProps {
 }
 
 export function CertificatesView({ appId, action }: CertificatesViewProps) {
-  const query = useQuery<CertInfo[]>({
+  const query = useQuery<AppCertificate[]>({
     queryKey: ["app-certs", appId],
-    queryFn: async () => {
-      const res = await fetch(`/api/v1/servers/${encodeURIComponent(appId)}/certificates`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`Failed to load certificates: ${res.status}`);
-      return res.json() as Promise<CertInfo[]>;
-    },
+    queryFn: () => fetchAppCertificates(appId),
     enabled: Boolean(appId),
   });
 

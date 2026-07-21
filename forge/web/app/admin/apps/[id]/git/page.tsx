@@ -13,6 +13,7 @@ import {
 } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { formatDate } from "@/lib/utils";
+import { toast, Toaster } from "@/components/ui/sonner";
 
 export default function GitSourcePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -38,16 +39,19 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
       setNewBranch("");
       void qc.invalidateQueries({ queryKey: ["app-git", id] });
     },
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to switch branch"),
   });
 
   const autoDeployMut = useMutation({
     mutationFn: (enabled: boolean) => toggleAppAutoDeploy(id, enabled),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-git", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to toggle auto-deploy"),
   });
 
   const triggerMut = useMutation({
     mutationFn: () => triggerDeploy(id),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to trigger deploy"),
   });
 
   const copyWebhook = () => {
@@ -214,6 +218,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
           </div>
         )}
       </Card>
+      <Toaster />
     </div>
   );
 }

@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import {
   AlertTriangle, Ban, Box, Cpu, Database, ExternalLink, HardDrive, Info,
   KeyRound, Layers, Network, Plus, RefreshCw, Trash2, Zap,
@@ -32,17 +33,29 @@ const SERVER_TABS: Array<{ id: ServerTab; label: string; danger?: boolean }> = [
 ];
 
 export function AdminServers() {
-  const { data: servers = [], isLoading } = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
-  const { data: users = [] } = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
-  const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
-  const { data: allocations = [] } = useQuery({ queryKey: ["allocations"], queryFn: fetchAllocations });
-  const { data: eggs = [] } = useQuery<ApiEgg[]>({
+  const serversQuery = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
+  const servers = serversQuery.data ?? [];
+  const isLoading = serversQuery.isLoading;
+  const isError = serversQuery.isError;
+  const error = serversQuery.error;
+  const refetch = serversQuery.refetch;
+  const usersQuery = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
+  const users = usersQuery.data ?? [];
+  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodes = nodesQuery.data ?? [];
+  const allocsQuery = useQuery({ queryKey: ["allocations"], queryFn: fetchAllocations });
+  const allocations = allocsQuery.data ?? [];
+  const eggsQuery = useQuery<ApiEgg[]>({
     queryKey: ["eggs"],
     queryFn: () => fetchEggs("*"),
   });
-  const { data: templates = [] } = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates });
-  const { data: regions = [] } = useQuery({ queryKey: ["regions"], queryFn: fetchRegions });
-  const { data: mounts = [] } = useQuery({ queryKey: ["mounts"], queryFn: fetchMounts });
+  const eggs = eggsQuery.data ?? [];
+  const templatesQuery = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates });
+  const templates = templatesQuery.data ?? [];
+  const regionsQuery = useQuery({ queryKey: ["regions"], queryFn: fetchRegions });
+  const regions = regionsQuery.data ?? [];
+  const mountsQuery = useQuery({ queryKey: ["mounts"], queryFn: fetchMounts });
+  const mounts = mountsQuery.data ?? [];
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
@@ -67,6 +80,8 @@ export function AdminServers() {
         </div>
         {isLoading ? (
           <div className="p-8 text-center text-sm text-slate-500">Loading servers…</div>
+        ) : isError ? (
+          <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load servers: {error?.message ?? "Unknown error"}</span><Btn size="sm" tone="ghost" onClick={() => void refetch()}>Retry</Btn></div></div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Layers} message="No servers yet." />
         ) : (
@@ -139,6 +154,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
   onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [name, setName] = useState("");
   const [ownerId, setOwnerId] = useState("");
   const [nodeId, setNodeId] = useState("");
@@ -192,6 +208,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
       void qc.invalidateQueries({ queryKey: ["allocations"] });
       onClose();
     },
+    onError: (error) => toast({ tone: "error", title: "Create failed", message: error instanceof Error ? error.message : "Could not create server" }),
   });
 
   return (
@@ -259,12 +276,13 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
   mounts: ApiMount[]; onClose: () => void;
 }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const { data: server, isLoading } = useQuery({ queryKey: ["server", serverId], queryFn: () => fetchServer(serverId) });
-  const deleteMut = useMutation({ mutationFn: () => deleteServer(serverId, false), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); } });
-  const forceDeleteMut = useMutation({ mutationFn: () => deleteServer(serverId, true), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); } });
-  const suspendMut = useMutation({ mutationFn: () => suspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }) });
-  const unsuspendMut = useMutation({ mutationFn: () => unsuspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }) });
-  const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }) });
+  const deleteMut = useMutation({ mutationFn: () => deleteServer(serverId, false), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete server" }) });
+  const forceDeleteMut = useMutation({ mutationFn: () => deleteServer(serverId, true), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Force delete failed", message: error instanceof Error ? error.message : "Could not force delete server" }) });
+  const suspendMut = useMutation({ mutationFn: () => suspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
+  const unsuspendMut = useMutation({ mutationFn: () => unsuspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
+  const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
 
   if (isLoading || !server) return <div className="p-8 text-center text-sm text-slate-500">Loading…</div>;
   const installed = server.status !== "installing";
@@ -389,6 +407,7 @@ function ServerDetailsTab({ server, users }: { server: ApiServer; users: ApiUser
     enabled: userSearch.length > 0,
   });
   const canSafelyUpdate = Boolean(ownerId && server.memoryMb !== undefined && server.cpuShares !== undefined && server.diskMb !== undefined);
+  const { toast } = useToast();
   const saveMut = useMutation({
     mutationFn: () => {
       if (!canSafelyUpdate) throw new Error("Current server resource values are unavailable.");
@@ -402,6 +421,7 @@ function ServerDetailsTab({ server, users }: { server: ApiServer; users: ApiUser
       });
     },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["server", server.id] }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
+    onError: (error) => toast({ tone: "error", title: "Update failed", message: error instanceof Error ? error.message : "Could not update server details" }),
   });
   return (
     <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSafelyUpdate && name.trim()) saveMut.mutate(); }}>
@@ -442,6 +462,7 @@ function ServerDetailsTab({ server, users }: { server: ApiServer; users: ApiUser
 
 function ServerBuildTab({ server, users, allocations }: { server: ApiServer; users: ApiUser[]; allocations: ApiAllocation[] }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const ownerId = server.ownerId ?? users.find((user) => user.id === server.owner || user.email === server.owner)?.id ?? "";
   const [memory, setMemory] = useState(server.memoryMb === undefined ? "" : String(server.memoryMb));
   const [disk, setDisk] = useState(server.diskMb === undefined ? "" : String(server.diskMb));
@@ -465,6 +486,7 @@ function ServerBuildTab({ server, users, allocations }: { server: ApiServer; use
       });
     },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["server", server.id] }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
+    onError: (error) => toast({ tone: "error", title: "Build update failed", message: error instanceof Error ? error.message : "Could not update build configuration" }),
   });
   return (
     <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (canSafelyUpdate) saveMut.mutate(); }}>
@@ -511,9 +533,10 @@ function ServerBuildTab({ server, users, allocations }: { server: ApiServer; use
 
 function ServerStartupTab({ server }: { server: ApiServer }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const { data: startup } = useQuery({ queryKey: ["server-startup", server.id], queryFn: () => fetchServerStartup(server.id) });
   const [vars, setVars] = useState<Record<string, string>>({});
-  const imageEntries = Object.entries(startup?.docker_images ?? {});
+  const imageEntries = Object.entries(startup?.docker_images ?? {}) as Array<[string, string]>;
   const updateVar = (name: string, value: string) => setVars((current) => ({ ...current, [name]: value }));
   const saveMut = useMutation({
     mutationFn: async () => {
@@ -525,6 +548,7 @@ function ServerStartupTab({ server }: { server: ApiServer }) {
       setVars({});
       void qc.invalidateQueries({ queryKey: ["server-startup", server.id] });
     },
+    onError: (error) => toast({ tone: "error", title: "Startup update failed", message: error instanceof Error ? error.message : "Could not update startup variables" }),
   });
   return (
     <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (Object.keys(vars).length > 0) saveMut.mutate(); }}>
@@ -587,24 +611,28 @@ function ServerAllocationsTab({ server, allocations }: { server: ApiServer; allo
   const available = allocations.filter((allocation) => !allocation.server && !assignedIds.has(allocation.id) && allocation.node === server.node);
   const [allocationId, setAllocationId] = useState("");
   const refresh = () => { void qc.invalidateQueries({ queryKey: ["server-allocations", server.id] }); void qc.invalidateQueries({ queryKey: ["allocations"] }); void qc.invalidateQueries({ queryKey: ["server", server.id] }); };
-  const assignMut = useMutation({ mutationFn: () => assignServerAllocation(server.id, allocationId), onSuccess: () => { setAllocationId(""); refresh(); } });
-  const unassignMut = useMutation({ mutationFn: (id: string) => unassignServerAllocation(server.id, id), onSuccess: refresh });
-  const primaryMut = useMutation({ mutationFn: (id: string) => setPrimaryServerAllocation(server.id, id), onSuccess: refresh });
+  const { toast } = useToast();
+  const assignMut = useMutation({ mutationFn: () => assignServerAllocation(server.id, allocationId), onSuccess: () => { setAllocationId(""); refresh(); }, onError: (error) => toast({ tone: "error", title: "Assign failed", message: error instanceof Error ? error.message : "Could not assign allocation" }) });
+  const unassignMut = useMutation({ mutationFn: (id: string) => unassignServerAllocation(server.id, id), onSuccess: refresh, onError: (error) => toast({ tone: "error", title: "Unassign failed", message: error instanceof Error ? error.message : "Could not unassign allocation" }) });
+  const primaryMut = useMutation({ mutationFn: (id: string) => setPrimaryServerAllocation(server.id, id), onSuccess: refresh, onError: (error) => toast({ tone: "error", title: "Set primary failed", message: error instanceof Error ? error.message : "Could not set primary allocation" }) });
   const primaryId = server.primaryAllocationId ?? server.allocationId;
   return <div className="space-y-4"><Card><CardHeader title="Assigned Allocations" icon={Network}/>{assigned.length === 0 ? <EmptyState icon={Network} message="No allocations assigned."/> : <div className="overflow-x-auto"><table className="w-full text-sm"><tbody className="divide-y divide-white/[0.04]">{assigned.map((allocation) => { const primary = allocation.id === primaryId || allocation.primary || allocation.isPrimary; return <tr key={allocation.id}><td className="px-4 py-3 font-mono text-xs">{allocation.ip}:{allocation.port}</td><td className="px-4 py-3">{primary ? <Pill tone="green">Primary</Pill> : <Btn size="sm" tone="ghost" onClick={() => primaryMut.mutate(allocation.id)}>Make primary</Btn>}</td><td className="px-4 py-3 text-right"><Btn size="sm" tone="danger" disabled={Boolean(primary) || unassignMut.isPending} onClick={() => { if (confirm("Unassign this allocation?")) unassignMut.mutate(allocation.id); }}>Unassign</Btn></td></tr>; })}</tbody></table></div>}</Card><Card><CardHeader title="Assign Allocation" icon={Plus}/><div className="flex flex-col gap-3 p-4 sm:flex-row"><select className="h-9 flex-1 rounded border border-white/10 bg-[#161b28] px-3 text-sm" value={allocationId} onChange={(event) => setAllocationId(event.target.value)}><option value="">Select an unassigned allocation…</option>{available.map((allocation) => <option key={allocation.id} value={allocation.id}>{allocation.ip}:{allocation.port}</option>)}</select><Btn disabled={!allocationId || assignMut.isPending} onClick={() => assignMut.mutate()}>Assign</Btn></div></Card></div>;
 }
 
 function ServerDatabaseTab({ serverId }: { serverId: string }) {
   const qc = useQueryClient();
-  const { data: dbs = [] } = useQuery({ queryKey: ["server-dbs", serverId], queryFn: () => fetchServerDatabases(serverId) });
+  const { toast } = useToast();
+  const dbsQuery = useQuery({ queryKey: ["server-dbs", serverId], queryFn: () => fetchServerDatabases(serverId) });
+  const dbs = dbsQuery.data ?? [];
   const [dbName, setDbName] = useState("");
   const [remote, setRemote] = useState("%");
   const createMut = useMutation({
     mutationFn: () => createServerDatabase(serverId, { database: dbName.trim(), remote: remote.trim() || "%" } as any),
     onSuccess: () => { setDbName(""); void qc.invalidateQueries({ queryKey: ["server-dbs", serverId] }); },
+    onError: (error) => toast({ tone: "error", title: "Create failed", message: error instanceof Error ? error.message : "Could not create database" }),
   });
-  const rotateMut = useMutation({ mutationFn: (dbId: string) => rotateServerDatabasePasswordByBody(serverId, dbId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server-dbs", serverId] }) });
-  const deleteMut = useMutation({ mutationFn: (dbId: string) => deleteServerDatabaseWithSuffix(serverId, dbId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server-dbs", serverId] }) });
+  const rotateMut = useMutation({ mutationFn: (dbId: string) => rotateServerDatabasePasswordByBody(serverId, dbId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server-dbs", serverId] }), onError: (error) => toast({ tone: "error", title: "Rotate failed", message: error instanceof Error ? error.message : "Could not rotate database password" }) });
+  const deleteMut = useMutation({ mutationFn: (dbId: string) => deleteServerDatabaseWithSuffix(serverId, dbId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server-dbs", serverId] }), onError: (error) => toast({ tone: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete database" }) });
   return (
     <div className="space-y-4">
       <Card>
@@ -665,7 +693,11 @@ function ServerDatabaseTab({ serverId }: { serverId: string }) {
 function ServerMountsTab({ server, mounts }: { server: ApiServer; mounts: ApiMount[] }) {
   const qc = useQueryClient();
   const serverId = server.id;
-  const { data: serverMounts = [], isError: isMountsError, error: mountsError } = useQuery({ queryKey: ["server-mounts", serverId], queryFn: () => fetchServerMounts(serverId) });
+  const smQuery = useQuery({ queryKey: ["server-mounts", serverId], queryFn: () => fetchServerMounts(serverId) });
+  const serverMounts = smQuery.data ?? [];
+  const isMountsError = smQuery.isError;
+  const mountsError = smQuery.error;
+  const refetchMounts = smQuery.refetch;
   const mountIds = new Set(serverMounts.map((mount) => mount.id));
   const nodeId = server.nodeId;
   const eggId = server.template;
@@ -701,7 +733,7 @@ function ServerMountsTab({ server, mounts }: { server: ApiServer; mounts: ApiMou
       </div>
       {server.configSyncPending ? <div className="m-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100" role="status">Mount configuration is pending runtime synchronization{server.configSyncError ? `: ${server.configSyncError}` : "."}</div> : null}
       {syncNotice ? <div className="m-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-100" role="status">{syncNotice}</div> : null}
-      {isMountsError ? <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200" role="alert">{errorText(mountsError, "Server mount assignments could not be loaded.")}</div> : null}
+      {isMountsError ? <div className="mx-4 mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200" role="alert"><span>Could not load mount assignments: {errorText(mountsError, "Server mount assignments could not be loaded.")}</span><Btn size="sm" tone="ghost" onClick={() => void refetchMounts()}>Retry</Btn></div> : null}
       {actionError ? <div className="m-4 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200" role="alert">{errorText(actionError, "Mount assignment failed. The persisted change may be pending runtime synchronization.")}</div> : null}
       {eligibleMounts.length === 0 ? (
         <div className="p-6 text-sm text-slate-400">
@@ -751,12 +783,13 @@ function ServerMountsTab({ server, mounts }: { server: ApiServer; mounts: ApiMou
 
 function ServerManageTab({ server, reinstallMut, suspendMut, unsuspendMut, nodes, allocations }: { server: ApiServer; reinstallMut: { mutate: () => void; isPending: boolean }; suspendMut: { mutate: () => void; isPending: boolean }; unsuspendMut: { mutate: () => void; isPending: boolean }; nodes: ApiNode[]; allocations: ApiAllocation[] }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const transferQuery = useQuery({ queryKey: ["server-transfer", server.id], queryFn: () => fetchServerTransferStatus(server.id), retry: false, refetchInterval: server.transferring ? 5000 : false });
   const [targetNodeId, setTargetNodeId] = useState(server.transferTargetNodeId ?? "");
   const [primaryAllocationId, setPrimaryAllocationId] = useState("");
   const targetAllocations = allocations.filter((allocation) => allocation.node === targetNodeId && !allocation.server);
-  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); } });
-  const cancelMut = useMutation({ mutationFn: () => cancelServerTransfer(server.id), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); } });
+  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Transfer failed", message: error instanceof Error ? error.message : "Could not transfer server" }) });
+  const cancelMut = useMutation({ mutationFn: () => cancelServerTransfer(server.id), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }) });
   const transfer = transferQuery.data;
   return (
     <div className="grid gap-4 md:grid-cols-2">

@@ -3,9 +3,10 @@
 import { useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut } from "lucide-react";
+import { LogOut, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchCurrentUser, logout } from "@/lib/api";
+import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
 import { adminPagesForRole } from "./admin-registry";
@@ -51,18 +52,24 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="grid min-h-screen place-items-center bg-[#0f1419] p-4">
         <div className="w-full max-w-md space-y-4 rounded-xl border border-red-500/30 bg-[#1e2536] p-6 text-center" role="alert">
+          <AlertTriangle size={28} className="mx-auto text-amber-400" strokeWidth={1.5} />
           <h1 className="text-xl font-bold text-slate-100">Unable to verify admin access</h1>
           <p className="text-sm text-red-300">
-            The current user could not be loaded. Admin content remains hidden until the API responds.
+            {userQuery.isError
+              ? `API not reachable at ${API_BASE_URL}. Make sure the Go backend is running.`
+              : "The current user could not be loaded. Admin content remains hidden until the API responds."
+            }
           </p>
-          <button
-            className="rounded-lg bg-[#dc2626] px-4 py-2 text-sm font-bold text-white hover:bg-[#b91c1c] disabled:opacity-60"
-            disabled={userQuery.isFetching}
-            onClick={() => void userQuery.refetch()}
-            type="button"
-          >
-            {userQuery.isFetching ? "Retrying…" : "Retry"}
-          </button>
+          <div className="flex justify-center gap-2">
+            <button
+              className="rounded-lg bg-[#dc2626] px-4 py-2 text-sm font-bold text-white hover:bg-[#b91c1c] disabled:opacity-60 transition-colors"
+              disabled={userQuery.isFetching}
+              onClick={() => void userQuery.refetch()}
+              type="button"
+            >
+              {userQuery.isFetching ? "Retrying…" : "Retry"}
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -77,11 +84,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }
 
   return (
-    <div className="min-h-screen bg-[#0f1419]">
-      {/* Top bar */}
-      <header className="flex h-14 items-center justify-between border-b border-white/[0.06] bg-[#111827] px-4 sm:px-6">
+    <div className="h-screen overflow-hidden bg-[#0a0e14]">
+      {/* Top bar — fixed */}
+      <header className="flex h-14 shrink-0 items-center justify-between border-b border-white/[0.06] bg-[#0f1520] px-4 sm:px-6">
         <button
-          className="text-lg font-bold text-slate-100"
+          className="text-lg font-bold text-slate-100 tracking-tight"
           onClick={() => router.push("/servers")}
           type="button"
         >
@@ -89,7 +96,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         </button>
         <div className="flex items-center gap-3 text-sm text-slate-400">
           <button
-            className="hover:text-white transition"
+            className="hover:text-white transition-colors"
             onClick={() => router.push("/servers")}
             type="button"
           >
@@ -98,13 +105,13 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
         </div>
       </header>
 
-      <div className="lg:flex">
-        {/* Sidebar */}
-        <aside className="border-b border-white/[0.06] bg-[#151920] lg:w-56 lg:shrink-0 lg:border-b-0 lg:border-r lg:border-white/[0.06] lg:min-h-[calc(100vh-56px)]">
-          <div className="flex gap-2 overflow-x-auto px-3 py-3 lg:block lg:px-4 lg:py-5">
+      <div className="flex h-[calc(100vh-56px)]">
+        {/* Sidebar — independently scrollable */}
+        <aside className="flex flex-col border-r border-white/[0.06] bg-[#11161f] w-56 shrink-0">
+          <nav className="flex-1 overflow-y-auto px-3 py-5">
             {navGroups.map((group) => (
-              <div key={group.title} className="flex shrink-0 gap-1 lg:mb-3 lg:block">
-                <p className="hidden px-3 pb-1 text-[10px] font-bold uppercase tracking-widest text-slate-600 lg:block">
+              <div key={group.title} className="mb-4">
+                <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-600">
                   {group.title}
                 </p>
                 {group.items.map((item) => {
@@ -115,38 +122,38 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                       key={item.href}
                       aria-current={active ? "page" : undefined}
                       className={cn(
-                        "flex w-auto shrink-0 items-center gap-2.5 whitespace-nowrap rounded-lg px-3 py-2 text-sm font-medium transition lg:w-full",
+                        "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all text-left",
                         active
-                          ? "bg-[#dc2626]/10 text-[#dc2626]"
+                          ? "bg-red-500/10 text-red-400 shadow-sm shadow-red-950/20"
                           : "text-slate-400 hover:bg-white/[0.04] hover:text-slate-200",
                       )}
                       onClick={() => router.push(item.href)}
                       type="button"
                     >
-                      <Icon size={15} />
-                      {item.label}
+                      <Icon size={15} className="shrink-0" />
+                      <span className="truncate">{item.label}</span>
                     </button>
                   );
                 })}
               </div>
             ))}
-          </div>
-          <div className="border-t border-white/[0.06] px-4 py-3">
+          </nav>
+          <div className="shrink-0 border-t border-white/[0.06] px-3 py-3">
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2 w-full px-3 py-2 text-sm text-neutral-secondary hover:text-white hover:bg-surface-elevated rounded-lg transition-colors"
+              className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-slate-500 hover:text-slate-200 hover:bg-white/[0.04] rounded-lg transition-all"
               type="button"
             >
-              <LogOut className="w-4 h-4" />
+              <LogOut size={15} />
               Sign Out
             </button>
           </div>
         </aside>
 
-        {/* Content */}
-        <section className="min-w-0 flex-1 p-4 sm:p-6 lg:p-8">
+        {/* Content — independently scrollable */}
+        <main className="flex-1 overflow-y-auto min-w-0 p-4 sm:p-6 lg:p-8">
           {children}
-        </section>
+        </main>
       </div>
     </div>
   );

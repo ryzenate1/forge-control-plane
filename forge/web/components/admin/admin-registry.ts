@@ -1,9 +1,9 @@
 import type { LucideIcon } from "lucide-react";
 import {
-  Activity, ArrowLeftRight, BarChart3, Box, Bug, Cable, Cloud, Container, Database,
-  GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
+  Activity, ArrowLeftRight, Award, BarChart3, Box, Bug, Cable, Clock, Cloud, Container, Database,
+  FileText, GanttChart, Globe, HardDrive, HeartPulse, KeyRound, Layers, Layout,
   Map, MapPin, Network, Plug, Scale, Server, ShieldCheck, SlidersHorizontal,
-  Users, Workflow,
+  Terminal, Users, Workflow, Shield,
 } from "lucide-react";
 
 export type AdminNavEntry = {
@@ -21,6 +21,8 @@ export const adminPageRegistry: AdminNavGroup[] = [
   { title: "Operations", items: [
     { label: "Overview", href: "/admin/overview", icon: Server, requiredRole: "admin", capability: "available", description: "Live control-plane summary" },
     { label: "Monitoring", href: "/admin/monitoring", icon: HeartPulse, requiredRole: "admin", capability: "available", description: "Platform and node health" },
+    { label: "Cron Jobs", href: "/admin/cron-jobs", icon: Clock, requiredRole: "admin", capability: "available", description: "Schedule and manage automated tasks" },
+    { label: "Host", href: "/admin/host", icon: Server, requiredRole: "admin", capability: "available", description: "Host system information and management" },
     { label: "Activity", href: "/admin/activity", icon: Activity, requiredRole: "admin", capability: "available", description: "Human-readable audit history" },
     { label: "Migrations & Recovery", href: "/admin/operations", icon: Workflow, requiredRole: "admin", capability: "metadata-only", description: "Planning only; no workload executor available" },
   ]},
@@ -31,6 +33,8 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Allocations", href: "/admin/allocations", icon: Cable, requiredRole: "admin", capability: "available", description: "Network allocations" },
     { label: "Database Hosts", href: "/admin/databases", icon: Database, requiredRole: "admin", capability: "available", description: "Provisioning hosts" },
     { label: "Mounts", href: "/admin/mounts", icon: HardDrive, requiredRole: "admin", capability: "available", description: "Shared storage mounts" },
+    { label: "Files", href: "/admin/files", icon: FileText, requiredRole: "admin", capability: "available", description: "Host file manager" },
+    { label: "Terminal", href: "/admin/terminal", icon: Terminal, requiredRole: "admin", capability: "available", description: "Host shell terminal" },
   ]},
   { title: "Management", items: [
     { label: "Servers", href: "/admin/servers", icon: Layers, requiredRole: "admin", capability: "available", description: "Game server instances" },
@@ -41,23 +45,28 @@ export const adminPageRegistry: AdminNavGroup[] = [
   ]},
   { title: "Services", items: [
     { label: "Nests & Eggs", href: "/admin/nests", icon: Box, requiredRole: "admin", capability: "available", description: "Canonical service definitions" },
-    { label: "Compatibility Templates", href: "/admin/templates", icon: Layout, requiredRole: "admin", capability: "available", description: "Legacy compatibility templates" },
+    { label: "App Templates", href: "/admin/app-templates", icon: Layout, requiredRole: "admin", capability: "available", description: "Application deployment templates" },
+    { label: "Compatibility Templates", href: "/admin/templates", icon: Box, requiredRole: "admin", capability: "available", description: "Legacy compatibility templates" },
     { label: "Webhooks", href: "/admin/webhooks", icon: Globe, requiredRole: "admin", capability: "available", description: "Event delivery" },
     { label: "Plugins", href: "/admin/plugins", icon: Plug, requiredRole: "admin", capability: "metadata-only", description: "Manifest registry; runtime unavailable" },
     { label: "API Keys", href: "/admin/api", icon: KeyRound, requiredRole: "admin", capability: "available", description: "Application API credentials" },
     { label: "Settings", href: "/admin/settings", icon: SlidersHorizontal, requiredRole: "admin", capability: "available", description: "Panel configuration" },
   ]},
   { title: "Advanced", items: [
+    { label: "Docker", href: "/admin/docker", icon: Container, requiredRole: "admin", capability: "available", description: "Container, image, network, and volume management" },
     { label: "Scheduler", href: "/admin/scheduler", icon: BarChart3, requiredRole: "admin", capability: "available", description: "Scoring, affinity rules, and placement constraints" },
     { label: "Auto-Scaler", href: "/admin/autoscaler", icon: Scale, requiredRole: "admin", capability: "available", description: "Automatic resource scaling policies" },
     { label: "Deployments", href: "/admin/deployments", icon: ArrowLeftRight, requiredRole: "admin", capability: "available", description: "Blue-green and rolling deployments" },
+    { label: "Preview Deployments", href: "/admin/preview-deployments", icon: Layout, requiredRole: "admin", capability: "available", description: "PR-based preview deployments" },
     { label: "Failover", href: "/admin/failover", icon: Bug, requiredRole: "admin", capability: "available", description: "Automatic failover policies and crash simulation" },
     { label: "Load Balancer", href: "/admin/load-balancer", icon: GanttChart, requiredRole: "admin", capability: "available", description: "Target groups and traffic routing" },
     { label: "Traffic", href: "/admin/traffic", icon: Globe, requiredRole: "admin", capability: "available", description: "Route rules and traffic policies" },
     { label: "Domains", href: "/admin/domains", icon: Globe, requiredRole: "admin", capability: "available", description: "Custom domain management" },
+    { label: "Certificates", href: "/admin/certificates", icon: Award, requiredRole: "admin", capability: "available", description: "TLS/SSL certificate management" },
     { label: "Cloud", href: "/admin/cloud", icon: Cloud, requiredRole: "admin", capability: "available", description: "Cloud provider integrations and instance provisioning" },
     { label: "Compose", href: "/admin/compose", icon: Container, requiredRole: "admin", capability: "available", description: "Docker Compose file import and management" },
     { label: "Social Login", href: "/admin/social", icon: Users, requiredRole: "admin", capability: "available", description: "OAuth social login providers" },
+    { label: "mTLS Certificates", href: "/admin/mtls", icon: Shield, requiredRole: "admin", capability: "available", description: "Mutual TLS certificate management" },
   ]},
 ];
 

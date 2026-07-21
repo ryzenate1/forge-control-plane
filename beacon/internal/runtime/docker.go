@@ -542,6 +542,9 @@ func buildResources(req CreateRequest) container.Resources {
 		pids = 256
 	}
 	memory := req.MemoryMB * 1024 * 1024
+	if memory > 0 && req.MemoryOverhead > 0 {
+		memory = int64(float64(memory) * (1 + req.MemoryOverhead/100))
+	}
 	memorySwap := int64(0)
 	if memory > 0 {
 		memorySwap = memory + req.SwapMB*1024*1024
@@ -554,22 +557,36 @@ func buildResources(req CreateRequest) container.Resources {
 }
 
 func buildHostConfig(req CreateRequest, mounts []mount.Mount, portBindings nat.PortMap) *container.HostConfig {
+	securityOpts := []string{"no-new-privileges:true"}
+	usernsMode := ""
+	if os.Getenv("DAEMON_DOCKER_ROOTLESS_ENABLED") == "true" {
+		usernsMode = "host"
+	}
+	logMaxSize := os.Getenv("DAEMON_LOG_MAX_SIZE")
+	if logMaxSize == "" {
+		logMaxSize = "10m"
+	}
+	logMaxFile := os.Getenv("DAEMON_LOG_MAX_FILE")
+	if logMaxFile == "" {
+		logMaxFile = "3"
+	}
 	return &container.HostConfig{
 		Resources:      buildResources(req),
 		Mounts:         mounts,
 		PortBindings:   portBindings,
 		NetworkMode:    container.NetworkMode(req.NetworkName),
+		UsernsMode:     container.UsernsMode(usernsMode),
 		CapDrop:        []string{"ALL"},
 		Privileged:     false,
 		Init:           ptrBool(true),
 		ReadonlyRootfs: true,
-		SecurityOpt:    []string{"no-new-privileges:true"},
+		SecurityOpt:    securityOpts,
 		Tmpfs:          map[string]string{"/tmp": "rw,exec,size=64M"},
 		LogConfig: container.LogConfig{
 			Type: "json-file",
 			Config: map[string]string{
-				"max-size": "10m",
-				"max-file": "3",
+				"max-size": logMaxSize,
+				"max-file": logMaxFile,
 			},
 		},
 	}

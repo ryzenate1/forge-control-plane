@@ -1,0 +1,133 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "minecraft-paper",
+  "name": "Minecraft (Paper)",
+  "description": "High-performance PaperMC server — the most widely used Minecraft server software, featuring optimized gameplay, extensive plugin API, and automatic latest build downloads.",
+  "version": "1.0.0",
+  "game": "Minecraft",
+  "author": "GamePanel",
+  "update_url": "https://api.papermc.io/v2/projects/paper",
+  "image": "ghcr.io/pterodactyl/yolks:java_21",
+  "images": {
+    "Java 21": "ghcr.io/pterodactyl/yolks:java_21",
+    "Java 17": "ghcr.io/pterodactyl/yolks:java_17"
+  },
+  "startup": "java -Xms128M -XX:MaxRAMPercentage=95.0 -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
+  "config": {
+    "files": {
+      "server.properties": {
+        "parser": "properties",
+        "find": {
+          "server-ip": "0.0.0.0",
+          "server-port": "{{server.build.default.port}}",
+          "query.port": "{{server.build.default.port}}"
+        }
+      }
+    },
+    "startup": {
+      "done": ")! For help, type \""
+    },
+    "stop": "stop",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 25565,
+      "protocol": "tcp",
+      "public": true,
+      "description": "Minecraft game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Minecraft Version",
+      "env_variable": "MINECRAFT_VERSION",
+      "description": "Minecraft version to download. Set to 'latest' for the most recent stable release.",
+      "default_value": "latest",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "nullable|string|max:20"
+    },
+    {
+      "name": "Server Jar File",
+      "env_variable": "SERVER_JARFILE",
+      "description": "File name for the server jar. Must end with .jar.",
+      "default_value": "server.jar",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|regex:/^([\\w\\d._-]+)(\\.jar)$/"
+    },
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Display name shown in the Minecraft server list.",
+      "default_value": "A GamePanel Minecraft Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:60"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of concurrent players.",
+      "default_value": "20",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:100"
+    },
+    {
+      "name": "Difficulty",
+      "env_variable": "DIFFICULTY",
+      "description": "Game difficulty level.",
+      "default_value": "easy",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:easy,normal,hard,peaceful"
+    },
+    {
+      "name": "Gamemode",
+      "env_variable": "GAMEMODE",
+      "description": "Default game mode for new players.",
+      "default_value": "survival",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|in:survival,creative,adventure,spectator"
+    },
+    {
+      "name": "Build Number",
+      "env_variable": "BUILD_NUMBER",
+      "description": "Paper build number. Leave as 'latest' for the most recent build.",
+      "default_value": "latest",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:20"
+    },
+    {
+      "name": "Download Path",
+      "env_variable": "DL_PATH",
+      "description": "Override download URL for the server jar. Internal use only.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "nullable|string"
+    }
+  ],
+  "resources": {
+    "cpu": 100,
+    "memory_mb": 2048,
+    "memory_max_mb": 8192,
+    "disk_mb": 10240,
+    "cpu_shares": 512,
+    "io_weight": 500,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:alpine",
+    "entrypoint": "ash",
+    "script": "#!/bin/ash\n# PaperMC Installation Script\n# Server Files: /mnt/server\n\nPROJECT=paper\nUSER_AGENT=\"GamePanel (https://gamepanel.io)\"\n\nif [ -n \"${DL_PATH}\" ]; then\n    echo \"Using supplied download url: ${DL_PATH}\"\n    DOWNLOAD_URL=$(eval echo $(echo ${DL_PATH} | sed -e 's/{{/${/g' -e 's/}}/}/g'))\nelse\n    VER_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r --arg VERSION $MINECRAFT_VERSION '.versions[] | contains($VERSION)' | grep -m1 true)\n    LATEST_VERSION=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r '.versions | last')\n\n    if [ \"${VER_EXISTS}\" = \"true\" ]; then\n        echo \"Version is valid. Using version ${MINECRAFT_VERSION}\"\n    else\n        echo \"Specified version not found. Defaulting to the latest ${PROJECT} version\"\n        MINECRAFT_VERSION=${LATEST_VERSION}\n    fi\n\n    BUILD_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r --arg BUILD ${BUILD_NUMBER} '.builds[] | tostring | contains($BUILD)' | grep -m1 true)\n    LATEST_BUILD=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r '.builds | last')\n\n    if [ \"${BUILD_EXISTS}\" = \"true\" ]; then\n        echo \"Build is valid for version ${MINECRAFT_VERSION}. Using build ${BUILD_NUMBER}\"\n    else\n        echo \"Using the latest ${PROJECT} build for version ${MINECRAFT_VERSION}\"\n        BUILD_NUMBER=${LATEST_BUILD}\n    fi\n\n    DOWNLOAD_URL=\"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}/builds/${BUILD_NUMBER}/downloads/${PROJECT}-${MINECRAFT_VERSION}-${BUILD_NUMBER}.jar\"\nfi\n\ncd /mnt/server\necho \"Downloading ${PROJECT} version ${MINECRAFT_VERSION} build ${BUILD_NUMBER}\"\ncurl --user-agent \"${USER_AGENT}\" -o ${SERVER_JARFILE} -L \"${DOWNLOAD_URL}\"\necho \"Download complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "sandbox", "building"],
+  "file_denylist": [],
+  "features": ["eula", "java_version", "pid_limit"]
+}

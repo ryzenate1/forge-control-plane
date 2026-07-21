@@ -2,4 +2,10 @@
 # `docker compose exec postgres psql ...` and `docker compose exec redis
 # redis-cli ...` for development access. Publishing these ports by default is
 # unsafe on developer laptops and VPS hosts alike.
-services: {}
+services:
+  postgres:
+    ports:
+      - "${DB_PORT:-5432}:5432"
+  redis:
+    ports:
+      - "${REDIS_PORT:-6379}:6379"

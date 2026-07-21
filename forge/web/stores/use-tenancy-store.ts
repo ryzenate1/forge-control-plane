@@ -2,6 +2,12 @@
 
 import { create } from 'zustand';
 import type { Organization, Project, Environment, TeamMember } from '@/lib/api/tenancy';
+import {
+  fetchOrganizations,
+  fetchProjects as apiFetchProjects,
+  fetchEnvironments as apiFetchEnvironments,
+  fetchTeamMembers,
+} from '@/lib/api/tenancy';
 
 interface TenancyState {
   organizations: Organization[];
@@ -24,9 +30,14 @@ interface TenancyState {
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   reset: () => void;
+
+  fetchOrgs: () => Promise<void>;
+  selectOrg: (org: Organization | null) => Promise<void>;
+  selectProject: (project: Project | null) => Promise<void>;
+  selectEnvironment: (env: Environment | null) => void;
 }
 
-export const useTenancyStore = create<TenancyState>((set) => ({
+export const useTenancyStore = create<TenancyState>((set, get) => ({
   organizations: [],
   activeOrg: null,
   projects: [],
@@ -47,4 +58,43 @@ export const useTenancyStore = create<TenancyState>((set) => ({
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   reset: () => set({ organizations: [], activeOrg: null, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [], error: null }),
+
+  fetchOrgs: async () => {
+    set({ loading: true, error: null });
+    try {
+      const orgs = await fetchOrganizations();
+      set({ organizations: orgs, loading: false });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to load organizations', loading: false });
+    }
+  },
+
+  selectOrg: async (org) => {
+    set({ activeOrg: org, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [] });
+    if (!org) return;
+    set({ loading: true, error: null });
+    try {
+      const [projects, members] = await Promise.all([
+        apiFetchProjects(org.id),
+        fetchTeamMembers(org.id),
+      ]);
+      set({ projects, members, loading: false });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to load org details', loading: false });
+    }
+  },
+
+  selectProject: async (project) => {
+    set({ activeProject: project, environments: [], activeEnvironment: null });
+    if (!project) return;
+    set({ loading: true, error: null });
+    try {
+      const environments = await apiFetchEnvironments(project.id);
+      set({ environments, loading: false });
+    } catch (err) {
+      set({ error: err instanceof Error ? err.message : 'Failed to load environments', loading: false });
+    }
+  },
+
+  selectEnvironment: (env) => set({ activeEnvironment: env }),
 }));

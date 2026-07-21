@@ -9,18 +9,20 @@ import (
 )
 
 type Certificate struct {
-	ID            string    `json:"id"`
-	Domains       []string  `json:"domains"`
-	Issuer        string    `json:"issuer"`
-	Certificate   string    `json:"certificate"`
-	PrivateKey    string    `json:"-"`
-	ExpiresAt     time.Time `json:"expiresAt"`
-	AutoRenew     bool      `json:"autoRenew"`
-	Provider      string    `json:"provider"`
-	ChallengeType string    `json:"challengeType"`
-	Wildcard      bool      `json:"wildcard"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID            string            `json:"id"`
+	Domains       []string          `json:"domains"`
+	Issuer        string            `json:"issuer"`
+	Certificate   string            `json:"certificate"`
+	PrivateKey    string            `json:"-"`
+	ExpiresAt     time.Time         `json:"expiresAt"`
+	AutoRenew     bool              `json:"autoRenew"`
+	Provider      string            `json:"provider"`
+	ChallengeType string            `json:"challengeType"`
+	DNSProvider   string            `json:"dnsProvider"`
+	DNSCredentials map[string]string `json:"dnsCredentials,omitempty"`
+	Wildcard      bool              `json:"wildcard"`
+	CreatedAt     time.Time         `json:"createdAt"`
+	UpdatedAt     time.Time         `json:"updatedAt"`
 }
 
 type CertificateFilter struct {
@@ -32,15 +34,17 @@ type CertificateFilter struct {
 }
 
 type CreateCertificateRequest struct {
-	Domains       []string
-	Issuer        string
-	Certificate   string
-	PrivateKey    string
-	ExpiresAt     time.Time
-	AutoRenew     bool
-	Provider      string
-	ChallengeType string
-	Wildcard      bool
+	Domains        []string
+	Issuer         string
+	Certificate    string
+	PrivateKey     string
+	ExpiresAt      time.Time
+	AutoRenew      bool
+	Provider       string
+	ChallengeType  string
+	DNSProvider    string
+	DNSCredentials map[string]string
+	Wildcard       bool
 }
 
 type UpdateCertificateRequest struct {
@@ -86,16 +90,17 @@ func (s *Store) CreateCertificate(ctx context.Context, req CreateCertificateRequ
 	}
 
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO certificates (id, domains, issuer, certificate, private_key_encrypted, expires_at, auto_renew, provider, challenge_type, wildcard, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, id, req.Domains, req.Issuer, req.Certificate, encryptedKey, req.ExpiresAt, req.AutoRenew, req.Provider, req.ChallengeType, req.Wildcard, now, now)
+		INSERT INTO certificates (id, domains, issuer, certificate, private_key_encrypted, expires_at, auto_renew, provider, challenge_type, dns_provider, dns_credentials, wildcard, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+	`, id, req.Domains, req.Issuer, req.Certificate, encryptedKey, req.ExpiresAt, req.AutoRenew, req.Provider, req.ChallengeType, req.DNSProvider, req.DNSCredentials, req.Wildcard, now, now)
 	if err != nil {
 		return Certificate{}, err
 	}
 	return Certificate{
 		ID: id, Domains: req.Domains, Issuer: req.Issuer, Certificate: req.Certificate,
 		ExpiresAt: req.ExpiresAt, AutoRenew: req.AutoRenew, Provider: req.Provider,
-		ChallengeType: req.ChallengeType, Wildcard: req.Wildcard, CreatedAt: now, UpdatedAt: now,
+		ChallengeType: req.ChallengeType, DNSProvider: req.DNSProvider,
+		DNSCredentials: req.DNSCredentials, Wildcard: req.Wildcard, CreatedAt: now, UpdatedAt: now,
 	}, nil
 }
 
@@ -106,11 +111,11 @@ func (s *Store) GetCertificate(ctx context.Context, id string) (Certificate, err
 	err := s.db.QueryRow(ctx, `
 		SELECT id::text, domains, COALESCE(issuer,''), COALESCE(certificate,''), COALESCE(private_key_encrypted,''),
 		       expires_at, auto_renew, COALESCE(provider,''), COALESCE(challenge_type,'http-01'), COALESCE(wildcard,false),
-		       created_at, updated_at
+		       COALESCE(dns_provider,''), COALESCE(dns_credentials,'{}'::jsonb), created_at, updated_at
 		FROM certificates WHERE id::text = $1
 	`, id).Scan(&cert.ID, &cert.Domains, &cert.Issuer, &cert.Certificate, &keyEncrypted,
 		&cert.ExpiresAt, &cert.AutoRenew, &cert.Provider, &cert.ChallengeType, &cert.Wildcard,
-		&cert.CreatedAt, &cert.UpdatedAt)
+		&cert.DNSProvider, &cert.DNSCredentials, &cert.CreatedAt, &cert.UpdatedAt)
 	if err != nil {
 		return Certificate{}, errors.New("certificate not found")
 	}
@@ -129,7 +134,7 @@ func (s *Store) ListCertificates(ctx context.Context, filter CertificateFilter) 
 	query := `
 		SELECT id::text, domains, COALESCE(issuer,''), COALESCE(certificate,''), '', expires_at,
 		       auto_renew, COALESCE(provider,''), COALESCE(challenge_type,'http-01'), COALESCE(wildcard,false),
-		       created_at, updated_at
+		       COALESCE(dns_provider,''), COALESCE(dns_credentials,'{}'::jsonb), created_at, updated_at
 		FROM certificates WHERE 1=1`
 	args := []any{}
 	argIdx := 1
@@ -173,7 +178,7 @@ func (s *Store) ListCertificates(ctx context.Context, filter CertificateFilter) 
 		var _pk string
 		if err := rows.Scan(&cert.ID, &cert.Domains, &cert.Issuer, &cert.Certificate, &_pk,
 			&cert.ExpiresAt, &cert.AutoRenew, &cert.Provider, &cert.ChallengeType, &cert.Wildcard,
-			&cert.CreatedAt, &cert.UpdatedAt); err != nil {
+			&cert.DNSProvider, &cert.DNSCredentials, &cert.CreatedAt, &cert.UpdatedAt); err != nil {
 			return nil, err
 		}
 		certs = append(certs, cert)
@@ -238,7 +243,7 @@ func (s *Store) FindExpiringCertificates(ctx context.Context) ([]Certificate, er
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, domains, COALESCE(issuer,''), COALESCE(certificate,''), COALESCE(private_key_encrypted,''),
 		       expires_at, auto_renew, COALESCE(provider,''), COALESCE(challenge_type,'http-01'), COALESCE(wildcard,false),
-		       created_at, updated_at
+		       COALESCE(dns_provider,''), COALESCE(dns_credentials,'{}'::jsonb), created_at, updated_at
 		FROM certificates
 		WHERE auto_renew = true AND expires_at <= NOW() + INTERVAL '30 days'
 		ORDER BY expires_at ASC
@@ -254,7 +259,7 @@ func (s *Store) FindExpiringCertificates(ctx context.Context) ([]Certificate, er
 		var keyEncrypted string
 		if err := rows.Scan(&cert.ID, &cert.Domains, &cert.Issuer, &cert.Certificate, &keyEncrypted,
 			&cert.ExpiresAt, &cert.AutoRenew, &cert.Provider, &cert.ChallengeType, &cert.Wildcard,
-			&cert.CreatedAt, &cert.UpdatedAt); err != nil {
+			&cert.DNSProvider, &cert.DNSCredentials, &cert.CreatedAt, &cert.UpdatedAt); err != nil {
 			return nil, err
 		}
 		if keyEncrypted != "" && s.secrets != nil {

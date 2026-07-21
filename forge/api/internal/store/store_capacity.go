@@ -29,6 +29,22 @@ func (s *Store) NodeCapacitySnapshot(ctx context.Context, nodeID string) (NodeCa
 	return s.nodeCapacitySnapshotTx(ctx, s.db, nodeID)
 }
 
+func (s *Store) LockNodeCapacitySnapshot(ctx context.Context, nodeID string) (NodeCapacitySnapshot, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return NodeCapacitySnapshot{}, err
+	}
+	defer tx.Rollback(ctx)
+	snapshot, err := s.lockedNodeCapacitySnapshotTx(ctx, tx, nodeID)
+	if err != nil {
+		return NodeCapacitySnapshot{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return NodeCapacitySnapshot{}, err
+	}
+	return snapshot, nil
+}
+
 func (s *Store) nodeCapacitySnapshotTx(ctx context.Context, querier interface {
 	QueryRow(context.Context, string, ...any) pgx.Row
 }, nodeID string) (NodeCapacitySnapshot, error) {
@@ -40,15 +56,17 @@ func (s *Store) nodeCapacitySnapshotTx(ctx context.Context, querier interface {
 		       COALESCE(n.cpu_threads, 0),
 		       COALESCE(NULLIF(n.node_memory_mb, 0), n.memory_mb, 0),
 		       COALESCE(NULLIF(n.node_disk_mb, 0), n.disk_mb, 0),
-		       COALESCE(SUM(s.cpu_shares) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(SUM(s.memory_mb) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(SUM(s.disk_mb) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(COUNT(s.id) FILTER (WHERE s.status <> 'deleted'), 0)::int,
+		       COALESCE((SELECT SUM(s.cpu_shares) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.cpu) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.memory_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.memory_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.disk_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.disk_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT COUNT(s.id) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT COUNT(i.id) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
 		       now()
 		FROM nodes n
-		LEFT JOIN servers s ON s.node_id = n.id
 		WHERE n.id = $1
-		GROUP BY n.id, n.region_id, n.cpu_threads, n.node_memory_mb, n.memory_mb, n.node_disk_mb, n.disk_mb
 	`, nodeID).Scan(
 		&snapshot.NodeID,
 		&regionID,
@@ -86,15 +104,17 @@ func (s *Store) RegionCapacitySnapshots(ctx context.Context, regionID string) ([
 		       COALESCE(n.cpu_threads, 0),
 		       COALESCE(NULLIF(n.node_memory_mb, 0), n.memory_mb, 0),
 		       COALESCE(NULLIF(n.node_disk_mb, 0), n.disk_mb, 0),
-		       COALESCE(SUM(s.cpu_shares) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(SUM(s.memory_mb) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(SUM(s.disk_mb) FILTER (WHERE s.status <> 'deleted'), 0)::int,
-		       COALESCE(COUNT(s.id) FILTER (WHERE s.status <> 'deleted'), 0)::int,
+		       COALESCE((SELECT SUM(s.cpu_shares) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.cpu) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.memory_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.memory_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.disk_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.disk_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT COUNT(s.id) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT COUNT(i.id) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
 		       now()
 		FROM nodes n
-		LEFT JOIN servers s ON s.node_id = n.id
 		WHERE n.region_id = $1
-		GROUP BY n.id, n.region_id, n.cpu_threads, n.node_memory_mb, n.memory_mb, n.node_disk_mb, n.disk_mb
 		ORDER BY n.name
 	`, regionID)
 	if err != nil {
@@ -168,6 +188,60 @@ func (s *Store) FindAvailableAllocation(ctx context.Context, nodeID string) (All
 		allocation.Alias = &alias.String
 	}
 	return allocation, nil
+}
+
+func (s *Store) lockedNodeCapacitySnapshotTx(ctx context.Context, querier interface {
+	QueryRow(context.Context, string, ...any) pgx.Row
+}, nodeID string) (NodeCapacitySnapshot, error) {
+	var snapshot NodeCapacitySnapshot
+	var regionID sql.NullString
+	var cpuThreads, memoryMB, diskMB int
+	err := querier.QueryRow(ctx, `
+		SELECT n.id::text, n.region_id::text,
+		       COALESCE(n.cpu_threads, 0),
+		       COALESCE(NULLIF(n.node_memory_mb, 0), n.memory_mb, 0),
+		       COALESCE(NULLIF(n.node_disk_mb, 0), n.disk_mb, 0),
+		       COALESCE((SELECT SUM(s.cpu_shares) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.cpu) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.memory_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.memory_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT SUM(s.disk_mb) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT SUM(i.disk_mb) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       COALESCE((SELECT COUNT(s.id) FILTER (WHERE s.status <> 'deleted') FROM servers s WHERE s.node_id = n.id), 0)::int
+		         + COALESCE((SELECT COUNT(i.id) FILTER (WHERE i.status NOT IN ('removing', 'failed')) FROM instances i WHERE i.node_id = n.id), 0)::int,
+		       now()
+		FROM nodes n
+		WHERE n.id = $1
+		FOR UPDATE
+	`, nodeID).Scan(
+		&snapshot.NodeID,
+		&regionID,
+		&cpuThreads,
+		&memoryMB,
+		&diskMB,
+		&snapshot.AllocatedCPU,
+		&snapshot.AllocatedMemory,
+		&snapshot.AllocatedDisk,
+		&snapshot.ServerCount,
+		&snapshot.UpdatedAt,
+	)
+	if err != nil {
+		return NodeCapacitySnapshot{}, err
+	}
+	if regionID.Valid {
+		snapshot.RegionID = regionID.String
+	}
+	snapshot.TotalCPU = cpuThreads * 1024
+	snapshot.TotalMemory = memoryMB
+	snapshot.TotalDisk = diskMB
+	reserved, err := s.activeReservedCapacity(ctx, querier, nodeID)
+	if err != nil {
+		return NodeCapacitySnapshot{}, err
+	}
+	snapshot.AvailableCPU = availableResource(snapshot.TotalCPU, snapshot.AllocatedCPU+reserved.CPU)
+	snapshot.AvailableMemory = availableResource(snapshot.TotalMemory, snapshot.AllocatedMemory+reserved.Memory)
+	snapshot.AvailableDisk = availableResource(snapshot.TotalDisk, snapshot.AllocatedDisk+reserved.Disk)
+	return snapshot, nil
 }
 
 func availableResource(total, allocated int) int {

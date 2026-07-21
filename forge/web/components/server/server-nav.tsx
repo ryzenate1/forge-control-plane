@@ -3,12 +3,12 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
+import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, Layers, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
 import { type ApiServer, logout } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { hasServerPermission, type ServerAccess } from "./server-context";
 
-export type ServerTab = "console" | "files" | "databases" | "schedules" | "users" | "backups" | "network" | "startup" | "settings" | "activity" | "mounts";
+export type ServerTab = "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "database";
 
 interface ServerNavProps { serverId: string; server: ApiServer; access: ServerAccess; activeTab?: ServerTab }
 
@@ -19,11 +19,14 @@ const tabs: Array<{ id: ServerTab; label: string; icon: typeof Terminal; permiss
   { id: "schedules", label: "Schedules", icon: Calendar, permissions: ["schedule.read"] },
   { id: "users", label: "Users", icon: Users, permissions: ["user.read"] },
   { id: "backups", label: "Backups", icon: HardDrive, permissions: ["backup.read"] },
+  { id: "builds", label: "Builds", icon: Rocket, permissions: [] },
   { id: "network", label: "Network", icon: Network, permissions: ["allocation.read"] },
   { id: "startup", label: "Startup", icon: Rocket, permissions: ["startup.read"] },
   { id: "settings", label: "Settings", icon: Settings, permissions: ["settings.rename", "settings.reinstall", "file.sftp"] },
   { id: "mounts", label: "Mounts", icon: Folder, permissions: ["mount.read"] },
   { id: "activity", label: "Activity", icon: Activity, permissions: ["activity.read"] },
+  { id: "processes", label: "Processes", icon: Layers, permissions: ["control.start"] },
+  { id: "deployments", label: "Deployments", icon: Rocket, permissions: [] },
 ];
 
 function statusTone(server: ApiServer) {
