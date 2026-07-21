@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.next/
+build/
+*.min.js
+*.min.css
+coverage/
+.vscode/
+.dev-data/
+.dev-logs/
+.dev-pids/
