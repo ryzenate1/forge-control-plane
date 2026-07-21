@@ -1,10 +1,12 @@
 # Forge Control Plane — Docker Compose
 # Copy .env.example to .env and set every required value before use.
 # Demo seeding is disabled by default and cannot be enabled in production.
+# Apply logging overrides with: docker compose -f compose.yml -f compose.logging.yml --env-file .env up -d
 
 services:
   postgres:
     restart: unless-stopped
+    init: true
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gamepanel}
@@ -20,26 +22,69 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - backend
+      backend:
+        aliases:
+          - pgdb.internal
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres"
+      app.environment: "${APP_ENV:-development}"
 
   redis:
     restart: unless-stopped
+    init: true
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    command: >
+      sh -c 'exec redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}'
     expose:
       - "6379"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
-      - backend
+      backend:
+        aliases:
+          - redis.internal
     volumes:
       - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "redis"
+      app.environment: "${APP_ENV:-development}"
 
   postgres-backup:
     restart: unless-stopped
+    init: true
     image: postgres:16-alpine
     environment:
       PGHOST: postgres
@@ -48,6 +93,16 @@ services:
       PGPASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
       POSTGRES_BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}
       POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+      S3_BACKUP_BUCKET: ${S3_BACKUP_BUCKET:-}
+      S3_BACKUP_REGION: ${S3_BACKUP_REGION:-}
+      S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-}
+      S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-}
+      S3_BACKUP_PREFIX: ${S3_BACKUP_PREFIX:-postgres}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER-postgres} -d $${POSTGRES_DB-postgres}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
     entrypoint: ["/bin/sh", "/usr/local/bin/gamepanel-postgres-backup"]
     volumes:
       - ./postgres-backup.sh:/usr/local/bin/gamepanel-postgres-backup:ro
@@ -57,9 +112,24 @@ services:
         condition: service_healthy
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres-backup"
+      app.environment: "${APP_ENV:-development}"
 
   api:
     restart: unless-stopped
+    init: true
     build:
       context: ..
       dockerfile: forge/api/Dockerfile
@@ -75,10 +145,12 @@ services:
       FORGE_MASTER_KEY: "${FORGE_MASTER_KEY:?Set FORGE_MASTER_KEY in infra/.env}"
       FORGE_MASTER_KEY_ID: ${FORGE_MASTER_KEY_ID:-primary}
       FORGE_PREVIOUS_MASTER_KEYS: ${FORGE_PREVIOUS_MASTER_KEYS:-}
-      FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "false"
+      FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "${FORGE_ALLOW_EPHEMERAL_MASTER_KEY:-false}"
       MIGRATIONS_DIR: /migrations
+      BATCH2_MIGRATIONS_DIR: /batch2-migrations
       LANGS_DIR: /lang
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
       PANEL_URL: ${PANEL_URL:-http://localhost:3000}
       API_SEED_DEMO: "false"
@@ -99,11 +171,36 @@ services:
       timeout: 5s
       retries: 12
     networks:
-      - frontend
-      - backend
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "forge-api"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   daemon:
     restart: unless-stopped
+    init: true
     build:
       context: ../beacon
     env_file:
@@ -117,6 +214,7 @@ services:
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
       PANEL_API_URL: ${PANEL_API_URL:-http://api:8080/api/v1}
       DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-:2022}
+      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-127.0.0.1:2022}
       DAEMON_ALLOW_MOCK_RUNTIME: ${DAEMON_ALLOW_MOCK_RUNTIME:-false}
       DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
       BACKUP_ADAPTER: ${BACKUP_ADAPTER:-local}
@@ -132,9 +230,6 @@ services:
       - "2022:2022"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      # Beacon controls the host Docker daemon, so this must be the same
-      # absolute host path inside and outside the Beacon container. A named
-      # volume is not visible at this path to sibling game containers.
       - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}
     healthcheck:
       test: ["CMD", "/daemon", "--healthcheck"]
@@ -142,16 +237,47 @@ services:
       timeout: 5s
       retries: 12
     networks:
-      - frontend
-      - backend
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 256M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "beacon"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   prometheus:
     restart: unless-stopped
     image: prom/prometheus:v2.55.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
     ports:
       - "9091:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
@@ -163,21 +289,72 @@ services:
         condition: service_healthy
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "prometheus"
+      app.environment: "${APP_ENV:-development}"
 
   alertmanager:
     restart: unless-stopped
     image: prom/alertmanager:v0.27.0
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+      - "--config.expand-env=true"
     ports:
       - "9093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ALERTMANAGER_SMTP_HOST: ${ALERTMANAGER_SMTP_HOST:-}
+      ALERTMANAGER_SMTP_PORT: ${ALERTMANAGER_SMTP_PORT:-587}
+      ALERTMANAGER_SMTP_USER: ${ALERTMANAGER_SMTP_USER:-}
+      ALERTMANAGER_SMTP_PASS: ${ALERTMANAGER_SMTP_PASS:-}
+      ALERTMANAGER_SMTP_FROM: ${ALERTMANAGER_SMTP_FROM:-noreply@gamepanel.local}
+      ALERTMANAGER_ADMIN_EMAIL: ${ALERTMANAGER_ADMIN_EMAIL:-}
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
     volumes:
       - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager-data:/alertmanager
     networks:
       - backend
     depends_on:
       - prometheus
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "alertmanager"
+      app.environment: "${APP_ENV:-development}"
 
   grafana:
     restart: unless-stopped
@@ -187,21 +364,98 @@ services:
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in infra/.env}"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
     ports:
       - "3001:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
       - prometheus
     networks:
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "grafana"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+
+  caddy:
+    restart: unless-stopped
+    init: true
+    image: caddy:2-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      CADDY_ADMIN: "127.0.0.1:2019"
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    networks:
       - frontend
       - backend
-
-
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "caddy"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   web:
     restart: unless-stopped
+    init: true
     build:
       context: ..
       dockerfile: forge/web/Dockerfile
@@ -215,8 +469,37 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
     networks:
-      - frontend
+      frontend:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "forge-web"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
   postgres-data:
@@ -224,9 +507,13 @@ volumes:
   prometheus-data:
   alertmanager-data:
   grafana-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   frontend:
+    name: forge-frontend
     driver: bridge
   backend:
+    name: forge-backend
     driver: bridge

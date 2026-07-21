@@ -54,7 +54,8 @@ func (s *Store) GetServerByExternalID(ctx context.Context, externalID string) (S
 		       s.primary_allocation_id::text, s.config_sync_pending, s.config_sync_error,
 		       n.name, n.id::text, COALESCE(NULLIF(n.fqdn, ''), n.base_url), COALESCE(n.daemon_sftp, 2022),
 		       u.email, u.id::text, e.name, COALESCE(s.external_id, ''),
-		       COALESCE(s.uuid, ''), COALESCE(s.uuid_short, ''), s.installed_at, s.skip_scripts, s.docker_labels
+		       COALESCE(s.uuid, ''), COALESCE(s.uuid_short, ''), s.installed_at, s.skip_scripts, s.docker_labels,
+		       COALESCE(s.generation, 0), s.workload_lease_expiry
 		FROM servers s
 		JOIN nodes n ON n.id = s.node_id
 		JOIN users u ON u.id = s.owner_id
@@ -70,6 +71,7 @@ func (s *Store) GetServerByExternalID(ctx context.Context, externalID string) (S
 		&server.Node, &server.NodeID, &server.SFTPHost, &server.SFTPPort,
 		&server.Owner, &server.OwnerID, &server.Template, &server.ExternalID,
 		&server.Uuid, &server.UuidShort, &server.InstalledAt, &server.SkipScripts, &server.DockerLabels,
+		&server.Generation, &server.WorkloadLeaseExpiry,
 	)
 	if err != nil {
 		return Server{}, err

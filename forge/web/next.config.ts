@@ -8,6 +8,11 @@ const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: projectRoot,
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: '**' },
+    ],
+  },
   async rewrites() {
     return [
       {

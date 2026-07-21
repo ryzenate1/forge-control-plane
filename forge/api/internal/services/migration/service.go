@@ -526,6 +526,14 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 		s.fail(ctx, migrationID, fmt.Errorf("create destination container: %w", err), source, target, false, sourceCredential, destinationCredential)
 		return
 	}
+	exists, err := s.runtime.Exists(ctx, runtimeTarget)
+	if err != nil || !exists {
+		if err == nil {
+			err = errors.New("post-creation health check failed: server does not exist on destination")
+		}
+		s.fail(ctx, migrationID, fmt.Errorf("destination health check: %w", err), source, target, true, sourceCredential, destinationCredential)
+		return
+	}
 	_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "destination_created", "", 0, "")
 	s.finalize(ctx, migrationID, source, target, sourceCredential, destinationCredential)
 }
@@ -554,20 +562,22 @@ func phaseAtLeast(current, expected string) bool {
 }
 
 func (s *Service) fail(ctx context.Context, migrationID string, cause error, source, target store.ServerProvisionTarget, destinationCreated bool, sourceCredential, destinationCredential string) {
+	rollbackCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 	if destinationCredential != "" && target.NodeURL != "" {
-		_ = s.daemon.CancelTransfer(context.Background(), target.NodeURL, migrationID, destinationCredential)
+		_ = s.daemon.CancelTransfer(rollbackCtx, target.NodeURL, migrationID, destinationCredential)
 	}
 	if destinationCreated && target.NodeURL != "" {
-		_, _ = s.runtime.DeleteServer(context.Background(), runtimeTarget(target))
+		_, _ = s.runtime.DeleteServer(rollbackCtx, runtimeTarget(target))
 	}
 	if sourceCredential != "" && source.NodeURL != "" {
-		_ = s.daemon.CancelTransfer(context.Background(), source.NodeURL, migrationID, sourceCredential)
+		_ = s.daemon.CancelTransfer(rollbackCtx, source.NodeURL, migrationID, sourceCredential)
 	}
 	if source.NodeURL != "" {
-		_, _ = s.runtime.StartServer(context.Background(), runtimeTarget(source))
+		_, _ = s.runtime.StartServer(rollbackCtx, runtimeTarget(source))
 	}
-	_ = s.store.FailMigrationRun(context.Background(), migrationID, cause.Error())
-	_, _ = s.MarkFailed(context.Background(), migrationID, cause.Error())
+	_ = s.store.FailMigrationRun(rollbackCtx, migrationID, cause.Error())
+	_, _ = s.MarkFailed(rollbackCtx, migrationID, cause.Error())
 }
 
 func (s *Service) CancelMigration(ctx context.Context, migrationID string) (store.Migration, error) {

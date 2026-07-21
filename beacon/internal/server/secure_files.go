@@ -40,8 +40,8 @@ func lockUpload(serverID, uploadID string) func() {
 	mu := value.(*sync.Mutex)
 	mu.Lock()
 	return func() {
-		mu.Unlock()
 		uploadLocks.Delete(key)
+		mu.Unlock()
 	}
 }
 

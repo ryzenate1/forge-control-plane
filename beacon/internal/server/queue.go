@@ -36,15 +36,20 @@ const (
 )
 
 type Operation struct {
-	ID          string          `json:"id"`
-	CommandID   string          `json:"commandId,omitempty"`
-	ServerID    string          `json:"serverId"`
-	Type        OperationType   `json:"type"`
-	Status      OperationStatus `json:"status"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	StartedAt   time.Time       `json:"startedAt,omitempty"`
-	CompletedAt time.Time       `json:"completedAt,omitempty"`
+	ID           string          `json:"id"`
+	CommandID    string          `json:"commandId,omitempty"`
+	ServerID     string          `json:"serverId"`
+	Type         OperationType   `json:"type"`
+	Status       OperationStatus `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	StartedAt    time.Time       `json:"startedAt,omitempty"`
+	CompletedAt  time.Time       `json:"completedAt,omitempty"`
+	TTL          time.Duration   `json:"ttl,omitempty"`
+	Progress     string          `json:"progress,omitempty"`
+	ProgressPct  int             `json:"progressPct,omitempty"`
+	ResultData   string          `json:"resultData,omitempty"`
+	Acknowledged bool            `json:"acknowledged"`
 }
 
 type OperationHandler func(context.Context, *Operation) error
@@ -86,12 +91,19 @@ func NewPersistentOperationQueue(path string, concurrency int, handler Operation
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS beacon_operations (
 		id TEXT PRIMARY KEY, command_id TEXT UNIQUE, server_id TEXT NOT NULL, type TEXT NOT NULL,
 		status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL,
-		started_at TIMESTAMP, completed_at TIMESTAMP);
+		started_at TIMESTAMP, completed_at TIMESTAMP, ttl INTEGER DEFAULT 0,
+		progress TEXT NOT NULL DEFAULT '', progress_pct INTEGER DEFAULT 0, result_data TEXT NOT NULL DEFAULT '');
 		CREATE INDEX IF NOT EXISTS idx_beacon_operations_status ON beacon_operations(status, created_at);
 		CREATE INDEX IF NOT EXISTS idx_beacon_operations_server ON beacon_operations(server_id, created_at);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate command journal: %w", err)
 	}
+	// Migrate existing tables - add columns if missing (errors are non-fatal)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN ttl INTEGER DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN progress TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN progress_pct INTEGER DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN result_data TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN acknowledged INTEGER DEFAULT 0`)
 	q := newOperationQueue(concurrency, handler, db)
 	if err := q.loadJournal(); err != nil {
 		db.Close()
@@ -112,7 +124,8 @@ func newOperationQueue(concurrency int, handler OperationHandler, db *sql.DB) *O
 }
 
 func (q *OperationQueue) loadJournal() error {
-	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at
+	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at,
+		COALESCE(ttl,0),COALESCE(progress,''),COALESCE(progress_pct,0),COALESCE(result_data,''),COALESCE(acknowledged,0)
 		FROM beacon_operations ORDER BY created_at`)
 	if err != nil {
 		return fmt.Errorf("load command journal: %w", err)
@@ -122,7 +135,10 @@ func (q *OperationQueue) loadJournal() error {
 		var op Operation
 		var typ, status string
 		var started, completed sql.NullTime
-		if err := rows.Scan(&op.ID, &op.CommandID, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed); err != nil {
+		var ttlNanos sql.NullInt64
+		var ack sql.NullBool
+		if err := rows.Scan(&op.ID, &op.CommandID, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed,
+			&ttlNanos, &op.Progress, &op.ProgressPct, &op.ResultData, &ack); err != nil {
 			return err
 		}
 		op.Type, op.Status = OperationType(typ), OperationStatus(status)
@@ -132,10 +148,18 @@ func (q *OperationQueue) loadJournal() error {
 		if completed.Valid {
 			op.CompletedAt = completed.Time
 		}
+		if ttlNanos.Valid {
+			op.TTL = time.Duration(ttlNanos.Int64)
+		}
+		if ack.Valid {
+			op.Acknowledged = ack.Bool
+		}
 		if op.Status == StatusRunning {
 			op.Status = StatusPending
 			op.StartedAt = time.Time{}
 			op.Error = ""
+			// Preserve progress and result data for resumption after restart
+			// op.Progress, op.ProgressPct, and op.ResultData remain unchanged
 			_ = q.persist(&op)
 		}
 		copyOp := op
@@ -197,6 +221,14 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 		q.mu.Unlock()
 		return
 	}
+	if op.TTL > 0 && time.Since(op.CreatedAt) > op.TTL {
+		op.Status = StatusFailed
+		op.Error = "command expired"
+		op.CompletedAt = time.Now().UTC()
+		_ = q.persist(op)
+		q.mu.Unlock()
+		return
+	}
 	op.Status = StatusRunning
 	op.StartedAt = time.Now().UTC()
 	_ = q.persist(op)
@@ -227,11 +259,98 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 	_ = q.persist(op)
 }
 
+func (q *OperationQueue) SetProgress(id string, progress string, pct int) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.Progress = progress
+	op.ProgressPct = pct
+	return q.persist(op)
+}
+
+func (q *OperationQueue) SetError(id string, errMsg string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.Error = errMsg
+	op.Status = StatusFailed
+	op.CompletedAt = time.Now().UTC()
+	return q.persist(op)
+}
+
+func (q *OperationQueue) ServersWithPending() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	seen := make(map[string]struct{})
+	for _, op := range q.operations {
+		if op.Status == StatusPending {
+			seen[op.ServerID] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
+func (q *OperationQueue) AckCommand(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	if op.Status != StatusPending && op.Status != StatusRunning {
+		return fmt.Errorf("cannot ack operation in state %s", op.Status)
+	}
+	op.Acknowledged = true
+	return q.persist(op)
+}
+
+func (q *OperationQueue) SetResult(id string, resultData string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.ResultData = resultData
+	return q.persist(op)
+}
+
+func (q *OperationQueue) ExpireExpired() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := time.Now().UTC()
+	expired := 0
+	for _, op := range q.operations {
+		if op.Status == StatusPending && op.TTL > 0 && now.Sub(op.CreatedAt) > op.TTL {
+			op.Status = StatusFailed
+			op.Error = "command expired"
+			op.CompletedAt = now
+			_ = q.persist(op)
+			expired++
+		}
+	}
+	return expired
+}
+
 func (q *OperationQueue) Enqueue(ctx context.Context, serverID string, typ OperationType) (*Operation, error) {
 	return q.EnqueueCommand(ctx, "", serverID, typ)
 }
 
 func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID string, typ OperationType) (*Operation, error) {
+	return q.EnqueueCommandWithTTL(ctx, commandID, serverID, typ, 0)
+}
+
+func (q *OperationQueue) EnqueueCommandWithTTL(ctx context.Context, commandID, serverID string, typ OperationType, ttl time.Duration) (*Operation, error) {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -251,7 +370,7 @@ func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID
 	if q.db == nil {
 		id = fmt.Sprintf("op-%d", q.nextID)
 	}
-	op := &Operation{ID: id, CommandID: commandID, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC()}
+	op := &Operation{ID: id, CommandID: commandID, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC(), TTL: ttl}
 	q.operations[id] = op
 	q.serverOps[serverID] = append(q.serverOps[serverID], id)
 	if err := q.persist(op); err != nil {
@@ -276,10 +395,17 @@ func (q *OperationQueue) persist(op *Operation) error {
 	if q.db == nil {
 		return nil
 	}
-	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at)
-		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
-		started_at=excluded.started_at,completed_at=excluded.completed_at`, op.ID, op.CommandID, op.ServerID, string(op.Type), string(op.Status), op.Error,
-		op.CreatedAt, nullTime(op.StartedAt), nullTime(op.CompletedAt))
+	ackVal := 0
+	if op.Acknowledged {
+		ackVal = 1
+	}
+	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at,ttl,progress,progress_pct,result_data,acknowledged)
+		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
+		started_at=excluded.started_at,completed_at=excluded.completed_at,
+		progress=excluded.progress,progress_pct=excluded.progress_pct,result_data=excluded.result_data,acknowledged=excluded.acknowledged`,
+		op.ID, op.CommandID, op.ServerID, string(op.Type), string(op.Status), op.Error,
+		op.CreatedAt, nullTime(op.StartedAt), nullTime(op.CompletedAt),
+		ttlNanos(op.TTL), op.Progress, op.ProgressPct, op.ResultData, ackVal)
 	return err
 }
 
@@ -288,6 +414,13 @@ func nullTime(v time.Time) any {
 		return nil
 	}
 	return v
+}
+
+func ttlNanos(d time.Duration) any {
+	if d <= 0 {
+		return nil
+	}
+	return d.Nanoseconds()
 }
 
 func (q *OperationQueue) GetStatus(id string) (*Operation, error) {
@@ -300,6 +433,18 @@ func (q *OperationQueue) GetStatus(id string) (*Operation, error) {
 	cp := *op
 	return &cp, nil
 }
+func (q *OperationQueue) ListPendingByServer(id string) []Operation {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]Operation, 0, len(q.serverOps[id]))
+	for _, opID := range q.serverOps[id] {
+		if op := q.operations[opID]; op != nil && op.Status == StatusPending {
+			out = append(out, *op)
+		}
+	}
+	return out
+}
+
 func (q *OperationQueue) ListByServer(id string) []Operation {
 	q.mu.Lock()
 	defer q.mu.Unlock()

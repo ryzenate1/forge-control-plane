@@ -32,21 +32,15 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		claims, ok := c.Locals("user").(tokenClaims)
-		if !ok || claims.JTI == "" {
-			// For cookie-based sessions without JTI, still clear cookies
-			clearSessionCookies(c)
-			return c.SendStatus(fiber.StatusNoContent)
+		if ok && claims.JTI != "" {
+			ctx, cancel := requestContext()
+			defer cancel()
+			if err := cfg.Store.RevokeJWT(ctx, claims.JTI, time.Unix(claims.Exp, 0)); err != nil {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "could not revoke session")
+			}
+			_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "logout", "user", &claims.Sub, "{}")
 		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		if err := cfg.Store.RevokeJWT(ctx, claims.JTI, time.Unix(claims.Exp, 0)); err != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "could not revoke session")
-		}
-		// Clear cookies for cookie-based sessions
-		authSource, _ := c.Locals("authSource").(string)
-		if authSource == authSourceCookieSession {
-			clearSessionCookies(c)
-		}
+		clearSessionCookies(c)
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 

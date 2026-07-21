@@ -1,0 +1,29 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gamepanel-config
+  namespace: gamepanel
+data:
+  APP_ENV: "production"
+  API_ADDR: ":8080"
+  DAEMON_ADDR: ":9090"
+  DAEMON_SFTP_ADDR: ":2022"
+  DAEMON_DATA_DIR: "/srv/game-panel/servers"
+  DAEMON_ALLOW_MOCK_RUNTIME: "false"
+  REDIS_ADDR: "redis:6379"
+  PANEL_URL: "https://panel.example.com"
+  PANEL_API_URL: "http://api:8080/api/v1"
+  MIGRATIONS_DIR: "/migrations"
+  LANGS_DIR: "/lang"
+  FORGE_MASTER_KEY_ID: "primary"
+  FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "false"
+  API_SEED_DEMO: "false"
+  LOAD_BALANCER_ENABLED: "true"
+  LOAD_BALANCER_BIND_HOST: ""
+  LOAD_BALANCER_PORT_MIN: "30000"
+  LOAD_BALANCER_PORT_MAX: "30100"
+  POSTGRES_DB: "gamepanel"
+  POSTGRES_USER: "gamepanel"
+  BACKUP_ADAPTER: "local"
+  GRAFANA_ADMIN_USER: "admin"
+  S3_USE_PATH_STYLE: "true"

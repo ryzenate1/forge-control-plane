@@ -156,6 +156,29 @@ func (m *mockCoordinatorStore) UpdateMigrationStatus(_ context.Context, _ string
 	return store.Migration{}, nil
 }
 
+func (m *mockCoordinatorStore) UpdateServerGeneration(_ context.Context, _ string, _ int64, _ *time.Time) error {
+	return nil
+}
+
+func (m *mockCoordinatorStore) GetServer(_ context.Context, serverID string) (store.Server, error) {
+	return store.Server{ID: serverID, ActualState: store.ServerActualStateRunning}, nil
+}
+
+func (m *mockCoordinatorStore) ListRecoveryItemsByStatus(_ context.Context, statuses ...string) ([]store.RecoveryItem, error) {
+	var items []store.RecoveryItem
+	for _, planItems := range m.items {
+		for _, item := range planItems {
+			for _, s := range statuses {
+				if item.Status == s {
+					items = append(items, item)
+					break
+				}
+			}
+		}
+	}
+	return items, nil
+}
+
 
 
 type recordingMigrationExecutor struct {
@@ -458,5 +481,116 @@ func TestMetricsNilCoordinator(t *testing.T) {
 	m := nilCoord.Metrics()
 	if m.RecoveryPlansTotal != 0 || m.RecoveryItemsTotal != 0 || m.RecoveryFailuresTotal != 0 {
 		t.Fatal("expected zero metrics from nil coordinator")
+	}
+}
+
+func TestReconcileRecoveryAcknowledgmentServerRunning(t *testing.T) {
+	s := newMockStore()
+	plan, _ := s.CreateRecoveryPlan(context.Background(), "node-1", "test")
+	s.CreateRecoveryItem(context.Background(), plan.ID, store.RecoveryItem{
+		ServerID: "srv-1", SourceNodeID: "node-1", TargetNodeID: "target-1",
+		Status:    string(store.RecoveryItemStatusAwaitingBeacon),
+		UpdatedAt: time.Now().UTC(),
+	})
+	c := &Coordinator{store: s}
+
+	err := c.ReconcileRecoveryAcknowledgment(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileRecoveryAcknowledgment error = %v", err)
+	}
+	items := s.items[plan.ID]
+	for _, item := range items {
+		if item.Status != string(store.RecoveryItemStatusRestored) {
+			t.Fatalf("expected item restored, got %s", item.Status)
+		}
+	}
+}
+
+func TestReconcileRecoveryAcknowledgmentTimeout(t *testing.T) {
+	s := newMockStore()
+	plan, _ := s.CreateRecoveryPlan(context.Background(), "node-1", "test")
+	s.CreateRecoveryItem(context.Background(), plan.ID, store.RecoveryItem{
+		ServerID: "srv-1", SourceNodeID: "node-1", TargetNodeID: "target-1",
+		Status:    string(store.RecoveryItemStatusAwaitingBeacon),
+		UpdatedAt: time.Now().UTC().Add(-2 * DefaultRecoveryAcknowledgmentTimeout),
+	})
+	s.nodes["target-1"] = store.Node{ID: "target-1"}
+	c := &Coordinator{store: s}
+
+	err := c.ReconcileRecoveryAcknowledgment(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileRecoveryAcknowledgment error = %v", err)
+	}
+	items := s.items[plan.ID]
+	for _, item := range items {
+		if item.Status != string(store.RecoveryItemStatusFailed) {
+			t.Fatalf("expected item failed after timeout, got %s", item.Status)
+		}
+	}
+}
+
+func TestReconcileRecoveryAcknowledgmentNilCoordinator(t *testing.T) {
+	var nilCoord *Coordinator
+	err := nilCoord.ReconcileRecoveryAcknowledgment(context.Background())
+	if err == nil {
+		t.Fatal("expected error from nil coordinator")
+	}
+}
+
+func TestFinishBackupRestorePlanAwaitingBeaconNonTerminal(t *testing.T) {
+	s := newMockStore()
+	plan, _ := s.CreateRecoveryPlan(context.Background(), "node-1", "test")
+	s.CreateRecoveryItem(context.Background(), plan.ID, store.RecoveryItem{
+		ServerID: "srv-1", SourceNodeID: "node-1",
+		Status: string(store.RecoveryItemStatusAwaitingBeacon),
+	})
+	c := &Coordinator{store: s}
+
+	result, err := c.finishBackupRestorePlan(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatalf("finishBackupRestorePlan error = %v", err)
+	}
+	if result.Status == store.RecoveryPlanStatusRestored || result.Status == store.RecoveryPlanStatusCompleted {
+		t.Fatalf("plan should not complete with awaiting_beacon item, got %v", result.Status)
+	}
+}
+
+func TestFinishBackupRestorePlanHealthGatingNonTerminal(t *testing.T) {
+	s := newMockStore()
+	plan, _ := s.CreateRecoveryPlan(context.Background(), "node-1", "test")
+	s.CreateRecoveryItem(context.Background(), plan.ID, store.RecoveryItem{
+		ServerID: "srv-1", SourceNodeID: "node-1",
+		Status: string(store.RecoveryItemStatusHealthGating),
+	})
+	c := &Coordinator{store: s}
+
+	result, err := c.finishBackupRestorePlan(context.Background(), plan.ID)
+	if err != nil {
+		t.Fatalf("finishBackupRestorePlan error = %v", err)
+	}
+	if result.Status == store.RecoveryPlanStatusRestored || result.Status == store.RecoveryPlanStatusCompleted {
+		t.Fatalf("plan should not complete with health_gating item, got %v", result.Status)
+	}
+}
+
+func TestReconcileRecoveryAcknowledgmentHealthGatingToRestored(t *testing.T) {
+	s := newMockStore()
+	plan, _ := s.CreateRecoveryPlan(context.Background(), "node-1", "test")
+	s.CreateRecoveryItem(context.Background(), plan.ID, store.RecoveryItem{
+		ServerID: "srv-1", SourceNodeID: "node-1", TargetNodeID: "target-1",
+		Status:    string(store.RecoveryItemStatusHealthGating),
+		UpdatedAt: time.Now().UTC(),
+	})
+	c := &Coordinator{store: s}
+
+	err := c.ReconcileRecoveryAcknowledgment(context.Background())
+	if err != nil {
+		t.Fatalf("ReconcileRecoveryAcknowledgment error = %v", err)
+	}
+	items := s.items[plan.ID]
+	for _, item := range items {
+		if item.Status != string(store.RecoveryItemStatusRestored) {
+			t.Fatalf("expected health_gating item restored, got %s", item.Status)
+		}
 	}
 }

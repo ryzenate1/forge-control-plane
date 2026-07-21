@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { Check, Clipboard, KeyRound, Save, Server, Settings, Wrench } from "lucide-react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { type ApiNode, type ApiServer, reinstallServer, updateServer } from "@/lib/api";
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage as message } from "@/lib/utils";
@@ -21,8 +22,9 @@ export function ServerSettingsView({ server, node: nodeProp }: { server?: ApiSer
   const [description, setDescription] = useState(server?.description ?? "");
   const [copied, setCopied] = useState(false);
   useEffect(() => { setName(server?.name ?? ""); setDescription(server?.description ?? ""); }, [server?.id, server?.name, server?.description]);
-  const save = useMutation({ mutationFn: () => updateServer(server?.id ?? "", { name: name.trim(), description }), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server", server?.id] }); await qc.invalidateQueries({ queryKey: ["servers"] }); await context?.refreshServer(); } });
-  const reinstall = useMutation({ mutationFn: () => reinstallServer(server?.id ?? ""), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["servers"] }); await context?.refreshServer(); } });
+  const { toast } = useToast();
+  const save = useMutation({ mutationFn: () => updateServer(server?.id ?? "", { name: name.trim(), description }), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server", server?.id] }); await qc.invalidateQueries({ queryKey: ["servers"] }); await context?.refreshServer(); }, onError: (error) => toast({ tone: "error", title: "Save failed", message: error instanceof Error ? error.message : "Could not save server details" }) });
+  const reinstall = useMutation({ mutationFn: () => reinstallServer(server?.id ?? ""), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["servers"] }); await context?.refreshServer(); }, onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
   const host = server?.sftpHost?.replace(/^https?:\/\//, "").replace(/\/$/, "") || node?.fqdn || node?.baseUrl?.replace(/^https?:\/\//, "").replace(/\/$/, "") || node?.name || "Unavailable";
   const port = server?.sftpPort ?? node?.daemonSftp;
   const username = access.user && server ? `${access.user.email}.${server.id}` : server ? `${server.owner}.${server.id}` : "Unavailable";

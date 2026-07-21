@@ -100,6 +100,10 @@ func (s *Store) GetGitCredential(ctx context.Context, id string) (GitCredential,
 	return gc, nil
 }
 
+func (s *Store) GetGitCredentialUnmasked(ctx context.Context, id string) (GitCredential, error) {
+	return s.getGitCredentialInternal(ctx, id)
+}
+
 func (s *Store) CreateGitCredential(ctx context.Context, req CreateGitCredentialRequest) (GitCredential, error) {
 	if strings.TrimSpace(req.Name) == "" {
 		return GitCredential{}, errors.New("name is required")

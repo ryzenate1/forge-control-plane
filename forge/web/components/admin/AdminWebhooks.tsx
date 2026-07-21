@@ -1,10 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Plus, Trash2 } from "lucide-react";
-import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, type ApiWebhook, type ApiWebhookDelivery } from "@/lib/api";
+import { Globe, Plus, RefreshCw, Send, Trash2 } from "lucide-react";
+import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, testWebhook, retryWebhookDelivery, type ApiWebhook, type ApiWebhookDelivery } from "@/lib/api";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
+import { TableSkeleton } from "@/components/ui/loading-skeleton";
 
 type Webhook = ApiWebhook;
 type WebhookResponse = Webhook[] | { data?: unknown; error?: unknown; message?: unknown };
@@ -33,6 +34,17 @@ function errorMessage(error: unknown, fallback: string): string {
   return error instanceof Error && error.message.trim() ? error.message : fallback;
 }
 
+const PAGE_SIZE = 10;
+
+function isValidUrl(str: string): boolean {
+  try {
+    const url = new URL(str);
+    return url.protocol === "http:" || url.protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 const AVAILABLE_EVENTS = [
   "server:created", "server:deleted",
   "server:started", "server:stopped",
@@ -56,6 +68,7 @@ export function AdminWebhooks() {
   const webhooks = webhooksQuery.data ?? [];
 
   const [showCreate, setShowCreate] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -70,6 +83,8 @@ export function AdminWebhooks() {
 
   const [editId, setEditId] = useState<string | null>(null);
   const [historyId, setHistoryId] = useState<string | null>(null);
+
+  const urlError = url.trim() && !isValidUrl(url.trim()) ? "Must be a valid HTTP or HTTPS URL" : null;
 
   const resetForm = () => {
     setName(""); setDescription(""); setUrl(""); setWebhookType("regular");
@@ -89,7 +104,11 @@ export function AdminWebhooks() {
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteJSON(`/webhooks/${id}`),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["webhooks"] }),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setDeleteConfirmId(null); },
+  });
+
+  const testMut = useMutation({
+    mutationFn: (id: string) => testWebhook(id),
   });
 
   const openEdit = (wh: Webhook) => {
@@ -121,58 +140,74 @@ export function AdminWebhooks() {
       <Card>
         <CardHeader title="Webhook List" icon={Globe} />
         {webhooksQuery.isLoading ? (
-          <div className="py-10 text-center text-sm text-slate-500">Loading...</div>
+          <TableSkeleton />
         ) : webhooksQuery.isError ? (
-          <div className="p-6 text-sm text-red-300">{errorMessage(webhooksQuery.error, "Webhooks could not be loaded.")}</div>
+          <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load webhooks: {webhooksQuery.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void webhooksQuery.refetch()}>Retry</Btn></div></div>
         ) : webhooks.length === 0 ? (
           <EmptyState icon={Globe} message="No webhooks configured." />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-slate-500 uppercase tracking-wider">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Type</th>
-                <th className="px-4 py-3">Events</th>
-                <th className="px-4 py-3">URL</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3" />
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-white/[0.04]">
-              {webhooks.map((wh) => (
-                <tr key={wh.id} className="hover:bg-white/[0.02]">
-                  <td className="px-4 py-3">
-                    <p className="font-medium text-slate-200">{wh.name}</p>
-                    {wh.description && <p className="text-xs text-slate-500">{wh.description}</p>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Pill tone={wh.webhookType === "discord" ? "blue" : "neutral"}>
-                      {wh.webhookType === "discord" ? "Discord" : "Regular"}
-                    </Pill>
-                  </td>
-                  <td className="px-4 py-3">
-                    <div className="flex flex-wrap gap-1">
-                      {webhookEvents(wh.events).slice(0, 3).map((ev) => (
-                        <Pill key={ev} tone="neutral">{ev}</Pill>
-                      ))}
-                      {webhookEvents(wh.events).length > 3 && <span className="text-xs text-slate-500">+{webhookEvents(wh.events).length - 3}</span>}
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 font-mono text-xs text-slate-400 max-w-[200px] truncate">{wh.url}</td>
-                  <td className="px-4 py-3"><Pill tone={wh.enabled ? "green" : "yellow"}>{wh.enabled ? "Active" : "Disabled"}</Pill></td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <Btn size="sm" tone="ghost" onClick={() => setHistoryId(wh.id)}>Deliveries</Btn>
-                    <Btn size="sm" tone="ghost" onClick={() => openEdit(wh)}>Edit</Btn>
-                    <Btn size="sm" tone="danger" onClick={() => { if (confirm("Delete this webhook?")) deleteMut.mutate(wh.id); }} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
-                  </td>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-white/[0.06] bg-[#161b28] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                  <th className="px-4 py-3">Name</th>
+                  <th className="hidden sm:table-cell px-4 py-3">Type</th>
+                  <th className="hidden md:table-cell px-4 py-3">Events</th>
+                  <th className="hidden lg:table-cell px-4 py-3">URL</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3" />
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody className="divide-y divide-white/[0.04]">
+                {webhooks.map((wh) => (
+                  <tr key={wh.id} className="hover:bg-white/[0.02]">
+                    <td className="px-4 py-3 min-w-0 max-w-[160px] sm:max-w-none">
+                      <p className="font-medium text-slate-200 truncate">{wh.name}</p>
+                      {wh.description && <p className="text-xs text-slate-500 truncate">{wh.description}</p>}
+                    </td>
+                    <td className="hidden sm:table-cell px-4 py-3">
+                      <Pill tone={wh.webhookType === "discord" ? "blue" : "neutral"}>
+                        {wh.webhookType === "discord" ? "Discord" : "Regular"}
+                      </Pill>
+                    </td>
+                    <td className="hidden md:table-cell px-4 py-3">
+                      <div className="flex flex-wrap gap-1">
+                        {webhookEvents(wh.events).slice(0, 3).map((ev) => (
+                          <Pill key={ev} tone="neutral">{ev}</Pill>
+                        ))}
+                        {webhookEvents(wh.events).length > 3 && <span className="text-xs text-slate-500">+{webhookEvents(wh.events).length - 3}</span>}
+                      </div>
+                    </td>
+                    <td className="hidden lg:table-cell px-4 py-3 font-mono text-xs text-slate-400 max-w-[120px] xl:max-w-[200px] truncate">{wh.url}</td>
+                    <td className="px-4 py-3"><Pill tone={wh.enabled ? "green" : "yellow"}>{wh.enabled ? "Active" : "Disabled"}</Pill></td>
+                  <td className="px-4 py-3 whitespace-nowrap">
+                    <div className="flex items-center gap-1.5">
+                      <Btn size="sm" tone="ghost" onClick={() => setHistoryId(wh.id)}>Deliveries</Btn>
+                      <Btn size="sm" tone="ghost" onClick={() => openEdit(wh)}>Edit</Btn>
+                      <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(wh.id)} disabled={testMut.isPending}><Send size={12} /></Btn>
+                      <Btn size="sm" tone="danger" onClick={() => setDeleteConfirmId(wh.id)} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
+                    </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
-      {deleteMut.isError ? <p className="mt-3 text-sm text-red-300">{errorMessage(deleteMut.error, "Webhook could not be deleted.")}</p> : null}
+      {deleteConfirmId ? (
+        <Modal title="Delete Webhook" onClose={() => setDeleteConfirmId(null)}>
+          <p className="text-sm text-slate-300">Are you sure you want to delete this webhook? This action cannot be undone.</p>
+          {deleteMut.isError ? <p className="mt-3 text-sm text-red-300">{errorMessage(deleteMut.error, "Webhook could not be deleted.")}</p> : null}
+          <ModalFooter
+            onCancel={() => { setDeleteConfirmId(null); deleteMut.reset(); }}
+            onConfirm={() => deleteMut.mutate(deleteConfirmId)}
+            disabled={deleteMut.isPending}
+            confirmLabel="Delete"
+          />
+        </Modal>
+      ) : null}
 
       {historyId ? <WebhookDeliveryModal webhookId={historyId} onClose={() => setHistoryId(null)} /> : null}
 
@@ -182,17 +217,17 @@ export function AdminWebhooks() {
             <Input label="Name" value={name} onChange={setName} placeholder="My Webhook" />
             <Input label="Description" value={description} onChange={setDescription} placeholder="Optional description" />
             <Input label="Payload URL" value={url} onChange={setUrl} placeholder="https://discord.com/api/webhooks/..." />
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="mb-1.5 block text-sm font-medium text-slate-300">Type</label>
-                <select className="h-9 w-full rounded-lg border border-white/10 bg-[#0f1419] px-3 text-sm text-slate-100" value={webhookType} onChange={(e) => setWebhookType(e.target.value as "regular" | "discord")}>
+                <select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100" value={webhookType} onChange={(e) => setWebhookType(e.target.value as "regular" | "discord")}>
                   <option value="regular">Regular</option>
                   <option value="discord">Discord Embed</option>
                 </select>
               </div>
               <div>
                 <label className="mb-1.5 block font-medium text-sm text-slate-300">Signing Secret</label>
-                <input className="h-9 w-full rounded-lg border border-white/10 bg-[#0f1419] px-3 text-sm text-slate-100" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={editId ? "Masked; replace to rotate" : "Optional secret"} />
+                <input className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100" type="password" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder={editId ? "Masked; replace to rotate" : "Optional secret"} />
                 <p className="mt-1 text-xs text-slate-500">Secrets are masked after creation. Enter a new value to replace the current secret.</p>
               </div>
             </div>
@@ -202,23 +237,23 @@ export function AdminWebhooks() {
             </label>
 
             {webhookType === "discord" && (
-              <div className="rounded-lg border border-white/[0.06] bg-[#0f1419] p-4 grid gap-4">
-                <h4 className="text-sm font-semibold text-slate-200">Discord Settings</h4>
+              <div className="rounded-lg border border-white/[0.06] bg-[#161b28] p-4 grid gap-4">
+                <h4 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Discord Settings</h4>
                 <Input label="Username Override" value={discordUsername} onChange={setDiscordUsername} placeholder="My Bot" />
                 <Input label="Avatar URL" value={discordAvatarUrl} onChange={setDiscordAvatarUrl} placeholder="https://..." />
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-300">Content</label>
-                  <textarea className="h-20 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 py-2 text-sm text-slate-100" value={discordContent} onChange={(e) => setDiscordContent(e.target.value)} placeholder="Optional message content" />
+                  <textarea className="h-20 w-full rounded-lg border border-white/10 bg-surface-card-header px-3 py-2 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={discordContent} onChange={(e) => setDiscordContent(e.target.value)} placeholder="Optional message content" />
                 </div>
                 {/* Mini preview */}
                 <div className="rounded-lg bg-[#2b2d31] p-3">
-                  <div className="flex items-center gap-2 mb-2">
+                  <div className="flex items-center gap-2.5 mb-2">
                     {discordAvatarUrl ? <span aria-label="Webhook avatar preview" className="h-6 w-6 rounded-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${discordAvatarUrl})` }} /> : <div className="h-6 w-6 rounded-full bg-[#5865f2]" />}
-                    <span className="text-sm font-medium text-white">{discordUsername || "Webhook"}</span>
+                    <span className="text-sm font-medium text-white leading-none">{discordUsername || "Webhook"}</span>
                     <span className="text-xs text-[#949ba4]">Today at 12:00</span>
                   </div>
-                  {discordContent && <p className="text-sm text-[#dbdee1]">{discordContent}</p>}
-                  <div className="mt-2 rounded-lg border border-[#3b3d44] bg-[#2b2d31] p-3">
+                  {discordContent && <p className="text-sm leading-relaxed text-[#dbdee1]">{discordContent}</p>}
+                  <div className="mt-2 rounded-lg border-l-[4px] border-l-[#5865f2] bg-[#2b2d31] p-3">
                     <p className="text-sm font-semibold text-[#dbdee1]">Event Notification</p>
                     <p className="text-xs text-[#949ba4] mt-1">This is a preview of how the webhook will appear in Discord.</p>
                     {events.length > 0 && <p className="text-xs text-[#949ba4] mt-1">Triggered on: {events.join(", ")}</p>}
@@ -229,9 +264,9 @@ export function AdminWebhooks() {
 
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-300">Events</label>
-              <div className="grid grid-cols-2 md:grid-cols-3 gap-2 max-h-48 overflow-y-auto">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-32 sm:max-h-48 overflow-y-auto">
                 {AVAILABLE_EVENTS.map((ev) => (
-                  <label key={ev} className="flex items-center gap-2 rounded border border-white/10 bg-[#0f1419] px-3 py-2 text-xs cursor-pointer hover:bg-white/[0.03]">
+                  <label key={ev} className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-[#161b28] px-3 py-2.5 text-sm text-slate-200 hover:bg-white/[0.03]">
                     <input type="checkbox" checked={events.includes(ev)} onChange={() => toggleEvent(ev)} className="accent-[#dc2626]" />
                     {ev}
                   </label>
@@ -264,6 +299,6 @@ function WebhookDeliveryModal({ webhookId, onClose }: { webhookId: string; onClo
     {query.isLoading ? <p className="text-sm text-slate-500">Loading delivery history...</p> : null}
     {query.isError ? <p className="text-sm text-red-300">{errorMessage(query.error, "Delivery history could not be loaded.")}</p> : null}
     {!query.isLoading && !query.isError && deliveries.length === 0 ? <EmptyState icon={Globe} message="No deliveries recorded."/> : null}
-    {!query.isLoading && !query.isError && deliveries.length > 0 ? <div className="max-h-[60vh] overflow-auto"><table className="w-full text-xs"><thead><tr className="border-b border-white/10 text-left text-slate-500"><th className="p-2">Created</th><th className="p-2">Event</th><th className="p-2">State</th><th className="p-2">HTTP</th><th className="p-2">Attempts</th><th className="p-2">Failure</th></tr></thead><tbody>{deliveries.map((delivery) => <tr className="border-b border-white/[0.04]" key={delivery.id}><td className="p-2 whitespace-nowrap">{new Date(delivery.createdAt).toLocaleString()}</td><td className="p-2 font-mono">{delivery.eventName}</td><td className="p-2"><Pill tone={delivery.state === "delivered" ? "green" : delivery.state === "failed" ? "red" : "yellow"}>{delivery.state}</Pill></td><td className="p-2">{delivery.responseStatus ?? "—"}</td><td className="p-2">{delivery.attempt}</td><td className="p-2 text-red-300">{delivery.lastError ?? delivery.responseBodyExcerpt ?? "—"}</td></tr>)}</tbody></table></div> : null}
+    {!query.isLoading && !query.isError && deliveries.length > 0 ? <div className="max-h-[60vh] overflow-auto"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-white/[0.06] bg-[#161b28] text-left text-[10px] uppercase tracking-widest text-slate-500"><th className="px-3 py-2.5">Created</th><th className="px-3 py-2.5">Event</th><th className="px-3 py-2.5">State</th><th className="hidden sm:table-cell px-3 py-2.5">HTTP</th><th className="px-3 py-2.5">Attempts</th><th className="hidden md:table-cell px-3 py-2.5">Failure</th></tr></thead><tbody>{deliveries.map((delivery) => <tr className="border-b border-white/[0.04]" key={delivery.id}><td className="px-3 py-2.5 whitespace-nowrap">{new Date(delivery.createdAt).toLocaleString()}</td><td className="px-3 py-2.5 font-mono max-w-[120px] truncate">{delivery.eventName}</td><td className="px-3 py-2.5"><Pill tone={delivery.state === "delivered" ? "green" : delivery.state === "failed" ? "red" : "yellow"}>{delivery.state}</Pill></td><td className="hidden sm:table-cell px-3 py-2.5">{delivery.responseStatus ?? "—"}</td><td className="px-3 py-2.5">{delivery.attempt}</td><td className="hidden md:table-cell px-3 py-2.5 text-red-300 max-w-[160px] truncate">{delivery.lastError ?? delivery.responseBodyExcerpt ?? "—"}</td></tr>)}</tbody></table></div></div> : null}
   </Modal>;
 }

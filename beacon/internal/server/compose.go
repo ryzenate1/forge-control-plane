@@ -53,7 +53,14 @@ func (cs *composeStack) unlock(stackID string) {
 	}
 }
 
+func validStackID(stackID string) bool {
+	return !strings.Contains(stackID, "..") && !strings.Contains(stackID, "/") && stackID != "" && stackID != "."
+}
+
 func (cs *composeStack) dirForID(stackID string) string {
+	if !validStackID(stackID) {
+		return filepath.Join(cs.dir, "_invalid_"+stackID)
+	}
 	return filepath.Join(cs.dir, stackID)
 }
 
@@ -170,6 +177,10 @@ func (s *Server) handleComposeStop(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "stackId is required")
 		return
 	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
+		return
+	}
 
 	cs := s.composeStackManager()
 	cs.lock(stackID)
@@ -208,6 +219,10 @@ func (s *Server) handleComposeStart(w http.ResponseWriter, r *http.Request) {
 	stackID := r.PathValue("stackId")
 	if stackID == "" {
 		writeError(w, http.StatusBadRequest, "stackId is required")
+		return
+	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
 		return
 	}
 
@@ -250,6 +265,10 @@ func (s *Server) handleComposeRestart(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "stackId is required")
 		return
 	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
+		return
+	}
 
 	cs := s.composeStackManager()
 	cs.lock(stackID)
@@ -288,6 +307,10 @@ func (s *Server) handleComposeDelete(w http.ResponseWriter, r *http.Request) {
 	stackID := r.PathValue("stackId")
 	if stackID == "" {
 		writeError(w, http.StatusBadRequest, "stackId is required")
+		return
+	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
 		return
 	}
 
@@ -329,6 +352,10 @@ func (s *Server) handleComposeStatus(w http.ResponseWriter, r *http.Request) {
 	stackID := r.PathValue("stackId")
 	if stackID == "" {
 		writeError(w, http.StatusBadRequest, "stackId is required")
+		return
+	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
 		return
 	}
 
@@ -384,6 +411,10 @@ func (s *Server) handleComposeLogs(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "stackId is required")
 		return
 	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
+		return
+	}
 
 	cs := s.composeStackManager()
 	stackDir := cs.dirForID(stackID)
@@ -423,6 +454,10 @@ func (s *Server) handleComposePull(w http.ResponseWriter, r *http.Request) {
 	stackID := r.PathValue("stackId")
 	if stackID == "" {
 		writeError(w, http.StatusBadRequest, "stackId is required")
+		return
+	}
+	if !validStackID(stackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
 		return
 	}
 

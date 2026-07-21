@@ -21,6 +21,7 @@ type Manager struct {
 	publisher events.Publisher
 	mu        sync.Mutex
 	metrics   Metrics
+	cancel    context.CancelFunc
 }
 
 func New(store *store.Store, publishers ...events.Publisher) *Manager {
@@ -44,6 +45,7 @@ func (m *Manager) Start(ctx context.Context) {
 	if m == nil || m.store == nil {
 		return
 	}
+	ctx, m.cancel = context.WithCancel(ctx)
 	go func() {
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
@@ -56,6 +58,12 @@ func (m *Manager) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (m *Manager) Stop() {
+	if m != nil && m.cancel != nil {
+		m.cancel()
+	}
 }
 
 func (m *Manager) CreateReservation(ctx context.Context, req store.CreatePlacementReservationRequest) (store.PlacementReservation, error) {

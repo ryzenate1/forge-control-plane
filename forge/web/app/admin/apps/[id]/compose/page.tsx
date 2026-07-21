@@ -13,6 +13,7 @@ import {
 } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, Modal } from "@/components/admin/admin-ui";
 import { LogViewer } from "@/components/admin/AdminAppsShared";
+import { toast, Toaster } from "@/components/ui/sonner";
 
 export default function ComposeStackPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -33,10 +34,25 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
   const [selectedService, setSelectedService] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
 
-  const startMut = useMutation({ mutationFn: () => startApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const stopMut = useMutation({ mutationFn: () => stopApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const restartMut = useMutation({ mutationFn: () => restartApp(id), onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }) });
-  const redeployMut = useMutation({ mutationFn: () => redeployComposeStack(id) });
+  const startMut = useMutation({
+    mutationFn: () => startApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to start stack"),
+  });
+  const stopMut = useMutation({
+    mutationFn: () => stopApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to stop stack"),
+  });
+  const restartMut = useMutation({
+    mutationFn: () => restartApp(id),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to restart stack"),
+  });
+  const redeployMut = useMutation({
+    mutationFn: () => redeployComposeStack(id),
+    onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to redeploy stack"),
+  });
 
   const services = composeData?.services ?? [];
 
@@ -155,6 +171,7 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
           {redeployMut.error.message}
         </div>
       )}
+      <Toaster />
     </div>
   );
 }

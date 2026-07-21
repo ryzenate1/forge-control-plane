@@ -7,15 +7,9 @@ import {
   ErrorAlert,
   SpinnerInline,
 } from "@/components/shared";
+import { fetchOrganizations } from "@/lib/api/tenancy";
+import type { Organization } from "@/lib/api/tenancy";
 import type { ReactNode } from "react";
-
-type OrgInfo = {
-  id: string;
-  name: string;
-  role: string;
-  memberCount: number;
-  createdAt: string;
-};
 
 interface TeamTenancyViewProps {
   access?: {
@@ -27,13 +21,9 @@ interface TeamTenancyViewProps {
 }
 
 export function TeamTenancyView({ action }: TeamTenancyViewProps) {
-  const query = useQuery<OrgInfo[]>({
+  const query = useQuery<Organization[]>({
     queryKey: ["organizations"],
-    queryFn: async () => {
-      const res = await fetch("/api/v1/organizations", { credentials: "include" });
-      if (!res.ok) throw new Error(`Failed to load organizations: ${res.status}`);
-      return res.json() as Promise<OrgInfo[]>;
-    },
+    queryFn: fetchOrganizations,
   });
 
   if (query.isLoading) return <SpinnerInline label="Loading organizations…" />;
@@ -70,7 +60,7 @@ export function TeamTenancyView({ action }: TeamTenancyViewProps) {
             <div className="min-w-0 flex-1">
               <p className="text-sm font-semibold text-slate-200">{org.name}</p>
               <p className="text-xs text-slate-500">
-                {org.role} · {org.memberCount} member{org.memberCount === 1 ? "" : "s"}
+                {org.ownerName ?? org.slug}
               </p>
             </div>
           </div>

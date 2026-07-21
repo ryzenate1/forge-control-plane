@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"hash/fnv"
+	"log/slog"
 	"net"
 	"os"
 	"sort"
@@ -546,4 +547,93 @@ func (s *Service) Metrics(ctx context.Context) map[string]any {
 		"totalTargets":   totalTargets,
 		"healthyTargets": healthyTargets,
 	}
+}
+
+func (s *Service) Handle(ctx context.Context, envelope events.Envelope) error {
+	switch envelope.Type {
+	case events.EventNodeOffline:
+		return s.MarkNodeTargetsUnhealthy(ctx, envelope.ResourceID)
+	case events.EventNodeRecovered:
+		return s.MarkNodeTargetsHealthy(ctx, envelope.ResourceID)
+	default:
+		return nil
+	}
+}
+
+func (s *Service) MarkNodeTargetsUnhealthy(ctx context.Context, nodeID string) error {
+	if s.store == nil {
+		return nil
+	}
+	if _, err := s.store.GetNode(ctx, nodeID); err != nil {
+		return err
+	}
+	targets, err := s.store.ListTargetsByNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, t := range targets {
+		s.mu.Lock()
+		group, exists := s.groups[t.GroupID]
+		if exists {
+			for i := range group.Targets {
+				if group.Targets[i].ID == t.ID {
+					group.Targets[i].Status = TargetStatusUnhealthy
+					group.UpdatedAt = time.Now().UTC()
+					if err := s.store.UpdateTargetStatus(ctx, t.ID, string(TargetStatusUnhealthy)); err != nil {
+						slog.Error("loadbalancer: failed to persist target status", "targetId", t.ID, "error", err)
+					} else {
+						count++
+					}
+					break
+				}
+			}
+		}
+		s.mu.Unlock()
+	}
+	if count > 0 {
+		slog.Info("marked targets unhealthy due to node going offline", "nodeId", nodeID, "count", count)
+	}
+	return nil
+}
+
+func (s *Service) MarkNodeTargetsHealthy(ctx context.Context, nodeID string) error {
+	if s.store == nil {
+		return nil
+	}
+	node, err := s.store.GetNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	if node.HeartbeatState != string(store.NodeHeartbeatStateHealthy) {
+		return nil
+	}
+	targets, err := s.store.ListTargetsByNode(ctx, nodeID)
+	if err != nil {
+		return err
+	}
+	count := 0
+	for _, t := range targets {
+		s.mu.Lock()
+		group, exists := s.groups[t.GroupID]
+		if exists {
+			for i := range group.Targets {
+				if group.Targets[i].ID == t.ID {
+					group.Targets[i].Status = TargetStatusHealthy
+					group.UpdatedAt = time.Now().UTC()
+					if err := s.store.UpdateTargetStatus(ctx, t.ID, string(TargetStatusHealthy)); err != nil {
+						slog.Error("loadbalancer: failed to persist target status", "targetId", t.ID, "error", err)
+					} else {
+						count++
+					}
+					break
+				}
+			}
+		}
+		s.mu.Unlock()
+	}
+	if count > 0 {
+		slog.Info("marked targets healthy due to node recovery", "nodeId", nodeID, "count", count)
+	}
+	return nil
 }

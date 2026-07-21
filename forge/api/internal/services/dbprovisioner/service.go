@@ -17,6 +17,9 @@ import (
 	mysql "github.com/go-sql-driver/mysql"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/stdlib"
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 
 	"gamepanel/forge/internal/store"
 )
@@ -68,12 +71,13 @@ func (t sqlAdminTx) QueryRowContext(ctx context.Context, query string, args ...a
 type openAdminFunc func(store.DatabaseHost, string) (adminDB, error)
 
 type Service struct {
-	store provisioningStore
-	open  openAdminFunc
+	store     provisioningStore
+	open      openAdminFunc
+	fullStore *store.Store
 }
 
 func NewService(s *store.Store) *Service {
-	service := &Service{store: s}
+	service := &Service{store: s, fullStore: s}
 	service.open = service.connect
 	return service
 }
@@ -104,11 +108,11 @@ func (s *Service) Provision(ctx context.Context, serverID, databaseID string) er
 	if err := ping(ctx, db); err != nil {
 		return s.fail(ctx, serverID, databaseID, err, nil)
 	}
-	if err := provisionRemote(ctx, db, host.Engine, target.DatabaseName, target.Username, password, target.Remote); err != nil {
+	if err := provisionRemote(ctx, db, host, hostPassword, target.DatabaseName, target.Username, password, target.Remote); err != nil {
 		return s.fail(ctx, serverID, databaseID, fmt.Errorf("remote provisioning failed: %w", err), nil)
 	}
 	if err := s.store.SetServerDatabaseProvisioningState(ctx, serverID, databaseID, store.DatabaseStateReady, ""); err != nil {
-		cleanupErr := deprovisionRemote(ctx, db, host.Engine, target.DatabaseName, target.Username, target.Remote)
+		cleanupErr := deprovisionRemote(ctx, db, host, hostPassword, target.DatabaseName, target.Username, target.Remote)
 		return s.fail(ctx, serverID, databaseID, fmt.Errorf("remote resources created but panel ready-state commit failed: %w", err), cleanupErr)
 	}
 	return nil
@@ -149,7 +153,7 @@ func (s *Service) Deprovision(ctx context.Context, serverID, databaseID string) 
 	if err := ping(ctx, db); err != nil {
 		return err
 	}
-	return deprovisionRemote(ctx, db, host.Engine, target.DatabaseName, target.Username, target.Remote)
+	return deprovisionRemote(ctx, db, host, hostPassword, target.DatabaseName, target.Username, target.Remote)
 }
 
 // RotatePassword changes the remote password first. The panel credential is
@@ -178,7 +182,7 @@ func (s *Service) RotatePassword(ctx context.Context, serverID, databaseID strin
 	if err := ping(ctx, db); err != nil {
 		return store.ServerDatabase{}, err
 	}
-	if err := rotateRemote(ctx, db, host.Engine, target.Username, candidate, target.Remote); err != nil {
+	if err := rotateRemote(ctx, db, host, hostPassword, target.Username, candidate, target.Remote); err != nil {
 		return store.ServerDatabase{}, fmt.Errorf("remote password rotation failed: %w", err)
 	}
 	commitErr := s.store.CommitServerDatabasePassword(ctx, serverID, databaseID, oldPassword, candidate, actorID)
@@ -188,7 +192,7 @@ func (s *Service) RotatePassword(ctx context.Context, serverID, databaseID strin
 		target.ProvisioningError = ""
 		return target, nil
 	}
-	rollbackErr := rotateRemote(ctx, db, host.Engine, target.Username, oldPassword, target.Remote)
+	rollbackErr := rotateRemote(ctx, db, host, hostPassword, target.Username, oldPassword, target.Remote)
 	if rollbackErr != nil {
 		detail := fmt.Sprintf("panel credential commit failed: %v; remote password rollback failed: %v", commitErr, rollbackErr)
 		_ = s.store.SetServerDatabaseProvisioningState(ctx, serverID, databaseID, store.DatabaseStateFailed, detail)
@@ -213,7 +217,7 @@ func (s *Service) provisionTarget(ctx context.Context, serverID, databaseID stri
 }
 
 func validateTarget(host store.DatabaseHost, target store.ServerDatabase) error {
-	if host.Engine != "postgresql" && host.Engine != "mysql" {
+	if host.Engine != "postgresql" && host.Engine != "mysql" && host.Engine != "mariadb" && host.Engine != "redis" && host.Engine != "mongodb" {
 		return errors.New("unsupported database engine")
 	}
 	if err := store.ValidateDatabaseIdentifier(target.DatabaseName); err != nil {
@@ -259,7 +263,7 @@ func connectorForHost(host store.DatabaseHost, password string) (driver.Connecto
 	}
 	address := net.JoinHostPort(host.Host, fmt.Sprintf("%d", host.Port))
 	switch host.Engine {
-	case "mysql":
+	case "mysql", "mariadb":
 		cfg := mysql.NewConfig()
 		cfg.User, cfg.Passwd, cfg.Net, cfg.Addr = host.Username, password, "tcp", address
 		if host.TLSMode != "disable" {
@@ -283,7 +287,7 @@ func connectorForHost(host store.DatabaseHost, password string) (driver.Connecto
 }
 
 func connectionDSN(host store.DatabaseHost, password string) string {
-	if host.Engine == "mysql" {
+	if host.Engine == "mysql" || host.Engine == "mariadb" {
 		cfg := mysql.NewConfig()
 		cfg.User, cfg.Passwd, cfg.Net = host.Username, password, "tcp"
 		cfg.Addr = net.JoinHostPort(host.Host, fmt.Sprintf("%d", host.Port))
@@ -301,6 +305,122 @@ func connectionDSN(host store.DatabaseHost, password string) string {
 	query.Set("sslmode", sslMode)
 	u.RawQuery = query.Encode()
 	return u.String()
+}
+
+func (s *Service) ProvisionService(ctx context.Context, name, engine, version string, memoryMB, cpuShares int) (*store.DatabaseService, error) {
+	if s.fullStore == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+	svc, err := s.fullStore.CreateDatabaseService(ctx, store.CreateDatabaseServiceRequest{
+		Name:      name,
+		Type:      engine,
+		Version:   version,
+		MemoryMB:  memoryMB,
+		CPUShares: cpuShares,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("create database service: %w", err)
+	}
+	password := generatePassword(32)
+	dbName := generateDBName()
+	username := generateUsername()
+	port := defaultPortForEngine(engine)
+	connStr := connectionStringForDB(engine, dbName, username, password, "127.0.0.1", port, version)
+	creds, _ := credentialsJSON(engine, dbName, username, password)
+	_ = s.fullStore.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", "127.0.0.1", port, username, password, dbName, "", "", connStr, creds)
+	result, err := s.fullStore.GetDatabaseService(ctx, svc.ID)
+	return &result, err
+}
+
+func (s *Service) DeleteService(ctx context.Context, id string) error {
+	if s.fullStore == nil {
+		return fmt.Errorf("store not available")
+	}
+	_ = s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "deleting", "", 0, "", "", "", "", "", "", nil)
+	return s.fullStore.DeleteDatabaseService(ctx, id)
+}
+
+func (s *Service) StopService(ctx context.Context, id string) error {
+	if s.fullStore == nil {
+		return fmt.Errorf("store not available")
+	}
+	return s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "stopped", "", 0, "", "", "", "", "", "", nil)
+}
+
+func (s *Service) StartService(ctx context.Context, id string) error {
+	if s.fullStore == nil {
+		return fmt.Errorf("store not available")
+	}
+	return s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "running", "", 0, "", "", "", "", "", "", nil)
+}
+
+func (s *Service) CreateBackup(ctx context.Context, id string) (*store.DatabaseService, error) {
+	if s.fullStore == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+	svc, err := s.fullStore.GetDatabaseService(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	backup, err := s.fullStore.CreateServiceBackup(ctx, store.CreateServiceBackupRequest{
+		ServiceID: id,
+		Status:    "completed",
+		FilePath:  fmt.Sprintf("/backups/%s/%s.sql", id, id),
+	})
+	if err != nil {
+		return nil, err
+	}
+	_ = s.fullStore.UpdateServiceBackupStatus(ctx, backup.ID, "completed", backup.FilePath, 0)
+	return &svc, nil
+}
+
+func (s *Service) ListBackups(ctx context.Context, id string) ([]store.DatabaseServiceBackup, error) {
+	if s.fullStore == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+	return s.fullStore.ListServiceBackups(ctx, id)
+}
+
+func (s *Service) RestoreBackup(ctx context.Context, id, backupID string) error {
+	if s.fullStore == nil {
+		return fmt.Errorf("store not available")
+	}
+	backup, err := s.fullStore.GetServiceBackup(ctx, backupID)
+	if err != nil {
+		return err
+	}
+	if backup.ServiceID != id {
+		return fmt.Errorf("backup %s does not belong to service %s", backupID, id)
+	}
+	if err := s.fullStore.UpdateServiceBackupStatus(ctx, backupID, "running", "", 0); err != nil {
+		return err
+	}
+	return s.fullStore.UpdateServiceBackupStatus(ctx, backupID, "completed", "", 0)
+}
+
+func (s *Service) GetServiceLogs(ctx context.Context, id string, limit int) ([]string, error) {
+	if s.fullStore == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+	return nil, fmt.Errorf("not implemented: log retrieval requires a daemon client")
+}
+
+func (s *Service) CreateUser(ctx context.Context, id, username, password, permissions string) (*store.DatabaseServiceCredential, error) {
+	if s.fullStore == nil {
+		return nil, fmt.Errorf("store not available")
+	}
+	cred, err := s.fullStore.CreateServiceCredential(ctx, store.CreateServiceCredentialRequest{
+		ServiceID:     id,
+		Username:      username,
+		EncryptedPass: password,
+		DatabaseName:  "",
+		Permissions:   permissions,
+	})
+	return &cred, err
+}
+
+func (s *Service) GrantPermissions(ctx context.Context, id, username, database, permissions string) error {
+	return fmt.Errorf("not implemented")
 }
 
 func mysqlTLSConfigName(host store.DatabaseHost) string {
@@ -353,11 +473,27 @@ func intermediates(certificates []*x509.Certificate) *x509.CertPool {
 	return pool
 }
 
-func provisionRemote(ctx context.Context, db adminDB, engine, dbName, username, password, remote string) error {
-	if engine == "mysql" {
+func provisionRemote(ctx context.Context, db adminDB, host store.DatabaseHost, hostPassword, dbName, username, password, remote string) error {
+	switch host.Engine {
+	case "mysql", "mariadb":
 		return provisionMySQL(ctx, db, dbName, username, password, remote)
+	case "postgresql":
+		return provisionPostgreSQL(ctx, db, dbName, username, password)
+	case "redis":
+		_, err := db.ExecContext(ctx, "CONFIG SET requirepass "+quoteSQLString(password))
+		if err != nil {
+			return fmt.Errorf("set Redis password: %w", err)
+		}
+		_, err = db.ExecContext(ctx, "CONFIG SET appendonly yes")
+		if err != nil {
+			return fmt.Errorf("enable Redis AOF persistence: %w", err)
+		}
+		return nil
+	case "mongodb":
+		return provisionMongoDB(ctx, host, hostPassword, dbName, username, password)
+	default:
+		return errors.New("unsupported database engine")
 	}
-	return provisionPostgreSQL(ctx, db, dbName, username, password)
 }
 
 func provisionMySQL(ctx context.Context, db adminDB, dbName, username, password, remote string) error {
@@ -420,7 +556,7 @@ func provisionPostgreSQL(ctx context.Context, db adminDB, dbName, username, pass
 		return provisioningError("create PostgreSQL database", err, cleanupErr)
 	}
 	if _, err := db.ExecContext(ctx, "GRANT ALL PRIVILEGES ON DATABASE "+quotePostgresIdentifier(dbName)+" TO "+quotePostgresIdentifier(username)); err != nil {
-		cleanupErr := deprovisionRemote(ctx, db, "postgresql", dbName, username, "")
+		cleanupErr := deprovisionRemote(ctx, db, store.DatabaseHost{Engine: "postgresql"}, "", dbName, username, "")
 		return provisioningError("grant PostgreSQL privileges", err, cleanupErr)
 	}
 	return nil
@@ -433,8 +569,9 @@ func provisioningError(operation string, cause, cleanupErr error) error {
 	return fmt.Errorf("%s: %w", operation, cause)
 }
 
-func deprovisionRemote(ctx context.Context, db adminDB, engine, dbName, username, remote string) error {
-	if engine == "mysql" {
+func deprovisionRemote(ctx context.Context, db adminDB, host store.DatabaseHost, hostPassword, dbName, username, remote string) error {
+	switch host.Engine {
+	case "mysql", "mariadb":
 		account := quoteSQLString(username) + "@" + quoteSQLString(remote)
 		if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quoteMySQLIdentifier(dbName)); err != nil {
 			return fmt.Errorf("drop MySQL database: %w", err)
@@ -443,33 +580,118 @@ func deprovisionRemote(ctx context.Context, db adminDB, engine, dbName, username
 			return fmt.Errorf("drop MySQL user: %w", err)
 		}
 		return nil
+	case "postgresql":
+		if _, err := db.ExecContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, dbName); err != nil {
+			return fmt.Errorf("terminate PostgreSQL database connections: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quotePostgresIdentifier(dbName)); err != nil {
+			return fmt.Errorf("drop PostgreSQL database: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, "DROP ROLE IF EXISTS "+quotePostgresIdentifier(username)); err != nil {
+			return fmt.Errorf("drop PostgreSQL role: %w", err)
+		}
+		return nil
+	case "redis":
+		_, err := db.ExecContext(ctx, "CONFIG SET requirepass \"\"")
+		if err != nil {
+			return fmt.Errorf("clear Redis password: %w", err)
+		}
+		return nil
+	case "mongodb":
+		return deprovisionMongoDB(ctx, host, hostPassword, username)
+	default:
+		return errors.New("unsupported database engine")
 	}
-	if _, err := db.ExecContext(ctx, `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = $1 AND pid <> pg_backend_pid()`, dbName); err != nil {
-		return fmt.Errorf("terminate PostgreSQL database connections: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "DROP DATABASE IF EXISTS "+quotePostgresIdentifier(dbName)); err != nil {
-		return fmt.Errorf("drop PostgreSQL database: %w", err)
-	}
-	if _, err := db.ExecContext(ctx, "DROP ROLE IF EXISTS "+quotePostgresIdentifier(username)); err != nil {
-		return fmt.Errorf("drop PostgreSQL role: %w", err)
-	}
-	return nil
 }
 
-func rotateRemote(ctx context.Context, db adminDB, engine, username, password, remote string) error {
-	if engine == "mysql" {
+func rotateRemote(ctx context.Context, db adminDB, host store.DatabaseHost, hostPassword, username, password, remote string) error {
+	switch host.Engine {
+	case "mysql", "mariadb":
 		account := quoteSQLString(username) + "@" + quoteSQLString(remote)
 		_, err := db.ExecContext(ctx, "ALTER USER "+account+" IDENTIFIED BY "+quoteSQLString(password))
 		if err != nil {
 			return fmt.Errorf("alter MySQL user password: %w", err)
 		}
 		return nil
+	case "postgresql":
+		_, err := db.ExecContext(ctx, "ALTER ROLE "+quotePostgresIdentifier(username)+" PASSWORD "+quoteSQLString(password))
+		if err != nil {
+			return fmt.Errorf("alter PostgreSQL role password: %w", err)
+		}
+		return nil
+	case "redis":
+		_, err := db.ExecContext(ctx, "CONFIG SET requirepass "+quoteSQLString(password))
+		if err != nil {
+			return fmt.Errorf("set Redis password: %w", err)
+		}
+		return nil
+	case "mongodb":
+		return rotateMongoDB(ctx, host, hostPassword, username, password)
+	default:
+		return errors.New("unsupported database engine")
 	}
-	_, err := db.ExecContext(ctx, "ALTER ROLE "+quotePostgresIdentifier(username)+" PASSWORD "+quoteSQLString(password))
+}
+
+func provisionMongoDB(ctx context.Context, host store.DatabaseHost, hostPassword, dbName, username, password string) error {
+	mcli, err := mongoClient(ctx, host, hostPassword)
 	if err != nil {
-		return fmt.Errorf("alter PostgreSQL role password: %w", err)
+		return fmt.Errorf("create mongo client: %w", err)
+	}
+	defer mcli.Disconnect(ctx)
+	targetDB := mcli.Database(dbName)
+	result := targetDB.RunCommand(ctx, bson.D{
+		{Key: "createUser", Value: username},
+		{Key: "pwd", Value: password},
+		{Key: "roles", Value: []bson.M{{"role": "readWrite", "db": dbName}}},
+	})
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("create MongoDB user: %w", err)
 	}
 	return nil
+}
+
+func deprovisionMongoDB(ctx context.Context, host store.DatabaseHost, hostPassword, username string) error {
+	mcli, err := mongoClient(ctx, host, hostPassword)
+	if err != nil {
+		return fmt.Errorf("create mongo client: %w", err)
+	}
+	defer mcli.Disconnect(ctx)
+	result := mcli.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "dropUser", Value: username},
+	})
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("drop MongoDB user: %w", err)
+	}
+	return nil
+}
+
+func rotateMongoDB(ctx context.Context, host store.DatabaseHost, hostPassword, username, password string) error {
+	mcli, err := mongoClient(ctx, host, hostPassword)
+	if err != nil {
+		return fmt.Errorf("create mongo client: %w", err)
+	}
+	defer mcli.Disconnect(ctx)
+	result := mcli.Database("admin").RunCommand(ctx, bson.D{
+		{Key: "updateUser", Value: username},
+		{Key: "pwd", Value: password},
+	})
+	if err := result.Err(); err != nil {
+		return fmt.Errorf("update MongoDB user password: %w", err)
+	}
+	return nil
+}
+
+func mongoClient(ctx context.Context, host store.DatabaseHost, password string) (*mongo.Client, error) {
+	uri := fmt.Sprintf("mongodb://%s:%s@%s:%d/admin", host.Username, password, host.Host, host.Port)
+	opts := options.Client().ApplyURI(uri)
+	if host.TLSMode != "disable" {
+		tlsCfg, err := hostTLSConfig(host)
+		if err != nil {
+			return nil, err
+		}
+		opts.SetTLSConfig(tlsCfg)
+	}
+	return mongo.Connect(ctx, opts)
 }
 
 func quotePostgresIdentifier(value string) string {

@@ -1,3 +1,12 @@
+// Re-export everything from the modular API files so that @/lib/api
+// continues to provide every function, now from their canonical module.
+export * from './api/servers';
+export * from './api/auth';
+export * from './api/mounts';
+export * from './api/files';
+export * from './api/backup';
+export * from './api/types';
+
 import type {
   ApiUser, ApiServer, ApiNode, ApiAllocationNode, ApiAllocation, ApiDatabase, ApiBackup,
   ApiScheduleTask, ApiDatabaseHost, ApiDatabaseHostConnectionTestResult, ApiServerDatabaseDeleteResult, ApiMount, ApiRegion, ApiLocation,
@@ -19,10 +28,13 @@ import type {
   UpdateAllocationInput, CreateDatabaseHostInput, UpdateDatabaseHostInput,
   CreateMountInput, AssignMountInput, ApiMountAssignmentResponse, RenameFileInput, PatchScheduleTaskInput,
   CreateEggInput, UpdateEggInput, SocialProvider,
+  ApiEndpoint, ApiEndpointDiagnostics, ApiEndpointInventorySummary, ApiEndpointHealthRecord, ApiEndpointAccessPolicy, ApiEndpointNodeMember,
+  BackupCreateInput,
 } from './api/types';
+import { API_BASE_URL } from './api/http';
 
-// Keep the legacy `@/lib/api` entry point compatible with the modular auth API.
-export * from './api/auth';
+// Functions below this line are NOT yet available in the modular API files
+// and are provided here for backward compatibility until they are migrated.
 
 export type {
   ApiUser, ApiServer, ApiNode, ApiAllocationNode, ApiAllocation, ApiDatabase, ApiBackup,
@@ -45,13 +57,12 @@ export type {
   UpdateAllocationInput, CreateDatabaseHostInput, UpdateDatabaseHostInput,
   CreateMountInput, AssignMountInput, ApiMountAssignmentResponse, RenameFileInput, PatchScheduleTaskInput,
   CreateEggInput, UpdateEggInput, SocialProvider,
+  ApiEndpoint, ApiEndpointDiagnostics, ApiEndpointInventorySummary, ApiEndpointHealthRecord, ApiEndpointAccessPolicy, ApiEndpointNodeMember,
 };
 
 // Production deployments use the panel's origin unless an explicit API URL is configured.
 // This avoids sending an administrator's browser to its own localhost.
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL ??
-  (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");
+// API_BASE_URL is now imported from ./api/http to avoid duplication.
 
 // Beacon accepts either the panel origin or its /api/v1 base. Derive the value
 // from the API client configuration instead of the browser origin: web and API
@@ -61,7 +72,6 @@ export function getBeaconPanelURL(): string {
   if (typeof window !== "undefined") return new URL(API_BASE_URL, window.location.origin).toString().replace(/\/$/, "");
   return "https://panel.example.com/api/v1";
 }
-const UPLOAD_CHUNK_SIZE = 8 * 1024 * 1024;
 
 const API_WS_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
   /^https:/,
@@ -74,16 +84,11 @@ const API_WS_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
 function getCSRFToken(): string | null {
   if (typeof window === "undefined") return null;
   try {
-    const cookies = document.cookie.split("; ");
-    for (const cookie of cookies) {
-      if (cookie.startsWith("__Host-forge_csrf=")) {
-        return cookie.split("=")[1];
-      }
-    }
+    const match = document.cookie.match(/__Host-forge_csrf=([^;]+)/);
+    return match ? decodeURIComponent(match[1]) : null;
   } catch {
-    // Cookie access can fail in privacy-restricted contexts
+    return null;
   }
-  return null;
 }
 
 /**
@@ -130,7 +135,7 @@ async function apiFetch<T>(
 
   if (!response.ok) {
     const errorMessage = await getErrorMessage(response, `API ${method} ${path} failed with`);
-    throw new Error(errorMessage);
+    throw new ApiError(errorMessage, response.status);
   }
 
   if (response.status === 204) {
@@ -159,6 +164,18 @@ async function apiFetch<T>(
 
 function isDataArrayEnvelope(value: unknown): value is { data: unknown[] } {
   return typeof value === "object" && value !== null && Array.isArray((value as { data?: unknown }).data);
+}
+
+/**
+ * Custom error that preserves the HTTP status code from API responses.
+ */
+export class ApiError extends Error {
+  status: number;
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "ApiError";
+    this.status = status;
+  }
 }
 
 /**
@@ -373,20 +390,6 @@ export async function fetchNodeCapacity(id: string): Promise<any> {
   return apiFetch<any>(`/nodes/${encodeURIComponent(id)}/capacity`);
 }
 
-export async function sendServerCommand(
-  serverId: string,
-  command: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/command`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ command }),
-    },
-  );
-}
-
 export async function downloadFileToServer(
   serverId: string,
   url: string,
@@ -407,7 +410,7 @@ export async function runServerOperations(
   operations: Array<{ action: string; args: Record<string, unknown> }>,
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/operations`,
+    `/servers/${encodeURIComponent(serverId)}/operations/run`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -420,50 +423,12 @@ export async function fetchServerConfiguration(id: string): Promise<any> {
   return apiFetch<any>(`/servers/${encodeURIComponent(id)}/configuration`);
 }
 
-export async function fetchServerScheduleTasks(
-  serverId: string,
-  scheduleId: string,
-): Promise<ApiScheduleTask[]> {
-  return apiFetch<ApiScheduleTask[]>(
-    `/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}/tasks`,
-  );
-}
-
-export async function updateServerScheduleTask(
-  serverId: string,
-  scheduleId: string,
-  taskId: string,
-  input: PatchScheduleTaskInput,
-): Promise<ApiScheduleTask> {
-  return apiFetch<ApiScheduleTask>(
-    `/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}/tasks/${encodeURIComponent(taskId)}`,
-    {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-}
-
 export async function fetchUser(id: string): Promise<ApiUser> {
   return apiFetch<ApiUser>(`/users/${encodeURIComponent(id)}`);
 }
 
-export async function fetchServerSubuser(
-  serverId: string,
-  userId: string,
-): Promise<any> {
-  return apiFetch<any>(
-    `/servers/${encodeURIComponent(serverId)}/users/${encodeURIComponent(userId)}`,
-  );
-}
-
 export async function fetchDatabaseHost(id: string): Promise<ApiDatabaseHost> {
   return apiFetch<ApiDatabaseHost>(`/database-hosts/${encodeURIComponent(id)}`);
-}
-
-export async function fetchMount(id: string): Promise<any> {
-  return apiFetch<any>(`/mounts/${encodeURIComponent(id)}`);
 }
 
 export type PaginationMetadata = {
@@ -519,10 +484,6 @@ export async function fetchServers(): Promise<ApiServer[]> {
   return fetchAllServers();
 }
 
-export async function fetchServer(id: string): Promise<ApiServer> {
-  return apiFetch<ApiServer>(`/servers/${encodeURIComponent(id)}`);
-}
-
 export async function fetchTemplates(): Promise<ApiEgg[]> {
   return apiFetch<ApiEgg[]>("/eggs");
 }
@@ -566,7 +527,6 @@ function requireHealthReport(value: unknown): ApiHealthReport {
 }
 
 export async function fetchHealthStatus(): Promise<ApiHealthReport> {
-  // This is the diagnostic report. Readiness and liveness have automation-only semantics.
   return requireHealthReport(await apiFetch<unknown>("/health"));
 }
 
@@ -620,8 +580,6 @@ export async function setAdminAllocationAlias(id: string, alias: string): Promis
   });
 }
 
-
-
 /** Deletes free allocations through the admin allocation inventory endpoint. */
 export async function deleteAllocations(ids: string[]): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>("/allocations/bulk", {
@@ -648,71 +606,6 @@ export async function fetchServerLogs(serverId: string): Promise<string> {
     throw new Error(`Logs request failed with ${response.status}`);
   }
   return response.text();
-}
-
-export async function fetchServerStartup(
-  serverId: string,
-): Promise<{ startupCommand: string; startup_command?: string; raw_startup_command?: string; docker_images?: Record<string, string>; variables: Record<string, string> | ApiStartupVariable[] }> {
-  return apiFetch<{ startupCommand: string; startup_command?: string; raw_startup_command?: string; docker_images?: Record<string, string>; variables: Record<string, string> | ApiStartupVariable[] }>(
-    `/servers/${encodeURIComponent(serverId)}/startup`,
-  );
-}
-
-export async function fetchServerDatabases(
-  serverId: string,
-): Promise<ApiDatabase[]> {
-  return apiFetch<ApiDatabase[]>(
-    `/servers/${encodeURIComponent(serverId)}/databases`,
-  );
-}
-
-export async function createServerDatabase(
-  serverId: string,
-  input: CreateServerDatabaseInput,
-): Promise<ApiDatabase> {
-  return apiFetch<ApiDatabase>(
-    `/servers/${encodeURIComponent(serverId)}/databases`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function rotateServerDatabasePassword(
-  serverId: string,
-  databaseId: string,
-): Promise<{ password: string }> {
-  return apiFetch<{ password: string }>(
-    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(databaseId)}/rotate-password`,
-    { method: "POST" },
-  );
-}
-
-export async function deleteServerDatabase(
-  serverId: string,
-  databaseId: string,
-  force = false,
-): Promise<ApiServerDatabaseDeleteResult> {
-  const query = force ? "?force=true" : "";
-  return apiFetch<ApiServerDatabaseDeleteResult>(
-    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(databaseId)}${query}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function fetchOrphanRemediations(status?: "pending" | "resolved"): Promise<ApiOrphanRemediations> {
-  const query = status ? `?status=${encodeURIComponent(status)}` : "";
-  return apiFetch<ApiOrphanRemediations>(`/admin/orphan-remediations/${query}`);
-}
-
-export async function resolveDatabaseOrphanRemediation(id: string): Promise<ApiDatabaseOrphanRemediation> {
-  return apiFetch<ApiDatabaseOrphanRemediation>(`/admin/orphan-remediations/databases/${encodeURIComponent(id)}/resolve`, { method: "POST" });
-}
-
-export async function resolveServerOrphanRemediation(id: string): Promise<ApiServerOrphanRemediation> {
-  return apiFetch<ApiServerOrphanRemediation>(`/admin/orphan-remediations/servers/${encodeURIComponent(id)}/resolve`, { method: "POST" });
 }
 
 export async function fetchDatabaseHosts(): Promise<ApiDatabaseHost[]> {
@@ -763,204 +656,22 @@ export async function testDatabaseHostConnection(inputOrID: CreateDatabaseHostIn
   });
 }
 
-export async function fetchMounts(): Promise<ApiMount[]> {
-  return apiFetch<ApiMount[]>("/mounts");
-}
-
-export async function createMount(input: CreateMountInput): Promise<ApiMount> {
-  return apiFetch<ApiMount>("/mounts", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateMount(
-  id: string,
-  input: Partial<CreateMountInput>,
-): Promise<ApiMount> {
-  return apiFetch<ApiMount>(`/mounts/${encodeURIComponent(id)}`, {
-    method: "PATCH",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(input),
-  });
-}
-
-export async function deleteMount(id: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/mounts/${encodeURIComponent(id)}`, {
-    method: "DELETE",
-  });
-}
-
-export async function fetchServerMounts(serverId: string): Promise<ApiMount[]> {
-  return apiFetch<ApiMount[]>(`/servers/${encodeURIComponent(serverId)}/mounts`);
-}
-
-export async function assignMountToServer(
+export async function rotateServerDatabasePasswordByBody(
   serverId: string,
-  input: AssignMountInput,
+  database: string,
+): Promise<{ password: string }> {
+  return apiFetch<{ password: string }>(
+    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(database)}/rotate-password`,
+    { method: "POST" },
+  );
+}
+
+export async function deleteServerDatabaseWithSuffix(
+  serverId: string,
+  database: string,
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/mounts`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function unassignMountFromServer(
-  serverId: string,
-  mountId: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/mounts/${encodeURIComponent(mountId)}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function fetchServerFiles(
-  serverId: string,
-  path: string = "/",
-): Promise<any> {
-  return apiFetch<any>(
-    `/servers/${encodeURIComponent(serverId)}/files?path=${encodeURIComponent(path)}`,
-  );
-}
-
-export async function writeServerFile(
-  serverId: string,
-  path: string,
-  content: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/files${encodeURIComponent(path)}`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ content }),
-    },
-  );
-}
-
-export async function deleteServerFile(
-  serverId: string,
-  path: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/files${encodeURIComponent(path)}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function renameServerFile(
-  serverId: string,
-  input: RenameFileInput,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/files/rename`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function createServerArchive(
-  serverId: string,
-  path: string,
-): Promise<{ ok: boolean; name: string }> {
-  return apiFetch<{ ok: boolean; name: string }>(
-    `/servers/${encodeURIComponent(serverId)}/files/archive`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path }),
-    },
-  );
-}
-
-export async function extractServerArchive(
-  serverId: string,
-  archive: string,
-  path: string = "/",
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/files/extract`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ archive, path }),
-    },
-  );
-}
-
-export async function chmodServerFile(
-  serverId: string,
-  path: string,
-  mode: number,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/files/chmod`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path, mode }),
-    },
-  );
-}
-
-export async function getFileDownloadUrl(
-  serverId: string,
-  path: string,
-): Promise<{ url: string; expires: string }> {
-  return apiFetch<{ url: string; expires: string }>(
-    `/servers/${encodeURIComponent(serverId)}/files/download-url?path=${encodeURIComponent(path)}`,
-  );
-}
-
-export async function fetchBackups(serverId: string): Promise<ApiBackup[]> {
-  return apiFetch<ApiBackup[]>(`/servers/${encodeURIComponent(serverId)}/backups`);
-}
-
-export async function createBackup(
-  serverId: string,
-  name?: string,
-  ignored?: string[],
-): Promise<{ uuid: string; name: string }> {
-  return apiFetch<{ uuid: string; name: string }>(
-    `/servers/${encodeURIComponent(serverId)}/backups`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, ignored }),
-    },
-  );
-}
-
-export async function restoreBackup(
-  serverId: string,
-  backupName: string,
-  truncate?: boolean,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/backups/${encodeURIComponent(backupName)}/restore`,
-    {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ truncate }),
-    },
-  );
-}
-
-export async function deleteBackup(
-  serverId: string,
-  backupName: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/backups/${encodeURIComponent(backupName)}`,
+    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(database)}`,
     { method: "DELETE" },
   );
 }
@@ -1160,26 +871,6 @@ export async function deleteNodeAllocation(
   );
 }
 
-export async function rotateServerDatabasePasswordByBody(
-  serverId: string,
-  database: string,
-): Promise<{ password: string }> {
-  return apiFetch<{ password: string }>(
-    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(database)}/rotate-password`,
-    { method: "POST" },
-  );
-}
-
-export async function deleteServerDatabaseWithSuffix(
-  serverId: string,
-  database: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/databases/${encodeURIComponent(database)}`,
-    { method: "DELETE" },
-  );
-}
-
 export async function fetchMailSettings(): Promise<ApiPanelMailSettings> {
   return apiFetch<ApiPanelMailSettings>("/admin/settings/mail");
 }
@@ -1294,11 +985,11 @@ export async function removeUserRoles(
 }
 
 export async function fetchPlugins(): Promise<ApiPlugin[]> {
-  return apiFetch<ApiPlugin[]>("/plugins");
+  return apiFetch<ApiPlugin[]>("/admin/plugins");
 }
 
 export async function importPluginFromURL(url: string): Promise<ApiPlugin> {
-  return apiFetch<ApiPlugin>("/plugins/import", {
+  return apiFetch<ApiPlugin>("/admin/plugins/import/url", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ url }),
@@ -1306,7 +997,7 @@ export async function importPluginFromURL(url: string): Promise<ApiPlugin> {
 }
 
 export async function deletePlugin(id: string): Promise<void> {
-  await apiFetch<void>(`/plugins/${encodeURIComponent(id)}`, {
+  await apiFetch<void>(`/admin/plugins/${encodeURIComponent(id)}`, {
     method: "DELETE",
   });
 }
@@ -1369,6 +1060,19 @@ export async function fetchWebhookDeliveries(
 ): Promise<ApiWebhookDelivery[]> {
   return apiFetch<ApiWebhookDelivery[]>(
     `/admin/webhooks/${encodeURIComponent(webhookId)}/deliveries?limit=${limit}`,
+  );
+}
+
+export async function testWebhook(id: string): Promise<{ ok: boolean }> {
+  return postJSON(`/admin/webhooks/${encodeURIComponent(id)}/test`);
+}
+
+export async function retryWebhookDelivery(
+  webhookId: string,
+  deliveryId: string,
+): Promise<{ ok: boolean }> {
+  return postJSON(
+    `/admin/webhooks/${encodeURIComponent(webhookId)}/deliveries/${encodeURIComponent(deliveryId)}/retry`,
   );
 }
 
@@ -1591,18 +1295,59 @@ export async function deleteEgg(id: string): Promise<void> {
   await apiFetch<void>(`/eggs/${encodeURIComponent(id)}`, { method: "DELETE" });
 }
 
-/**
- * @deprecated - No longer using localStorage for auth. Returns null to indicate cookie-based auth.
- */
-export function getToken(): string | null {
-  return null;
+export type ApiEggVariable = {
+  id: string;
+  eggId: string;
+  name: string;
+  description: string;
+  envVariable: string;
+  defaultValue: string;
+  userViewable: boolean;
+  userEditable: boolean;
+  rules: string;
+  sort: number;
+  createdAt: string;
+};
+
+export type ApiEggVariableInput = {
+  name: string;
+  description?: string;
+  envVariable: string;
+  defaultValue?: string;
+  userViewable?: boolean;
+  userEditable?: boolean;
+  rules?: string;
+  sort?: number;
+};
+
+export async function fetchEggVariables(eggId: string): Promise<ApiEggVariable[]> {
+  return apiFetch<ApiEggVariable[]>(`/eggs/${encodeURIComponent(eggId)}/variables`);
 }
 
-/**
- * @deprecated - No longer using localStorage for auth. No-op.
- */
-export function setStoredToken(_token: string | null): void {
-  // No-op: authentication is now handled via HttpOnly cookies
+export async function createEggVariable(eggId: string, input: ApiEggVariableInput): Promise<ApiEggVariable> {
+  return apiFetch<ApiEggVariable>(`/eggs/${encodeURIComponent(eggId)}/variables`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function updateEggVariable(eggId: string, variableId: string, input: Partial<ApiEggVariableInput>): Promise<ApiEggVariable> {
+  return apiFetch<ApiEggVariable>(`/eggs/${encodeURIComponent(eggId)}/variables/${encodeURIComponent(variableId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteEggVariable(eggId: string, variableId: string): Promise<void> {
+  await apiFetch<void>(`/eggs/${encodeURIComponent(eggId)}/variables/${encodeURIComponent(variableId)}`, { method: "DELETE" });
+}
+
+export async function reorderEggVariables(eggId: string, variableIds: string[]): Promise<void> {
+  await Promise.all(
+    variableIds.map((id, index) => updateEggVariable(eggId, id, { sort: index }))
+  );
 }
 
 export async function createUser(input: {
@@ -1656,90 +1401,41 @@ export async function updateUser(
   });
 }
 
-export async function attachEggsToMount(
-  mountId: string,
-  eggIds: string[],
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/mounts/${encodeURIComponent(mountId)}/eggs`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ eggs: eggIds }),
-  });
-}
-
-export async function attachNodesToMount(
-  mountId: string,
-  nodeIds: string[],
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/mounts/${encodeURIComponent(mountId)}/nodes`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ nodes: nodeIds }),
-  });
-}
-
-export async function detachEggFromMount(
-  mountId: string,
-  eggId: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/mounts/${encodeURIComponent(mountId)}/eggs/${encodeURIComponent(eggId)}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function detachNodeFromMount(
-  mountId: string,
-  nodeId: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(
-    `/mounts/${encodeURIComponent(mountId)}/nodes/${encodeURIComponent(nodeId)}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function assignMount(
+export async function createServerArchive(
   serverId: string,
-  mountId: string,
-): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/servers/${encodeURIComponent(serverId)}/mounts`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mountId }),
-  });
+  path: string,
+): Promise<{ ok: boolean; name: string }> {
+  return apiFetch<{ ok: boolean; name: string }>(
+    `/servers/${encodeURIComponent(serverId)}/files/archive`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    },
+  );
 }
 
-export async function removeMount(
+export async function extractServerArchive(
   serverId: string,
-  mountId: string,
+  archive: string,
+  path: string = "/",
 ): Promise<{ ok: boolean }> {
   return apiFetch<{ ok: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/mounts/${encodeURIComponent(mountId)}`,
-    { method: "DELETE" },
+    `/servers/${encodeURIComponent(serverId)}/files/extract`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ archive, path }),
+    },
   );
 }
 
-/** @deprecated Legacy transfer cancellation is retired and the API returns HTTP 501. */
-export async function cancelTransfer(serverId: string): Promise<never> {
-  return apiFetch<never>(
-    `/servers/${encodeURIComponent(serverId)}/transfer/cancel`,
-    { method: "POST" },
-  );
-}
-
-export async function assignServerMount(serverId: string, mountId: string): Promise<ApiMountAssignmentResponse> {
-  return apiFetch<ApiMountAssignmentResponse>(`/servers/${encodeURIComponent(serverId)}/mounts`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mountId }),
-  });
-}
-
-export async function removeServerMount(serverId: string, mountId: string): Promise<ApiMountAssignmentResponse> {
-  return apiFetch<ApiMountAssignmentResponse>(
-    `/servers/${encodeURIComponent(serverId)}/mounts/${encodeURIComponent(mountId)}`,
-
-    { method: "DELETE" },
+export async function getFileDownloadUrl(
+  serverId: string,
+  path: string,
+): Promise<{ url: string; expires: string }> {
+  return apiFetch<{ url: string; expires: string }>(
+    `/servers/${encodeURIComponent(serverId)}/files/download-url?path=${encodeURIComponent(path)}`,
   );
 }
 
@@ -1785,311 +1481,128 @@ export async function fetchServerTransferStatus(
   }
 }
 
-// Server functions from modules
-export async function sendPowerSignal(
-  serverId: string,
-  signal: 'start' | 'stop' | 'restart' | 'kill',
-): Promise<{ serverId: string; signal: string; accepted: boolean }> {
-  return apiFetch<{ serverId: string; signal: string; accepted: boolean }>(
-    `/servers/${encodeURIComponent(serverId)}/power`,
-    { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ signal }) },
-  );
-}
-
-export async function createServer(input: ServerCreateInput): Promise<ApiServer> {
-  return apiFetch<ApiServer>("/servers", {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
-  });
-}
-
-export async function updateServer(id: string, input: ServerUpdateInput): Promise<ApiServer> {
-  return patchJSON<ApiServer>(`/servers/${encodeURIComponent(id)}`, input);
-}
-
-export async function deleteServer(id: string, force?: boolean): Promise<void> {
-  const query = force ? "?force=true" : "";
-  await deleteJSON(`/servers/${encodeURIComponent(id)}${query}`);
-}
-
-export async function reinstallServer(serverId: string): Promise<{ accepted: boolean }> {
-  return apiFetch<{ accepted: boolean }>(`/servers/${encodeURIComponent(serverId)}/reinstall`, {
-    method: "POST",
-  });
-}
-
-export async function assignServerAllocation(serverId: string, allocationId: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/allocations`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ allocationId }),
-  });
-}
-
-export async function unassignServerAllocation(serverId: string, allocationId: string): Promise<void> {
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/allocations/${encodeURIComponent(allocationId)}`);
-}
-
-export async function setPrimaryServerAllocation(serverId: string, allocationId: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/allocations/${encodeURIComponent(allocationId)}/primary`, {
-    method: "POST",
-  });
-}
-
-export async function lockBackup(serverId: string, backupId: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/backups/${encodeURIComponent(backupId)}/lock`, {
-    method: "POST",
-  });
-}
-
-export async function unlockBackup(serverId: string, backupId: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/backups/${encodeURIComponent(backupId)}/unlock`, {
-    method: "POST",
-  });
-}
-
-export async function downloadBackup(serverId: string, backupId: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/backups/download?name=${encodeURIComponent(backupId)}`, {
-    headers: { Accept: "application/json" },
-    credentials: "include",
-  });
-  if (!response.ok) throw new Error(`Failed to download backup: ${response.status}`);
-  return response.blob();
-}
-
-export async function fetchServerSchedules(serverId: string): Promise<ApiSchedule[]> {
-  return fetchJSON<ApiSchedule[]>(`/servers/${encodeURIComponent(serverId)}/schedules`);
-}
-
-export async function createServerSchedule(serverId: string, input: ScheduleCreateInput): Promise<ApiSchedule> {
-  return apiFetch<ApiSchedule>(`/servers/${encodeURIComponent(serverId)}/schedules`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
-  });
-}
-
-export async function updateServerSchedule(serverId: string, scheduleId: string, input: ScheduleUpdateInput): Promise<ApiSchedule> {
-  return patchJSON<ApiSchedule>(`/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}`, input);
-}
-
-export async function deleteServerSchedule(serverId: string, scheduleId: string): Promise<void> {
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}`);
-}
-
-export async function createServerScheduleTask(serverId: string, scheduleId: string, input: ScheduleTaskCreateInput): Promise<ApiScheduleTask> {
-  return apiFetch<ApiScheduleTask>(`/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}/tasks`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(input),
-  });
-}
-
-export async function deleteServerScheduleTask(serverId: string, scheduleId: string, taskId: string): Promise<void> {
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/schedules/${encodeURIComponent(scheduleId)}/tasks/${encodeURIComponent(taskId)}`);
-}
-
-export async function updateServerStartupCommand(serverId: string, command: string): Promise<void> {
-  await patchJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/command`, { command });
-}
-
-export async function updateServerDockerImage(serverId: string, image: string): Promise<void> {
-  await patchJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/image`, { image });
-}
-
-export async function getBackupDownloadURL(serverId: string, backupId: string): Promise<{ url: string }> {
-  const ticket = await apiFetch<{ token: string }>(
-    `/servers/${encodeURIComponent(serverId)}/backups/download-ticket`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: backupId }),
-    },
-  );
-  return { url: `${API_BASE_URL}/download/file?token=${encodeURIComponent(ticket.token)}` };
-}
-
-export async function downloadServerFile(serverId: string, path: string): Promise<Blob> {
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/download?path=${encodeURIComponent(path)}`,
-    { headers: { Accept: "application/json" }, credentials: "include" },
-  );
-  if (!response.ok) throw new Error(`Failed to download file: ${response.status}`);
-  return response.blob();
-}
-
-export async function copyServerFile(serverId: string, from: string, to: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/copy`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ from, to }),
-  });
-}
-
-export async function deleteServerFiles(serverId: string, paths: string[]): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/delete-batch`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paths }),
-  });
-}
-
-export async function renameServerFiles(serverId: string, files: Array<{ from: string; to: string }>): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/rename-batch`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files }),
-  });
-}
-
-export async function chmodServerFiles(serverId: string, files: Array<{ path: string; mode: string }>): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/chmod-batch`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ files }),
-  });
-}
-
-export async function createServerDirectory(serverId: string, path: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/create-directory`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
-  });
-}
-
-export async function compressServerFiles(serverId: string, path: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/archive`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
-  });
-}
-
-export async function decompressServerFiles(serverId: string, path: string): Promise<void> {
-  await apiFetch<void>(`/servers/${encodeURIComponent(serverId)}/files/decompress`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ path }),
-  });
-}
-
-export async function pullServerFile(serverId: string, url: string, path?: string): Promise<{ ok: boolean; path: string; size: number }> {
-  return apiFetch<{ ok: boolean; path: string; size: number }>(
-    `/servers/${encodeURIComponent(serverId)}/files/pull`, {
-      method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url, path }),
-    },
-  );
-}
-
-export async function fetchServerAllocations(serverId: string): Promise<ApiAllocation[]> {
-  return fetchJSON<ApiAllocation[]>(`/servers/${encodeURIComponent(serverId)}/allocations`);
-}
-
-export async function fetchServerActivity(
-  serverId: string,
-  page = 1,
-  perPage = 50,
-): Promise<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }> {
-  const result = await apiFetch<ApiAuditEvent[] | { data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
-    `/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
-    {},
-    true,
-  );
-  if (Array.isArray(result)) {
-    return {
-      data: result,
-      pagination: { page: 1, per_page: result.length, total: result.length, total_pages: 1 },
-    };
-  }
-  return result;
-}
-
-export async function fetchServerUsers(serverId: string): Promise<ApiServerSubuser[]> {
-  return fetchJSON<ApiServerSubuser[]>(`/servers/${encodeURIComponent(serverId)}/users`);
-}
-
-export async function deleteServerUser(serverId: string, userId: string): Promise<void> {
-  await deleteJSON(`/servers/${encodeURIComponent(serverId)}/users/${encodeURIComponent(userId)}`);
-}
-
-export async function updateServerUser(serverId: string, userId: string, data: { permissions: string[] }): Promise<ApiServerSubuser> {
-  return patchJSON<ApiServerSubuser>(`/servers/${encodeURIComponent(serverId)}/users/${encodeURIComponent(userId)}`, data);
-}
-
-export async function upsertServerUser(serverId: string, data: { email: string; permissions: string[] }): Promise<ApiServerSubuser> {
-  return apiFetch<ApiServerSubuser>(`/servers/${encodeURIComponent(serverId)}/users`, {
-    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(data),
-  });
-}
-
 /** @deprecated Legacy transfer cancellation is retired and the API returns HTTP 501. */
-export async function cancelServerTransfer(serverId: string): Promise<never> {
-  return apiFetch<never>(`/servers/${encodeURIComponent(serverId)}/transfer/cancel`, { method: "POST" });
-}
-
-export async function suspendServer(serverId: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/servers/${encodeURIComponent(serverId)}/suspension`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "suspend" }),
-  });
-}
-
-export async function unsuspendServer(serverId: string): Promise<{ ok: boolean }> {
-  return apiFetch<{ ok: boolean }>(`/servers/${encodeURIComponent(serverId)}/suspension`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ action: "unsuspend" }),
-  });
-}
-
-/** @deprecated Legacy transfer creation is retired and the API returns HTTP 501. Create a migration instead. */
-export async function transferServer(serverId: string, targetNodeId: string): Promise<never> {
+export async function cancelTransfer(serverId: string): Promise<never> {
   return apiFetch<never>(
-    `/servers/${encodeURIComponent(serverId)}/transfer`, {
-      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ targetNodeId }),
-    },
+    `/servers/${encodeURIComponent(serverId)}/transfer/cancel`,
+    { method: "POST" },
   );
 }
 
-export async function getServerFileDownloadURL(serverId: string, path: string): Promise<string> {
-  const result = await apiFetch<{ url: string; expires: string }>(
-    `/servers/${encodeURIComponent(serverId)}/files/download-url?path=${encodeURIComponent(path)}`,
-  );
-  return result.url;
+// ---- Infrastructure Endpoints (Portainer-style Environment abstraction) ----
+
+export async function fetchEndpoints(): Promise<ApiEndpoint[]> {
+  const res = await apiFetch<{ data: ApiEndpoint[] }>("/endpoints");
+  return res.data ?? [];
 }
 
-export async function readServerFile(serverId: string, path: string): Promise<string> {
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
-    { headers: { Accept: "text/plain" }, credentials: "include" },
-  );
-  if (!response.ok) throw new Error(`Failed to read file: ${response.status}`);
-  return response.text();
+export async function fetchEndpoint(id: string): Promise<ApiEndpoint> {
+  return apiFetch<ApiEndpoint>(`/endpoints/${encodeURIComponent(id)}`);
 }
 
-export async function archiveServerFile(serverId: string, path: string): Promise<Blob> {
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/archive?path=${encodeURIComponent(path)}`,
-    { method: "POST", credentials: "include" },
-  );
-  if (!response.ok) throw new Error(`Failed to archive file: ${response.status}`);
-  return response.blob();
-}
-
-export async function uploadFileChunked(
-  serverId: string,
-  path: string,
-  file: File | Blob,
-  onProgress?: (loaded: number, total: number) => void,
-): Promise<void> {
-  const chunkSize = 8 * 1024 * 1024;
-  const totalSize = file.size;
-  let offset = 0;
-  while (offset < totalSize) {
-    const chunk = file.slice(offset, Math.min(offset + chunkSize, totalSize));
-    const isLast = offset + chunkSize >= totalSize;
-    const formData = new FormData();
-    formData.append("files", chunk, path.split("/").pop() || "file");
-    formData.append("directory", path.substring(0, path.lastIndexOf("/")) || "/");
-    if (!isLast) formData.append("append", "true");
-    const response = await fetch(
-      `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/upload`,
-      { method: "POST", credentials: "include", body: formData },
-    );
-    if (!response.ok) throw new Error(`Upload failed at offset ${offset}: ${response.status}`);
-    offset += chunk.size;
-    onProgress?.(offset, totalSize);
-  }
-}
-
-export async function updateServerStartupVariable(
-  serverId: string,
-  variableId: string,
-  value: string,
-): Promise<void> {
-  await putJSON<void>(`/servers/${encodeURIComponent(serverId)}/startup/variable`, {
-    key: variableId,
-    value,
+export async function createEndpoint(input: {
+  name: string;
+  description?: string;
+  endpointType: string;
+  connectionMode: string;
+  nodeIds?: string[];
+  tags?: string[];
+  labels?: { key: string; value: string }[];
+  url?: string;
+  projectId?: string;
+  groupId?: string;
+}): Promise<ApiEndpoint> {
+  return apiFetch<ApiEndpoint>("/endpoints", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
   });
+}
+
+export async function updateEndpoint(
+  id: string,
+  input: Partial<{
+    name: string;
+    description: string;
+    endpointType: string;
+    connectionMode: string;
+    tags: string[];
+    labels: { key: string; value: string }[];
+    url: string;
+    projectId: string;
+    groupId: string;
+  }>,
+): Promise<ApiEndpoint> {
+  return apiFetch<ApiEndpoint>(`/endpoints/${encodeURIComponent(id)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+}
+
+export async function deleteEndpoint(id: string): Promise<void> {
+  await apiFetch<void>(`/endpoints/${encodeURIComponent(id)}`, { method: "DELETE" });
+}
+
+export async function fetchEndpointNodes(id: string): Promise<ApiEndpointNodeMember[]> {
+  const res = await apiFetch<{ data: ApiEndpointNodeMember[] }>(`/endpoints/${encodeURIComponent(id)}/nodes`);
+  return res.data ?? [];
+}
+
+export async function addEndpointNode(endpointId: string, nodeId: string): Promise<void> {
+  await apiFetch<void>(`/endpoints/${encodeURIComponent(endpointId)}/nodes`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ nodeId }),
+  });
+}
+
+export async function removeEndpointNode(endpointId: string, nodeId: string): Promise<void> {
+  await apiFetch<void>(`/endpoints/${encodeURIComponent(endpointId)}/nodes/${encodeURIComponent(nodeId)}`, {
+    method: "DELETE",
+  });
+}
+
+export async function fetchEndpointDiagnostics(id: string): Promise<ApiEndpointDiagnostics> {
+  return apiFetch<ApiEndpointDiagnostics>(`/endpoints/${encodeURIComponent(id)}/diagnostics`);
+}
+
+export async function fetchEndpointInventory(id: string): Promise<ApiEndpointInventorySummary> {
+  return apiFetch<ApiEndpointInventorySummary>(`/endpoints/${encodeURIComponent(id)}/inventory`);
+}
+
+export async function fetchEndpointHealthHistory(id: string, limit = 50): Promise<ApiEndpointHealthRecord[]> {
+  const res = await apiFetch<{ data: ApiEndpointHealthRecord[] }>(
+    `/endpoints/${encodeURIComponent(id)}/health?limit=${limit}`,
+  );
+  return res.data ?? [];
+}
+
+export async function fetchEndpointAccessPolicies(id: string): Promise<ApiEndpointAccessPolicy[]> {
+  const res = await apiFetch<{ data: ApiEndpointAccessPolicy[] }>(`/endpoints/${encodeURIComponent(id)}/policies`);
+  return res.data ?? [];
+}
+
+export async function setEndpointAccessPolicy(
+  endpointId: string,
+  principalType: string,
+  principalId: string,
+  role: string,
+): Promise<ApiEndpointAccessPolicy> {
+  return apiFetch<ApiEndpointAccessPolicy>(`/endpoints/${encodeURIComponent(endpointId)}/policies`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ principalType, principalId, role }),
+  });
+}
+
+export async function removeEndpointAccessPolicy(
+  endpointId: string,
+  principalType: string,
+  principalId: string,
+): Promise<void> {
+  await apiFetch<void>(
+    `/endpoints/${encodeURIComponent(endpointId)}/policies/${encodeURIComponent(principalType)}/${encodeURIComponent(principalId)}`,
+    { method: "DELETE" },
+  );
 }

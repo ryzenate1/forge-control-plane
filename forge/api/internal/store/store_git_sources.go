@@ -190,6 +190,22 @@ func (s *Store) FindGitSourceByRepoAndBranch(ctx context.Context, repoURL, branc
 	return &gs, nil
 }
 
+// GetGitSourceByServerID resolves a server ID to the associated GitSource.
+// It looks up the server, then checks docker_labels for a stored "git_source_id"
+// key. If found, returns that GitSource. Otherwise falls back to looking up the
+// ID directly as a git source ID (to support frontends that already pass
+// git source IDs through this route).
+func (s *Store) GetGitSourceByServerID(ctx context.Context, serverID string) (GitSource, error) {
+	server, err := s.GetServer(ctx, serverID)
+	if err != nil {
+		return GitSource{}, err
+	}
+	if gsID, ok := server.DockerLabels["git_source_id"]; ok && gsID != "" {
+		return s.GetGitSource(ctx, gsID)
+	}
+	return s.GetGitSource(ctx, serverID)
+}
+
 func (s *Store) DeleteGitSource(ctx context.Context, id string) error {
 	cmd, err := s.db.Exec(ctx, `DELETE FROM git_sources WHERE id = $1`, id)
 	if err != nil {

@@ -132,7 +132,7 @@ func setSessionCookies(c *fiber.Ctx, sessionToken, csrfToken string, expires tim
 		Name:     csrfCookieName,
 		Value:    csrfToken,
 		Path:     "/",
-		HTTPOnly: true,
+		HTTPOnly: false,
 		Secure:   true,
 		SameSite: "Lax",
 		Expires:  expires,
@@ -153,7 +153,7 @@ func clearSessionCookies(c *fiber.Ctx) {
 		Name:     csrfCookieName,
 		Value:    "",
 		Path:     "/",
-		HTTPOnly: true,
+		HTTPOnly: false,
 		Secure:   true,
 		SameSite: "Lax",
 		Expires:  time.Unix(0, 0),
@@ -178,74 +178,11 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 		if secret == "" {
 			return fiber.NewError(fiber.StatusInternalServerError, "auth secret is not configured")
 		}
-		header := c.Get("Authorization")
-		hasBearer := strings.HasPrefix(header, "Bearer ")
-		_, hasSessionCookie := getSessionCookie(c)
-		if !hasBearer && !hasSessionCookie {
-			return fiber.NewError(fiber.StatusUnauthorized, "missing authentication")
-		}
-		if st == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required for authentication")
-		}
-
-		// If explicit Bearer token is present, authenticate it exclusively
-		if hasBearer {
-			rawToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-			ctx, cancel := requestContext()
-			defer cancel()
-
-			if claims, err := parseToken(secret, rawToken); err == nil {
-				current, err := validateCurrentSession(ctx, st, claims)
-				if err != nil {
-					return fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
-				}
-				c.Locals("user", current)
-				if current.Role == "admin" {
-					c.Locals("apiScopes", []string{"*"})
-				} else {
-					c.Locals("apiScopes", []string{})
-				}
-				c.Locals("scopedAuth", false)
-				c.Locals("authSource", authSourceBearerSession)
-				return c.Next()
-			}
-
-			if verifyOAuth != nil {
-				if oauthClaims, scopes, oauthErr := verifyOAuth(rawToken); oauthErr == nil {
-					user, err := st.GetUserByID(ctx, stringFromClaim(oauthClaims["sub"]))
-					if err != nil || user.SessionVersion != int64(intFromClaim(oauthClaims["ver"])) {
-						return fiber.NewError(fiber.StatusUnauthorized, "invalid or stale oauth session")
-					}
-					scopes, err = store.ValidateApiKeyScopes(scopes, user.Role == "admin" && stringFromClaim(oauthClaims["server_id"]) == "")
-					if err != nil {
-						return fiber.NewError(fiber.StatusUnauthorized, "invalid oauth scopes")
-					}
-					c.Locals("user", claimsFromUser(user, stringFromClaim(oauthClaims["jti"]), int64(intFromClaim(oauthClaims["exp"]))))
-					c.Locals("apiScopes", scopes)
-					c.Locals("scopedAuth", true)
-					c.Locals("oauthClientId", stringFromClaim(oauthClaims["client_id"]))
-					if serverID := stringFromClaim(oauthClaims["server_id"]); serverID != "" {
-						c.Locals("oauthServerId", serverID)
-					}
-					c.Locals("authSource", authSourceOAuth)
-					return c.Next()
-				}
-			}
-
-			user, scopes, keyErr := st.ValidateApiKey(ctx, rawToken, c.IP())
-			if keyErr == nil && user != nil {
-				c.Locals("user", claimsFromUser(*user, "", time.Now().Add(tokenTTL).Unix()))
-				c.Locals("apiScopes", scopes)
-				c.Locals("scopedAuth", true)
-				c.Locals("authSource", authSourceAPIKey)
-				return c.Next()
-			}
-
-			return fiber.NewError(fiber.StatusUnauthorized, "invalid bearer token")
-		}
-
-		// No Bearer header - try session cookie
+		// Try session cookie first (browser clients)
 		if sessionToken, ok := getSessionCookie(c); ok {
+			if st == nil {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+			}
 			ctx, cancel := requestContext()
 			defer cancel()
 
@@ -270,7 +207,70 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 			return c.Next()
 		}
 
-		return fiber.NewError(fiber.StatusUnauthorized, "missing authentication")
+		// Fall back to Bearer token for API keys and OAuth tokens
+		header := c.Get("Authorization")
+		if !strings.HasPrefix(header, "Bearer ") {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing authentication")
+		}
+		if st == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
+		rawToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		ctx, cancel := requestContext()
+		defer cancel()
+
+		// Browser sessions may also be sent as Bearer tokens by API clients. They
+		// must be validated against the current account and revocation state, just
+		// like the cookie form, so role changes take effect immediately.
+		if claims, err := parseToken(secret, rawToken); err == nil {
+			current, err := validateCurrentSession(ctx, st, claims)
+			if err != nil {
+				return fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
+			}
+			c.Locals("user", current)
+			if current.Role == "admin" {
+				c.Locals("apiScopes", []string{"*"})
+			} else {
+				c.Locals("apiScopes", []string{})
+			}
+			c.Locals("scopedAuth", false)
+			c.Locals("authSource", authSourceCookieSession)
+			return c.Next()
+		}
+
+		if verifyOAuth != nil {
+			if oauthClaims, scopes, oauthErr := verifyOAuth(rawToken); oauthErr == nil {
+				user, err := st.GetUserByID(ctx, stringFromClaim(oauthClaims["sub"]))
+				if err != nil || user.SessionVersion != int64(intFromClaim(oauthClaims["ver"])) {
+					return fiber.NewError(fiber.StatusUnauthorized, "invalid or stale oauth session")
+				}
+				scopes, err = store.ValidateApiKeyScopes(scopes, user.Role == "admin" && stringFromClaim(oauthClaims["server_id"]) == "")
+				if err != nil {
+					return fiber.NewError(fiber.StatusUnauthorized, "invalid oauth scopes")
+				}
+				c.Locals("user", claimsFromUser(user, stringFromClaim(oauthClaims["jti"]), int64(intFromClaim(oauthClaims["exp"]))))
+				c.Locals("apiScopes", scopes)
+				c.Locals("scopedAuth", true)
+				c.Locals("oauthClientId", stringFromClaim(oauthClaims["client_id"]))
+				if serverID := stringFromClaim(oauthClaims["server_id"]); serverID != "" {
+					c.Locals("oauthServerId", serverID)
+				}
+				c.Locals("authSource", authSourceOAuth)
+				return c.Next()
+			}
+		}
+
+		user, scopes, keyErr := st.ValidateApiKey(ctx, rawToken, c.IP())
+		if keyErr == nil && user != nil {
+			c.Locals("user", claimsFromUser(*user, "", time.Now().Add(tokenTTL).Unix()))
+			c.Locals("apiScopes", scopes)
+			c.Locals("scopedAuth", true)
+			c.Locals("authSource", authSourceAPIKey)
+			return c.Next()
+		}
+
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid bearer token")
 	}
 }
 
@@ -462,7 +462,7 @@ func parse2FAConfirmationToken(secret string, token string) (string, error) {
 func requireTwoFactorAuthentication(st *store.Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if st == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required for 2FA enforcement")
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 
 		// Get current 2FA policy from panel settings

@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIE = "__Host-forge_session";
 const PUBLIC_PATHS = new Set(["/", "/setup", "/forgot-password", "/reset-password", "/favicon.ico"]);
-const PROTECTED_PREFIXES = ["/servers", "/server", "/account", "/admin"];
+const PROTECTED_PREFIXES = ["/servers", "/server", "/account", "/admin", "/organizations"];
 
 function isProtected(pathname: string) {
   if (PUBLIC_PATHS.has(pathname)) return false;

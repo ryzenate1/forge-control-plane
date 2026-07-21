@@ -270,33 +270,39 @@ export function AdminHealth({ initialSection = "infrastructure", overview = fals
       />
 
       {healthQuery.isError ? (
-        <div className="rounded-lg border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-300">
-          Monitoring checks could not be loaded from the API: {queryErrorMessage(healthQuery.error)}
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <span>Monitoring checks could not be loaded from the API: {queryErrorMessage(healthQuery.error)}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void healthQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {nodesQuery.isError ? (
-        <div className="rounded-lg border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-300">
-          Nodes could not be loaded from the API: {queryErrorMessage(nodesQuery.error)}
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <span>Nodes could not be loaded from the API: {queryErrorMessage(nodesQuery.error)}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void nodesQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {serversQuery.isError ? (
-        <div className="rounded-lg border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-300">
-          Servers could not be loaded from the API: {queryErrorMessage(serversQuery.error)}
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <span>Servers could not be loaded from the API: {queryErrorMessage(serversQuery.error)}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {reservationsQuery.isError ? (
-        <div className="rounded-lg border border-amber-700/30 bg-amber-900/10 p-3 text-sm text-amber-200">
-          Reservation data could not be loaded: {queryErrorMessage(reservationsQuery.error)}. Reservation counts are unavailable.
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-sm text-amber-200">
+          <span>Reservation data could not be loaded: {queryErrorMessage(reservationsQuery.error)}. Reservation counts are unavailable.</span>
+          <Btn size="sm" tone="ghost" onClick={() => void reservationsQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {recoveryQuery.isError ? (
-        <div className="rounded-lg border border-amber-700/30 bg-amber-900/10 p-3 text-sm text-amber-200">
-          Recovery plan data could not be loaded: {queryErrorMessage(recoveryQuery.error)}. Recovery counts are unavailable.
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-sm text-amber-200">
+          <span>Recovery plan data could not be loaded: {queryErrorMessage(recoveryQuery.error)}. Recovery counts are unavailable.</span>
+          <Btn size="sm" tone="ghost" onClick={() => void recoveryQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {activityQuery.isError ? (
-        <div className="rounded-lg border border-amber-700/30 bg-amber-900/10 p-3 text-sm text-amber-200">
-          Platform activity could not be loaded: {queryErrorMessage(activityQuery.error)}. Activity counts are unavailable.
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-sm text-amber-200">
+          <span>Platform activity could not be loaded: {queryErrorMessage(activityQuery.error)}. Activity counts are unavailable.</span>
+          <Btn size="sm" tone="ghost" onClick={() => void activityQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
 

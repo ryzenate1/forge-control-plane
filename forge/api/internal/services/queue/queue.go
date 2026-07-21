@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -83,13 +85,15 @@ type Service struct {
 	mu       sync.RWMutex
 	wg       sync.WaitGroup
 	cancel   context.CancelFunc
+	active   map[string]context.CancelFunc
+	activeMu sync.Mutex
 }
 
 func New(store QueueStore, workers int) *Service {
 	if workers <= 0 {
 		workers = 5
 	}
-	return &Service{store: store, handlers: make(map[JobType]HandlerFunc), workers: workers, workerID: uuid.NewString(), lease: 30 * time.Second}
+	return &Service{store: store, handlers: make(map[JobType]HandlerFunc), workers: workers, workerID: uuid.NewString(), lease: 30 * time.Second, active: make(map[string]context.CancelFunc)}
 }
 
 func (s *Service) RegisterHandler(jobType JobType, handler HandlerFunc) {
@@ -110,6 +114,11 @@ func (s *Service) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.activeMu.Lock()
+	for _, cancel := range s.active {
+		cancel()
+	}
+	s.activeMu.Unlock()
 	s.wg.Wait()
 }
 
@@ -135,6 +144,30 @@ func (s *Service) worker(ctx context.Context) {
 }
 
 func (s *Service) process(ctx context.Context, job *Job) {
+	jobCtx, jobCancel := context.WithCancel(ctx)
+	s.activeMu.Lock()
+	s.active[job.ID] = jobCancel
+	s.activeMu.Unlock()
+
+	defer func() {
+		s.activeMu.Lock()
+		delete(s.active, job.ID)
+		s.activeMu.Unlock()
+		jobCancel()
+
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			err := fmt.Errorf("panic in job %s: %v\nstack: %s", job.ID, r, buf[:n])
+			if job.RetryCount+1 >= job.MaxRetries {
+				_ = s.store.Fail(ctx, job.ID, err)
+			} else {
+				backoff := time.Duration(1<<min(job.RetryCount, 6)) * time.Second
+				_ = s.store.Retry(ctx, job.ID, err, time.Now().UTC().Add(backoff))
+			}
+		}
+	}()
+
 	s.mu.RLock()
 	handler, ok := s.handlers[job.Type]
 	s.mu.RUnlock()
@@ -143,8 +176,8 @@ func (s *Service) process(ctx context.Context, job *Job) {
 		return
 	}
 	done := make(chan struct{})
-	go s.keepLease(ctx, job.ID, done)
-	err := handler(ctx, job)
+	go s.keepLease(jobCtx, job.ID, done)
+	err := handler(jobCtx, job)
 	close(done)
 	if err != nil {
 		if job.RetryCount+1 >= job.MaxRetries {
@@ -190,6 +223,15 @@ func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string,
 	job := &Job{ID: id, Type: jobType, Status: JobStatusPending, ServerID: serverID, NodeID: nodeID,
 		Payload: data, Priority: priority, MaxRetries: 3, IdempotencyKey: idempotencyKey, AvailableAt: now, CreatedAt: now}
 	return job, s.store.Enqueue(ctx, job)
+}
+
+func (s *Service) Cancel(ctx context.Context, id string) error {
+	s.activeMu.Lock()
+	if cancel, ok := s.active[id]; ok {
+		cancel()
+	}
+	s.activeMu.Unlock()
+	return s.store.Fail(ctx, id, errors.New("job cancelled"))
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*Job, error) { return s.store.GetJob(ctx, id) }

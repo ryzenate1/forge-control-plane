@@ -73,9 +73,15 @@ type caddyUpdater interface {
 }
 
 type VerifiedDomainRoute struct {
-	Domain   string `json:"domain"`
-	Wildcard bool   `json:"wildcard"`
-	ServerID string `json:"serverId"`
+	Domain     string `json:"domain"`
+	Wildcard   bool   `json:"wildcard"`
+	ServerID   string `json:"serverId"`
+	TargetHost string `json:"targetHost,omitempty"`
+	TargetPort int    `json:"targetPort,omitempty"`
+}
+
+type NodeResolver interface {
+	ResolveServerTarget(ctx context.Context, serverID string) (host string, port int, err error)
 }
 
 type Service struct {
@@ -88,6 +94,7 @@ type Service struct {
 	done          chan struct{}
 	panelIP       string
 	reverifyEvery time.Duration
+	nodeResolver  NodeResolver
 }
 
 func New(store domainStore, caddy caddyUpdater, panelIP string, publishers ...events.Publisher) *Service {
@@ -103,6 +110,10 @@ func New(store domainStore, caddy caddyUpdater, panelIP string, publishers ...ev
 		panelIP:       panelIP,
 		reverifyEvery: 24 * time.Hour,
 	}
+}
+
+func (s *Service) SetNodeResolver(r NodeResolver) {
+	s.nodeResolver = r
 }
 
 func (s *Service) SetReverifyInterval(d time.Duration) {
@@ -415,11 +426,21 @@ func (s *Service) syncCaddyRoutes(ctx context.Context) error {
 
 	routes := make([]VerifiedDomainRoute, 0, len(rows))
 	for _, row := range rows {
-		routes = append(routes, VerifiedDomainRoute{
-			Domain:   row.Domain,
-			Wildcard: row.Wildcard,
-			ServerID: row.ServerID,
-		})
+		dr := VerifiedDomainRoute{
+			Domain:     row.Domain,
+			Wildcard:   row.Wildcard,
+			ServerID:   row.ServerID,
+			TargetHost: "localhost",
+			TargetPort: 8080,
+		}
+		if s.nodeResolver != nil && row.ServerID != "" {
+			host, port, err := s.nodeResolver.ResolveServerTarget(ctx, row.ServerID)
+			if err == nil {
+				dr.TargetHost = host
+				dr.TargetPort = port
+			}
+		}
+		routes = append(routes, dr)
 	}
 
 	if s.caddy == nil {

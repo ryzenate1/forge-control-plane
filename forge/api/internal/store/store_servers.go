@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"time"
 
 	"errors"
 	"fmt"
@@ -293,7 +294,8 @@ func (s *Store) GetServer(ctx context.Context, serverID string) (Server, error) 
 		       s.primary_allocation_id::text, s.config_sync_pending, s.config_sync_error,
 		       n.name, n.id::text, COALESCE(NULLIF(n.fqdn, ''), n.base_url), COALESCE(n.daemon_sftp, 2022),
 		       u.email, u.id::text, e.name,
-		       COALESCE(s.uuid, ''), COALESCE(s.uuid_short, ''), s.installed_at, s.skip_scripts, s.docker_labels
+		       COALESCE(s.uuid, ''), COALESCE(s.uuid_short, ''), s.installed_at, s.skip_scripts, s.docker_labels,
+		       COALESCE(s.generation, 0), s.workload_lease_expiry
 		FROM servers s
 		JOIN nodes n ON n.id = s.node_id
 		JOIN users u ON u.id = s.owner_id
@@ -309,6 +311,7 @@ func (s *Store) GetServer(ctx context.Context, serverID string) (Server, error) 
 		&server.Node, &server.NodeID, &server.SFTPHost, &server.SFTPPort,
 		&server.Owner, &server.OwnerID, &server.Template,
 		&server.Uuid, &server.UuidShort, &server.InstalledAt, &server.SkipScripts, &server.DockerLabels,
+		&server.Generation, &server.WorkloadLeaseExpiry,
 	)
 	if err != nil {
 		return Server{}, err
@@ -458,6 +461,20 @@ func (s *Store) UpdateServer(ctx context.Context, serverID string, req UpdateSer
 		return Server{}, err
 	}
 	return s.GetServer(ctx, serverID)
+}
+
+func (s *Store) UpdateServerGeneration(ctx context.Context, serverID string, generation int64, leaseExpiry *time.Time) error {
+	commandTag, err := s.db.Exec(ctx, `
+		UPDATE servers SET generation = $2, workload_lease_expiry = $3, updated_at = now()
+		WHERE id = $1
+	`, serverID, generation, leaseExpiry)
+	if err != nil {
+		return err
+	}
+	if commandTag.RowsAffected() == 0 {
+		return errors.New("server not found")
+	}
+	return nil
 }
 
 func invalidOptionalInt(value *int, minimum int, strict bool) bool {

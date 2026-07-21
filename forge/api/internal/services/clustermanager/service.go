@@ -103,8 +103,9 @@ func (s *Service) CreateServer(ctx context.Context, req store.CreateServerReques
 		decision.AllocationID = allocation.ID
 		decision.Reasons = append(decision.Reasons, "selected first available allocation on placed node")
 	}
+	reservationID := decision.ReservationID
 	var reservation store.PlacementReservation
-	if s.reservations != nil {
+	if reservationID == "" && s.reservations != nil {
 		reservation, err = s.reservations.CreateReservation(ctx, store.CreatePlacementReservationRequest{
 			NodeID:          req.NodeID,
 			ReservationType: store.PlacementReservationTypePlacement,
@@ -117,7 +118,14 @@ func (s *Service) CreateServer(ctx context.Context, req store.CreateServerReques
 		if err != nil {
 			return store.Server{}, domain.PlacementDecision{}, err
 		}
+		reservationID = reservation.ID
 		decision.Reasons = append(decision.Reasons, "reserved capacity on placed node")
+		decision.ReservationID = reservationID
+	} else if reservationID != "" {
+		reservation, err = s.reservations.GetReservation(ctx, reservationID)
+		if err != nil {
+			return store.Server{}, domain.PlacementDecision{}, err
+		}
 	}
 	s.publish(ctx, events.EventPlacementCreated, "placement", decision.NodeID, map[string]any{
 		"regionId":      decision.RegionID,
@@ -130,7 +138,7 @@ func (s *Service) CreateServer(ctx context.Context, req store.CreateServerReques
 	})
 	server, err := s.store.CreateServer(ctx, req)
 	if err != nil {
-		s.cancelReservation(ctx, reservation.ID)
+		s.cancelReservation(ctx, reservationID)
 		return store.Server{}, domain.PlacementDecision{}, err
 	}
 	created := false
@@ -140,12 +148,12 @@ func (s *Service) CreateServer(ctx context.Context, req store.CreateServerReques
 		created, err = s.provisionServer(ctx, server.ID)
 	}
 	if err != nil {
-		s.cancelReservation(ctx, reservation.ID)
+		s.cancelReservation(ctx, reservationID)
 		return store.Server{}, domain.PlacementDecision{}, s.compensateCreateFailure(ctx, server.ID, created, err)
 	}
-	if s.reservations != nil && reservation.ID != "" {
-		if _, err := s.reservations.ConfirmReservation(ctx, reservation.ID); err != nil {
-			s.cancelReservation(ctx, reservation.ID)
+	if s.reservations != nil && reservationID != "" {
+		if _, err := s.reservations.ConfirmReservation(ctx, reservationID); err != nil {
+			s.cancelReservation(ctx, reservationID)
 			return store.Server{}, domain.PlacementDecision{}, s.compensateCreateFailure(ctx, server.ID, true, err)
 		}
 	}

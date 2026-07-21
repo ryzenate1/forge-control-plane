@@ -3,7 +3,6 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"sync"
 	"testing"
 
 	"github.com/spf13/pflag"
@@ -228,9 +227,9 @@ crash_detection:
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(yamlFile)
+	cfg, err := LoadWithOptions(LoadOptions{Path: yamlFile})
 	if err != nil {
-		t.Fatalf("Load() failed: %v", err)
+		t.Fatalf("LoadWithOptions() failed: %v", err)
 	}
 
 	if !cfg.Debug {
@@ -263,9 +262,9 @@ func TestLoadFromSources_NoFileNoEnv(t *testing.T) {
 	os.Unsetenv("DAEMON_SYSTEM_API_PORT")
 	os.Unsetenv("DAEMON_SYSTEM_API_HOST")
 
-	cfg, err := LoadFromSources("", EnvPrefix)
+	cfg, err := LoadWithOptions(LoadOptions{EnvPrefix: EnvPrefix})
 	if err != nil {
-		t.Fatalf("LoadFromSources() failed: %v", err)
+		t.Fatalf("LoadWithOptions() failed: %v", err)
 	}
 
 	if cfg.System.API.Port != 9090 {
@@ -289,9 +288,9 @@ func TestLoadFromSources_WithYAMLFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	cfg, err := LoadFromSources(yamlFile, EnvPrefix)
+	cfg, err := LoadWithOptions(LoadOptions{Path: yamlFile, EnvPrefix: EnvPrefix})
 	if err != nil {
-		t.Fatalf("LoadFromSources() failed: %v", err)
+		t.Fatalf("LoadWithOptions() failed: %v", err)
 	}
 
 	if cfg.System.API.Port != 8080 {
@@ -320,9 +319,9 @@ func TestLoadFromSources_EnvOverridesFile(t *testing.T) {
 	os.Setenv("DAEMON_SYSTEM_API_PORT", "9999")
 	defer os.Unsetenv("DAEMON_SYSTEM_API_PORT")
 
-	cfg, err := LoadFromSources(yamlFile, EnvPrefix)
+	cfg, err := LoadWithOptions(LoadOptions{Path: yamlFile, EnvPrefix: EnvPrefix})
 	if err != nil {
-		t.Fatalf("LoadFromSources() failed: %v", err)
+		t.Fatalf("LoadWithOptions() failed: %v", err)
 	}
 
 	if cfg.System.API.Port != 9999 {
@@ -334,9 +333,9 @@ func TestLoadFromSources_InvalidConfig(t *testing.T) {
 	os.Setenv("DAEMON_SYSTEM_API_PORT", "70000")
 	defer os.Unsetenv("DAEMON_SYSTEM_API_PORT")
 
-	_, err := LoadFromSources("", EnvPrefix)
+	_, err := LoadWithOptions(LoadOptions{EnvPrefix: EnvPrefix})
 	if err == nil {
-		t.Error("LoadFromSources() should reject invalid config via env var")
+		t.Error("LoadWithOptions() should reject invalid config via env var")
 	}
 }
 
@@ -389,52 +388,6 @@ func viperWithDefaultsForTest() *viper.Viper {
 	return v
 }
 
-func TestAccessors_APIConfig(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	api := cfg.APIConfig()
-	if api.Host != "0.0.0.0" {
-		t.Errorf("APIConfig().Host = %q, want %q", api.Host, "0.0.0.0")
-	}
-	if api.Port != 9090 {
-		t.Errorf("APIConfig().Port = %d, want %d", api.Port, 9090)
-	}
-}
-
-func TestAccessors_SFTPConfig(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	sftp := cfg.SFTPConfig()
-	if sftp.Address != "0.0.0.0" {
-		t.Errorf("SFTPConfig().Address = %q, want %q", sftp.Address, "0.0.0.0")
-	}
-	if sftp.Port != 2022 {
-		t.Errorf("SFTPConfig().Port = %d, want %d", sftp.Port, 2022)
-	}
-}
-
-func TestAccessors_DockerConfig(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	docker := cfg.DockerConfig()
-	if docker.Timezone != "UTC" {
-		t.Errorf("DockerConfig().Timezone = %q, want %q", docker.Timezone, "UTC")
-	}
-}
-
-func TestAccessors_CrashDetectConfig(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	crash := cfg.CrashDetectConfig()
-	if crash.DetectCleanExitAsCrash != false {
-		t.Error("CrashDetectConfig().DetectCleanExitAsCrash should be false")
-	}
-}
-
 func TestAccessors_AllowedMountsList(t *testing.T) {
 	cfg := Default()
 	cfg.AllowedMounts = []string{"/mnt/a", "/mnt/b"}
@@ -451,98 +404,12 @@ func TestAccessors_AllowedMountsList(t *testing.T) {
 	}
 }
 
-func TestAccessors_AllowedOriginsList(t *testing.T) {
-	cfg := Default()
-	cfg.AllowedOrigins = []string{"https://example.com"}
-	setGlobal(cfg)
-
-	origins := cfg.AllowedOriginsList()
-	if len(origins) != 1 {
-		t.Errorf("AllowedOriginsList() length = %d, want %d", len(origins), 1)
-	}
-
-	origins = append(origins, "https://other.com")
-	if len(cfg.AllowedOriginsList()) != 1 {
-		t.Error("AllowedOriginsList() should return defensive copy")
-	}
-}
-
-func TestAccessors_RemoteQueryList(t *testing.T) {
-	cfg := Default()
-	cfg.RemoteQuery = map[string]int{"server1": 25565}
-	setGlobal(cfg)
-
-	queries := cfg.RemoteQueryList()
-	if len(queries) != 1 {
-		t.Errorf("RemoteQueryList() length = %d, want %d", len(queries), 1)
-	}
-	if queries["server1"] != 25565 {
-		t.Errorf("RemoteQueryList()[server1] = %d, want %d", queries["server1"], 25565)
-	}
-
-	queries["server2"] = 25566
-	if len(cfg.RemoteQueryList()) != 1 {
-		t.Error("RemoteQueryList() should return defensive copy")
-	}
-}
-
-func TestAccessors_IsDebug(t *testing.T) {
+func TestAccessors_BackupConfig(t *testing.T) {
 	cfg := Default()
 	setGlobal(cfg)
 
-	if cfg.IsDebug() != false {
-		t.Error("IsDebug() should be false by default")
+	bc := cfg.BackupConfig()
+	if bc.WriteLimit != 0 {
+		t.Errorf("BackupConfig().WriteLimit = %d, want %d", bc.WriteLimit, 0)
 	}
-
-	cfg.Debug = true
-	if cfg.IsDebug() != true {
-		t.Error("IsDebug() should reflect updated Debug value")
-	}
-}
-
-func TestAccessors_DataDir(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	if cfg.DataDir() != "/srv/game-panel/servers" {
-		t.Errorf("DataDir() = %q, want %q", cfg.DataDir(), "/srv/game-panel/servers")
-	}
-}
-
-func TestAccessors_APIAddr(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	addr := cfg.APIAddr()
-	if addr != "0.0.0.0:9090" {
-		t.Errorf("APIAddr() = %q, want %q", addr, "0.0.0.0:9090")
-	}
-}
-
-func TestThreadSafety_ConcurrentReads(t *testing.T) {
-	cfg := Default()
-	setGlobal(cfg)
-
-	var wg sync.WaitGroup
-	numGoroutines := 100
-
-	for i := 0; i < numGoroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			_ = Get()
-			_ = cfg.APIConfig()
-			_ = cfg.SFTPConfig()
-			_ = cfg.DockerConfig()
-			_ = cfg.CrashDetectConfig()
-			_ = cfg.AllowedMountsList()
-			_ = cfg.AllowedOriginsList()
-			_ = cfg.RemoteQueryList()
-			_ = cfg.IsDebug()
-			_ = cfg.DataDir()
-			_ = cfg.APIAddr()
-		}()
-	}
-
-	wg.Wait()
 }

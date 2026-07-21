@@ -7,16 +7,9 @@ import {
   ErrorAlert,
   BuildStatus,
 } from "@/components/shared";
+import { fetchAppGitSource } from "@/lib/api/apps";
+import type { GitSource } from "@/lib/api/apps";
 import type { ReactNode } from "react";
-
-type GitInfo = {
-  provider: string;
-  repository: string;
-  branch: string;
-  lastCommit?: string;
-  lastCommitMessage?: string;
-  lastBuildStatus?: string;
-};
 
 interface GitViewProps {
   appId: string;
@@ -24,15 +17,9 @@ interface GitViewProps {
 }
 
 export function GitView({ appId, action }: GitViewProps) {
-  const query = useQuery<GitInfo>({
+  const query = useQuery<GitSource>({
     queryKey: ["app-git", appId],
-    queryFn: async () => {
-      const res = await fetch(`/api/v1/servers/${encodeURIComponent(appId)}/git`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`Failed to load git info: ${res.status}`);
-      return res.json() as Promise<GitInfo>;
-    },
+    queryFn: () => fetchAppGitSource(appId),
     enabled: Boolean(appId),
   });
 
@@ -47,12 +34,14 @@ export function GitView({ appId, action }: GitViewProps) {
     return <EmptyGit action={action} />;
   }
 
+  const lastCommit = git.commits?.[0];
+
   return (
     <div className="ui-card">
       <div className="ui-card-header">
         <span className="text-sm font-semibold text-slate-200">Source Repository</span>
-        {git.lastBuildStatus ? (
-          <BuildStatus status={git.lastBuildStatus} />
+        {git.autoDeploy ? (
+          <BuildStatus status="active" />
         ) : null}
       </div>
       <div className="space-y-4 p-6">
@@ -63,19 +52,19 @@ export function GitView({ appId, action }: GitViewProps) {
           </div>
           <div>
             <p className="text-xs text-slate-500">Repository</p>
-            <p className="text-sm font-semibold text-slate-200">{git.repository}</p>
+            <p className="text-sm font-semibold text-slate-200">{git.repoUrl}</p>
           </div>
           <div>
             <p className="text-xs text-slate-500">Branch</p>
             <p className="text-sm font-semibold text-slate-200">{git.branch}</p>
           </div>
         </div>
-        {git.lastCommit ? (
+        {lastCommit ? (
           <div className="rounded-lg border border-white/[0.06] bg-[#161b28] p-4">
             <p className="text-xs text-slate-500">Last commit</p>
-            <p className="mt-1 font-mono text-sm text-slate-300">{git.lastCommit.slice(0, 7)}</p>
-            {git.lastCommitMessage ? (
-              <p className="mt-1 text-sm text-slate-400">{git.lastCommitMessage}</p>
+            <p className="mt-1 font-mono text-sm text-slate-300">{lastCommit.sha.slice(0, 7)}</p>
+            {lastCommit.message ? (
+              <p className="mt-1 text-sm text-slate-400">{lastCommit.message}</p>
             ) : null}
           </div>
         ) : null}

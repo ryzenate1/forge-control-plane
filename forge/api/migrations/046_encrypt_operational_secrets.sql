@@ -7,7 +7,6 @@ ALTER TABLE database_hosts ADD COLUMN IF NOT EXISTS password_encrypted TEXT;
 ALTER TABLE server_databases ADD COLUMN IF NOT EXISTS password_encrypted TEXT;
 ALTER TABLE users ADD COLUMN IF NOT EXISTS totp_secret_encrypted TEXT;
 ALTER TABLE webhooks ADD COLUMN IF NOT EXISTS secret_encrypted TEXT;
-ALTER TABLE webhook_deliveries ADD COLUMN IF NOT EXISTS secret_encrypted TEXT;
 ALTER TABLE panel_settings
     ADD COLUMN IF NOT EXISTS smtp_password_encrypted TEXT,
     ADD COLUMN IF NOT EXISTS recaptcha_secret_key_encrypted TEXT;

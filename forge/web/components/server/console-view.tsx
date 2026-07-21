@@ -4,6 +4,7 @@ import { FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from "
 import { AlertTriangle, ArrowDown, Clock, Cpu, Download, MemoryStick, Network, PlugZap, RefreshCw, Search, Send, Server, Trash2, Upload } from "lucide-react";
 import { useMutation } from "@tanstack/react-query";
 import { type ApiServer, type ApiStats, connectServerWebSocket, fetchServerLogs, reinstallServer, sendPowerSignal } from "@/lib/api";
+import { WebSocketManager } from "@/lib/api/ws/websocket-manager";
 import { cn, formatBytes } from "@/lib/utils";
 import { hasServerPermission, useServerContext } from "./server-context";
 import { CrashBanner } from "./crash-banner";
@@ -132,28 +133,54 @@ export function ConsoleView({ server }: { server: ApiServer }) {
   const install = useMutation({ mutationFn: () => reinstallServer(server.id), onSuccess: () => void refreshServer() });
 
   useEffect(() => { if (autoScroll) requestAnimationFrame(() => outputRef.current?.scrollTo({ top: outputRef.current.scrollHeight })); }, [autoScroll, lines]);
+  const cmdBuffer = useRef<string[]>([]);
   useEffect(() => {
     if (!canConsole) { setConnection("error"); setConnectionError("You do not have permission to access this server console."); return; }
-    let closed = false;
-    let socket: WebSocket | null = null;
-    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
     setConnection(nonce ? "reconnecting" : "connecting");
     setConnectionError("");
     void fetchServerLogs(server.id).then((logs) => setLines(logs.split("\n").filter(Boolean).slice(-MAX_LINES))).catch((error) => setConnectionError(error instanceof Error ? error.message : "Previous logs could not be loaded."));
-    void connectServerWebSocket(server.id, "console").then((next) => {
-      if (closed) { next.close(); return; }
-      socket = next; socketRef.current = next;
-      next.onopen = () => { setConnection("connected"); reconnectAttempt.current = 0; messageCount.current = 0; connectedAt.current = Date.now(); };
-      next.onmessage = (event) => {
+
+    const manager = new WebSocketManager({
+      maxRetries: 20,
+      baseDelay: 1000,
+      maxDelay: 30000,
+      factory: () => connectServerWebSocket(server.id, "console"),
+      onMessage: (data) => {
         messageCount.current += 1;
-        let text = String(event.data);
+        let text = String(data);
         try { const payload = JSON.parse(text) as { data?: string; error?: string }; text = payload.data ?? payload.error ?? text; } catch { /* plain daemon output */ }
         if (text) setLines((current) => [...current, ...text.split("\n").filter(Boolean)].slice(-MAX_LINES));
-      };
-      next.onerror = () => { setConnection("error"); setConnectionError("The console connection failed."); };
-      next.onclose = () => { if (!closed) { setConnection("reconnecting"); const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 30000); reconnectAttempt.current += 1; reconnectTimer = setTimeout(() => setNonce((value) => value + 1), delay); } };
-    }).catch((error) => { if (!closed) { setConnection("error"); setConnectionError(error instanceof Error ? error.message : "Console authorization failed."); } });
-    return () => { closed = true; if (reconnectTimer) clearTimeout(reconnectTimer); socket?.close(); socketRef.current = null; };
+      },
+      onStatusChange: (status) => {
+        switch (status) {
+          case "connected":
+            setConnection("connected");
+            messageCount.current = 0;
+            connectedAt.current = Date.now();
+            setConnectionError("");
+            const pending = cmdBuffer.current.splice(0);
+            for (const cmd of pending) manager.send(cmd);
+            break;
+          case "connecting":
+            setConnection(nonce ? "reconnecting" : "connecting");
+            break;
+          case "reconnecting":
+            setConnection("reconnecting");
+            break;
+          case "disconnected":
+            setConnection("error");
+            setConnectionError("Console disconnected");
+            break;
+        }
+      },
+      onError: (_error: Event) => { setConnectionError("The console connection failed."); },
+    });
+
+    const proxySocket = { send: (data: string) => { manager.send(data); }, close: () => manager.disconnect(), get readyState() { return manager.status === "connected" ? WebSocket.OPEN : WebSocket.CLOSED; } } as WebSocket;
+    socketRef.current = proxySocket;
+
+    void manager.connect();
+    return () => { manager.disconnect(); socketRef.current = null; cmdBuffer.current = []; };
   }, [canConsole, nonce, server.id]);
 
   useEffect(() => {
@@ -175,7 +202,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
 
   const memoryPercent = stats && stats.memoryLimit > 0 ? (stats.memoryBytes / stats.memoryLimit) * 100 : null;
   const stateLabel = connection === "connected" ? "Connected" : connection === "connecting" ? "Connecting" : connection === "reconnecting" ? "Reconnecting" : "Connection error";
-  const submit = (event: FormEvent) => { event.preventDefault(); const value = command.trim(); if (!value || socketRef.current?.readyState !== WebSocket.OPEN) return; socketRef.current.send(value); setHistory((items) => { const next = [value, ...items.filter((item) => item !== value)].slice(0, 50); localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); return next; }); setHistoryIndex(-1); setCommand(""); };
+  const submit = (event: FormEvent) => { event.preventDefault(); const value = command.trim(); if (!value) return; if (socketRef.current?.readyState === WebSocket.OPEN) { socketRef.current.send(value); } else { cmdBuffer.current.push(value); } setHistory((items) => { const next = [value, ...items.filter((item) => item !== value)].slice(0, 50); localStorage.setItem(HISTORY_KEY, JSON.stringify(next)); return next; }); setHistoryIndex(-1); setCommand(""); };
   const historyKey = (event: KeyboardEvent<HTMLInputElement>) => { if (event.key !== "ArrowUp" && event.key !== "ArrowDown") return; event.preventDefault(); const next = event.key === "ArrowUp" ? Math.min(historyIndex + 1, history.length - 1) : Math.max(historyIndex - 1, -1); setHistoryIndex(next); setCommand(next < 0 ? "" : history[next] ?? ""); };
   const controls = useMemo(() => (["start", "restart", "stop", "kill"] as const), []);
   const blocked = server.suspended || server.transferring || server.status === "installing";

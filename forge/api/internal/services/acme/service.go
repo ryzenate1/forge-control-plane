@@ -144,6 +144,7 @@ func (s *Service) RegisterDNSProvider(name string, factory DNSProviderFactory) {
 	s.mu.Lock()
 	s.dnsProviders[name] = factory
 	s.mu.Unlock()
+	RegisterDNSProvider(name, factory)
 }
 
 func (s *Service) directoryURL(provider CertificateProvider) string {
@@ -199,6 +200,16 @@ func (s *Service) IssueCertificate(ctx context.Context, req IssueCertificateRequ
 		return store.Certificate{}, errors.New("wildcard certificates require dns-01 challenge")
 	}
 
+	// Validate DNS-01 challenge requirements
+	if req.ChallengeType == ChallengeTypeDNS01 {
+		if req.DNSProvider == "" {
+			return store.Certificate{}, errors.New("dns provider is required for dns-01 challenge")
+		}
+		if len(req.DNSCredentials) == 0 {
+			return store.Certificate{}, errors.New("dns credentials are required for dns-01 challenge")
+		}
+	}
+
 	privateKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
 	if err != nil {
 		return store.Certificate{}, fmt.Errorf("generate private key: %w", err)
@@ -245,15 +256,17 @@ func (s *Service) IssueCertificate(ctx context.Context, req IssueCertificateRequ
 	}
 
 	cert, err := s.store.CreateCertificate(ctx, store.CreateCertificateRequest{
-		Domains:       req.Domains,
-		Issuer:        string(certRes.IssuerCertificate),
-		Certificate:   certPEM,
-		PrivateKey:    keyPEM,
-		ExpiresAt:     expiresAt,
-		AutoRenew:     req.AutoRenew,
-		Provider:      req.Provider,
-		ChallengeType: req.ChallengeType,
-		Wildcard:      wildcard,
+		Domains:        req.Domains,
+		Issuer:         string(certRes.IssuerCertificate),
+		Certificate:    certPEM,
+		PrivateKey:     keyPEM,
+		ExpiresAt:      expiresAt,
+		AutoRenew:      req.AutoRenew,
+		Provider:       req.Provider,
+		ChallengeType:  req.ChallengeType,
+		DNSProvider:    req.DNSProvider,
+		DNSCredentials: req.DNSCredentials,
+		Wildcard:       wildcard,
 	})
 	if err != nil {
 		return store.Certificate{}, err
@@ -313,9 +326,11 @@ func (s *Service) RenewCertificate(ctx context.Context, certID string) (store.Ce
 		expiresAt = certs[0].NotAfter
 	}
 
+	keyPEM := string(res.PrivateKey)
 	now := time.Now().UTC()
 	updated, err := s.store.UpdateCertificate(ctx, certID, store.UpdateCertificateRequest{
 		Certificate: &certPEM,
+		PrivateKey:  &keyPEM,
 		ExpiresAt:   &expiresAt,
 		UpdatedAt:   &now,
 	})
@@ -339,8 +354,11 @@ func (s *Service) ListCertificates(ctx context.Context, filter store.Certificate
 }
 
 func (s *Service) StartAutoRenewal(ctx context.Context) {
-	ctx, cancel := context.WithCancel(ctx)
 	s.mu.Lock()
+	if s.cancel != nil {
+		s.cancel()
+	}
+	ctx, cancel := context.WithCancel(ctx)
 	s.cancel = cancel
 	s.mu.Unlock()
 
@@ -477,10 +495,8 @@ func (s *Service) renewOnce(cert store.Certificate, privateKey crypto.PrivateKey
 		return nil, fmt.Errorf("create acme client: %w", err)
 	}
 
-	if cert.ChallengeType == ChallengeTypeDNS01 {
-		client.Challenge.SetDNS01Provider(s.httpChallenge)
-	} else {
-		client.Challenge.SetHTTP01Provider(s.httpChallenge)
+	if err := s.configureChallenge(client, cert.ChallengeType, cert.DNSProvider, cert.DNSCredentials); err != nil {
+		return nil, fmt.Errorf("configure challenge for renewal: %w", err)
 	}
 
 	reg, err := client.Registration.Register(registration.RegisterOptions{TermsOfServiceAgreed: true})

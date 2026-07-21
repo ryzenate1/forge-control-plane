@@ -88,10 +88,9 @@ func NewServerManager(rt runtime.Runtime) *ServerManager {
 	return &ServerManager{runtime: rt, crashCooldown: time.Minute, detectCleanExitAsCrash: false}
 }
 
-// SetDetectCleanExitAsCrash toggles whether an exit code of 0 should be
-// treated as a crash and trigger auto-restart. When false (default), exit
-// code 0 is treated as a clean shutdown and the server stays stopped.
-// Matches Wings' config.system.crash_detection.detect_clean_exit_as_crash.
+// SetConsoleLifecycle registers callbacks invoked when a server transitions
+// to a running or stopped power state. The onRunning callback is called when
+// the server starts; onStopped is called on any stop or crash.
 func (m *ServerManager) SetConsoleLifecycle(onRunning, onStopped func(string)) {
 	m.onRunning = onRunning
 	m.onStopped = onStopped
@@ -107,7 +106,7 @@ func (m *ServerManager) Reconcile(ctx context.Context, reconstruction Reconstruc
 	state := m.State(reconstruction.ServerID)
 	state.mu.Lock()
 	state.RootDir = filepath.Clean(reconstruction.RootDir)
-	state.DiskLimitBytes = mbToBytes(reconstruction.DiskLimitMB)
+	state.DiskLimitBytes = MbToBytes(reconstruction.DiskLimitMB)
 	state.ConfigurationSynced = reconstruction.ConfigurationSynced
 	state.Suspended = reconstruction.Suspended
 	state.InstallationState = reconstruction.InstallationState
@@ -182,7 +181,7 @@ func (m *ServerManager) MarkCreated(serverID, rootDir string, diskLimitMB int64)
 	state.InstallationState = "installed"
 	state.ContainerExists = true
 	state.RootDir = rootDir
-	state.DiskLimitBytes = mbToBytes(diskLimitMB)
+	state.DiskLimitBytes = MbToBytes(diskLimitMB)
 	if state.PowerState == "" {
 		state.PowerState = PowerStateOffline
 	}
@@ -194,7 +193,7 @@ func (m *ServerManager) MarkConfigurationSynced(serverID string, diskLimitMB int
 	defer state.mu.Unlock()
 	state.ConfigurationSynced = true
 	if diskLimitMB >= 0 {
-		state.DiskLimitBytes = mbToBytes(diskLimitMB)
+		state.DiskLimitBytes = MbToBytes(diskLimitMB)
 	}
 }
 
@@ -564,7 +563,7 @@ func diskUsageBytes(root string) (int64, error) {
 	return total, err
 }
 
-func mbToBytes(value int64) int64 {
+func MbToBytes(value int64) int64 {
 	if value <= 0 {
 		return 0
 	}

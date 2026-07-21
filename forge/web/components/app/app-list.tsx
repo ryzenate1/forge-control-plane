@@ -2,19 +2,20 @@
 
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Server } from "lucide-react";
-import { fetchServers, type ApiServer } from "@/lib/api";
+import { fetchApps, type ApiApp } from "@/lib/api/apps";
+import { Cpu, MemoryStick, HardDrive } from "lucide-react";
 import { SkeletonList, EmptyList, ErrorAlert } from "@/components/shared";
 import type { ReactNode } from "react";
 
 interface AppListProps {
-  onSelect?: (app: ApiServer) => void;
+  onSelect?: (app: ApiApp) => void;
   emptyAction?: ReactNode;
 }
 
 export function AppList({ onSelect, emptyAction }: AppListProps) {
   const query = useQuery({
     queryKey: ["apps"],
-    queryFn: fetchServers,
+    queryFn: fetchApps,
   });
 
   if (query.isLoading) {

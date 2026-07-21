@@ -118,36 +118,26 @@ func TestLegacyServerTransferEndpointsAreRetired(t *testing.T) {
 	}
 }
 
-func TestPluginLifecycleHandlersReturnNotImplementedWithoutRuntime(t *testing.T) {
+func TestPluginLifecycleHandlersReturnServiceUnavailableWithoutService(t *testing.T) {
 	tests := []struct {
 		name    string
 		method  string
 		handler fiber.Handler
 	}{
-		{name: "install", method: nethttp.MethodPost, handler: InstallPlugin(Config{}, "")},
+		{name: "install", method: nethttp.MethodPost, handler: InstallPlugin(Config{})},
 		{name: "update", method: nethttp.MethodPatch, handler: UpdatePlugin(Config{})},
 		{name: "enable", method: nethttp.MethodPost, handler: EnablePlugin(Config{})},
 		{name: "disable", method: nethttp.MethodPost, handler: DisablePlugin(Config{})},
-		{name: "uninstall", method: nethttp.MethodPost, handler: UninstallPlugin(Config{}, "")},
+		{name: "uninstall", method: nethttp.MethodPost, handler: UninstallPlugin(Config{})},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			app := fiber.New(fiber.Config{DisableStartupMessage: true})
 			app.Add(tt.method, "/plugins/:id", tt.handler)
-			res, body := requestStatus(t, app, tt.method, "/plugins/plugin-1", []byte(`{}`))
-			// install handler still returns 501, the rest return 503 (no store)
-			if tt.name == "install" {
-				if res.StatusCode != nethttp.StatusNotImplemented {
-					t.Fatalf("%s returned %d, want 501", tt.name, res.StatusCode)
-				}
-				if !strings.Contains(string(body), "plugin runtime is not available") || !strings.Contains(string(body), tt.name) {
-					t.Fatalf("%s did not explain its runtime limitation: %s", tt.name, body)
-				}
-			} else {
-				if res.StatusCode != nethttp.StatusServiceUnavailable && res.StatusCode != nethttp.StatusNotImplemented {
-					t.Fatalf("%s returned %d, want 501 or 503", tt.name, res.StatusCode)
-				}
+			res, _ := requestStatus(t, app, tt.method, "/plugins/plugin-1", []byte(`{}`))
+			if res.StatusCode != nethttp.StatusServiceUnavailable {
+				t.Fatalf("%s returned %d, want 503", tt.name, res.StatusCode)
 			}
 		})
 	}

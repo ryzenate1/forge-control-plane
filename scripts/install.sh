@@ -35,6 +35,7 @@ readonly MIN_DISK_GB=20
 readonly MIN_CPUS=2
 readonly REQUIRED_PORTS=(80 443 8080 9090 3000)
 readonly SUPPORTED_OS=("Ubuntu 22.04" "Ubuntu 24.04" "Debian 12")
+readonly SUPPORTED_MACOS=("macOS 14" "macOS 15")
 readonly TIMESTAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
 # These will be set after detection
@@ -237,34 +238,60 @@ prompt() {
 detect_os() {
     step "1" "9" "Detecting operating system"
 
-    if [ ! -f /etc/os-release ]; then
-        fail "Cannot detect OS — /etc/os-release not found"
-    fi
-    . /etc/os-release
+    OS_NAME=""
+    OS_VERSION=""
+    OS_ID=""
 
-    OS_NAME="${NAME:-unknown}"
-    OS_VERSION="${VERSION_ID:-unknown}"
-    OS_ID="${ID:-unknown}"
-
-    info "Detected: $OS_NAME $OS_VERSION ($OS_ID)"
-
-    local supported=false
-    for supported_os in "${SUPPORTED_OS[@]}"; do
-        if echo "$OS_NAME $OS_VERSION" | grep -qF "$supported_os"; then
-            supported=true
-            break
-        fi
-    done
-
-    if [ "$supported" = "false" ]; then
-        warn "$OS_NAME $OS_VERSION is not officially supported. Supported: ${SUPPORTED_OS[*]}"
-        if [ "$UNATTENDED" = "true" ]; then
-            fail "Unsupported OS in unattended mode. Use --skip-checks to override."
-        fi
-        printf "  Continue anyway? [y/N]: "
-        read -r response
-        case "${response:-n}" in [Yy]*) ;; *) exit 1 ;; esac
-    fi
+    case "$(uname -s)" in
+        Darwin)
+            OS_NAME="macOS"
+            OS_VERSION="$(sw_vers -productVersion 2>/dev/null || echo "unknown")"
+            OS_ID="darwin"
+            info "Detected: macOS $OS_VERSION"
+            local supported=false
+            for supported_os in "${SUPPORTED_MACOS[@]}"; do
+                if echo "macOS $OS_VERSION" | grep -qF "$supported_os"; then
+                    supported=true
+                    break
+                fi
+            done
+            if [ "$supported" = "false" ]; then
+                warn "macOS $OS_VERSION is not officially supported. Supported: ${SUPPORTED_MACOS[*]}"
+            else
+                info "macOS version is supported"
+            fi
+            return 0
+            ;;
+        Linux)
+            if [ ! -f /etc/os-release ]; then
+                fail "Cannot detect Linux distro — /etc/os-release not found"
+            fi
+            . /etc/os-release
+            OS_NAME="${NAME:-unknown}"
+            OS_VERSION="${VERSION_ID:-unknown}"
+            OS_ID="${ID:-unknown}"
+            info "Detected: $OS_NAME $OS_VERSION ($OS_ID)"
+            local supported=false
+            for supported_os in "${SUPPORTED_OS[@]}"; do
+                if echo "$OS_NAME $OS_VERSION" | grep -qF "$supported_os"; then
+                    supported=true
+                    break
+                fi
+            done
+            if [ "$supported" = "false" ]; then
+                warn "$OS_NAME $OS_VERSION is not officially supported. Supported: ${SUPPORTED_OS[*]}"
+                if [ "$UNATTENDED" = "true" ]; then
+                    fail "Unsupported OS in unattended mode. Use --skip-checks to override."
+                fi
+                printf "  Continue anyway? [y/N]: "
+                read -r response
+                case "${response:-n}" in [Yy]*) ;; *) exit 1 ;; esac
+            fi
+            ;;
+        *)
+            fail "Unsupported OS: $(uname -s)"
+            ;;
+    esac
 }
 
 # ============================================================
@@ -336,14 +363,34 @@ check_docker() {
 }
 
 install_docker() {
-    detail "Installing Docker Engine..."
-    curl -fsSL https://get.docker.com | sh
-    if ! have docker; then
-        fail "Docker installation via get.docker.com failed"
-    fi
-    if command -v systemctl >/dev/null 2>&1; then
-        systemctl enable docker
-        systemctl start docker
+    if [ "$(uname -s)" = "Darwin" ]; then
+        detail "Docker Desktop is required on macOS."
+        detail "Download from: https://www.docker.com/products/docker-desktop/"
+        detail "Alternatively, install via Homebrew: brew install --cask docker"
+        if have brew; then
+            printf "  Install Docker Desktop via Homebrew? [y/N]: "
+            read -r response
+            case "${response:-n}" in [Yy]*)
+                brew install --cask docker
+                open -a Docker
+                detail "Please wait for Docker Desktop to start, then press Enter"
+                read -r
+                ;;
+            *) fail "Docker Desktop is required. Install manually and retry." ;;
+            esac
+        else
+            fail "Docker Desktop is required. Install from https://www.docker.com/products/docker-desktop/"
+        fi
+    else
+        detail "Installing Docker Engine..."
+        curl -fsSL https://get.docker.com | sh
+        if ! have docker; then
+            fail "Docker installation via get.docker.com failed"
+        fi
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl enable docker
+            systemctl start docker
+        fi
     fi
 }
 
@@ -377,7 +424,9 @@ check_resources() {
     local ram_mb cpus disk_gb
 
     # RAM
-    if [ -f /proc/meminfo ]; then
+    if [ "$(uname -s)" = "Darwin" ]; then
+        ram_mb="$(($(sysctl -n hw.memsize) / 1024 / 1024))"
+    elif [ -f /proc/meminfo ]; then
         ram_mb="$(awk '/MemTotal/ {printf "%d", $2/1024}' /proc/meminfo)"
     elif have free; then
         ram_mb="$(free -m | awk '/Mem:/ {print $2}')"
@@ -390,7 +439,11 @@ check_resources() {
     info "RAM: ${ram_mb}MB"
 
     # CPUs
-    cpus="$(nproc 2>/dev/null || echo 1)"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        cpus="$(sysctl -n hw.ncpu)"
+    else
+        cpus="$(nproc 2>/dev/null || echo 1)"
+    fi
     if [ "$cpus" -lt "$MIN_CPUS" ]; then
         fail "Insufficient CPUs: $cpus available, $MIN_CPUS required"
     fi
@@ -398,7 +451,11 @@ check_resources() {
 
     # Disk
     local install_path="${GAMEPANEL_INSTALL_DIR:-/opt/gamepanel}"
-    disk_gb="$(df --output=avail -BG "$(dirname "$install_path" 2>/dev/null || echo '/')" 2>/dev/null | tail -1 | tr -dc '0-9')"
+    if [ "$(uname -s)" = "Darwin" ]; then
+        disk_gb="$(df -g "$(dirname "$install_path" 2>/dev/null || echo '/')" 2>/dev/null | tail -1 | awk '{print $4}' | tr -dc '0-9')"
+    else
+        disk_gb="$(df --output=avail -BG "$(dirname "$install_path" 2>/dev/null || echo '/')" 2>/dev/null | tail -1 | tr -dc '0-9')"
+    fi
     if [ -z "$disk_gb" ]; then disk_gb=0; fi
     if [ "$disk_gb" -lt "$MIN_DISK_GB" ] && [ "$disk_gb" -gt 0 ]; then
         fail "Insufficient disk: ${disk_gb}GB available, ${MIN_DISK_GB}GB required"

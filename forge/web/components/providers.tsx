@@ -3,8 +3,9 @@
 import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
-import { fetchCurrentUser, migrateToCookieSession, refreshSession } from "@/lib/api";
+import { fetchCurrentUser, refreshSession } from "@/lib/api";
 import { useServerStore } from "@/stores/use-server-store";
+import { TenancyHydrator } from "@/lib/api/tenancy-hydrate";
 import { BrandingProvider } from "@/components/branding";
 import { Button } from "@/components/ui/primitives";
 import { ToastProvider, useToast } from "@/components/ui/toast";
@@ -34,20 +35,6 @@ function SessionLoader({ children }: { children: ReactNode }) {
   });
 
   useEffect(() => {
-    const onVisibility = () => {
-      if (document.visibilityState === "visible" && currentUser) {
-        void migrateToCookieSession().finally(() => queryClient.invalidateQueries({ queryKey: ["current-user"] }));
-      }
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    return () => document.removeEventListener("visibilitychange", onVisibility);
-  }, [currentUser, queryClient]);
-
-  useEffect(() => {
-    void migrateToCookieSession();
-  }, []);
-
-  useEffect(() => {
     if (!currentUser) return;
     const interval = setInterval(() => {
       void refreshSession().catch(() => undefined);
@@ -71,6 +58,7 @@ function SessionLoader({ children }: { children: ReactNode }) {
   return <>
     {sessionQuery.isFetching && !sessionQuery.data ? <div aria-label="Verifying session" className="fixed inset-x-0 top-0 z-[55] h-0.5 overflow-hidden bg-red-950"><div className="h-full w-1/2 animate-pulse bg-red-500" /></div> : null}
     {sessionQuery.isError ? <div className="flex flex-wrap items-center justify-center gap-3 border-b border-amber-500/25 bg-amber-500/10 px-4 py-2 text-sm text-amber-100" role="alert"><span>Session verification is temporarily unavailable. Your local session has not been removed.</span><Button className="min-h-8 px-3 py-1" disabled={sessionQuery.isFetching} onClick={() => void sessionQuery.refetch()} variant="secondary">{sessionQuery.isFetching ? "Retrying…" : "Retry"}</Button></div> : null}
+    <TenancyHydrator />
     {children}
   </>;
 }

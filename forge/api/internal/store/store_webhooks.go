@@ -20,19 +20,29 @@ const (
 )
 
 type Webhook struct {
-	ID               string      `json:"id"`
-	Name             string      `json:"name"`
-	Description      string      `json:"description"`
-	URL              string      `json:"url"`
-	WebhookType      WebhookType `json:"webhookType"`
-	Events           []string    `json:"events"`
-	Enabled          bool        `json:"enabled"`
-	Secret           string      `json:"secret,omitempty"`
-	DiscordUsername  string      `json:"discordUsername,omitempty"`
-	DiscordAvatarURL string      `json:"discordAvatarUrl,omitempty"`
-	DiscordContent   string      `json:"discordContent,omitempty"`
-	CreatedAt        time.Time   `json:"createdAt"`
-	UpdatedAt        time.Time   `json:"updatedAt"`
+	ID                string      `json:"id"`
+	Name              string      `json:"name"`
+	Description       string      `json:"description"`
+	URL               string      `json:"url"`
+	WebhookType       WebhookType `json:"webhookType"`
+	Events            []string    `json:"events"`
+	Enabled           bool        `json:"enabled"`
+	Secret            string      `json:"secret,omitempty"`
+	DiscordUsername   string      `json:"discordUsername,omitempty"`
+	DiscordAvatarURL  string      `json:"discordAvatarUrl,omitempty"`
+	DiscordContent    string      `json:"discordContent,omitempty"`
+	CreatedAt         time.Time   `json:"createdAt"`
+	UpdatedAt         time.Time   `json:"updatedAt"`
+	LastDeliveryAt    *time.Time  `json:"lastDeliveryAt,omitempty"`
+	LastDeliveryState *string     `json:"lastDeliveryState,omitempty"`
+}
+
+type WebhookStats struct {
+	TotalWebhooks     int     `json:"totalWebhooks"`
+	DeliveriesToday   int     `json:"deliveriesToday"`
+	SuccessRate       float64 `json:"successRate"`
+	FailedDeliveries  int     `json:"failedDeliveries"`
+	PendingDeliveries int     `json:"pendingDeliveries"`
 }
 
 type CreateWebhookRequest struct {
@@ -50,17 +60,21 @@ type CreateWebhookRequest struct {
 
 func (s *Store) ListWebhooks(ctx context.Context) ([]Webhook, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id, name, COALESCE(description,''), url, webhook_type,
-		       COALESCE(events,'{}'), enabled, (COALESCE(secret,'') <> '' OR COALESCE(secret_encrypted,'') <> ''),
-		       COALESCE(discord_username,''), COALESCE(discord_avatar_url,''),
-		       COALESCE(discord_content,''), created_at, updated_at
-		FROM webhooks ORDER BY name
+		SELECT w.id, w.name, COALESCE(w.description,''), w.url, w.webhook_type,
+		       COALESCE(w.events,'{}'), w.enabled, (COALESCE(w.secret,'') <> '' OR COALESCE(w.secret_encrypted,'') <> ''),
+		       COALESCE(w.discord_username,''), COALESCE(w.discord_avatar_url,''),
+		       COALESCE(w.discord_content,''), w.created_at, w.updated_at,
+		       last_del.created_at, last_del.state
+		FROM webhooks w
+		LEFT JOIN LATERAL (
+			SELECT created_at, state FROM webhook_deliveries WHERE webhook_id = w.id ORDER BY created_at DESC LIMIT 1
+		) last_del ON true
+		ORDER BY w.name
 	`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	// Return [] rather than null when no hooks exist; this is the list endpoint's JSON contract.
 	whs := []Webhook{}
 	for rows.Next() {
 		var wh Webhook
@@ -68,7 +82,8 @@ func (s *Store) ListWebhooks(ctx context.Context) ([]Webhook, error) {
 		if err := rows.Scan(&wh.ID, &wh.Name, &wh.Description, &wh.URL, &wh.WebhookType,
 			&wh.Events, &wh.Enabled, &hasSecret,
 			&wh.DiscordUsername, &wh.DiscordAvatarURL, &wh.DiscordContent,
-			&wh.CreatedAt, &wh.UpdatedAt); err != nil {
+			&wh.CreatedAt, &wh.UpdatedAt,
+			&wh.LastDeliveryAt, &wh.LastDeliveryState); err != nil {
 			return nil, err
 		}
 		if hasSecret {
@@ -102,6 +117,10 @@ func (s *Store) getWebhookInternal(ctx context.Context, id string) (Webhook, err
 	return wh, nil
 }
 
+func (s *Store) GetWebhookWithSecret(ctx context.Context, id string) (Webhook, error) {
+	return s.getWebhookInternal(ctx, id)
+}
+
 func (s *Store) GetWebhook(ctx context.Context, id string) (Webhook, error) {
 	wh, err := s.getWebhookInternal(ctx, id)
 	if err != nil {
@@ -128,6 +147,9 @@ func (s *Store) CreateWebhook(ctx context.Context, req CreateWebhookRequest) (We
 	now := time.Now().UTC()
 	if req.Events == nil {
 		req.Events = []string{}
+	}
+	for i := range req.Events {
+		req.Events[i] = strings.ToLower(strings.TrimSpace(req.Events[i]))
 	}
 	if _, err := s.db.Exec(ctx, `
 		INSERT INTO webhooks (id, name, description, url, webhook_type, events, enabled, secret, secret_encrypted,
@@ -160,6 +182,10 @@ func (s *Store) UpdateWebhook(ctx context.Context, id string, req CreateWebhookR
 	}
 	if req.Events == nil {
 		req.Events = existing.Events
+	} else {
+		for i := range req.Events {
+			req.Events[i] = strings.ToLower(strings.TrimSpace(req.Events[i]))
+		}
 	}
 	if strings.TrimSpace(req.Secret) == "" || req.Secret == maskedStoreSecret {
 		req.Secret = existing.Secret
@@ -224,4 +250,24 @@ func (s *Store) DeleteWebhook(ctx context.Context, id string) error {
 		return errors.New("webhook not found")
 	}
 	return nil
+}
+
+func (s *Store) GetWebhookStats(ctx context.Context) (WebhookStats, error) {
+	var stats WebhookStats
+	err := s.db.QueryRow(ctx, `
+		SELECT
+			(SELECT COUNT(*) FROM webhooks) AS total_webhooks,
+			(SELECT COUNT(*) FROM webhook_deliveries WHERE created_at >= CURRENT_DATE) AS deliveries_today,
+			CASE
+				WHEN (SELECT COUNT(*) FROM webhook_deliveries WHERE attempts > 0) > 0
+				THEN ROUND((SELECT COUNT(*) FROM webhook_deliveries WHERE state = 'delivered')::float / NULLIF((SELECT COUNT(*) FROM webhook_deliveries WHERE attempts > 0), 0) * 100, 1)
+				ELSE 0
+			END AS success_rate,
+			(SELECT COUNT(*) FROM webhook_deliveries WHERE state = 'failed') AS failed_deliveries,
+			(SELECT COUNT(*) FROM webhook_deliveries WHERE state = 'pending') AS pending_deliveries
+	`).Scan(&stats.TotalWebhooks, &stats.DeliveriesToday, &stats.SuccessRate, &stats.FailedDeliveries, &stats.PendingDeliveries)
+	if err != nil {
+		return WebhookStats{}, err
+	}
+	return stats, nil
 }

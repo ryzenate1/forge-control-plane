@@ -13,7 +13,7 @@ import (
 )
 
 func TestListSupportedProviders(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	providers := svc.ListSupportedProviders()
 
 	assert.Greater(t, len(providers), 30, "should have 30+ providers")
@@ -56,7 +56,7 @@ func TestListSupportedProviders(t *testing.T) {
 }
 
 func TestGetProviderDefinition(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 
 	t.Run("valid provider", func(t *testing.T) {
 		def, err := svc.GetProviderDefinition("cloudflare")
@@ -192,7 +192,7 @@ func (m *mockProvider) CleanUp(domain, token, keyAuth string) error {
 }
 
 func TestProviderRegistryHasAllDefinitions(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 	for _, def := range svc.ListSupportedProviders() {
 		_, ok := providerRegistry[def.Type]
 		assert.True(t, ok, "provider %s should have a factory registered", def.Type)
@@ -200,7 +200,7 @@ func TestProviderRegistryHasAllDefinitions(t *testing.T) {
 }
 
 func TestConfigureProviderValidation(t *testing.T) {
-	svc := New(nil)
+	svc, _ := New(nil)
 
 	_, err := svc.GetProviderDefinition("cloudflare")
 	require.NoError(t, err)

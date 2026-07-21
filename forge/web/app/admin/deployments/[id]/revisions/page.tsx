@@ -54,13 +54,6 @@ export default function DeploymentRevisionsPage() {
     queryFn: () => fetchJSON<Revision[]>(`/admin/deployments/${id}/revisions`),
   });
 
-  const compareQuery = useQuery({
-    queryKey: ["admin", "deployments", id, "compare", diffFrom, diffTo],
-    queryFn: () =>
-      fetchJSON<RevisionDiff>(`/admin/deployments/${id}/compare?from=${diffFrom}&to=${diffTo}`),
-    enabled: false,
-  });
-
   const rollbackMutation = useMutation({
     mutationFn: (revisionId: string) =>
       postJSON(`/admin/deployments/${id}/revisions/${revisionId}/rollback`),

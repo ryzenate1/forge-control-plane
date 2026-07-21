@@ -168,6 +168,8 @@ export type ApiNode = {
   nodeMemoryMb?: number;
   nodeDiskMb?: number;
   heartbeatError?: string;
+  schedulerType?: string;
+  schedulerConfig?: Record<string, unknown>;
 };
 
 export type ApiNodeHealth = {
@@ -361,11 +363,9 @@ export type ServerUpdateInput = {
 };
 
 export type DatabaseCreateInput = {
-  name: string;
-  remote?: string;
-  hostId?: string;
-  username?: string;
-  password?: string;
+	database: string;
+	remote?: string;
+	maxConnections?: number;
 };
 
 export type ScheduleCreateInput = {
@@ -492,7 +492,6 @@ export type ApiSetupRequest = {
 
 export type LoginResponse = {
   complete: boolean;
-  token?: string;
   user?: ApiUser;
   confirmationToken?: string;
 };
@@ -703,6 +702,21 @@ export type ApiWebhookDelivery = {
   nextAttemptAt?: string;
   deliveredAt?: string;
   createdAt: string;
+};
+
+export type ApiWebhookStats = {
+  totalWebhooks: number;
+  deliveriesToday: number;
+  successRate: number;
+  failedDeliveries: number;
+  pendingDeliveries: number;
+};
+
+export type ApiWebhookTestResult = {
+  success: boolean;
+  statusCode?: number;
+  responseBody?: string;
+  error?: string;
 };
 
 export type ApiMigrationStatus =
@@ -940,6 +954,26 @@ export type CreateNodeInput = {
   daemonConnect?: number;
   cpuOverallocate?: number;
   tags?: string[];
+  schedulerType?: string;
+  schedulerConfig?: Record<string, unknown>;
+  allowedIps?: string[];
+  networkInterface?: string;
+  reservedMemoryMb?: number;
+  reservedDiskMb?: number;
+  defaultAllocationIp?: string;
+  allocationPortMin?: number;
+  allocationPortMax?: number;
+  autoAllocate?: boolean;
+  enableHealthChecks?: boolean;
+  enableMetrics?: boolean;
+  prometheusEndpoint?: string;
+  alertThresholdCpu?: number;
+  alertThresholdMemory?: number;
+  alertThresholdDisk?: number;
+  maintenanceMessage?: string;
+  drainBeforeMaintenance?: boolean;
+  tokenRotationPolicy?: string;
+  tlsSetting?: string;
 };
 
 export type UpdateNodeInput = {
@@ -970,6 +1004,8 @@ export type UpdateNodeInput = {
   daemonConnect?: number;
   cpuOverallocate?: number;
   tags?: string[];
+  schedulerType?: string;
+  schedulerConfig?: Record<string, unknown>;
 };
 
 export type CreateAllocationInput = {
@@ -1302,16 +1338,139 @@ export type ApiLegacyTransferStatus = {
 };
 
 export type SocialProvider = {
+	id: string;
+	name: string;
+	displayName: string;
+	enabled: boolean;
+	clientId: string;
+	issuerUrl?: string;
+	hasClientSecret: boolean;
+	scopes: string[];
+	buttonStyle: string;
+	iconClass: string;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type ApiEndpoint = {
+	id: string;
+	name: string;
+	description?: string;
+	endpointType: "docker" | "swarm" | "kubernetes" | "edge";
+	connectionMode: "direct" | "tunnel" | "edge";
+	status: "unknown" | "online" | "degraded" | "offline" | "provisioning";
+	edgeId?: string;
+	tags?: string[];
+	labels?: { key: string; value: string }[];
+	url?: string;
+	projectId?: string;
+	groupId?: string;
+	reachable?: boolean;
+	version?: string;
+	nodeCount?: number;
+	totalContainers?: number;
+	totalImages?: number;
+	totalVolumes?: number;
+	createdAt: string;
+	updatedAt: string;
+};
+
+export type ApiEndpointDiagnostics = {
+	endpointId: string;
+	reachable: boolean;
+	version?: string;
+	totalMemoryMb?: number;
+	usedMemoryMb?: number;
+	totalDiskMb?: number;
+	usedDiskMb?: number;
+	cpuPercent?: number;
+	nodes: {
+		nodeId: string;
+		name: string;
+		status: string;
+		serverCount: number;
+		allocatedMemMb: number;
+		allocatedCpu: number;
+		allocatedDiskMb: number;
+	}[];
+	checkedAt: string;
+};
+
+export type ApiEndpointInventorySummary = {
+	totalServers: number;
+	totalContainers: number;
+	totalImages: number;
+	totalVolumes: number;
+	totalAllocations: number;
+	usedMemoryMb: number;
+	totalMemoryMb: number;
+	usedDiskMb: number;
+	totalDiskMb: number;
+};
+
+export type ApiEndpointHealthRecord = {
+	id: string;
+	endpointId: string;
+	status: string;
+	reachable: boolean;
+	healthScore: number;
+	version?: string;
+	containers: number;
+	images: number;
+	volumes: number;
+	error?: string;
+	observedAt: string;
+};
+
+export type ApiEndpointAccessPolicy = {
+	id: string;
+	endpointId: string;
+	principalType: string;
+	principalId: string;
+	role: string;
+	createdAt: string;
+};
+
+export type ApiEndpointNodeMember = {
+	id: string;
+	nodeId: string;
+	nodeName: string;
+	nodeStatus: string;
+	createdAt: string;
+};
+
+export type ProcessType = {
   id: string;
-  name: string;
-  displayName: string;
-  enabled: boolean;
-  clientId: string;
-  issuerUrl?: string;
-  hasClientSecret: boolean;
-  scopes: string[];
-  buttonStyle: string;
-  iconClass: string;
+  serverId: string;
+  processType: string;
+  command: string;
+  quantity: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type ProcessScalingEvent = {
+  id: string;
+  serverId: string;
+  processType: string;
+  oldQuantity: number;
+  newQuantity: number;
+  triggeredBy: string;
+  createdAt: string;
+};
+
+export type OneOffTask = {
+  id: string;
+  serverId: string;
+  command: string;
+  status: string;
+  output: string;
+  createdAt: string;
+  completedAt: string | null;
+};
+
+export type ProcfileEntry = {
+  processType: string;
+  command: string;
+  quantity?: number;
 };

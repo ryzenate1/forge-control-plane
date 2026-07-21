@@ -45,14 +45,14 @@ function SimplePieChart({ data, total }: { data: { label: string; value: number;
   );
 }
 
-function SimpleBarChart({ data, title }: { data: { label: string; value: number; max: number }[]; title: string }) {
+function SimpleBarChart({ data, title }: { data: { id: string; label: string; value: number; max: number }[]; title: string }) {
   const maxValue = Math.max(0, ...data.map((item) => item.max));
   return (
     <div>
       <h4 className="text-sm font-semibold text-slate-200 mb-3">{title}</h4>
       <div className="space-y-2">
         {data.map((item) => (
-          <div key={item.label} className="flex items-center gap-2">
+          <div key={item.id} className="flex items-center gap-2">
             <span className="w-20 text-xs text-slate-400">{item.label}</span>
             <div className="flex-1 h-4 rounded-full bg-white/[0.05] overflow-hidden">
               <div 
@@ -123,7 +123,7 @@ export function AdminOverview() {
 
   const nodeResourceData = nodes
     .filter((node): node is ApiNode & { memoryMb: number } => typeof node.memoryMb === "number" && Number.isFinite(node.memoryMb))
-    .map((node) => ({ label: node.name, value: node.memoryMb, max: node.memoryMb }));
+    .map((node) => ({ id: node.id, label: node.name, value: node.memoryMb, max: node.memoryMb }));
 
   return (
   <div>

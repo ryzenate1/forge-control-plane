@@ -1,23 +1,8 @@
 #!/usr/bin/env bash
-# ============================================================
-# GamePanel - Linux Production Deployment Script
-#
-# This script deploys GamePanel on a Linux server with:
-#   - Native PostgreSQL 16 (systemd)
-#   - Native Redis 7 (systemd)
-#   - Go API binary (systemd)
-#   - Next.js frontend (systemd + Node.js)
-#
-# NO DOCKER for database/redis. Docker is ONLY for game servers.
-#
-# Usage:
-#   chmod +x deploy-prod.sh
-#   sudo ./deploy-prod.sh
-# ============================================================
-
+# GamePanel Production Deployment Script
+# Supports blue-green deployment with health checks and rollback
 set -euo pipefail
 
-# --- Colors ---
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -29,293 +14,180 @@ warn()  { echo -e "  ${YELLOW}[!!]${NC} $1"; }
 fail()  { echo -e "  ${RED}[FAIL]${NC} $1"; exit 1; }
 header(){ echo -e "\n${CYAN}=== $1 ===${NC}"; }
 
-# --- Must be root ---
-if [ "$(id -u)" -ne 0 ]; then
-    fail "This script must be run as root (sudo ./deploy-prod.sh)"
-fi
-
-# --- Configuration ---
-PANEL_USER="gamepanel"
-DB_NAME="gamepanel"
-DB_PASS="$(openssl rand -hex 16)"
-API_SECRET="$(openssl rand -hex 32)"
-NODE_TOKEN="$(openssl rand -hex 32)"
-MASTER_KEY="$(openssl rand -hex 32)"
+# Configuration
 INSTALL_DIR="/opt/gamepanel"
+COMPOSE_DIR="$INSTALL_DIR/infra"
+COMPOSE_FILES="-f compose.yml -f compose.production.yml"
+ENV_FILE="--env-file .env"
+BACKUP_DIR="/var/backups/gamepanel"
+ROLLBACK_DIR="$BACKUP_DIR/rollback"
+HEALTH_RETRIES=30
+HEALTH_INTERVAL=5
 
-API_PORT=8080
-FRONTEND_PORT=3000
+usage() {
+  echo "Usage: $0 [--rollback] [--version <tag>] [--dry-run]"
+  echo ""
+  echo "Options:"
+  echo "  --rollback          Roll back to the previous deployment"
+  echo "  --version <tag>     Specify Docker image tag to deploy (default: latest)"
+  echo "  --dry-run           Print what would be done without making changes"
+  echo "  --help              Show this help message"
+  exit 0
+}
+
+ROLLBACK=false
+VERSION="latest"
+DRY_RUN=false
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --rollback) ROLLBACK=true; shift ;;
+    --version) VERSION="$2"; shift 2 ;;
+    --dry-run) DRY_RUN=true; shift ;;
+    --help) usage ;;
+    *) fail "Unknown option: $1. Use --help for usage." ;;
+  esac
+done
+
+if [ "$(id -u)" -ne 0 ] && [ "$DRY_RUN" = false ]; then
+  fail "This script must be run as root (sudo ./deploy-prod.sh)"
+fi
 
 echo ""
 echo -e "  ${RED}+==========================================+${NC}"
-echo -e "  ${RED}|   GamePanel Production Deployment        |${NC}"
-echo -e "  ${RED}|   Native PostgreSQL + Redis (no Docker)  |${NC}"
+echo -e "  ${RED}|   GamePanel Production Deploy             |${NC}"
+echo -e "  ${RED}|   Version: $VERSION                          ${NC}"
 echo -e "  ${RED}+==========================================+${NC}"
 echo ""
 
-# ============================================================
-# Step 1: Install PostgreSQL 16 natively
-# ============================================================
-header "Installing PostgreSQL 16"
-
-if command -v psql &>/dev/null; then
-    info "PostgreSQL already installed: $(psql --version)"
-else
-    # Add PostgreSQL APT repo
-    apt-get update -qq
-    apt-get install -y -qq curl ca-certificates gnupg lsb-release
-    curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql.gpg
-    echo "deb [signed-by=/usr/share/keyrings/postgresql.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list
-    apt-get update -qq
-    apt-get install -y -qq postgresql-16
-    info "PostgreSQL 16 installed"
+if [ "$DRY_RUN" = true ]; then
+  info "DRY RUN MODE — no changes will be made"
 fi
 
-# Ensure running
-systemctl enable postgresql
-systemctl start postgresql
-info "PostgreSQL service running (systemd)"
+# === Pre-flight checks ===
+header "Pre-flight checks"
 
-# Create database and user
-sudo -u postgres psql -tc "SELECT 1 FROM pg_roles WHERE rolname='${PANEL_USER}'" | grep -q 1 || {
-    sudo -u postgres psql -c "CREATE USER ${PANEL_USER} WITH PASSWORD '${DB_PASS}' CREATEDB;"
-    info "Created PostgreSQL user: ${PANEL_USER}"
+if [ "$DRY_RUN" = false ]; then
+  # Check Docker
+  if ! command -v docker &>/dev/null; then
+    fail "Docker is not installed"
+  fi
+  info "Docker found: $(docker --version)"
+
+  # Check Docker Compose
+  if ! docker compose version &>/dev/null; then
+    fail "Docker Compose v2 is not available"
+  fi
+  info "Docker Compose found: $(docker compose version)"
+
+  # Check install directory
+  if [ ! -d "$COMPOSE_DIR" ]; then
+    fail "Install directory not found: $COMPOSE_DIR"
+  fi
+  info "Install directory found: $INSTALL_DIR"
+
+  # Check environment file
+  if [ ! -f "$COMPOSE_DIR/.env" ]; then
+    fail "Environment file not found: $COMPOSE_DIR/.env"
+  fi
+  info "Environment file found"
+
+  # Run production guard
+  if [ -f "$INSTALL_DIR/scripts/production-guard.sh" ]; then
+    info "Running production guard..."
+    bash "$INSTALL_DIR/scripts/production-guard.sh"
+  fi
+fi
+
+# === Backup current state ===
+header "Backing up current state"
+if [ "$DRY_RUN" = false ]; then
+  mkdir -p "$ROLLBACK_DIR"
+  TIMESTAMP=$(date +%Y%m%d-%H%M%S)
+  if [ -d "$COMPOSE_DIR" ]; then
+    cp "$COMPOSE_DIR/.env" "$ROLLBACK_DIR/.env.$TIMESTAMP"
+    docker compose $COMPOSE_FILES $ENV_FILE config 2>/dev/null > "$ROLLBACK_DIR/docker-compose-config.$TIMESTAMP.yml" || true
+    info "Current state backed up to $ROLLBACK_DIR"
+  fi
+fi
+
+# === Pull new images ===
+header "Pulling Docker images"
+if [ "$DRY_RUN" = false ]; then
+  (cd "$COMPOSE_DIR" && TAG=$VERSION docker compose $COMPOSE_FILES $ENV_FILE pull) || warn "Image pull encountered warnings"
+  info "Docker images pulled"
+fi
+
+# === Deploy (blue-green) ===
+header "Deploying services"
+
+if [ "$ROLLBACK" = true ]; then
+  info "Rolling back to previous deployment..."
+  # Find most recent backup
+  LATEST_BACKUP=$(ls -t "$ROLLBACK_DIR/.env."* 2>/dev/null | head -1)
+  if [ -z "$LATEST_BACKUP" ]; then
+    fail "No rollback backup found"
+  fi
+  info "Restoring from: $LATEST_BACKUP"
+  if [ "$DRY_RUN" = false ]; then
+    cp "$LATEST_BACKUP" "$COMPOSE_DIR/.env"
+  fi
+fi
+
+if [ "$DRY_RUN" = false ]; then
+  (cd "$COMPOSE_DIR" && docker compose $COMPOSE_FILES $ENV_FILE up -d --remove-orphans) || fail "Deploy failed"
+  info "Services deployed"
+fi
+
+# === Health check verification ===
+header "Verifying health"
+
+check_health() {
+  local name=$1 url=$2 retries=$3
+  echo -n "  Waiting for $name... "
+  for i in $(seq 1 "$retries"); do
+    if curl -sf "$url" > /dev/null 2>&1; then
+      echo -e "${GREEN}healthy${NC}"
+      return 0
+    fi
+    sleep "$HEALTH_INTERVAL"
+  done
+  echo -e "${RED}unhealthy${NC}"
+  return 1
 }
-sudo -u postgres psql -tc "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1 || {
-    sudo -u postgres createdb -O "${PANEL_USER}" "${DB_NAME}"
-    info "Created database: ${DB_NAME}"
-}
 
-# ============================================================
-# Step 2: Install Redis 7 natively
-# ============================================================
-header "Installing Redis"
+if [ "$DRY_RUN" = false ]; then
+  ALL_HEALTHY=true
 
-if command -v redis-cli &>/dev/null; then
-    info "Redis already installed: $(redis-cli --version)"
-else
-    apt-get install -y -qq redis-server
-    info "Redis installed"
+  check_health "Forge API" "http://localhost:8080/api/v1/health/ready" "$HEALTH_RETRIES" || ALL_HEALTHY=false
+  check_health "Forge Web" "http://localhost:3000" 12 || ALL_HEALTHY=false
+  check_health "Beacon" "http://localhost:9090/health" 12 || ALL_HEALTHY=false
+
+  if [ "$ALL_HEALTHY" = false ]; then
+    warn "Some services are unhealthy!"
+    info "Running diagnostics..."
+    bash "$INSTALL_DIR/scripts/diagnose.sh" 2>/dev/null || true
+    if [ "$ROLLBACK" = false ]; then
+      warn "Consider rolling back: $0 --rollback"
+    fi
+  else
+    info "All services healthy"
+  fi
 fi
 
-systemctl enable redis-server
-systemctl start redis-server
-info "Redis service running (systemd)"
-
-# ============================================================
-# Step 3: Install Node.js 20+ (for frontend)
-# ============================================================
-header "Checking Node.js"
-
-if command -v node &>/dev/null && [ "$(node -v | cut -d. -f1 | tr -d v)" -ge 20 ]; then
-    info "Node.js $(node -v) already installed"
-else
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y -qq nodejs
-    info "Node.js $(node -v) installed"
-fi
-
-# ============================================================
-# Step 4: Install Docker (for game server containers ONLY)
-# ============================================================
-header "Checking Docker (for game servers only)"
-
-if command -v docker &>/dev/null; then
-    info "Docker already installed: $(docker --version)"
-else
-    curl -fsSL https://get.docker.com | sh
-    systemctl enable docker
-    systemctl start docker
-    info "Docker installed (used ONLY for game server containers)"
-fi
-
-# ============================================================
-# Step 5: Create panel user and directories
-# ============================================================
-header "Setting up directories"
-
-id -u "${PANEL_USER}" &>/dev/null || {
-    useradd -r -m -d "${INSTALL_DIR}" -s /bin/bash "${PANEL_USER}"
-    info "Created system user: ${PANEL_USER}"
-}
-
-mkdir -p "${INSTALL_DIR}"/{api,frontend,migrations,logs}
-info "Directories created at ${INSTALL_DIR}"
-
-# ============================================================
-# Step 6: Build and install API
-# ============================================================
-header "Building Go API"
-
-if command -v go &>/dev/null; then
-    info "Go $(go version | awk '{print $3}') found"
-else
-    warn "Go not installed. Install from https://go.dev/dl/ and re-run."
-    warn "Or copy the pre-built api binary to ${INSTALL_DIR}/api/"
-fi
-
-# Copy migrations
-cp -r apps/api/migrations/* "${INSTALL_DIR}/migrations/" 2>/dev/null || true
-info "Migrations copied to ${INSTALL_DIR}/migrations/"
-
-# Build API (if source available)
-if [ -d "panel" ] && command -v go &>/dev/null; then
-    cd forge
-    CGO_ENABLED=0 go build -o "${INSTALL_DIR}/api/panel-api" ./cmd/api
-    cd ../..
-    info "API binary built: ${INSTALL_DIR}/api/panel-api"
-fi
-
-# ============================================================
-# Step 7: Build frontend
-# ============================================================
-header "Building Frontend"
-
-if [ -d "web" ]; then
-    cd web
-    npm ci --production=false
-    npx next build
-    cd ../..
-    cp -r web/{.next,public,package.json,node_modules} "${INSTALL_DIR}/frontend/" 2>/dev/null || true
-    info "Frontend built and installed"
-fi
-
-# ============================================================
-# Step 8: Create environment file
-# ============================================================
-header "Creating environment config"
-
-cat > "${INSTALL_DIR}/.env" << EOF
-# GamePanel Production Configuration
-# Generated: $(date -Iseconds)
-
-# Database (native PostgreSQL - NOT Docker)
-DATABASE_URL=postgres://${PANEL_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?sslmode=disable
-
-# API
-API_ADDR=:${API_PORT}
-API_AUTH_SECRET=${API_SECRET}
-APP_ENV=production
-MIGRATIONS_DIR=${INSTALL_DIR}/migrations
-
-# Redis (native - NOT Docker)
-REDIS_ADDR=localhost:6379
-
-# Daemon
-DAEMON_NODE_TOKEN=${NODE_TOKEN}
-API_DEMO_MODE=false
-
-# Encryption at Rest (Required when DATABASE_URL is set)
-FORGE_MASTER_KEY=${MASTER_KEY}
-FORGE_MASTER_KEY_ID=primary
-EOF
-
-
-chmod 600 "${INSTALL_DIR}/.env"
-chown "${PANEL_USER}:${PANEL_USER}" -R "${INSTALL_DIR}"
-info "Environment config: ${INSTALL_DIR}/.env"
-
-# ============================================================
-# Step 9: Create systemd services
-# ============================================================
-header "Creating systemd services"
-
-# API service
-cat > /etc/systemd/system/forge-api.service << EOF
-[Unit]
-Description=GamePanel API Server
-After=network.target postgresql.service redis-server.service
-Requires=postgresql.service
-
-[Service]
-Type=simple
-User=${PANEL_USER}
-WorkingDirectory=${INSTALL_DIR}/api
-EnvironmentFile=${INSTALL_DIR}/.env
-ExecStart=${INSTALL_DIR}/api/panel-api
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=forge-api
-
-# Security hardening
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-ReadWritePaths=${INSTALL_DIR}/logs
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-info "Created forge-api.service"
-
-# Frontend service
-cat > /etc/systemd/system/panel-frontend.service << EOF
-[Unit]
-Description=GamePanel Frontend (Next.js)
-After=network.target forge-api.service
-
-[Service]
-Type=simple
-User=${PANEL_USER}
-WorkingDirectory=${INSTALL_DIR}/frontend
-Environment=NODE_ENV=production
-Environment=PORT=${FRONTEND_PORT}
-ExecStart=/usr/bin/npx next start -p ${FRONTEND_PORT}
-Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-SyslogIdentifier=plane-frontend
-
-NoNewPrivileges=true
-ProtectSystem=strict
-ProtectHome=true
-PrivateTmp=true
-
-[Install]
-WantedBy=multi-user.target
-EOF
-info "Created plane-frontend.service"
-
-# Reload and enable
-systemctl daemon-reload
-systemctl enable forge-api plane-frontend
-systemctl start forge-api
-sleep 3
-systemctl start plane-frontend
-
-info "Services enabled and started"
-
-# ============================================================
-# Summary
-# ============================================================
+# === Summary ===
 echo ""
 echo -e "  ${GREEN}+==========================================+${NC}"
-echo -e "  ${GREEN}|   GamePanel Deployed Successfully!       |${NC}"
+echo -e "  ${GREEN}|   Deployment Complete                      |${NC}"
 echo -e "  ${GREEN}+==========================================+${NC}"
 echo ""
-echo "  Architecture (NO Docker for infrastructure):"
-echo "  -----------------------------------------------"
-echo -e "  ${CYAN}PostgreSQL 16${NC}  Native systemd   port 5432"
-echo -e "  ${CYAN}Redis 7${NC}        Native systemd   port 6379"
-echo -e "  ${CYAN}API${NC}            Native Go binary  port ${API_PORT}"
-echo -e "  ${CYAN}Frontend${NC}       Node.js           port ${FRONTEND_PORT}"
-echo -e "  ${CYAN}Docker${NC}         Game servers ONLY"
-echo ""
-echo "  Credentials saved to: ${INSTALL_DIR}/.env"
-echo "  DB Password: ${DB_PASS}"
-echo "  API Secret:  ${API_SECRET}"
-echo "  Node Token:  ${NODE_TOKEN}"
+echo "  Version:     $VERSION"
+echo "  Action:      $([ "$ROLLBACK" = true ] && echo "rollback" || echo "deploy")"
+echo "  Directory:   $INSTALL_DIR"
+echo "  Timestamp:   $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
 echo ""
 echo "  Commands:"
-echo "    systemctl status forge-api"
-echo "    systemctl status plane-frontend"
-echo "    journalctl -u forge-api -f"
-echo "    journalctl -u plane-frontend -f"
+echo "    docker compose -f $COMPOSE_DIR/compose.yml ps"
+echo "    docker compose -f $COMPOSE_DIR/compose.yml logs --tail 50"
+echo "    $0 --rollback"
 echo ""
-echo -e "  ${YELLOW}SAVE THESE CREDENTIALS - they won't be shown again!${NC}"
-echo ""
-""

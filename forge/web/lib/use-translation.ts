@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_I18N_CONFIG, type Locale } from "@forge/shared-types/src/i18n";
+import { DEFAULT_I18N_CONFIG, type Locale } from "@/lib/api/shared-types";
 
 // TODO: Bridge solution - replace with proper next-intl integration
 // See: https://next-intl.dev/docs/getting-started/app-router

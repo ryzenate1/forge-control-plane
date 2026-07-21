@@ -231,3 +231,23 @@ func (s *Store) GetDBContainerCredentials(ctx context.Context, id string) (json.
 	}
 	return credentials, connectionString, nil
 }
+
+// DBContainerBackupTarget contains the info needed to run a database backup
+type DBContainerBackupTarget struct {
+	ServerID    string
+	ContainerID string
+	Engine      string
+}
+
+// GetDBContainerBackupTarget retrieves container and server info for backup execution
+func (s *Store) GetDBContainerBackupTarget(ctx context.Context, dbContainerID string) (DBContainerBackupTarget, error) {
+	var t DBContainerBackupTarget
+	err := s.db.QueryRow(ctx, `
+		SELECT server_id::text, container_id, engine
+		FROM db_containers WHERE id = $1
+	`, dbContainerID).Scan(&t.ServerID, &t.ContainerID, &t.Engine)
+	if err != nil {
+		return DBContainerBackupTarget{}, err
+	}
+	return t, nil
+}

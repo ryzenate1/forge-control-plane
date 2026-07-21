@@ -62,7 +62,7 @@ export function AdminRegions() {
 
   return <div>
     <SectionHeader title="Regions" sub="Cluster regions used for placement, capacity, and recovery planning." action={<Btn onClick={() => open()}><Plus size={14}/> New Region</Btn>} />
-    {regionsQuery.isError ? <p className="mb-4 rounded-lg border border-red-500/30 bg-red-950/20 p-3 text-sm text-red-300">Regions could not be loaded.</p> : null}
+    {regionsQuery.isError ? <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load regions: {regionsQuery.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void regionsQuery.refetch()}>Retry</Btn></div> : null}
     <Card><CardHeader title={`${regions.length} regions`} icon={Map}/>
       {regionsQuery.isLoading ? <p className="p-6 text-sm text-slate-500">Loading regions…</p> : regions.length === 0 ? <EmptyState icon={Map} message="No regions configured."/> :
       <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-white/[0.06] text-left text-xs uppercase text-slate-500"><th className="px-4 py-3">Region</th><th className="px-4 py-3">Slug</th><th className="px-4 py-3">Nodes</th><th className="px-4 py-3">Status</th><th/></tr></thead><tbody className="divide-y divide-white/[0.04]">{regions.map((region) => {

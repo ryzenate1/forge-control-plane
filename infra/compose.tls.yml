@@ -1,0 +1,179 @@
+# TLS for Forge Control Plane — external (Traefik ACME) + internal (inter-service).
+# Usage:
+#   docker compose -f compose.yml -f compose.tls.yml --env-file .env up -d
+#
+# External TLS — Traefik v3 with automatic Let's Encrypt certificates:
+#   Set TRAEFIK_ACME_EMAIL, TRAEFIK_CERTIFICATE_RESOLVER, and PANEL_DOMAIN
+#   in infra/.env.
+#
+# Internal TLS — self-signed CA for inter-service communication:
+#   - API <-> Redis via Redis native TLS (port 6380)
+#   - API <-> Postgres via PostgreSQL SSL
+#   On first deploy cert-init generates certificates. Subsequent starts
+#   re-use the persisted tls-certs volume.
+#   NOTE: The application must support TLS connections:
+#     DATABASE_URL must include ?sslmode=require
+#     REDIS_ADDR must point to redis:6380
+#     REDIS_TLS_ENABLED=true, REDIS_TLS_SKIP_VERIFY=true (self-signed)
+
+services:
+  # =========================================================================
+  # External TLS — Traefik reverse proxy with ACME
+  # =========================================================================
+  traefik:
+    restart: unless-stopped
+    image: traefik:v3.3
+    container_name: traefik
+    command:
+      - "--api.dashboard=true"
+      - "--api.debug=false"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--providers.docker.network=forge-frontend"
+      - "--providers.file.directory=/etc/traefik/dynamic"
+      - "--providers.file.watch=true"
+      - "--entryPoints.web.address=:80"
+      - "--entryPoints.websecure.address=:443"
+      - "--entryPoints.traefik.address=:8080"
+      - "--certificatesresolvers.${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}.acme.httpchallenge=true"
+      - "--certificatesresolvers.${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}.acme.httpchallenge.entrypoint=web"
+      - "--certificatesresolvers.${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}.acme.email=${TRAEFIK_ACME_EMAIL:?Set TRAEFIK_ACME_EMAIL in infra/.env}"
+      - "--certificatesresolvers.${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    environment:
+      TRAEFIK_ACME_EMAIL: "${TRAEFIK_ACME_EMAIL:?Set TRAEFIK_ACME_EMAIL in infra/.env}"
+      TRAEFIK_CERTIFICATE_RESOLVER: ${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - letsencrypt:/letsencrypt
+      - ./traefik/dynamic:/etc/traefik/dynamic:ro
+    networks:
+      - frontend
+
+  web:
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.web-http.rule: "Host(`${PANEL_DOMAIN:?Set PANEL_DOMAIN in infra/.env}`)"
+      traefik.http.routers.web-http.entrypoints: "web"
+      traefik.http.routers.web-http.middlewares: "web-redirect"
+      traefik.http.middlewares.web-redirect.redirectscheme.scheme: "https"
+      traefik.http.middlewares.web-redirect.redirectscheme.permanent: "true"
+      traefik.http.routers.web.rule: "Host(`${PANEL_DOMAIN}`)"
+      traefik.http.routers.web.entrypoints: "websecure"
+      traefik.http.routers.web.tls: "true"
+      traefik.http.routers.web.tls.certresolver: "${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}"
+      traefik.http.services.web.loadbalancer.server.port: "3000"
+
+  api:
+    labels:
+      traefik.enable: "true"
+      traefik.http.routers.api.rule: "Host(`${API_DOMAIN:-${PANEL_DOMAIN}}`) && PathPrefix(`/api`)"
+      traefik.http.routers.api.entrypoints: "websecure"
+      traefik.http.routers.api.tls: "true"
+      traefik.http.routers.api.tls.certresolver: "${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}"
+      traefik.http.services.api.loadbalancer.server.port: "8080"
+
+  # =========================================================================
+  # Internal TLS — self-signed certificates for inter-service communication
+  # =========================================================================
+  cert-init:
+    image: alpine:3.21
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        apk add --no-cache openssl
+        mkdir -p /certs
+        cd /certs
+        if [ ! -f ca.pem ]; then
+          # Internal CA
+          openssl genrsa -out ca-key.pem 4096
+          openssl req -x509 -new -nodes -key ca-key.pem \
+            -sha256 -days 3650 -out ca.pem \
+            -subj "/C=XX/ST=Internal/O=GamePanel/CN=GamePanel Internal CA"
+
+          # Redis certificate
+          openssl genrsa -out redis-key.pem 2048
+          openssl req -new -key redis-key.pem \
+            -out redis.csr \
+            -subj "/C=XX/ST=Internal/O=GamePanel/CN=redis"
+          openssl x509 -req -in redis.csr \
+            -CA ca.pem -CAkey ca-key.pem \
+            -CAcreateserial -out redis-cert.pem -days 365 \
+            -sha256 -extfile <(printf "subjectAltName=DNS:redis,DNS:localhost")
+
+          # PostgreSQL certificate
+          openssl genrsa -out pg-key.pem 2048
+          openssl req -new -key pg-key.pem \
+            -out pg.csr \
+            -subj "/C=XX/ST=Internal/O=GamePanel/CN=postgres"
+          openssl x509 -req -in pg.csr \
+            -CA ca.pem -CAkey ca-key.pem \
+            -CAcreateserial -out pg-cert.pem -days 365 \
+            -sha256 -extfile <(printf "subjectAltName=DNS:postgres,DNS:localhost")
+
+          rm -f *.csr
+          chmod 0600 *-key.pem
+        fi
+    volumes:
+      - tls-certs:/certs
+    networks:
+      - backend
+
+  redis:
+    volumes:
+      - tls-certs:/certs:ro
+    command:
+      - "redis-server"
+      - "--appendonly"
+      - "yes"
+      - "--tls-port"
+      - "6380"
+      - "--port"
+      - "0"
+      - "--tls-cert-file"
+      - "/certs/redis-cert.pem"
+      - "--tls-key-file"
+      - "/certs/redis-key.pem"
+      - "--tls-ca-cert-file"
+      - "/certs/ca.pem"
+      - "--tls-auth-clients"
+      - "no"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+
+  postgres:
+    volumes:
+      - tls-certs:/certs:ro
+    command:
+      - "postgres"
+      - "-c"
+      - "ssl=on"
+      - "-c"
+      - "ssl_cert_file=/certs/pg-cert.pem"
+      - "-c"
+      - "ssl_key_file=/certs/pg-key.pem"
+      - "-c"
+      - "ssl_ca_file=/certs/ca.pem"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+
+  api:
+    environment:
+      REDIS_ADDR: redis:6380
+      REDIS_TLS_ENABLED: "true"
+      REDIS_TLS_SKIP_VERIFY: "true"
+      DATABASE_URL: "${DATABASE_URL}?sslmode=require"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+
+volumes:
+  letsencrypt:
+  tls-certs:

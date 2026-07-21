@@ -9,18 +9,10 @@ import {
   ErrorPermission,
   DeploymentStatus,
 } from "@/components/shared";
+import { fetchAppDeployments } from "@/lib/api/apps";
+import type { AppDeployment } from "@/lib/api/apps";
 import { formatDate } from "@/lib/utils";
 import type { ReactNode } from "react";
-
-type DeployInfo = {
-  id: string;
-  version: string;
-  status: string;
-  commit?: string;
-  commitMessage?: string;
-  createdAt: string;
-  deployedAt?: string;
-};
 
 interface DeploymentsViewProps {
   appId: string;
@@ -29,15 +21,9 @@ interface DeploymentsViewProps {
 }
 
 export function DeploymentsView({ appId, action, canDeploy = true }: DeploymentsViewProps) {
-  const query = useQuery<DeployInfo[]>({
+  const query = useQuery<AppDeployment[]>({
     queryKey: ["app-deployments", appId],
-    queryFn: async () => {
-      const res = await fetch(`/api/v1/servers/${encodeURIComponent(appId)}/deployments`, {
-        credentials: "include",
-      });
-      if (!res.ok) throw new Error(`Failed to load deployments: ${res.status}`);
-      return res.json() as Promise<DeployInfo[]>;
-    },
+    queryFn: () => fetchAppDeployments(appId),
     enabled: Boolean(appId),
   });
 
@@ -82,7 +68,7 @@ export function DeploymentsView({ appId, action, canDeploy = true }: Deployments
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <p className="truncate text-sm font-semibold text-slate-200">
-                  {deploy.version}
+                  v{deploy.revision}
                 </p>
                 <DeploymentStatus status={deploy.status} />
               </div>
@@ -92,7 +78,7 @@ export function DeploymentsView({ appId, action, canDeploy = true }: Deployments
                   {deploy.commitMessage ? ` — ${deploy.commitMessage}` : ""}
                 </p>
               ) : null}
-              <p className="text-xs text-slate-600">{formatDate(deploy.createdAt)}</p>
+              <p className="text-xs text-slate-600">{formatDate(deploy.startedAt)}</p>
             </div>
           </div>
         ))}

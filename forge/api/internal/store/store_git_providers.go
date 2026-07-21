@@ -17,6 +17,7 @@ const (
 	GitProviderGitLab    GitProviderType = "gitlab"
 	GitProviderBitbucket GitProviderType = "bitbucket"
 	GitProviderGitea     GitProviderType = "gitea"
+	GitProviderGeneric   GitProviderType = "generic"
 )
 
 type GitProviderToken struct {

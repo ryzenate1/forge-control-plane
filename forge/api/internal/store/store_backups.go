@@ -10,7 +10,9 @@ import (
 func (s *Store) ListBackups(ctx context.Context, serverID string, page, perPage int) ([]Backup, error) {
 	offset := (page - 1) * perPage
 	rows, err := s.db.Query(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE server_id = $1
 		ORDER BY created_at DESC
@@ -23,7 +25,7 @@ func (s *Store) ListBackups(ctx context.Context, serverID string, page, perPage 
 	backups := []Backup{}
 	for rows.Next() {
 		var backup Backup
-		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt); err != nil {
+		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce); err != nil {
 			return nil, err
 		}
 		backups = append(backups, backup)
@@ -60,8 +62,12 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 		req.Status = "completed"
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO backups (uuid, server_id, name, checksum, size, status, upload_id, completed_at, updated_at, is_locked, status_message, status_callback, retry_count)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), FALSE, $9, $10, COALESCE($11, 0))
+		INSERT INTO backups (uuid, server_id, name, checksum, size, status, upload_id, completed_at, updated_at, is_locked, status_message, status_callback, retry_count,
+		                     source_type, source_id, database_type, volume_name, manifest, storage_receipt, checksum_verified, restore_count, last_restore_at,
+		                     compressed, encrypted, nonce)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), FALSE, $9, $10, COALESCE($11, 0),
+		        $12, $13, $14, $15, $16, $17, $18, $19, $20,
+		        $21, $22, $23)
 		ON CONFLICT (server_id, name) DO UPDATE SET
 			checksum = EXCLUDED.checksum,
 			size = EXCLUDED.size,
@@ -71,8 +77,22 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 			updated_at = now(),
 			status_message = EXCLUDED.status_message,
 			status_callback = EXCLUDED.status_callback,
-			retry_count = EXCLUDED.retry_count
-	`, req.UUID, serverID, req.Name, req.Checksum, req.Size, req.Status, req.UploadID, req.CompletedAt, req.StatusMessage, req.StatusCallback, req.RetryCount)
+			retry_count = EXCLUDED.retry_count,
+			source_type = EXCLUDED.source_type,
+			source_id = EXCLUDED.source_id,
+			database_type = EXCLUDED.database_type,
+			volume_name = EXCLUDED.volume_name,
+			manifest = EXCLUDED.manifest,
+			storage_receipt = EXCLUDED.storage_receipt,
+			checksum_verified = EXCLUDED.checksum_verified,
+			restore_count = EXCLUDED.restore_count,
+			last_restore_at = EXCLUDED.last_restore_at,
+			compressed = EXCLUDED.compressed,
+			encrypted = EXCLUDED.encrypted,
+			nonce = EXCLUDED.nonce
+	`, req.UUID, serverID, req.Name, req.Checksum, req.Size, req.Status, req.UploadID, req.CompletedAt, req.StatusMessage, req.StatusCallback, req.RetryCount,
+		req.SourceType, req.SourceID, req.DatabaseType, req.VolumeName, jsonOrNull(req.Manifest), jsonOrNull(req.StorageReceipt), req.ChecksumVerified, req.RestoreCount, req.LastRestoreAt,
+		req.Compressed, req.Encrypted, req.Nonce)
 	if err != nil {
 		return Backup{}, err
 	}
@@ -83,10 +103,12 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 func (s *Store) GetBackupByName(ctx context.Context, serverID, name string) (Backup, error) {
 	var backup Backup
 	err := s.db.QueryRow(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE server_id = $1 AND name = $2
-	`, serverID, name).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt)
+	`, serverID, name).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce)
 	return backup, err
 }
 
@@ -325,7 +347,9 @@ func (s *Store) FailStaleBackups(ctx context.Context, pruneAgeMinutes int) (int6
 // GetBackupsByStatus retrieves backups with specific status (for callback processing)
 func (s *Store) GetBackupsByStatus(ctx context.Context, status string) ([]Backup, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE status = $1 AND status_callback IS NOT NULL
 		ORDER BY created_at ASC
@@ -337,10 +361,18 @@ func (s *Store) GetBackupsByStatus(ctx context.Context, status string) ([]Backup
 	backups := []Backup{}
 	for rows.Next() {
 		var backup Backup
-		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt); err != nil {
+		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce); err != nil {
 			return nil, err
 		}
 		backups = append(backups, backup)
 	}
 	return backups, rows.Err()
+}
+
+// jsonOrNull marshals data to JSON bytes, returning nil (SQL NULL) for empty/nil input
+func jsonOrNull(data []byte) any {
+	if len(data) == 0 {
+		return nil
+	}
+	return data
 }

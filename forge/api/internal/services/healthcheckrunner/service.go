@@ -110,6 +110,7 @@ type Service struct {
 	lastGroupPoll time.Time
 	lastGroups    []store.TargetGroupRow
 	lastPrune     time.Time
+	cancel        context.CancelFunc
 }
 
 func New(store storeAdapter, config Config) *Service {
@@ -135,6 +136,7 @@ func (s *Service) Start(ctx context.Context) {
 	if s == nil || s.store == nil {
 		return
 	}
+	ctx, s.cancel = context.WithCancel(ctx)
 	go func() {
 		s.loadExistingStates(ctx)
 		s.runOnce(ctx)
@@ -149,6 +151,12 @@ func (s *Service) Start(ctx context.Context) {
 			}
 		}
 	}()
+}
+
+func (s *Service) Stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *Service) loadExistingStates(ctx context.Context) {

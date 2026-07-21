@@ -2,7 +2,6 @@ package events
 
 import (
 	"encoding/json"
-	"strings"
 	"sync"
 	"time"
 )
@@ -32,13 +31,6 @@ func NewBus() *Bus {
 // message from the channel to make room, matching the Wings SinkPool ring
 // buffer pattern. All channel sends happen concurrently.
 func (b *Bus) Publish(topic string, data interface{}) {
-	if strings.Contains(topic, ":") {
-		parts := strings.SplitN(topic, ":", 2)
-		if len(parts) == 2 {
-			topic = parts[0]
-		}
-	}
-
 	enc, err := json.Marshal(Event{Topic: topic, Data: data})
 	if err != nil {
 		return

@@ -2,11 +2,14 @@ package paperdl
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"gamepanel/beacon/internal/installer/operations"
@@ -172,5 +175,20 @@ func (op *PaperDl) downloadFile(ctx context.Context, url, dest string) error {
 }
 
 func (op *PaperDl) verifyChecksum(path, expectedSha string) error {
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open: %w", err)
+	}
+	defer f.Close()
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("hash: %w", err)
+	}
+
+	got := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(got, expectedSha) {
+		return fmt.Errorf("sha256 mismatch: got %s, expected %s", got, expectedSha)
+	}
 	return nil
 }

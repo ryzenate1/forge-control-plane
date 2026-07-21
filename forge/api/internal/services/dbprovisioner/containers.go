@@ -190,6 +190,40 @@ func (s *DBContainerService) Provision(ctx context.Context, serverID, engine, ve
 	return s.store.GetDBContainer(ctx, db.ID)
 }
 
+func (s *DBContainerService) ProvisionDevFallback(ctx context.Context, serverID, engine, version string, memoryMB, cpuShares int) (store.DBContainer, error) {
+	engine = strings.ToLower(strings.TrimSpace(engine))
+	version = strings.TrimSpace(version)
+	if err := store.ValidateDBEngine(engine, version); err != nil {
+		return store.DBContainer{}, err
+	}
+	req := store.CreateDBContainerRequest{
+		ServerID:  serverID,
+		Engine:    engine,
+		Version:   version,
+		MemoryMB:  memoryMB,
+		CPUShares: cpuShares,
+	}
+	db, err := s.store.CreateDBContainer(ctx, req)
+	if err != nil {
+		return store.DBContainer{}, fmt.Errorf("create db container record: %w", err)
+	}
+	dbName := generateDBName()
+	username := generateUsername()
+	password := generatePassword(32)
+	volumeName := "mgp-db-" + db.ID[:12]
+	port := defaultPortForEngine(engine)
+	host := s.dockerHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	connStr := connectionStringForDB(engine, dbName, username, password, host, port, version)
+	creds, _ := credentialsJSON(engine, dbName, username, password)
+	if err := s.store.SetDBContainerStatus(ctx, db.ID, "", "running", port, volumeName, connStr, creds); err != nil {
+		return store.DBContainer{}, fmt.Errorf("update container status: %w", err)
+	}
+	return s.store.GetDBContainer(ctx, db.ID)
+}
+
 func (s *DBContainerService) Deprovision(ctx context.Context, containerID string) error {
 	db, err := s.store.GetDBContainer(ctx, containerID)
 	if err != nil {
@@ -221,7 +255,8 @@ func (s *DBContainerService) Backup(ctx context.Context, containerID string) err
 		return errors.New("container not yet provisioned")
 	}
 	if s.daemon != nil {
-		return s.daemon.BackupDatabase(ctx, s.beaconBaseURL, s.nodeToken, db.ContainerID, db.Engine)
+		_, err = s.daemon.BackupDatabase(ctx, s.beaconBaseURL, s.nodeToken, db.ContainerID, db.Engine)
+		return err
 	}
 	return errors.New("beacon client not available")
 }

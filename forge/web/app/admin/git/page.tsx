@@ -84,6 +84,7 @@ function ProviderIcon({ provider }: { provider: string }) {
     gitea: "/gitea-favicon.ico",
   };
   return (
+    // eslint-disable-next-line @next/next/no-img-element
     <img
       src={icons[provider] || `https://${provider}.com/favicon.ico`}
       alt={provider}
@@ -315,11 +316,11 @@ export default function GitPage() {
             </button>
           </div>
 
-          {credentials.length === 0 && (
+          {(!credentials || credentials.length === 0) && (
             <p className="text-muted-foreground text-sm">No credentials configured.</p>
           )}
 
-          {credentials.map((cred) => (
+          {credentials?.map((cred) => (
             <div key={cred.id} className="border rounded-lg p-4 space-y-2">
               <div className="flex justify-between items-start">
                 <div>
@@ -385,11 +386,11 @@ export default function GitPage() {
             </button>
           </div>
 
-          {providerTokens.length === 0 && (
+          {(!providerTokens || providerTokens.length === 0) && (
             <p className="text-muted-foreground text-sm">No providers connected.</p>
           )}
 
-          {providerTokens.map((pt) => (
+          {providerTokens?.map((pt) => (
             <div key={pt.id} className="border rounded-lg p-4 space-y-2">
               <div className="flex justify-between items-start">
                 <div className="flex items-center gap-2">
@@ -475,11 +476,11 @@ export default function GitPage() {
             </button>
           </div>
 
-          {sources.length === 0 && (
+          {(!sources || sources.length === 0) && (
             <p className="text-muted-foreground text-sm">No repositories linked.</p>
           )}
 
-          {sources.map((src) => (
+          {sources?.map((src) => (
             <div key={src.id} className="border rounded-lg p-4 space-y-2">
               <div className="flex justify-between items-start">
                 <div>
@@ -616,7 +617,7 @@ function ProviderForm({
   const [providerName, setProviderName] = useState("");
   const [accessToken, setAccessToken] = useState("");
   const [refreshToken, setRefreshToken] = useState("");
-  const [tokenType, setTokenType] = useState("bearer");
+  const [tokenType] = useState("bearer");
   const [baseUrl, setBaseUrl] = useState("");
   const [username, setUsername] = useState("");
 

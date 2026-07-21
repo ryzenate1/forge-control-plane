@@ -1,12 +1,18 @@
 package http
 
 import (
+	"bytes"
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -99,33 +105,57 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
+		schedulerType := strings.TrimSpace(req.SchedulerType)
+		if schedulerType == "" {
+			schedulerType = "docker"
+		}
 		storeReq := store.CreateNodeRequest{
-			Name:               req.Name,
-			Region:             req.Region,
-			RegionID:           req.RegionID,
-			Description:        req.Description,
-			LocationID:         req.LocationID,
-			BaseURL:            req.BaseURL,
-			FQDN:               req.FQDN,
-			Scheme:             req.Scheme,
-			BehindProxy:        req.BehindProxy,
-			Public:             req.Public == nil || *req.Public,
-			Maintenance:        req.MaintenanceMode != nil && *req.MaintenanceMode,
-			MemoryMB:           req.MemoryMB,
-			DiskMB:             req.DiskMB,
-			UploadSizeMB:       req.UploadSizeMB,
-			DaemonBase:         req.DaemonBase,
-			DaemonListen:       req.DaemonListen,
-			DaemonSFTP:         req.DaemonSFTP,
-			MemoryOverallocate: derefInt(req.MemoryOverallocate),
-			DiskOverallocate:   derefInt(req.DiskOverallocate),
-			CPUCores:           derefInt(req.CPUCores),
-			DisplayName:        req.DisplayName,
-			PublicHostname:     req.PublicHostname,
-			DaemonSFTPAlias:    req.DaemonSFTPAlias,
-			DaemonConnect:      derefInt(req.DaemonConnect),
-			CPUOverallocate:    derefInt(req.CPUOverallocate),
-			Tags:               req.Tags,
+			Name:                req.Name,
+			Region:              req.Region,
+			RegionID:            req.RegionID,
+			Description:         req.Description,
+			LocationID:          req.LocationID,
+			BaseURL:             req.BaseURL,
+			FQDN:                req.FQDN,
+			Scheme:              req.Scheme,
+			BehindProxy:         req.BehindProxy,
+			Public:              req.Public == nil || *req.Public,
+			Maintenance:         req.MaintenanceMode != nil && *req.MaintenanceMode,
+			MemoryMB:            req.MemoryMB,
+			DiskMB:              req.DiskMB,
+			UploadSizeMB:        req.UploadSizeMB,
+			DaemonBase:          req.DaemonBase,
+			DaemonListen:        req.DaemonListen,
+			DaemonSFTP:          req.DaemonSFTP,
+			MemoryOverallocate:  derefInt(req.MemoryOverallocate),
+			DiskOverallocate:    derefInt(req.DiskOverallocate),
+			CPUCores:            derefInt(req.CPUCores),
+			DisplayName:         req.DisplayName,
+			PublicHostname:      req.PublicHostname,
+			DaemonSFTPAlias:     req.DaemonSFTPAlias,
+			DaemonConnect:       derefInt(req.DaemonConnect),
+			CPUOverallocate:     derefInt(req.CPUOverallocate),
+			Tags:                req.Tags,
+			SchedulerType:       schedulerType,
+			SchedulerConfig:     req.SchedulerConfig,
+			AllowedIPs:          req.AllowedIPs,
+			NetworkInterface:    req.NetworkInterface,
+			ReservedMemoryMB:    derefInt(req.ReservedMemoryMB),
+			ReservedDiskMB:      derefInt(req.ReservedDiskMB),
+			DefaultAllocationIP: req.DefaultAllocationIP,
+			AllocationPortMin:   derefInt(req.AllocationPortMin),
+			AllocationPortMax:   derefInt(req.AllocationPortMax),
+			AutoAllocate:        req.AutoAllocate != nil && *req.AutoAllocate,
+			EnableHealthChecks:  req.EnableHealthChecks == nil || *req.EnableHealthChecks,
+			EnableMetrics:       req.EnableMetrics == nil || *req.EnableMetrics,
+			PrometheusEndpoint:  req.PrometheusEndpoint,
+			AlertThresholdCPU:   derefInt(req.AlertThresholdCPU),
+			AlertThresholdMem:   derefInt(req.AlertThresholdMem),
+			AlertThresholdDisk:  derefInt(req.AlertThresholdDisk),
+			MaintenanceMessage:  req.MaintenanceMessage,
+			DrainBeforeMaint:    req.DrainBeforeMaint != nil && *req.DrainBeforeMaint,
+			TokenRotationPolicy: req.TokenRotationPolicy,
+			TLSSetting:          req.TLSSetting,
 		}
 		node, token, err := nodeRegistry.RegisterNode(ctx, storeReq, actorID)
 		if err != nil {
@@ -228,6 +258,8 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			DaemonConnect:      req.DaemonConnect,
 			CPUOverallocate:    req.CPUOverallocate,
 			Tags:               req.Tags,
+			SchedulerType:      req.SchedulerType,
+			SchedulerConfig:    req.SchedulerConfig,
 		}, actorID)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
@@ -2036,8 +2068,8 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 	protected.Get("/admin/plugins/:id", requireRole("admin"), GetPlugin(cfg))
 	protected.Post("/admin/plugins/import/file", requireRole("admin"), ImportPluginFromFile(cfg))
 	protected.Post("/admin/plugins/import/url", requireRole("admin"), ImportPluginFromURL(cfg))
-	protected.Post("/admin/plugins/:id/install", requireRole("admin"), InstallPlugin(cfg, cfg.PluginsDir))
-	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), UninstallPlugin(cfg, cfg.PluginsDir))
+	protected.Post("/admin/plugins/install", requireRole("admin"), InstallPlugin(cfg))
+	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), UninstallPlugin(cfg))
 	protected.Post("/admin/plugins/:id/enable", requireRole("admin"), EnablePlugin(cfg))
 	protected.Post("/admin/plugins/:id/disable", requireRole("admin"), DisablePlugin(cfg))
 	protected.Patch("/admin/plugins/:id", requireRole("admin"), UpdatePlugin(cfg))
@@ -2060,7 +2092,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Webhooks ----
 
-	protected.Get("/webhooks", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/webhooks", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2078,7 +2110,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(webhooks)
 	})
 
-	protected.Post("/webhooks", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/webhooks", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2098,7 +2130,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.Status(fiber.StatusCreated).JSON(wh)
 	})
 
-	protected.Patch("/webhooks/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2121,33 +2153,50 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(wh)
 	})
 
-	protected.Get("/webhooks/:id/deliveries", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/webhooks/:id/deliveries", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		offset := 0
+		if o := c.Query("offset"); o != "" {
+			if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+				offset = parsed
+			}
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c))
+		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c), offset)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		return c.JSON(deliveries)
 	})
 
-	protected.Get("/admin/webhooks/:id/deliveries", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/webhooks/:id/deliveries/:deliveryId/retry", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c))
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		if err := cfg.Store.RetryWebhookDelivery(ctx, c.Params("deliveryId")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(deliveries)
+		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Delete("/webhooks/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/webhooks/deliveries/:deliveryId", requireRole("admin"), requireAdminScope("webhooks.delete"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.Store.DeleteWebhookDelivery(ctx, c.Params("deliveryId")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"ok": true})
+	})
+
+	protected.Delete("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.delete"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"sync"
 	"time"
@@ -16,6 +17,8 @@ import (
 	schedulersvc "gamepanel/forge/internal/services/scheduler"
 	"gamepanel/forge/internal/store"
 )
+
+const DefaultRecoveryAcknowledgmentTimeout = 10 * time.Minute
 
 type Metrics struct {
 	RecoveryPlansTotal    uint64 `json:"recovery_plans_total"`
@@ -60,6 +63,9 @@ type coordinatorStore interface {
 	LatestVerifiedRecoveryBackup(ctx context.Context, serverID string) (store.Backup, error)
 	CreateMigration(ctx context.Context, req store.CreateMigrationRequest) (store.Migration, error)
 	UpdateMigrationStatus(ctx context.Context, id string, status store.MigrationStatus, reason string) (store.Migration, error)
+	UpdateServerGeneration(ctx context.Context, serverID string, generation int64, leaseExpiry *time.Time) error
+	GetServer(ctx context.Context, serverID string) (store.Server, error)
+	ListRecoveryItemsByStatus(ctx context.Context, statuses ...string) ([]store.RecoveryItem, error)
 }
 
 var _ coordinatorStore = (*store.Store)(nil)
@@ -290,9 +296,10 @@ func (c *Coordinator) FindRecoveryTargets(ctx context.Context, source store.Node
 		return domain.PlacementDecision{}, errors.New("scheduler unavailable")
 	}
 	req := domain.PlacementRequest{
-		MemoryMB: server.MemoryMB,
-		CPU:      server.CPUShares,
-		DiskMB:   server.DiskMB,
+		MemoryMB:       server.MemoryMB,
+		CPU:            server.CPUShares,
+		DiskMB:         server.DiskMB,
+		SkipReservation: true,
 	}
 	if source.RegionID != nil {
 		req.RegionID = *source.RegionID
@@ -348,12 +355,10 @@ func (c *Coordinator) ExecutePlan(ctx context.Context, planID string) (store.Rec
 			continue
 		}
 		if err := restoreExecutor.VerifyAndRestore(ctx, item); err != nil {
-			if _, updateErr := c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusFailed, "backup restore failed: "+err.Error()); updateErr != nil {
-				return store.RecoveryPlan{}, updateErr
-			}
-			return c.failPlan(ctx, plan.ID, "backup recovery failed: "+err.Error())
+			_, _ = c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusFailed, "backup restore failed: "+err.Error())
+			continue
 		}
-		if _, err := c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusRestored, "verified backup restored and workload ownership committed to target"); err != nil {
+		if _, err := c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusAwaitingBeacon, "restore dispatched, awaiting Beacon workload acknowledgment"); err != nil {
 			return store.RecoveryPlan{}, err
 		}
 	}
@@ -377,6 +382,8 @@ func (c *Coordinator) finishBackupRestorePlan(ctx context.Context, planID string
 		case string(store.RecoveryItemStatusSkipped), string(store.RecoveryItemStatusCancelled):
 		case string(store.RecoveryItemStatusFailed):
 			return c.failPlan(ctx, plan.ID, "backup restore item has failed status: "+item.Reason)
+		case string(store.RecoveryItemStatusAwaitingBeacon), string(store.RecoveryItemStatusHealthGating):
+			return plan, nil
 		default:
 			return plan, nil
 		}
@@ -385,6 +392,50 @@ func (c *Coordinator) finishBackupRestorePlan(ctx context.Context, planID string
 		return c.store.UpdateRecoveryPlanStatus(ctx, plan.ID, store.RecoveryPlanStatusCompleted, "no verified backup restore sources were available")
 	}
 	return c.store.UpdateRecoveryPlanStatus(ctx, plan.ID, store.RecoveryPlanStatusRestored, "verified backup recovery restored and ownership committed")
+}
+
+func (c *Coordinator) ReconcileRecoveryAcknowledgment(ctx context.Context) error {
+	if c == nil || c.store == nil {
+		return errors.New("recovery coordinator unavailable")
+	}
+	items, err := c.store.ListRecoveryItemsByStatus(ctx,
+		string(store.RecoveryItemStatusAwaitingBeacon),
+		string(store.RecoveryItemStatusHealthGating),
+	)
+	if err != nil {
+		return fmt.Errorf("list pending acknowledgment items: %w", err)
+	}
+	for _, item := range items {
+		if time.Since(item.UpdatedAt) > DefaultRecoveryAcknowledgmentTimeout {
+			if item.ReservationID != "" && c.reservations != nil {
+				if _, err := c.reservations.CancelReservation(ctx, item.ReservationID); err != nil {
+					slog.Error("recovery: failed to release reservation on timeout", "itemId", item.ID, "reservationId", item.ReservationID, "error", err)
+				}
+			}
+			if _, err := c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusFailed,
+				"beacon acknowledgment timed out after "+DefaultRecoveryAcknowledgmentTimeout.String()); err != nil {
+				return fmt.Errorf("timeout recovery item %s: %w", item.ID, err)
+			}
+			continue
+		}
+		server, err := c.store.GetServer(ctx, item.ServerID)
+		if err != nil {
+			continue
+		}
+		if server.ActualState != store.ServerActualStateRunning {
+			continue
+		}
+		if _, err := c.store.UpdateRecoveryItemStatus(ctx, item.ID, store.RecoveryItemStatusRestored,
+			"beacon acknowledged server running"); err != nil {
+			return fmt.Errorf("acknowledge recovery item %s: %w", item.ID, err)
+		}
+		if item.ReservationID != "" && c.reservations != nil {
+			if _, err := c.reservations.ConfirmReservation(ctx, item.ReservationID); err != nil {
+				return fmt.Errorf("confirm reservation %s for item %s: %w", item.ReservationID, item.ID, err)
+			}
+		}
+	}
+	return nil
 }
 
 func (c *Coordinator) ReconcilePlan(ctx context.Context, planID string) (store.RecoveryPlan, error) {
@@ -582,6 +633,17 @@ func (c *Coordinator) planServer(ctx context.Context, planID string, source stor
 	if err != nil {
 		return store.RecoveryItem{}, err
 	}
+	server.Generation++
+	leaseExpiry := time.Now().UTC().Add(1 * time.Hour)
+	server.WorkloadLeaseExpiry = &leaseExpiry
+	fenceGeneration := server.Generation
+	// WARNING: generation bump is not transactional with subsequent operations.
+	// If CreateReservations or CreateRecoveryItem fail after this point, the
+	// generation has already been bumped with no rollback. This is a known
+	// limitation since the store does not support cross-table transactions.
+	if err := c.store.UpdateServerGeneration(ctx, server.ID, server.Generation, &leaseExpiry); err != nil {
+		return store.RecoveryItem{}, err
+	}
 	// Offline recovery does not create a migration record: migration execution
 	// needs the source daemon and must never be attempted for this plan.
 	reservation, err := c.CreateReservations(ctx, server, decision.NodeID, "")
@@ -598,6 +660,7 @@ func (c *Coordinator) planServer(ctx context.Context, planID string, source stor
 		SourceBackupSize:     backup.Size,
 		Status:               string(store.RecoveryItemStatusPlanned),
 		Reason:               "planned verified backup recovery target",
+		FenceGeneration:      fenceGeneration,
 	})
 }
 

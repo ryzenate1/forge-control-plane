@@ -1,17 +1,22 @@
 package http
 
 import (
+	"crypto/rand"
 	"crypto/subtle"
+	"encoding/hex"
 	"strings"
+	"time"
 
 	"github.com/gofiber/fiber/v2"
 )
 
 const (
 	authSourceCookieSession = "cookie-session"
-	authSourceBearerSession = "bearer-session"
 	authSourceOAuth         = "oauth"
 	authSourceAPIKey        = "api-key"
+
+	CSRFTokenLength = 32
+	CSRFTokenExpiry = 2 * time.Hour
 )
 
 func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
@@ -56,6 +61,42 @@ func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
 		}
 
 		return c.Next()
+	}
+}
+
+func GenerateCSRFToken() (string, error) {
+	bytes := make([]byte, CSRFTokenLength)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(bytes), nil
+}
+
+func SetCSRFCookie(c *fiber.Ctx, token string) {
+	c.Cookie(&fiber.Cookie{
+		Name:     CSRFCookieName,
+		Value:    token,
+		HTTPOnly: false,
+		Secure:   true,
+		SameSite: "Lax",
+		Expires:  time.Now().Add(CSRFTokenExpiry),
+		Path:     "/",
+	})
+}
+
+func GetCSRFTokenHandler() fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		token, err := GenerateCSRFToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to generate CSRF token")
+		}
+
+		SetCSRFCookie(c, token)
+
+		return c.JSON(fiber.Map{
+			"token":   token,
+			"expires": time.Now().Add(CSRFTokenExpiry).Format(time.RFC3339),
+		})
 	}
 }
 

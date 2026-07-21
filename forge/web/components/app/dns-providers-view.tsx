@@ -8,29 +8,19 @@ import {
   VerificationStatus,
   SpinnerInline,
 } from "@/components/shared";
+import { fetchDnsProviders } from "@/lib/api/dns";
+import type { DNSProvider } from "@/lib/api/dns";
 import { formatDate } from "@/lib/utils";
 import type { ReactNode } from "react";
-
-type DNSProviderInfo = {
-  id: string;
-  name: string;
-  provider: string;
-  verificationStatus?: string;
-  createdAt: string;
-};
 
 interface DNSProvidersViewProps {
   action?: ReactNode;
 }
 
 export function DNSProvidersView({ action }: DNSProvidersViewProps) {
-  const query = useQuery<DNSProviderInfo[]>({
+  const query = useQuery<DNSProvider[]>({
     queryKey: ["dns-providers"],
-    queryFn: async () => {
-      const res = await fetch("/api/v1/dns-providers", { credentials: "include" });
-      if (!res.ok) throw new Error(`Failed to load DNS providers: ${res.status}`);
-      return res.json() as Promise<DNSProviderInfo[]>;
-    },
+    queryFn: fetchDnsProviders,
   });
 
   if (query.isLoading) return <SpinnerInline label="Loading DNS providers…" />;

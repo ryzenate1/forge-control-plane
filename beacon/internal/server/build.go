@@ -17,16 +17,18 @@ import (
 )
 
 type buildJob struct {
-	id        string
-	cmd       *exec.Cmd
-	logBuf    bytes.Buffer
-	logCh     chan string
-	cancel    context.CancelFunc
-	status    string
-	exitCode  int
-	imageRef  string
-	startedAt time.Time
-	mu        sync.RWMutex
+	id          string
+	workspaceID string
+	cmd         *exec.Cmd
+	logBuf      bytes.Buffer
+	logCh       chan string
+	cancel      context.CancelFunc
+	status      string
+	exitCode    int
+	imageRef    string
+	startedAt   time.Time
+	truncated   bool
+	mu          sync.RWMutex
 }
 
 type buildManager struct {
@@ -36,22 +38,38 @@ type buildManager struct {
 
 var builds = &buildManager{active: make(map[string]*buildJob)}
 
+const maxLogBufferSize = 100 * 1024 * 1024
+
 type dockerfileBuildRequest struct {
-	SourceDir  string   `json:"sourceDir"`
-	Dockerfile string   `json:"dockerfile"`
-	ImageName  string   `json:"imageName"`
-	BuildArgs  []string `json:"buildArgs"`
-	Labels     []string `json:"labels"`
-	Tags       []string `json:"tags"`
-	NoCache    bool     `json:"noCache"`
+	WorkspaceID        string   `json:"workspaceId"`
+	SourceDir          string   `json:"sourceDir"` // deprecated: use workspaceId
+	Dockerfile         string   `json:"dockerfile"`
+	ImageName          string   `json:"imageName"`
+	BuildArgs          []string `json:"buildArgs"`
+	Labels             []string `json:"labels"`
+	Tags               []string `json:"tags"`
+	NoCache            bool     `json:"noCache"`
+	SecretArgs         []string `json:"secretArgs,omitempty"`
+	MaxCPU             int      `json:"maxCpu,omitempty"`
+	MaxMemoryMB        int      `json:"maxMemoryMb,omitempty"`
+	MaxLogBytes        int      `json:"maxLogBytes,omitempty"`
+	CredentialPatterns []string `json:"credentialPatterns,omitempty"`
+	TenantID           string   `json:"tenantId,omitempty"`
 }
 
 type nixpacksBuildRequest struct {
-	SourceDir string   `json:"sourceDir"`
-	ImageName string   `json:"imageName"`
-	BuildArgs []string `json:"buildArgs"`
-	Tags      []string `json:"tags"`
-	NoCache   bool     `json:"noCache"`
+	WorkspaceID        string   `json:"workspaceId"`
+	SourceDir          string   `json:"sourceDir"` // deprecated: use workspaceId
+	ImageName          string   `json:"imageName"`
+	BuildArgs          []string `json:"buildArgs"`
+	Tags               []string `json:"tags"`
+	NoCache            bool     `json:"noCache"`
+	SecretArgs         []string `json:"secretArgs,omitempty"`
+	MaxCPU             int      `json:"maxCpu,omitempty"`
+	MaxMemoryMB        int      `json:"maxMemoryMb,omitempty"`
+	MaxLogBytes        int      `json:"maxLogBytes,omitempty"`
+	CredentialPatterns []string `json:"credentialPatterns,omitempty"`
+	TenantID           string   `json:"tenantId,omitempty"`
 }
 
 func (s *Server) handleDockerfileBuild(w http.ResponseWriter, r *http.Request) {
@@ -60,47 +78,85 @@ func (s *Server) handleDockerfileBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.SourceDir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sourceDir is required"})
+
+	sourceDir, err := s.resolveWorkspace(req.WorkspaceID, req.SourceDir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace: " + err.Error()})
 		return
 	}
-	if _, err := os.Stat(req.SourceDir); err != nil {
+
+	if _, err := os.Stat(sourceDir); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": fmt.Sprintf("source directory not found: %v", err)})
 		return
 	}
 
+	tid := req.TenantID
+	if tid == "" {
+		tid = "_system"
+	}
+
 	imageName := req.ImageName
 	if imageName == "" {
-		imageName = fmt.Sprintf("beacon-build-%d", time.Now().UnixNano())
+		imageName = fmt.Sprintf("forge/%s/build-%d", tid, time.Now().UnixNano())
 	}
 
 	dockerfile := req.Dockerfile
 	if dockerfile == "" {
-		dockerfile = filepath.Join(req.SourceDir, "Dockerfile")
+		dockerfile = filepath.Join(sourceDir, "Dockerfile")
 	}
 
-	args := []string{"docker", "build", "-f", dockerfile}
+	args := []string{"buildx", "build", "-f", dockerfile}
+
 	if req.NoCache {
 		args = append(args, "--no-cache")
 	}
+
 	for _, arg := range req.BuildArgs {
 		args = append(args, "--build-arg", arg)
 	}
+
+	for _, secret := range req.SecretArgs {
+		args = append(args, "--secret", secret)
+	}
+
 	for _, label := range req.Labels {
 		args = append(args, "--label", label)
 	}
+
 	for _, tag := range req.Tags {
 		args = append(args, "-t", tag)
 	}
 	args = append(args, "-t", imageName)
-	args = append(args, req.SourceDir)
 
-	job := builds.startBuild(r.Context(), imageName, "docker", args[1:]...)
+	if req.MaxCPU > 0 {
+		args = append(args, "--cpu-shares", fmt.Sprintf("%d", req.MaxCPU*1024/100))
+	}
+	if req.MaxMemoryMB > 0 {
+		args = append(args, "--memory", fmt.Sprintf("%dm", req.MaxMemoryMB))
+		args = append(args, "--memory-swap", fmt.Sprintf("%dm", req.MaxMemoryMB))
+	}
+	args = append(args, "--shm-size", "256m")
+	args = append(args, sourceDir)
+
+	job := builds.startBuild(r.Context(), imageName, req.WorkspaceID, "docker", req.CredentialPatterns, args[1:]...)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"id":        job.id,
-		"imageName": imageName,
-		"status":    job.status,
+		"id":          job.id,
+		"imageName":   imageName,
+		"workspaceId": req.WorkspaceID,
+		"status":      job.status,
 	})
+}
+
+func (s *Server) resolveWorkspace(workspaceID, legacySourceDir string) (string, error) {
+	if workspaceID != "" {
+		cloneBase := filepath.Join(s.dataDir, gitCloneDir)
+		sourceDir := filepath.Join(cloneBase, workspaceID)
+		return safePath(sourceDir, cloneBase)
+	}
+	if legacySourceDir != "" {
+		return legacySourceDir, nil
+	}
+	return "", fmt.Errorf("no workspaceId or sourceDir provided")
 }
 
 func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
@@ -109,17 +165,24 @@ func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
 	}
-	if req.SourceDir == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "sourceDir is required"})
+
+	sourceDir, err := s.resolveWorkspace(req.WorkspaceID, req.SourceDir)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid workspace: " + err.Error()})
 		return
+	}
+
+	tid := req.TenantID
+	if tid == "" {
+		tid = "_system"
 	}
 
 	imageName := req.ImageName
 	if imageName == "" {
-		imageName = fmt.Sprintf("beacon-build-%d", time.Now().UnixNano())
+		imageName = fmt.Sprintf("forge/%s/build-%d", tid, time.Now().UnixNano())
 	}
 
-	args := []string{"nixpacks", "build", req.SourceDir, "--name", imageName}
+	args := []string{"nixpacks", "build", sourceDir, "--name", imageName}
 	if req.NoCache {
 		args = append(args, "--no-cache")
 	}
@@ -131,11 +194,12 @@ func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
 	}
 	args = append(args, "-t", imageName)
 
-	job := builds.startBuild(r.Context(), imageName, "nixpacks", args[1:]...)
+	job := builds.startBuild(r.Context(), imageName, req.WorkspaceID, "nixpacks", req.CredentialPatterns, args[1:]...)
 	writeJSON(w, http.StatusAccepted, map[string]any{
-		"id":        job.id,
-		"imageName": imageName,
-		"status":    job.status,
+		"id":          job.id,
+		"imageName":   imageName,
+		"workspaceId": req.WorkspaceID,
+		"status":      job.status,
 	})
 }
 
@@ -234,19 +298,21 @@ func (s *Server) handleBuildCancel(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-func (m *buildManager) startBuild(ctx context.Context, imageRef string, command string, args ...string) *buildJob {
-	cmd := exec.CommandContext(ctx, command, args...)
+func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID string, command string, credPatterns []string, args ...string) *buildJob {
+	buildCtx, cancel := context.WithCancel(ctx)
+	cmd := exec.CommandContext(buildCtx, command, args...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Env = append(os.Environ(), "DOCKER_BUILDKIT=1")
 
-	buildCtx, cancel := context.WithCancel(context.Background())
 	job := &buildJob{
-		id:        fmt.Sprintf("build-%d", time.Now().UnixNano()),
-		cmd:       cmd,
-		cancel:    cancel,
-		status:    "running",
-		imageRef:  imageRef,
-		startedAt: time.Now(),
-		logCh:     make(chan string, 256),
+		id:          fmt.Sprintf("build-%d", time.Now().UnixNano()),
+		workspaceID: workspaceID,
+		cmd:         cmd,
+		cancel:      cancel,
+		status:      "running",
+		imageRef:    imageRef,
+		startedAt:   time.Now(),
+		logCh:       make(chan string, 256),
 	}
 
 	stdout, _ := cmd.StdoutPipe()
@@ -278,8 +344,18 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef string, command 
 		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 		for scanner.Scan() {
 			line := scanner.Text()
+			for _, pattern := range credPatterns {
+				if pattern != "" {
+					line = strings.ReplaceAll(line, pattern, "****")
+				}
+			}
 			job.mu.Lock()
-			_, _ = fmt.Fprintln(&job.logBuf, line)
+			if job.logBuf.Len()+len(line) < maxLogBufferSize {
+				_, _ = fmt.Fprintln(&job.logBuf, line)
+			} else if !job.truncated {
+				_, _ = fmt.Fprintln(&job.logBuf, "[LOG TRUNCATED: exceeded 100MB limit]")
+				job.truncated = true
+			}
 			job.mu.Unlock()
 		}
 	}()
@@ -332,4 +408,47 @@ func (m *buildManager) reapAbandoned() {
 			delete(m.active, id)
 		}
 	}
+}
+
+func StartBuildReaper(ctx context.Context, dataDir string) {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute)
+		defer ticker.Stop()
+
+		cleanupOrphanedClones(dataDir)
+
+		for {
+			select {
+			case <-ticker.C:
+				builds.reapAbandoned()
+				cleanupStaleClones(dataDir)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+func cleanupOrphanedClones(dataDir string) {
+	cloneBase := filepath.Join(dataDir, gitCloneDir)
+	entries, err := os.ReadDir(cloneBase)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		if entry.IsDir() {
+			info, err := entry.Info()
+			if err != nil {
+				continue
+			}
+			if now.Sub(info.ModTime()) > 24*time.Hour {
+				_ = os.RemoveAll(filepath.Join(cloneBase, entry.Name()))
+			}
+		}
+	}
+}
+
+func cleanupStaleClones(dataDir string) {
+	cleanupOrphanedClones(dataDir)
 }

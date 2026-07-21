@@ -10,8 +10,11 @@ import { UserLimitsGrid } from "./user-limits";
 
 export function AdminUsers() {
  const qc = useQueryClient();
- const { data: users = [], isLoading } = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
- const { data: servers = [] } = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
+ const usersQuery = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
+ const users = usersQuery.data ?? [];
+ const isLoading = usersQuery.isLoading;
+ const serversQuery = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
+ const servers = serversQuery.data ?? [];
 
  const [modal, setModal] = useState(false);
  const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
@@ -342,6 +345,6 @@ function UserRoleAssignments({ userId }: { userId: string }) {
  const refresh = () => void qc.invalidateQueries({ queryKey: ["user-roles", userId] });
  const assignMut = useMutation({ mutationFn: (roleKey: string) => assignUserRoles(userId, [roleKey]), onSuccess: refresh });
  const removeMut = useMutation({ mutationFn: (roleKey: string) => removeUserRoles(userId, [roleKey]), onSuccess: refresh });
- if (rolesQuery.isError || assignedQuery.isError) return <p className="text-xs text-red-300">Additional roles could not be loaded.</p>;
+  if (rolesQuery.isError || assignedQuery.isError) return <div className="flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-2 text-xs text-red-200"><span>Additional roles could not be loaded{rolesQuery.isError ? `: ${rolesQuery.error.message}` : assignedQuery.isError ? `: ${assignedQuery.error.message}` : ""}</span><Btn size="sm" tone="ghost" onClick={() => { void rolesQuery.refetch(); void assignedQuery.refetch(); }}>Retry</Btn></div>;
  return <div className="rounded-lg border border-white/[0.06] bg-[#161b28] p-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Additional Roles</p>{(rolesQuery.data ?? []).length === 0 ? <p className="text-xs text-slate-400">No additional roles configured.</p> : <div className="flex flex-wrap gap-2">{(rolesQuery.data ?? []).map((role) => <label className="flex items-center gap-2 rounded border border-white/10 px-2 py-1 text-xs text-slate-300" key={role.id}><input type="checkbox" checked={assigned.has(role.key)} disabled={assignMut.isPending || removeMut.isPending} onChange={(event) => event.target.checked ? assignMut.mutate(role.key) : removeMut.mutate(role.key)}/>{role.name}</label>)}</div>}</div>;
 }

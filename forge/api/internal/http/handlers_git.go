@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/store"
@@ -643,7 +644,222 @@ func generateWebhookSecret() string {
 	return fmt.Sprintf("%x", b)
 }
 
-func registerGitRoutes(protected fiber.Router, cfg Config, gitSvc *git.Service, deploySvc *git.DeployService, adminIPAccess, mutationLimiter fiber.Handler) {
+// ---------- Git Deployments ----------
+
+type CreateDeploymentRequest struct {
+	RepoURL    string `json:"repoUrl"`
+	Branch     string `json:"branch"`
+	CommitHash string `json:"commitHash"`
+}
+
+func ListGitDeployments(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		source, err := cfg.Store.GetGitSourceByServerID(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "git source not found")
+		}
+		deploys, err := cfg.Store.ListGitDeployments(ctx, source.ID, 10)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if deploys == nil {
+			deploys = []store.GitDeployment{}
+		}
+		return c.JSON(deploys)
+	}
+}
+
+func GetGitDeployment(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		deploy, err := cfg.Store.GetGitDeployment(ctx, c.Params("deployment_id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		return c.JSON(deploy)
+	}
+}
+
+func TriggerGitDeployment(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		var req CreateDeploymentRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.RepoURL == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "repoUrl is required")
+		}
+		if req.Branch == "" {
+			req.Branch = "main"
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		source, err := cfg.Store.FindGitSourceByRepoAndBranch(ctx, req.RepoURL, req.Branch)
+		if err != nil || source == nil {
+			return fiber.NewError(fiber.StatusNotFound, "git source not found for the given repository and branch")
+		}
+		deploy, err := cfg.Store.CreateGitDeployment(ctx, store.CreateGitDeploymentRequest{
+			GitSourceID: source.ID,
+			Branch:     req.Branch,
+			CommitSHA:  req.CommitHash,
+			Status:     "pending",
+			StartedAt:  time.Now().UTC(),
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(deploy)
+	}
+}
+
+// ---------- Git Deployment Hooks ----------
+
+type CreateGitDeploymentHookRequest struct {
+	Events []string `json:"events"`
+}
+
+func ListGitDeploymentHooks(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		source, err := cfg.Store.GetGitSourceByServerID(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "git source not found")
+		}
+		hooks, err := cfg.Store.ListGitDeploymentHooks(ctx, source.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		if hooks == nil {
+			hooks = []store.GitDeploymentHook{}
+		}
+		return c.JSON(hooks)
+	}
+}
+
+func CreateGitDeploymentHook(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		var req CreateGitDeploymentHookRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.Events == nil {
+			req.Events = []string{"push"}
+		}
+		secret := ""
+		if cfg.GitDeployMgmtService != nil {
+			secret = cfg.GitDeployMgmtService.GenerateSecret()
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		source, err := cfg.Store.GetGitSourceByServerID(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "git source not found")
+		}
+		hook, err := cfg.Store.CreateGitDeploymentHook(ctx, source.ID, secret, req.Events)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(hook)
+	}
+}
+
+func DeleteGitDeploymentHook(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.Store.DeleteGitDeploymentHook(ctx, c.Params("hook_id")); err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	}
+}
+
+func RegenerateGitDeploymentHookSecret(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		secret := ""
+		if cfg.GitDeployMgmtService != nil {
+			secret = cfg.GitDeployMgmtService.GenerateSecret()
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		hook, err := cfg.Store.RegenerateGitDeploymentHookSecret(ctx, c.Params("hook_id"), secret)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		return c.JSON(hook)
+	}
+}
+
+// ---------- Webhook Receiver for Git Deployments ----------
+
+type receiveWebhookRequest struct {
+	ServerID string `json:"serverId"`
+}
+
+func ReceiveGitDeploymentWebhook(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return c.SendStatus(fiber.StatusOK)
+		}
+		serverID := c.Params("serverId")
+		if serverID == "" {
+			var req receiveWebhookRequest
+			if err := c.BodyParser(&req); err == nil && req.ServerID != "" {
+				serverID = req.ServerID
+			}
+		}
+		if serverID == "" {
+			return c.SendStatus(fiber.StatusOK)
+		}
+
+		signature := c.Get("X-Hub-Signature-256")
+		if signature == "" {
+			signature = c.Get("X-Hub-Signature")
+		}
+
+		body := c.Body()
+
+		ctx, cancel := requestContext()
+		defer cancel()
+
+		if cfg.GitDeployMgmtService != nil {
+			if err := cfg.GitDeployMgmtService.HandleWebhookPayload(ctx, serverID, "", body, signature); err != nil {
+				if cfg.Logger != nil {
+					cfg.Logger.Warn("git deployment webhook processing failed", "server", serverID, "err", err)
+				}
+			}
+		}
+
+		return c.SendStatus(fiber.StatusOK)
+	}
+}
+
+func registerGitRoutes(protected fiber.Router, cfg Config, adminIPAccess, mutationLimiter fiber.Handler) {
 	gitGroup := protected.Group("/git")
 
 	gitGroup.Get("/credentials", ListGitCredentials(cfg))
@@ -661,6 +877,16 @@ func registerGitRoutes(protected fiber.Router, cfg Config, gitSvc *git.Service, 
 	gitGroup.Get("/sources", ListGitSources(cfg))
 	gitGroup.Post("/sources", mutationLimiter, CreateGitSource(cfg))
 	gitGroup.Delete("/sources/:id", mutationLimiter, DeleteGitSource(cfg))
+
+	// ---- Git Deployment routes ----
+	gitGroup.Get("/servers/:id/deployments", ListGitDeployments(cfg))
+	gitGroup.Post("/servers/:id/deployments", mutationLimiter, TriggerGitDeployment(cfg))
+	gitGroup.Get("/servers/:id/deployments/:deployment_id", GetGitDeployment(cfg))
+
+	gitGroup.Get("/servers/:id/hooks", ListGitDeploymentHooks(cfg))
+	gitGroup.Post("/servers/:id/hooks", mutationLimiter, CreateGitDeploymentHook(cfg))
+	gitGroup.Post("/servers/:id/hooks/:hook_id/regenerate", mutationLimiter, RegenerateGitDeploymentHookSecret(cfg))
+	gitGroup.Delete("/servers/:id/hooks/:hook_id", mutationLimiter, DeleteGitDeploymentHook(cfg))
 }
 
 func registerGitWebhookRoutes(v1 fiber.Router, cfg Config) {
@@ -668,4 +894,5 @@ func registerGitWebhookRoutes(v1 fiber.Router, cfg Config) {
 	v1.Post("/git/webhook/gitlab", HandleGitLabWebhook(cfg))
 	v1.Post("/git/webhook/bitbucket", HandleBitbucketWebhook(cfg))
 	v1.Post("/git/webhook/gitea", HandleGiteaWebhook(cfg))
+	v1.Post("/git/webhook/deploy/:serverId", ReceiveGitDeploymentWebhook(cfg))
 }

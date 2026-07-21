@@ -49,6 +49,10 @@ func registerMailSettingsRoutes(protected fiber.Router, cfg Config, mutationLimi
 	})
 
 	admin.Post("/mail/test", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
 		var req struct {
 			Recipient string `json:"recipient"`
 		}

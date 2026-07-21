@@ -30,6 +30,9 @@ func (s *Service) Handle(ctx context.Context, ev events.Envelope) error {
 		return nil
 	}
 
+	s.wg.Add(1)
+	defer s.wg.Done()
+
 	payload := map[string]any{
 		"id":             ev.ID,
 		"timestamp":      ev.Timestamp,

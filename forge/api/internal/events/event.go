@@ -61,9 +61,10 @@ const (
 
 	EventRecoveryPlanCreated   EventType = "RecoveryPlanCreated"
 	EventRecoveryPlanPlanned   EventType = "RecoveryPlanPlanned"
-	EventRecoveryPlanFailed    EventType = "RecoveryPlanFailed"
-	EventRecoveryPlanCancelled EventType = "RecoveryPlanCancelled"
-	EventRecoveryItemCreated   EventType = "RecoveryItemCreated"
+	EventRecoveryPlanFailed     EventType = "RecoveryPlanFailed"
+	EventRecoveryPlanCancelled  EventType = "RecoveryPlanCancelled"
+	EventRecoveryPlanCompleted  EventType = "RecoveryPlanCompleted"
+	EventRecoveryItemCreated    EventType = "RecoveryItemCreated"
 
 	// Auto-scaling events
 	EventScalingPolicyCreated EventType = "ScalingPolicyCreated"
@@ -72,10 +73,41 @@ const (
 	EventScalingError         EventType = "ScalingError"
 
 	// Deployment events
-	EventDeploymentStarted    EventType = "DeploymentStarted"
-	EventDeploymentCompleted  EventType = "DeploymentCompleted"
-	EventDeploymentRolledBack EventType = "DeploymentRolledBack"
-	EventDeploymentCancelled  EventType = "DeploymentCancelled"
+	EventDeploymentStarted           EventType = "DeploymentStarted"
+	EventDeploymentCompleted         EventType = "DeploymentCompleted"
+	EventDeploymentRolledBack        EventType = "DeploymentRolledBack"
+	EventDeploymentCancelled         EventType = "DeploymentCancelled"
+	EventDeploymentFailed            EventType = "DeploymentFailed"
+	EventDeploymentTimedOut          EventType = "DeploymentTimedOut"
+	EventDeploymentExecutionStarted  EventType = "DeploymentExecutionStarted"
+	EventDeploymentProvisioning      EventType = "DeploymentProvisioning"
+	EventDeploymentPromoted          EventType = "DeploymentPromoted"
+	EventDeploymentDraining          EventType = "DeploymentDraining"
+	EventDeploymentCleanup           EventType = "DeploymentCleanup"
+	EventAutoRollbackTriggered       EventType = "AutoRollbackTriggered"
+	EventAutoRollbackCompleted       EventType = "AutoRollbackCompleted"
+	EventAutoRollbackFailed          EventType = "AutoRollbackFailed"
+	EventRollingScaleUp              EventType = "RollingScaleUp"
+	EventRollingScaleDown            EventType = "RollingScaleDown"
+	EventCanaryDraining              EventType = "CanaryDraining"
+
+	// Instance lifecycle events (replica instances)
+	EventInstanceCreated            EventType = "InstanceCreated"
+	EventInstanceProvisioning        EventType = "InstanceProvisioning"
+	EventInstanceRunning             EventType = "InstanceRunning"
+	EventInstanceStopped             EventType = "InstanceStopped"
+	EventInstanceFailed              EventType = "InstanceFailed"
+	EventInstanceReplaced            EventType = "InstanceReplaced"
+
+	// App deployment lifecycle events
+	EventAppCreated                  EventType = "AppCreated"
+	EventAppDeleted                  EventType = "AppDeleted"
+	EventAppDeploying                EventType = "AppDeploying"
+	EventAppRunning                  EventType = "AppRunning"
+	EventAppDegraded                 EventType = "AppDegraded"
+	EventAppFailed                   EventType = "AppFailed"
+	EventAppScaledUp                 EventType = "AppScaledUp"
+	EventAppScaledDown               EventType = "AppScaledDown"
 
 	// Failover events
 	EventFailoverDetected        EventType = "FailoverDetected"
@@ -90,6 +122,10 @@ const (
 	EventTargetAdded         EventType = "TargetAdded"
 	EventTargetRemoved       EventType = "TargetRemoved"
 	EventTargetHealthChanged EventType = "TargetHealthChanged"
+
+	// Fencing events
+	EventNodeFenced      EventType = "NodeFenced"
+	EventNodeReconciling EventType = "NodeReconciling"
 
 	// Crash events
 	EventServerCrashed               EventType = "ServerCrashed"
@@ -118,6 +154,21 @@ const (
 	// Allocation events
 	EventAllocationCreated EventType = "AllocationCreated"
 	EventAllocationRemoved EventType = "AllocationRemoved"
+
+	// Compose GitOps events
+	EventComposeDeployed           EventType = "compose_stack_deployed"
+	EventComposeUpdateAvailable    EventType = "compose_update_available"
+	EventComposeUpdated            EventType = "compose_stack_updated"
+	EventComposeUpdateFailed       EventType = "compose_stack_update_failed"
+	EventComposeWebhookReceived    EventType = "compose_webhook_received"
+	EventComposeRollbackStarted    EventType = "compose_stack_rollback_started"
+	EventComposeRollbackCompleted  EventType = "compose_stack_rolled_back"
+	EventComposeRollbackFailed     EventType = "compose_stack_rollback_failed"
+	EventComposeDriftDetected      EventType = "compose_drift_detected"
+	EventComposeDriftResolved      EventType = "compose_drift_resolved"
+	EventComposePollCheck          EventType = "compose_poll_check"
+	EventComposeBranchChanged      EventType = "compose_branch_changed"
+	EventComposeDeleted           EventType = "compose_stack_deleted"
 )
 
 func (e Envelope) Validate() error {

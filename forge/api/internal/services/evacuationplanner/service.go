@@ -4,21 +4,44 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/events"
+	"gamepanel/forge/internal/services/reservations"
 	schedulersvc "gamepanel/forge/internal/services/scheduler"
 	"gamepanel/forge/internal/store"
 
 	"github.com/google/uuid"
 )
 
+type ReplacementPolicy string
+
+const (
+	ReplacementPolicyAutoReplace ReplacementPolicy = "auto_replace"
+	ReplacementPolicyProtect     ReplacementPolicy = "protect"
+)
+
+type StorageLocality string
+
+const (
+	StorageLocalOnly  StorageLocality = "local_only"
+	StorageReplicated StorageLocality = "replicated"
+	StorageShared     StorageLocality = "shared"
+)
+
+type ServerMountStore interface {
+	ServerMounts(ctx context.Context, serverID string) ([]store.ServerMount, error)
+}
+
 type Metrics struct {
 	EvacuationPlansTotal              uint64 `json:"evacuation_plans_total"`
 	EvacuationCandidatesTotal         uint64 `json:"evacuation_candidates_total"`
 	EvacuationValidationFailuresTotal uint64 `json:"evacuation_validation_failures_total"`
+	StorageLocalSkippedTotal          uint64 `json:"storage_local_skipped_total"`
+	OrphanDetectionTotal              uint64 `json:"orphan_detection_total"`
 }
 
 type CapacityImpact struct {
@@ -50,14 +73,17 @@ type MigrationExecutor interface {
 }
 
 type Service struct {
-	store     *store.Store
-	scheduler schedulersvc.Service
-	publisher events.Publisher
-	executor  MigrationExecutor
-	mu        sync.Mutex
-	metrics   Metrics
-	observers map[string]struct{}
-	startOnce sync.Once
+	store        *store.Store
+	scheduler    schedulersvc.Service
+	publisher    events.Publisher
+	executor     MigrationExecutor
+	mountStore   ServerMountStore
+	reservations *reservations.Manager
+	mu           sync.Mutex
+	metrics      Metrics
+	observers    map[string]struct{}
+	startOnce    sync.Once
+	cancel       context.CancelFunc
 }
 
 func New(store *store.Store, scheduler schedulersvc.Service, publishers ...events.Publisher) *Service {
@@ -76,6 +102,7 @@ func (s *Service) Start(ctx context.Context) {
 		return
 	}
 	s.startOnce.Do(func() {
+		ctx, s.cancel = context.WithCancel(ctx)
 		go func() {
 			s.resumeRunningPlans(ctx)
 			ticker := time.NewTicker(30 * time.Second)
@@ -90,6 +117,12 @@ func (s *Service) Start(ctx context.Context) {
 			}
 		}()
 	})
+}
+
+func (s *Service) Stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
 }
 
 func (s *Service) resumeRunningPlans(ctx context.Context) {
@@ -305,7 +338,7 @@ func (s *Service) reconcileItems(ctx context.Context, plan store.EvacuationPlan)
 		}
 		status, err := executor.EvacuationMigrationStatus(ctx, item.MigrationID)
 		if err != nil {
-			return s.store.UpdateEvacuationItemExecution(ctx, item.ID, item.MigrationID, "failed", fmt.Errorf("get migration status: %w", err))
+			continue
 		}
 		switch evacuationMigrationOutcome(status) {
 		case "completed":
@@ -511,7 +544,50 @@ func (s *Service) evaluateNode(ctx context.Context, nodeID string, preview bool)
 	items := []PlanItem{}
 	reserved := map[string]CapacityImpact{}
 	for _, server := range servers {
+		locality, _ := s.StorageLocality(ctx, server.ID)
+		if locality == StorageLocalOnly {
+			s.increment(func(metrics *Metrics) {
+				metrics.StorageLocalSkippedTotal++
+			})
+			items = append(items, PlanItem{
+				EvacuationItem: store.EvacuationItem{
+					ServerID:     server.ID,
+					SourceNodeID: source.ID,
+					Eligible:     false,
+					Reason:       "storage locality is local-only; cannot migrate",
+				},
+			})
+			continue
+		}
+
+		// Check for backup availability for stateful workloads that require protection
+		// For now, we only protect StorageLocalOnly workloads (handled above)
+		// Replicated and Shared storage workloads can be migrated without backup checks
+		// as they don't have the same locality constraints
+		policy := s.ReplacementPolicyForServer(ctx, server, locality)
+		if policy == ReplacementPolicyProtect {
+			s.increment(func(metrics *Metrics) {
+				metrics.EvacuationValidationFailuresTotal++
+			})
+			items = append(items, PlanItem{
+				EvacuationItem: store.EvacuationItem{
+					ServerID:     server.ID,
+					SourceNodeID: source.ID,
+					Eligible:     false,
+					Reason:       "replacement policy is protect; manual intervention required",
+				},
+			})
+			continue
+		}
 		selected, impact, reason := s.findCandidates(ctx, server, source, nodes, reserved)
+		if selected.ID != "" && !preview {
+			server.Generation++
+			leaseExpiry := time.Now().UTC().Add(1 * time.Hour)
+			server.WorkloadLeaseExpiry = &leaseExpiry
+			if err := s.store.UpdateServerGeneration(ctx, server.ID, server.Generation, &leaseExpiry); err != nil {
+				return PlanResult{}, err
+			}
+		}
 		item := PlanItem{
 			EvacuationItem: store.EvacuationItem{
 				ServerID:     server.ID,
@@ -579,6 +655,114 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func (s *Service) SetServerMountStore(store ServerMountStore) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mountStore = store
+}
+
+func (s *Service) SetReservationsManager(mgr *reservations.Manager) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.reservations = mgr
+}
+
+func (s *Service) reservationsManager() *reservations.Manager {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.reservations
+}
+
+func (s *Service) StorageLocality(ctx context.Context, serverID string) (StorageLocality, error) {
+	if s == nil || s.mountStore == nil {
+		return StorageReplicated, nil
+	}
+	mounts, err := s.mountStore.ServerMounts(ctx, serverID)
+	if err != nil {
+		return StorageReplicated, err
+	}
+	for _, mount := range mounts {
+		if mount.Source != "" && !mount.ReadOnly {
+			if isNetworkStorage(mount.Source) {
+				return StorageShared, nil
+			}
+			return StorageLocalOnly, nil
+		}
+	}
+	return StorageReplicated, nil
+}
+
+func isNetworkStorage(source string) bool {
+	if strings.Contains(source, "://") {
+		return true
+	}
+	if strings.Contains(source, "@") && strings.Contains(source, ":") {
+		return true
+	}
+	return false
+}
+
+func (s *Service) ReplacementPolicyForServer(_ context.Context, server store.Server, locality StorageLocality) ReplacementPolicy {
+	if locality == StorageLocalOnly {
+		return ReplacementPolicyProtect
+	}
+	if locality == StorageShared {
+		return ReplacementPolicyAutoReplace
+	}
+	return ReplacementPolicyAutoReplace
+}
+
+func (s *Service) DetectOrphans(ctx context.Context) ([]OrphanedWorkload, error) {
+	if s == nil || s.store == nil {
+		return nil, errors.New("evacuation planner unavailable")
+	}
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list nodes: %w", err)
+	}
+	var orphans []OrphanedWorkload
+	for _, node := range nodes {
+		if node.HeartbeatState != string(store.NodeHeartbeatStateOffline) &&
+			node.HeartbeatState != string(store.NodeHeartbeatStateUnreachable) {
+			continue
+		}
+		servers, err := s.store.ListServersForNode(ctx, node.ID)
+		if err != nil {
+			continue
+		}
+		for _, server := range servers {
+			if server.Status == "deleted" || server.Suspended {
+				continue
+			}
+			locality, _ := s.StorageLocality(ctx, server.ID)
+			policy := s.ReplacementPolicyForServer(ctx, server, locality)
+			orphans = append(orphans, OrphanedWorkload{
+				ServerID:          server.ID,
+				NodeID:            node.ID,
+				Status:            server.Status,
+				StorageLocality:   locality,
+				ReplacementPolicy: policy,
+			})
+			s.increment(func(m *Metrics) { m.OrphanDetectionTotal++ })
+		}
+	}
+	return orphans, nil
+}
+
+type OrphanedWorkload struct {
+	ServerID          string            `json:"serverId"`
+	NodeID            string            `json:"nodeId"`
+	Status            string            `json:"status"`
+	StorageLocality   StorageLocality   `json:"storageLocality"`
+	ReplacementPolicy ReplacementPolicy `json:"replacementPolicy"`
 }
 
 func (s *Service) increment(update func(*Metrics)) {

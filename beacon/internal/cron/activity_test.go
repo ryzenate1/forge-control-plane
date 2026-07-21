@@ -11,9 +11,9 @@ import (
 )
 
 type mockPanelClient struct {
-	mu       sync.Mutex
+	mu         sync.Mutex
 	activities []remote.Activity
-	sendErr  error
+	sendErr    error
 }
 
 func (m *mockPanelClient) GetServerConfiguration(ctx context.Context, uuid string) (remote.ServerConfigurationResponse, error) {
@@ -61,6 +61,9 @@ func (m *mockPanelClient) SendBackupStatus(ctx context.Context, serverID string,
 	return nil
 }
 func (m *mockPanelClient) SendRestoreStatus(ctx context.Context, serverID string, req remote.RestoreStatusRequest) error {
+	return nil
+}
+func (m *mockPanelClient) SendCapabilityReport(ctx context.Context, report interface{}) error {
 	return nil
 }
 

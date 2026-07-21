@@ -30,9 +30,9 @@ func TestValidateRepoURL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			err := validateRepoURL(tt.url)
+			err := ValidateRepoURL(tt.url)
 			if (err != nil) != tt.wantErr {
-				t.Errorf("validateRepoURL(%q) error = %v, wantErr = %v", tt.url, err, tt.wantErr)
+				t.Errorf("ValidateRepoURL(%q) error = %v, wantErr = %v", tt.url, err, tt.wantErr)
 			}
 		})
 	}
@@ -148,7 +148,7 @@ func TestDetectProjectType(t *testing.T) {
 func TestSafeClonePath(t *testing.T) {
 	t.Run("valid path under git-sources", func(t *testing.T) {
 		dir := os.TempDir() + "/git-sources/abc123"
-		got, err := safeClonePath(dir)
+		got, err := safeClonePath(dir, os.TempDir())
 		if err != nil {
 			t.Fatalf("expected no error, got %v", err)
 		}
@@ -159,7 +159,7 @@ func TestSafeClonePath(t *testing.T) {
 
 	t.Run("rejects path outside git-sources", func(t *testing.T) {
 		dir := os.TempDir() + "/evil-path"
-		_, err := safeClonePath(dir)
+		_, err := safeClonePath(dir, os.TempDir())
 		if err == nil {
 			t.Error("expected error for path outside git-sources")
 		}
@@ -168,7 +168,7 @@ func TestSafeClonePath(t *testing.T) {
 	t.Run("rejects traversal", func(t *testing.T) {
 		base := os.TempDir()
 		dir := base + "/git-sources/../../../etc"
-		_, err := safeClonePath(dir)
+		_, err := safeClonePath(dir, base)
 		if err == nil {
 			t.Error("expected error for traversal path")
 		}

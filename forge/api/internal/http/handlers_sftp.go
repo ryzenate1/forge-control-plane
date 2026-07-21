@@ -10,6 +10,9 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 	admin := protected.Group("/admin", requireRole("admin"))
 
 	admin.Get("/sftp/settings", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		settings, err := cfg.Store.GetSFTPGlobalConfig(ctx)
@@ -20,6 +23,9 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 	})
 
 	admin.Put("/sftp/settings", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
 		var req store.SFTPGlobalConfig
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -33,6 +39,9 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 	})
 
 	admin.Get("/nodes/:nodeId/sftp", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		config, err := cfg.Store.GetSFTPNodeConfig(ctx, c.Params("nodeId"))
@@ -43,6 +52,9 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 	})
 
 	admin.Put("/nodes/:nodeId/sftp", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
 		var req store.SFTPNodeConfig
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -57,6 +69,9 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 	})
 
 	admin.Get("/sftp/nodes", func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		configs, err := cfg.Store.ListSFTPNodeConfigs(ctx)

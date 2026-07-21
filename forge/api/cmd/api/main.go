@@ -13,9 +13,12 @@ import (
 	"os/signal"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	forgecfg "gamepanel/forge/config"
+	"gamepanel/forge/internal/auth"
 	"gamepanel/forge/internal/cloud"
 	"gamepanel/forge/internal/config"
 	"gamepanel/forge/internal/daemon"
@@ -25,22 +28,40 @@ import (
 	"gamepanel/forge/internal/placement"
 	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/secrets"
+
+	"github.com/go-acme/lego/v4/challenge"
+
+	"gamepanel/forge/internal/services"
 	acmesvc "gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/services/activity"
+	alerting "gamepanel/forge/internal/services/alerting"
+	apphostingsvc "gamepanel/forge/internal/services/apphosting"
+	appstoresvc "gamepanel/forge/internal/services/appstore"
 	auditlogsvc "gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
 	buildsvc "gamepanel/forge/internal/services/build"
+	buildpacksvc "gamepanel/forge/internal/services/buildpack"
+	cleanupsvc "gamepanel/forge/internal/services/cleanup"
 	"gamepanel/forge/internal/services/clustermanager"
+	"gamepanel/forge/internal/services/clustermembership"
 	composesvc "gamepanel/forge/internal/services/compose"
 	"gamepanel/forge/internal/services/configvalidator"
 	"gamepanel/forge/internal/services/crashdetector"
+	cronjobsvc "gamepanel/forge/internal/services/cronjob"
+	"gamepanel/forge/internal/services/crossnode"
+	dbbackupsvc "gamepanel/forge/internal/services/dbbackup"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
 	dnssvc "gamepanel/forge/internal/services/dns"
 	"gamepanel/forge/internal/services/domains"
+	"gamepanel/forge/internal/services/environments"
+	envvarsvc "gamepanel/forge/internal/services/envvars"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
+	fencing "gamepanel/forge/internal/services/fencing"
+	gitsvc "gamepanel/forge/internal/services/git"
+	gitprovidersvc "gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
 	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
@@ -51,18 +72,26 @@ import (
 	"gamepanel/forge/internal/services/migration"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
+	notification "gamepanel/forge/internal/services/notification"
 	"gamepanel/forge/internal/services/observability"
+	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/plugins"
+	previewsvc "gamepanel/forge/internal/services/preview"
+	proceduresvc "gamepanel/forge/internal/services/procedure"
+	processsvc "gamepanel/forge/internal/services/process"
 	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/services/reconciler"
 	recoverysvc "gamepanel/forge/internal/services/recovery"
+	"gamepanel/forge/internal/services/replicamanager"
 	"gamepanel/forge/internal/services/reservations"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
 	"gamepanel/forge/internal/services/scheduler"
+	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/webhook"
+	"gamepanel/forge/internal/services/zerodowntime"
 	"gamepanel/forge/internal/store"
 	"gamepanel/forge/internal/version"
 
@@ -97,8 +126,11 @@ func main() {
 	})
 
 	var db *store.Store
+	var masterKeyring *secrets.Keyring
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
-		keyring, ephemeral, err := masterKeyringFromEnvironment(production)
+		kr, ephemeral, err := masterKeyringFromEnvironment(production)
+		masterKeyring = kr
+		keyring := kr
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -111,6 +143,27 @@ func main() {
 		}
 		defer connected.Close()
 		if err := connected.RunMigrations(ctx, env("MIGRATIONS_DIR", "migrations")); err != nil {
+			log.Fatal(err)
+		}
+		if err := connected.RunSelectedMigrations(ctx, env("BATCH2_MIGRATIONS_DIR", "internal/store/migrations"), []string{
+			"024_a_sftp_config.sql",
+			"025_a_install_workflows.sql",
+			"026_a_external_ids.sql",
+			"033_node_onboarding.sql",
+			"034_build_pipeline.sql",
+			"035_compose_gitops.sql",
+			"035_a_infra_endpoints.sql",
+			"035_b_observability_monitoring.sql",
+			"036_compose_concurrency.sql",
+			"037_build_extended_fields.sql",
+			"038_traffic_routing.sql",
+			"040_git_deployment.sql",
+			"041_a_placement_intents.sql",
+			"041_buildpack_support.sql",
+			"042_service_discovery_endpoints.sql",
+			"043_webhook_idempotency.sql",
+			"114_e_zero_downtime_deploy.sql",
+		}); err != nil {
 			log.Fatal(err)
 		}
 		if err := eventstore.Migrate(connected.GetDB()); err != nil {
@@ -178,6 +231,7 @@ func main() {
 		auditLogSvc       auditlogsvc.AuditLogger
 		pluginSvc         *plugins.Service
 		queueSvc          *queue.Service
+		opSvc             *operationsvc.Service
 		runtimeRegistry   *runtimesvc.Registry
 		waSvc             *webauthn.Service
 		autoSvc           *autoscaler.Service
@@ -188,6 +242,7 @@ func main() {
 		domainSvc         *domains.Service
 		buildSvc          *buildsvc.Service
 		deploySvc         *deployment.Service
+		previewDeploySvc  *previewsvc.Service
 		cloudMgr          *cloud.Manager
 		lbSvc             *loadbalancer.Service
 		failSvc           *failover.Service
@@ -199,6 +254,35 @@ func main() {
 		tenancySvc        *tenancy.Service
 		dbContainerSvc    *dbprovisioner.DBContainerService
 		composeLifecycle  *composesvc.Service
+		procedureSvc      *proceduresvc.Service
+		apphostingSvc     *apphostingsvc.Service
+		endpointSvc       *environments.Service
+		alertSvc          *alerting.Service
+		notifSvc          *notification.Service
+		fenceSvc          *fencing.Service
+		membershipSvc     *clustermembership.Service
+		cleanupSvc        *cleanupsvc.Service
+		gitSvc            *gitsvc.Service
+		gitDeploySvc      *gitsvc.DeployService
+		gitProviderSvc    *gitprovidersvc.Service
+		gitOpsController  *composesvc.GitOpsController
+		sessionStore      *auth.PostgresSessionStore
+		replicaMgr        *replicamanager.Manager
+		discoverySvc      *servicediscovery.Service
+		crossNodeResolver *crossnode.Resolver
+		ingressSync       *crossnode.IngressSynchronizer
+		healthFilter      *crossnode.HealthFilter
+		appStoreSvc       *appstoresvc.Service
+		cronJobSvc        *cronjobsvc.Service
+		gitDeployMgmtSvc  *gitsvc.DeploymentManagementService
+		zdSvc             *zerodowntime.Service
+		dbSvcProv         *services.DatabaseServiceProvisioner
+		dbBackupSvc       *dbbackupsvc.Service
+		buildpackSvc      *buildpacksvc.Service
+		processSvc        *processsvc.Service
+		certSvc           *services.CertService
+		mtlsMigrator      *services.MTLSMigrator
+		mtlsCfg           forgecfg.MTLS
 	)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -231,15 +315,31 @@ func main() {
 
 		placeEngine = placement.NewEngine(placement.NewScorer(placement.StrategyLeastLoaded), placement.NewConstraintChecker())
 
-		sched := scheduler.New(db, placeEngine, outboxPub)
+		predictiveScorer = scheduler.NewPredictiveScorer(predictiveStore{db})
+		constraintSched = scheduler.NewConstraintScheduler(db)
+
 		resMgr = reservations.New(db, outboxPub)
+		sched := scheduler.New(db, placeEngine, outboxPub).
+			WithPredictiveScorer(predictiveScorer).
+			WithConstraintScheduler(constraintSched).
+			WithReservations(resMgr)
 		dockerRT := gpruntime.NewDockerAdapter(daemonClient)
 		cm = clustermanager.New(db, dockerRT, sched, resMgr, outboxPub)
+
+		// Initialize Beacon HTTP client for replicamanager
+		beaconBaseURL := env("BEACON_BASE_URL", "http://127.0.0.1:9090")
+		beaconHTTPClient := replicamanager.NewBeaconHTTPClient(db, daemonClient, beaconBaseURL, slogLogger)
+
+		// Initialize replicamanager with all required dependencies
+		replicaMgr = replicamanager.New(db, placeEngine, sched, resMgr, nil, beaconHTTPClient, slogLogger, outboxPub)
 		hbm = heartbeatmonitor.New(db, outboxPub)
 		rec = reconciler.New(db, cm, 0, outboxPub)
 		ep = evacuationplanner.New(db, sched, outboxPub)
 		mig = migration.New(db, sched, ep, resMgr, dockerRT, outboxPub)
 		ep.SetMigrationExecutor(mig)
+		ep.SetServerMountStore(db)
+		fenceSvc = fencing.New(db, outboxPub)
+		eventRegistry.Subscribe(events.EventNodeRecovered, fenceSvc)
 		rcv = recoverysvc.NewWithMigrationExecutor(db, sched, resMgr, mig, outboxPub)
 		recTokenStore := recoverysvc.NewStore(db.GetDB())
 		rts = recoverysvc.NewTokenService(recTokenStore)
@@ -282,8 +382,15 @@ func main() {
 		registerPowerJob(queue.JobServerStop, "stop")
 		registerPowerJob(queue.JobServerRestart, "restart")
 		registerPowerJob(queue.JobServerKill, "kill")
-		composeLifecycle = composesvc.New(db, outboxPub)
-		composeQH := composesvc.NewQueueHandler(composeLifecycle)
+		composeLifecycle, err = composesvc.New(db, outboxPub)
+		if err != nil {
+			log.Fatalf("failed to create compose service: %v", err)
+		}
+		composeLifecycle.WithReservationManager(resMgr).WithScheduler(sched)
+		composeQH, err := composesvc.NewQueueHandler(composeLifecycle)
+		if err != nil {
+			log.Fatalf("failed to create compose queue handler: %v", err)
+		}
 		queueSvc.RegisterHandler(queue.JobComposeDeploy, func(ctx context.Context, job *queue.Job) error {
 			return composeQH.HandleDeploy(ctx, job.Payload)
 		})
@@ -302,7 +409,70 @@ func main() {
 		queueSvc.RegisterHandler(queue.JobComposeRestart, func(ctx context.Context, job *queue.Job) error {
 			return composeQH.HandleRestart(ctx, job.Payload)
 		})
+
+		gitSvc = gitsvc.NewService(db, slogLogger)
+		gitDeploySvc = gitsvc.NewDeployService(gitSvc, db, slogLogger, "", "")
+		gitDeployMgmtSvc = gitsvc.NewDeploymentManagementService(db, slogLogger, gitDeploySvc)
+		gitProviderSvc = gitprovidersvc.NewService(db, slogLogger)
+		gitOpsController, err = composesvc.NewGitOpsController(
+			db,
+			gitDeploySvc,
+			composeLifecycle,
+			daemonClient,
+			outboxPub,
+			slogLogger,
+			env("GITOPS_WORKER_ID", ""),
+		)
+		if err != nil {
+			log.Fatalf("failed to create gitops controller: %v", err)
+		}
+		gitOpsController.Start(appCtx)
+
+		appStoreSvc, err = appstoresvc.New(db, composeLifecycle)
+		if err != nil {
+			log.Fatalf("failed to create app store service: %v", err)
+		}
+
 		queueSvc.Start(appCtx)
+
+		opStore := operationsvc.NewPostgresStore(db.GetDB())
+		opSvc = operationsvc.New(opStore)
+		registerPowerOp := func(opType operationsvc.OperationType, signal string) {
+			opSvc.RegisterHandler(opType, func(ctx context.Context, op *operationsvc.Operation) error {
+				commandCtx := daemon.ContextWithCommandID(ctx, op.ID)
+				_, _, err := cm.RequestServerPower(commandCtx, op.ResourceID, signal)
+				if err == nil {
+					event := map[string]string{"start": "server:started", "stop": "server:stopped", "restart": "server:restarted", "kill": "server:stopped"}[signal]
+					if event != "" {
+						db.DispatchWebhookEvent(event, map[string]any{"subject_type": "server", "subject_id": op.ResourceID, "signal": signal, "operation_id": op.ID})
+					}
+				}
+				return err
+			})
+		}
+		registerPowerOp(operationsvc.OpServerStart, "start")
+		registerPowerOp(operationsvc.OpServerStop, "stop")
+		registerPowerOp(operationsvc.OpServerRestart, "restart")
+		registerPowerOp(operationsvc.OpServerKill, "kill")
+		opSvc.RegisterHandler(operationsvc.OpComposeDeploy, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleDeploy(ctx, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpComposeUpdate, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleUpdate(ctx, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpComposeDelete, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleDelete(ctx, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpComposeStart, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleStart(ctx, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpComposeStop, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleStop(ctx, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpComposeRestart, func(ctx context.Context, op *operationsvc.Operation) error {
+			return composeQH.HandleRestart(ctx, op.Input)
+		})
+		opSvc.Start(appCtx)
 
 		runtimeRegistry = runtimesvc.NewRegistry()
 
@@ -319,10 +489,39 @@ func main() {
 
 		autoSvc = autoscaler.New(db, cm, dockerRT, outboxPub)
 		deploySvc = deployment.New(db, outboxPub)
+		previewDeploySvc = previewsvc.New(db, outboxPub)
 		lbSvc = loadbalancer.New(db, outboxPub)
-		lbSvc.Start(appCtx)
 
 		healthCheckRunner = healthchecksvc.New(db, healthchecksvc.DefaultConfig())
+		var rollbackMu sync.Mutex
+		healthCheckRunner.OnUnhealthy(func(ctx context.Context, serverID string, targetID string, consecutiveFailures int) {
+			rollbackMu.Lock()
+			defer rollbackMu.Unlock()
+
+			deps, err := db.ListDeployments(ctx, serverID)
+			if err != nil {
+				slogLogger.Error("health check bridge: list deployments", slog.String("serverId", serverID), slog.String("error", err.Error()))
+				return
+			}
+			for _, d := range deps {
+				if !d.RollbackOnHealthFailure {
+					continue
+				}
+				switch d.Status {
+				case string(deployment.StatusInProgress), string(deployment.StatusPending), string(deployment.StatusProvisioning), string(deployment.StatusAwaitingHealth), string(deployment.StatusPromoting), string(deployment.StatusRollbackPending), string(deployment.StatusRollingBack):
+					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollbackPending),
+						fmt.Sprintf("auto-rollback triggered by runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures))
+					_, rollbackErr := deploySvc.RollbackToPrevious(ctx, d.ID)
+					if rollbackErr != nil {
+						slogLogger.Error("health check bridge: auto-rollback failed", slog.String("deploymentId", d.ID), slog.String("serverId", serverID), slog.String("error", rollbackErr.Error()))
+						continue
+					}
+					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollingBack), "")
+					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRolledBack),
+						fmt.Sprintf("auto-rollback due to runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures))
+				}
+			}
+		})
 		healthCheckRunner.Start(appCtx)
 		rec.SetHealthChecker(healthCheckRunner.ReconcilerAdapter())
 		failSvc = failover.New(db, outboxPub)
@@ -378,8 +577,27 @@ func main() {
 			}()
 			return nil
 		})
-		eventRegistry.Subscribe(events.EventNodeSuspected, failSvc)
-		eventRegistry.Subscribe(events.EventNodeUnreachable, failSvc)
+		failSvc.SetWorkloadClassifier(func(ctx context.Context, nodeID string) (failover.FailoverAction, error) {
+			servers, err := db.ListServersForNode(ctx, nodeID)
+			if err != nil {
+				return failover.FailoverActionNotify, err
+			}
+			allShared := len(servers) > 0
+			for _, server := range servers {
+				locality, _ := ep.StorageLocality(ctx, server.ID)
+				if locality == evacuationplanner.StorageLocalOnly {
+					return failover.FailoverActionNotify, nil
+				}
+				policy := ep.ReplacementPolicyForServer(ctx, server, locality)
+				if policy == evacuationplanner.ReplacementPolicyProtect {
+					return failover.FailoverActionNotify, nil
+				}
+			}
+			if allShared {
+				return failover.FailoverActionEvacuate, nil
+			}
+			return failover.FailoverActionNotify, nil
+		})
 		eventRegistry.Subscribe(events.EventNodeOffline, failSvc)
 		crashDetector = crashdetector.New(crashdetector.DefaultConfig(), db)
 		crashDetector.OnCrash(func(ctx context.Context, serverID string, crashCount int) {
@@ -407,24 +625,121 @@ func main() {
 		})
 		bkSvc = backup.New(db)
 		bkSvc.SetRetentionDays(envInt("BACKUP_RETENTION_DAYS", 30))
+		backup.RegisterProvider("s3", backup.NewS3Factory)
+		backup.RegisterProvider("gcs", backup.NewGCSFactory)
+		backup.RegisterProvider("azure", backup.NewAzureFactory)
+		backup.RegisterProvider("local", backup.NewLocalFactory)
 		bkWorker = backup.NewWorker(db, bkSvc, daemonClient)
-		dnsSvc = dnssvc.New(db)
+		dnsSvc, err = dnssvc.New(db)
+		if err != nil {
+			log.Fatalf("failed to create dns service: %v", err)
+		}
 		caddyProxy := trafficmanager.NewCaddyReverseProxy(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
 		acmeSvc = acmesvc.New(db, slogLogger)
+		dnsSvc.RegisterWithAcme(func(name string, factory func(providerName string, credentials map[string]string) (challenge.Provider, error)) {
+			acmeSvc.RegisterDNSProvider(name, factory)
+		})
+		discoverySvc = servicediscovery.New(db, servicediscovery.NewEndpointStore(db.GetDB()), outboxPub)
+		crossNodeResolver = crossnode.NewResolver(resolutionStoreAdapter{db})
+		crossNodeResolver.SetServiceDiscovery(discoverySvc)
+		discoverySvc.Start(appCtx)
+
+		healthFilter = crossnode.NewHealthFilter(2, 30*time.Second)
+		healthFilter.StartReaper(appCtx, 5*time.Minute)
+		ingressSync = crossnode.NewIngressSynchronizer(caddyProxy, crossNodeResolver, healthFilter, outboxPub)
+		ingressSync.Start(appCtx, 30*time.Second)
+
+		domainNodeResolver := &domainNodeResolver{store: db}
 		domainSvc = domains.New(store.NewDomainAdapter(db), caddyProxy, env("PANEL_IP", ""), outboxPub)
-		buildSvc = buildsvc.NewService(db)
+		domainSvc.SetNodeResolver(domainNodeResolver)
+		buildSvc = buildsvc.NewService(db, slogLogger)
 		tenancySvc = tenancy.New(db)
+		procedureSvc = proceduresvc.New(db, outboxPub, slogLogger, db)
+		apphostingSvc = apphostingsvc.New(db, tenancySvc)
+		endpointSvc = environments.New(db)
+		alertSvc = alerting.New(db, alerting.DefaultThresholds, slogLogger)
+		notifSvc = notification.New(db, slogLogger)
+		if err := notifSvc.RefreshChannels(appCtx); err != nil {
+			slogLogger.Warn("failed to refresh notification channels", slog.String("error", err.Error()))
+		}
+		eventRegistry.Subscribe(events.EventServerCrashed, notifSvc)
+		eventRegistry.Subscribe(events.EventServerInstallCompleted, notifSvc)
+		eventRegistry.Subscribe(events.EventServerBackupCreated, notifSvc)
+		eventRegistry.Subscribe(events.EventServerBackupFailed, notifSvc)
+		eventRegistry.Subscribe(events.EventDeploymentCompleted, notifSvc)
+		eventRegistry.Subscribe(events.EventDeploymentFailed, notifSvc)
+		eventRegistry.Subscribe(events.EventNodeOffline, notifSvc)
+		eventRegistry.Subscribe(events.EventNodeOnline, notifSvc)
+		membershipSvc = clustermembership.New(db, outboxPub)
+		membershipSvc.SetEvacuationPlanner(ep)
+		cleanupSvc = cleanupsvc.New(db, outboxPub)
+		cleanupSvc.Start(appCtx)
 		dbContainerSvc = dbprovisioner.NewDBContainerService(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"))
-		tmSvc = trafficmanager.New(db, caddyProxy, outboxPub)
-		predictiveScorer = scheduler.NewPredictiveScorer(predictiveStore{db})
-		constraintSched = scheduler.NewConstraintScheduler(db)
+		dbSvcProv = services.NewDatabaseServiceProvisioner(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"), masterKeyring)
+		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewNoopStorage())
+		tmSvc = trafficmanager.NewWithPersistence(db, db, db, db, caddyProxy, outboxPub)
+		eventRegistry.Subscribe(events.EventNodeOffline, tmSvc)
+		eventRegistry.Subscribe(events.EventNodeRecovered, tmSvc)
+		tmSvc.Start(appCtx)
+		eventRegistry.Subscribe(events.EventNodeOffline, lbSvc)
+		eventRegistry.Subscribe(events.EventNodeRecovered, lbSvc)
+		eventRegistry.Subscribe(events.EventNodeOnline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
+			crossNodeResolver.ClearCache()
+			if ingressSync != nil {
+				_ = ingressSync.Sync(ctx)
+			}
+			return nil
+		}))
+		eventRegistry.Subscribe(events.EventNodeOffline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
+			crossNodeResolver.ClearCache()
+			if ingressSync != nil {
+				_ = ingressSync.Sync(ctx)
+			}
+			return nil
+		}))
+		eventRegistry.Subscribe(events.EventNodeRecovered, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
+			crossNodeResolver.ClearCache()
+			if ingressSync != nil {
+				_ = ingressSync.Sync(ctx)
+			}
+			return nil
+		}))
+		eventRegistry.Subscribe(events.EventNodeReconciling, events.HandlerFunc(func(ctx context.Context, envelope events.Envelope) error {
+			slog.Info("node reconciling", "nodeId", envelope.ResourceID, "payload", envelope.Payload)
+			return nil
+		}))
+		lbSvc.Start(appCtx)
 
 		// Wire observability as a catch-all event subscriber so every domain
 		// event is persisted to the timeline.
 		eventRegistry.Subscribe(events.WildcardEventType, obs)
 		eventRegistry.Subscribe(events.WildcardEventType, whSvc)
 
+		cronJobSvc, err = cronjobsvc.New(db, slogLogger)
+		if err != nil {
+			log.Fatalf("failed to create cron job service: %v", err)
+		}
+
+		zdSvc = zerodowntime.New(db)
+
+		processSvc = processsvc.New(db, &processDaemonAdapter{store: db, daemon: daemonClient}, slogLogger)
+		buildpackSvc = buildpacksvc.NewService(db)
+
+		certSvc = services.NewCertService(db, db, slogLogger)
+		mtlsCfg = forgecfg.MTLSConfig()
+		if mtlsCfg.AutoMigrate {
+			mtlsMigrator = services.NewMTLSMigrator(certSvc, db, slogLogger)
+			if err := mtlsMigrator.Run(appCtx); err != nil {
+				slogLogger.Warn("mTLS auto-migration failed", slog.String("error", err.Error()))
+			}
+		} else {
+			mtlsMigrator = services.NewMTLSMigrator(certSvc, db, slogLogger)
+		}
+
 		// Start background services.
+		if err := cronJobSvc.Start(appCtx); err != nil {
+			slogLogger.Error("cron job service startup failed", slog.String("error", err.Error()))
+		}
 		resMgr.Start(appCtx)
 		hbm.Start(appCtx)
 		rec.Start(appCtx)
@@ -437,6 +752,27 @@ func main() {
 		eventRelay.Start(appCtx)
 		domainSvc.StartReverify(appCtx)
 		acmeSvc.StartAutoRenewal(appCtx)
+		procedureSvc.Start(appCtx)
+		replicaMgr.Start(appCtx)
+		if err := autoSvc.Start(appCtx); err != nil {
+			slogLogger.Error("autoscaler startup failed", slog.String("error", err.Error()))
+		}
+
+		sessionStore = auth.NewPostgresSessionStore(db.GetDB())
+		go func() {
+			ticker := time.NewTicker(time.Hour)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-appCtx.Done():
+					return
+				case <-ticker.C:
+					if err := sessionStore.Cleanup(appCtx); err != nil {
+						slogLogger.Error("session cleanup failed", slog.String("error", err.Error()))
+					}
+				}
+			}
+		}()
 	}
 
 	langsDir := env("LANGS_DIR", "lang")
@@ -537,6 +873,7 @@ func main() {
 	}))
 	healthSvc.AddCheck(health.NewAPIRuntimeCheck(started))
 	healthSvc.AddCheck(health.NewMemoryCheck(0))
+	healthSvc.AddCheck(health.NewDockerCheck())
 	healthSvc.AddCheck(health.NewSystemCheck(started))
 
 	cfg := config.Config{
@@ -604,57 +941,90 @@ func main() {
 	validateConfig(&cfg, db != nil)
 
 	appCfg := http.Config{
-		Logger:               slogLogger,
-		Addr:                 env("API_ADDR", ":8080"),
-		ReadTimeout:          5 * time.Second,
-		AuthSecret:           authSecret,
-		Store:                db,
-		Redis:                redisClient,
-		RedisEnabled:         redisEnabled,
-		Daemon:               daemonClient,
-		BackgroundContext:    appCtx,
-		PanelURL:             env("PANEL_URL", "http://localhost:3000"),
-		PluginsDir:           env("PLUGINS_DIR", ""),
-		PluginService:        pluginSvc,
-		NodeRegistry:         nr,
-		NodeProbe:            np,
-		ClusterManager:       cm,
-		EvacuationPlanner:    ep,
-		MigrationService:     mig,
-		ReservationManager:   resMgr,
-		RecoveryCoordinator:  rcv,
-		RecoveryTokenService: rts,
-		HeartbeatMonitor:     hbm,
-		Observability:        obs,
-		Reconciler:           rec,
-		DBProvisioner:        dbProv,
-		HealthService:        healthSvc,
-		MailTriggerService:   mailTriggerSvc,
-		QueueService:         queueSvc,
-		RuntimeRegistry:      runtimeRegistry,
-		WebAuthnService:      waSvc,
-		ActivityService:      actSvc,
-		AuditLogService:      auditLogSvc,
-		EventRelay:           eventRelay,
-		AutoScaler:           autoSvc,
-		CrashDetector:        crashDetector,
-		DeploymentSvc:        deploySvc,
-		CloudManager:         cloudMgr,
-		LoadBalancer:         lbSvc,
-		FailoverSvc:          failSvc,
-		TrafficManager:       tmSvc,
-		PredictiveScorer:     predictiveScorer,
-		ConstraintScheduler:  constraintSched,
-		BackupSvc:            bkSvc,
-		DNSService:           dnsSvc,
-		AcmeService:          acmeSvc,
-		DomainService:        domainSvc,
-		BuildService:         buildSvc,
-		Translator:           translator,
-		GitService:           nil,
-		GitDeployService:     nil,
-		DBContainerService:   dbContainerSvc,
-		TenancyService:       tenancySvc,
+		Logger:                     slogLogger,
+		Addr:                       env("API_ADDR", ":8080"),
+		ReadTimeout:                5 * time.Second,
+		AuthSecret:                 authSecret,
+		Store:                      db,
+		Redis:                      redisClient,
+		RedisEnabled:               redisEnabled,
+		Daemon:                     daemonClient,
+		BackgroundContext:          appCtx,
+		PanelURL:                   env("PANEL_URL", "http://localhost:3000"),
+		PluginsDir:                 env("PLUGINS_DIR", ""),
+		PluginService:              pluginSvc,
+		CORSConfig:                 http.DefaultCORSConfig(),
+		NodeRegistry:               nr,
+		NodeProbe:                  np,
+		ClusterManager:             cm,
+		EvacuationPlanner:          ep,
+		MigrationService:           mig,
+		ReservationManager:         resMgr,
+		RecoveryCoordinator:        rcv,
+		RecoveryTokenService:       rts,
+		HeartbeatMonitor:           hbm,
+		Observability:              obs,
+		Reconciler:                 rec,
+		DBProvisioner:              dbProv,
+		HealthService:              healthSvc,
+		SessionStore:               sessionStore,
+		MailTriggerService:         mailTriggerSvc,
+		QueueService:               queueSvc,
+		OperationService:           opSvc,
+		RuntimeRegistry:            runtimeRegistry,
+		WebAuthnService:            waSvc,
+		ActivityService:            actSvc,
+		AuditLogService:            auditLogSvc,
+		EventRelay:                 eventRelay,
+		AutoScaler:                 autoSvc,
+		CrashDetector:              crashDetector,
+		DeploymentSvc:              deploySvc,
+		PreviewDeploymentSvc:       previewDeploySvc,
+		CloudManager:               cloudMgr,
+		LoadBalancer:               lbSvc,
+		FailoverSvc:                failSvc,
+		TrafficManager:             tmSvc,
+		PredictiveScorer:           predictiveScorer,
+		ConstraintScheduler:        constraintSched,
+		BackupSvc:                  bkSvc,
+		DNSService:                 dnsSvc,
+		AcmeService:                acmeSvc,
+		DomainService:              domainSvc,
+		BuildService:               buildSvc,
+		Translator:                 translator,
+		GitService:                 gitSvc,
+		GitDeployService:           gitDeploySvc,
+		GitProviderService:         gitProviderSvc,
+		ComposeService:             composeLifecycle,
+		DBContainerService:         dbContainerSvc,
+		DatabaseServiceProvisioner: dbSvcProv,
+		DBBackupService:            dbBackupSvc,
+		TenancyService:             tenancySvc,
+		EnvVarService:              envvarsvc.New(db),
+		ProcedureService:           procedureSvc,
+		AppHostingService:          apphostingSvc,
+		EndpointService:            endpointSvc,
+		AlertService:               alertSvc,
+		NotificationService:        notifSvc,
+		ClusterMembershipService:   membershipSvc,
+		CleanupService:             cleanupSvc,
+		ReplicaManager:             replicaMgr,
+		GitDeployMgmtService:       gitDeployMgmtSvc,
+		AppStoreService:            appStoreSvc,
+		CronJobService:             cronJobSvc,
+		BuildpackService:           buildpackSvc,
+		ProcessService:             processSvc,
+		ZeroDowntimeSvc:            zdSvc,
+		ServiceDiscovery:           discoverySvc,
+		CrossNodeResolver:          crossNodeResolver,
+		IngressSynchronizer:        ingressSync,
+		MTLSEnabled:                mtlsCfg.Enabled,
+		MTLSCACertPath:             mtlsCfg.CACertPath,
+		MTLSCertPath:               mtlsCfg.CertPath,
+		MTLSKeyPath:                mtlsCfg.KeyPath,
+		MTLSDevBypass:              mtlsCfg.DevBypass,
+		CertService:                certSvc,
+		MTLSMigrator:               mtlsMigrator,
 	}
 
 	app := http.NewServer(appCfg)
@@ -678,8 +1048,74 @@ func main() {
 		if queueSvc != nil {
 			queueSvc.Stop()
 		}
+		if opSvc != nil {
+			opSvc.Stop()
+		}
+		if procedureSvc != nil {
+			procedureSvc.Stop()
+		}
+		if gitOpsController != nil {
+			gitOpsController.Stop()
+		}
 		if eventRelay != nil {
 			eventRelay.Stop()
+		}
+		if replicaMgr != nil {
+			replicaMgr.Stop()
+		}
+		if discoverySvc != nil {
+			discoverySvc.Stop()
+		}
+		if ingressSync != nil {
+			ingressSync.Stop()
+		}
+		if healthFilter != nil {
+			healthFilter.StopReaper()
+		}
+		if resMgr != nil {
+			resMgr.Stop()
+		}
+		if hbm != nil {
+			hbm.Stop()
+		}
+		if rec != nil {
+			rec.Stop()
+		}
+		if mig != nil {
+			_ = mig.Shutdown(context.Background())
+		}
+		if ep != nil {
+			ep.Stop()
+		}
+		if failSvc != nil {
+			failSvc.Stop()
+		}
+		if bkWorker != nil {
+			bkWorker.Stop()
+		}
+		if healthCheckRunner != nil {
+			healthCheckRunner.Stop()
+		}
+		if lbSvc != nil {
+			lbSvc.Shutdown()
+		}
+		if autoSvc != nil {
+			autoSvc.Stop()
+		}
+		if tmSvc != nil {
+			tmSvc.Stop()
+		}
+		if cleanupSvc != nil {
+			cleanupSvc.Stop()
+		}
+		if cronJobSvc != nil {
+			cronJobSvc.Stop()
+		}
+		if domainSvc != nil {
+			domainSvc.StopReverify()
+		}
+		if acmeSvc != nil {
+			acmeSvc.StopAutoRenewal()
 		}
 	case err := <-listenErr:
 		appCancel()
@@ -692,6 +1128,75 @@ func main() {
 		}
 		if queueSvc != nil {
 			queueSvc.Stop()
+		}
+		if opSvc != nil {
+			opSvc.Stop()
+		}
+		if gitOpsController != nil {
+			gitOpsController.Stop()
+		}
+		if procedureSvc != nil {
+			procedureSvc.Stop()
+		}
+		if eventRelay != nil {
+			eventRelay.Stop()
+		}
+		if replicaMgr != nil {
+			replicaMgr.Stop()
+		}
+		if discoverySvc != nil {
+			discoverySvc.Stop()
+		}
+		if ingressSync != nil {
+			ingressSync.Stop()
+		}
+		if healthFilter != nil {
+			healthFilter.StopReaper()
+		}
+		if resMgr != nil {
+			resMgr.Stop()
+		}
+		if hbm != nil {
+			hbm.Stop()
+		}
+		if rec != nil {
+			rec.Stop()
+		}
+		if mig != nil {
+			_ = mig.Shutdown(context.Background())
+		}
+		if ep != nil {
+			ep.Stop()
+		}
+		if failSvc != nil {
+			failSvc.Stop()
+		}
+		if bkWorker != nil {
+			bkWorker.Stop()
+		}
+		if healthCheckRunner != nil {
+			healthCheckRunner.Stop()
+		}
+		if lbSvc != nil {
+			lbSvc.Shutdown()
+		}
+		if autoSvc != nil {
+			autoSvc.Stop()
+		}
+		if tmSvc != nil {
+			tmSvc.Stop()
+		}
+		if cleanupSvc != nil {
+			cleanupSvc.Stop()
+		}
+		if cronJobSvc != nil {
+			cronJobSvc.Stop()
+		}
+		if domainSvc != nil {
+			domainSvc.StopReverify()
+		}
+		if acmeSvc != nil {
+			acmeSvc.StopAutoRenewal()
 		}
 		if err != nil {
 			slogLogger.Warn("api listener stopped", slog.String("error", err.Error()))
@@ -809,10 +1314,47 @@ func demoSeedEnabled(appEnv, raw string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("API_SEED_DEMO must be a boolean: %w", err)
 	}
-	if enabled && strings.EqualFold(strings.TrimSpace(appEnv), "production") {
-		return false, fmt.Errorf("API_SEED_DEMO cannot be enabled in production")
+	if !enabled {
+		return false, nil
 	}
-	return enabled, nil
+	allowedEnvs := map[string]bool{"development": true, "local": true, "test": true}
+	if !allowedEnvs[strings.ToLower(strings.TrimSpace(appEnv))] {
+		return false, fmt.Errorf("API_SEED_DEMO is only allowed in development/local/test environments, got %q", appEnv)
+	}
+	return true, nil
+}
+
+// processDaemonAdapter adapts *daemon.Client to process.DaemonClient.
+type processDaemonAdapter struct {
+	store  *store.Store
+	daemon *daemon.Client
+}
+
+func (a *processDaemonAdapter) StartContainer(ctx context.Context, serverID, processType string) error {
+	target, err := a.store.ServerControlTarget(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	_, err = a.daemon.SendPower(ctx, target.NodeURL, target.NodeToken, serverID, "start")
+	return err
+}
+
+func (a *processDaemonAdapter) StopContainer(ctx context.Context, serverID, processType string) error {
+	target, err := a.store.ServerControlTarget(ctx, serverID)
+	if err != nil {
+		return err
+	}
+	_, err = a.daemon.SendPower(ctx, target.NodeURL, target.NodeToken, serverID, "stop")
+	return err
+}
+
+func (a *processDaemonAdapter) RunContainer(ctx context.Context, serverID, command string) (string, error) {
+	target, err := a.store.ServerControlTarget(ctx, serverID)
+	if err != nil {
+		return "", err
+	}
+	err = a.daemon.SendCommand(ctx, target.NodeURL, target.NodeToken, serverID, command)
+	return "", err
 }
 
 // predictiveStore adapts *store.Store to scheduler.predictiveStore.
@@ -820,4 +1362,50 @@ type predictiveStore struct{ *store.Store }
 
 func (s predictiveStore) ListServersByNode(ctx context.Context, nodeID string) ([]store.Server, error) {
 	return s.ListServersForNode(ctx, nodeID)
+}
+
+// resolutionStoreAdapter adapts *store.Store to crossnode.ResolutionStore.
+type resolutionStoreAdapter struct {
+	*store.Store
+}
+
+func (a resolutionStoreAdapter) GetServerNodeID(ctx context.Context, id string) (string, error) {
+	server, err := a.Store.GetServer(ctx, id)
+	if err != nil {
+		return "", err
+	}
+	return server.NodeID, nil
+}
+
+func (a resolutionStoreAdapter) GetNodeHost(ctx context.Context, id string) (string, string, error) {
+	node, err := a.Store.GetNode(ctx, id)
+	if err != nil {
+		return "", "", err
+	}
+	return node.PublicHostname, node.FQDN, nil
+}
+
+// domainNodeResolver adapts *store.Store to domains.NodeResolver.
+type domainNodeResolver struct {
+	store *store.Store
+}
+
+func (r *domainNodeResolver) ResolveServerTarget(ctx context.Context, serverID string) (string, int, error) {
+	nodeID, err := r.store.ServerNodeID(ctx, serverID)
+	if err != nil {
+		return "", 0, err
+	}
+	node, err := r.store.GetNode(ctx, nodeID)
+	if err != nil {
+		return "", 0, err
+	}
+	host := strings.TrimSpace(node.PublicHostname)
+	if host == "" {
+		host = strings.TrimSpace(node.FQDN)
+	}
+	port := node.DaemonListen
+	if port <= 0 {
+		port = 8080
+	}
+	return host, port, nil
 }

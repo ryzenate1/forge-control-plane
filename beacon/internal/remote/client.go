@@ -31,6 +31,7 @@ type Client interface {
 	SendCrashEvent(ctx context.Context, serverID string, exitCode int, oomKilled bool, autoRestart bool) error
 	SendBackupStatus(ctx context.Context, serverID string, req BackupStatusRequest) error
 	SendRestoreStatus(ctx context.Context, serverID string, req RestoreStatusRequest) error
+	SendCapabilityReport(ctx context.Context, report interface{}) error
 }
 
 type client struct {
@@ -241,4 +242,9 @@ func (c *client) SendBackupStatus(ctx context.Context, serverID string, req Back
 // SendRestoreStatus notifies the panel that a restore completed.
 func (c *client) SendRestoreStatus(ctx context.Context, serverID string, req RestoreStatusRequest) error {
 	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/backups/restore-status", req)
+}
+
+// SendCapabilityReport sends a capability report to the panel.
+func (c *client) SendCapabilityReport(ctx context.Context, report interface{}) error {
+	return c.postAndClose(ctx, c.apiBaseURL, "/nodes/capabilities", report)
 }

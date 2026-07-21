@@ -1,12 +1,17 @@
 package http
 
 import (
+	"encoding/json"
+	"strings"
+
 	"gamepanel/forge/internal/domain"
-	"gamepanel/forge/internal/services/scheduler"
+	schedulersvc "gamepanel/forge/internal/services/scheduler"
+	"gamepanel/forge/internal/store"
+
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *scheduler.PredictiveScorer, constraintScheduler *scheduler.ConstraintScheduler, adminIPAccess, mutationLimiter fiber.Handler) {
+func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedulersvc.PredictiveScorer, constraintScheduler *schedulersvc.ConstraintScheduler, adminIPAccess, mutationLimiter fiber.Handler) {
 	sc := protected.Group("/admin/scheduler", adminIPAccess)
 
 	if scorer != nil {
@@ -19,7 +24,7 @@ func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedul
 		})
 
 		sc.Post("/predictive/metrics/:nodeId", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
-			var metric scheduler.ResourceMetric
+			var metric schedulersvc.ResourceMetric
 			if err := c.BodyParser(&metric); err != nil {
 				return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 			}
@@ -36,7 +41,7 @@ func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedul
 		})
 
 		sc.Post("/predictive/affinity-rules", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
-			var rule scheduler.AffinityRule
+			var rule schedulersvc.AffinityRule
 			if err := c.BodyParser(&rule); err != nil {
 				return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 			}
@@ -62,7 +67,7 @@ func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedul
 		})
 
 		sc.Post("/predictive/anti-affinity-rules", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
-			var rule scheduler.AntiAffinityRule
+			var rule schedulersvc.AntiAffinityRule
 			if err := c.BodyParser(&rule); err != nil {
 				return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 			}
@@ -86,7 +91,7 @@ func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedul
 		})
 
 		sc.Put("/constraints", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
-			var constraints []scheduler.Constraint
+			var constraints []schedulersvc.Constraint
 			if err := c.BodyParser(&constraints); err != nil {
 				return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 			}
@@ -94,4 +99,53 @@ func registerSchedulerRoutes(protected fiber.Router, cfg Config, scorer *schedul
 			return c.JSON(fiber.Map{"data": constraints})
 		})
 	}
+
+	// ---- Scheduler backend management ----
+
+	sc.Get("/backends", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		backends := []fiber.Map{
+			{"type": "docker", "name": "Docker", "description": "Docker container runtime (default)"},
+			{"type": "k3s", "name": "K3s", "description": "Lightweight Kubernetes via kubectl"},
+			{"type": "nomad", "name": "Nomad", "description": "HashiCorp Nomad via nomad CLI"},
+		}
+		return c.JSON(fiber.Map{"data": backends})
+	})
+
+	// Node scheduler configuration update
+	sc.Put("/nodes/:id/scheduler", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		var req struct {
+			SchedulerType   string           `json:"schedulerType"`
+			SchedulerConfig *json.RawMessage `json:"schedulerConfig,omitempty"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		sType := strings.TrimSpace(req.SchedulerType)
+		if sType == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "schedulerType is required")
+		}
+		if sType != "docker" && sType != "k3s" && sType != "nomad" {
+			return fiber.NewError(fiber.StatusBadRequest, "schedulerType must be one of: docker, k3s, nomad")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		node, err := cfg.Store.PatchNode(ctx, c.Params("id"), store.NodePatch{
+			SchedulerType:   &sType,
+			SchedulerConfig: req.SchedulerConfig,
+		}, actorID)
+		if err != nil {
+			if strings.Contains(err.Error(), "not found") {
+				return fiber.NewError(fiber.StatusNotFound, err.Error())
+			}
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(node)
+	})
 }

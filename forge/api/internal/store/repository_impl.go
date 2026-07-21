@@ -40,7 +40,20 @@ func (r *userRepositoryImpl) Create(ctx context.Context, user *User) error {
 }
 
 func (r *userRepositoryImpl) Update(ctx context.Context, user *User) error {
-	return nil
+	_, err := r.st.db.Exec(ctx, `
+		UPDATE users
+		SET email = $1,
+		    cpu_limit = $2, memory_mb_limit = $3, disk_mb_limit = $4,
+		    backup_limit = $5, database_limit = $6, allocation_limit = $7,
+		    subuser_limit = $8, schedule_limit = $9, server_limit = $10,
+		    updated_at = now()
+		WHERE id = $11
+	`, user.Email,
+		user.CPULimit, user.MemoryMBLimit, user.DiskMBLimit,
+		user.BackupLimit, user.DatabaseLimit, user.AllocationLimit,
+		user.SubuserLimit, user.ScheduleLimit, user.ServerLimit,
+		user.ID)
+	return err
 }
 
 func (r *userRepositoryImpl) Delete(ctx context.Context, id string) error {

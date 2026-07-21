@@ -1,0 +1,119 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: beacon
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: beacon
+spec:
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: beacon-api
+    - port: 2022
+      targetPort: 2022
+      name: beacon-sftp
+  selector:
+    app: gamepanel
+    component: beacon
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: beacon
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: beacon
+spec:
+  selector:
+    matchLabels:
+      app: gamepanel
+      component: beacon
+  template:
+    metadata:
+      labels:
+        app: gamepanel
+        component: beacon
+    spec:
+      hostNetwork: true
+      dnsPolicy: ClusterFirstWithHostNet
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      containers:
+        - name: beacon
+          image: ghcr.io/anomalyco/gamepanel/beacon:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 9090
+              name: beacon-api
+              hostPort: 9090
+            - containerPort: 2022
+              name: beacon-sftp
+              hostPort: 2022
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: DAEMON_ADDR
+              value: ":9090"
+            - name: DAEMON_SFTP_ADDR
+              value: ":2022"
+            - name: DAEMON_DATA_DIR
+              value: "/srv/game-panel/servers"
+            - name: DAEMON_ALLOW_MOCK_RUNTIME
+              value: "false"
+            - name: DAEMON_ALLOW_INSECURE_NO_AUTH
+              value: "false"
+            - name: DAEMON_NODE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_NODE_ID
+            - name: DAEMON_NODE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_NODE_TOKEN
+            - name: PANEL_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: PANEL_API_URL
+            - name: BACKUP_ADAPTER
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: BACKUP_ADAPTER
+            - name: S3_USE_PATH_STYLE
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: S3_USE_PATH_STYLE
+          volumeMounts:
+            - name: dockersocket
+              mountPath: /var/run/docker.sock
+            - name: servers
+              mountPath: /srv/game-panel/servers
+          livenessProbe:
+            exec:
+              command:
+                - /daemon
+                - --healthcheck
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command:
+                - /daemon
+                - --healthcheck
+            initialDelaySeconds: 10
+            periodSeconds: 10
+      volumes:
+        - name: dockersocket
+          hostPath:
+            path: /var/run/docker.sock
+        - name: servers
+          hostPath:
+            path: /srv/game-panel/servers

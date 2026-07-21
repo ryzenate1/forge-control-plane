@@ -1,148 +1,152 @@
-#!/bin/bash
+#!/usr/bin/env bash
+# GamePanel Diagnostic Script — comprehensive system health check
+set -euo pipefail
 
-# GamePanel Diagnostic Script
-# Checks all services and reports status
-
-echo "========================================"
-echo "🔍 GamePanel System Diagnostic"
-echo "========================================"
-echo ""
-
-# Color codes
-GREEN='\033[0;32m'
 RED='\033[0;31m'
+GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
+CYAN='\033[0;36m'
+NC='\033[0m'
 
-# Check API
-echo -n "API (port 8080): "
-if curl -s http://localhost:8080/api/v1/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Running${NC}"
+ok()  { echo -e "  ${GREEN}[OK]${NC} $1"; }
+fail() { echo -e "  ${RED}[FAIL]${NC} $1"; }
+info() { echo -e "  ${YELLOW}[INFO]${NC} $1"; }
+
+DIAG_DIR=$(mktemp -d)
+REPORT="/tmp/diagnostic-report-$(date +%Y%m%d-%H%M%S).txt"
+
+echo "" | tee -a "$REPORT"
+echo "========================================" | tee -a "$REPORT"
+echo "  GamePanel System Diagnostic" | tee -a "$REPORT"
+echo "  $(date -u '+%Y-%m-%d %H:%M:%S UTC')" | tee -a "$REPORT"
+echo "========================================" | tee -a "$REPORT"
+echo "" | tee -a "$REPORT"
+
+# === Service health checks ===
+echo "--- Service health ---" | tee -a "$REPORT"
+
+check_endpoint() {
+  local name=$1 url=$2
+  echo -n "  $name: " | tee -a "$REPORT"
+  if curl -sf "$url" > /dev/null 2>&1; then
+    ok "$name ($url)" | tee -a "$REPORT"
+  else
+    fail "$name ($url)" | tee -a "$REPORT"
+  fi
+}
+
+check_endpoint "Forge API" "http://localhost:8080/api/v1/health/ready"
+check_endpoint "Beacon" "http://localhost:9090/health"
+check_endpoint "Forge Web" "http://localhost:3000"
+check_endpoint "Prometheus" "http://localhost:9091/-/ready"
+check_endpoint "Alertmanager" "http://localhost:9093/-/ready"
+check_endpoint "Grafana" "http://localhost:3001/api/health"
+
+# === Docker container status ===
+echo "" | tee -a "$REPORT"
+echo "--- Docker containers ---" | tee -a "$REPORT"
+docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | tee -a "$REPORT" || info "Docker not available"
+
+# === PostgreSQL check ===
+echo "" | tee -a "$REPORT"
+echo "--- PostgreSQL ---" | tee -a "$REPORT"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q postgres; then
+  PG_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep postgres | head -1)
+  if docker exec "$PG_CONTAINER" pg_isready -U gamepanel > /dev/null 2>&1; then
+    ok "PostgreSQL is ready"
+    # Query database stats
+      info "Migrations applied: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM schema_migrations" 2>/dev/null | tr -d ' ' || echo 'N/A')"
+    info "Servers: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM servers" 2>/dev/null | tr -d ' ' || echo 'N/A')"
+    info "Nodes: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM nodes" 2>/dev/null | tr -d ' ' || echo 'N/A')"
+  else
+    fail "PostgreSQL is not responding"
+  fi
 else
-    echo -e "${RED}✗ Not responding${NC}"
+  fail "PostgreSQL container not found"
 fi
 
-# Check Daemon
-echo -n "Daemon (port 9090): "
-if curl -s http://localhost:9090/health > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Running${NC}"
+# === Redis check ===
+echo "" | tee -a "$REPORT"
+echo "--- Redis ---" | tee -a "$REPORT"
+if docker ps --format '{{.Names}}' 2>/dev/null | grep -q redis; then
+  REDIS_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep redis | head -1)
+  if docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep -q PONG; then
+    ok "Redis is responding"
+    info "Redis info: $(docker exec "$REDIS_CONTAINER" redis-cli INFO server 2>/dev/null | grep -E '^(redis_version|uptime_in_seconds|used_memory_human):' | tr '\n' ', ')"
+  else
+    fail "Redis is not responding"
+  fi
 else
-    echo -e "${RED}✗ Not responding${NC}"
+  fail "Redis container not found"
 fi
 
-# Check Frontend
-echo -n "Frontend (port 3000): "
-if curl -s http://localhost:3000 > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Running${NC}"
+# === Disk space check ===
+echo "" | tee -a "$REPORT"
+echo "--- Disk space ---" | tee -a "$REPORT"
+df -h / /var/lib/docker /srv/game-panel 2>/dev/null | tee -a "$REPORT"
+
+# === Memory usage ===
+echo "" | tee -a "$REPORT"
+echo "--- Memory usage ---" | tee -a "$REPORT"
+free -h | tee -a "$REPORT"
+
+echo "" | tee -a "$REPORT"
+echo "--- Top memory consumers ---" | tee -a "$REPORT"
+ps aux --sort=-%mem 2>/dev/null | head -10 | tee -a "$REPORT" || ps aux -o pid,user,%mem,rss,command 2>/dev/null | head -10 | tee -a "$REPORT"
+
+# === Network connectivity ===
+echo "" | tee -a "$REPORT"
+echo "--- Network connectivity ---" | tee -a "$REPORT"
+# Check internal DNS
+if host api 2>/dev/null || getent hosts api 2>/dev/null; then
+  ok "Internal DNS resolution works"
 else
-    echo -e "${RED}✗ Not responding${NC}"
+  info "Internal DNS resolution skipped (not in Docker network)"
 fi
 
-# Check PostgreSQL
-echo -n "PostgreSQL: "
-if docker exec docker-postgres-1 pg_isready -U gamepanel > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Running${NC}"
+# Check external connectivity
+if curl -sf --max-time 5 https://google.com > /dev/null 2>&1; then
+  ok "External internet connectivity"
 else
-    echo -e "${RED}✗ Not running${NC}"
+  fail "No external internet connectivity"
 fi
 
-# Check Redis
-echo -n "Redis: "
-if docker exec docker-redis-1 redis-cli ping > /dev/null 2>&1; then
-    echo -e "${GREEN}✓ Running${NC}"
-else
-    echo -e "${RED}✗ Not running${NC}"
+# === Log collection ===
+echo "" | tee -a "$REPORT"
+echo "--- Recent logs ---" | tee -a "$REPORT"
+for logfile in api-dev.log api-dev.err.log beacon-dev.err.log frontend-dev.log; do
+  if [ -f "$logfile" ]; then
+    echo "  Last 10 lines of $logfile:" | tee -a "$REPORT"
+    tail -10 "$logfile" 2>/dev/null | sed 's/^/    /' | tee -a "$REPORT"
+  fi
+done
+
+# Docker logs
+for service in api daemon web; do
+  if docker logs "$service" --tail 5 2>/dev/null; then
+    echo "  Last 5 lines of $service container:" | tee -a "$REPORT"
+    docker logs "$service" --tail 5 2>/dev/null | sed 's/^/    /' | tee -a "$REPORT"
+  fi
+done
+
+# === Collect docker-compose ps ===
+echo "" | tee -a "$REPORT"
+echo "--- Docker Compose status ---" | tee -a "$REPORT"
+if [ -d infra ]; then
+  (cd infra && docker compose -f compose.yml ps 2>/dev/null) | tee -a "$REPORT" || info "Docker Compose not available"
 fi
 
-echo ""
-echo "----------------------------------------"
-echo "📊 Testing API Authentication"
-echo "----------------------------------------"
+# === Report summary ===
+echo "" | tee -a "$REPORT"
+echo "========================================" | tee -a "$REPORT"
+echo "  Diagnostic Report Saved" | tee -a "$REPORT"
+echo "  $REPORT" | tee -a "$REPORT"
+echo "========================================" | tee -a "$REPORT"
+echo "" | tee -a "$REPORT"
+echo "Next steps:" | tee -a "$REPORT"
+echo "  1. Review any [FAIL] results above" | tee -a "$REPORT"
+echo "  2. Check container logs: docker compose logs --tail 200" | tee -a "$REPORT"
+echo "  3. Run production guard: ./scripts/production-guard.sh" | tee -a "$REPORT"
+echo "" | tee -a "$REPORT"
 
-# Test login
-echo -n "Login endpoint: "
-LOGIN_RESPONSE=$(curl -s -X POST http://localhost:8080/api/v1/auth/login \
-  -H "Content-Type: application/json" \
-  -d '{"email":"admin@example.com","password":"admin123"}')
-
-if echo "$LOGIN_RESPONSE" | grep -q "token"; then
-    echo -e "${GREEN}✓ Working${NC}"
-    TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
-    echo "   Token: ${TOKEN:0:50}..."
-    
-    # Test authenticated endpoint
-    echo -n "Authenticated request: "
-    ME_RESPONSE=$(curl -s -H "Authorization: Bearer $TOKEN" http://localhost:8080/api/v1/auth/me)
-    if echo "$ME_RESPONSE" | grep -q "admin@example.com"; then
-        echo -e "${GREEN}✓ Working${NC}"
-    else
-        echo -e "${RED}✗ Failed${NC}"
-        echo "   Response: $ME_RESPONSE"
-    fi
-else
-    echo -e "${RED}✗ Failed${NC}"
-    echo "   Response: $LOGIN_RESPONSE"
-fi
-
-echo ""
-echo "----------------------------------------"
-echo "🗄️  Database Status"
-echo "----------------------------------------"
-
-# Count migrations
-MIGRATIONS=$(docker exec docker-postgres-1 psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM schema_migrations" 2>/dev/null | tr -d ' ')
-if [ -n "$MIGRATIONS" ]; then
-    echo "Applied migrations: ${GREEN}$MIGRATIONS${NC}"
-else
-    echo -e "Migrations: ${RED}Unable to query${NC}"
-fi
-
-# Count servers
-SERVERS=$(docker exec docker-postgres-1 psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM servers" 2>/dev/null | tr -d ' ')
-if [ -n "$SERVERS" ]; then
-    echo "Servers in database: ${GREEN}$SERVERS${NC}"
-fi
-
-# Count nodes
-NODES=$(docker exec docker-postgres-1 psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM nodes" 2>/dev/null | tr -d ' ')
-if [ -n "$NODES" ]; then
-    echo "Nodes in database: ${GREEN}$NODES${NC}"
-fi
-
-# Count allocations
-ALLOCATIONS=$(docker exec docker-postgres-1 psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM allocations" 2>/dev/null | tr -d ' ')
-if [ -n "$ALLOCATIONS" ]; then
-    echo "Allocations in database: ${GREEN}$ALLOCATIONS${NC}"
-fi
-
-echo ""
-echo "----------------------------------------"
-echo "📝 Recent Logs"
-echo "----------------------------------------"
-
-echo ""
-echo "Last 5 API log entries:"
-tail -5 .dev-logs/api.log 2>/dev/null || echo "No API logs found"
-
-echo ""
-echo "Last 5 API errors:"
-tail -5 .dev-logs/api.err.log 2>/dev/null || echo "No API errors"
-
-echo ""
-echo "Last 5 Daemon errors:"
-tail -5 .dev-logs/daemon.err.log 2>/dev/null || echo "No Daemon errors"
-
-echo ""
-echo "========================================"
-echo "✨ Diagnostic Complete"
-echo "========================================"
-echo ""
-echo "Next steps:"
-echo "1. If all services are green, open http://localhost:3000"
-echo "2. Open browser DevTools (F12) → Console tab"
-echo "3. Login with admin@example.com / admin123"
-echo "4. Check for errors in browser console"
-echo "5. Report any red errors you see"
-echo ""
-echo "For more details, see: INTEGRATION_FIX_PLAN.md"
-echo ""
+echo "  Report saved to: $REPORT"

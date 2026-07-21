@@ -2,7 +2,6 @@
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ??
   (process.env.NODE_ENV === 'development' ? 'http://localhost:8080/api/v1' : '/api/v1');
-export const LEGACY_TOKEN_KEY = 'modern-game-panel-token';
 
 export class ApiError extends Error {
   constructor(
@@ -32,36 +31,36 @@ function addCSRFToHeaders(headers: Record<string, string>, method: string): void
   }
 }
 
-async function handleResponse<T>(response: Response, method: string, path: string): Promise<T> {
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API ${method} ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await response.text();
-  if (!text) {
-    return undefined as T;
-  }
-
-  return JSON.parse(text) as T;
-}
-
 export async function fetchJSON<T>(path: string): Promise<T> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...getAuthHeaders(),
   };
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  return apiFetch<T>(path, {
     headers,
     credentials: 'include',
   });
+}
 
-  return handleResponse<T>(response, 'GET', path);
+async function apiFetch<T>(path: string, init: RequestInit): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, init);
+    if (!response.ok) {
+      const errorMessage = await getErrorMessage(response, `API ${init.method ?? "GET"} ${path} failed with`);
+      throw new ApiError(errorMessage, response.status);
+    }
+    if (response.status === 204) return undefined as T;
+    const text = await response.text();
+    if (!text) return undefined as T;
+    return JSON.parse(text) as T;
+  } catch (err) {
+    if (err instanceof ApiError) throw err;
+    const message = err instanceof TypeError
+      ? "Network error — check your connection and ensure the API server is running"
+      : err instanceof Error ? err.message : "Unknown error";
+    throw new ApiError(message, 0);
+  }
 }
 
 export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
@@ -72,21 +71,14 @@ export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  await addCSRFToHeaders(headers, 'POST');
+  addCSRFToHeaders(headers, 'POST');
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  return apiFetch<T>(path, {
     method: 'POST',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'include',
   });
-
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API POST ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  return response.json() as Promise<T>;
 }
 
 export async function putJSON<T>(path: string, body?: unknown): Promise<T> {
@@ -97,21 +89,14 @@ export async function putJSON<T>(path: string, body?: unknown): Promise<T> {
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  await addCSRFToHeaders(headers, 'PUT');
+  addCSRFToHeaders(headers, 'PUT');
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  return apiFetch<T>(path, {
     method: 'PUT',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'include',
   });
-
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API PUT ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  return response.json() as Promise<T>;
 }
 
 export async function patchJSON<T>(path: string, body?: unknown): Promise<T> {
@@ -122,60 +107,61 @@ export async function patchJSON<T>(path: string, body?: unknown): Promise<T> {
   if (body !== undefined) {
     headers['Content-Type'] = 'application/json';
   }
-  await addCSRFToHeaders(headers, 'PATCH');
+  addCSRFToHeaders(headers, 'PATCH');
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
+  return apiFetch<T>(path, {
     method: 'PATCH',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'include',
   });
-
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API PATCH ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  return response.json() as Promise<T>;
 }
 
 export async function deleteJSON<T = void>(path: string, body?: unknown): Promise<T> {
-  const headers = {
+  const headers: Record<string, string> = {
     Accept: 'application/json',
     ...getAuthHeaders(),
   };
-  await addCSRFToHeaders(headers, 'DELETE');
+  addCSRFToHeaders(headers, 'DELETE');
 
-  const options: RequestInit = {
+  return apiFetch<T>(path, {
     method: 'DELETE',
     headers,
+    body: body !== undefined ? JSON.stringify(body) : undefined,
     credentials: 'include',
-  };
+  });
+}
 
-  if (body) {
-    options.headers = {
-      ...options.headers,
-      'Content-Type': 'application/json',
-    };
-    options.body = JSON.stringify(body);
-  }
-
-  const response = await fetch(`${API_BASE_URL}${path}`, options);
-
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API DELETE ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  if (response.status === 204) return undefined as T;
-  return response.json() as Promise<T>;
+function statusHint(status: number): string {
+  if (status === 0 || status >= 600) return "API server unreachable — is the Go backend running?";
+  if (status === 401) return "Not authenticated — try logging out and back in";
+  if (status === 403) return "Access denied — admin role required";
+  if (status === 404) return "Endpoint not found — check API server is running and up to date";
+  if (status === 503) return "Service unavailable — a required dependency (database/daemon) is not ready";
+  return "";
 }
 
 async function getErrorMessage(response: Response, prefix: string): Promise<string> {
   try {
     const error = await response.json();
-    return error.message || error.error || `${prefix} ${response.status}`;
+    const msg = error.message || error.error || "";
+    const hint = statusHint(response.status);
+    return msg ? `${msg}${hint ? " — " + hint : ""}` : `${prefix} ${response.status}${hint ? " — " + hint : ""}`;
   } catch {
-    return `${prefix} ${response.status}`;
+    const hint = statusHint(response.status);
+    try {
+      const text = await response.clone().text();
+      if (text) return `${prefix} ${response.status}: ${text.slice(0, 300)}${hint ? " — " + hint : ""}`;
+    } catch {}
+    return `${prefix} ${response.status}${hint ? " — " + hint : ""}`;
+  }
+}
+
+export async function checkApiReachable(): Promise<boolean> {
+  try {
+    const res = await fetch(`${API_BASE_URL}/health`, { method: "GET", signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
   }
 }

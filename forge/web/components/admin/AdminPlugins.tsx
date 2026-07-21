@@ -47,7 +47,7 @@ export function AdminPlugins() {
     </div>
     <Card>
       <CardHeader title={`${plugins.length} installed manifests`} icon={Plug}/>
-      {query.isError ? <p className="p-4 text-sm text-red-300">Plugin manifests could not be loaded.</p> : 
+      {query.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load plugin manifests: {query.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void query.refetch()}>Retry</Btn></div></div> : 
        plugins.length === 0 ? <EmptyState icon={Plug} message="No plugin manifests registered."/> : 
        <div className="overflow-x-auto">
          <table className="w-full text-sm">

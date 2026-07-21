@@ -292,3 +292,32 @@ func unquoteArrayElement(s string) string {
 	}
 	return s
 }
+
+// SourceType represents the origin of an application workload.
+type SourceType string
+
+const (
+	SourceTypeGit         SourceType = "GIT"
+	SourceTypeDockerImage SourceType = "DOCKER_IMAGE"
+	SourceTypeCompose     SourceType = "COMPOSE"
+)
+
+// ServiceStatus represents the observed runtime condition.
+type ServiceStatus string
+
+const (
+	ServiceStatusIdle      ServiceStatus = "idle"
+	ServiceStatusRunning   ServiceStatus = "running"
+	ServiceStatusDone      ServiceStatus = "done"
+	ServiceStatusError     ServiceStatus = "error"
+	ServiceStatusDeploying ServiceStatus = "deploying"
+)
+
+// AppDesiredState is the operator-intended state for an application.
+type AppDesiredState string
+
+const (
+	AppDesiredStateRunning AppDesiredState = "running"
+	AppDesiredStateStopped AppDesiredState = "stopped"
+	AppDesiredStateRemoved AppDesiredState = "removed"
+)

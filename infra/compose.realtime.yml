@@ -1,0 +1,23 @@
+# Real-time WebSocket server (Soketi) for live console, stats, and event streaming.
+# Invoke alongside the main stack:
+#   docker compose -f compose.yml -f compose.realtime.yml up -d
+#
+# The frontend Next.js app uses Pusher-protocol-compatible WebSocket clients
+# (e.g. pusher-js). Configure SOKETI_APP_KEY / SOKETI_APP_SECRET in .env and
+# point the frontend at ws://<host>:6001.
+services:
+  soketi:
+    restart: unless-stopped
+    image: quay.io/soketi/soketi:latest-16-alpine
+    environment:
+      SOKETI_APP_ID: ${SOKETI_APP_ID:-gamepanel}
+      SOKETI_APP_KEY: "${SOKETI_APP_KEY:?Set SOKETI_APP_KEY in infra/.env}"
+      SOKETI_APP_SECRET: "${SOKETI_APP_SECRET:?Set SOKETI_APP_SECRET in infra/.env}"
+      SOKETI_METRICS_PORT: ${SOKETI_METRICS_PORT:-9601}
+    ports:
+      - "6001:6001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - backend
