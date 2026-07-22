@@ -1,4 +1,5 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { cn } from '../lib/utils';
 
 interface StatsCardProps {
   title: string;
@@ -10,19 +11,19 @@ interface StatsCardProps {
 
 export function StatsCard({ title, value, icon, description, trend }: StatsCardProps) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+    <div className="ui-card">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-sm font-medium text-gray-500 dark:text-gray-400">{title}</p>
-          <p className="text-2xl font-bold mt-1">{value}</p>
-          {description && <p className="text-sm text-gray-500 mt-1">{description}</p>}
+          <p className="t-eyebrow">{title}</p>
+          <p className="t-readout mt-1 text-text">{value}</p>
+          {description && <p className="t-meta mt-1">{description}</p>}
           {trend && (
-            <p className={`text-sm mt-2 ${trend.positive ? 'text-green-600' : 'text-red-600'}`}>
+            <p className={cn('mt-2 text-sm', trend.positive ? 'text-ok' : 'text-danger')}>
               {trend.positive ? '↑' : '↓'} {Math.abs(trend.value)}%
             </p>
           )}
         </div>
-        {icon && <div className="text-gray-400">{icon}</div>}
+        {icon && <div className="text-text-muted">{icon}</div>}
       </div>
     </div>
   );

@@ -2,23 +2,38 @@
   "name": "@forge/ui",
   "private": true,
   "version": "0.1.0",
-  "description": "Shared UI components for GamePanel",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Shared React UI components for the Forge control plane",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@forge/shared-types": "*"
+    "clsx": "^2.1.1",
+    "tailwind-merge": "^3.6.0"
   },
   "peerDependencies": {
+    "next": "^15.5.21",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   },
   "devDependencies": {
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
+    "next": "^15.5.21",
     "typescript": "^5.7.2"
   }
 }

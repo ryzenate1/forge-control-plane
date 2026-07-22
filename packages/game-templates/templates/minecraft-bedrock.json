@@ -1,0 +1,101 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "minecraft-bedrock",
+  "name": "Minecraft: Bedrock Edition",
+  "description": "Minecraft Bedrock Edition dedicated server. Cross-platform Minecraft server supporting Windows, mobile, and console players.",
+  "version": "1.0.0",
+  "game": "Minecraft Bedrock",
+  "author": "GamePanel",
+  "image": "ghcr.io/pterodactyl/yolks:ubuntu",
+  "images": {
+    "Ubuntu": "ghcr.io/pterodactyl/yolks:ubuntu"
+  },
+  "startup": "LD_LIBRARY_PATH=. ./bedrock_server",
+  "config": {
+    "files": {
+      "server.properties": {
+        "parser": "properties",
+        "find": {
+          "server-port": "{{server.build.default.port}}",
+          "server-portv6": "19133",
+          "max-players": "{{MAX_PLAYERS}}"
+        }
+      }
+    },
+    "startup": {
+      "done": "Server started."
+    },
+    "stop": "stop",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 19132,
+      "protocol": "udp",
+      "public": true,
+      "description": "Minecraft Bedrock game server traffic (IPv4)"
+    },
+    {
+      "port": 19133,
+      "protocol": "udp",
+      "public": true,
+      "description": "Minecraft Bedrock game server traffic (IPv6)"
+    }
+  ],
+  "env": [
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of players.",
+      "default_value": "10",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:30"
+    },
+    {
+      "name": "Gamemode",
+      "env_variable": "GAMEMODE",
+      "description": "0=survival, 1=creative.",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1"
+    },
+    {
+      "name": "Difficulty",
+      "env_variable": "DIFFICULTY",
+      "description": "0=peaceful, 1=easy, 2=normal, 3=hard.",
+      "default_value": "2",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1,2,3"
+    },
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Server name.",
+      "default_value": "Bedrock Level",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 2048,
+    "memory_max_mb": 8192,
+    "disk_mb": 5120,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Minecraft Bedrock Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\n# Download latest Bedrock server\ncurl -L -o bedrock-server.zip \"https://minecraft.net/en-us/download/server/bedrock/\"\nunzip -o bedrock-server.zip\nrm bedrock-server.zip\n\necho \"Minecraft Bedrock server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "sandbox", "building"],
+  "file_denylist": [],
+  "features": ["pid_limit"]
+}

@@ -1,69 +1,69 @@
 'use client';
 
+import type { ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '../lib/utils';
 
+export interface SidebarNavItem {
+  label: string;
+  href: string;
+  /** Rendered in the icon slot. Navigation entries are supplied by the host
+   * app (e.g. the web admin registry) — this package ships no hardcoded nav. */
+  icon?: ReactNode;
+}
+
 interface SidebarProps {
   open: boolean;
   onToggle: () => void;
+  /** Navigation entries. Required: the sidebar renders exactly what it is given. */
+  items: SidebarNavItem[];
+  title?: string;
 }
 
-interface NavItem {
-  label: string;
-  href: string;
-  icon: string;
-  children?: NavItem[];
-}
-
-const navItems: NavItem[] = [
-  { label: 'Dashboard', href: '/admin', icon: 'LayoutDashboard' },
-  { label: 'Nodes', href: '/admin/nodes', icon: 'Server' },
-  { label: 'Servers', href: '/admin/servers', icon: 'Gamepad2' },
-  { label: 'Users', href: '/admin/users', icon: 'Users' },
-  { label: 'Locations', href: '/admin/locations', icon: 'MapPin' },
-  { label: 'Nests', href: '/admin/nests', icon: 'Hierarchy' },
-  { label: 'Eggs', href: '/admin/eggs', icon: 'Egg' },
-  { label: 'Database Hosts', href: '/admin/database-hosts', icon: 'Database' },
-  { label: 'Mounts', href: '/admin/mounts', icon: 'FolderKanban' },
-  { label: 'Plugins', href: '/admin/plugins', icon: 'Puzzle' },
-  { label: 'Social Login', href: '/admin/social', icon: 'LogIn' },
-  { label: 'Activity Log', href: '/admin/activity', icon: 'Activity' },
-  { label: 'Settings', href: '/admin/settings', icon: 'Settings' },
-];
-
-export function Sidebar({ open, onToggle }: SidebarProps) {
+export function Sidebar({ open, onToggle, items, title = 'Admin Panel' }: SidebarProps) {
   const pathname = usePathname();
 
   return (
-    <aside className={cn(
-      'bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 transition-all duration-300',
-      open ? 'w-64' : 'w-16'
-    )}>
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-gray-700">
-        {open && <span className="font-bold text-lg">Admin Panel</span>}
-        <button onClick={onToggle} className="p-1 rounded hover:bg-gray-100 dark:hover:bg-gray-700">
-          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={open ? "M11 19l-7-7 7-7" : "M13 5l7 7-7 7"} />
+    <aside
+      className={cn(
+        'border-r border-line bg-surface transition-all duration-300',
+        open ? 'w-64' : 'w-16',
+      )}
+    >
+      <div className="flex items-center justify-between border-b border-line p-4">
+        {open && <span className="text-lg font-bold text-text">{title}</span>}
+        <button
+          onClick={onToggle}
+          className="rounded p-1 text-text-subtle hover:bg-overlay hover:text-text"
+          aria-label={open ? 'Collapse sidebar' : 'Expand sidebar'}
+        >
+          <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              strokeWidth={2}
+              d={open ? 'M11 19l-7-7 7-7' : 'M13 5l7 7-7 7'}
+            />
           </svg>
         </button>
       </div>
-      <nav className="p-2 space-y-1">
-        {navItems.map((item) => {
+      <nav className="space-y-1 p-2">
+        {items.map((item) => {
           const isActive = pathname === item.href || pathname?.startsWith(item.href + '/');
           return (
             <Link
               key={item.href}
               href={item.href}
               className={cn(
-                'flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
+                'flex items-center gap-3 rounded-md px-3 py-2 text-sm transition-colors',
                 isActive
-                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300'
-                  : 'text-gray-700 hover:bg-gray-100 dark:text-gray-300 dark:hover:bg-gray-700'
+                  ? 'bg-brand-subtle text-brand'
+                  : 'text-text-subtle hover:bg-overlay hover:text-text',
               )}
               title={!open ? item.label : undefined}
             >
-              <span className="w-5 h-5 flex-shrink-0">{/* Icon placeholder */}</span>
+              <span className="flex h-5 w-5 shrink-0 items-center justify-center">{item.icon}</span>
               {open && <span>{item.label}</span>}
             </Link>
           );

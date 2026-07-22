@@ -1,5 +1,6 @@
 export { AdminLayout } from './AdminLayout';
 export { Sidebar } from './Sidebar';
+export type { SidebarNavItem } from './Sidebar';
 export { TopBar } from './TopBar';
 export { DataTable } from './DataTable';
 export type { Column } from './DataTable';

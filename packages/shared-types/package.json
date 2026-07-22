@@ -2,12 +2,24 @@
   "name": "@forge/shared-types",
   "private": true,
   "version": "0.1.0",
-  "description": "Shared TypeScript types for GamePanel frontend and SDK",
-  "main": "dist/index.js",
-  "types": "dist/index.d.ts",
+  "description": "Shared TypeScript types for the Forge control plane (web + sdk)",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
   "scripts": {
-    "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.2"
