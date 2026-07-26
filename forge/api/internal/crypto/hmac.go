@@ -1,0 +1,36 @@
+package crypto
+
+import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"errors"
+)
+
+// Sign returns the hex-encoded HMAC-SHA256 of data using the given secret.
+func Sign(secret string, data []byte) (string, error) {
+	if secret == "" {
+		return "", errors.New("HMAC secret must not be empty")
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(data)
+	return hex.EncodeToString(mac.Sum(nil)), nil
+}
+
+// SignB64 returns the URL-safe base64-encoded HMAC-SHA256 of data using the
+// given secret. Use this when backward compatibility with existing base64-
+// encoded signatures is required.
+func SignB64(secret string, data []byte) (string, error) {
+	if secret == "" {
+		return "", errors.New("HMAC secret must not be empty")
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write(data)
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil)), nil
+}
+
+// Equal performs a constant-time comparison of two signature strings.
+func Equal(a, b string) bool {
+	return hmac.Equal([]byte(a), []byte(b))
+}

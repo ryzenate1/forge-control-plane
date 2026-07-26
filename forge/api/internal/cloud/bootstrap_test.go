@@ -7,11 +7,11 @@ import (
 )
 
 func TestBeaconCloudInitContainsHardenedRuntimeBootstrap(t *testing.T) {
-	data, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon:v1")
+	data, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, expected := range []string{"download.docker.com/linux/ubuntu", "--restart unless-stopped", "DAEMON_ALLOW_INSECURE_NO_AUTH=false", "/var/run/docker.sock", "ghcr.io/acme/beacon:v1"} {
+	for _, expected := range []string{"download.docker.com/linux/ubuntu", "--restart unless-stopped", "DAEMON_ALLOW_INSECURE_NO_AUTH=false", "/var/run/docker.sock", "ghcr.io/acme/beacon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"} {
 		if !strings.Contains(data, expected) {
 			t.Fatalf("cloud-init missing %q", expected)
 		}
@@ -22,7 +22,7 @@ func TestBeaconCloudInitContainsHardenedRuntimeBootstrap(t *testing.T) {
 }
 
 func TestBeaconCloudInitIncludesSharedS3BackupConfiguration(t *testing.T) {
-	data, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon:v1", BeaconBackupConfig{
+	data, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", BeaconBackupConfig{
 		Adapter: "s3", Bucket: "gamepanel-backups", Region: "ap-south-1", Prefix: "production", UsePathStyle: "false",
 	})
 	if err != nil {
@@ -33,7 +33,7 @@ func TestBeaconCloudInitIncludesSharedS3BackupConfiguration(t *testing.T) {
 			t.Fatalf("cloud-init missing %q", expected)
 		}
 	}
-	if _, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon:v1", BeaconBackupConfig{Adapter: "s3"}); err == nil {
+	if _, err := BeaconCloudInit("node-1", "id.secret", "https://panel.example.com/api/v1", "ghcr.io/acme/beacon@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", BeaconBackupConfig{Adapter: "s3"}); err == nil {
 		t.Fatal("expected missing S3 bucket error")
 	}
 }

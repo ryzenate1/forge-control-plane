@@ -4,10 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
 )
+
+var cloudResourceIDPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/+=,@-]{0,254}$`)
 
 type ProviderKind string
 
@@ -68,6 +72,33 @@ func (r CreateInstanceRequest) Validate() error {
 	}
 	if strings.TrimSpace(r.Image) == "" {
 		return errors.New("image is required")
+	}
+	if len(r.UserData) > 16*1024 {
+		return errors.New("user data exceeds the 16 KiB cloud-init limit")
+	}
+	for label, value := range map[string]string{
+		"name": r.Name, "region": r.Region, "instance type": r.InstanceType,
+		"image": r.Image, "subnet ID": r.SubnetID, "IAM instance profile": r.IAMInstanceProfile,
+	} {
+		if value != "" && (!cloudResourceIDPattern.MatchString(value) || strings.ContainsAny(value, "\r\n\x00")) {
+			return fmt.Errorf("invalid %s", label)
+		}
+	}
+	if len(r.SecurityGroupIDs) > 32 || len(r.SSHKeys) > 16 || len(r.Tags) > 50 {
+		return errors.New("too many cloud resource selectors")
+	}
+	for _, value := range append(append([]string{}, r.SecurityGroupIDs...), r.SSHKeys...) {
+		if !cloudResourceIDPattern.MatchString(value) {
+			return errors.New("invalid cloud resource selector")
+		}
+	}
+	for key, value := range r.Tags {
+		if strings.ContainsAny(key+value, "\r\n\x00") || len(key) > 128 || len(value) > 256 {
+			return errors.New("invalid cloud instance tag")
+		}
+	}
+	if net.ParseIP(r.Region) != nil {
+		return errors.New("invalid region")
 	}
 	return nil
 }

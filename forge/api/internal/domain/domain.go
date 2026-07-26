@@ -1,6 +1,15 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrAmbiguousTarget is returned when a request names the same placement
+// target two different ways (e.g. RegionID vs Region, RequiredNode vs
+// NodeID). An ambiguous target must be rejected, never resolved by silently
+// picking the first value. Handlers map this to 400.
+var ErrAmbiguousTarget = errors.New("conflicting placement target: values must agree")
 
 type Cluster struct {
 	ID        string
@@ -42,9 +51,10 @@ const (
 type NodeActualState string
 
 const (
-	NodeActualStateOnline   NodeActualState = "online"
-	NodeActualStateOffline  NodeActualState = "offline"
-	NodeActualStateDegraded NodeActualState = "degraded"
+	NodeActualStateOnline      NodeActualState = "online"
+	NodeActualStateOffline     NodeActualState = "offline"
+	NodeActualStateDegraded    NodeActualState = "degraded"
+	NodeActualStateReconciling NodeActualState = "reconciling"
 )
 
 type NodeHealth struct {
@@ -111,28 +121,143 @@ type Runtime struct {
 }
 
 type PlacementRequest struct {
-	ServerID      string `json:"serverId,omitempty"`
-	RegionID      string `json:"regionId,omitempty"`
-	Region        string `json:"region,omitempty"`
-	PreferredNode string `json:"preferredNode,omitempty"`
-	RequiredNode  string `json:"requiredNode,omitempty"`
-	NodeID        string `json:"nodeId,omitempty"`
-	AllocationID  string `json:"allocationId,omitempty"`
-	MemoryMB      int    `json:"memoryMb,omitempty"`
-	CPUShares     int    `json:"cpuShares,omitempty"`
-	CPU           int    `json:"cpu,omitempty"`
-	DiskMB        int    `json:"diskMb,omitempty"`
+	ServerID        string `json:"serverId,omitempty"`
+	RegionID        string `json:"regionId,omitempty"`
+	Region          string `json:"region,omitempty"`
+	PreferredNode   string `json:"preferredNode,omitempty"`
+	RequiredNode    string `json:"requiredNode,omitempty"`
+	NodeID          string `json:"nodeId,omitempty"`
+	AllocationID    string `json:"allocationId,omitempty"`
+	SkipReservation bool   `json:"skipReservation,omitempty"`
+	StorageLocality string `json:"storageLocality,omitempty"`
+	// RuntimeProvider constrains placement to nodes whose runtime_provider
+	// matches. Empty (or "docker") leaves placement unconstrained.
+	RuntimeProvider string `json:"runtimeProvider,omitempty"`
+	// Constraints are scheduler-level placement constraints (required,
+	// preferred, forbidden) threaded through to the placement engine.
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
+	MemoryMB        int                   `json:"memoryMb,omitempty"`
+	CPUShares       int                   `json:"cpuShares,omitempty"`
+	CPU             int                   `json:"cpu,omitempty"`
+	DiskMB          int                   `json:"diskMb,omitempty"`
+}
+
+// PlacementConstraintType names how strongly a placement constraint binds.
+type PlacementConstraintType string
+
+const (
+	PlacementConstraintRequired  PlacementConstraintType = "required"
+	PlacementConstraintPreferred PlacementConstraintType = "preferred"
+	PlacementConstraintForbidden PlacementConstraintType = "forbidden"
+)
+
+// PlacementConstraint is the domain-level placement constraint. The scheduler
+// translates it into the engine's own constraint type so the domain package
+// stays free of engine imports.
+type PlacementConstraint struct {
+	Type     PlacementConstraintType `json:"type"`
+	Key      string                  `json:"key"`
+	Operator string                  `json:"operator"`
+	Value    string                  `json:"value"`
+}
+
+type ConstraintFailure struct {
+	Constraint string `json:"constraint"`
+	Required   string `json:"required"`
+	Available  string `json:"available"`
+	Message    string `json:"message"`
+}
+
+type TargetValidationError struct {
+	Code            string              `json:"code"`
+	Message         string              `json:"message"`
+	Reasons         []ConstraintFailure `json:"reasons"`
+	EligibleTargets []string            `json:"-"`
+}
+
+func (e *TargetValidationError) Error() string {
+	return e.Message
 }
 
 type PlacementDecision struct {
-	RegionID     string   `json:"regionId,omitempty"`
-	RegionIDRaw  string   `json:"region_id,omitempty"`
-	NodeID       string   `json:"nodeId"`
-	NodeIDRaw    string   `json:"node_id"`
-	AllocationID string   `json:"allocationId,omitempty"`
-	Manual       bool     `json:"manual"`
-	Score        float64  `json:"score"`
-	Reasons      []string `json:"reasons"`
+	RegionID      string   `json:"regionId,omitempty"`
+	NodeID        string   `json:"nodeId"`
+	AllocationID  string   `json:"allocationId,omitempty"`
+	ReservationID string   `json:"reservationId,omitempty"`
+	Manual        bool     `json:"manual"`
+	Score         float64  `json:"score"`
+	Reasons       []string `json:"reasons"`
+}
+
+type ReplicaApplication struct {
+	ID        string    `json:"id"`
+	Name      string    `json:"name"`
+	Replicas  int       `json:"replicas"`
+	CreatedAt time.Time `json:"createdAt"`
+	UpdatedAt time.Time `json:"updatedAt"`
+}
+
+type InstanceStatus string
+
+const (
+	InstanceStatusPending   InstanceStatus = "pending"
+	InstanceStatusProvision InstanceStatus = "provisioning"
+	InstanceStatusRunning   InstanceStatus = "running"
+	InstanceStatusStopped   InstanceStatus = "stopped"
+	InstanceStatusFailed    InstanceStatus = "failed"
+	InstanceStatusRemoving  InstanceStatus = "removing"
+)
+
+type Instance struct {
+	ID              string         `json:"id"`
+	AppID           string         `json:"appId"`
+	Index           int            `json:"index"`
+	NodeID          string         `json:"nodeId"`
+	Status          InstanceStatus `json:"status"`
+	CPU             int            `json:"cpu"`
+	MemoryMB        int            `json:"memoryMb"`
+	DiskMB          int            `json:"diskMb"`
+	AllocationID    *string        `json:"allocationId,omitempty"`
+	PlacementID     string         `json:"placementId"`
+	ReservationID   *string        `json:"reservationId,omitempty"`
+	RuntimeProvider string         `json:"runtimeProvider,omitempty"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+type PlacementReason struct {
+	InstanceID string   `json:"instanceId"`
+	NodeID     string   `json:"nodeId"`
+	Index      int      `json:"index"`
+	Score      float64  `json:"score"`
+	Accepted   bool     `json:"accepted"`
+	Reasons    []string `json:"reasons"`
+}
+
+type PlaceReplicasRequest struct {
+	AppID           string `json:"appId"`
+	ReplicaCount    int    `json:"replicaCount"`
+	CPU             int    `json:"cpu"`
+	MemoryMB        int    `json:"memoryMb"`
+	DiskMB          int    `json:"diskMb"`
+	RegionID        string `json:"regionId,omitempty"`
+	RequiredNode    string `json:"requiredNode,omitempty"`
+	PreferredNode   string `json:"preferredNode,omitempty"`
+	RuntimeFilter   string `json:"runtimeFilter,omitempty"`
+	StorageLocality string `json:"storageLocality,omitempty"`
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
+}
+
+type ScaleRequest struct {
+	AppID           string `json:"appId"`
+	ReplicaCount    int    `json:"replicaCount"`
+	RegionID        string `json:"regionId,omitempty"`
+	StorageLocality string `json:"storageLocality,omitempty"`
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
+}
+
+type ReplaceFailedInstanceRequest struct {
+	InstanceID string `json:"instanceId"`
 }
 
 type ServerDesiredState string
@@ -199,4 +324,151 @@ type Migration struct {
 	Status       MigrationStatus `json:"status"`
 	CreatedAt    time.Time       `json:"createdAt"`
 	UpdatedAt    time.Time       `json:"updatedAt"`
+}
+
+type EndpointType string
+
+const (
+	EndpointTypeDocker EndpointType = "docker"
+	EndpointTypeSwarm  EndpointType = "swarm"
+	EndpointTypeK8s    EndpointType = "kubernetes"
+	EndpointTypeEdge   EndpointType = "edge"
+)
+
+type ConnectionMode string
+
+const (
+	ConnectionModeDirect ConnectionMode = "direct"
+	ConnectionModeTunnel ConnectionMode = "tunnel"
+	ConnectionModeEdge   ConnectionMode = "edge"
+)
+
+type EndpointStatus string
+
+const (
+	EndpointStatusUnknown      EndpointStatus = "unknown"
+	EndpointStatusOnline       EndpointStatus = "online"
+	EndpointStatusDegraded     EndpointStatus = "degraded"
+	EndpointStatusOffline      EndpointStatus = "offline"
+	EndpointStatusProvisioning EndpointStatus = "provisioning"
+)
+
+type Endpoint struct {
+	ID              string         `json:"id"`
+	Name            string         `json:"name"`
+	Description     string         `json:"description"`
+	EndpointType    EndpointType   `json:"endpointType"`
+	ConnectionMode  ConnectionMode `json:"connectionMode"`
+	Status          EndpointStatus `json:"status"`
+	EdgeID          string         `json:"edgeId,omitempty"`
+	Tags            []string       `json:"tags"`
+	Labels          []LabelPair    `json:"labels"`
+	URL             string         `json:"url,omitempty"`
+	ProjectID       string         `json:"projectId,omitempty"`
+	GroupID         string         `json:"groupId,omitempty"`
+	Reachable       bool           `json:"reachable"`
+	Version         string         `json:"version,omitempty"`
+	NodeCount       int            `json:"nodeCount"`
+	TotalContainers int            `json:"totalContainers"`
+	TotalImages     int            `json:"totalImages"`
+	TotalVolumes    int            `json:"totalVolumes"`
+	CreatedAt       time.Time      `json:"createdAt"`
+	UpdatedAt       time.Time      `json:"updatedAt"`
+}
+
+type LabelPair struct {
+	Key   string `json:"key"`
+	Value string `json:"value"`
+}
+
+type EndpointDiagnostics struct {
+	EndpointID    string        `json:"endpointId"`
+	Reachable     bool          `json:"reachable"`
+	Version       string        `json:"version,omitempty"`
+	TotalMemoryMB int64         `json:"totalMemoryMb,omitempty"`
+	UsedMemoryMB  int64         `json:"usedMemoryMb,omitempty"`
+	TotalDiskMB   int64         `json:"totalDiskMb,omitempty"`
+	UsedDiskMB    int64         `json:"usedDiskMb,omitempty"`
+	CPUPercent    float64       `json:"cpuPercent,omitempty"`
+	Nodes         []NodeSummary `json:"nodes"`
+	CheckedAt     time.Time     `json:"checkedAt"`
+}
+
+type NodeSummary struct {
+	NodeID        string `json:"nodeId"`
+	Name          string `json:"name"`
+	Status        string `json:"status"`
+	ServerCount   int    `json:"serverCount"`
+	AllocatedMem  int    `json:"allocatedMemMb"`
+	AllocatedCPU  int    `json:"allocatedCpu"`
+	AllocatedDisk int    `json:"allocatedDiskMb"`
+}
+
+type InventorySummary struct {
+	TotalServers     int   `json:"totalServers"`
+	TotalContainers  int   `json:"totalContainers"`
+	TotalImages      int   `json:"totalImages"`
+	TotalVolumes     int   `json:"totalVolumes"`
+	TotalAllocations int   `json:"totalAllocations"`
+	UsedMemoryMB     int64 `json:"usedMemoryMb"`
+	TotalMemoryMB    int64 `json:"totalMemoryMb"`
+	UsedDiskMB       int64 `json:"usedDiskMb"`
+	TotalDiskMB      int64 `json:"totalDiskMb"`
+}
+
+type HealthRecord struct {
+	ID          string         `json:"id"`
+	EndpointID  string         `json:"endpointId"`
+	Status      EndpointStatus `json:"status"`
+	Reachable   bool           `json:"reachable"`
+	HealthScore float64        `json:"healthScore"`
+	Version     string         `json:"version,omitempty"`
+	Containers  int            `json:"containers"`
+	Images      int            `json:"images"`
+	Volumes     int            `json:"volumes"`
+	Error       string         `json:"error,omitempty"`
+	ObservedAt  time.Time      `json:"observedAt"`
+}
+
+type AccessPolicy struct {
+	ID            string    `json:"id"`
+	EndpointID    string    `json:"endpointId"`
+	PrincipalType string    `json:"principalType"`
+	PrincipalID   string    `json:"principalId"`
+	Role          string    `json:"role"`
+	CreatedAt     time.Time `json:"createdAt"`
+}
+
+type CreateEndpointRequest struct {
+	Name           string         `json:"name"`
+	Description    string         `json:"description"`
+	EndpointType   EndpointType   `json:"endpointType"`
+	ConnectionMode ConnectionMode `json:"connectionMode"`
+	NodeIDs        []string       `json:"nodeIds"`
+	Tags           []string       `json:"tags"`
+	Labels         []LabelPair    `json:"labels"`
+	URL            string         `json:"url"`
+	ProjectID      string         `json:"projectId"`
+	GroupID        string         `json:"groupId"`
+	EdgeID         string         `json:"edgeId"`
+	TLSConfig      *TLSConfig     `json:"tlsConfig,omitempty"`
+}
+
+type UpdateEndpointRequest struct {
+	Name           *string         `json:"name,omitempty"`
+	Description    *string         `json:"description,omitempty"`
+	EndpointType   *EndpointType   `json:"endpointType,omitempty"`
+	ConnectionMode *ConnectionMode `json:"connectionMode,omitempty"`
+	Tags           *[]string       `json:"tags,omitempty"`
+	Labels         *[]LabelPair    `json:"labels,omitempty"`
+	URL            *string         `json:"url,omitempty"`
+	ProjectID      *string         `json:"projectId,omitempty"`
+	GroupID        *string         `json:"groupId,omitempty"`
+	TLSConfig      *TLSConfig      `json:"tlsConfig,omitempty"`
+}
+
+type TLSConfig struct {
+	CACert  string `json:"caCert"`
+	TLSCert string `json:"tlsCert"`
+	TLSKey  string `json:"-"`
 }

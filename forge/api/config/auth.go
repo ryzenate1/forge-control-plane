@@ -64,7 +64,7 @@ func AuthConfig() Auth {
 			Auth:     envInt("RATE_LIMIT_AUTH", 5),
 			Mutation: envInt("RATE_LIMIT_MUTATION", 30),
 			Read:     envInt("RATE_LIMIT_READ", 120),
-			Window:   time.Duration(envInt("RATE_LIMIT_WINDOW", 1)) * time.Minute,
+			Window:   time.Duration(max(envInt("RATE_LIMIT_WINDOW", 1), 1)) * time.Minute,
 		},
 	}
 }
