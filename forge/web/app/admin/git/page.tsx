@@ -293,8 +293,8 @@ export default function GitPage() {
             onClick={() => setTab(t)}
             className={`px-4 py-2 text-sm font-medium rounded-t-lg ${
               tab === t
-                ? "bg-primary text-primary-foreground border-b-2 border-primary"
-                : "text-muted-foreground hover:text-foreground"
+                ? "bg-red-600 text-white border-b-2 border-red-600"
+                : "text-slate-400 hover:text-slate-100"
             }`}
           >
             {t.charAt(0).toUpperCase() + t.slice(1)}
@@ -310,14 +310,14 @@ export default function GitPage() {
             </h2>
             <button
               onClick={() => setShowCreateCredential(true)}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90"
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:opacity-90"
             >
               <Plus className="w-4 h-4" /> Add Credential
             </button>
           </div>
 
           {(!credentials || credentials.length === 0) && (
-            <p className="text-muted-foreground text-sm">No credentials configured.</p>
+            <p className="text-slate-400 text-sm">No credentials configured.</p>
           )}
 
           {credentials?.map((cred) => (
@@ -325,7 +325,7 @@ export default function GitPage() {
               <div className="flex justify-between items-start">
                 <div>
                   <p className="font-medium">{cred.name}</p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-slate-400">
                     Type: {cred.credentialType}
                     {cred.description && ` — ${cred.description}`}
                   </p>
@@ -334,7 +334,7 @@ export default function GitPage() {
                   {cred.credentialType === "ssh_key" && (
                     <button
                       onClick={() => generateKey.mutate(cred.id)}
-                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-muted"
+                      className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-white/[0.06]"
                       disabled={generateKey.isPending}
                     >
                       <RefreshCw className="w-3 h-3" /> Generate Key
@@ -342,7 +342,7 @@ export default function GitPage() {
                   )}
                   <button
                     onClick={() => { if (confirm("Delete this credential?")) deleteCredential.mutate(cred.id); }}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-50"
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-500/10"
                   >
                     <Trash2 className="w-3 h-3" /> Delete
                   </button>
@@ -350,12 +350,12 @@ export default function GitPage() {
               </div>
               {cred.publicKey && (
                 <details className="text-xs">
-                  <summary className="cursor-pointer text-muted-foreground">Public Key</summary>
-                  <pre className="mt-1 p-2 bg-muted rounded text-[10px] overflow-x-auto">{cred.publicKey}</pre>
+                  <summary className="cursor-pointer text-slate-400">Public Key</summary>
+                  <pre className="mt-1 p-2 bg-white/[0.06] rounded text-[10px] overflow-x-auto">{cred.publicKey}</pre>
                 </details>
               )}
               {cred.credential && (
-                <p className="text-xs text-muted-foreground">
+                <p className="text-xs text-slate-400">
                   Credential: <Shield className="w-3 h-3 inline" /> Stored encrypted
                 </p>
               )}
@@ -380,14 +380,14 @@ export default function GitPage() {
             </h2>
             <button
               onClick={() => setShowConnectProvider(true)}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90"
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:opacity-90"
             >
               <Link className="w-4 h-4" /> Connect Provider
             </button>
           </div>
 
           {(!providerTokens || providerTokens.length === 0) && (
-            <p className="text-muted-foreground text-sm">No providers connected.</p>
+            <p className="text-slate-400 text-sm">No providers connected.</p>
           )}
 
           {providerTokens?.map((pt) => (
@@ -397,7 +397,7 @@ export default function GitPage() {
                   <ProviderIcon provider={pt.provider} />
                   <div>
                     <p className="font-medium capitalize">{pt.provider}{pt.providerName ? ` - ${pt.providerName}` : ""}</p>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-slate-400">
                       {pt.username && `@${pt.username} — `}{pt.tokenType} token{pt.accessToken && <Shield className="w-3 h-3 inline ml-1" />}
                     </p>
                   </div>
@@ -405,14 +405,14 @@ export default function GitPage() {
                 <div className="flex gap-1">
                   <button
                     onClick={() => loadProviderRepos(pt.id)}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-muted"
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded hover:bg-white/[0.06]"
                     disabled={loadingRepos === pt.id}
                   >
                     <RefreshCw className={`w-3 h-3 ${loadingRepos === pt.id ? "animate-spin" : ""}`} /> Repos
                   </button>
                   <button
                     onClick={() => { if (confirm("Disconnect this provider?")) disconnectProvider.mutate(pt.id); }}
-                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-50"
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-500/10"
                   >
                     <Trash2 className="w-3 h-3" /> Disconnect
                   </button>
@@ -421,12 +421,12 @@ export default function GitPage() {
 
               {selectedProviderRepos.length > 0 && (
                 <div className="ml-6 mt-2 space-y-1 border-l-2 pl-3">
-                  <p className="text-xs font-medium text-muted-foreground">Repositories:</p>
+                  <p className="text-xs font-medium text-slate-400">Repositories:</p>
                   {selectedProviderRepos.map((repo) => (
                     <div key={repo.fullName} className="flex items-center justify-between text-xs">
                       <span>
                         {repo.name}
-                        {repo.private && <span className="ml-1 text-muted-foreground">(private)</span>}
+                        {repo.private && <span className="ml-1 text-slate-400">(private)</span>}
                       </span>
                       <button
                         onClick={() => loadProviderBranches(pt.id, repo.fullName)}
@@ -441,9 +441,9 @@ export default function GitPage() {
               )}
 
               {selectedProviderBranches.length > 0 && (
-                <div className="ml-10 mt-1 space-y-1 text-xs text-muted-foreground">
+                <div className="ml-10 mt-1 space-y-1 text-xs text-slate-400">
                   {selectedProviderBranches.map((b) => (
-                    <span key={b.name} className="mr-2 inline-flex items-center gap-1 bg-muted px-1.5 py-0.5 rounded">
+                    <span key={b.name} className="mr-2 inline-flex items-center gap-1 bg-white/[0.06] px-1.5 py-0.5 rounded">
                       <GitBranch className="w-3 h-3" /> {b.name}
                     </span>
                   ))}
@@ -470,14 +470,14 @@ export default function GitPage() {
             </h2>
             <button
               onClick={() => setShowCreateSource(true)}
-              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded-md hover:opacity-90"
+              className="inline-flex items-center gap-1 px-3 py-1.5 text-sm bg-red-600 text-white rounded-md hover:opacity-90"
             >
               <Plus className="w-4 h-4" /> Link Repository
             </button>
           </div>
 
           {(!sources || sources.length === 0) && (
-            <p className="text-muted-foreground text-sm">No repositories linked.</p>
+            <p className="text-slate-400 text-sm">No repositories linked.</p>
           )}
 
           {sources?.map((src) => (
@@ -486,30 +486,30 @@ export default function GitPage() {
                 <div>
                   <p className="font-medium">
                     {src.repositoryOwner}/{src.repositoryName}
-                    {src.provider && <span className="ml-2 text-xs text-muted-foreground capitalize">({src.provider})</span>}
+                    {src.provider && <span className="ml-2 text-xs text-slate-400 capitalize">({src.provider})</span>}
                   </p>
-                  <p className="text-xs text-muted-foreground">
+                  <p className="text-xs text-slate-400">
                     Branch: {src.branch} — Auto-deploy: {src.autoDeploy ? <CheckCircle className="w-3 h-3 inline text-green-500" /> : <XCircle className="w-3 h-3 inline text-gray-400" />}
                   </p>
                   {src.lastCommitSha && (
-                    <p className="text-xs text-muted-foreground">
+                    <p className="text-xs text-slate-400">
                       Last: {src.lastCommitSha.slice(0, 7)} — {src.lastCommitMessage?.slice(0, 80)}
                     </p>
                   )}
                 </div>
                 <button
                   onClick={() => { if (confirm("Remove this git source?")) deleteSource.mutate(src.id); }}
-                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-50"
+                  className="inline-flex items-center gap-1 px-2 py-1 text-xs border rounded text-red-500 hover:bg-red-500/10"
                 >
                   <Trash2 className="w-3 h-3" /> Remove
                 </button>
               </div>
               {src.webhookUrl && (
                 <details className="text-xs">
-                  <summary className="cursor-pointer text-muted-foreground flex items-center gap-1">
+                  <summary className="cursor-pointer text-slate-400 flex items-center gap-1">
                     <Webhook className="w-3 h-3" /> Webhook details
                   </summary>
-                  <div className="mt-1 p-2 bg-muted rounded space-y-1">
+                  <div className="mt-1 p-2 bg-white/[0.06] rounded space-y-1">
                     <p>URL: <code className="text-[10px]">{src.webhookUrl}</code></p>
                     {src.webhookId && <p>ID: {src.webhookId}</p>}
                     {src.webhookSecret && <p>Secret: <Shield className="w-3 h-3 inline" /> verified</p>}
@@ -547,7 +547,7 @@ function CredentialForm({
   const [description, setDescription] = useState("");
 
   return (
-    <div className="border rounded-lg p-4 bg-card space-y-3">
+    <div className="border rounded-lg p-4 bg-[#111722] space-y-3">
       <h3 className="font-medium text-sm">New Credential</h3>
       <input
         placeholder="Name (e.g. GitHub Deploy Key)"
@@ -593,11 +593,11 @@ function CredentialForm({
         className="w-full p-2 border rounded text-sm"
       />
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-muted">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-white/[0.06]">Cancel</button>
         <button
           onClick={() => onSubmit({ name, credentialType: credType, credential, description })}
           disabled={loading || !name || !credential}
-          className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50"
+          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:opacity-90 disabled:opacity-50"
         >
           Create
         </button>
@@ -622,7 +622,7 @@ function ProviderForm({
   const [username, setUsername] = useState("");
 
   return (
-    <div className="border rounded-lg p-4 bg-card space-y-3">
+    <div className="border rounded-lg p-4 bg-[#111722] space-y-3">
       <h3 className="font-medium text-sm">Connect Git Provider</h3>
       <select
         value={provider}
@@ -669,11 +669,11 @@ function ProviderForm({
         className="w-full p-2 border rounded text-sm"
       />
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-muted">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-white/[0.06]">Cancel</button>
         <button
           onClick={() => onSubmit({ provider, providerName, accessToken, refreshToken, tokenType, baseUrl, username })}
           disabled={loading || !accessToken}
-          className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50"
+          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:opacity-90 disabled:opacity-50"
         >
           Connect
         </button>
@@ -706,7 +706,7 @@ function SourceForm({
   const [authMode, setAuthMode] = useState<"credential" | "provider" | "none">("none");
 
   return (
-    <div className="border rounded-lg p-4 bg-card space-y-3">
+    <div className="border rounded-lg p-4 bg-[#111722] space-y-3">
       <h3 className="font-medium text-sm">Link Repository</h3>
 
       <div className="flex gap-2">
@@ -715,7 +715,7 @@ function SourceForm({
             key={mode}
             onClick={() => setAuthMode(mode)}
             className={`px-3 py-1 text-xs rounded ${
-              authMode === mode ? "bg-primary text-primary-foreground" : "border hover:bg-muted"
+              authMode === mode ? "bg-red-600 text-white" : "border hover:bg-white/[0.06]"
             }`}
           >
             {mode === "none" ? "Public" : mode === "credential" ? "Deploy Key/Credential" : "Provider Token"}
@@ -792,7 +792,7 @@ function SourceForm({
         </label>
       </div>
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-muted">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border rounded hover:bg-white/[0.06]">Cancel</button>
         <button
           onClick={() => onSubmit({
             credentialId: authMode === "credential" && credentialId ? credentialId : undefined,
@@ -805,7 +805,7 @@ function SourceForm({
             autoDeploy,
           })}
           disabled={loading || !repoUrl || !repoName}
-          className="px-3 py-1.5 text-sm bg-primary text-primary-foreground rounded hover:opacity-90 disabled:opacity-50"
+          className="px-3 py-1.5 text-sm bg-red-600 text-white rounded hover:opacity-90 disabled:opacity-50"
         >
           Link
         </button>

@@ -201,7 +201,9 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		if req.Database != "" {
-			_ = ds.GrantPermissions(ctx, c.Params("id"), req.Username, req.Database, perms)
+			if err := ds.GrantPermissions(ctx, c.Params("id"), req.Username, req.Database, perms); err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			}
 		}
 		return c.Status(fiber.StatusCreated).JSON(cred)
 	})

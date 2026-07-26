@@ -1,22 +1,20 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Globe, Plus, Eye, EyeOff } from "lucide-react";
 import { Btn, Card, CardHeader, SectionHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
-import type { Organization, Project, Environment, EnvironmentVariable } from "@/lib/api/tenancy";
+import { fetchOrganizations, fetchProjects, fetchEnvironments, createEnvironment, deleteEnvVar } from "@/lib/api/tenancy";
+import { fetchEnvVars, createEnvVar, type EnvVarResponse } from "@/lib/api/env-vars";
 
 export default function AdminEnvironmentsPage() {
-  const [orgs, setOrgs] = useState<Organization[]>([]);
+  const queryClient = useQueryClient();
   const [selectedOrg, setSelectedOrg] = useState("");
-  const [projects, setProjects] = useState<Project[]>([]);
   const [selectedProject, setSelectedProject] = useState("");
-  const [environments, setEnvironments] = useState<Environment[]>([]);
-  const [loading, setLoading] = useState(true);
   const [envName, setEnvName] = useState("");
   const [envColor, setEnvColor] = useState("#6366f1");
   const [envProtected, setEnvProtected] = useState(false);
 
-  const [envVars, setEnvVars] = useState<EnvironmentVariable[]>([]);
   const [selectedEnv, setSelectedEnv] = useState("");
   const [varKey, setVarKey] = useState("");
   const [varValue, setVarValue] = useState("");
@@ -24,76 +22,84 @@ export default function AdminEnvironmentsPage() {
 
   const colors = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#64748b"];
 
-  useEffect(() => {
-    fetch("/api/v1/organizations", { credentials: "include" })
-      .then((r) => r.ok ? r.json() : [])
-      .then(setOrgs);
-  }, []);
+  const orgsQuery = useQuery({
+    queryKey: ["organizations"],
+    queryFn: fetchOrganizations,
+  });
 
-  const fetchProjects = async (orgId: string) => {
-    if (!orgId) { setProjects([]); return; }
-    const res = await fetch(`/api/v1/organizations/${orgId}/projects`, { credentials: "include" });
-    if (res.ok) setProjects(await res.json());
-  };
+  const projectsQuery = useQuery({
+    queryKey: ["projects", selectedOrg],
+    queryFn: () => fetchProjects(selectedOrg),
+    enabled: Boolean(selectedOrg),
+  });
 
-  useEffect(() => { fetchProjects(selectedOrg); setSelectedProject(""); setEnvironments([]); setSelectedEnv(""); }, [selectedOrg]);
+  const environmentsQuery = useQuery({
+    queryKey: ["environments", selectedProject],
+    queryFn: () => fetchEnvironments(selectedProject),
+    enabled: Boolean(selectedProject),
+  });
 
-  const fetchEnvironments = async (projectId: string) => {
-    if (!projectId) { setEnvironments([]); return; }
-    setLoading(true);
-    try {
-      const res = await fetch(`/api/v1/projects/${projectId}/envs`, { credentials: "include" });
-      if (res.ok) setEnvironments(await res.json());
-    } finally { setLoading(false); }
-  };
+  const envVarsQuery = useQuery({
+    queryKey: ["env-vars", selectedEnv],
+    queryFn: () => fetchEnvVars(selectedEnv),
+    enabled: Boolean(selectedEnv),
+  });
 
-  useEffect(() => { fetchEnvironments(selectedProject); setSelectedEnv(""); setEnvVars([]); }, [selectedProject]);
+  const createEnvMutation = useMutation({
+    mutationFn: () => createEnvironment(selectedProject, envName.trim(), envColor, envProtected),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["environments", selectedProject] });
+      setEnvName("");
+    },
+  });
 
-  const fetchEnvVars = async (envId: string) => {
-    if (!envId) { setEnvVars([]); return; }
-    const res = await fetch(`/api/v1/environments/${envId}/env-vars`, { credentials: "include" });
-    if (res.ok) setEnvVars(await res.json());
-  };
+  const addVarMutation = useMutation({
+    mutationFn: () => createEnvVar(selectedEnv, varKey.trim(), varValue, false),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["env-vars", selectedEnv] });
+      setVarKey("");
+      setVarValue("");
+    },
+  });
 
-  useEffect(() => { fetchEnvVars(selectedEnv); }, [selectedEnv]);
+  const deleteVarMutation = useMutation({
+    mutationFn: (varId: string) => deleteEnvVar(varId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["env-vars", selectedEnv] });
+    },
+  });
 
-  const handleCreateEnv = async (e: React.FormEvent) => {
+  const handleCreateEnv = (e: React.FormEvent) => {
     e.preventDefault();
     if (!envName.trim() || !selectedProject) return;
-    const res = await fetch(`/api/v1/projects/${selectedProject}/envs`, {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: envName.trim(), color: envColor, protected: envProtected }),
-    });
-    if (res.ok) { setEnvName(""); await fetchEnvironments(selectedProject); }
+    createEnvMutation.mutate();
   };
 
-  const handleAddVar = async (e: React.FormEvent) => {
+  const handleAddVar = (e: React.FormEvent) => {
     e.preventDefault();
     if (!varKey.trim() || !selectedEnv) return;
-    const res = await fetch(`/api/v1/environments/${selectedEnv}/env-vars`, {
-      method: "POST", credentials: "include",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ key: varKey.trim(), value: varValue, isSensitive: false }),
-    });
-    if (res.ok) { setVarKey(""); setVarValue(""); await fetchEnvVars(selectedEnv); }
+    addVarMutation.mutate();
   };
 
-  const handleDeleteVar = async (varId: string) => {
-    await fetch(`/api/v1/env-vars/${varId}`, { method: "DELETE", credentials: "include" });
-    await fetchEnvVars(selectedEnv);
+  const handleDeleteVar = (varId: string) => {
+    deleteVarMutation.mutate(varId);
   };
+
+  const orgs = orgsQuery.data ?? [];
+  const projects = projectsQuery.data ?? [];
+  const environments = environmentsQuery.data ?? [];
+  const envVars = envVarsQuery.data ?? [];
 
   return (
     <div>
       <SectionHeader title="Environments" sub="Manage deployment environments and environment variables" />
 
       <div className="mb-4 flex gap-3">
-        <select value={selectedOrg} onChange={(e) => setSelectedOrg(e.target.value)} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
+        <select value={selectedOrg} onChange={(e) => { setSelectedOrg(e.target.value); setSelectedProject(""); setSelectedEnv(""); }} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
           <option value="">Select organization...</option>
           {orgs.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
         </select>
-        <select value={selectedProject} onChange={(e) => setSelectedProject(e.target.value)} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
+        <select value={selectedProject} onChange={(e) => { setSelectedProject(e.target.value); setSelectedEnv(""); }} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
           <option value="">Select project...</option>
           {projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
         </select>
@@ -117,7 +123,7 @@ export default function AdminEnvironmentsPage() {
             <input type="checkbox" checked={envProtected} onChange={(e) => setEnvProtected(e.target.checked)} className="rounded" />
             Protected
           </label>
-          <Btn type="submit"><Plus size={14} /> Create</Btn>
+          <Btn type="submit" loading={createEnvMutation.isPending}><Plus size={14} /> Create</Btn>
         </form>
       )}
 
@@ -125,7 +131,7 @@ export default function AdminEnvironmentsPage() {
         <Card>
           <CardHeader title="Environments" icon={Globe} />
           {!selectedProject ? <EmptyState message="Select a project" /> :
-           loading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+           environmentsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
            environments.length === 0 ? <EmptyState message="No environments" /> :
            <div className="divide-y divide-white/[0.06]">
             {environments.map((env) => (
@@ -152,11 +158,12 @@ export default function AdminEnvironmentsPage() {
             <form onSubmit={handleAddVar} className="flex gap-2 p-3 border-b border-white/[0.06]">
               <input value={varKey} onChange={(e) => setVarKey(e.target.value)} placeholder="KEY" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-mono text-white placeholder:text-gray-500 focus:border-purple-500/50 focus:outline-none" required />
               <input value={varValue} onChange={(e) => setVarValue(e.target.value)} placeholder="value" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-purple-500/50 focus:outline-none" />
-              <Btn type="submit"><Plus size={14} /></Btn>
+              <Btn type="submit" loading={addVarMutation.isPending}><Plus size={14} /></Btn>
             </form>
-            {envVars.length === 0 ? <EmptyState message="No environment variables" /> :
+            {envVarsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+             envVars.length === 0 ? <EmptyState message="No environment variables" /> :
              <div className="divide-y divide-white/[0.06]">
-              {envVars.map((v) => (
+              {envVars.map((v: EnvVarResponse) => (
                 <div key={v.id} className="flex items-center justify-between px-4 py-2.5">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-mono text-slate-200">{v.key}</span>

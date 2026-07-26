@@ -624,13 +624,14 @@ func testHistoryTracking(t *testing.T) {
 	time.Sleep(500 * time.Millisecond)
 
 	// Check audit events
-	if len(fs.auditEvents) == 0 {
+	auditEvents := fs.auditSnapshot()
+	if len(auditEvents) == 0 {
 		t.Fatal("expected audit events")
 	}
 
 	foundStarted := false
 	foundSucceeded := false
-	for _, evt := range fs.auditEvents {
+	for _, evt := range auditEvents {
 		if evt == "procedure execution started" {
 			foundStarted = true
 		}

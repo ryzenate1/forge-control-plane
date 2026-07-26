@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -121,31 +122,47 @@ func (s *Service) SetReverifyInterval(d time.Duration) {
 }
 
 func (s *Service) StartReverify(ctx context.Context) {
+	s.mu.Lock()
 	if s.verfiyTicker != nil {
+		s.mu.Unlock()
 		return
 	}
-	s.verfiyTicker = time.NewTicker(s.reverifyEvery)
-	s.done = make(chan struct{})
-	go func() {
+	ticker := time.NewTicker(s.reverifyEvery)
+	done := make(chan struct{})
+	s.verfiyTicker = ticker
+	s.done = done
+	s.mu.Unlock()
+	go func(ticker *time.Ticker, done <-chan struct{}) {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				fmt.Printf("domain reverify panic: %v\nstack: %s", r, buf[:n])
+			}
+		}()
 		for {
 			select {
-			case <-s.verfiyTicker.C:
+			case <-ticker.C:
 				s.reverifyAll(ctx)
-			case <-s.done:
+			case <-done:
 				return
 			}
 		}
-	}()
+	}(ticker, done)
 }
 
 func (s *Service) StopReverify() {
-	if s.verfiyTicker != nil {
-		s.verfiyTicker.Stop()
-		s.verfiyTicker = nil
+	s.mu.Lock()
+	ticker := s.verfiyTicker
+	done := s.done
+	s.verfiyTicker = nil
+	s.done = nil
+	s.mu.Unlock()
+	if ticker != nil {
+		ticker.Stop()
 	}
-	if s.done != nil {
-		close(s.done)
-		s.done = nil
+	if done != nil {
+		close(done)
 	}
 }
 
@@ -197,6 +214,11 @@ func (s *Service) AddDomain(ctx context.Context, serverID, domain string) (*Doma
 	record := domainRowToRecord(row)
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("domain verify ownership panic: %v", r)
+			}
+		}()
 		verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		s.verifyOwnership(verifyCtx, &record)
@@ -224,6 +246,11 @@ func (s *Service) RemoveDomain(ctx context.Context, id string) error {
 
 	if s.caddy != nil {
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					fmt.Printf("domain sync caddy routes panic: %v", r)
+				}
+			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			s.syncCaddyRoutes(ctx)

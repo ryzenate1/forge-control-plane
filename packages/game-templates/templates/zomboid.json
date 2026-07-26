@@ -1,0 +1,93 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "zomboid",
+  "name": "Project Zomboid",
+  "description": "Project Zomboid dedicated server. The ultimate zombie survival simulation game with deep crafting, building, and permadeath mechanics.",
+  "version": "1.0.0",
+  "game": "Project Zomboid",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/380870",
+  "image": "ghcr.io/pterodactyl/yolks:steamcmd",
+  "images": {
+    "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
+  },
+  "startup": "./start-server.sh -servername {{SERVER_NAME}} -adminpassword {{ADMIN_PASSWORD}} -port {{PORT}}",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "SERVER STARTED"
+    },
+    "stop": "quit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 16261,
+      "protocol": "udp",
+      "public": true,
+      "description": "Project Zomboid game server traffic"
+    },
+    {
+      "port": 16262,
+      "protocol": "udp",
+      "public": true,
+      "description": "Project Zomboid game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Name of the Zomboid server.",
+      "default_value": "Zomboid Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Admin Password",
+      "env_variable": "ADMIN_PASSWORD",
+      "description": "Admin password for server administration.",
+      "default_value": "changeme",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|min:4|max:32"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum players.",
+      "default_value": "16",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:100"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Server password for joining.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 12288,
+    "disk_mb": 10240,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:steamcmd",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Project Zomboid SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Project Zomboid dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 380870 validate +quit\n\necho \"Project Zomboid server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "zombie"],
+  "file_denylist": [],
+  "features": ["steamcmd", "pid_limit"]
+}

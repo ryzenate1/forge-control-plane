@@ -1,6 +1,9 @@
 package http
 
 import (
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -10,7 +13,6 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
-	"github.com/google/uuid"
 )
 
 func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nodeprobe.Service) {
@@ -132,6 +134,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+
 		var report struct {
 			NodeID        string          `json:"nodeId"`
 			BeaconVersion string          `json:"beaconVersion"`
@@ -143,6 +146,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 			UptimeSeconds int64           `json:"uptimeSeconds"`
 			Capabilities  json.RawMessage `json:"capabilities"`
 			FetchedAt     string          `json:"fetchedAt"`
+			Signature     string          `json:"signature"`
 		}
 		if err := c.BodyParser(&report); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid report")
@@ -153,6 +157,18 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 		ctx, cancel := requestContext()
 		defer cancel()
+
+		token, err := cfg.Store.GetNodeDaemonToken(ctx, report.NodeID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnauthorized, "node authentication failed")
+		}
+
+		mac := hmac.New(sha256.New, []byte(token))
+		mac.Write([]byte(report.NodeID))
+		expectedSig := hex.EncodeToString(mac.Sum(nil))
+		if !hmac.Equal([]byte(report.Signature), []byte(expectedSig)) {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid node signature")
+		}
 
 		fetchedAt := time.Now().UTC()
 		if report.FetchedAt != "" {
@@ -310,5 +326,5 @@ func actorIDFromCtx(c *fiber.Ctx) string {
 	if claims, ok := c.Locals("user").(tokenClaims); ok {
 		return claims.Sub
 	}
-	return uuid.NewString()
+	return "system"
 }

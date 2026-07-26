@@ -62,7 +62,11 @@ func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		ctx, cancel := requestContext()
 		defer cancel()
 
-		_, err := wa.FinishRegistration(ctx, req.SessionID, claims.Sub, c.Body())
+		body := c.Body()
+		if len(body) > 65536 {
+			return fiber.NewError(fiber.StatusBadRequest, "request body too large")
+		}
+		_, err := wa.FinishRegistration(ctx, req.SessionID, claims.Sub, body)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
@@ -107,7 +111,11 @@ func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		ctx, cancel := requestContext()
 		defer cancel()
 
-		_, err := wa.FinishLogin(ctx, req.SessionID, req.UserID, c.Body())
+		body := c.Body()
+		if len(body) > 65536 {
+			return fiber.NewError(fiber.StatusBadRequest, "request body too large")
+		}
+		_, err := wa.FinishLogin(ctx, req.SessionID, req.UserID, body)
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, err.Error())
 		}
@@ -122,14 +130,15 @@ func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
 
-		csrfToken, _ := generateCSRFToken()
+		csrfToken, err := generateCSRFToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
+		}
 		expires := time.Now().Add(tokenTTL)
 		setSessionCookies(c, token, csrfToken, expires)
 
 		return c.JSON(fiber.Map{
 			"complete": true,
-			"token":    token,
-			"user":     user,
 		})
 	})
 

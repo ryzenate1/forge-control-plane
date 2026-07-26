@@ -12,6 +12,7 @@ import (
 	fiberws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	gorilla "github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 // getWebSocketAllowedOrigins returns the list of allowed WebSocket origins for CORS validation.
@@ -151,6 +152,22 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 			_ = client.WriteJSON(map[string]any{"error": "missing server permission: " + store.PermWebsocketConnect})
 			return
 		}
+
+		// For interactive streams (console), additionally require the control.console
+		// permission so that a user with only websocket.connect cannot send arbitrary
+		// commands through the proxy to the upstream daemon.
+		if stream == "console" {
+			consoleAllowed, consoleErr := cfg.Store.UserCanAccessServer(ctx, client.Params("id"), userID, userRole, store.PermControlConsole)
+			if consoleErr != nil {
+				_ = client.WriteJSON(map[string]any{"error": "server not found"})
+				return
+			}
+			if !consoleAllowed {
+				_ = client.WriteJSON(map[string]any{"error": "missing server permission: " + store.PermControlConsole})
+				return
+			}
+		}
+
 		if ticketToConsume != "" && !consumeWSTicket(cfg, ticketStore, ticketToConsume) {
 			_ = client.WriteJSON(map[string]any{"error": "invalid or expired ws ticket"})
 			return
@@ -176,9 +193,29 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 		configureClientSocket(client)
 		configureUpstreamSocket(upstream)
 
+		// Start ping keepalive — periodically sends a ping to detect half-open
+		// connections and prevent silent disconnects.
+		pingTicker := time.NewTicker(30 * time.Second)
+		defer pingTicker.Stop()
+		go func() {
+			for {
+				select {
+				case <-pingTicker.C:
+					if err := upstream.WriteControl(gorilla.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		errs := make(chan error, 2)
+		// Rate-limit upstream-bound messages (from client) to 10/s to prevent
+		// a compromised or malicious client from flooding the upstream daemon.
+		clientLimiter := rate.NewLimiter(rate.Limit(10), 20)
 		go pumpUpstreamToClient(ctx, upstream, client, errs)
-		go pumpClientToUpstream(ctx, client, upstream, errs)
+		go pumpClientToUpstream(ctx, client, upstream, clientLimiter, errs)
 		<-errs
 		cancel()
 		_ = client.Close()
@@ -222,11 +259,17 @@ func pumpUpstreamToClient(ctx context.Context, upstream *gorilla.Conn, client *f
 	}
 }
 
-func pumpClientToUpstream(ctx context.Context, client *fiberws.Conn, upstream *gorilla.Conn, errs chan<- error) {
+func pumpClientToUpstream(ctx context.Context, client *fiberws.Conn, upstream *gorilla.Conn, limiter *rate.Limiter, errs chan<- error) {
 	for {
 		if ctx.Err() != nil {
 			errs <- ctx.Err()
 			return
+		}
+		if limiter != nil {
+			if err := limiter.Wait(ctx); err != nil {
+				errs <- err
+				return
+			}
 		}
 		messageType, payload, err := client.ReadMessage()
 		if err != nil {

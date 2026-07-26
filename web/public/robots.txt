@@ -1,0 +1,10 @@
+User-agent: *
+Disallow: /health
+Disallow: /system
+Disallow: /backups
+Disallow: /api/
+
+Allow: /docs/
+Allow: /features
+Allow: /manual/
+Allow: /

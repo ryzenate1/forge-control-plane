@@ -31,9 +31,9 @@ ALTER TABLE server_databases
 
 CREATE TABLE IF NOT EXISTS database_orphan_remediations (
     id UUID PRIMARY KEY,
-    server_database_id UUID NOT NULL,
-    server_id UUID NOT NULL,
-    database_host_id UUID NOT NULL,
+    server_database_id UUID NOT NULL REFERENCES server_databases(id) ON DELETE CASCADE,
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
+    database_host_id UUID NOT NULL REFERENCES database_hosts(id) ON DELETE CASCADE,
     engine TEXT NOT NULL,
     host TEXT NOT NULL,
     port INTEGER NOT NULL,

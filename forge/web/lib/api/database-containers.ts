@@ -33,8 +33,8 @@ export type DBContainerCredentials = {
 
 export type EnginesMap = Record<string, string[]>;
 
-export function listDBContainers(params?: { engine?: string }): Promise<DBContainer[]> {
-  const query = params?.engine ? `?engine=${encodeURIComponent(params.engine)}` : '';
+export function listDBContainers(params?: { serverId?: string }): Promise<DBContainer[]> {
+  const query = params?.serverId ? `?serverId=${encodeURIComponent(params.serverId)}` : '';
   return fetchJSON<DBContainer[]>(`/databases/containers${query}`);
 }
 

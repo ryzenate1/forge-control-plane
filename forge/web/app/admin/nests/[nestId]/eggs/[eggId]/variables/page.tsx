@@ -2,7 +2,7 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, Container, Cpu, FileCode, Terminal } from "lucide-react";
+import { ArrowLeft, ChevronRight, Container, FileCode, Terminal } from "lucide-react";
 import { fetchEgg, fetchNest } from "@/lib/api";
 import { AdminEggVariables } from "@/components/admin/AdminEggVariables";
 import { Btn, Card, cn } from "@/components/admin/admin-ui";

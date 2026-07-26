@@ -95,7 +95,9 @@ func (svc *Service) CreateChannel(ctx context.Context, req store.CreateNotificat
 	if err != nil {
 		return store.NotificationChannel{}, err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after create", "error", err)
+	}
 	return ch, nil
 }
 
@@ -108,7 +110,9 @@ func (svc *Service) UpdateChannel(ctx context.Context, id string, req store.Upda
 	if err != nil {
 		return store.NotificationChannel{}, err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after update", "error", err)
+	}
 	return ch, nil
 }
 
@@ -117,7 +121,9 @@ func (svc *Service) DeleteChannel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after delete", "error", err)
+	}
 	return nil
 }
 

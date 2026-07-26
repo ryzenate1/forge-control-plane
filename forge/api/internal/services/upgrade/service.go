@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -446,7 +447,7 @@ func (s *Service) createBackup(ctx context.Context, plan *UpgradePlan) error {
 
 	// Backup database (this would require database access)
 	if err := s.backupDatabase(ctx, backupPath); err != nil {
-		s.logger.Warn("Failed to backup database", "error", err)
+		return fmt.Errorf("failed to backup database: %w", err)
 	}
 
 	s.logger.Info("Backup created", "path", backupPath)
@@ -457,11 +458,25 @@ func (s *Service) createBackup(ctx context.Context, plan *UpgradePlan) error {
 func (s *Service) backupDatabase(ctx context.Context, backupPath string) error {
 	s.logger.Info("Backing up database")
 
-	// This would use pg_dump or similar to backup the database
-	// For now, just create a placeholder
-	backupFile := filepath.Join(backupPath, "database.sql")
-	if err := os.WriteFile(backupFile, []byte("-- Database backup placeholder"), 0644); err != nil {
-		return fmt.Errorf("failed to create database backup: %w", err)
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required for upgrade backup")
+	}
+	backupFile := filepath.Join(backupPath, "database.dump")
+	command := exec.CommandContext(ctx, "pg_dump", "--format=custom", "--no-owner", "--no-acl", "--file", backupFile, databaseURL)
+	if output, err := command.CombinedOutput(); err != nil {
+		_ = os.Remove(backupFile)
+		return fmt.Errorf("pg_dump failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	info, err := os.Stat(backupFile)
+	if err != nil {
+		return fmt.Errorf("stat database backup: %w", err)
+	}
+	if info.Size() == 0 {
+		return fmt.Errorf("pg_dump produced an empty backup")
+	}
+	if err := os.Chmod(backupFile, 0o600); err != nil {
+		return fmt.Errorf("secure database backup: %w", err)
 	}
 
 	return nil
@@ -497,9 +512,18 @@ func (s *Service) rollbackUpgrade(ctx context.Context, plan *UpgradePlan) error 
 func (s *Service) restoreFromBackup(ctx context.Context, plan *UpgradePlan) error {
 	s.logger.Info("Restoring from backup", "backupPath", plan.BackupPath)
 
-	// This would restore all the backed up files and database
-	// For now, just simulate the restore
-
+	databaseURL := strings.TrimSpace(os.Getenv("DATABASE_URL"))
+	if databaseURL == "" {
+		return fmt.Errorf("DATABASE_URL is required for rollback")
+	}
+	backupFile := filepath.Join(plan.BackupPath, "database.dump")
+	if info, err := os.Stat(backupFile); err != nil || !info.Mode().IsRegular() || info.Size() == 0 {
+		return fmt.Errorf("valid database backup is required for rollback")
+	}
+	command := exec.CommandContext(ctx, "pg_restore", "--clean", "--if-exists", "--no-owner", "--no-acl", "--dbname", databaseURL, backupFile)
+	if output, err := command.CombinedOutput(); err != nil {
+		return fmt.Errorf("pg_restore failed: %w: %s", err, strings.TrimSpace(string(output)))
+	}
 	return nil
 }
 

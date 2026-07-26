@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -114,6 +116,15 @@ func (s *Store) UpdateAcmeAccount(ctx context.Context, id string, req UpdateAcme
 		return s.GetAcmeAccount(ctx, id)
 	}
 
+	var allowedAcmeAccountColumns = map[string]bool{
+		"email": true, "private_key": true, "ca_url": true, "is_default": true, "updated_at": true,
+	}
+	for _, u := range updates {
+		col := strings.SplitN(u, " =", 2)[0]
+		if !allowedAcmeAccountColumns[col] {
+			return AcmeAccount{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	q := "UPDATE acme_accounts SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		q += ", " + updates[i]
@@ -239,6 +250,15 @@ func (s *Store) UpdateDNSProviderAccount(ctx context.Context, id string, req Upd
 		return s.GetDNSProviderAccount(ctx, id)
 	}
 
+	var allowedDNSProviderColumns = map[string]bool{
+		"name": true, "provider": true, "credentials": true, "updated_at": true,
+	}
+	for _, u := range updates {
+		col := strings.SplitN(u, " =", 2)[0]
+		if !allowedDNSProviderColumns[col] {
+			return DNSProviderAccount{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	q := "UPDATE dns_provider_accounts SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		q += ", " + updates[i]

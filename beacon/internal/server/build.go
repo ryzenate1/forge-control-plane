@@ -14,6 +14,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"gamepanel/beacon/internal/serverid"
 )
 
 type buildJob struct {
@@ -73,6 +75,10 @@ type nixpacksBuildRequest struct {
 }
 
 func (s *Server) handleDockerfileBuild(w http.ResponseWriter, r *http.Request) {
+	if _, err := exec.LookPath("docker"); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "docker build CLI is unavailable"})
+		return
+	}
 	var req dockerfileBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
@@ -153,13 +159,22 @@ func (s *Server) resolveWorkspace(workspaceID, legacySourceDir string) (string, 
 		sourceDir := filepath.Join(cloneBase, workspaceID)
 		return safePath(sourceDir, cloneBase)
 	}
-	if legacySourceDir != "" {
-		return legacySourceDir, nil
+	const serverPrefix = "server:"
+	if strings.HasPrefix(legacySourceDir, serverPrefix) {
+		serverID := strings.TrimPrefix(legacySourceDir, serverPrefix)
+		if err := serverid.Validate(serverID); err != nil {
+			return "", fmt.Errorf("invalid server workspace: %w", err)
+		}
+		return safePath(filepath.Join(s.dataDir, serverID), s.dataDir)
 	}
-	return "", fmt.Errorf("no workspaceId or sourceDir provided")
+	return "", fmt.Errorf("workspace must be a managed clone or server root")
 }
 
 func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
+	if _, err := exec.LookPath("nixpacks"); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "nixpacks build CLI is unavailable"})
+		return
+	}
 	var req nixpacksBuildRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})

@@ -74,8 +74,7 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 	runMigrationIDs := mr.getRunMigrationIDs(ctx)
 
 	for _, file := range sqlFiles {
-		id := strings.TrimSuffix(file, ".sql")
-		if _, exists := runMigrationIDs[id]; exists {
+		if _, exists := runMigrationIDs[file]; exists {
 			continue
 		}
 
@@ -98,13 +97,14 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 				if strings.Contains(strings.ToUpper(stmt), "DROP CONSTRAINT") || strings.Contains(strings.ToUpper(stmt), "ADD CONSTRAINT") {
 					continue
 				}
-				if strings.Contains(strings.ToUpper(stmt), "ALTER COLUMN") {
+				if strings.Contains(strings.ToUpper(stmt), "ALTER COLUMN") || strings.Contains(strings.ToUpper(stmt), "DROP COLUMN") {
 					continue
 				}
-				if strings.HasPrefix(strings.TrimSpace(strings.ToUpper(stmt)), "DO $$") {
+				upperStmt := strings.TrimSpace(strings.ToUpper(stmt))
+				if strings.HasPrefix(upperStmt, "DO $$") || strings.HasPrefix(upperStmt, "COMMENT ON") || strings.HasPrefix(upperStmt, "CREATE OR REPLACE FUNCTION") || strings.HasPrefix(upperStmt, "CREATE FUNCTION") || strings.HasPrefix(upperStmt, "CREATE OR REPLACE VIEW") || strings.HasPrefix(upperStmt, "CREATE VIEW") || strings.HasPrefix(upperStmt, "DROP VIEW") || strings.HasPrefix(upperStmt, "CREATE TRIGGER") || strings.HasPrefix(upperStmt, "DROP TRIGGER") || strings.HasPrefix(upperStmt, "CREATE TYPE") || strings.HasPrefix(upperStmt, "ALTER TYPE") || strings.Contains(upperStmt, "LANGUAGE PLPGSQL") || strings.Contains(upperStmt, "EXECUTE FUNCTION") {
 					continue
 				}
-				if strings.Contains(strings.ToLower(stmt), "regexp_replace") || strings.Contains(strings.ToLower(stmt), "substring(") {
+				if strings.Contains(strings.ToLower(stmt), "regexp_replace") || strings.Contains(strings.ToLower(stmt), "substring(") || strings.Contains(strings.ToLower(stmt), "text_object_agg") || strings.Contains(strings.ToLower(stmt), "jsonb_object_agg") || strings.Contains(strings.ToLower(stmt), "jsonb_typeof") || strings.Contains(strings.ToLower(stmt), "text_typeof") || strings.Contains(strings.ToLower(stmt), "cardinality(") || strings.Contains(strings.ToLower(stmt), "to_tsvector") || strings.Contains(strings.ToLower(stmt), "using gin") {
 					continue
 				}
 				for _, expanded := range splitSQLiteAlterAdd(stmt) {
@@ -123,7 +123,7 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 		}
 
 		recordSQL := getRecordMigrationSQL(mr.driver.Type())
-		if _, err := mr.driver.Exec(ctx, recordSQL, id); err != nil {
+		if _, err := mr.driver.Exec(ctx, recordSQL, file); err != nil {
 			return fmt.Errorf("record migration %s: %w", file, err)
 		}
 	}
@@ -156,12 +156,19 @@ func splitSQLiteAlterAdd(stmt string) []string {
 func sqliteCompatibleMigration(sql string) string {
 	replacer := strings.NewReplacer(
 		"TIMESTAMPTZ", "TIMESTAMP", "timestamptz", "timestamp",
-		"::jsonb", "", "JSONB", "TEXT", "jsonb", "text",
+		"::jsonb", "",
+		"jsonb_build_object(t.image, t.image)", "('{\"' || t.image || '\":\"' || t.image || '\"}')",
+		"jsonb_build_object", "",
+		"jsonb_object_agg", "",
+		"jsonb_array_elements_text", "",
+		"JSONB", "TEXT", "jsonb", "text",
 		"TEXT[]", "TEXT", "text[]", "text",
 		"UUID", "TEXT", "uuid", "text",
 		"INET", "TEXT", "inet", "text",
 		"now()", "CURRENT_TIMESTAMP", "NOW()", "CURRENT_TIMESTAMP",
-		"gen_random_uuid()", "''",
+		"DEFAULT gen_random_uuid()", "DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
+		"DEFAULT gen_random_uuid ()", "DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
+		"gen_random_uuid()", "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
 		"split_part(email, '@', 1)", "substr(email, 1, instr(email, '@') - 1)",
 		"CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')", "CHECK (length(slug) > 0)",
 		"::text", "", "::json", "",
@@ -235,6 +242,14 @@ func migrationPrefix(name string) string {
 	return parts[0]
 }
 
+// validateNoDuplicatePrefixes rejects two migrations that would sort under the
+// same numeric prefix. Known historical numbering exceptions in the shipped
+// migration set are legal under this rule and must NOT be renamed, because the
+// applied file names are already recorded in production schema_migrations:
+//   - 024_a_sftp_config.sql coexists with 024_recovery_tokens.sql (prefixes
+//     "024_a" and "024" are distinct)
+//   - 035_a_*, 035_b_* coexist with 035_compose_gitops.sql
+//   - prefix 039 is intentionally unused (038 jumps to 040)
 func validateNoDuplicatePrefixes(files []string) error {
 	seen := make(map[string]string)
 	for _, f := range files {
@@ -248,22 +263,26 @@ func validateNoDuplicatePrefixes(files []string) error {
 	return nil
 }
 
+// The schema_migrations DDL below must stay column-compatible with the
+// production runner in store.go (runMigrations), which keys the table on a
+// "version" column holding the full migration filename. Both runners can then
+// safely share the same table and history.
 func getCreateMigrationTableSQL(dbType DatabaseType) string {
 	switch dbType {
 	case DatabaseMySQL, DatabaseMariaDB:
 		return `CREATE TABLE IF NOT EXISTS schema_migrations (
-			id VARCHAR(255) PRIMARY KEY,
-			applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+			version VARCHAR(255) PRIMARY KEY,
+			applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 		)`
 	case DatabaseSQLite:
 		return `CREATE TABLE IF NOT EXISTS schema_migrations (
-			id TEXT PRIMARY KEY,
-			applied_at TEXT DEFAULT (datetime('now'))
+			version TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)`
 	default:
 		return `CREATE TABLE IF NOT EXISTS schema_migrations (
-			id TEXT PRIMARY KEY,
-			applied_at TIMESTAMPTZ DEFAULT now()
+			version TEXT PRIMARY KEY,
+			applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`
 	}
 }
@@ -271,12 +290,12 @@ func getCreateMigrationTableSQL(dbType DatabaseType) string {
 func getRecordMigrationSQL(dbType DatabaseType) string {
 	switch dbType {
 	case DatabaseMySQL, DatabaseMariaDB:
-		return `INSERT INTO schema_migrations (id) VALUES (?)`
+		return `INSERT INTO schema_migrations (version) VALUES (?)`
 	default:
-		return `INSERT INTO schema_migrations (id) VALUES ($1)`
+		return `INSERT INTO schema_migrations (version) VALUES ($1)`
 	}
 }
 
 func getListMigrationsSQL(dbType DatabaseType) string {
-	return `SELECT id FROM schema_migrations ORDER BY id`
+	return `SELECT version FROM schema_migrations ORDER BY version`
 }

@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, RotateCcw, Trash2, Archive, RefreshCw, Plus, Download } from "lucide-react";
+import { Database, Trash2, Archive, RefreshCw, Plus, Download } from "lucide-react";
 import {
   type ManagedDatabase,
   type ManagedDatabaseBackup,
-  type ManagedDatabaseRestore,
   type ManagedDatabaseEngine,
   listManagedDatabases,
   backupManagedDatabase,

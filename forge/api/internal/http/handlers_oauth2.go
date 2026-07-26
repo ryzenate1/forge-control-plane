@@ -1,6 +1,7 @@
 package http
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,6 +17,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// oauthSigningKey derives a separate signing key for OAuth2 tokens from
+// the main AuthSecret, so that compromise of one does not compromise the other.
+func oauthSigningKey(authSecret string) []byte {
+	mac := hmac.New(sha256.New, []byte(authSecret))
+	mac.Write([]byte("oauth2-token-signing-v1"))
+	return mac.Sum(nil)
+}
 
 // ---- /oauth2/token ----
 // Implements RFC 6749 client_credentials grant for PufferPanel-style
@@ -49,14 +58,10 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 				"error_description": "only client_credentials is supported",
 			})
 		}
-		// Authenticate client via HTTP Basic. FastHTTP's Request doesn't expose
-		// BasicAuth directly, so we parse the Authorization header ourselves.
-		clientID, clientSecret, ok := parseBasicAuth(c.Get("Authorization"))
-		if !ok {
-			clientID = c.FormValue("client_id")
-			clientSecret = c.FormValue("client_secret")
-		}
-		if clientID == "" || clientSecret == "" {
+	// Authenticate client via HTTP Basic only. Form-based client credentials
+	// are not accepted to avoid exposing secrets in request bodies and logs.
+	clientID, clientSecret, ok := parseBasicAuth(c.Get("Authorization"))
+	if !ok || clientID == "" || clientSecret == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error":             "invalid_client",
 				"error_description": "client_id and client_secret are required",
@@ -87,7 +92,10 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid_client"})
 		}
-		allowAdminScopes := client.Scope == store.OAuthClientScopeAccount && owner.Role == "admin"
+		if owner.Disabled {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "invalid_client", "error_description": "account is disabled"})
+		}
+		allowAdminScopes := client.Scope == store.OAuthClientScopeAccount && owner.Role == RoleAdmin
 		allowedScopes, err := store.ValidateApiKeyScopes(client.AllowedScopes, allowAdminScopes)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -109,8 +117,8 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 			}
 			grantedScopes = wanted
 		}
-		// Mint the token. TTL 1 hour.
-		ttl := time.Hour
+		// Mint the token. TTL matches the session token TTL.
+		ttl := tokenTTL
 		expiresAt := time.Now().Add(ttl)
 		claims := jwt.MapClaims{
 			"iss":       "forge-panel",
@@ -127,7 +135,7 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 			claims["server_id"] = *client.ServerID
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		signed, err := token.SignedString([]byte(cfg.AuthSecret))
+		signed, err := token.SignedString(oauthSigningKey(cfg.AuthSecret))
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to sign token")
 		}
@@ -307,7 +315,7 @@ func AdminDeleteOAuthClient(cfg Config) fiber.Handler {
 func VerifyOAuthToken(cfg Config, tokenString string) (jwt.MapClaims, []string, error) {
 	parser := jwt.NewParser(jwt.WithValidMethods([]string{"HS256"}))
 	token, err := parser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
-		return []byte(cfg.AuthSecret), nil
+		return oauthSigningKey(cfg.AuthSecret), nil
 	})
 	if err != nil {
 		return nil, nil, err

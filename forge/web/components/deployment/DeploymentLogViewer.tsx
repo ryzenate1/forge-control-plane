@@ -32,6 +32,8 @@ function getLevelColor(level?: string): string {
   }
 }
 
+const MAX_RECONNECT_ATTEMPTS = 20;
+
 export function DeploymentLogViewer({ deploymentId, wsUrl, initialLogs }: DeploymentLogViewerProps) {
   const [logs, setLogs] = useState<LogEntry[]>(initialLogs ?? []);
   const [autoScroll, setAutoScroll] = useState(true);
@@ -88,6 +90,7 @@ export function DeploymentLogViewer({ deploymentId, wsUrl, initialLogs }: Deploy
         socket.onclose = () => {
           if (aborted) return;
           setConnected(false);
+          if (reconnectAttempt.current >= MAX_RECONNECT_ATTEMPTS) return;
           const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 30000);
           reconnectAttempt.current += 1;
           reconnectTimer.current = setTimeout(() => {
@@ -99,6 +102,7 @@ export function DeploymentLogViewer({ deploymentId, wsUrl, initialLogs }: Deploy
           socket?.close();
         };
       } catch {
+        if (reconnectAttempt.current >= MAX_RECONNECT_ATTEMPTS) return;
         const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 30000);
         reconnectAttempt.current += 1;
         reconnectTimer.current = setTimeout(() => {

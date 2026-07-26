@@ -24,7 +24,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "current user is unavailable")
 		}
-		return c.JSON(user)
+		return c.JSON(ToPublicUser(user))
 	})
 
 	protected.Post("/auth/logout", mutationLimiter, func(c *fiber.Ctx) error {
@@ -141,7 +141,9 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 			Scopes      []string `json:"scopes"`
 			AllowedIPs  []string `json:"allowedIps"`
 		}
-		_ = c.BodyParser(&req)
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		key, err := cfg.Store.CreateApiKey(ctx, claims.Sub, store.CreateApiKeyRequest{
@@ -161,7 +163,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
 		}
-		if claims.Role == "admin" {
+		if claims.Role == RoleAdmin {
 			return c.JSON(store.AdminScopes)
 		}
 		return c.JSON(store.ClientScopes)
@@ -229,7 +231,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		return c.Status(fiber.StatusCreated).JSON(key)
 	})
 
-	protected.Delete("/ssh-keys", mutationLimiter, func(c *fiber.Ctx) error {
+	protected.Delete("/ssh-keys/:fingerprint", mutationLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -237,15 +239,9 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
 		}
-		var req struct {
-			Fingerprint string `json:"fingerprint"`
-		}
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.DeleteSSHKey(ctx, claims.Sub, req.Fingerprint); err != nil {
+		if err := cfg.Store.DeleteSSHKey(ctx, claims.Sub, c.Params("fingerprint")); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -318,42 +314,11 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 
 	// ---- Self-service password change ----
 
-	protected.Put("/account/password", mutationLimiter, func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		claims, ok := c.Locals("user").(tokenClaims)
-		if !ok {
-			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
-		}
-		var req struct {
-			CurrentPassword string `json:"currentPassword"`
-			NewPassword     string `json:"newPassword"`
-		}
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := store.ValidatePassword(req.NewPassword); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		if req.NewPassword == req.CurrentPassword {
-			return fiber.NewError(fiber.StatusBadRequest, "new password must differ from current password")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		if _, err := cfg.Store.Authenticate(ctx, claims.Email, req.CurrentPassword); err != nil {
-			return fiber.NewError(fiber.StatusUnauthorized, "current password is incorrect")
-		}
-		if err := cfg.Store.UpdateUserPassword(ctx, claims.Sub, req.NewPassword); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "account.password.changed", "user", &claims.Sub, "{}")
-		return c.JSON(fiber.Map{"status": "ok"})
-	})
+	protected.Put("/account/password", mutationLimiter, handlePasswordChange(cfg))
 
 	// ---- Self-service email change ----
 
-	protected.Patch("/account/email", mutationLimiter, func(c *fiber.Ctx) error {
+	handleUpdateEmail := func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -378,7 +343,10 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		}
 		_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "account.email.changed", "user", &claims.Sub, "{}")
 		return c.JSON(fiber.Map{"status": "ok"})
-	})
+	}
+
+	protected.Patch("/account/email", mutationLimiter, handleUpdateEmail)
+	protected.Patch("/auth/email/change", mutationLimiter, handleUpdateEmail)
 
 	// ---- Activity Logs ----
 
@@ -392,7 +360,14 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		logs, err := cfg.Store.ListUserActivityLogs(ctx, claims.Sub, 50)
+		limit := c.QueryInt("limit", 50)
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+		logs, err := cfg.Store.ListUserActivityLogs(ctx, claims.Sub, limit)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
@@ -465,6 +440,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if req.Reason == "" {
 			req.Reason = "User requested bulk revocation"
 		}
+		req.Reason = sanitizeReason(req.Reason)
 
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -485,38 +461,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 
 	// ---- Legacy API path aliases for frontend compatibility ----
 
-	protected.Post("/auth/password/change", mutationLimiter, func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		claims, ok := c.Locals("user").(tokenClaims)
-		if !ok {
-			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
-		}
-		var req struct {
-			CurrentPassword string `json:"currentPassword"`
-			NewPassword     string `json:"newPassword"`
-		}
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := store.ValidatePassword(req.NewPassword); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		if req.NewPassword == req.CurrentPassword {
-			return fiber.NewError(fiber.StatusBadRequest, "new password must differ from current password")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		if _, err := cfg.Store.Authenticate(ctx, claims.Email, req.CurrentPassword); err != nil {
-			return fiber.NewError(fiber.StatusUnauthorized, "current password is incorrect")
-		}
-		if err := cfg.Store.UpdateUserPassword(ctx, claims.Sub, req.NewPassword); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "account.password.changed", "user", &claims.Sub, "{}")
-		return c.JSON(fiber.Map{"status": "ok"})
-	})
+	protected.Post("/auth/password/change", mutationLimiter, handlePasswordChange(cfg))
 
 	protected.Post("/auth/email/change", mutationLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -576,7 +521,7 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		reason := c.Query("reason", "User requested revocation")
+		reason := sanitizeReason(c.Query("reason", "User requested revocation"))
 		if err := cfg.Store.RevokeUserSession(ctx, claims.Sub, sessionID, reason); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
@@ -603,4 +548,52 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 	protected.Get("/account/oauth-clients", ListMyOAuthClients(cfg))
 	protected.Post("/account/oauth-clients", mutationLimiter, CreateMyOAuthClient(cfg))
 	protected.Delete("/account/oauth-clients/:id", mutationLimiter, DeleteMyOAuthClient(cfg))
+}
+
+func handlePasswordChange(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		var req struct {
+			CurrentPassword string `json:"currentPassword"`
+			NewPassword     string `json:"newPassword"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if err := store.ValidatePassword(req.NewPassword); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if req.NewPassword == req.CurrentPassword {
+			return fiber.NewError(fiber.StatusBadRequest, "new password must differ from current password")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if _, err := cfg.Store.Authenticate(ctx, claims.Email, req.CurrentPassword); err != nil {
+			return fiber.NewError(fiber.StatusUnauthorized, "current password is incorrect")
+		}
+		if err := cfg.Store.UpdateUserPassword(ctx, claims.Sub, req.NewPassword); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "account.password.changed", "user", &claims.Sub, "{}")
+		return c.JSON(fiber.Map{"status": "ok"})
+	}
+}
+
+func sanitizeReason(s string) string {
+	if len(s) > 500 {
+		s = s[:500]
+	}
+	var result strings.Builder
+	for _, r := range s {
+		if r >= 32 && r != 127 {
+			result.WriteRune(r)
+		}
+	}
+	return result.String()
 }

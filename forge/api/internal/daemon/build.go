@@ -13,43 +13,43 @@ import (
 )
 
 type DockerfileBuildRequest struct {
-	WorkspaceID    string        `json:"workspaceId"`
-	SourceDir      string        `json:"sourceDir"` // deprecated: use WorkspaceID
-	Dockerfile     string        `json:"dockerfile,omitempty"`
-	ImageName      string        `json:"imageName"`
-	BuildArgs      []string      `json:"buildArgs,omitempty"`
-	Labels         []string      `json:"labels,omitempty"`
-	Tags           []string      `json:"tags,omitempty"`
-	NoCache        bool          `json:"noCache"`
-	CacheFrom      []string      `json:"cacheFrom,omitempty"`
-	CacheTo        []string      `json:"cacheTo,omitempty"`
-	Platform       string        `json:"platform,omitempty"`
-	RegistryAuth   *RegistryAuth `json:"registryAuth,omitempty"`
-	SecretArgs     []string      `json:"secretArgs,omitempty"`
-	MaxCPU         int           `json:"maxCpu,omitempty"`
-	MaxMemoryMB    int           `json:"maxMemoryMb,omitempty"`
-	MaxLogBytes    int           `json:"maxLogBytes,omitempty"`
-	IdempotencyKey string        `json:"idempotencyKey,omitempty"`
-	CredentialPatterns []string  `json:"credentialPatterns,omitempty"`
-	TenantID       string        `json:"tenantId,omitempty"`
+	WorkspaceID        string        `json:"workspaceId"`
+	SourceDir          string        `json:"sourceDir"` // deprecated: use WorkspaceID
+	Dockerfile         string        `json:"dockerfile,omitempty"`
+	ImageName          string        `json:"imageName"`
+	BuildArgs          []string      `json:"buildArgs,omitempty"`
+	Labels             []string      `json:"labels,omitempty"`
+	Tags               []string      `json:"tags,omitempty"`
+	NoCache            bool          `json:"noCache"`
+	CacheFrom          []string      `json:"cacheFrom,omitempty"`
+	CacheTo            []string      `json:"cacheTo,omitempty"`
+	Platform           string        `json:"platform,omitempty"`
+	RegistryAuth       *RegistryAuth `json:"registryAuth,omitempty"`
+	SecretArgs         []string      `json:"secretArgs,omitempty"`
+	MaxCPU             int           `json:"maxCpu,omitempty"`
+	MaxMemoryMB        int           `json:"maxMemoryMb,omitempty"`
+	MaxLogBytes        int           `json:"maxLogBytes,omitempty"`
+	IdempotencyKey     string        `json:"idempotencyKey,omitempty"`
+	CredentialPatterns []string      `json:"credentialPatterns,omitempty"`
+	TenantID           string        `json:"tenantId,omitempty"`
 }
 
 type NixpacksBuildRequest struct {
-	WorkspaceID    string        `json:"workspaceId"`
-	SourceDir      string        `json:"sourceDir"` // deprecated: use WorkspaceID
-	ImageName      string        `json:"imageName"`
-	BuildArgs      []string      `json:"buildArgs,omitempty"`
-	Tags           []string      `json:"tags,omitempty"`
-	NoCache        bool          `json:"noCache"`
-	Platform       string        `json:"platform,omitempty"`
-	RegistryAuth   *RegistryAuth `json:"registryAuth,omitempty"`
-	SecretArgs     []string      `json:"secretArgs,omitempty"`
-	MaxCPU         int           `json:"maxCpu,omitempty"`
-	MaxMemoryMB    int           `json:"maxMemoryMb,omitempty"`
-	MaxLogBytes    int           `json:"maxLogBytes,omitempty"`
-	IdempotencyKey string        `json:"idempotencyKey,omitempty"`
-	CredentialPatterns []string  `json:"credentialPatterns,omitempty"`
-	TenantID       string        `json:"tenantId,omitempty"`
+	WorkspaceID        string        `json:"workspaceId"`
+	SourceDir          string        `json:"sourceDir"` // deprecated: use WorkspaceID
+	ImageName          string        `json:"imageName"`
+	BuildArgs          []string      `json:"buildArgs,omitempty"`
+	Tags               []string      `json:"tags,omitempty"`
+	NoCache            bool          `json:"noCache"`
+	Platform           string        `json:"platform,omitempty"`
+	RegistryAuth       *RegistryAuth `json:"registryAuth,omitempty"`
+	SecretArgs         []string      `json:"secretArgs,omitempty"`
+	MaxCPU             int           `json:"maxCpu,omitempty"`
+	MaxMemoryMB        int           `json:"maxMemoryMb,omitempty"`
+	MaxLogBytes        int           `json:"maxLogBytes,omitempty"`
+	IdempotencyKey     string        `json:"idempotencyKey,omitempty"`
+	CredentialPatterns []string      `json:"credentialPatterns,omitempty"`
+	TenantID           string        `json:"tenantId,omitempty"`
 }
 
 type BuildStartResponse struct {
@@ -115,8 +115,8 @@ func (c *Client) NixpacksBuild(ctx context.Context, baseURL, nodeToken string, r
 }
 
 func (c *Client) BuildLogs(ctx context.Context, baseURL, nodeToken, buildID string, follow bool) ([]BuildLogLine, error) {
-	url := fmt.Sprintf("%s/build/logs?id=%s&follow=%t", strings.TrimRight(baseURL, "/"), buildID, follow)
-	request, err := c.newRequest(ctx, nodeToken, http.MethodGet, url, nil)
+	endpoint := fmt.Sprintf("%s/build/logs?id=%s&follow=%t", strings.TrimRight(baseURL, "/"), url.QueryEscape(buildID), follow)
+	request, err := c.newRequest(ctx, nodeToken, http.MethodGet, endpoint, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -131,16 +131,23 @@ func (c *Client) BuildLogs(ctx context.Context, baseURL, nodeToken, buildID stri
 	}
 
 	var lines []BuildLogLine
+	eventStream := strings.HasPrefix(strings.ToLower(resp.Header.Get("Content-Type")), "text/event-stream")
 	scanner := bufio.NewScanner(resp.Body)
 	for scanner.Scan() {
 		line := scanner.Text()
-		if strings.HasPrefix(line, "data: ") {
-			lines = append(lines, BuildLogLine{
-				BuildID:   buildID,
-				Timestamp: time.Now(),
-				Line:      strings.TrimPrefix(line, "data: "),
-			})
+		if eventStream {
+			if !strings.HasPrefix(line, "data: ") {
+				continue
+			}
+			line = strings.TrimPrefix(line, "data: ")
+		} else if strings.TrimSpace(line) == "" {
+			continue
 		}
+		lines = append(lines, BuildLogLine{
+			BuildID:   buildID,
+			Timestamp: time.Now(),
+			Line:      line,
+		})
 	}
 	return lines, scanner.Err()
 }
@@ -247,10 +254,10 @@ func (c *Client) GitCleanup(ctx context.Context, baseURL, nodeToken, workspaceID
 }
 
 type CapabilitiesResponse struct {
-	NodeID       string             `json:"nodeId,omitempty"`
-	Architecture string             `json:"architecture"`
-	Capabilities []CapabilityEntry  `json:"capabilities"`
-	BuildInfo    *BuildCapability   `json:"buildInfo,omitempty"`
+	NodeID       string            `json:"nodeId,omitempty"`
+	Architecture string            `json:"architecture"`
+	Capabilities []CapabilityEntry `json:"capabilities"`
+	BuildInfo    *BuildCapability  `json:"buildInfo,omitempty"`
 }
 
 type CapabilityEntry struct {

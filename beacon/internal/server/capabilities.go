@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os/exec"
 	stdruntime "runtime"
 	"sync"
 	"time"
@@ -104,9 +105,18 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		}
 	}
 
+	_, dockerBuildErr := exec.LookPath("docker")
+	_, nixpacksErr := exec.LookPath("nixpacks")
+	dockerBuildEnabled := runtimeAvailable && dockerBuildErr == nil
+	nixpacksEnabled := runtimeAvailable && nixpacksErr == nil
+	buildStatus := "error"
+	if dockerBuildEnabled || nixpacksEnabled {
+		buildStatus = "ok"
+	}
+
 	capabilities := []CapabilityEntry{
 		{Type: CapabilityRuntime, Status: runtimeStatus},
-		{Type: CapabilityBuild, Status: "ok"},
+		{Type: CapabilityBuild, Status: buildStatus},
 		{Type: CapabilityCompose, Status: "ok"},
 		{Type: CapabilityStorage, Status: "ok"},
 		{Type: CapabilityGateway, Status: "ok"},
@@ -114,8 +124,8 @@ func (s *Server) collectCapabilities() CapabilityReport {
 	}
 
 	buildInfo := &BuildCapability{
-		DockerBuildEnabled: runtimeAvailable,
-		NixpacksEnabled:    false,
+		DockerBuildEnabled: dockerBuildEnabled,
+		NixpacksEnabled:    nixpacksEnabled,
 	}
 
 	var composeEnabled bool

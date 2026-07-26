@@ -12,6 +12,7 @@ import (
 	stdruntime "runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"gamepanel/forge/internal/auth"
@@ -93,6 +94,8 @@ type readinessResponse struct {
 type Config struct {
 	Addr              string
 	ReadTimeout       time.Duration
+	TokenTTL          time.Duration
+	AppEnv            string
 	AuthSecret        string
 	Store             *store.Store
 	Redis             *redis.Client
@@ -169,12 +172,12 @@ type Config struct {
 	ReplicaManager   *replicamanager.Manager
 	AppStoreService  *appstoresvc.Service
 
-	AlertService              *alerting.Service
-	NotificationService       *notificationsvc.Service
+	AlertService                *alerting.Service
+	NotificationService         *notificationsvc.Service
 	EnhancedNotificationService *enhancednotifsvc.Service
-	CronJobService            *cronjobsvc.Service
-	ProcessService      *processsvc.Service
-	ZeroDowntimeSvc     *zerodowntime.Service
+	CronJobService              *cronjobsvc.Service
+	ProcessService              *processsvc.Service
+	ZeroDowntimeSvc             *zerodowntime.Service
 
 	ClusterMembershipService *clustermembership.Service
 	CleanupService           *cleanupsvc.Service
@@ -194,6 +197,7 @@ type Config struct {
 
 	Logger     *slog.Logger
 	CORSConfig CORSConfig
+	LangsDir   string
 }
 
 type PowerRequest struct {
@@ -210,47 +214,98 @@ func loginRateLimitKey(prefix, value string) string {
 	return "login:" + prefix + ":" + hex.EncodeToString(sum[:])
 }
 
+var (
+	inMemLoginMu    sync.Mutex
+	inMemLoginCount = map[string]int{}
+)
+
 func checkLoginRateLimit(ctx context.Context, cfg Config, c *fiber.Ctx, email string) error {
-	if cfg.Redis == nil || !cfg.RedisEnabled {
-		return nil
-	}
 	keys := []string{
 		loginRateLimitKey("ip", c.IP()),
 		loginRateLimitKey("email", email),
 	}
-	for _, key := range keys {
-		count, err := cfg.Redis.Get(ctx, key).Int()
-		if err == nil && count >= 5 {
-			return fiber.NewError(fiber.StatusTooManyRequests, "too many login attempts; try again later")
+	if cfg.Redis != nil && cfg.RedisEnabled {
+		for _, key := range keys {
+			count, err := cfg.Redis.Get(ctx, key).Int()
+			if err == nil && count >= 5 {
+				return fiber.NewError(fiber.StatusTooManyRequests, "too many login attempts; try again later")
+			}
+			if err != nil && err != redis.Nil {
+				continue
+			}
 		}
-		if err != nil && err != redis.Nil {
-			continue
+		return nil
+	}
+	// In-memory fallback when Redis is unavailable
+	inMemLoginMu.Lock()
+	defer inMemLoginMu.Unlock()
+	for _, key := range keys {
+		if count, ok := inMemLoginCount[key]; ok && count >= 5 {
+			return fiber.NewError(fiber.StatusTooManyRequests, "too many login attempts; try again later")
 		}
 	}
 	return nil
 }
 
 func recordLoginFailure(ctx context.Context, cfg Config, c *fiber.Ctx, email string) {
-	if cfg.Redis == nil || !cfg.RedisEnabled {
-		return
-	}
 	keys := []string{
 		loginRateLimitKey("ip", c.IP()),
 		loginRateLimitKey("email", email),
 	}
+	if cfg.Redis != nil && cfg.RedisEnabled {
+		for _, key := range keys {
+			count, err := cfg.Redis.Incr(ctx, key).Result()
+			if err == nil && count == 1 {
+				if err := cfg.Redis.Expire(ctx, key, time.Minute).Err(); err != nil && cfg.Logger != nil {
+					cfg.Logger.Error("failed to set login rate limit expiry", "key", key, "error", err)
+				}
+			}
+		}
+		return
+	}
+	// In-memory fallback when Redis is unavailable
+	inMemLoginMu.Lock()
+	defer inMemLoginMu.Unlock()
+	now := time.Now()
 	for _, key := range keys {
-		count, err := cfg.Redis.Incr(ctx, key).Result()
-		if err == nil && count == 1 {
-			_ = cfg.Redis.Expire(ctx, key, time.Minute).Err()
+		inMemLoginCount[key]++
+		if inMemLoginCount[key] == 1 {
+			expiry := now.Add(time.Minute)
+			k := key
+			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						if cfg.Logger != nil {
+							cfg.Logger.Error("login rate limit cleanup panic", "panic", r)
+						}
+					}
+				}()
+				time.Sleep(time.Until(expiry))
+				inMemLoginMu.Lock()
+				delete(inMemLoginCount, k)
+				inMemLoginMu.Unlock()
+			}()
 		}
 	}
 }
 
 func clearLoginFailures(ctx context.Context, cfg Config, c *fiber.Ctx, email string) {
-	if cfg.Redis == nil || !cfg.RedisEnabled {
+	keys := []string{
+		loginRateLimitKey("ip", c.IP()),
+		loginRateLimitKey("email", email),
+	}
+	if cfg.Redis != nil && cfg.RedisEnabled {
+		if err := cfg.Redis.Del(ctx, keys[0], keys[1]).Err(); err != nil && cfg.Logger != nil {
+			cfg.Logger.Error("failed to clear login rate limit", "error", err)
+		}
 		return
 	}
-	_ = cfg.Redis.Del(ctx, loginRateLimitKey("ip", c.IP()), loginRateLimitKey("email", email)).Err()
+	// In-memory fallback when Redis is unavailable
+	inMemLoginMu.Lock()
+	defer inMemLoginMu.Unlock()
+	for _, key := range keys {
+		delete(inMemLoginCount, key)
+	}
 }
 
 type CreateServerRequest struct {
@@ -523,7 +578,7 @@ type CreateNodeRequest struct {
 	Region              string           `json:"region"`
 	RegionID            string           `json:"regionId"`
 	Description         string           `json:"description"`
-	LocationID          string           `json:"locationId"`
+	LocationID          string           `json:"locationId" validate:"required"`
 	BaseURL             string           `json:"baseUrl"`
 	FQDN                string           `json:"fqdn"`
 	Scheme              string           `json:"scheme"`
@@ -651,6 +706,10 @@ func NewServer(cfg Config) *fiber.App {
 		cfg.HealthService.AddCheck(health.NewQueueCheck("Queue Worker", runner.Health))
 	}
 
+	if cfg.TokenTTL > 0 {
+		tokenTTL = cfg.TokenTTL
+	}
+
 	// WebSocket ticket store (in-memory; tickets are short-lived and single-use).
 	wsTickets := newWSTicketStore(cfg)
 	fileDownloadTickets := newFileDownloadTicketStore()
@@ -674,12 +733,17 @@ func NewServer(cfg Config) *fiber.App {
 			if errors.As(err, &e) {
 				code = e.Code
 			}
-			return c.Status(code).JSON(fiber.Map{"error": err.Error()})
+			msg := err.Error()
+			if cfg.AppEnv == "production" && code == fiber.StatusInternalServerError {
+				msg = "an internal error occurred"
+			}
+			return c.Status(code).JSON(fiber.Map{"error": msg})
 		},
 	})
 
-	// Panic recovery middleware - catches panics and returns 500 with stack trace
-	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: true}))
+	// Panic recovery middleware - catches panics and returns 500
+	// Stack traces are only enabled in non-production for debugging
+	app.Use(fiberrecover.New(fiberrecover.Config{EnableStackTrace: cfg.AppEnv != "production"}))
 
 	// CORS middleware — registered before any route-specific middleware so that
 	// preflight (OPTIONS) requests and CORS headers are applied to every route
@@ -703,7 +767,7 @@ func NewServer(cfg Config) *fiber.App {
 
 	// Security headers middleware - prevents XSS, clickjacking, MIME sniffing
 	// Added as part of comprehensive security audit fixes
-	app.Use(SecurityHeaders())
+	app.Use(SecurityHeaders(cfg.AppEnv))
 
 	if cfg.Logger != nil {
 		app.Use(StructuredLogger(cfg.Logger))
@@ -720,9 +784,10 @@ func NewServer(cfg Config) *fiber.App {
 
 	// Create rate limiters for different endpoint types
 	// Added as part of comprehensive security audit fixes
-	authLimiter := RateLimiter(GetRateLimitForEndpoint("auth", cfg.Redis))
-	mutationLimiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis))
-	readLimiter := RateLimiter(GetRateLimitForEndpoint("read", cfg.Redis))
+	requireSharedRateLimiter := cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")
+	authLimiter := RateLimiter(GetRateLimitForEndpoint("auth", cfg.Redis, requireSharedRateLimiter))
+	mutationLimiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis, requireSharedRateLimiter))
+	readLimiter := RateLimiter(GetRateLimitForEndpoint("read", cfg.Redis, requireSharedRateLimiter))
 
 	// Create IP access control middleware
 	// Added as part of comprehensive security audit fixes
@@ -737,6 +802,9 @@ func NewServer(cfg Config) *fiber.App {
 		KeyPath:    cfg.MTLSKeyPath,
 		DevBypass:  cfg.MTLSDevBypass,
 	}
+	if cfg.Store != nil {
+		mtlsCfg.RevocationLookup = cfg.Store.IsMTLSCertificateRevoked
+	}
 	mtlsMw := MTLSAuthMiddleware(mtlsCfg)
 
 	v1 := app.Group("/api/v1", apiIPAccess, mtlsMw)
@@ -747,6 +815,8 @@ func NewServer(cfg Config) *fiber.App {
 			defer cancel()
 			if stored, err := cfg.Store.GetPanelSettings(ctx); err == nil {
 				settings = stored
+			} else if cfg.Logger != nil {
+				cfg.Logger.Error("failed to load panel settings", "error", err)
 			}
 		}
 		resp := fiber.Map{
@@ -789,15 +859,24 @@ func NewServer(cfg Config) *fiber.App {
 	})
 
 	// Translation file endpoint — serves locale JSON for the frontend
+	allowedLocales := map[string]bool{
+		"en": true, "de": true, "fr": true, "es": true, "pt": true,
+		"ru": true, "zh": true, "ja": true, "ko": true, "it": true,
+		"nl": true, "pl": true, "sv": true, "nb": true, "da": true,
+		"fi": true, "cs": true, "hu": true, "ro": true, "uk": true,
+		"tr": true, "ar": true, "th": true, "vi": true, "ms": true,
+	}
 	v1.Get("/i18n/:locale", func(c *fiber.Ctx) error {
 		locale := c.Params("locale")
-		if len(locale) != 2 {
+		if !allowedLocales[locale] {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid locale")
 		}
-		langsDir := "lang"
+		langsDir := cfg.LangsDir
+		if langsDir == "" {
+			langsDir = "lang"
+		}
 		path := langsDir + "/" + locale + ".json"
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			// Fallback to English
 			path = langsDir + "/en.json"
 			if _, err := os.Stat(path); os.IsNotExist(err) {
 				return fiber.NewError(fiber.StatusNotFound, "translation not found")
@@ -929,7 +1008,7 @@ func NewServer(cfg Config) *fiber.App {
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		node, err := cfg.Store.UpdateNodeHeartbeat(ctx, c.Params("id"), store.NodeHeartbeatRequest{
+		heartbeat := store.NodeHeartbeatRequest{
 			Version:         req.Version,
 			OS:              req.OS,
 			Architecture:    req.Architecture,
@@ -940,9 +1019,18 @@ func NewServer(cfg Config) *fiber.App {
 			RuntimeStatus:   req.RuntimeStatus,
 			RuntimeProvider: req.RuntimeProvider,
 			Error:           req.Error,
-		})
+		}
+		node, err := cfg.Store.UpdateNodeHeartbeat(ctx, c.Params("id"), heartbeat)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if cfg.Observability != nil {
+			cfg.Observability.RecordNodeHeartbeat(ctx, node, heartbeat)
+		}
+		if cfg.HeartbeatMonitor != nil {
+			if evaluation, evalErr := cfg.HeartbeatMonitor.EvaluateNode(ctx, node.ID); evalErr == nil {
+				node = evaluation.Node
+			}
 		}
 		return c.JSON(fiber.Map{"ok": true, "node": node})
 	})
@@ -966,11 +1054,15 @@ func NewServer(cfg Config) *fiber.App {
 		user, err := cfg.Store.Authenticate(ctx, req.Email, req.Password)
 		if err != nil {
 			recordLoginFailure(ctx, cfg, c, req.Email)
-			_ = cfg.Store.AppendAudit(ctx, nil, "login.failed", "user", nil, safeAuditMeta(map[string]string{"email": req.Email}))
+			if err := cfg.Store.AppendAudit(ctx, nil, "login.failed", "user", nil, safeAuditMeta(map[string]string{"email": req.Email})); err != nil {
+				cfg.Logger.Error("audit append failed", "action", "login.failed", "error", err)
+			}
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 		}
 		clearLoginFailures(ctx, cfg, c, req.Email)
-		_ = cfg.Store.AppendAudit(ctx, &user.ID, "login.success", "user", &user.ID, "{}")
+		if err := cfg.Store.AppendAudit(ctx, &user.ID, "login.success", "user", &user.ID, "{}"); err != nil {
+			cfg.Logger.Error("audit append failed", "action", "login.success", "error", err)
+		}
 
 		if user.UseTOTP {
 			confToken, err := issue2FAConfirmationToken(cfg.AuthSecret, user.ID)
@@ -1071,7 +1163,10 @@ func NewServer(cfg Config) *fiber.App {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue session token")
 		}
-		csrfToken, _ := generateCSRFToken()
+		csrfToken, err := generateCSRFToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not generate CSRF token")
+		}
 		expires := time.Now().Add(tokenTTL)
 		setSessionCookies(c, newToken, csrfToken, expires)
 		return c.SendStatus(fiber.StatusNoContent)
@@ -1079,28 +1174,34 @@ func NewServer(cfg Config) *fiber.App {
 
 	v1.Get("/servers/:id/ws/stats", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "stats"), fiberws.Config{
 		RecoverHandler: func(conn *fiberws.Conn) {
-			if err := recover(); err != nil {
-				_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
-				_ = conn.Close()
-			}
+			defer func() {
+				if err := recover(); err != nil {
+					_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
+					_ = conn.Close()
+				}
+			}()
 		},
 		Origins: getWebSocketAllowedOrigins(cfg),
 	}))
 	v1.Get("/servers/:id/ws/logs", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "logs"), fiberws.Config{
 		RecoverHandler: func(conn *fiberws.Conn) {
-			if err := recover(); err != nil {
-				_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
-				_ = conn.Close()
-			}
+			defer func() {
+				if err := recover(); err != nil {
+					_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
+					_ = conn.Close()
+				}
+			}()
 		},
 		Origins: getWebSocketAllowedOrigins(cfg),
 	}))
 	v1.Get("/servers/:id/ws/console", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "console"), fiberws.Config{
 		RecoverHandler: func(conn *fiberws.Conn) {
-			if err := recover(); err != nil {
-				_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
-				_ = conn.Close()
-			}
+			defer func() {
+				if err := recover(); err != nil {
+					_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
+					_ = conn.Close()
+				}
+			}()
 		},
 		Origins: getWebSocketAllowedOrigins(cfg),
 	}))
@@ -1243,7 +1344,9 @@ func NewServer(cfg Config) *fiber.App {
 			Reinstall  bool   `json:"reinstall"`
 			Error      string `json:"error"`
 		}
-		_ = c.BodyParser(&body)
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
@@ -1330,7 +1433,9 @@ func NewServer(cfg Config) *fiber.App {
 			Status      string `json:"status"`
 			Error       string `json:"error"`
 		}
-		_ = c.BodyParser(&body)
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
@@ -1338,10 +1443,14 @@ func NewServer(cfg Config) *fiber.App {
 			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
 		}
 		if body.ActualState != "" {
-			_ = cfg.Store.SetServerActualState(ctx, c.Params("id"), store.ServerActualState(body.ActualState), body.Status)
+			if err := cfg.Store.SetServerActualState(ctx, c.Params("id"), store.ServerActualState(body.ActualState), body.Status); err != nil {
+				cfg.Logger.Error("failed to set server actual state", "serverId", c.Params("id"), "error", err)
+			}
 		}
 		if body.Status != "" {
-			_ = cfg.Store.SetServerStatus(ctx, c.Params("id"), body.Status, body.Error)
+			if err := cfg.Store.SetServerStatus(ctx, c.Params("id"), body.Status, body.Error); err != nil {
+				cfg.Logger.Error("failed to set server status", "serverId", c.Params("id"), "error", err)
+			}
 		}
 		return c.SendStatus(fiber.StatusNoContent)
 	})
@@ -1355,7 +1464,9 @@ func NewServer(cfg Config) *fiber.App {
 			Action   string `json:"action"`
 			Metadata string `json:"metadata"`
 		}
-		_ = c.BodyParser(&body)
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		if body.Action == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "action is required")
 		}
@@ -1366,7 +1477,9 @@ func NewServer(cfg Config) *fiber.App {
 			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
 		}
 		serverID := c.Params("id")
-		_ = cfg.Store.AppendAudit(ctx, nil, body.Action, "server", &serverID, body.Metadata)
+		if err := cfg.Store.AppendAudit(ctx, nil, body.Action, "server", &serverID, body.Metadata); err != nil {
+			cfg.Logger.Error("audit append failed", "action", body.Action, "error", err)
+		}
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
@@ -1383,7 +1496,11 @@ func NewServer(cfg Config) *fiber.App {
 			return c.Status(400).JSON(fiber.Map{"error": "invalid request body"})
 		}
 		crashID := uuid.NewString()
-		_, err := cfg.Store.Exec(c.Context(), `INSERT INTO server_crash_events
+		crashCtx := cfg.BackgroundContext
+		if crashCtx == nil {
+			crashCtx = context.Background()
+		}
+		_, err := cfg.Store.Exec(crashCtx, `INSERT INTO server_crash_events
 			(id, server_id, node_id, exit_code, oom_killed, auto_restarted, created_at)
 			VALUES ($1, $2, '', $3, $4, $5, NOW())`,
 			crashID, c.Params("id"), req.ExitCode, req.OOMKilled, req.AutoRestart)
@@ -1403,8 +1520,8 @@ func NewServer(cfg Config) *fiber.App {
 	// OAuth2 token endpoint (PufferPanel parity). Mounted on the public
 	// `/api/v1/oauth2/token` and `/oauth2/token` paths so external
 	// integrations can reach it without an admin JWT.
-	v1.Post("/oauth2/token", IssueOAuth2Token(cfg))
-	v1.Post("/oauth/token", IssueOAuth2Token(cfg)) // alias
+	v1.Post("/oauth2/token", authLimiter, IssueOAuth2Token(cfg))
+	v1.Post("/oauth/token", authLimiter, IssueOAuth2Token(cfg)) // alias
 
 	// Social authentication (Discord, Steam, Authentik)
 	registerSocialAuthRoutes(v1, cfg, mutationLimiter)
@@ -1437,8 +1554,9 @@ func NewServer(cfg Config) *fiber.App {
 		if cfg.Store == nil || cfg.Daemon == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and daemon are required")
 		}
-		_, cancel := requestContext()
+		ctx, cancel := requestContext()
 		defer cancel()
+		_ = ctx
 
 		serverID := c.Params("id")
 		filePath := c.Query("path")
@@ -1496,7 +1614,9 @@ func NewServer(cfg Config) *fiber.App {
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		_ = cfg.Store.AppendAudit(ctx, actorID, "server:console.command", "server", &target.ServerID, safeAuditMeta(map[string]string{"command": body.Command}))
+		if err := cfg.Store.AppendAudit(ctx, actorID, "server:console.command", "server", &target.ServerID, safeAuditMeta(map[string]string{"command": body.Command})); err != nil {
+			cfg.Logger.Error("audit append failed", "action", "server:console.command", "error", err)
+		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
@@ -1565,7 +1685,7 @@ func NewServer(cfg Config) *fiber.App {
 		registerEnhancedNotificationRoutes(protected, cfg.EnhancedNotificationService)
 	}
 	registerMailSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)
-	registerSFTPRoutes(protected, cfg)
+	registerSFTPRoutes(protected, cfg, mutationLimiter)
 	registerWebAuthnRoutes(protected, cfg, mutationLimiter, cfg.WebAuthnService)
 	registerAutoScalerRoutes(protected, cfg, cfg.AutoScaler, adminIPAccess, mutationLimiter)
 	registerDeploymentRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)

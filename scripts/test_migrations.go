@@ -155,8 +155,8 @@ func runAllMigrations(db *sql.DB, migrationDir string) error {
 	// Create migrations tracking table
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS schema_migrations (
-			id TEXT PRIMARY KEY,
-			applied_at TEXT DEFAULT (datetime('now'))
+			version TEXT PRIMARY KEY,
+			applied_at TEXT NOT NULL DEFAULT (datetime('now'))
 		)
 	`)
 	if err != nil {
@@ -206,7 +206,7 @@ func runAllMigrations(db *sql.DB, migrationDir string) error {
 
 	// Get already applied migrations
 	applied := make(map[string]bool)
-	rows, err := db.Query("SELECT id FROM schema_migrations")
+	rows, err := db.Query("SELECT version FROM schema_migrations")
 	if err != nil {
 		return fmt.Errorf("failed to query applied migrations: %w", err)
 	}
@@ -220,10 +220,10 @@ func runAllMigrations(db *sql.DB, migrationDir string) error {
 		applied[id] = true
 	}
 
-	// Apply pending migrations
+	// Apply pending migrations. The version key is the full migration file
+	// name, matching the production runner in forge/api/internal/store.
 	for _, migration := range migrations {
-		id := strings.TrimSuffix(migration, ".sql")
-		if applied[id] {
+		if applied[migration] {
 			log.Printf("  ✅ Migration %s already applied", migration)
 			continue
 		}
@@ -261,7 +261,7 @@ func runAllMigrations(db *sql.DB, migrationDir string) error {
 		}
 
 		// Record migration
-		_, err = tx.Exec("INSERT INTO schema_migrations (id) VALUES (?)", id)
+		_, err = tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", migration)
 		if err != nil {
 			tx.Rollback()
 			return fmt.Errorf("failed to record migration %s: %w", migration, err)
@@ -293,16 +293,16 @@ func splitSQLStatements(sql string) []string {
 				}
 				current = ""
 			} else {
-				current += char
+				current += string(char)
 			}
 		case '\'':
 			inQuotes = !inQuotes
-			current += char
+			current += string(char)
 		case '`':
 			inBackticks = !inBackticks
-			current += char
+			current += string(char)
 		default:
-			current += char
+			current += string(char)
 		}
 	}
 
@@ -329,7 +329,7 @@ func validateFreshInstallation(db *sql.DB) error {
 	var dupCount int
 	err = db.QueryRow(`
 		SELECT COUNT(*) FROM (
-			SELECT id FROM schema_migrations GROUP BY id HAVING COUNT(*) > 1
+			SELECT version FROM schema_migrations GROUP BY version HAVING COUNT(*) > 1
 		) AS duplicates
 	`).Scan(&dupCount)
 	if err != nil {

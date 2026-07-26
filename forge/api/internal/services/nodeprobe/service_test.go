@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -33,35 +34,45 @@ func testStore(t *testing.T) *store.Store {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(s.Close)
-	if err := s.RunMigrations(context.Background(), "../../migrations"); err != nil {
+	if err := s.RunMigrations(context.Background(), "../../../migrations"); err != nil {
 		t.Fatalf("migrations: %v", err)
 	}
 	return s
 }
 
 // seedNode creates a location, region, and node via the store, returning the node ID and its credential.
-func seedNode(t *testing.T, s *store.Store, ctx context.Context, fqdn, scheme string) (nodeID, credential string) {
+func seedNode(t *testing.T, s *store.Store, ctx context.Context, baseURL string) (nodeID, credential string) {
 	t.Helper()
 	locationID := uuid.NewString()
 	regionID := uuid.NewString()
+	suffix := strings.ReplaceAll(locationID, "-", "")[:8]
+	parsedURL, err := url.Parse(baseURL)
+	if err != nil {
+		t.Fatalf("parse base URL: %v", err)
+	}
+	fqdn := "node-" + suffix + ".example.test"
+	validatedBaseURL := parsedURL.Scheme + "://" + fqdn
+	if parsedURL.Port() != "" {
+		validatedBaseURL += ":" + parsedURL.Port()
+	}
 
-	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, 'test', 'Test')`, locationID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, $2, 'Test')`, locationID, "test-"+suffix); err != nil {
 		t.Fatalf("insert location: %v", err)
 	}
-	if _, err := s.DB().Exec(ctx, `INSERT INTO regions (id, uuid, name, slug) VALUES ($1, $1, 'Test', 'test')`, regionID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO regions (id, uuid, name, slug) VALUES ($1, $1, 'Test', $2)`, regionID, "test-"+suffix); err != nil {
 		t.Fatalf("insert region: %v", err)
 	}
 
 	node, token, err := s.CreateNode(ctx, store.CreateNodeRequest{
-		Name:        "Test Node",
-		LocationID:  locationID,
-		RegionID:    regionID,
-		Description: "test node",
-		BaseURL:     scheme + "://" + fqdn,
-		FQDN:        fqdn,
-		Scheme:      scheme,
-		MemoryMB:    4096,
-		DiskMB:      102400,
+		Name:         "Test Node",
+		LocationID:   locationID,
+		RegionID:     regionID,
+		Description:  "test node",
+		BaseURL:      validatedBaseURL,
+		FQDN:         fqdn,
+		Scheme:       parsedURL.Scheme,
+		MemoryMB:     4096,
+		DiskMB:       102400,
 		UploadSizeMB: 100,
 		DaemonBase:   "/srv/daemon",
 		DaemonListen: 8080,
@@ -69,6 +80,11 @@ func seedNode(t *testing.T, s *store.Store, ctx context.Context, fqdn, scheme st
 	}, nil)
 	if err != nil {
 		t.Fatalf("create node: %v", err)
+	}
+	// Point the persisted endpoint at the local test server after validating the
+	// public node identity. This also verifies ProbeNode honors BaseURL.
+	if _, err := s.DB().Exec(ctx, `UPDATE nodes SET base_url = $1 WHERE id = $2`, baseURL, node.ID); err != nil {
+		t.Fatalf("update test node base URL: %v", err)
 	}
 	return node.ID, token
 }
@@ -104,8 +120,9 @@ func TestProbeNodeNoFQDN(t *testing.T) {
 	ctx := context.Background()
 	locationID := uuid.NewString()
 	nodeID := uuid.NewString()
+	locationShort := "test-" + strings.ReplaceAll(locationID, "-", "")[:8]
 
-	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, 'test', 'Test')`, locationID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, $2, 'Test')`, locationID, locationShort); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB().Exec(ctx, `INSERT INTO nodes (id, name, region, base_url, token_hash, location_id) VALUES ($1, 'NoFQDN', 'test', 'https://x.test', 'hash', $2)`, nodeID, locationID); err != nil {
@@ -151,8 +168,7 @@ func TestProbeNodeDaemonSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fqdn := strings.TrimPrefix(server.URL, "http://")
-	nodeID, _ := seedNode(t, s, ctx, fqdn, "http")
+	nodeID, _ := seedNode(t, s, ctx, server.URL)
 
 	svc := NewService(s)
 	info, err := svc.ProbeNode(ctx, nodeID)
@@ -197,8 +213,7 @@ func TestProbeNodeDaemonNonOKStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fqdn := strings.TrimPrefix(server.URL, "http://")
-	nodeID, _ := seedNode(t, s, ctx, fqdn, "http")
+	nodeID, _ := seedNode(t, s, ctx, server.URL)
 
 	svc := NewService(s)
 	info, err := svc.ProbeNode(ctx, nodeID)
@@ -223,8 +238,7 @@ func TestProbeNodeDaemonInvalidJSON(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fqdn := strings.TrimPrefix(server.URL, "http://")
-	nodeID, _ := seedNode(t, s, ctx, fqdn, "http")
+	nodeID, _ := seedNode(t, s, ctx, server.URL)
 
 	svc := NewService(s)
 	info, err := svc.ProbeNode(ctx, nodeID)
@@ -244,11 +258,12 @@ func TestProbeNodeNetworkError(t *testing.T) {
 	ctx := context.Background()
 	locationID := uuid.NewString()
 	nodeID := uuid.NewString()
+	locationShort := "test-" + strings.ReplaceAll(locationID, "-", "")[:8]
 
-	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, 'test', 'Test')`, locationID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, $2, 'Test')`, locationID, locationShort); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.DB().Exec(ctx, `INSERT INTO regions (id, uuid, name, slug) VALUES ($1, $1, 'Test', 'test')`, locationID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO regions (id, uuid, name, slug) VALUES ($1, $1, 'Test', $2)`, locationID, locationShort); err != nil {
 		t.Fatal(err)
 	}
 
@@ -257,9 +272,9 @@ func TestProbeNodeNetworkError(t *testing.T) {
 	if _, err := s.DB().Exec(ctx, `
 		INSERT INTO nodes (id, name, region, base_url, fqdn, scheme, token_hash,
 		                   daemon_token_id, daemon_token, location_id, region_id)
-		VALUES ($1, 'NetFail', 'test', 'http://`+fqdn+`', $2, 'http', 'hash',
-		        'token-id', 'test-token-value', $3, $4)
-	`, nodeID, fqdn, locationID, locationID); err != nil {
+			VALUES ($1, 'NetFail', 'test', 'http://`+fqdn+`', $2, 'http', 'hash',
+			        $3, 'test-token-value', $4, $5)
+		`, nodeID, fqdn, uuid.NewString(), locationID, locationID); err != nil {
 		t.Fatal(err)
 	}
 
@@ -281,8 +296,9 @@ func TestProbeNodeNoDaemonToken(t *testing.T) {
 	ctx := context.Background()
 	locationID := uuid.NewString()
 	nodeID := uuid.NewString()
+	locationShort := "test-" + strings.ReplaceAll(locationID, "-", "")[:8]
 
-	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, 'test', 'Test')`, locationID); err != nil {
+	if _, err := s.DB().Exec(ctx, `INSERT INTO locations (id, short, long) VALUES ($1, $2, 'Test')`, locationID, locationShort); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.DB().Exec(ctx, `
@@ -324,8 +340,7 @@ func TestProbeNodeDaemonEmptyDockerStatus(t *testing.T) {
 	}))
 	defer server.Close()
 
-	fqdn := strings.TrimPrefix(server.URL, "http://")
-	nodeID, _ := seedNode(t, s, ctx, fqdn, "http")
+	nodeID, _ := seedNode(t, s, ctx, server.URL)
 
 	svc := NewService(s)
 	info, err := svc.ProbeNode(ctx, nodeID)

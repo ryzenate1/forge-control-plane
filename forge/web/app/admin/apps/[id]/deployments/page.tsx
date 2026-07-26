@@ -4,19 +4,16 @@ import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, History, RotateCcw, RefreshCw, XCircle, CheckCircle,
-  Clock, AlertTriangle, Eye,
+  ArrowLeft, History, RotateCcw, RefreshCw, XCircle, Eye,
 } from "lucide-react";
 import {
   fetchApp, fetchAppDeployments,
 } from "@/lib/api/apps";
 import {
-  fetchDeploymentSteps, cancelDeployment, rollbackToPrevious,
+  cancelDeployment, rollbackToPrevious,
 } from "@/lib/api/deployments";
 import type { AppDeployment } from "@/lib/api/apps";
-import type { DeploymentStep } from "@/lib/api/deployments";
 import { Btn, Card, CardHeader, EmptyState, Modal, SectionHeader } from "@/components/admin/admin-ui";
-import { cn } from "@/lib/utils";
 import { toast, Toaster } from "@/components/ui/sonner";
 import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";
 import { DeploymentProgress } from "@/components/app/deployment-progress";
@@ -64,7 +61,7 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to rollback deployment"),
   });
 
-  const handleRollbackConfirm = (createSnapshot: boolean) => {
+  const handleRollbackConfirm = () => {
     rollbackMut.mutate();
   };
 

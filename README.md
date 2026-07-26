@@ -163,7 +163,7 @@ player load, backups, world growth, and container image cache—not only idle us
 ### 1. Download the source and dependencies
 
 ```bash
-git clone <repository-url> gamepanel
+git clone https://github.com/your-org/gamepanel.git
 cd gamepanel
 npm ci
 go work sync
@@ -216,7 +216,7 @@ load-balancer, evacuation and recovery instructions live in the
 The short version is:
 
 ```bash
-git clone <repository-url> gamepanel
+git clone https://github.com/your-org/gamepanel.git
 cd gamepanel/infra
 
 # Generates API, database, encryption, node and Grafana secrets.

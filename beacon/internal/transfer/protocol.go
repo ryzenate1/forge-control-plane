@@ -363,6 +363,10 @@ func (e *Engine) SourceArchive(migrationID, credential string, offset int64) (*o
 	if offset < 0 || offset > meta.ArchiveSize {
 		return nil, meta, ErrOffsetMismatch
 	}
+	// os.Open (os.OpenFile under the hood) already ORs in syscall.O_CLOEXEC on
+	// Unix (see src/os/file_unix.go), so this descriptor cannot leak across a
+	// later exec.Command call in this process. We rely on os.Open rather than a
+	// raw syscall.Open specifically to keep that guarantee.
 	file, err := os.Open(e.archivePath(migrationID))
 	if err != nil {
 		return nil, meta, err

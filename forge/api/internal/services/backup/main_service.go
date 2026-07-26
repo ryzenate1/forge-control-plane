@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 )
 
 // MainService is the main backup service that coordinates all backup operations
@@ -47,6 +50,7 @@ func NewMainService(store *store.Store, logger Logger) *MainService {
 
 	// Set up service dependencies
 	service.jobService.SetConfigService(service.configService)
+	service.configService.jobService = service.jobService
 	service.jobService.SetArtifactService(service.artifactService)
 	service.jobService.SetRestoreService(service.restoreService)
 
@@ -61,6 +65,12 @@ func (s *MainService) SetBeaconClient(beaconClient BeaconClient) {
 	s.beaconClient = beaconClient
 	s.jobService.SetBeaconClient(beaconClient)
 	s.restoreService.SetBeaconClient(beaconClient)
+}
+
+func (s *MainService) SetDaemonClient(client *daemon.Client) {
+	s.jobService.SetDaemonClient(client)
+	s.restoreService.SetDaemonClient(client)
+	s.artifactService.SetDaemonClient(client)
 }
 
 // SetScheduler sets the scheduler for all services
@@ -297,8 +307,12 @@ func (s *MainService) ScheduleBackup(ctx context.Context, configID string, cronE
 	}
 	config.NextRunAt = &nextRun
 
-	// Update in database
-	// TODO: Implement update
+	isScheduled := true
+	if _, err := s.configService.Update(ctx, configID, UpdateBackupConfigRequest{
+		IsScheduled: &isScheduled, CronExpression: &cronExpr,
+	}, userID); err != nil {
+		return err
+	}
 
 	// Schedule the job
 	if s.scheduler != nil {
@@ -326,8 +340,13 @@ func (s *MainService) UnscheduleBackup(ctx context.Context, configID string, use
 	config.CronExpression = nil
 	config.NextRunAt = nil
 
-	// Update in database
-	// TODO: Implement update
+	isScheduled := false
+	emptyCron := ""
+	if _, err := s.configService.Update(ctx, configID, UpdateBackupConfigRequest{
+		IsScheduled: &isScheduled, CronExpression: &emptyCron,
+	}, userID); err != nil {
+		return err
+	}
 
 	// Unschedules the job
 	if s.scheduler != nil {
@@ -414,35 +433,71 @@ func (s *MainService) RegisterStorageProvider(ctx context.Context, req RegisterS
 
 	// Register the adapter
 	s.RegisterStorageAdapter(req.Name, adapter)
-
-	// TODO: Store the provider configuration in the database
+	if !req.Enabled {
+		req.Enabled = true
+	}
+	record := store.BackupStorageProviderRecord{
+		Name: req.Name, Type: req.ProviderType, Config: req.Config,
+		Enabled: req.Enabled, IsDefault: req.IsDefault,
+	}
+	if err := s.store.CreateBackupStorageProvider(ctx, &record); err != nil {
+		delete(s.storageAdapters, req.Name)
+		return fmt.Errorf("persist storage provider: %w", err)
+	}
 
 	s.logger.Infof("Registered storage provider: %s (type: %s)", req.Name, req.ProviderType)
 
 	return nil
 }
 
+// LoadStorageProviders restores enabled adapters from encrypted database records.
+func (s *MainService) LoadStorageProviders(ctx context.Context) error {
+	records, err := s.store.ListBackupStorageProviders(ctx)
+	if err != nil {
+		return err
+	}
+	for _, summary := range records {
+		if !summary.Enabled {
+			continue
+		}
+		record, err := s.store.GetBackupStorageProvider(ctx, summary.Name)
+		if err != nil {
+			return fmt.Errorf("load storage provider %s: %w", summary.Name, err)
+		}
+		adapter, err := s.createStorageAdapter(RegisterStorageProviderRequest{
+			Name: record.Name, ProviderType: record.Type, Config: record.Config,
+			Enabled: record.Enabled, IsDefault: record.IsDefault,
+		})
+		if err != nil {
+			return fmt.Errorf("initialize storage provider %s: %w", record.Name, err)
+		}
+		s.RegisterStorageAdapter(record.Name, adapter)
+		if record.IsDefault {
+			s.defaultAdapter = adapter
+			s.artifactService.SetDefaultAdapter(adapter)
+		}
+	}
+	return nil
+}
+
 // GetStorageProvider gets a storage provider by name
 func (s *MainService) GetStorageProvider(ctx context.Context, providerName string) (*StorageProvider, error) {
-	// TODO: Implement database retrieval
-	// For now, return a placeholder
-	return nil, fmt.Errorf("not implemented: Get storage provider")
+	record, err := s.store.GetBackupStorageProvider(ctx, providerName)
+	if err != nil {
+		return nil, fmt.Errorf("get storage provider: %w", err)
+	}
+	return storageProviderFromRecord(record, false), nil
 }
 
 // ListStorageProviders lists all registered storage providers
 func (s *MainService) ListStorageProviders(ctx context.Context) ([]*StorageProvider, error) {
-	// TODO: Implement database listing
-	// For now, return the registered adapters
-	providers := make([]*StorageProvider, 0, len(s.storageAdapters))
-	for name, adapter := range s.storageAdapters {
-		providers = append(providers, &StorageProvider{
-			Name:      name,
-			Type:      adapter.Name(),
-			Enabled:   true,
-			IsDefault: adapter == s.defaultAdapter,
-			CreatedAt: time.Now(),
-			UpdatedAt: time.Now(),
-		})
+	records, err := s.store.ListBackupStorageProviders(ctx)
+	if err != nil {
+		return nil, err
+	}
+	providers := make([]*StorageProvider, 0, len(records))
+	for _, record := range records {
+		providers = append(providers, storageProviderFromRecord(record, false))
 	}
 	return providers, nil
 }
@@ -473,8 +528,9 @@ func (s *MainService) SetDefaultStorageProvider(ctx context.Context, providerNam
 
 	s.defaultAdapter = adapter
 	s.artifactService.SetDefaultAdapter(adapter)
-
-	// TODO: Update in database
+	if err := s.store.SetDefaultBackupStorageProvider(ctx, providerName); err != nil {
+		return fmt.Errorf("persist default storage provider: %w", err)
+	}
 
 	s.logger.Infof("Set default storage provider: %s", providerName)
 	return nil
@@ -549,7 +605,12 @@ func (s *MainService) CreateRetentionPolicy(ctx context.Context, req CreateReten
 		UpdatedAt:       now,
 	}
 
-	// TODO: Store in database
+	record := retentionPolicyToRecord(policy)
+	if err := s.store.CreateBackupRetentionPolicy(ctx, &record); err != nil {
+		return nil, fmt.Errorf("persist retention policy: %w", err)
+	}
+	policy.CreatedAt = record.CreatedAt
+	policy.UpdatedAt = record.UpdatedAt
 
 	s.logger.Infof("Created retention policy: %s (scope: %s)", policy.Name, policy.Scope)
 
@@ -558,38 +619,140 @@ func (s *MainService) CreateRetentionPolicy(ctx context.Context, req CreateReten
 
 // GetRetentionPolicy retrieves a retention policy by ID
 func (s *MainService) GetRetentionPolicy(ctx context.Context, policyID string) (*RetentionPolicy, error) {
-	// TODO: Implement database retrieval
-	return nil, fmt.Errorf("not implemented: Get retention policy")
+	record, err := s.store.GetBackupRetentionPolicy(ctx, policyID)
+	if err != nil {
+		return nil, fmt.Errorf("get retention policy: %w", err)
+	}
+	return retentionPolicyFromRecord(record), nil
 }
 
 // ListRetentionPolicies lists retention policies with optional filtering
 func (s *MainService) ListRetentionPolicies(ctx context.Context, filters RetentionPolicyFilter) ([]*RetentionPolicy, int, error) {
-	// TODO: Implement database listing
-	return []*RetentionPolicy{}, 0, nil
+	records, err := s.store.ListBackupRetentionPolicies(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	policies := make([]*RetentionPolicy, 0, len(records))
+	for _, record := range records {
+		policy := retentionPolicyFromRecord(record)
+		if filters.Scope != nil && policy.Scope != *filters.Scope {
+			continue
+		}
+		if filters.ServerID != nil && !sameStringPointer(policy.ServerID, filters.ServerID) {
+			continue
+		}
+		if filters.AppID != nil && !sameStringPointer(policy.AppID, filters.AppID) {
+			continue
+		}
+		if filters.DatabaseID != nil && !sameStringPointer(policy.DatabaseID, filters.DatabaseID) {
+			continue
+		}
+		if filters.VolumeID != nil && !sameStringPointer(policy.VolumeID, filters.VolumeID) {
+			continue
+		}
+		if filters.Enabled != nil && policy.Enabled != *filters.Enabled {
+			continue
+		}
+		if filters.Search != nil {
+			query := strings.ToLower(strings.TrimSpace(*filters.Search))
+			if query != "" && !strings.Contains(strings.ToLower(policy.Name+" "+policy.Description), query) {
+				continue
+			}
+		}
+		policies = append(policies, policy)
+	}
+	total := len(policies)
+	page, perPage := filters.Page, filters.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return policies[start:end], total, nil
 }
 
 // UpdateRetentionPolicy updates a retention policy
 func (s *MainService) UpdateRetentionPolicy(ctx context.Context, policyID string, req UpdateRetentionPolicyRequest, userID string) (*RetentionPolicy, error) {
-	// TODO: Implement database update
-	return nil, fmt.Errorf("not implemented: Update retention policy")
+	policy, err := s.GetRetentionPolicy(ctx, policyID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != nil {
+		policy.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Description != nil {
+		policy.Description = *req.Description
+	}
+	if req.MaxBackups != nil {
+		policy.MaxBackups = *req.MaxBackups
+	}
+	if req.RetentionDays != nil {
+		policy.RetentionDays = *req.RetentionDays
+	}
+	if req.RetentionWeeks != nil {
+		policy.RetentionWeeks = *req.RetentionWeeks
+	}
+	if req.RetentionMonths != nil {
+		policy.RetentionMonths = *req.RetentionMonths
+	}
+	if req.CleanupSchedule != nil {
+		policy.CleanupSchedule = req.CleanupSchedule
+	}
+	if req.Priority != nil {
+		policy.Priority = *req.Priority
+	}
+	if req.Enabled != nil {
+		policy.Enabled = *req.Enabled
+	}
+	if policy.CleanupSchedule != nil && *policy.CleanupSchedule != "" {
+		next, err := s.calculateNextCronRun(*policy.CleanupSchedule)
+		if err != nil {
+			return nil, err
+		}
+		policy.NextCleanupAt = &next
+	}
+	record := retentionPolicyToRecord(policy)
+	if err := s.store.UpdateBackupRetentionPolicy(ctx, &record); err != nil {
+		return nil, err
+	}
+	policy.UpdatedAt = time.Now().UTC()
+	s.logger.Infof("Updated retention policy %s by user %s", policyID, userID)
+	return policy, nil
 }
 
 // DeleteRetentionPolicy deletes a retention policy
 func (s *MainService) DeleteRetentionPolicy(ctx context.Context, policyID string, userID string) error {
-	// TODO: Implement database deletion
-	return fmt.Errorf("not implemented: Delete retention policy")
+	if err := s.store.DeleteBackupRetentionPolicy(ctx, policyID); err != nil {
+		return err
+	}
+	s.logger.Infof("Deleted retention policy %s by user %s", policyID, userID)
+	return nil
 }
 
 // EnableRetentionPolicy enables a retention policy
 func (s *MainService) EnableRetentionPolicy(ctx context.Context, policyID string, userID string) error {
-	// TODO: Implement enable
-	return fmt.Errorf("not implemented: Enable retention policy")
+	enabled := true
+	_, err := s.UpdateRetentionPolicy(ctx, policyID, UpdateRetentionPolicyRequest{Enabled: &enabled}, userID)
+	return err
 }
 
 // DisableRetentionPolicy disables a retention policy
 func (s *MainService) DisableRetentionPolicy(ctx context.Context, policyID string, userID string) error {
-	// TODO: Implement disable
-	return fmt.Errorf("not implemented: Disable retention policy")
+	enabled := false
+	_, err := s.UpdateRetentionPolicy(ctx, policyID, UpdateRetentionPolicyRequest{Enabled: &enabled}, userID)
+	return err
 }
 
 // ApplyRetentionPolicy applies a retention policy to cleanup old backups
@@ -629,35 +792,51 @@ func (s *MainService) GetBackupSystemStatus(ctx context.Context) (*BackupSystemS
 		return nil, fmt.Errorf("failed to count restore operations: %w", err)
 	}
 
-	// Count scheduled configurations
-	scheduledCount := 0
+	scheduledCount, enabledCount := 0, 0
 	for _, config := range configs {
 		if config.IsScheduled {
 			scheduledCount++
 		}
+		if config.Enabled {
+			enabledCount++
+		}
 	}
 
 	// Count running jobs
-	runningJobs := 0
+	runningJobs, pendingJobs, failedJobs := 0, 0, 0
 	for _, job := range jobs {
-		if job.Status == BackupRunning {
+		switch job.Status {
+		case BackupRunning:
 			runningJobs++
+		case BackupPending:
+			pendingJobs++
+		case BackupFailed:
+			failedJobs++
 		}
 	}
 
 	// Count verified artifacts
-	verifiedArtifacts := 0
+	verifiedArtifacts, lockedArtifacts, expiredArtifacts := 0, 0, 0
+	now := time.Now().UTC()
 	for _, artifact := range artifacts {
 		if artifact.IsVerified {
 			verifiedArtifacts++
 		}
+		if artifact.IsLocked {
+			lockedArtifacts++
+		}
+		if artifact.ExpiresAt != nil && artifact.ExpiresAt.Before(now) {
+			expiredArtifacts++
+		}
 	}
 
 	// Count completed restores
-	completedRestores := 0
+	completedRestores, failedRestores := 0, 0
 	for _, restore := range restores {
 		if restore.Status == "completed" {
 			completedRestores++
+		} else if restore.Status == "failed" {
+			failedRestores++
 		}
 	}
 
@@ -665,43 +844,70 @@ func (s *MainService) GetBackupSystemStatus(ctx context.Context) (*BackupSystemS
 		BackupConfigurations: BackupSystemStatusCounts{
 			Total:     configCount,
 			Scheduled: scheduledCount,
-			Enabled:   0, // TODO: Count enabled
+			Enabled:   enabledCount,
 		},
 		BackupJobs: BackupSystemStatusCounts{
 			Total:   jobCount,
 			Running: runningJobs,
-			Pending: 0, // TODO: Count pending
-			Failed:  0, // TODO: Count failed
+			Pending: pendingJobs,
+			Failed:  failedJobs,
 		},
 		BackupArtifacts: BackupSystemStatusCounts{
 			Total:    artifactCount,
 			Verified: verifiedArtifacts,
-			Locked:   0, // TODO: Count locked
-			Expired:  0, // TODO: Count expired
+			Locked:   lockedArtifacts,
+			Expired:  expiredArtifacts,
 		},
 		BackupRestores: BackupSystemStatusCounts{
 			Total:     restoreCount,
 			Completed: completedRestores,
-			Failed:    0, // TODO: Count failed
+			Failed:    failedRestores,
 		},
 		StorageProviders: len(s.storageAdapters),
-		LastCleanupAt:    nil, // TODO: Get last cleanup time
+		LastCleanupAt:    nil,
 	}, nil
 }
 
 // GetBackupSystemStatistics gets detailed statistics for the backup system
 func (s *MainService) GetBackupSystemStatistics(ctx context.Context, days int) (*BackupSystemStatistics, error) {
-	// TODO: Implement detailed statistics collection
-	return &BackupSystemStatistics{
+	if days <= 0 {
+		days = 30
+	}
+	start := time.Now().UTC().Add(-time.Duration(days) * 24 * time.Hour)
+	artifacts, _, err := s.artifactService.List(ctx, ArtifactFilter{StartDate: &start, Page: 1, PerPage: 200})
+	if err != nil {
+		return nil, err
+	}
+	jobs, _, err := s.jobService.List(ctx, JobFilter{StartDate: &start, Page: 1, PerPage: 200})
+	if err != nil {
+		return nil, err
+	}
+	stats := &BackupSystemStatistics{
 		TimeRange:    fmt.Sprintf("last %d days", days),
-		TotalBackups: 0,
-		TotalSize:    0,
-		SuccessRate:  0,
-		AverageSize:  0,
+		TotalBackups: len(jobs),
 		ByType:       make(map[string]int),
 		ByStatus:     make(map[string]int),
 		ByStorage:    make(map[string]int),
-	}, nil
+	}
+	completed := 0
+	for _, job := range jobs {
+		stats.ByType[string(job.JobType)]++
+		stats.ByStatus[string(job.Status)]++
+		if job.Status == BackupCompleted {
+			completed++
+		}
+	}
+	for _, artifact := range artifacts {
+		stats.TotalSize += artifact.FileSize
+		stats.ByStorage[artifact.StorageProvider]++
+	}
+	if len(jobs) > 0 {
+		stats.SuccessRate = float64(completed) / float64(len(jobs)) * 100
+	}
+	if len(artifacts) > 0 {
+		stats.AverageSize = float64(stats.TotalSize) / float64(len(artifacts))
+	}
+	return stats, nil
 }
 
 // =============================================================================
@@ -725,9 +931,11 @@ func (s *MainService) createStorageAdapter(req RegisterStorageProviderRequest) (
 
 // calculateNextCronRun calculates the next run time for a cron expression
 func (s *MainService) calculateNextCronRun(cronExpr string) (time.Time, error) {
-	// TODO: Implement cron parsing
-	// For now, return a time 1 hour from now as a placeholder
-	return time.Now().Add(1 * time.Hour), nil
+	schedule, err := cron.ParseStandard(strings.TrimSpace(cronExpr))
+	if err != nil {
+		return time.Time{}, err
+	}
+	return schedule.Next(time.Now().UTC()), nil
 }
 
 // CreateStorageAdapter creates a storage adapter based on provider type and config
@@ -762,6 +970,45 @@ func CreateStorageAdapter(providerType string, config *StorageConfig) (StorageAd
 		return NewGCSStorageAdapter(config.GCS)
 	default:
 		return nil, fmt.Errorf("unsupported storage provider type: %s", providerType)
+	}
+}
+
+func storageProviderFromRecord(record store.BackupStorageProviderRecord, includeConfig bool) *StorageProvider {
+	provider := &StorageProvider{
+		ID: record.ID, Name: record.Name, Type: record.Type, Enabled: record.Enabled,
+		IsDefault: record.IsDefault, LastTestAt: record.LastTestAt,
+		LastTestStatus: record.LastTestStatus, CreatedAt: record.CreatedAt,
+		UpdatedAt: record.UpdatedAt,
+	}
+	if includeConfig {
+		provider.Config = record.Config
+	}
+	return provider
+}
+
+func retentionPolicyToRecord(policy *RetentionPolicy) store.BackupRetentionPolicyRecord {
+	return store.BackupRetentionPolicyRecord{
+		ID: policy.ID, Name: policy.Name, Description: policy.Description, Scope: policy.Scope,
+		ServerID: policy.ServerID, AppID: policy.AppID, DatabaseID: policy.DatabaseID,
+		VolumeID: policy.VolumeID, MaxBackups: policy.MaxBackups,
+		RetentionDays: policy.RetentionDays, RetentionWeeks: policy.RetentionWeeks,
+		RetentionMonths: policy.RetentionMonths, CleanupSchedule: policy.CleanupSchedule,
+		LastCleanupAt: policy.LastCleanupAt, NextCleanupAt: policy.NextCleanupAt,
+		Priority: policy.Priority, Enabled: policy.Enabled,
+		CreatedAt: policy.CreatedAt, UpdatedAt: policy.UpdatedAt,
+	}
+}
+
+func retentionPolicyFromRecord(record store.BackupRetentionPolicyRecord) *RetentionPolicy {
+	return &RetentionPolicy{
+		ID: record.ID, Name: record.Name, Description: record.Description, Scope: record.Scope,
+		ServerID: record.ServerID, AppID: record.AppID, DatabaseID: record.DatabaseID,
+		VolumeID: record.VolumeID, MaxBackups: record.MaxBackups,
+		RetentionDays: record.RetentionDays, RetentionWeeks: record.RetentionWeeks,
+		RetentionMonths: record.RetentionMonths, CleanupSchedule: record.CleanupSchedule,
+		LastCleanupAt: record.LastCleanupAt, NextCleanupAt: record.NextCleanupAt,
+		Priority: record.Priority, Enabled: record.Enabled,
+		CreatedAt: record.CreatedAt, UpdatedAt: record.UpdatedAt,
 	}
 }
 

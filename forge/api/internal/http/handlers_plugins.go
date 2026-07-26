@@ -166,15 +166,6 @@ func importPluginManifest(c *fiber.Ctx, cfg Config, body []byte, source string) 
 	return c.Status(fiber.StatusCreated).JSON(plugin)
 }
 
-func pluginRuntimeUnavailable(operation string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		return c.Status(fiber.StatusNotImplemented).JSON(fiber.Map{
-			"error":     "plugin runtime is not available",
-			"operation": operation,
-		})
-	}
-}
-
 func InstallPlugin(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if cfg.PluginService == nil {

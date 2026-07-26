@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS scaling_policies (
     id UUID PRIMARY KEY,
     name TEXT NOT NULL,
-    server_id UUID NOT NULL,
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     enabled BOOLEAN NOT NULL DEFAULT true,
     min_memory_mb BIGINT NOT NULL DEFAULT 512,
     max_memory_mb BIGINT NOT NULL DEFAULT 4096,
@@ -25,7 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_scaling_policies_server ON scaling_policies(serve
 CREATE TABLE IF NOT EXISTS scaling_events (
     id UUID PRIMARY KEY,
     policy_id UUID REFERENCES scaling_policies(id) ON DELETE CASCADE,
-    server_id UUID NOT NULL,
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     direction TEXT NOT NULL,
     old_memory BIGINT NOT NULL DEFAULT 0,
     new_memory BIGINT NOT NULL DEFAULT 0,
@@ -38,3 +38,4 @@ CREATE TABLE IF NOT EXISTS scaling_events (
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_scaling_events_policy ON scaling_events(policy_id);
+CREATE INDEX IF NOT EXISTS idx_scaling_events_policy_created ON scaling_events(policy_id, created_at DESC);

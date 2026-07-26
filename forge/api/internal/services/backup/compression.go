@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	defaultCompressionLevel    = gzip.DefaultCompression
-	compressionAlgorithmGzip  = "gzip"
-	compressionAlgorithmZstd  = "zstd"
+	defaultCompressionLevel     = gzip.DefaultCompression
+	compressionAlgorithmGzip    = "gzip"
+	compressionAlgorithmZstd    = "zstd"
 	compressionAlgorithmDeflate = "deflate"
 	defaultCompressionAlgorithm = compressionAlgorithmGzip
 )

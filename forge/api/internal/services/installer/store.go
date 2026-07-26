@@ -3,8 +3,9 @@ package installer
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -75,5 +76,74 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, serverID string) ([]W
 }
 
 func (s *PostgresStore) UpdateStep(ctx context.Context, stepID string, status InstallStatus, errMsg string) error {
-	return fmt.Errorf("installer UpdateStep not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var workflowID string
+	var stepsJSON []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text, steps
+		FROM install_workflows
+		WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(steps) step WHERE step->>'id' = $1)
+		FOR UPDATE
+	`, stepID).Scan(&workflowID, &stepsJSON); err != nil {
+		return err
+	}
+	var steps []InstallStep
+	if err := json.Unmarshal(stepsJSON, &steps); err != nil {
+		return err
+	}
+	found := false
+	now := time.Now().UTC()
+	for index := range steps {
+		if steps[index].ID != stepID {
+			continue
+		}
+		found = true
+		steps[index].Status = status
+		steps[index].Error = errMsg
+		if status == InstallRunning && steps[index].StartedAt == nil {
+			steps[index].StartedAt = &now
+		}
+		if status == InstallCompleted || status == InstallFailed {
+			steps[index].CompletedAt = &now
+		}
+		break
+	}
+	if !found {
+		return pgx.ErrNoRows
+	}
+	workflowStatus := InstallRunning
+	allCompleted := true
+	for _, step := range steps {
+		if step.Status == InstallFailed {
+			workflowStatus = InstallFailed
+			allCompleted = false
+			break
+		}
+		if step.Status != InstallCompleted {
+			allCompleted = false
+		}
+	}
+	var completedAt *time.Time
+	if allCompleted {
+		workflowStatus = InstallCompleted
+		completedAt = &now
+	} else if workflowStatus == InstallFailed {
+		completedAt = &now
+	}
+	encoded, err := json.Marshal(steps)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE install_workflows
+		SET steps = $2, status = $3, completed_at = $4
+		WHERE id = $1
+	`, workflowID, encoded, string(workflowStatus), completedAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }

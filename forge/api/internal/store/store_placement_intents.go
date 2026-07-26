@@ -133,7 +133,8 @@ func (s *Store) GetPlacementIntent(ctx context.Context, id string) (PlacementInt
 
 func (s *Store) ListPendingPlacementIntents(ctx context.Context) ([]PlacementIntent, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text
+		SELECT id::text, server_id::text, node_id::text, allocation_id::text, reservation_id::text,
+		       cpu, memory_mb, disk_mb, status::text, error, created_at, updated_at, confirmed_at, expired_at
 		FROM placement_intents
 		WHERE status IN ('pending', 'completing')
 		ORDER BY created_at, id
@@ -145,13 +146,35 @@ func (s *Store) ListPendingPlacementIntents(ctx context.Context) ([]PlacementInt
 
 	intents := []PlacementIntent{}
 	for rows.Next() {
-		var id string
-		if err := rows.Scan(&id); err != nil {
+		var intent PlacementIntent
+		var serverID, allocationID, reservationID, errStr sql.NullString
+		var statusStr string
+		var confirmedAt, expiredAt sql.NullTime
+		if err := rows.Scan(
+			&intent.ID, &serverID, &intent.NodeID, &allocationID, &reservationID,
+			&intent.CPU, &intent.MemoryMB, &intent.DiskMB, &statusStr,
+			&errStr, &intent.CreatedAt, &intent.UpdatedAt, &confirmedAt, &expiredAt,
+		); err != nil {
 			return nil, err
 		}
-		intent, err := s.GetPlacementIntent(ctx, id)
-		if err != nil {
-			return nil, err
+		intent.Status = PlacementIntentStatus(statusStr)
+		if serverID.Valid {
+			intent.ServerID = serverID.String
+		}
+		if allocationID.Valid {
+			intent.AllocationID = allocationID.String
+		}
+		if reservationID.Valid {
+			intent.ReservationID = reservationID.String
+		}
+		if errStr.Valid {
+			intent.Error = errStr.String
+		}
+		if confirmedAt.Valid {
+			intent.ConfirmedAt = &confirmedAt.Time
+		}
+		if expiredAt.Valid {
+			intent.ExpiredAt = &expiredAt.Time
 		}
 		intents = append(intents, intent)
 	}

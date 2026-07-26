@@ -9,9 +9,12 @@ import { fetchCurrentUser, logout } from "@/lib/api";
 import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
+import { useT } from "@/components/TranslationProvider";
 import { adminPagesForRole } from "./admin-registry";
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
+  const t = useT();
+  const tOr = (key: string, fallback: string) => { const value = t(key); return value === key ? fallback : value; };
   const pathname = usePathname();
   const router = useRouter();
   const { companyName } = useBranding();
@@ -43,7 +46,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (userQuery.isPending) {
       return (
         <div className="grid min-h-screen place-items-center bg-[#0f1419] p-4 text-sm text-slate-400">
-          Redirecting to sign in…
+          {tOr("admin.shell.redirecting", "Redirecting to sign in…")}
         </div>
       );
     }
@@ -53,11 +56,11 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
       <div className="grid min-h-screen place-items-center bg-[#0f1419] p-4">
         <div className="w-full max-w-md space-y-4 rounded-xl border border-red-500/30 bg-[#1e2536] p-6 text-center" role="alert">
           <AlertTriangle size={28} className="mx-auto text-amber-400" strokeWidth={1.5} />
-          <h1 className="text-xl font-bold text-slate-100">Unable to verify admin access</h1>
+          <h1 className="text-xl font-bold text-slate-100">{tOr("admin.shell.verifyFailedTitle", "Unable to verify admin access")}</h1>
           <p className="text-sm text-red-300">
             {userQuery.isError
-              ? `API not reachable at ${API_BASE_URL}. Make sure the Go backend is running.`
-              : "The current user could not be loaded. Admin content remains hidden until the API responds."
+              ? `${tOr("admin.shell.apiUnreachable", "API not reachable at")} ${API_BASE_URL}. ${tOr("admin.shell.apiUnreachableHint", "Make sure the Go backend is running.")}`
+              : tOr("admin.shell.userLoadFailed", "The current user could not be loaded. Admin content remains hidden until the API responds.")
             }
           </p>
           <div className="flex justify-center gap-2">
@@ -67,7 +70,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               onClick={() => void userQuery.refetch()}
               type="button"
             >
-              {userQuery.isFetching ? "Retrying…" : "Retry"}
+              {userQuery.isFetching ? tOr("admin.shell.retrying", "Retrying…") : tOr("common.retry", "Retry")}
             </button>
           </div>
         </div>
@@ -78,7 +81,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   if (!user) {
     return (
       <div className="grid min-h-screen place-items-center bg-[#0f1419] p-4 text-sm text-slate-400">
-        Verifying admin access…
+        {tOr("admin.shell.verifying", "Verifying admin access…")}
       </div>
     );
   }
@@ -100,7 +103,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             onClick={() => router.push("/servers")}
             type="button"
           >
-            My Servers
+            {tOr("server.myServers", "My Servers")}
           </button>
         </div>
       </header>
@@ -112,7 +115,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             {navGroups.map((group) => (
               <div key={group.title} className="mb-4">
                 <p className="px-3 pb-1.5 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-600">
-                  {group.title}
+                  {tOr(group.titleKey, group.title)}
                 </p>
                 {group.items.map((item) => {
                   const Icon = item.icon;
@@ -131,7 +134,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                       type="button"
                     >
                       <Icon size={15} className="shrink-0" />
-                      <span className="truncate">{item.label}</span>
+                      <span className="truncate">{tOr(item.labelKey, item.label)}</span>
                     </button>
                   );
                 })}
@@ -145,7 +148,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               type="button"
             >
               <LogOut size={15} />
-              Sign Out
+              {tOr("auth.logout", "Sign Out")}
             </button>
           </div>
         </aside>

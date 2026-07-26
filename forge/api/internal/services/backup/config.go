@@ -3,10 +3,13 @@ package backup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/robfig/cron/v3"
 
 	"gamepanel/forge/internal/store"
 )
@@ -128,9 +131,10 @@ type UpdateBackupConfigRequest struct {
 
 // ConfigService handles backup configuration management
 type ConfigService struct {
-	store     *store.Store
-	logger    Logger
-	scheduler Scheduler
+	store      *store.Store
+	logger     Logger
+	scheduler  Scheduler
+	jobService *JobService
 }
 
 // NewConfigService creates a new ConfigService
@@ -155,23 +159,8 @@ func (s *ConfigService) Create(ctx context.Context, req CreateBackupConfigReques
 		return nil, fmt.Errorf("invalid backup type: %s", req.BackupType)
 	}
 
-	// Validate that exactly one target is specified
-	targetCount := 0
-	if req.ServerID != nil && *req.ServerID != "" {
-		targetCount++
-	}
-	if req.AppID != nil && *req.AppID != "" {
-		targetCount++
-	}
-	if req.DatabaseID != nil && *req.DatabaseID != "" {
-		targetCount++
-	}
-	if req.VolumeID != nil && *req.VolumeID != "" {
-		targetCount++
-	}
-
-	if targetCount != 1 {
-		return nil, fmt.Errorf("exactly one target (server, app, database, or volume) must be specified")
+	if err := validateBackupTargets(req.BackupType, req.ServerID, req.AppID, req.DatabaseID, req.VolumeID); err != nil {
+		return nil, err
 	}
 
 	// Set defaults
@@ -197,15 +186,8 @@ func (s *ConfigService) Create(ctx context.Context, req CreateBackupConfigReques
 		req.Enabled = true
 	}
 
-	// Generate ID
-	configID := uuid.NewString()
-
-	// Create the configuration in the database
-	// Note: This uses the existing store methods or direct SQL
-	// For now, we'll use a placeholder since the store doesn't have these methods yet
-
 	config := &BackupConfig{
-		ID:                 configID,
+		ID:                 uuid.NewString(),
 		Name:               req.Name,
 		Description:        req.Description,
 		ServerID:           req.ServerID,
@@ -236,9 +218,18 @@ func (s *ConfigService) Create(ctx context.Context, req CreateBackupConfigReques
 		config.NextRunAt = &nextRun
 	}
 
-	// TODO: Implement actual database insertion
-	// This would use s.store or direct database access
-	// For now, return the config as if it was created
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	record, err := backupConfigToRecord(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CreateBackupConfiguration(ctx, &record); err != nil {
+		return nil, fmt.Errorf("persist backup configuration: %w", err)
+	}
+	config.CreatedAt = record.CreatedAt
+	config.UpdatedAt = record.UpdatedAt
 
 	s.logger.Infof("Created backup configuration: %s (type: %s, target: %s)", config.Name, config.BackupType, config.getTargetDescription())
 
@@ -247,42 +238,163 @@ func (s *ConfigService) Create(ctx context.Context, req CreateBackupConfigReques
 
 // Get retrieves a backup configuration by ID
 func (s *ConfigService) Get(ctx context.Context, configID string) (*BackupConfig, error) {
-	// TODO: Implement database retrieval
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Get backup configuration")
+	record, err := s.store.GetBackupConfiguration(ctx, configID)
+	if err != nil {
+		return nil, fmt.Errorf("get backup configuration: %w", err)
+	}
+	return backupConfigFromRecord(record), nil
 }
 
 // List retrieves all backup configurations with optional filtering
 func (s *ConfigService) List(ctx context.Context, filters BackupConfigFilter) ([]*BackupConfig, int, error) {
-	// TODO: Implement database listing with filters
-	// Placeholder implementation
-	return []*BackupConfig{}, 0, nil
+	records, err := s.store.ListBackupConfigurations(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	configs := make([]*BackupConfig, 0, len(records))
+	for _, record := range records {
+		config := backupConfigFromRecord(record)
+		if filters.Search != nil {
+			query := strings.ToLower(strings.TrimSpace(*filters.Search))
+			if query != "" && !strings.Contains(strings.ToLower(config.Name+" "+config.Description), query) {
+				continue
+			}
+		}
+		if filters.BackupType != nil && config.BackupType != *filters.BackupType {
+			continue
+		}
+		if filters.ServerID != nil && !sameStringPointer(config.ServerID, filters.ServerID) {
+			continue
+		}
+		if filters.AppID != nil && !sameStringPointer(config.AppID, filters.AppID) {
+			continue
+		}
+		if filters.DatabaseID != nil && !sameStringPointer(config.DatabaseID, filters.DatabaseID) {
+			continue
+		}
+		if filters.VolumeID != nil && !sameStringPointer(config.VolumeID, filters.VolumeID) {
+			continue
+		}
+		if filters.Enabled != nil && config.Enabled != *filters.Enabled {
+			continue
+		}
+		if filters.Scheduled != nil && config.IsScheduled != *filters.Scheduled {
+			continue
+		}
+		configs = append(configs, config)
+	}
+	total := len(configs)
+	page, perPage := filters.Page, filters.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return configs[start:end], total, nil
 }
 
 // Update updates an existing backup configuration
 func (s *ConfigService) Update(ctx context.Context, configID string, req UpdateBackupConfigRequest, userID string) (*BackupConfig, error) {
-	// TODO: Implement database update
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Update backup configuration")
+	config, err := s.Get(ctx, configID)
+	if err != nil {
+		return nil, err
+	}
+	if req.Name != nil {
+		config.Name = strings.TrimSpace(*req.Name)
+	}
+	if req.Description != nil {
+		config.Description = *req.Description
+	}
+	if req.IsScheduled != nil {
+		config.IsScheduled = *req.IsScheduled
+	}
+	if req.CronExpression != nil {
+		config.CronExpression = req.CronExpression
+	}
+	if req.StorageProvider != nil {
+		config.StorageProvider = *req.StorageProvider
+	}
+	if len(req.StorageConfig) > 0 {
+		config.StorageConfig = req.StorageConfig
+	}
+	if req.MaxBackups != nil {
+		config.MaxBackups = *req.MaxBackups
+	}
+	if req.RetentionDays != nil {
+		config.RetentionDays = *req.RetentionDays
+	}
+	if req.CompressionEnabled != nil {
+		config.CompressionEnabled = *req.CompressionEnabled
+	}
+	if req.EncryptionEnabled != nil {
+		config.EncryptionEnabled = *req.EncryptionEnabled
+	}
+	if req.EncryptionKeyID != nil {
+		config.EncryptionKeyID = req.EncryptionKeyID
+	}
+	if req.Enabled != nil {
+		config.Enabled = *req.Enabled
+	}
+	if config.IsScheduled {
+		if config.CronExpression == nil || strings.TrimSpace(*config.CronExpression) == "" {
+			return nil, errors.New("cron expression is required for scheduled backups")
+		}
+		nextRun, err := s.calculateNextCronRun(*config.CronExpression)
+		if err != nil {
+			return nil, err
+		}
+		config.NextRunAt = &nextRun
+	} else {
+		config.NextRunAt = nil
+	}
+	if err := config.Validate(); err != nil {
+		return nil, err
+	}
+	record, err := backupConfigToRecord(config)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.UpdateBackupConfiguration(ctx, &record); err != nil {
+		return nil, fmt.Errorf("persist backup configuration update: %w", err)
+	}
+	config.UpdatedAt = record.UpdatedAt
+	s.logger.Infof("Updated backup configuration %s by user %s", configID, userID)
+	return config, nil
 }
 
 // Delete deletes a backup configuration
 func (s *ConfigService) Delete(ctx context.Context, configID string, userID string) error {
-	// TODO: Implement database deletion
-	// Placeholder implementation
-	return fmt.Errorf("not implemented: Delete backup configuration")
+	if err := s.store.DeleteBackupConfiguration(ctx, configID); err != nil {
+		return fmt.Errorf("delete backup configuration: %w", err)
+	}
+	s.logger.Infof("Deleted backup configuration %s by user %s", configID, userID)
+	return nil
 }
 
 // Enable enables a backup configuration
 func (s *ConfigService) Enable(ctx context.Context, configID string, userID string) error {
-	// TODO: Implement enable
-	return fmt.Errorf("not implemented: Enable backup configuration")
+	enabled := true
+	_, err := s.Update(ctx, configID, UpdateBackupConfigRequest{Enabled: &enabled}, userID)
+	return err
 }
 
 // Disable disables a backup configuration
 func (s *ConfigService) Disable(ctx context.Context, configID string, userID string) error {
-	// TODO: Implement disable
-	return fmt.Errorf("not implemented: Disable backup configuration")
+	enabled := false
+	_, err := s.Update(ctx, configID, UpdateBackupConfigRequest{Enabled: &enabled}, userID)
+	return err
 }
 
 // Execute executes a backup configuration manually
@@ -298,19 +410,20 @@ func (s *ConfigService) Execute(ctx context.Context, configID string, userID str
 	}
 
 	// Create a backup job
-	jobService := NewJobService(s.store, s.logger)
-	job, err := jobService.CreateFromConfig(ctx, config, userID)
+	if s.jobService == nil {
+		return nil, fmt.Errorf("backup job service is unavailable")
+	}
+	job, err := s.jobService.CreateFromConfig(ctx, config, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create backup job: %w", err)
 	}
 
 	// Execute the job
-	err = jobService.Execute(ctx, job.ID, userID)
+	err = s.jobService.Execute(ctx, job.ID, userID)
 	if err != nil {
 		return nil, fmt.Errorf("failed to execute backup job: %w", err)
 	}
-
-	return job, nil
+	return s.jobService.Get(ctx, job.ID)
 }
 
 // BackupConfigFilter represents filters for listing backup configurations
@@ -329,9 +442,11 @@ type BackupConfigFilter struct {
 
 // calculateNextCronRun calculates the next run time for a cron expression
 func (s *ConfigService) calculateNextCronRun(cronExpr string) (time.Time, error) {
-	// TODO: Implement cron parsing
-	// For now, return a time 1 hour from now as a placeholder
-	return time.Now().Add(1 * time.Hour), nil
+	schedule, err := cron.ParseStandard(strings.TrimSpace(cronExpr))
+	if err != nil {
+		return time.Time{}, err
+	}
+	return schedule.Next(time.Now().UTC()), nil
 }
 
 // getTargetDescription returns a description of the backup target
@@ -362,23 +477,8 @@ func (c *BackupConfig) Validate() error {
 		return fmt.Errorf("invalid backup type: %s", c.BackupType)
 	}
 
-	// Check that exactly one target is specified
-	targetCount := 0
-	if c.ServerID != nil && *c.ServerID != "" {
-		targetCount++
-	}
-	if c.AppID != nil && *c.AppID != "" {
-		targetCount++
-	}
-	if c.DatabaseID != nil && *c.DatabaseID != "" {
-		targetCount++
-	}
-	if c.VolumeID != nil && *c.VolumeID != "" {
-		targetCount++
-	}
-
-	if targetCount != 1 {
-		return fmt.Errorf("exactly one target must be specified")
+	if err := validateBackupTargets(c.BackupType, c.ServerID, c.AppID, c.DatabaseID, c.VolumeID); err != nil {
+		return err
 	}
 
 	if c.StorageProvider == "" {
@@ -394,10 +494,91 @@ func (c *BackupConfig) Validate() error {
 	}
 
 	if c.IsScheduled && c.CronExpression != nil && *c.CronExpression != "" {
-		// TODO: Validate cron expression
+		if _, err := cron.ParseStandard(strings.TrimSpace(*c.CronExpression)); err != nil {
+			return fmt.Errorf("invalid cron expression: %w", err)
+		}
 	}
 
 	return nil
+}
+
+func validateBackupTargets(backupType BackupType, serverID, appID, databaseID, volumeID *string) error {
+	has := func(value *string) bool { return value != nil && strings.TrimSpace(*value) != "" }
+	switch backupType {
+	case BackupTypeServer:
+		if !has(serverID) || has(appID) || has(databaseID) || has(volumeID) {
+			return fmt.Errorf("server backup requires only serverId")
+		}
+	case BackupTypeApp:
+		if !has(appID) || has(serverID) || has(databaseID) || has(volumeID) {
+			return fmt.Errorf("app backup requires only appId")
+		}
+	case BackupTypeDatabase:
+		if !has(databaseID) || has(serverID) || has(appID) || has(volumeID) {
+			return fmt.Errorf("database backup requires only databaseId")
+		}
+	case BackupTypeVolume:
+		if !has(serverID) || !has(volumeID) || has(appID) || has(databaseID) {
+			return fmt.Errorf("volume backup requires serverId and volumeId")
+		}
+	default:
+		return fmt.Errorf("invalid backup type: %s", backupType)
+	}
+	return nil
+}
+
+func sameStringPointer(left, right *string) bool {
+	return left != nil && right != nil && *left == *right
+}
+
+func backupConfigToRecord(config *BackupConfig) (store.BackupConfigurationRecord, error) {
+	data, err := json.Marshal(config)
+	if err != nil {
+		return store.BackupConfigurationRecord{}, fmt.Errorf("encode backup configuration: %w", err)
+	}
+	return store.BackupConfigurationRecord{
+		ID: config.ID, Name: config.Name, Description: config.Description,
+		ServerID: config.ServerID, AppID: config.AppID, DatabaseID: config.DatabaseID,
+		VolumeID: config.VolumeID, BackupType: string(config.BackupType),
+		IsScheduled: config.IsScheduled, CronExpression: config.CronExpression,
+		NextRunAt: config.NextRunAt, LastRunAt: config.LastRunAt,
+		StorageProvider: config.StorageProvider, StorageConfig: config.StorageConfig,
+		MaxBackups: config.MaxBackups, RetentionDays: config.RetentionDays,
+		CompressionEnabled: config.CompressionEnabled, EncryptionEnabled: config.EncryptionEnabled,
+		EncryptionKeyID: config.EncryptionKeyID, Enabled: config.Enabled,
+		LastStatus: config.LastStatus, LastError: config.LastError, Data: data,
+		CreatedAt: config.CreatedAt, UpdatedAt: config.UpdatedAt,
+	}, nil
+}
+
+func backupConfigFromRecord(record store.BackupConfigurationRecord) *BackupConfig {
+	var config BackupConfig
+	_ = json.Unmarshal(record.Data, &config)
+	config.ID = record.ID
+	config.Name = record.Name
+	config.Description = record.Description
+	config.ServerID = record.ServerID
+	config.AppID = record.AppID
+	config.DatabaseID = record.DatabaseID
+	config.VolumeID = record.VolumeID
+	config.BackupType = BackupType(record.BackupType)
+	config.IsScheduled = record.IsScheduled
+	config.CronExpression = record.CronExpression
+	config.NextRunAt = record.NextRunAt
+	config.LastRunAt = record.LastRunAt
+	config.StorageProvider = record.StorageProvider
+	config.StorageConfig = record.StorageConfig
+	config.MaxBackups = record.MaxBackups
+	config.RetentionDays = record.RetentionDays
+	config.CompressionEnabled = record.CompressionEnabled
+	config.EncryptionEnabled = record.EncryptionEnabled
+	config.EncryptionKeyID = record.EncryptionKeyID
+	config.Enabled = record.Enabled
+	config.LastStatus = record.LastStatus
+	config.LastError = record.LastError
+	config.CreatedAt = record.CreatedAt
+	config.UpdatedAt = record.UpdatedAt
+	return &config
 }
 
 // GetStorageConfig parses the storage configuration

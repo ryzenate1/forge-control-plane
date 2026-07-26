@@ -94,15 +94,22 @@ type ApiConfiguration struct {
 }
 
 type SystemConfiguration struct {
-	DataDirectory string            `default:"/srv/game-panel/servers" yaml:"data_directory"`
-	TempDirectory string            `default:"/tmp" yaml:"temp_directory"`
-	Sftp          SftpConfiguration `yaml:"sftp"`
-	API           ApiConfiguration  `yaml:"api"`
+	DataDirectory    string            `default:"/srv/game-panel/servers" yaml:"data_directory"`
+	TempDirectory    string            `default:"/tmp" yaml:"temp_directory"`
+	RootDirectory    string            `yaml:"root_directory"`
+	LogDirectory     string            `yaml:"log_directory"`
+	ArchiveDirectory string            `yaml:"archive_directory"`
+	BackupDirectory  string            `yaml:"backup_directory"`
+	Username         string            `yaml:"username"`
+	Sftp             SftpConfiguration `yaml:"sftp"`
+	API              ApiConfiguration  `yaml:"api"`
 }
 
 type DockerConfiguration struct {
 	Network struct {
 		Interface string `default:"eth0" yaml:"interface"`
+		Name      string `yaml:"name"`
+		Mode      string `yaml:"mode"`
 	} `yaml:"network"`
 	Timezone        string  `default:"UTC" yaml:"timezone"`
 	MemoryOverhead  float64 `default:"10" yaml:"memory_overhead"`

@@ -4,9 +4,38 @@
 # Apply logging overrides with: docker compose -f compose.yml -f compose.logging.yml --env-file .env up -d
 
 services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      VOLUMES: "1"
+      INFO: "1"
+      VERSION: "1"
+      PING: "1"
+      POST: "1"
+      BUILD: "1"
+      EXEC: "1"
+      AUTH: "0"
+      SECRETS: "0"
+      SERVICES: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   postgres:
     restart: unless-stopped
     init: true
+    stop_grace_period: 30s
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gamepanel}
@@ -21,6 +50,7 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     networks:
       backend:
         aliases:
@@ -42,22 +72,34 @@ services:
       app.organization: "gamepanel"
       app.component: "postgres"
       app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   redis:
     restart: unless-stopped
     init: true
+    stop_grace_period: 30s
     image: redis:7-alpine
     command: >
       sh -c 'exec redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}'
     expose:
       - "6379"
     environment:
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
       backend:
         aliases:
@@ -81,11 +123,23 @@ services:
       app.organization: "gamepanel"
       app.component: "redis"
       app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   postgres-backup:
     restart: unless-stopped
     init: true
+    stop_grace_period: 30s
     image: postgres:16-alpine
+    user: "10001:10001"
     environment:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-gamepanel}
@@ -126,10 +180,16 @@ services:
       app.organization: "gamepanel"
       app.component: "postgres-backup"
       app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   api:
     restart: unless-stopped
     init: true
+    stop_grace_period: 60s
+    image: ${API_IMAGE:-ghcr.io/gamepanel/forge-api:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ..
       dockerfile: forge/api/Dockerfile
@@ -139,6 +199,7 @@ services:
     environment:
       API_ADDR: ${API_ADDR:-:8080}
       APP_ENV: ${APP_ENV:-development}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
       API_AUTH_SECRET: "${API_AUTH_SECRET:?Set API_AUTH_SECRET in infra/.env}"
       APP_KEY: "${APP_KEY:?Set APP_KEY in infra/.env}"
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL in infra/.env}"
@@ -147,19 +208,19 @@ services:
       FORGE_PREVIOUS_MASTER_KEYS: ${FORGE_PREVIOUS_MASTER_KEYS:-}
       FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "${FORGE_ALLOW_EPHEMERAL_MASTER_KEY:-false}"
       MIGRATIONS_DIR: /migrations
-      BATCH2_MIGRATIONS_DIR: /batch2-migrations
       LANGS_DIR: /lang
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
       REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
       PANEL_URL: ${PANEL_URL:-http://localhost:3000}
-      API_SEED_DEMO: "false"
+      API_SEED_DEMO: "${API_SEED_DEMO:-false}"
       LOAD_BALANCER_ENABLED: ${LOAD_BALANCER_ENABLED:-false}
       LOAD_BALANCER_BIND_HOST: ${LOAD_BALANCER_BIND_HOST:-}
       LOAD_BALANCER_PORT_MIN: ${LOAD_BALANCER_PORT_MIN:-30000}
       LOAD_BALANCER_PORT_MAX: ${LOAD_BALANCER_PORT_MAX:-30100}
+      CADDY_ADMIN_ADDR: ${CADDY_ADMIN_ADDR:-caddy:2019}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -169,7 +230,8 @@ services:
       test: ["CMD", "/api", "--healthcheck"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 5
+      start_period: 60s
     networks:
       frontend:
       backend:
@@ -201,15 +263,20 @@ services:
   daemon:
     restart: unless-stopped
     init: true
+    stop_grace_period: 60s
+    image: ${DAEMON_IMAGE:-ghcr.io/gamepanel/beacon:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ../beacon
     env_file:
       - path: .env
         required: false
     environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
       DAEMON_ADDR: ${DAEMON_ADDR:-:9090}
       APP_ENV: ${APP_ENV:-development}
       DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      DAEMON_BACKUP_DIR: ${DAEMON_BACKUP_DIR:-/srv/game-panel/servers/.beacon/backups}
+      BEACON_DATABASE_PATH: ${BEACON_DATABASE_PATH:-/srv/game-panel/servers/.beacon/beacon.db}
       DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set DAEMON_NODE_ID in infra/.env}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
       PANEL_API_URL: ${PANEL_API_URL:-http://api:8080/api/v1}
@@ -226,16 +293,19 @@ services:
       S3_PREFIX: ${S3_PREFIX:-}
       S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     ports:
-      - "9090:9090"
-      - "2022:2022"
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:2022:2022"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
       - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+    depends_on:
+      docker-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "/daemon", "--healthcheck"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 5
+      start_period: 30s
     networks:
       frontend:
       backend:
@@ -266,12 +336,13 @@ services:
 
   prometheus:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: prom/prometheus:v2.55.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
       - "--storage.tsdb.retention.time=15d"
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
       interval: 30s
@@ -306,16 +377,24 @@ services:
       app.organization: "gamepanel"
       app.component: "prometheus"
       app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   alertmanager:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: prom/alertmanager:v0.27.0
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
       - "--config.expand-env=true"
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
     healthcheck:
       test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
       interval: 30s
@@ -340,7 +419,8 @@ services:
     networks:
       - backend
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     deploy:
       resources:
         limits:
@@ -355,9 +435,98 @@ services:
       app.organization: "gamepanel"
       app.component: "alertmanager"
       app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  postgres-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-gamepanel}
+      PGUSER: ${POSTGRES_USER:-gamepanel}
+      PGPASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
+      PGPORT: "5432"
+      PGSSLMODE: prefer
+    expose:
+      - "9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9187/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  redis-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: oliver006/redis_exporter:v1.66.0
+    expose:
+      - "9121"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9121/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "redis-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   grafana:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: grafana/grafana:11.3.0
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
@@ -378,7 +547,8 @@ services:
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
       - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
     networks:
       frontend:
       backend:
@@ -403,12 +573,15 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-
+    read_only: true
+    tmpfs:
+      - /tmp
 
   caddy:
     restart: unless-stopped
     init: true
-    image: caddy:2-alpine
+    stop_grace_period: 30s
+    image: caddy:2.9.1-alpine
     ports:
       - "80:80"
       - "443:443"
@@ -417,13 +590,13 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     environment:
-      CADDY_ADMIN: "127.0.0.1:2019"
+      CADDY_ADMIN: "0.0.0.0:2019"
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     depends_on:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:80/"]
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -452,10 +625,18 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
 
   web:
     restart: unless-stopped
     init: true
+    stop_grace_period: 60s
+    image: ${WEB_IMAGE:-ghcr.io/gamepanel/forge-web:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ..
       dockerfile: forge/web/Dockerfile
@@ -470,10 +651,11 @@ services:
       api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ > /dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ > /dev/null 2>&1 || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 60s
     networks:
       frontend:
     deploy:
@@ -512,8 +694,6 @@ volumes:
 
 networks:
   frontend:
-    name: forge-frontend
     driver: bridge
   backend:
-    name: forge-backend
     driver: bridge

@@ -73,7 +73,7 @@ func (s *Store) ListAppStoreApps(ctx context.Context, category, search string) (
 		a.Tags = tags
 		apps = append(apps, a)
 	}
-	return apps, nil
+	return apps, rows.Err()
 }
 
 func (s *Store) GetAppStoreApp(ctx context.Context, key string) (*AppStoreApp, error) {
@@ -88,8 +88,11 @@ func (s *Store) GetAppStoreApp(ctx context.Context, key string) (*AppStoreApp, e
 }
 
 func (s *Store) UpsertAppStoreApp(ctx context.Context, a *AppStoreApp) error {
-	tagsJSON, _ := json.Marshal(a.Tags)
-	_, err := s.db.Exec(ctx, `
+	tagsJSON, err := json.Marshal(a.Tags)
+	if err != nil {
+		tagsJSON = []byte("[]")
+	}
+	_, err = s.db.Exec(ctx, `
 		INSERT INTO app_store_apps (key, name, short_desc, description, icon, category, tags, version, compose_content, params, min_memory_mb, min_disk_mb, maintainer, source_url, created_at, updated_at)
 		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW())
 		ON CONFLICT (key) DO UPDATE SET
@@ -145,7 +148,7 @@ func (s *Store) ListAppStoreInstalls(ctx context.Context) ([]AppStoreInstall, er
 		}
 		insts = append(insts, inst)
 	}
-	return insts, nil
+	return insts, rows.Err()
 }
 
 func (s *Store) UpdateAppStoreInstallStatus(ctx context.Context, id, status, errMsg string) error {

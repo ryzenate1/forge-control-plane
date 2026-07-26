@@ -2,11 +2,15 @@ package downloadfile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"gamepanel/beacon/internal/installer/operations"
@@ -16,6 +20,13 @@ type DownloadFile struct {
 	URL     string `json:"url"`
 	Dest    string `json:"dest"`
 	Timeout int    `json:"timeout,omitempty"`
+	// ExpectedSHA256 is an optional hex-encoded SHA-256 digest of the
+	// downloaded content. When set, the download is verified after it
+	// completes and is deleted (with the whole operation failing) if the
+	// digest does not match. When empty, integrity verification is skipped
+	// and a warning is logged, since some legitimate installer definitions
+	// may not have a checksum available.
+	ExpectedSHA256 string `json:"expectedSha256,omitempty"`
 }
 
 func init() {
@@ -65,12 +76,25 @@ func (op *DownloadFile) Execute(ctx context.Context, serverDir string) error {
 	}
 	defer out.Close()
 
-	written, err := io.Copy(out, resp.Body)
+	hasher := sha256.New()
+	written, err := io.Copy(io.MultiWriter(out, hasher), resp.Body)
 	if err != nil {
 		return fmt.Errorf("write %q: %w", dest, err)
 	}
 	if written == 0 {
 		return fmt.Errorf("downloaded file %q is empty", dest)
+	}
+
+	if op.ExpectedSHA256 == "" {
+		log.Printf("[installer] warning: downloadFile %q has no expectedSha256; integrity verification skipped", op.URL)
+		return nil
+	}
+
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(got, op.ExpectedSHA256) {
+		_ = out.Close()
+		_ = os.Remove(dest)
+		return fmt.Errorf("downloaded file %q sha256 mismatch: got %s, expected %s", dest, got, op.ExpectedSHA256)
 	}
 	return nil
 }

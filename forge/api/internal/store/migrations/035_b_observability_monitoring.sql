@@ -150,6 +150,7 @@ CREATE TABLE IF NOT EXISTS alerts (
 );
 
 CREATE INDEX IF NOT EXISTS idx_alerts_node ON alerts(node_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_alerts_server ON alerts(server_id, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_severity ON alerts(severity, created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_alerts_unack ON alerts(acknowledged, severity) WHERE acknowledged = false;
 CREATE INDEX IF NOT EXISTS idx_alerts_suppression ON alerts(suppression_key);

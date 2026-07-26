@@ -36,8 +36,10 @@ required_vars=(
   "APP_ENV"
   "DATABASE_URL"
   "FORGE_MASTER_KEY"
+  "FORGE_MASTER_KEY_ID"
   "DAEMON_NODE_TOKEN"
   "DAEMON_NODE_ID"
+  "REDIS_PASSWORD"
 )
 
 for var in "${required_vars[@]}"; do
@@ -59,10 +61,8 @@ fi
 ok "FORGE_MASTER_KEY length is sufficient (${#forge_master_key} chars)"
 
 case "${DATABASE_URL:-}" in
-  *sslmode=require*|*sslmode=verify-ca*|*sslmode=verify-full*) ;;
-  *@postgres:5432/*sslmode=disable*)
-    ;;
-  *) fail "DATABASE_URL must require TLS unless it targets the private bundled postgres service" ;;
+  *sslmode=require*|*sslmode=verify-ca*|*sslmode=verify-full*|*sslmode=prefer*) ;;
+  *) fail "DATABASE_URL must require TLS or use encrypted sslmode (prefer, require, verify-ca, verify-full)" ;;
 esac
 ok "DATABASE_URL uses TLS or internal service"
 
@@ -84,6 +84,21 @@ if [ "${APP_ENV:-}" != "production" ]; then
 fi
 ok "APP_ENV is set to production"
 
+if [ "${DAEMON_ALLOW_INSECURE_NO_AUTH:-}" = "true" ]; then
+  fail "DAEMON_ALLOW_INSECURE_NO_AUTH must not be true in production"
+fi
+ok "DAEMON_ALLOW_INSECURE_NO_AUTH is disabled"
+
+if [ "${DAEMON_ALLOW_MOCK_RUNTIME:-}" = "true" ]; then
+  fail "DAEMON_ALLOW_MOCK_RUNTIME must not be true in production"
+fi
+ok "DAEMON_ALLOW_MOCK_RUNTIME is disabled"
+
+if [ "${SESSION_COOKIE_SECURE:-}" = "false" ]; then
+  fail "SESSION_COOKIE_SECURE must be true in production"
+fi
+ok "SESSION_COOKIE_SECURE is enabled"
+
 # === Docker daemon check ===
 echo ""
 echo "--- Docker daemon ---"
@@ -102,8 +117,22 @@ echo ""
 echo "--- Port availability ---"
 critical_ports=(80 443 8080 3000 9090 2022)
 for port in "${critical_ports[@]}"; do
-  if ss -tlnp "sport = :$port" 2>/dev/null | grep -q ":$port "; then
-    info "Port $port is in use (may be expected)"
+  if command -v ss &>/dev/null; then
+    if ss -tlnp "sport = :$port" 2>/dev/null | grep -q ":$port "; then
+      info "Port $port is in use (may be expected)"
+    fi
+  elif command -v netstat &>/dev/null; then
+    if netstat -tlnp 2>/dev/null | grep -q ":${port}[[:space:]]"; then
+      info "Port $port is in use (may be expected)"
+    fi
+  else
+    # Check via /proc if neither ss nor netstat is available
+    if [ -f /proc/net/tcp ]; then
+      hexport=$(printf "%04X" "$port")
+      if grep -qi "$hexport" /proc/net/tcp 2>/dev/null; then
+        info "Port $port appears to be in use"
+      fi
+    fi
   fi
 done
 
@@ -148,8 +177,16 @@ if [ "${AVAILABLE_DISK:-0}" -lt 5242880 ]; then
   info "Less than 5GB available disk space (${AVAILABLE_DISK}KB)"
 fi
 
-MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
-if [ "${MEM_TOTAL:-0}" -lt 2048 ]; then
+if command -v free &>/dev/null; then
+  MEM_TOTAL=$(free -m | awk '/^Mem:/{print $2}')
+elif [ -f /proc/meminfo ]; then
+  MEM_TOTAL_KB=$(grep -i '^MemTotal:' /proc/meminfo | awk '{print $2}')
+  MEM_TOTAL=$((MEM_TOTAL_KB / 1024))
+else
+  MEM_TOTAL=0
+  info "Cannot determine system memory"
+fi
+if [ "${MEM_TOTAL:-0}" -gt 0 ] && [ "${MEM_TOTAL}" -lt 2048 ]; then
   info "System has less than 2GB RAM (${MEM_TOTAL}MB)"
 fi
 

@@ -11,6 +11,7 @@ import {
   fetchApp, fetchAppComposeConfig, fetchAppServiceLogs,
   startApp, stopApp, restartApp, redeployComposeStack,
 } from "@/lib/api/apps";
+import type { ComposeService } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, Modal } from "@/components/admin/admin-ui";
 import { LogViewer } from "@/components/admin/AdminAppsShared";
 import { toast, Toaster } from "@/components/ui/sonner";
@@ -54,7 +55,12 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to redeploy stack"),
   });
 
-  const services = composeData?.services ?? [];
+  const sourceConfig = composeData?.sourceConfig as Record<string, unknown> | undefined;
+  const services: ComposeService[] = sourceConfig?.services
+    ? (sourceConfig.services as ComposeService[])
+    : [];
+  const composeContent = typeof sourceConfig?.content === "string" ? sourceConfig.content
+    : sourceConfig ? JSON.stringify(sourceConfig, null, 2) : "";
 
   if (appLoading) {
     return (
@@ -161,7 +167,7 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
       {showConfig && composeData && (
         <Modal title="Compose Configuration" onClose={() => setShowConfig(false)} wide>
           <pre className="max-h-96 overflow-y-auto rounded-lg border border-white/[0.06] bg-[#0a0e14] p-4 font-mono text-xs text-slate-400 whitespace-pre-wrap">
-            {composeData.content}
+            {composeContent || JSON.stringify(composeData.sourceConfig, null, 2)}
           </pre>
         </Modal>
       )}

@@ -1,6 +1,1 @@
-export type Locale = 'en' | 'fr' | 'de' | 'es' | 'ja' | 'zh' | 'ru' | 'pt-BR';
-
-export const DEFAULT_I18N_CONFIG = {
-  defaultLocale: 'en' as Locale,
-  supportedLocales: ['en', 'fr', 'de', 'es', 'ja', 'zh', 'ru', 'pt-BR'] as Locale[],
-};
+export { DEFAULT_I18N_CONFIG, type I18nConfig, type Locale } from '@forge/shared-types';

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"gamepanel/beacon/internal/tokens"
 )
 
 const testServerID = "123e4567-e89b-12d3-a456-426614174000"
@@ -95,6 +97,27 @@ func TestSignedRequestReachesUnavailableRuntime(t *testing.T) {
 
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", rec.Code)
+	}
+}
+
+func TestScopedWebSocketTokenReachesRouteWithoutPanelSignature(t *testing.T) {
+	server, handler := NewServer(&stubRuntime{}, t.TempDir(), "secret")
+	generator := tokens.NewGenerator([]byte("secret"))
+	server.SetTokenGenerator(generator)
+	token, err := generator.GenerateWebsocket(testServerID, "user-1", time.Minute)
+	if err != nil {
+		t.Fatalf("generate websocket token: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodGet, "/servers/"+testServerID+"/ws/stats?token="+token, nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected websocket upgrade to reach route and fail with 400, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "signature") {
+		t.Fatalf("scoped websocket request was incorrectly handled as panel HMAC: %s", rec.Body.String())
 	}
 }
 

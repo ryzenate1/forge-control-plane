@@ -2,6 +2,7 @@ package http
 
 import (
 	"gamepanel/forge/internal/services/recovery"
+	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -62,8 +63,8 @@ func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fibe
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
 
-		if len(req.Password) < 8 {
-			return fiber.NewError(fiber.StatusBadRequest, "password must be at least 8 characters")
+		if err := store.ValidatePassword(req.Password); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 
 		ctx, cancel := requestContext()
@@ -79,6 +80,8 @@ func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fibe
 		}
 
 		cfg.RecoveryTokenService.InvalidateUserTokens(ctx, userID, recovery.TokenPasswordReset)
+
+		cfg.Store.RevokeAllUserSessionsExceptCurrent(ctx, userID, "", "account recovered")
 
 		_ = cfg.Store.AppendAudit(ctx, &userID, "account.recovered", "user", &userID, safeAuditMeta(map[string]string{}))
 

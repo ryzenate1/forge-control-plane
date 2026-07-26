@@ -37,8 +37,7 @@ spec:
         app: gamepanel
         component: beacon
     spec:
-      hostNetwork: true
-      dnsPolicy: ClusterFirstWithHostNet
+      dnsPolicy: ClusterFirst
       tolerations:
         - effect: NoSchedule
           operator: Exists
@@ -62,6 +61,10 @@ spec:
               value: ":2022"
             - name: DAEMON_DATA_DIR
               value: "/srv/game-panel/servers"
+            - name: DAEMON_BACKUP_DIR
+              value: "/srv/game-panel/servers/.beacon/backups"
+            - name: DOCKER_HOST
+              value: "tcp://127.0.0.1:2375"
             - name: DAEMON_ALLOW_MOCK_RUNTIME
               value: "false"
             - name: DAEMON_ALLOW_INSECURE_NO_AUTH
@@ -92,8 +95,6 @@ spec:
                   name: gamepanel-config
                   key: S3_USE_PATH_STYLE
           volumeMounts:
-            - name: dockersocket
-              mountPath: /var/run/docker.sock
             - name: servers
               mountPath: /srv/game-panel/servers
           livenessProbe:
@@ -110,6 +111,50 @@ spec:
                 - --healthcheck
             initialDelaySeconds: 10
             periodSeconds: 10
+        - name: docker-proxy
+          image: tecnativa/docker-socket-proxy:v0.4.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CONTAINERS
+              value: "1"
+            - name: IMAGES
+              value: "1"
+            - name: NETWORKS
+              value: "1"
+            - name: VOLUMES
+              value: "1"
+            - name: INFO
+              value: "1"
+            - name: VERSION
+              value: "1"
+            - name: PING
+              value: "1"
+            - name: POST
+              value: "1"
+            - name: BUILD
+              value: "1"
+            - name: EXEC
+              value: "1"
+            - name: AUTH
+              value: "0"
+            - name: SECRETS
+              value: "0"
+            - name: SERVICES
+              value: "0"
+            - name: SWARM
+              value: "0"
+            - name: SYSTEM
+              value: "0"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: dockersocket
+              mountPath: /var/run/docker.sock
+              readOnly: true
       volumes:
         - name: dockersocket
           hostPath:

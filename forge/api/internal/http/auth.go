@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -18,10 +19,13 @@ import (
 	"github.com/google/uuid"
 )
 
+var tokenTTL = 24 * time.Hour
+
 const (
-	tokenTTL          = 24 * time.Hour
-	sessionCookieName = "__Host-forge_session"
-	csrfCookieName    = "__Host-forge_csrf"
+	RoleAdmin          = "admin"
+	RoleUser           = "user"
+	sessionCookieName  = "__Host-forge_session"
+	csrfCookieName     = "__Host-forge_csrf"
 )
 
 type tokenClaims struct {
@@ -30,6 +34,7 @@ type tokenClaims struct {
 	Role           string `json:"role"`
 	JTI            string `json:"jti"`
 	SessionVersion int64  `json:"ver"`
+	Iat            int64  `json:"iat,omitempty"`
 	Exp            int64  `json:"exp"`
 }
 
@@ -40,6 +45,7 @@ func issueToken(secret string, user store.User) (string, error) {
 		Role:           user.Role,
 		JTI:            uuid.NewString(),
 		SessionVersion: user.SessionVersion,
+		Iat:            time.Now().Unix(),
 		Exp:            time.Now().Add(tokenTTL).Unix(),
 	}
 	payload, err := json.Marshal(claims)
@@ -102,6 +108,21 @@ func intFromClaim(v any) int {
 	return 0
 }
 
+func int64FromClaim(v any) int64 {
+	switch x := v.(type) {
+	case int:
+		return int64(x)
+	case int64:
+		return x
+	case float64:
+		return int64(x)
+	case json.Number:
+		i, _ := x.Int64()
+		return i
+	}
+	return 0
+}
+
 type authenticationStore interface {
 	GetUserByID(context.Context, string) (store.User, error)
 	IsJWTRevoked(context.Context, string) (bool, error)
@@ -111,7 +132,8 @@ type authenticationStore interface {
 type oauthTokenVerifier func(string) (map[string]any, []string, error)
 
 func getSessionCookie(c *fiber.Ctx) (string, bool) {
-	cookie := c.Cookies(sessionCookieName)
+	cfg := LoadSessionCookieConfig()
+	cookie := c.Cookies(secureCookieName(sessionCookieName, cfg.Secure))
 	if cookie == "" {
 		return "", false
 	}
@@ -119,43 +141,63 @@ func getSessionCookie(c *fiber.Ctx) (string, bool) {
 }
 
 func setSessionCookies(c *fiber.Ctx, sessionToken, csrfToken string, expires time.Time) {
+	cfg := LoadSessionCookieConfig()
+	sessionName := secureCookieName(sessionCookieName, cfg.Secure)
+	csrfName := secureCookieName(csrfCookieName, cfg.Secure)
+	sameSite := "Lax"
+	if cfg.SameSite == http.SameSiteStrictMode {
+		sameSite = "Strict"
+	} else if cfg.SameSite == http.SameSiteNoneMode {
+		sameSite = "None"
+	}
 	c.Cookie(&fiber.Cookie{
-		Name:     sessionCookieName,
+		Name:     sessionName,
 		Value:    sessionToken,
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   true,
-		SameSite: "Lax",
+		Secure:   cfg.Secure,
+		SameSite: sameSite,
 		Expires:  expires,
 	})
 	c.Cookie(&fiber.Cookie{
-		Name:     csrfCookieName,
+		Name:     csrfName,
 		Value:    csrfToken,
 		Path:     "/",
 		HTTPOnly: false,
-		Secure:   true,
-		SameSite: "Lax",
+		Secure:   cfg.Secure,
+		SameSite: sameSite,
 		Expires:  expires,
 	})
 }
 
 func clearSessionCookies(c *fiber.Ctx) {
+	cfg := LoadSessionCookieConfig()
+	sessionName := secureCookieName(sessionCookieName, cfg.Secure)
+	csrfName := secureCookieName(csrfCookieName, cfg.Secure)
+	sameSite := "Lax"
+	if cfg.SameSite == http.SameSiteStrictMode {
+		sameSite = "Strict"
+	} else if cfg.SameSite == http.SameSiteNoneMode {
+		sameSite = "None"
+	}
 	c.Cookie(&fiber.Cookie{
-		Name:     sessionCookieName,
+		Name:     sessionName,
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: true,
-		Secure:   true,
-		SameSite: "Lax",
+		Secure:   cfg.Secure,
+		SameSite: sameSite,
+		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
 	c.Cookie(&fiber.Cookie{
-		Name:     csrfCookieName,
+		Name:     csrfName,
 		Value:    "",
 		Path:     "/",
 		HTTPOnly: false,
-		Secure:   true,
-		SameSite: "Lax",
+		Secure:   cfg.Secure,
+		SameSite: sameSite,
+		MaxAge:   -1,
 		Expires:  time.Unix(0, 0),
 	})
 }
@@ -197,7 +239,7 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 			}
 
 			c.Locals("user", current)
-			if current.Role == "admin" {
+			if current.Role == RoleAdmin {
 				c.Locals("apiScopes", []string{"*"})
 			} else {
 				c.Locals("apiScopes", []string{})
@@ -229,7 +271,7 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 				return fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
 			}
 			c.Locals("user", current)
-			if current.Role == "admin" {
+			if current.Role == RoleAdmin {
 				c.Locals("apiScopes", []string{"*"})
 			} else {
 				c.Locals("apiScopes", []string{})
@@ -242,14 +284,14 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 		if verifyOAuth != nil {
 			if oauthClaims, scopes, oauthErr := verifyOAuth(rawToken); oauthErr == nil {
 				user, err := st.GetUserByID(ctx, stringFromClaim(oauthClaims["sub"]))
-				if err != nil || user.SessionVersion != int64(intFromClaim(oauthClaims["ver"])) {
+				if err != nil || user.SessionVersion != int64FromClaim(oauthClaims["ver"]) {
 					return fiber.NewError(fiber.StatusUnauthorized, "invalid or stale oauth session")
 				}
-				scopes, err = store.ValidateApiKeyScopes(scopes, user.Role == "admin" && stringFromClaim(oauthClaims["server_id"]) == "")
+				scopes, err = store.ValidateApiKeyScopes(scopes, user.Role == RoleAdmin && stringFromClaim(oauthClaims["server_id"]) == "")
 				if err != nil {
 					return fiber.NewError(fiber.StatusUnauthorized, "invalid oauth scopes")
 				}
-				c.Locals("user", claimsFromUser(user, stringFromClaim(oauthClaims["jti"]), int64(intFromClaim(oauthClaims["exp"]))))
+				c.Locals("user", claimsFromUser(user, stringFromClaim(oauthClaims["jti"]), int64FromClaim(oauthClaims["exp"])))
 				c.Locals("apiScopes", scopes)
 				c.Locals("scopedAuth", true)
 				c.Locals("oauthClientId", stringFromClaim(oauthClaims["client_id"]))
@@ -281,12 +323,13 @@ func claimsFromUser(user store.User, jti string, exp int64) tokenClaims {
 		Role:           user.Role,
 		JTI:            jti,
 		SessionVersion: user.SessionVersion,
+		Iat:            time.Now().Unix(),
 		Exp:            exp,
 	}
 }
 
 func validateCurrentSession(ctx context.Context, st authenticationStore, claims tokenClaims) (tokenClaims, error) {
-	if claims.Sub == "" || claims.JTI == "" || claims.SessionVersion < 1 {
+	if claims.Sub == "" || claims.JTI == "" || claims.SessionVersion < 0 {
 		return tokenClaims{}, errors.New("missing session identity")
 	}
 	revoked, err := st.IsJWTRevoked(ctx, claims.JTI)
@@ -380,7 +423,7 @@ func checkServerPermission(c *fiber.Ctx, cfg Config, permission string) error {
 	defer cancel()
 	allowed, err := cfg.Store.UserCanAccessServer(ctx, c.Params("id"), claims.Sub, claims.Role, permission)
 	if err != nil {
-		return fiber.NewError(fiber.StatusNotFound, "server not found")
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to check server access: "+err.Error())
 	}
 	if !allowed {
 		if permission == "" {
@@ -457,12 +500,36 @@ func parse2FAConfirmationToken(secret string, token string) (string, error) {
 	return claims.Sub, nil
 }
 
+// Routes excluded from 2FA enforcement so users can set up 2FA
+var twoFactorExemptPaths = []string{
+	"/account/two-factor",
+	"/auth/2fa/confirm",
+}
+
+func isTwoFactorExempt(c *fiber.Ctx) bool {
+	path := strings.TrimPrefix(c.Path(), "/api/v1")
+	for _, exempt := range twoFactorExemptPaths {
+		if strings.HasPrefix(path, exempt) {
+			return true
+		}
+	}
+	return false
+}
+
+func userHasTwoFactor(user store.User) bool {
+	return user.UseTOTP
+}
+
 // 2FA enforcement middleware with configurable policy levels
 // Policy levels: "none" (no requirement), "admin" (require for admin users only), "all" (require for all users)
 func requireTwoFactorAuthentication(st *store.Store) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if st == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
+		if isTwoFactorExempt(c) {
+			return c.Next()
 		}
 
 		// Get current 2FA policy from panel settings
@@ -494,17 +561,15 @@ func requireTwoFactorAuthentication(st *store.Store) fiber.Handler {
 		}
 
 		// Check if 2FA is enabled for the user
-		has2FA := user.UseTOTP && user.TOTPSecret != nil && *user.TOTPSecret != ""
+		has2FA := userHasTwoFactor(user)
 
 		// Apply policy logic
 		switch settings.Require2FA {
 		case "admin":
-			// Only require 2FA for admin users
-			if user.Role == "admin" && !has2FA {
+			if user.Role == RoleAdmin && !has2FA {
 				return fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required for admin accounts")
 			}
 		case "all":
-			// Require 2FA for all users
 			if !has2FA {
 				return fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required")
 			}

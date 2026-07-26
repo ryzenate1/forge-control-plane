@@ -3,6 +3,7 @@ package crossnode
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -219,6 +220,13 @@ func (hf *HealthFilter) StartReaper(ctx context.Context, interval time.Duration)
 	hf.reaperMu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slog.Error("health filter reaper panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 

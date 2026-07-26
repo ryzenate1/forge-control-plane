@@ -18,8 +18,8 @@ import (
 const purposeEncryptionKey = "gamepanel-backup-encryption"
 
 const (
-	aesKeySize    = 32
-	nonceSize     = 12
+	aesKeySize         = 32
+	nonceSize          = 12
 	encryptionOverhead = nonceSize + 16
 )
 

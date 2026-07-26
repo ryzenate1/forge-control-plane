@@ -12,22 +12,25 @@ interface ToastItem {
   type: ToastType;
 }
 
-let toastId = 0;
-let addToastFn: ((message: string, type: ToastType) => void) | null = null;
+type ToastHandler = (message: string, type: ToastType) => void;
+
+let toastIdCounter = 0;
+let currentHandler: ToastHandler | null = null;
 
 export function Toaster() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
 
   useEffect(() => {
-    addToastFn = (message: string, type: ToastType) => {
-      const id = ++toastId;
+    const handler: ToastHandler = (message: string, type: ToastType) => {
+      const id = ++toastIdCounter;
       setToasts((prev) => [...prev, { id, message, type }]);
       setTimeout(() => {
         setToasts((prev) => prev.filter((t) => t.id !== id));
       }, 4000);
     };
+    currentHandler = handler;
     return () => {
-      addToastFn = null;
+      if (currentHandler === handler) currentHandler = null;
     };
   }, []);
 
@@ -73,7 +76,7 @@ export function Toaster() {
 }
 
 function addToast(message: string, type: ToastType) {
-  addToastFn?.(message, type);
+  currentHandler?.(message, type);
 }
 
 export const toast = {

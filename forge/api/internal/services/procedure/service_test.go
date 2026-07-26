@@ -123,7 +123,7 @@ func (f *fakeStore) CreateProcedureExecution(ctx context.Context, procedureID, t
 		f.stepDefinitions[seID] = step
 	}
 	f.stepExecs[id] = stepExecs
-	exec.Steps = stepExecs
+	exec.Steps = append([]store.ProcedureStepExecution(nil), stepExecs...)
 	return exec, nil
 }
 
@@ -134,7 +134,7 @@ func (f *fakeStore) GetProcedureExecution(ctx context.Context, id string) (store
 	if !ok {
 		return store.ProcedureExecution{}, errors.New("not found")
 	}
-	exec.Steps = f.stepExecs[id]
+	exec.Steps = append([]store.ProcedureStepExecution(nil), f.stepExecs[id]...)
 	return exec, nil
 }
 
@@ -144,7 +144,7 @@ func (f *fakeStore) ListProcedureExecutions(ctx context.Context, procedureID str
 	var result []store.ProcedureExecution
 	for _, e := range f.executions {
 		if e.ProcedureID == procedureID || procedureID == "" {
-			e.Steps = f.stepExecs[e.ID]
+			e.Steps = append([]store.ProcedureStepExecution(nil), f.stepExecs[e.ID]...)
 			result = append(result, e)
 		}
 	}
@@ -345,15 +345,17 @@ func (f *fakeStore) UpdateProcedureStepExecution(ctx context.Context, id, status
 	return nil
 }
 
-func (f *fakeStore) LinkProcedureStepOperation(ctx context.Context, stepExecID, operationID string) error { return nil }
+func (f *fakeStore) LinkProcedureStepOperation(ctx context.Context, stepExecID, operationID string) error {
+	return nil
+}
 
 func (f *fakeStore) AppendProcedureStepLog(ctx context.Context, stepExecutionID, level, message string) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.logs[stepExecutionID] = append(f.logs[stepExecutionID], store.ProcedureStepLog{
-		ID: fmt.Sprintf("log-%d", len(f.logs[stepExecutionID])+1),
+		ID:              fmt.Sprintf("log-%d", len(f.logs[stepExecutionID])+1),
 		StepExecutionID: stepExecutionID,
-		Level: level, Message: message, CreatedAt: time.Now(),
+		Level:           level, Message: message, CreatedAt: time.Now(),
 	})
 	return nil
 }
@@ -361,19 +363,25 @@ func (f *fakeStore) AppendProcedureStepLog(ctx context.Context, stepExecutionID,
 func (f *fakeStore) ListProcedureStepLogs(ctx context.Context, stepExecutionID string) ([]store.ProcedureStepLog, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.logs[stepExecutionID], nil
+	return append([]store.ProcedureStepLog(nil), f.logs[stepExecutionID]...), nil
 }
 
 func (f *fakeStore) ListProcedureSteps(ctx context.Context, procedureID string) ([]store.ProcedureStep, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.steps[procedureID], nil
+	return append([]store.ProcedureStep(nil), f.steps[procedureID]...), nil
 }
 
 func (f *fakeStore) ListProcedureStepExecutions(ctx context.Context, executionID string) ([]store.ProcedureStepExecution, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.stepExecs[executionID], nil
+	return append([]store.ProcedureStepExecution(nil), f.stepExecs[executionID]...), nil
+}
+
+func (f *fakeStore) auditSnapshot() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.auditEvents...)
 }
 
 func (f *fakeStore) GetProcedureSchedule(ctx context.Context, procedureID string) (store.ProcedureSchedule, error) {
@@ -386,13 +394,17 @@ func (f *fakeStore) GetProcedureSchedule(ctx context.Context, procedureID string
 	return s, nil
 }
 
-func (f *fakeStore) UpdateProcedureScheduleMeta(ctx context.Context, scheduleID string, lastRunAt, nextRunAt *time.Time) error { return nil }
+func (f *fakeStore) UpdateProcedureScheduleMeta(ctx context.Context, scheduleID string, lastRunAt, nextRunAt *time.Time) error {
+	return nil
+}
 
 func (f *fakeStore) ListDueProcedureSchedules(ctx context.Context, now time.Time, limit int) ([]store.ProcedureSchedule, error) {
 	return nil, nil
 }
 
-func (f *fakeStore) NextProcedureScheduleRunAt(ctx context.Context, now time.Time) (*time.Time, error) { return nil, nil }
+func (f *fakeStore) NextProcedureScheduleRunAt(ctx context.Context, now time.Time) (*time.Time, error) {
+	return nil, nil
+}
 
 func (f *fakeStore) AppendAudit(ctx context.Context, actorID *string, action, targetType string, targetID *string, metadata string) error {
 	f.mu.Lock()

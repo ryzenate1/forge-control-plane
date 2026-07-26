@@ -5,7 +5,6 @@ import { useMutation } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useAppToast } from "@/components/shared";
 import { createApp } from "@/lib/api/apps";
-import type { ApiApp } from "@/lib/api/apps";
 import { errorMessage } from "@/lib/utils";
 
 type FormValues = {

@@ -35,7 +35,7 @@ type GitOpsStore interface {
 	GetGitCredential(ctx context.Context, id string) (store.GitCredential, error)
 	CreatePlacementReservation(ctx context.Context, req store.CreatePlacementReservationRequest) (store.PlacementReservation, error)
 	UpdatePlacementReservationStatus(ctx context.Context, id string, status store.PlacementReservationStatus) (store.PlacementReservation, error)
-	DispatchWebhookEvent(event string, payload map[string]any)
+	DispatchWebhookEvent(ctx context.Context, event string, payload map[string]any) error
 }
 
 type GitOpsService struct {
@@ -394,7 +394,7 @@ func (g *GitOpsService) DeployFromGit(ctx context.Context, req GitDeployFromGitR
 			"name": req.Name, "nodeId": req.NodeID,
 		}))
 	}
-	g.store.DispatchWebhookEvent(string(events.EventComposeDeployed), map[string]any{"stackId": stackID, "name": req.Name, "nodeId": req.NodeID})
+	_ = g.store.DispatchWebhookEvent(ctx, string(events.EventComposeDeployed), map[string]any{"stackId": stackID, "name": req.Name, "nodeId": req.NodeID})
 	services, _ := g.getPerServiceStatus(ctx, stack)
 	return &GitDeployResult{
 		StackID:   stackID,
@@ -651,7 +651,7 @@ func (g *GitOpsService) RollbackToPrevious(ctx context.Context, stackID string) 
 			"commit": prevCommit, "branch": prevBranch,
 		}))
 	}
-	g.store.DispatchWebhookEvent(string(events.EventComposeRollbackCompleted), map[string]any{"stackId": stackID, "commit": prevCommit, "branch": prevBranch})
+	_ = g.store.DispatchWebhookEvent(ctx, string(events.EventComposeRollbackCompleted), map[string]any{"stackId": stackID, "commit": prevCommit, "branch": prevBranch})
 	services, _ := g.getPerServiceStatus(ctx, stack)
 	return &GitDeployResult{
 		StackID:   stackID,
@@ -1084,7 +1084,7 @@ func (g *GitOpsService) deployFromClone(ctx context.Context, stack *ComposeStack
 			"commit": clone.CommitSHA, "branch": clone.Branch,
 		}))
 	}
-	g.store.DispatchWebhookEvent(string(events.EventComposeUpdated), map[string]any{"stackId": stackID, "commit": clone.CommitSHA, "branch": clone.Branch})
+	_ = g.store.DispatchWebhookEvent(ctx, string(events.EventComposeUpdated), map[string]any{"stackId": stackID, "commit": clone.CommitSHA, "branch": clone.Branch})
 	services, _ := g.getPerServiceStatus(ctx, stack)
 	return &GitDeployResult{
 		StackID:   stackID,
@@ -1207,7 +1207,7 @@ func (g *GitOpsService) HandleWebhook(ctx context.Context, webhookID string, pay
 			"branch": branch, "commit": whPayload.After, "deliveryId": deliveryID,
 		}))
 	}
-	g.store.DispatchWebhookEvent(string(events.EventComposeWebhookReceived), map[string]any{"stackId": stack.ID, "branch": branch, "commit": whPayload.After, "deliveryId": deliveryID})
+	_ = g.store.DispatchWebhookEvent(ctx, string(events.EventComposeWebhookReceived), map[string]any{"stackId": stack.ID, "branch": branch, "commit": whPayload.After, "deliveryId": deliveryID})
 
 	// Trigger async deployment so the webhook returns quickly
 	go func() {
@@ -1301,7 +1301,7 @@ func (g *GitOpsService) checkAndPollStack(ctx context.Context, stack *ComposeSta
 			"preview": composeYAML,
 		}))
 	}
-	g.store.DispatchWebhookEvent(string(events.EventComposeUpdateAvailable), map[string]any{"stackId": stack.ID, "commit": desired, "branch": stack.GitBranch})
+	_ = g.store.DispatchWebhookEvent(ctx, string(events.EventComposeUpdateAvailable), map[string]any{"stackId": stack.ID, "commit": desired, "branch": stack.GitBranch})
 	return nil
 }
 

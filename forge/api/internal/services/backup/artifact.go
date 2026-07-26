@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
 
 	"github.com/google/uuid"
@@ -109,6 +110,11 @@ type ArtifactService struct {
 	logger          Logger
 	storageAdapters map[string]StorageAdapter
 	defaultAdapter  StorageAdapter
+	daemonClient    *daemon.Client
+}
+
+func (s *ArtifactService) SetDaemonClient(client *daemon.Client) {
+	s.daemonClient = client
 }
 
 // NewArtifactService creates a new ArtifactService
@@ -222,6 +228,16 @@ func (s *ArtifactService) Create(ctx context.Context, req CreateArtifactRequest,
 		expiresAt := now.Add(time.Duration(req.RetentionDays) * 24 * time.Hour)
 		artifact.ExpiresAt = &expiresAt
 	}
+	record, err := backupArtifactToRecord(artifact)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CreateBackupArtifactRecord(ctx, &record); err != nil {
+		return nil, fmt.Errorf("persist backup artifact: %w", err)
+	}
+	artifact.CreatedAt = record.CreatedAt
+	artifact.UpdatedAt = record.UpdatedAt
+	artifact.UploadedAt = record.UploadedAt
 
 	s.logger.Infof("Created backup artifact: %s (type: %s, size: %d bytes)", artifact.Name, artifact.ArtifactType, artifact.FileSize)
 
@@ -308,6 +324,9 @@ func (s *ArtifactService) CreateFromBackupResult(ctx context.Context, job *Backu
 	// Set uploaded timestamp
 	now := time.Now()
 	artifact.UploadedAt = &now
+	if err := s.persistArtifact(ctx, artifact); err != nil {
+		return nil, err
+	}
 
 	s.logger.Infof("Created backup artifact from result: %s (job: %s)", artifact.Name, job.ID)
 
@@ -316,23 +335,110 @@ func (s *ArtifactService) CreateFromBackupResult(ctx context.Context, job *Backu
 
 // Get retrieves a backup artifact by ID
 func (s *ArtifactService) Get(ctx context.Context, artifactID string) (*BackupArtifact, error) {
-	// TODO: Implement database retrieval
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Get backup artifact")
+	record, err := s.store.GetBackupArtifactRecord(ctx, artifactID)
+	if err != nil {
+		return nil, fmt.Errorf("get backup artifact: %w", err)
+	}
+	return backupArtifactFromRecord(record), nil
 }
 
 // List retrieves backup artifacts with optional filtering
 func (s *ArtifactService) List(ctx context.Context, filters ArtifactFilter) ([]*BackupArtifact, int, error) {
-	// TODO: Implement database listing with filters
-	// Placeholder implementation
-	return []*BackupArtifact{}, 0, nil
+	records, err := s.store.ListBackupArtifactRecords(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	artifacts := make([]*BackupArtifact, 0, len(records))
+	for _, record := range records {
+		artifact := backupArtifactFromRecord(record)
+		if filters.JobID != nil && !sameStringPointer(artifact.JobID, filters.JobID) {
+			continue
+		}
+		if filters.ConfigurationID != nil && !sameStringPointer(artifact.ConfigurationID, filters.ConfigurationID) {
+			continue
+		}
+		if filters.ArtifactType != nil && artifact.ArtifactType != *filters.ArtifactType {
+			continue
+		}
+		if filters.SourceServerID != nil && !sameStringPointer(artifact.SourceServerID, filters.SourceServerID) {
+			continue
+		}
+		if filters.SourceAppID != nil && !sameStringPointer(artifact.SourceAppID, filters.SourceAppID) {
+			continue
+		}
+		if filters.SourceDatabaseID != nil && !sameStringPointer(artifact.SourceDatabaseID, filters.SourceDatabaseID) {
+			continue
+		}
+		if filters.SourceVolumeID != nil && !sameStringPointer(artifact.SourceVolumeID, filters.SourceVolumeID) {
+			continue
+		}
+		if filters.StorageProvider != nil && artifact.StorageProvider != *filters.StorageProvider {
+			continue
+		}
+		if filters.Status != nil && artifact.Status != *filters.Status {
+			continue
+		}
+		if filters.IsLocked != nil && artifact.IsLocked != *filters.IsLocked {
+			continue
+		}
+		if filters.Search != nil {
+			query := strings.ToLower(strings.TrimSpace(*filters.Search))
+			if query != "" && !strings.Contains(strings.ToLower(artifact.Name+" "+artifact.DisplayName), query) {
+				continue
+			}
+		}
+		if filters.StartDate != nil && artifact.CreatedAt.Before(*filters.StartDate) {
+			continue
+		}
+		if filters.EndDate != nil && artifact.CreatedAt.After(*filters.EndDate) {
+			continue
+		}
+		artifacts = append(artifacts, artifact)
+	}
+	total := len(artifacts)
+	page, perPage := filters.Page, filters.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return artifacts[start:end], total, nil
 }
 
 // Update updates a backup artifact
 func (s *ArtifactService) Update(ctx context.Context, artifactID string, updates map[string]interface{}) (*BackupArtifact, error) {
-	// TODO: Implement database update
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Update backup artifact")
+	artifact, err := s.Get(ctx, artifactID)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := updates["status"].(string); ok {
+		artifact.Status = value
+	}
+	if value, ok := updates["isVerified"].(bool); ok {
+		artifact.IsVerified = value
+	}
+	if value, ok := updates["fileSize"].(int64); ok {
+		artifact.FileSize = value
+	}
+	if value, ok := updates["fileHash"].(string); ok {
+		artifact.FileHash = &value
+	}
+	if err := s.persistArtifact(ctx, artifact); err != nil {
+		return nil, err
+	}
+	return artifact, nil
 }
 
 // Delete deletes a backup artifact
@@ -351,13 +457,12 @@ func (s *ArtifactService) Delete(ctx context.Context, artifactID string, userID 
 	}
 
 	// Delete from storage
-	err = s.deleteFromStorage(ctx, artifact)
-	if err != nil {
-		s.logger.Warnf("Failed to delete artifact from storage: %v", err)
-		// Continue with database deletion even if storage deletion fails
+	if err := s.deleteFromStorage(ctx, artifact); err != nil {
+		return fmt.Errorf("delete artifact from storage: %w", err)
 	}
-
-	// TODO: Delete from database
+	if err := s.store.DeleteBackupArtifactRecord(ctx, artifactID); err != nil {
+		return fmt.Errorf("delete backup artifact record: %w", err)
+	}
 	s.logger.Infof("Deleted backup artifact: %s", artifact.Name)
 
 	return nil
@@ -374,9 +479,11 @@ func (s *ArtifactService) Lock(ctx context.Context, artifactID string, userID st
 		return fmt.Errorf("backup artifact is already locked")
 	}
 
-	// TODO: Update in database
 	artifact.IsLocked = true
 	artifact.LockReason = &reason
+	if err := s.persistArtifact(ctx, artifact); err != nil {
+		return err
+	}
 
 	s.logger.Infof("Locked backup artifact: %s (reason: %s)", artifact.Name, reason)
 
@@ -394,9 +501,11 @@ func (s *ArtifactService) Unlock(ctx context.Context, artifactID string, userID 
 		return fmt.Errorf("backup artifact is not locked")
 	}
 
-	// TODO: Update in database
 	artifact.IsLocked = false
 	artifact.LockReason = nil
+	if err := s.persistArtifact(ctx, artifact); err != nil {
+		return err
+	}
 
 	s.logger.Infof("Unlocked backup artifact: %s", artifact.Name)
 
@@ -416,23 +525,32 @@ func (s *ArtifactService) Verify(ctx context.Context, artifactID string) error {
 
 	s.logger.Infof("Verifying backup artifact: %s", artifact.Name)
 
-	// Get the storage adapter
-	adapter, err := s.getStorageAdapter(artifact.StorageProvider)
-	if err != nil {
-		return fmt.Errorf("failed to get storage adapter: %w", err)
-	}
-
-	// Download the artifact to verify
-	tempFile, err := s.downloadToTempFile(ctx, adapter, artifact.StoragePath)
-	if err != nil {
-		return fmt.Errorf("failed to download artifact for verification: %w", err)
-	}
-	defer os.Remove(tempFile)
-
-	// Calculate hash of the downloaded file
-	calculatedHash, err := calculateFileHash(tempFile, artifact.HashAlgorithm)
-	if err != nil {
-		return fmt.Errorf("failed to calculate file hash: %w", err)
+	var calculatedHash string
+	if artifact.StorageProvider == "beacon" {
+		reader, err := s.downloadFromBeacon(ctx, artifact)
+		if err != nil {
+			return fmt.Errorf("download beacon artifact for verification: %w", err)
+		}
+		defer reader.Close()
+		hasher := sha256.New()
+		if _, err := io.Copy(hasher, reader); err != nil {
+			return fmt.Errorf("hash beacon artifact: %w", err)
+		}
+		calculatedHash = hex.EncodeToString(hasher.Sum(nil))
+	} else {
+		adapter, err := s.getStorageAdapter(artifact.StorageProvider)
+		if err != nil {
+			return fmt.Errorf("failed to get storage adapter: %w", err)
+		}
+		tempFile, err := s.downloadToTempFile(ctx, adapter, artifact.StoragePath)
+		if err != nil {
+			return fmt.Errorf("failed to download artifact for verification: %w", err)
+		}
+		defer os.Remove(tempFile)
+		calculatedHash, err = calculateFileHash(tempFile, artifact.HashAlgorithm)
+		if err != nil {
+			return fmt.Errorf("failed to calculate file hash: %w", err)
+		}
 	}
 
 	// Compare with stored hash
@@ -441,7 +559,7 @@ func (s *ArtifactService) Verify(ctx context.Context, artifactID string) error {
 		s.logger.Warnf("No stored hash for artifact %s, skipping hash verification", artifact.Name)
 	} else if *artifact.FileHash != calculatedHash {
 		artifact.VerificationAttempts++
-		// TODO: Update in database
+		_ = s.persistArtifact(ctx, artifact)
 		return fmt.Errorf("hash mismatch: expected %s, got %s", *artifact.FileHash, calculatedHash)
 	}
 
@@ -451,6 +569,9 @@ func (s *ArtifactService) Verify(ctx context.Context, artifactID string) error {
 	now := time.Now()
 	artifact.LastVerifiedAt = &now
 	artifact.Status = "verified"
+	if err := s.persistArtifact(ctx, artifact); err != nil {
+		return err
+	}
 
 	s.logger.Infof("Backup artifact verified: %s", artifact.Name)
 
@@ -473,7 +594,10 @@ func (s *ArtifactService) Download(ctx context.Context, artifactID string) (io.R
 		return nil, fmt.Errorf("failed to get backup artifact: %w", err)
 	}
 
-	// Get the storage adapter
+	if artifact.StorageProvider == "beacon" {
+		return s.downloadFromBeacon(ctx, artifact)
+	}
+
 	adapter, err := s.getStorageAdapter(artifact.StorageProvider)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get storage adapter: %w", err)
@@ -555,47 +679,123 @@ func (s *ArtifactService) SetManifest(ctx context.Context, artifactID string, ma
 	}
 
 	artifact.Manifest = data
-
-	// TODO: Update in database
-
-	return nil
+	return s.persistArtifact(ctx, artifact)
 }
 
 // CleanupExpired cleans up expired backup artifacts
 func (s *ArtifactService) CleanupExpired(ctx context.Context, retentionDays int) (int, error) {
-	// TODO: Implement cleanup logic
-	// This would:
-	// 1. Find all artifacts where expires_at < now() and is_locked = false
-	// 2. Delete them from storage and database
-	// 3. Return the count of deleted artifacts
-
-	s.logger.Infof("Cleaning up expired backup artifacts (retention: %d days)", retentionDays)
-
-	return 0, nil
+	artifacts, _, err := s.List(ctx, ArtifactFilter{Page: 1, PerPage: 200})
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Now().UTC()
+	if retentionDays > 0 {
+		cutoff = cutoff.Add(-time.Duration(retentionDays) * 24 * time.Hour)
+	}
+	deleted := 0
+	for _, artifact := range artifacts {
+		expired := artifact.ExpiresAt != nil && artifact.ExpiresAt.Before(time.Now().UTC())
+		olderThanRetention := retentionDays > 0 && artifact.CreatedAt.Before(cutoff)
+		if artifact.IsLocked || (!expired && !olderThanRetention) {
+			continue
+		}
+		if err := s.Delete(ctx, artifact.ID, "system"); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // ApplyRetentionPolicy applies retention policy to backup artifacts
 func (s *ArtifactService) ApplyRetentionPolicy(ctx context.Context, policy RetentionPolicy) (int, error) {
-	// TODO: Implement retention policy application
-	// This would:
-	// 1. Find artifacts matching the policy scope
-	// 2. Sort by creation date
-	// 3. Keep the most recent N artifacts (based on policy)
-	// 4. Delete the rest (if not locked)
-
-	s.logger.Infof("Applying retention policy: %s", policy.Name)
-
-	return 0, nil
+	filter := ArtifactFilter{Page: 1, PerPage: 200}
+	switch policy.Scope {
+	case "server":
+		filter.SourceServerID = policy.ServerID
+	case "app":
+		filter.SourceAppID = policy.AppID
+	case "database":
+		filter.SourceDatabaseID = policy.DatabaseID
+	case "volume":
+		filter.SourceVolumeID = policy.VolumeID
+	case "global":
+	default:
+		return 0, fmt.Errorf("unsupported retention scope %q", policy.Scope)
+	}
+	artifacts, _, err := s.List(ctx, filter)
+	if err != nil {
+		return 0, err
+	}
+	cutoff := time.Time{}
+	if policy.RetentionDays > 0 {
+		cutoff = time.Now().UTC().Add(-time.Duration(policy.RetentionDays) * 24 * time.Hour)
+	}
+	deleted := 0
+	for index, artifact := range artifacts {
+		exceedsCount := policy.MaxBackups > 0 && index >= policy.MaxBackups
+		exceedsAge := !cutoff.IsZero() && artifact.CreatedAt.Before(cutoff)
+		if artifact.IsLocked || (!exceedsCount && !exceedsAge) {
+			continue
+		}
+		if err := s.Delete(ctx, artifact.ID, "retention"); err != nil {
+			return deleted, err
+		}
+		deleted++
+	}
+	return deleted, nil
 }
 
 // GetStatistics gets statistics for backup artifacts
 func (s *ArtifactService) GetStatistics(ctx context.Context, filters ArtifactFilter) (*ArtifactStatistics, error) {
-	// TODO: Implement statistics calculation
-	return &ArtifactStatistics{}, nil
+	filters.Page = 1
+	filters.PerPage = 200
+	artifacts, total, err := s.List(ctx, filters)
+	if err != nil {
+		return nil, err
+	}
+	stats := &ArtifactStatistics{
+		TotalCount: total, ByType: make(map[string]int),
+		ByStorage: make(map[string]int), ByStatus: make(map[string]int),
+	}
+	now := time.Now().UTC()
+	for _, artifact := range artifacts {
+		stats.TotalSize += artifact.FileSize
+		stats.ByType[string(artifact.ArtifactType)]++
+		stats.ByStorage[artifact.StorageProvider]++
+		stats.ByStatus[artifact.Status]++
+		if artifact.IsVerified {
+			stats.VerifiedCount++
+		}
+		if artifact.IsLocked {
+			stats.LockedCount++
+		}
+		if artifact.ExpiresAt != nil && artifact.ExpiresAt.Before(now) {
+			stats.ExpiredCount++
+		}
+		created := artifact.CreatedAt
+		if stats.OldestArtifact == nil || created.Before(*stats.OldestArtifact) {
+			stats.OldestArtifact = &created
+		}
+		if stats.NewestArtifact == nil || created.After(*stats.NewestArtifact) {
+			stats.NewestArtifact = &created
+		}
+	}
+	return stats, nil
 }
 
 // deleteFromStorage deletes an artifact from storage
 func (s *ArtifactService) deleteFromStorage(ctx context.Context, artifact *BackupArtifact) error {
+	if artifact.StorageProvider == "beacon" {
+		target, databaseBackupID, err := s.resolveBeaconArtifact(ctx, artifact)
+		if err != nil {
+			return err
+		}
+		if databaseBackupID != "" {
+			return s.daemonClient.DeleteDatabaseBackup(ctx, target.NodeURL, target.NodeToken, databaseBackupID)
+		}
+		return s.daemonClient.DeleteBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, artifact.StoragePath)
+	}
 	adapter, err := s.getStorageAdapter(artifact.StorageProvider)
 	if err != nil {
 		return fmt.Errorf("failed to get storage adapter: %w", err)
@@ -608,6 +808,69 @@ func (s *ArtifactService) deleteFromStorage(ctx context.Context, artifact *Backu
 
 	s.logger.Infof("Deleted artifact from storage: %s", artifact.StoragePath)
 	return nil
+}
+
+func (s *ArtifactService) downloadFromBeacon(ctx context.Context, artifact *BackupArtifact) (io.ReadCloser, error) {
+	target, databaseBackupID, err := s.resolveBeaconArtifact(ctx, artifact)
+	if err != nil {
+		return nil, err
+	}
+	if databaseBackupID != "" {
+		return s.daemonClient.DownloadDatabaseBackup(ctx, target.NodeURL, target.NodeToken, databaseBackupID)
+	}
+	return s.daemonClient.DownloadBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, artifact.StoragePath)
+}
+
+func (s *ArtifactService) resolveBeaconArtifact(ctx context.Context, artifact *BackupArtifact) (store.ServerControlTarget, string, error) {
+	if s.daemonClient == nil {
+		return store.ServerControlTarget{}, "", fmt.Errorf("daemon client not available")
+	}
+	var serverID string
+	var databaseBackupID string
+	switch artifact.ArtifactType {
+	case BackupTypeServer:
+		if artifact.SourceServerID != nil {
+			serverID = *artifact.SourceServerID
+		}
+	case BackupTypeApp:
+		if artifact.SourceAppID == nil {
+			return store.ServerControlTarget{}, "", fmt.Errorf("artifact has no source app")
+		}
+		app, err := s.store.GetApplication(ctx, *artifact.SourceAppID)
+		if err != nil {
+			return store.ServerControlTarget{}, "", err
+		}
+		if app.ServerID != nil {
+			serverID = *app.ServerID
+		}
+	case BackupTypeDatabase:
+		if artifact.SourceDatabaseID == nil {
+			return store.ServerControlTarget{}, "", fmt.Errorf("artifact has no source database")
+		}
+		database, err := s.store.GetDBContainerBackupTarget(ctx, *artifact.SourceDatabaseID)
+		if err != nil {
+			return store.ServerControlTarget{}, "", err
+		}
+		serverID = database.ServerID
+		databaseBackupID = strings.TrimSuffix(filepath.Base(artifact.StoragePath), ".backup.gz")
+	case BackupTypeVolume:
+		if artifact.JobID == nil {
+			return store.ServerControlTarget{}, "", fmt.Errorf("volume artifact has no source job")
+		}
+		record, err := s.store.GetBackupJob(ctx, *artifact.JobID)
+		if err != nil {
+			return store.ServerControlTarget{}, "", err
+		}
+		job := backupJobFromStore(record)
+		if job.ServerID != nil {
+			serverID = *job.ServerID
+		}
+	}
+	if serverID == "" {
+		return store.ServerControlTarget{}, "", fmt.Errorf("artifact has no backing server")
+	}
+	target, err := s.store.ServerControlTarget(ctx, serverID)
+	return target, databaseBackupID, err
 }
 
 // downloadToTempFile downloads an artifact to a temporary file
@@ -645,6 +908,58 @@ func (s *ArtifactService) getStorageAdapter(provider string) (StorageAdapter, er
 		return nil, fmt.Errorf("storage provider %s not found and no default adapter", provider)
 	}
 	return adapter, nil
+}
+
+func backupArtifactToRecord(artifact *BackupArtifact) (store.BackupArtifactRecord, error) {
+	data, err := json.Marshal(artifact)
+	if err != nil {
+		return store.BackupArtifactRecord{}, fmt.Errorf("encode backup artifact: %w", err)
+	}
+	return store.BackupArtifactRecord{
+		ID: artifact.ID, JobID: artifact.JobID, ConfigurationID: artifact.ConfigurationID,
+		ArtifactType: string(artifact.ArtifactType), Name: artifact.Name,
+		DisplayName: artifact.DisplayName, StorageProvider: artifact.StorageProvider,
+		StoragePath: artifact.StoragePath, FileSize: artifact.FileSize,
+		FileHash: artifact.FileHash, Status: artifact.Status,
+		IsVerified: artifact.IsVerified, IsLocked: artifact.IsLocked,
+		LockReason: artifact.LockReason, Data: data, CreatedAt: artifact.CreatedAt,
+		UpdatedAt: artifact.UpdatedAt, UploadedAt: artifact.UploadedAt,
+	}, nil
+}
+
+func backupArtifactFromRecord(record store.BackupArtifactRecord) *BackupArtifact {
+	var artifact BackupArtifact
+	_ = json.Unmarshal(record.Data, &artifact)
+	artifact.ID = record.ID
+	artifact.JobID = record.JobID
+	artifact.ConfigurationID = record.ConfigurationID
+	artifact.ArtifactType = BackupType(record.ArtifactType)
+	artifact.Name = record.Name
+	artifact.DisplayName = record.DisplayName
+	artifact.StorageProvider = record.StorageProvider
+	artifact.StoragePath = record.StoragePath
+	artifact.FileSize = record.FileSize
+	artifact.FileHash = record.FileHash
+	artifact.Status = record.Status
+	artifact.IsVerified = record.IsVerified
+	artifact.IsLocked = record.IsLocked
+	artifact.LockReason = record.LockReason
+	artifact.CreatedAt = record.CreatedAt
+	artifact.UpdatedAt = record.UpdatedAt
+	artifact.UploadedAt = record.UploadedAt
+	return &artifact
+}
+
+func (s *ArtifactService) persistArtifact(ctx context.Context, artifact *BackupArtifact) error {
+	record, err := backupArtifactToRecord(artifact)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdateBackupArtifactRecord(ctx, &record); err != nil {
+		return fmt.Errorf("persist backup artifact: %w", err)
+	}
+	artifact.UpdatedAt = time.Now().UTC()
+	return nil
 }
 
 // calculateFileHash calculates the hash of a file

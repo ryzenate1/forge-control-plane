@@ -43,3 +43,57 @@ groups:
         annotations:
           summary: "Beacon container runtime is disabled"
           description: "Beacon is responding, but its Docker runtime is unavailable; server lifecycle operations will fail."
+
+      - alert: DiskSpaceLow
+        expr: (node_filesystem_avail_bytes / node_filesystem_size_bytes) < 0.10
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Disk space utilization is over 90%"
+          description: "Mountpoint {{ $labels.mountpoint }} has less than 10% free space remaining."
+
+      - alert: ContainerRestartLoop
+        expr: increase(container_restart_count[5m]) > 3
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container restart loop detected"
+          description: "Container {{ $labels.name }} has restarted more than 3 times in the last 5 minutes."
+
+      - alert: CertExpiryWarning
+        expr: (probe_ssl_earliest_cert_expiry - time()) < 2592000
+        for: 12h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expiring soon"
+          description: "TLS certificate for {{ $labels.instance }} expires in less than 30 days."
+
+      - alert: BackupFailed
+        expr: game_panel_backup_success == 0
+        for: 1h
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL backup failed"
+          description: "The latest automated PostgreSQL backup operation failed."
+
+      - alert: PrometheusSelfScrapeFailed
+        expr: up{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus self-scrape failed"
+          description: "Prometheus is unable to scrape its own metrics endpoint."
+
+      - alert: ContainerOOMKilled
+        expr: increase(container_oom_events_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Container killed by OOM killer"
+          description: "Container {{ $labels.name }} experienced an out-of-memory kill event."

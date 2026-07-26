@@ -4,6 +4,8 @@ import (
 	"testing"
 )
 
+var ErrNotImplemented = ErrMigrationManagedByControlPlane
+
 func TestCapabilitiesUnion(t *testing.T) {
 	a := Capabilities{Containers: true, Snapshots: true}
 	b := Capabilities{Containers: false, Migration: true, ResourceLimits: true}

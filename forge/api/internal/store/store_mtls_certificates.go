@@ -17,17 +17,17 @@ const (
 )
 
 type MTLSCertificate struct {
-	ID                 string       `json:"id"`
-	CertType           MTLSCertType `json:"certType"`
-	CommonName         string       `json:"commonName"`
-	Organization       string       `json:"organization"`
-	CertificatePEM     string       `json:"certificatePem"`
-	PrivateKey         string       `json:"-"`
-	SerialNumber       string       `json:"serialNumber"`
-	ExpiresAt          time.Time    `json:"expiresAt"`
-	RevokedAt          *time.Time   `json:"revokedAt,omitempty"`
-	NodeID             *string      `json:"nodeId,omitempty"`
-	CreatedAt          time.Time    `json:"createdAt"`
+	ID             string       `json:"id"`
+	CertType       MTLSCertType `json:"certType"`
+	CommonName     string       `json:"commonName"`
+	Organization   string       `json:"organization"`
+	CertificatePEM string       `json:"certificatePem"`
+	PrivateKey     string       `json:"-"`
+	SerialNumber   string       `json:"serialNumber"`
+	ExpiresAt      time.Time    `json:"expiresAt"`
+	RevokedAt      *time.Time   `json:"revokedAt,omitempty"`
+	NodeID         *string      `json:"nodeId,omitempty"`
+	CreatedAt      time.Time    `json:"createdAt"`
 }
 
 type CreateMTLSCertificateRequest struct {
@@ -175,6 +175,18 @@ func (s *Store) RevokeMTLSCertificate(ctx context.Context, id string) error {
 	now := time.Now().UTC()
 	_, err := s.db.Exec(ctx, `UPDATE mtls_certificates SET revoked_at = $1 WHERE id::text = $2 AND revoked_at IS NULL`, now, id)
 	return err
+}
+
+func (s *Store) IsMTLSCertificateRevoked(ctx context.Context, serialNumber string) (bool, error) {
+	var revoked bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1
+			FROM mtls_certificates
+			WHERE serial_number = $1 AND revoked_at IS NOT NULL
+		)
+	`, serialNumber).Scan(&revoked)
+	return revoked, err
 }
 
 func (s *Store) GetActiveMTLSCertificateByNode(ctx context.Context, nodeID string, certType MTLSCertType) (MTLSCertificate, error) {

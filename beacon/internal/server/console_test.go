@@ -188,12 +188,13 @@ func TestConsoleStopDeleteAndNoProducerLeaks(t *testing.T) {
 		t.Fatalf("expected one attach per lifecycle, got %d", attaches)
 	}
 
-	if err := server.consoles.Ensure("delete-me"); err != nil {
+	deleteServerID := "123e4567-e89b-12d3-a456-426614174099"
+	if err := server.consoles.Ensure(deleteServerID); err != nil {
 		t.Fatal(err)
 	}
-	deleted := rt.session("delete-me")
-	req := httptest.NewRequest("DELETE", "/servers/delete-me", nil)
-	req.SetPathValue("id", "delete-me")
+	deleted := rt.session(deleteServerID)
+	req := httptest.NewRequest("DELETE", "/servers/"+deleteServerID, nil)
+	req.SetPathValue("id", deleteServerID)
 	rec := httptest.NewRecorder()
 	server.delete(rec, req)
 	if rec.Code != 202 {

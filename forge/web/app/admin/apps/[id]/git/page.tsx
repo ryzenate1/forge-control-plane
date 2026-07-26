@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { use, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
@@ -15,6 +15,20 @@ import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } fro
 import { formatDate } from "@/lib/utils";
 import { toast, Toaster } from "@/components/ui/sonner";
 
+interface GitConfig {
+  repoUrl?: string;
+  branch?: string;
+  provider?: string;
+  autoDeploy?: boolean;
+  webhookUrl?: string;
+  commits?: Array<{ sha: string; message: string; author: string; timestamp: string; url?: string }>;
+}
+
+function parseGitConfig(sourceConfig: unknown): GitConfig | null {
+  if (!sourceConfig || typeof sourceConfig !== "object") return null;
+  return sourceConfig as GitConfig;
+}
+
 export default function GitSourcePage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -25,10 +39,12 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
     queryFn: () => fetchApp(id),
   });
 
-  const { data: gitSource, isLoading: gitLoading } = useQuery({
+  const { data: gitResp, isLoading: gitLoading } = useQuery({
     queryKey: ["app-git", id],
     queryFn: () => fetchAppGitSource(id),
   });
+
+  const gitSource = useMemo(() => gitResp ? parseGitConfig(gitResp.sourceConfig) : null, [gitResp]);
 
   const [newBranch, setNewBranch] = useState("");
   const [webhookCopied, setWebhookCopied] = useState(false);

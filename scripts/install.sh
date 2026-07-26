@@ -543,7 +543,7 @@ generate_environment() {
 POSTGRES_DB=gamepanel
 POSTGRES_USER=gamepanel
 POSTGRES_PASSWORD=$postgres_password
-DATABASE_URL=postgres://gamepanel:$postgres_password@postgres:5432/gamepanel?sslmode=disable
+DATABASE_URL=postgres://gamepanel:$postgres_password@postgres:5432/gamepanel?sslmode=prefer
 POSTGRES_BACKUP_HOST_DIR=/var/backups/gamepanel/postgres
 POSTGRES_BACKUP_INTERVAL_SECONDS=86400
 POSTGRES_BACKUP_RETENTION_DAYS=14
@@ -589,9 +589,8 @@ GRAFANA_ADMIN_PASSWORD=$grafana_password
 BACKUP_ADAPTER=local
 
 # --- Admin Account ---
-# These are consumed by the setup endpoint on first run
 GAMEPANEL_ADMIN_EMAIL=$GAMEPANEL_ADMIN_EMAIL
-GAMEPANEL_ADMIN_PASSWORD=$GAMEPANEL_ADMIN_PASSWORD
+# GAMEPANEL_ADMIN_PASSWORD supplied via setup execution environment, not persisted to disk
 EOF
 
     chmod 600 "$ENV_FILE"

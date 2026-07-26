@@ -4,7 +4,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
 import { getSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, getDeploymentBuildLogs, type SourceDeployment, type BuildLog } from "@/lib/api/source-deployments";
-import { Play, XCircle, Trash2, GitBranch, Github, ArrowLeft, RefreshCw, Loader2, CheckCircle, Clock, AlertTriangle } from "lucide-react";
+import { Play, XCircle, Trash2, GitBranch, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 const statusColors: Record<string, string> = {
@@ -52,7 +52,7 @@ export default function SourceDeploymentDetailPage() {
   const { data: logs } = useQuery({
     queryKey: ["buildLogs", id],
     queryFn: () => getDeploymentBuildLogs(id),
-    refetchInterval: (query) => {
+    refetchInterval: () => {
       const d = queryClient.getQueryData<SourceDeployment>(["sourceDeployment", id]);
       if (d && !["completed", "failed", "canceled", "healthy", "unhealthy"].includes(d.status)) {
         return 3000;
@@ -100,7 +100,7 @@ export default function SourceDeploymentDetailPage() {
     return (
       <div className="p-6 text-center">
         <p className="opacity-60">Deployment not found.</p>
-        <button onClick={() => router.push("/admin/source-deployments")} className="btn btn-ghost mt-4">
+        <button onClick={() => router.push("/admin/source-deployments")} className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-4 py-2 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50 mt-4">
           <ArrowLeft className="w-4 h-4 mr-2" /> Back
         </button>
       </div>
@@ -113,12 +113,12 @@ export default function SourceDeploymentDetailPage() {
     <div className="p-6 max-w-4xl mx-auto">
       <button
         onClick={() => router.push("/admin/source-deployments")}
-        className="btn btn-ghost mb-4"
+        className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-4 py-2 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50 mb-4"
       >
         <ArrowLeft className="w-4 h-4 mr-2" /> Back to Deployments
       </button>
 
-      <div className="card p-6 mb-6">
+      <div className="rounded-xl border border-white/[0.08] bg-[#111722] p-6 mb-6 shadow-xl shadow-black/10">
         <div className="flex items-start justify-between mb-4">
           <div>
             <h1 className="text-2xl font-bold flex items-center gap-2">
@@ -133,13 +133,13 @@ export default function SourceDeploymentDetailPage() {
             </div>
           </div>
           <div className="flex items-center gap-2">
-            <button onClick={() => refetch()} className="btn btn-ghost btn-sm" title="Refresh">
+            <button onClick={() => refetch()} className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50" title="Refresh">
               <RefreshCw className="w-4 h-4" />
             </button>
             {isActive && (
               <button
                 onClick={() => cancelMutation.mutate()}
-                className="btn btn-ghost btn-sm"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
                 disabled={cancelMutation.isPending}
               >
                 <XCircle className="w-4 h-4 mr-1" /> Cancel
@@ -147,14 +147,14 @@ export default function SourceDeploymentDetailPage() {
             )}
             <button
               onClick={() => deployMutation.mutate()}
-              className="btn btn-primary btn-sm"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-red-500/70 bg-red-600 px-3 py-1.5 text-sm font-semibold text-white shadow-sm shadow-red-950/40 transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-50"
               disabled={deployMutation.isPending}
             >
               <Play className="w-4 h-4 mr-1" /> Deploy
             </button>
             <button
               onClick={() => deleteMutation.mutate()}
-              className="btn btn-ghost btn-sm text-red-400"
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-red-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
               disabled={deleteMutation.isPending}
             >
               <Trash2 className="w-4 h-4" />
@@ -197,7 +197,7 @@ export default function SourceDeploymentDetailPage() {
         </div>
       </div>
 
-      <div className="card">
+      <div className="rounded-xl border border-white/[0.08] bg-[#111722] shadow-xl shadow-black/10">
         <div className="p-4 border-b border-white/10 flex items-center justify-between">
           <h2 className="font-semibold">Build Logs</h2>
           {isActive && <Loader2 className="w-4 h-4 animate-spin text-blue-400" />}

@@ -71,13 +71,12 @@ func (t sqlAdminTx) QueryRowContext(ctx context.Context, query string, args ...a
 type openAdminFunc func(store.DatabaseHost, string) (adminDB, error)
 
 type Service struct {
-	store     provisioningStore
-	open      openAdminFunc
-	fullStore *store.Store
+	store provisioningStore
+	open  openAdminFunc
 }
 
 func NewService(s *store.Store) *Service {
-	service := &Service{store: s, fullStore: s}
+	service := &Service{store: s}
 	service.open = service.connect
 	return service
 }
@@ -305,122 +304,6 @@ func connectionDSN(host store.DatabaseHost, password string) string {
 	query.Set("sslmode", sslMode)
 	u.RawQuery = query.Encode()
 	return u.String()
-}
-
-func (s *Service) ProvisionService(ctx context.Context, name, engine, version string, memoryMB, cpuShares int) (*store.DatabaseService, error) {
-	if s.fullStore == nil {
-		return nil, fmt.Errorf("store not available")
-	}
-	svc, err := s.fullStore.CreateDatabaseService(ctx, store.CreateDatabaseServiceRequest{
-		Name:      name,
-		Type:      engine,
-		Version:   version,
-		MemoryMB:  memoryMB,
-		CPUShares: cpuShares,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("create database service: %w", err)
-	}
-	password := generatePassword(32)
-	dbName := generateDBName()
-	username := generateUsername()
-	port := defaultPortForEngine(engine)
-	connStr := connectionStringForDB(engine, dbName, username, password, "127.0.0.1", port, version)
-	creds, _ := credentialsJSON(engine, dbName, username, password)
-	_ = s.fullStore.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", "127.0.0.1", port, username, password, dbName, "", "", connStr, creds)
-	result, err := s.fullStore.GetDatabaseService(ctx, svc.ID)
-	return &result, err
-}
-
-func (s *Service) DeleteService(ctx context.Context, id string) error {
-	if s.fullStore == nil {
-		return fmt.Errorf("store not available")
-	}
-	_ = s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "deleting", "", 0, "", "", "", "", "", "", nil)
-	return s.fullStore.DeleteDatabaseService(ctx, id)
-}
-
-func (s *Service) StopService(ctx context.Context, id string) error {
-	if s.fullStore == nil {
-		return fmt.Errorf("store not available")
-	}
-	return s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "stopped", "", 0, "", "", "", "", "", "", nil)
-}
-
-func (s *Service) StartService(ctx context.Context, id string) error {
-	if s.fullStore == nil {
-		return fmt.Errorf("store not available")
-	}
-	return s.fullStore.UpdateDatabaseServiceStatus(ctx, id, "running", "", 0, "", "", "", "", "", "", nil)
-}
-
-func (s *Service) CreateBackup(ctx context.Context, id string) (*store.DatabaseService, error) {
-	if s.fullStore == nil {
-		return nil, fmt.Errorf("store not available")
-	}
-	svc, err := s.fullStore.GetDatabaseService(ctx, id)
-	if err != nil {
-		return nil, err
-	}
-	backup, err := s.fullStore.CreateServiceBackup(ctx, store.CreateServiceBackupRequest{
-		ServiceID: id,
-		Status:    "completed",
-		FilePath:  fmt.Sprintf("/backups/%s/%s.sql", id, id),
-	})
-	if err != nil {
-		return nil, err
-	}
-	_ = s.fullStore.UpdateServiceBackupStatus(ctx, backup.ID, "completed", backup.FilePath, 0)
-	return &svc, nil
-}
-
-func (s *Service) ListBackups(ctx context.Context, id string) ([]store.DatabaseServiceBackup, error) {
-	if s.fullStore == nil {
-		return nil, fmt.Errorf("store not available")
-	}
-	return s.fullStore.ListServiceBackups(ctx, id)
-}
-
-func (s *Service) RestoreBackup(ctx context.Context, id, backupID string) error {
-	if s.fullStore == nil {
-		return fmt.Errorf("store not available")
-	}
-	backup, err := s.fullStore.GetServiceBackup(ctx, backupID)
-	if err != nil {
-		return err
-	}
-	if backup.ServiceID != id {
-		return fmt.Errorf("backup %s does not belong to service %s", backupID, id)
-	}
-	if err := s.fullStore.UpdateServiceBackupStatus(ctx, backupID, "running", "", 0); err != nil {
-		return err
-	}
-	return s.fullStore.UpdateServiceBackupStatus(ctx, backupID, "completed", "", 0)
-}
-
-func (s *Service) GetServiceLogs(ctx context.Context, id string, limit int) ([]string, error) {
-	if s.fullStore == nil {
-		return nil, fmt.Errorf("store not available")
-	}
-	return nil, fmt.Errorf("not implemented: log retrieval requires a daemon client")
-}
-
-func (s *Service) CreateUser(ctx context.Context, id, username, password, permissions string) (*store.DatabaseServiceCredential, error) {
-	if s.fullStore == nil {
-		return nil, fmt.Errorf("store not available")
-	}
-	cred, err := s.fullStore.CreateServiceCredential(ctx, store.CreateServiceCredentialRequest{
-		ServiceID:     id,
-		Username:      username,
-		EncryptedPass: password,
-		DatabaseName:  "",
-		Permissions:   permissions,
-	})
-	return &cred, err
-}
-
-func (s *Service) GrantPermissions(ctx context.Context, id, username, database, permissions string) error {
-	return fmt.Errorf("not implemented")
 }
 
 func mysqlTLSConfigName(host store.DatabaseHost) string {

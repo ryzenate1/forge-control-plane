@@ -41,11 +41,9 @@ export function PermissionGate({
 }) {
   if (!access) return null;
   if (permission && !hasPermission(access, permission)) {
-    return (
-      fallback ?? <LockPlaceholder message="You do not have permission to view this content." />
-    ) as React.ReactElement;
+    return fallback ?? <LockPlaceholder message="You do not have permission to view this content." />;
   }
-  return children as React.ReactElement;
+  return <>{children}</>;
 }
 
 export function RoleGate({
@@ -60,11 +58,9 @@ export function RoleGate({
   fallback?: ReactNode;
 }) {
   if (!currentRole || !roles.includes(currentRole)) {
-    return (
-      fallback ?? <LockPlaceholder message={`This content is restricted to ${roles.join(" or ")} roles.`} />
-    ) as React.ReactElement;
+    return fallback ?? <LockPlaceholder message={`This content is restricted to ${roles.join(" or ")} roles.`} />;
   }
-  return children as React.ReactElement;
+  return <>{children}</>;
 }
 
 export function ScopeGate({
@@ -81,9 +77,7 @@ export function ScopeGate({
   const list = Array.isArray(requiredScope) ? requiredScope : [requiredScope];
   const hasScope = currentScopes?.some((s) => list.includes(s)) ?? false;
   if (!hasScope) {
-    return (
-      fallback ?? <LockPlaceholder message="This content requires additional permissions." />
-    ) as React.ReactElement;
+    return fallback ?? <LockPlaceholder message="This content requires additional permissions." />;
   }
-  return children as React.ReactElement;
+  return <>{children}</>;
 }

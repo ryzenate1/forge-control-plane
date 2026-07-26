@@ -8,14 +8,20 @@ import (
 	"github.com/google/uuid"
 )
 
-func (s *Store) ListAudit(ctx context.Context) ([]AuditEvent, error) {
+func (s *Store) ListAudit(ctx context.Context, limit, offset int) ([]AuditEvent, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT a.id::text, a.action, a.target_type, a.target_id::text, a.metadata::text, a.created_at, u.email
 		FROM audit_events a
 		LEFT JOIN users u ON u.id = a.actor_id
 		ORDER BY a.created_at DESC
-		LIMIT 50
-	`)
+		LIMIT $1 OFFSET $2
+	`, limit, offset)
 	if err != nil {
 		return nil, err
 	}

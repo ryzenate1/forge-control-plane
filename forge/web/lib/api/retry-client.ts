@@ -1,6 +1,6 @@
 "use client";
 
-import { ApiError } from "./http";
+import { ApiError, getCSRFToken } from "./http";
 
 interface RetryConfig {
   maxRetries?: number;
@@ -21,6 +21,14 @@ function getDelay(attempt: number, baseDelay: number, maxDelay: number): number 
   return delay + Math.random() * 500;
 }
 
+function addCSRFToOptions(options: RequestInit & { signal?: AbortSignal }): void {
+  const method = options.method ?? 'GET';
+  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) return;
+  const csrfToken = getCSRFToken();
+  if (!csrfToken) return;
+  options.headers = { ...options.headers as Record<string, string>, 'X-CSRF-Token': csrfToken };
+}
+
 export async function fetchWithRetry<T>(
   url: string,
   options: RequestInit & { signal?: AbortSignal } = {},
@@ -31,6 +39,7 @@ export async function fetchWithRetry<T>(
 
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
+      addCSRFToOptions(options);
       const response = await fetch(url, { ...options });
 
       if (!response.ok && retryOnStatus.includes(response.status) && attempt < maxRetries) {

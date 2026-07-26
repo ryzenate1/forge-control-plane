@@ -3,6 +3,7 @@ package backup
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -56,7 +57,17 @@ func (w *Worker) Start(ctx context.Context) {
 	}
 	w.stopCh = make(chan struct{})
 	w.wg.Add(1)
-	go func() { defer w.wg.Done(); w.loop(ctx) }()
+	go func() {
+		defer w.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				w.svc.log("backup worker panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
+		w.loop(ctx)
+	}()
 }
 
 func (w *Worker) Wait() { w.wg.Wait() }
@@ -222,7 +233,7 @@ func (w *Worker) executeDatabaseBackup(ctx context.Context, policy store.BackupP
 	backupCtx, backupCancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer backupCancel()
 
-	entry, daemonErr := w.daemon.BackupDatabase(backupCtx, target.NodeURL, target.NodeToken, dbTarget.ContainerID, dbTarget.Engine)
+	entry, daemonErr := w.daemon.BackupDatabase(backupCtx, target.NodeURL, target.NodeToken, dbTarget.ContainerID, dbTarget.Engine, stored.UUID)
 	if daemonErr != nil {
 		now := time.Now().UTC()
 		_, _ = w.store.UpsertBackup(ctx, target.ServerID, store.UpsertBackupRequest{

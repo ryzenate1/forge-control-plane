@@ -1,4 +1,28 @@
 // Common API types
+export type PaginatedResponse<T> = {
+  data: T[];
+  total: number;
+  page: number;
+  perPage: number;
+};
+
+/** Matches the meta.pagination shape returned by paginated list endpoints. */
+export type PaginationMeta = {
+  current: number;
+  total: number;
+  count: number;
+  per_page: number;
+  total_records: number;
+};
+
+/** Full paginated envelope including optional pagination metadata (meta.pagination). */
+export type PaginatedEnvelope<T> = {
+  data: T[];
+  meta?: {
+    pagination?: PaginationMeta;
+  };
+};
+
 export type ApiUser = {
   id: string;
   externalId?: string;
@@ -1159,6 +1183,40 @@ export type ApiFileEntry = {
   createdAt?: string;
 };
 
+export type ApiFileContent = {
+  content: string;
+  encoding?: string;
+};
+
+export type ApiFileRead = ApiFileContent;
+
+export type ApiTask = {
+  id: string;
+  serverId: string;
+  command: string;
+  status: string;
+  output?: string;
+  createdAt: string;
+  completedAt?: string | null;
+};
+
+export type ApiNotification = {
+  id: string;
+  userId?: string;
+  title: string;
+  content: string;
+  read: boolean;
+  createdAt: string;
+};
+
+export type ApiAlert = {
+  id: string;
+  title: string;
+  message: string;
+  level: "info" | "warning" | "error" | "critical";
+  createdAt: string;
+};
+
 export type ApiServerSubuser = {
   id: string;
   userId?: string;
@@ -1173,26 +1231,31 @@ export type ApiStartupVariable = {
   name: string;
   description?: string;
   envVariable: string;
-  env_variable?: string;
   defaultValue: string;
-  default_value?: string;
   serverValue: string;
-  server_value?: string;
   rules: string;
+  isEditable?: boolean;
+  /** @deprecated Use envVariable instead */
+  env_variable?: string;
+  /** @deprecated Use defaultValue instead */
+  default_value?: string;
+  /** @deprecated Use serverValue instead */
+  server_value?: string;
+  /** @deprecated Use isEditable instead */
   is_editable?: boolean;
 };
 
 export type CrashEvent = {
   id: string;
-  server_id: string;
-  node_id: string;
-  exit_code: number;
-  oom_killed: boolean;
-  clean_exit: boolean;
-  auto_restarted: boolean;
-  crash_count: number;
-  node_state: Record<string, unknown> | null;
-  created_at: string;
+  serverId: string;
+  nodeId: string;
+  exitCode: number;
+  oomKilled: boolean;
+  cleanExit: boolean;
+  autoRestarted: boolean;
+  crashCount: number;
+  nodeState: Record<string, unknown> | null;
+  createdAt: string;
 };
 
 export type ApiHealthCheck = {
@@ -1473,4 +1536,73 @@ export type ProcfileEntry = {
   processType: string;
   command: string;
   quantity?: number;
+};
+
+export type ApiServerConfiguration = {
+  startup: string;
+  stop: string;
+  dockerImage: string;
+  environment: Record<string, string>;
+  limits: {
+    memory: number;
+    disk: number;
+    cpu: number;
+    io: number;
+    swap: number;
+    threads: number | null;
+  };
+};
+
+export type ApiNodeSystemInformation = {
+  version: string;
+  os: string;
+  architecture: string;
+  cpuThreads: number;
+  dockerAvailable: boolean;
+  dockerStatus: string;
+  kernelVersion?: string;
+  uptime?: number;
+};
+
+export type ApiRegionCluster = {
+  regionId: string;
+  nodes: Array<{
+    id: string;
+    name: string;
+    status: string;
+    serverCount: number;
+  }>;
+  totalServers: number;
+  totalNodes: number;
+};
+
+export type ApiNodeDeployment = {
+  nodeId: string;
+  deployable: boolean;
+  reason?: string;
+  score?: number;
+  allocatedResources?: {
+    cpu: number;
+    memory: number;
+    disk: number;
+  };
+};
+
+export type ApiRecoveryToken = {
+  id: string;
+  token: string;
+  used: boolean;
+  createdAt: string;
+  usedAt?: string;
+};
+
+export type ApiAuditLogResponse = {
+  data: ApiAdminAuditEvent[];
+  pagination?: {
+    current: number;
+    total: number;
+    count: number;
+    per_page: number;
+    total_records: number;
+  };
 };

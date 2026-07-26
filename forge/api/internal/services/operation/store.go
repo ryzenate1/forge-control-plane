@@ -46,7 +46,7 @@ func (s *PostgresStore) Dequeue(ctx context.Context) (*Operation, error) {
 		)
 		UPDATE operations SET status='running', started_at=COALESCE(started_at,NOW()), updated_at=NOW()
 		FROM candidate WHERE operations.id=candidate.id
-		RETURNING id, kind, resource_type, resource_id, status,
+		RETURNING operations.id, kind, resource_type, resource_id, status,
 			COALESCE(error,''), COALESCE(input,'{}'::jsonb), COALESCE(idempotency_key,''),
 			desired_generation, observed_generation, created_at, updated_at, started_at, completed_at
 	`).Scan(
@@ -143,21 +143,61 @@ func (s *PostgresStore) UpdateStatus(ctx context.Context, id string, status Stat
 	now := time.Now().UTC()
 	switch status {
 	case StatusRunning:
-		_, err := s.pool.Exec(ctx, `UPDATE operations SET status='running', started_at=COALESCE(started_at,$2), updated_at=$2 WHERE id=$1`, id, now)
+		_, err := s.pool.Exec(ctx, `
+			WITH next_attempt AS (
+				SELECT COALESCE(MAX(oa.attempt), 0) + 1 AS attempt
+				FROM operation_attempts oa
+				JOIN operation_steps os ON os.id = oa.operation_step_id
+				WHERE os.operation_id = $1
+			), inserted AS (
+				INSERT INTO operation_attempts (id, operation_step_id, attempt, status, worker_id, started_at)
+				SELECT $1::text || '-attempt-' || next_attempt.attempt::text,
+				       'step-' || $1::text, next_attempt.attempt, 'running', '', $2
+				FROM next_attempt
+			)
+			UPDATE operations SET status='running', started_at=COALESCE(started_at,$2), updated_at=$2 WHERE id=$1`, id, now)
 		return err
 	case StatusSucceeded:
-		_, err := s.pool.Exec(ctx, `UPDATE operations SET status='succeeded', completed_at=$2, updated_at=$2 WHERE id=$1`, id, now)
+		_, err := s.pool.Exec(ctx, `
+			WITH completed AS (
+				UPDATE operation_attempts SET status='succeeded', completed_at=$2
+				WHERE id = (SELECT oa.id FROM operation_attempts oa JOIN operation_steps os ON os.id=oa.operation_step_id
+					WHERE os.operation_id=$1 ORDER BY oa.attempt DESC LIMIT 1)
+			)
+			UPDATE operations SET status='succeeded', completed_at=$2, updated_at=$2 WHERE id=$1`, id, now)
 		return err
 	case StatusFailed:
-		_, err := s.pool.Exec(ctx, `UPDATE operations SET status='failed', error=$3, completed_at=$2, updated_at=$2 WHERE id=$1`, id, now, errMsg)
+		_, err := s.pool.Exec(ctx, `
+			WITH completed AS (
+				UPDATE operation_attempts SET status='failed', error=$3, completed_at=$2
+				WHERE id = (SELECT oa.id FROM operation_attempts oa JOIN operation_steps os ON os.id=oa.operation_step_id
+					WHERE os.operation_id=$1 ORDER BY oa.attempt DESC LIMIT 1)
+			)
+			UPDATE operations SET status='failed', error=$3, completed_at=$2, updated_at=$2 WHERE id=$1`, id, now, errMsg)
 		return err
 	case StatusRetrying:
-		_, err := s.pool.Exec(ctx, `UPDATE operations SET status='retrying', error=$3, updated_at=$2 WHERE id=$1`, id, now, errMsg)
+		_, err := s.pool.Exec(ctx, `
+			WITH completed AS (
+				UPDATE operation_attempts SET status='failed', error=$3, completed_at=$2
+				WHERE id = (SELECT oa.id FROM operation_attempts oa JOIN operation_steps os ON os.id=oa.operation_step_id
+					WHERE os.operation_id=$1 ORDER BY oa.attempt DESC LIMIT 1)
+			)
+			UPDATE operations SET status='retrying', error=$3, updated_at=$2 WHERE id=$1`, id, now, errMsg)
 		return err
 	default:
 		_, err := s.pool.Exec(ctx, `UPDATE operations SET status=$2, updated_at=NOW() WHERE id=$1`, id, string(status))
 		return err
 	}
+}
+
+func (s *PostgresStore) AttemptCount(ctx context.Context, id string) (int, error) {
+	var count int
+	err := s.pool.QueryRow(ctx, `
+		SELECT COUNT(*)
+		FROM operation_attempts oa
+		JOIN operation_steps os ON os.id = oa.operation_step_id
+		WHERE os.operation_id = $1`, id).Scan(&count)
+	return count, err
 }
 
 func (s *PostgresStore) Cancel(ctx context.Context, id string) error {

@@ -1190,6 +1190,10 @@ func (s *Store) Seed(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	devHash, err := bcrypt.GenerateFromPassword([]byte("Admin123!@#"), bcrypt.DefaultCost)
+	if err != nil {
+		return err
+	}
 	nodeToken := "dev-node-token"
 	nodeTokenEncrypted, err := s.encryptSecret(nodeToken, secretAAD("nodes", nodeID, "daemon_token"))
 	if err != nil {
@@ -1220,6 +1224,21 @@ func (s *Store) Seed(ctx context.Context) error {
 	`, adminID); err != nil {
 		return err
 	}
+	devID := "77777777-7777-7777-7777-777777777777"
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO users (id, email, password_hash, role)
+		VALUES ($1, 'riyazkathar46@gmail.com', $2, 'admin')
+		ON CONFLICT (email) DO NOTHING
+	`, devID, string(devHash)); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO user_roles (user_id, role_id)
+		SELECT $1, r.id FROM roles r WHERE r.key = 'admin'
+		ON CONFLICT (user_id, role_id) DO NOTHING
+	`, devID); err != nil {
+		return err
+	}
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO nodes (
 			id, uuid, name, region, base_url, fqdn, scheme, status, token_hash,
@@ -1248,23 +1267,25 @@ func (s *Store) Seed(ctx context.Context) error {
 	`, templateID); err != nil {
 		return err
 	}
-	res, err := tx.Exec(ctx, `
-		INSERT INTO servers (id, node_id, owner_id, template_id, egg_id, name, status, memory_mb, cpu_shares, disk_mb)
-		SELECT $1, $2, $3, id, id, 'Survival SMP', 'stopped', 2048, 1024, 10240
-		FROM eggs
+	var eggID string
+	if err = tx.QueryRow(ctx, `
+		SELECT id FROM eggs
 		WHERE name = 'Minecraft Java'
 		  AND nest_id = (SELECT id FROM nests WHERE name = 'Games')
-		ON CONFLICT (id) DO NOTHING
-	`, serverID, nodeID, adminID)
-	if err != nil {
-		return err
-	}
-	if n := res.RowsAffected(); n == 0 {
-		return fmt.Errorf("seed: no egg found for 'Minecraft Java' in 'Games' nest; server not created")
+		LIMIT 1
+	`).Scan(&eggID); err != nil {
+		return fmt.Errorf("seed: no egg found for 'Minecraft Java' in 'Games' nest; server not created: %w", err)
 	}
 	if _, err = tx.Exec(ctx, `
-		INSERT INTO allocations (id, node_id, server_id, ip, port, protocol, alias, notes)
-		VALUES ($1, $2, $3, '0.0.0.0', 25565, 'tcp', 'minecraft.local', 'default Minecraft Java allocation')
+		INSERT INTO servers (id, node_id, owner_id, template_id, egg_id, name, status, memory_mb, cpu_shares, disk_mb)
+		VALUES ($1, $2, $3, $4, $4, 'Survival SMP', 'stopped', 2048, 1024, 10240)
+		ON CONFLICT (id) DO NOTHING
+	`, serverID, nodeID, adminID, eggID); err != nil {
+		return err
+	}
+	if _, err = tx.Exec(ctx, `
+		INSERT INTO allocations (id, node_id, server_id, ip, port, container_port, protocol, alias, notes)
+		VALUES ($1, $2, $3, '0.0.0.0', 25565, 25565, 'tcp', 'minecraft.local', 'default Minecraft Java allocation')
 		ON CONFLICT (node_id, ip, port, protocol) DO UPDATE SET server_id = EXCLUDED.server_id, alias = EXCLUDED.alias
 	`, allocationID, nodeID, serverID); err != nil {
 		return err
@@ -1275,8 +1296,8 @@ func (s *Store) Seed(ctx context.Context) error {
 		return err
 	}
 	if _, err = tx.Exec(ctx, `
-		INSERT INTO allocations (id, node_id, server_id, ip, port, protocol, alias, notes)
-		VALUES ($1, $2, NULL, '0.0.0.0', 25566, 'tcp', 'minecraft-alt.local', 'spare Minecraft Java allocation')
+		INSERT INTO allocations (id, node_id, server_id, ip, port, container_port, protocol, alias, notes)
+		VALUES ($1, $2, NULL, '0.0.0.0', 25566, 25566, 'tcp', 'minecraft-alt.local', 'spare Minecraft Java allocation')
 		ON CONFLICT (node_id, ip, port, protocol) DO NOTHING
 	`, spareAllocationID, nodeID); err != nil {
 		return err

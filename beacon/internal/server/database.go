@@ -1,7 +1,12 @@
 package server
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -67,7 +72,25 @@ func databaseContainerName(dbID string) string {
 	return "mgp-db-" + dbID
 }
 
-func databaseEnvVars(engine, dbName, username, password string) []string {
+// generateRandomSecret returns a cryptographically random, hex-encoded
+// secret with at least the requested number of bytes of entropy.
+func generateRandomSecret(numBytes int) (string, error) {
+	if numBytes < 32 {
+		numBytes = 32
+	}
+	buf := make([]byte, numBytes)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random secret: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
+}
+
+// databaseEnvVars builds the container environment variables for the given
+// engine. rootPassword is only used for engines that provision a separate
+// superuser/root account (mysql/mariadb) and must be an independently
+// generated, high-entropy secret distinct from the application password.
+// It is never returned to API callers.
+func databaseEnvVars(engine, dbName, username, password, rootPassword string) []string {
 	switch strings.ToLower(engine) {
 	case "postgresql":
 		return []string{
@@ -80,7 +103,7 @@ func databaseEnvVars(engine, dbName, username, password string) []string {
 			"MYSQL_DATABASE=" + dbName,
 			"MYSQL_USER=" + username,
 			"MYSQL_PASSWORD=" + password,
-			"MYSQL_ROOT_PASSWORD=" + password,
+			"MYSQL_ROOT_PASSWORD=" + rootPassword,
 		}
 	case "mongodb":
 		return []string{
@@ -217,7 +240,12 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	envVars := databaseEnvVars(engine, req.DBName, req.Username, req.Password)
+	rootPassword, err := generateRandomSecret(32)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "generate root credentials: " + err.Error()})
+		return
+	}
+	envVars := databaseEnvVars(engine, req.DBName, req.Username, req.Password, rootPassword)
 	memoryMB := req.MemoryMB
 	if memoryMB == 0 {
 		memoryMB = 256
@@ -232,9 +260,9 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 				nat.Port(fmt.Sprintf("%d/tcp", containerPort)): struct{}{},
 			},
 			Labels: map[string]string{
-				databaseLabel:                   "true",
-				"modern-game-panel.server_id":   req.ServerID,
-				"modern-game-panel.db_engine":   engine,
+				databaseLabel:                 "true",
+				"modern-game-panel.server_id": req.ServerID,
+				"modern-game-panel.db_engine": engine,
 			},
 		},
 		&container.HostConfig{
@@ -367,6 +395,7 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ContainerID string `json:"containerId"`
 		Engine      string `json:"engine"`
+		BackupID    string `json:"backupId"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
@@ -374,6 +403,10 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ContainerID == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "containerId is required"})
+		return
+	}
+	if !validBackupID(req.BackupID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backupId must contain only letters, digits, dashes, or underscores"})
 		return
 	}
 
@@ -394,11 +427,16 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	timestamp := time.Now().UTC().Format("20060102T150405Z")
-	fileName := fmt.Sprintf("backup-%s-%s.sql.gz", engine, timestamp)
+	fileName := req.BackupID + ".backup.gz"
 
+	// The in-container backup path is always a fixed, non-interpolated
+	// value. Nothing derived from request input (engine, timestamp, or
+	// fileName) is ever concatenated into the shell command string, which
+	// eliminates any shell-injection risk regardless of how those values
+	// are computed.
+	const containerBackupPath = "/tmp/mgp-backup.sql.gz"
 	execResp, err := cli.ContainerExecCreate(ctx, req.ContainerID, container.ExecOptions{
-		Cmd:          []string{"sh", "-c", strings.Join(cmd, " ") + " | gzip > /tmp/" + fileName},
+		Cmd:          []string{"sh", "-c", strings.Join(cmd, " ") + " | gzip > " + containerBackupPath},
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -433,30 +471,255 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	rc, _, err := cli.CopyFromContainer(ctx, req.ContainerID, "/tmp/"+fileName)
+	rc, _, err := cli.CopyFromContainer(ctx, req.ContainerID, containerBackupPath)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "copy backup: " + err.Error()})
 		return
 	}
 	defer rc.Close()
 
-	backupDir := filepath.Join(os.TempDir(), "mgp-db-backups")
-	_ = os.MkdirAll(backupDir, 0o750)
+	backupDir, err := databaseBackupDir()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "prepare backup directory: " + err.Error()})
+		return
+	}
 	backupPath := filepath.Join(backupDir, fileName)
-	f, err := os.Create(backupPath)
+	f, err := os.OpenFile(backupPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "create backup file: " + err.Error()})
 		return
 	}
-	defer f.Close()
-	_, _ = io.Copy(f, rc)
+	hasher := sha256.New()
+	size, err := copyFileFromTar(io.MultiWriter(f, hasher), rc)
+	closeErr := f.Close()
+	if err != nil {
+		_ = os.Remove(backupPath)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "extract backup file: " + err.Error()})
+		return
+	}
+	if closeErr != nil {
+		_ = os.Remove(backupPath)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "close backup file: " + closeErr.Error()})
+		return
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":     true,
-		"file":   backupPath,
-		"name":   fileName,
-		"engine": engine,
+		"ok":       true,
+		"backupId": req.BackupID,
+		"file":     backupPath,
+		"name":     fileName,
+		"engine":   engine,
+		"size":     size,
+		"checksum": hex.EncodeToString(hasher.Sum(nil)),
 	})
+}
+
+func (s *Server) handleDatabaseRestore(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ContainerID string `json:"containerId"`
+		Engine      string `json:"engine"`
+		BackupID    string `json:"backupId"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
+		return
+	}
+	if strings.TrimSpace(req.ContainerID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "containerId is required"})
+		return
+	}
+	if !validBackupID(req.BackupID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "backupId must contain only letters, digits, dashes, or underscores"})
+		return
+	}
+	engine := strings.ToLower(strings.TrimSpace(req.Engine))
+	if !validDatabaseEngine(engine) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported engine for restore: " + engine})
+		return
+	}
+
+	backupDir, err := databaseBackupDir()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "prepare backup directory: " + err.Error()})
+		return
+	}
+	backupPath := filepath.Join(backupDir, req.BackupID+".backup.gz")
+	backupFile, err := os.Open(backupPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "open backup: " + err.Error()})
+		return
+	}
+	defer backupFile.Close()
+	info, err := backupFile.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "backup is not a regular file"})
+		return
+	}
+
+	cli, err := getDockerClient()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "docker client unavailable: " + err.Error()})
+		return
+	}
+	defer cli.Close()
+
+	ctx, cancel := context.WithTimeout(r.Context(), 300*time.Second)
+	defer cancel()
+
+	var archive bytes.Buffer
+	tw := tar.NewWriter(&archive)
+	const containerRestoreName = "mgp-restore.backup.gz"
+	if err := tw.WriteHeader(&tar.Header{Name: containerRestoreName, Mode: 0o600, Size: info.Size()}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "prepare restore archive: " + err.Error()})
+		return
+	}
+	if _, err := io.Copy(tw, backupFile); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "read backup: " + err.Error()})
+		return
+	}
+	if err := tw.Close(); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "finalize restore archive: " + err.Error()})
+		return
+	}
+	if err := cli.CopyToContainer(ctx, req.ContainerID, "/tmp", bytes.NewReader(archive.Bytes()), container.CopyToContainerOptions{}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "copy backup to container: " + err.Error()})
+		return
+	}
+
+	const containerRestorePath = "/tmp/" + containerRestoreName
+	execResp, err := cli.ContainerExecCreate(ctx, req.ContainerID, container.ExecOptions{
+		Cmd:          []string{"sh", "-c", restoreCommandForEngine(engine, containerRestorePath)},
+		AttachStdout: true,
+		AttachStderr: true,
+	})
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "exec create: " + err.Error()})
+		return
+	}
+	if err := cli.ContainerExecStart(ctx, execResp.ID, container.ExecStartOptions{}); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "exec start: " + err.Error()})
+		return
+	}
+	for {
+		inspect, err := cli.ContainerExecInspect(ctx, execResp.ID)
+		if err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "exec inspect: " + err.Error()})
+			return
+		}
+		if !inspect.Running {
+			if inspect.ExitCode != 0 {
+				writeJSON(w, http.StatusInternalServerError, map[string]any{"error": fmt.Sprintf("restore command exited with code %d", inspect.ExitCode)})
+				return
+			}
+			break
+		}
+		select {
+		case <-ctx.Done():
+			writeJSON(w, http.StatusGatewayTimeout, map[string]any{"error": "restore timed out"})
+			return
+		case <-time.After(time.Second):
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "backupId": req.BackupID})
+}
+
+func databaseBackupDir() (string, error) {
+	dataDir := strings.TrimSpace(os.Getenv("DAEMON_DATA_DIR"))
+	if dataDir == "" {
+		dataDir = "/var/lib/gamepanel"
+	}
+	dir := filepath.Join(dataDir, ".beacon", "database-backups")
+	if err := os.MkdirAll(dir, 0o750); err != nil {
+		return "", err
+	}
+	return dir, nil
+}
+
+func (s *Server) handleDatabaseBackupDownload(w http.ResponseWriter, r *http.Request) {
+	backupID := r.PathValue("backupId")
+	if !validBackupID(backupID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid backupId"})
+		return
+	}
+	dir, err := databaseBackupDir()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	path := filepath.Join(dir, backupID+".backup.gz")
+	file, err := os.Open(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	defer file.Close()
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "backup is not a regular file"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/gzip")
+	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
+	w.Header().Set("Content-Disposition", `attachment; filename="`+backupID+`.backup.gz"`)
+	_, _ = io.Copy(w, file)
+}
+
+func (s *Server) handleDatabaseBackupDelete(w http.ResponseWriter, r *http.Request) {
+	backupID := r.PathValue("backupId")
+	if !validBackupID(backupID) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid backupId"})
+		return
+	}
+	dir, err := databaseBackupDir()
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	if err := os.Remove(filepath.Join(dir, backupID+".backup.gz")); err != nil {
+		if os.IsNotExist(err) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "backup not found"})
+			return
+		}
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": err.Error()})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func validBackupID(id string) bool {
+	if id == "" || len(id) > 128 {
+		return false
+	}
+	for _, r := range id {
+		if (r < 'a' || r > 'z') && (r < 'A' || r > 'Z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func copyFileFromTar(dst io.Writer, src io.Reader) (int64, error) {
+	tr := tar.NewReader(src)
+	for {
+		header, err := tr.Next()
+		if err == io.EOF {
+			return 0, fmt.Errorf("backup archive contained no regular file")
+		}
+		if err != nil {
+			return 0, err
+		}
+		if header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA {
+			return io.Copy(dst, tr)
+		}
+	}
 }
 
 func dataDirForEngine(engine string) string {
@@ -474,6 +737,39 @@ func dataDirForEngine(engine string) string {
 	}
 }
 
+func validDatabaseEngine(engine string) bool {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "postgresql", "mysql", "mariadb", "mongodb", "redis":
+		return true
+	default:
+		return false
+	}
+}
+
+func databaseCommand(engine, password string) []string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "redis":
+		return []string{"redis-server", "--requirepass", password}
+	default:
+		return nil
+	}
+}
+
+func restoreCommandForEngine(engine, backupPath string) string {
+	switch strings.ToLower(strings.TrimSpace(engine)) {
+	case "postgresql":
+		return "gzip -dc " + backupPath + " | psql -U $POSTGRES_USER"
+	case "mysql", "mariadb":
+		return "gzip -dc " + backupPath + " | mysql -u root -p$MYSQL_ROOT_PASSWORD"
+	case "mongodb":
+		return "gzip -dc " + backupPath + " | mongorestore --archive --authenticationDatabase admin"
+	case "redis":
+		return "gzip -dc " + backupPath + " | redis-cli --pipe"
+	default:
+		return "false"
+	}
+}
+
 func backupCommandForEngine(engine string) []string {
 	switch strings.ToLower(engine) {
 	case "postgresql":
@@ -481,7 +777,7 @@ func backupCommandForEngine(engine string) []string {
 	case "mysql", "mariadb":
 		return []string{"mysqldump", "--all-databases", "-u", "root", "-p$MYSQL_ROOT_PASSWORD"}
 	case "mongodb":
-		return []string{"mongodump", "--archive"}
+		return []string{"mongodump", "--archive", "--username", "\"$MONGO_INITDB_ROOT_USERNAME\"", "--password", "\"$MONGO_INITDB_ROOT_PASSWORD\"", "--authenticationDatabase", "admin"}
 	case "redis":
 		return []string{"redis-cli", "--rdb", "/tmp/backup.rdb", "SAVE"}
 	default:

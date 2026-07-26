@@ -232,10 +232,11 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 	op.Status = StatusRunning
 	op.StartedAt = time.Now().UTC()
 	_ = q.persist(op)
+	handlerOp := *op
 	q.mu.Unlock()
 	var opErr string
 	if q.handler != nil {
-		if err := q.handler(ctx, op); err != nil {
+		if err := q.handler(ctx, &handlerOp); err != nil {
 			opErr = err.Error()
 		}
 	}
@@ -379,15 +380,15 @@ func (q *OperationQueue) EnqueueCommandWithTTL(ctx context.Context, commandID, s
 		q.mu.Unlock()
 		return nil, err
 	}
+	result := *op
 	q.mu.Unlock()
 	select {
 	case <-ctx.Done():
-		return op, ctx.Err()
+		return &result, ctx.Err()
 	case q.ch <- op:
-		cp := *op
-		return &cp, nil
+		return &result, nil
 	default:
-		return op, ErrQueueFull
+		return &result, ErrQueueFull
 	}
 }
 

@@ -1,15 +1,15 @@
 # Loopback-only ephemeral port bindings for production-image smoke tests.
 services:
   api:
-    image: infra-api:latest
+    image: ${API_SMOKE_IMAGE:-infra-api:latest}
     ports: !override
       - "127.0.0.1::8080"
   web:
-    image: infra-web:latest
+    image: ${WEB_SMOKE_IMAGE:-infra-web:latest}
     ports: !override
       - "127.0.0.1::3000"
   daemon:
-    image: infra-daemon:latest
+    image: ${DAEMON_SMOKE_IMAGE:-infra-daemon:latest}
     ports: !override
       - "127.0.0.1::9090"
       - "127.0.0.1::2022"

@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -65,6 +66,16 @@ func (s *Store) UpdateMailNotificationTrigger(ctx context.Context, event string,
 		sets = fmt.Sprintf("subject_template = $%d, %s", argIdx, sets)
 		args = append(args, *req.Subject)
 		argIdx++
+	}
+
+	var allowedMailTriggerColumns = map[string]bool{
+		"enabled": true, "subject_template": true, "updated_at": true,
+	}
+	for _, part := range strings.Split(sets, ", ") {
+		col := strings.SplitN(part, " =", 2)[0]
+		if !allowedMailTriggerColumns[col] {
+			return fmt.Errorf("disallowed column: %s", col)
+		}
 	}
 
 	args = append(args, event)

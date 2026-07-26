@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import {
   Play, Square, RotateCcw, Trash2, Loader2, Terminal,
-  CheckCircle, XCircle, AlertTriangle, Clock, ArrowLeft, RefreshCw, Eye, EyeOff
+  XCircle, ArrowLeft, Eye, EyeOff
 } from "lucide-react";
 import Link from "next/link";
 

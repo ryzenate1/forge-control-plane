@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"os"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ func MaintenanceModeMiddleware(cfg Config) fiber.Handler {
 		}
 
 		if bypassToken != "" {
-			if h := c.Get(maintenanceBypassHeader); strings.TrimSpace(h) == bypassToken {
+			if h := c.Get(maintenanceBypassHeader); subtle.ConstantTimeCompare([]byte(strings.TrimSpace(h)), []byte(bypassToken)) == 1 {
 				return c.Next()
 			}
 		}
@@ -45,7 +46,7 @@ func MaintenanceModeMiddleware(cfg Config) fiber.Handler {
 			ips := strings.Split(whitelist, ",")
 			clientIP := c.IP()
 			for _, ip := range ips {
-				if strings.TrimSpace(ip) == clientIP {
+				if isIPInList(clientIP, []string{strings.TrimSpace(ip)}) {
 					return c.Next()
 				}
 			}

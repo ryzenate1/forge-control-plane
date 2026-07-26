@@ -18,14 +18,14 @@ func (s *Store) GetPanelSettings(ctx context.Context) (PanelSettings, error) {
 		       connection_timeout, request_timeout,
 		       auto_alloc_enabled, auto_alloc_start_port, auto_alloc_end_port,
 		       s3_backup_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key_id,
-		       COALESCE(s3_secret_access_key,''), COALESCE(s3_secret_access_key_encrypted,''),
+		       COALESCE(s3_secret_access_key_encrypted,''),
 		       s3_prefix, s3_use_path_style
 		FROM panel_settings
 		WHERE id = TRUE
 	`)
 	var ps PanelSettings
 	var smtpPlaintext, smtpEncrypted, recaptchaPlaintext, recaptchaEncrypted string
-	var s3Plaintext, s3Encrypted string
+	var s3Encrypted string
 	err := row.Scan(
 		&ps.CompanyName, &ps.Require2FA, &ps.DefaultLocale,
 		&ps.SMTPHost, &ps.SMTPPort, &ps.SMTPEncryption, &ps.SMTPUsername, &smtpPlaintext, &smtpEncrypted,
@@ -33,7 +33,7 @@ func (s *Store) GetPanelSettings(ctx context.Context) (PanelSettings, error) {
 		&ps.RecaptchaEnabled, &ps.RecaptchaSiteKey, &recaptchaPlaintext, &recaptchaEncrypted,
 		&ps.ConnectionTimeout, &ps.RequestTimeout,
 		&ps.AutoAllocEnabled, &ps.AutoAllocStartPort, &ps.AutoAllocEndPort,
-		&ps.S3BackupEnabled, &ps.S3Endpoint, &ps.S3Region, &ps.S3Bucket, &ps.S3AccessKeyID, &s3Plaintext, &s3Encrypted,
+		&ps.S3BackupEnabled, &ps.S3Endpoint, &ps.S3Region, &ps.S3Bucket, &ps.S3AccessKeyID, &s3Encrypted,
 		&ps.S3Prefix, &ps.S3UsePathStyle,
 	)
 	if err != nil {
@@ -51,7 +51,7 @@ func (s *Store) GetPanelSettings(ctx context.Context) (PanelSettings, error) {
 	if err != nil {
 		return DefaultPanelSettings(), err
 	}
-	ps.S3SecretAccessKey, err = s.decryptSecret(s3Encrypted, s3Plaintext, secretAAD("panel_settings", "true", "s3_secret_access_key"))
+	ps.S3SecretAccessKey, err = s.decryptSecret(s3Encrypted, "", secretAAD("panel_settings", "true", "s3_secret_access_key"))
 	if err != nil {
 		return DefaultPanelSettings(), err
 	}

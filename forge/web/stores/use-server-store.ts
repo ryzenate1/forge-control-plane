@@ -69,7 +69,7 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
   }),
 
   addConsoleLine: (line: string) => set((state) => ({
-    consoleLines: [...state.consoleLines.slice(-300), line],
+    consoleLines: [...state.consoleLines.slice(-299), line],
   })),
   addConsoleLines: (lines: string[]) => set((state) => ({
     consoleLines: [...state.consoleLines, ...lines].slice(-300),
@@ -78,10 +78,12 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
   setConsoleStatus: (consoleStatus: string) => set({ consoleStatus }),
 
   updateStats: (stats: ServerStats) => set((state) => {
-    const memPct = stats.memoryLimit > 0
-      ? Math.min(100, Math.round((stats.memoryBytes / stats.memoryLimit) * 100))
-      : 0;
-    const cpuPct = Math.min(300, stats.cpuPercent);
+    if (!stats) return state;
+    const memoryLimit = Number.isFinite(stats.memoryLimit) ? stats.memoryLimit : 0;
+    const memoryBytes = Number.isFinite(stats.memoryBytes) ? stats.memoryBytes : 0;
+    const cpuPercent = Number.isFinite(stats.cpuPercent) ? stats.cpuPercent : 0;
+    const memPct = memoryLimit > 0 ? Math.min(100, Math.round((memoryBytes / memoryLimit) * 100)) : 0;
+    const cpuPct = Math.min(300, cpuPercent);
     return {
       liveStats: stats,
       cpuHistory: [...state.cpuHistory.slice(-23), cpuPct],

@@ -1,13 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import Image from "next/image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Search, Grid3X3, ChevronLeft, ChevronRight, Package, Download, Trash2,
+  Search, Grid3X3, ChevronLeft, Package, Download, Trash2,
   RefreshCw, RotateCcw, Settings, X, ExternalLink, Server, Tag,
 } from "lucide-react";
 import {
-  SpinnerPage, ErrorAlert, SkeletonList, useAppToast,
+  ErrorAlert, SkeletonList, useAppToast,
 } from "@/components/shared";
 import { cn } from "@/lib/utils";
 import * as appStoreApi from "@/lib/api/app-store";
@@ -177,7 +178,7 @@ export default function AppStorePage() {
                   )}
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-white/5">
                     {app.icon ? (
-                      <img src={app.icon} alt="" className="h-8 w-8" />
+                      <Image src={app.icon} alt="" width={32} height={32} className="h-8 w-8" unoptimized />
                     ) : (
                       <Package className="h-6 w-6 text-slate-400" />
                     )}
@@ -292,7 +293,7 @@ function AppDetailView({
 
       <div className="flex items-start gap-5">
         <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white/5">
-          {app.icon ? <img src={app.icon} alt="" className="h-10 w-10" /> : <Package className="h-8 w-8 text-slate-400" />}
+          {app.icon ? <Image src={app.icon} alt="" width={40} height={40} className="h-10 w-10" unoptimized /> : <Package className="h-8 w-8 text-slate-400" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">

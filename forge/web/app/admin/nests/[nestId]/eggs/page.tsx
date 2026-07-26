@@ -4,11 +4,10 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, ChevronRight, Copy, Cpu, Download, ExternalLink, FileCode, Plus, Settings, Tag, Terminal, Trash2,
+  ArrowLeft, ChevronRight, Copy, Cpu, Download, FileCode, Plus, Settings, Tag, Terminal, Trash2,
 } from "lucide-react";
 import { type ApiEgg, fetchNest, fetchEggs, createEgg, updateEgg, deleteEgg } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn } from "@/components/admin/admin-ui";
-import { useToast } from "@/components/ui/toast";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea } from "@/components/admin/admin-ui";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -22,7 +21,6 @@ function dockerImageLines(value: unknown): string[] {
 
 function EggCard({
   egg,
-  nestId,
   onEdit,
   onClone,
   onExport,
@@ -30,7 +28,6 @@ function EggCard({
   onVariables,
 }: {
   egg: ApiEgg;
-  nestId: string;
   onEdit: () => void;
   onClone: () => void;
   onExport: () => void;
@@ -87,7 +84,6 @@ function EggCard({
 export default function NestEggsPage() {
   const params = useParams();
   const router = useRouter();
-  const { toast } = useToast();
   const nestId = params.nestId as string;
   const qc = useQueryClient();
 
@@ -250,7 +246,6 @@ export default function NestEggsPage() {
               <EggCard
                 key={egg.id}
                 egg={egg}
-                nestId={nestId}
                 onEdit={() => openEggEdit(egg)}
                 onClone={() => cloneEggMut.mutate(egg)}
                 onExport={() => exportEgg(egg)}

@@ -92,12 +92,12 @@ func (s *PeriodicJobScheduler) loop(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case now := <-ticker.C:
-			s.tick(now.UTC())
+			s.tick(ctx, now.UTC())
 		}
 	}
 }
 
-func (s *PeriodicJobScheduler) tick(now time.Time) {
+func (s *PeriodicJobScheduler) tick(ctx context.Context, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for _, j := range s.jobs {
@@ -109,18 +109,22 @@ func (s *PeriodicJobScheduler) tick(now time.Time) {
 			}
 		}
 		if !now.Before(j.nextRun) {
-			go s.execute(j)
+			go s.execute(ctx, j)
 			j.nextRun = j.schedule.Next(now)
 		}
 	}
 }
 
-func (s *PeriodicJobScheduler) execute(job *PeriodicJob) {
+func (s *PeriodicJobScheduler) execute(ctx context.Context, job *PeriodicJob) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("periodic job panic recovered", "id", job.id, "panic", r)
+		}
+	}()
 	jobType, payload, opts := job.constructor()
 	if jobType == "" {
 		return
 	}
-	ctx := context.Background()
 	dispatchOpts := opts
 	if dispatchOpts == nil {
 		dispatchOpts = &Job{}

@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS managed_databases (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    server_id UUID,
+    server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
+    database_service_id UUID REFERENCES database_services(id) ON DELETE SET NULL,
     name VARCHAR(255) NOT NULL,
     engine VARCHAR(50) NOT NULL,
     version VARCHAR(50) NOT NULL DEFAULT 'latest',
@@ -49,7 +50,11 @@ CREATE TABLE IF NOT EXISTS managed_database_restores (
 );
 
 CREATE INDEX IF NOT EXISTS idx_managed_databases_server_id ON managed_databases(server_id);
+CREATE INDEX IF NOT EXISTS idx_managed_databases_db_service_id ON managed_databases(database_service_id);
 CREATE INDEX IF NOT EXISTS idx_managed_databases_status ON managed_databases(status);
 CREATE INDEX IF NOT EXISTS idx_managed_database_backups_db_id ON managed_database_backups(managed_database_id);
 CREATE INDEX IF NOT EXISTS idx_managed_database_backups_status ON managed_database_backups(status);
 CREATE INDEX IF NOT EXISTS idx_managed_database_restores_db_id ON managed_database_restores(managed_database_id);
+
+ALTER TABLE managed_databases ADD COLUMN IF NOT EXISTS database_service_id UUID REFERENCES database_services(id) ON DELETE SET NULL;
+DO $$ BEGIN ALTER TABLE managed_databases ADD CONSTRAINT fk_managed_databases_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; END $$;

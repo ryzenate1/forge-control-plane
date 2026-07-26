@@ -1,21 +1,21 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== Running Go API tests ==="
-cd forge/api
-go test -v -cover -count=1 ./internal/services/i18n/...
-go test -v -cover -count=1 ./internal/services/health/...
-go test -v -cover -count=1 ./internal/services/activity/...
-go test -v -cover -count=1 ./internal/services/plugins/...
-go test -v -cover -count=1 ./internal/services/recovery/...
-go test -v -cover -count=1 ./internal/policies/...
-cd ../..
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/services/i18n/...)
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/services/health/...)
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/services/activity/...)
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/services/plugins/...)
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/services/recovery/...)
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./internal/policies/...)
 
 echo "=== Running Go Beacon tests ==="
-cd beacon && go test -v -count=1 ./... && cd ..
+(cd "$ROOT/beacon" && go test -v -count=1 ./...)
 
 echo "=== Running all Go tests ==="
-cd forge/api && go test -v -cover -count=1 ./... && cd ../..
-cd beacon && go test -v -cover -count=1 ./... && cd ..
+(cd "$ROOT/forge/api" && go test -v -cover -count=1 ./...)
+(cd "$ROOT/beacon" && go test -v -cover -count=1 ./...)
 
 echo "=== All tests passed ==="

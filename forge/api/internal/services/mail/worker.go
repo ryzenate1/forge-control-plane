@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"log"
+	"runtime"
 	"sync"
 	"time"
 
@@ -25,7 +26,17 @@ func NewWorker(s *store.Store) *Worker {
 func (w *Worker) Start(ctx context.Context) {
 	if w != nil && w.store != nil {
 		w.wg.Add(1)
-		go func() { defer w.wg.Done(); w.loop(ctx) }()
+		go func() {
+			defer w.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					log.Printf("mail worker panic: %v\nstack: %s", r, buf[:n])
+				}
+			}()
+			w.loop(ctx)
+		}()
 	}
 }
 

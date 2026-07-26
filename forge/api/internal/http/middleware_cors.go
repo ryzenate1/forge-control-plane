@@ -32,6 +32,7 @@ func DefaultCORSConfig() CORSConfig {
 }
 
 func CORSMiddleware(cfg CORSConfig) fiber.Handler {
+	validateCORSConfig(cfg)
 	return func(c *fiber.Ctx) error {
 		origin := c.Get("Origin")
 
@@ -51,6 +52,7 @@ func CORSMiddleware(cfg CORSConfig) fiber.Handler {
 		}
 
 		if c.Method() == fiber.MethodOptions {
+			c.Vary("Origin")
 			c.Set("Access-Control-Allow-Methods", cfg.AllowMethods)
 			c.Set("Access-Control-Allow-Headers", cfg.AllowHeaders)
 			if cfg.MaxAge > 0 {
@@ -73,6 +75,14 @@ func originAllowed(origin string, allowedOrigins []string) string {
 		}
 	}
 	return ""
+}
+
+func validateCORSConfig(cfg CORSConfig) {
+	for _, origin := range cfg.AllowedOrigins {
+		if origin == "*" && cfg.AllowCredentials {
+			panic("CORS: AllowCredentials cannot be true when AllowedOrigins contains wildcard '*'")
+		}
+	}
 }
 
 func parseAllowedOrigins(raw string) []string {

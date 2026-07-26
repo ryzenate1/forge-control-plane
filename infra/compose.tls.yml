@@ -42,16 +42,45 @@ services:
     ports:
       - "80:80"
       - "443:443"
-      - "127.0.0.1:8080:8080"
+      # Dashboard on host 8081 to avoid colliding with the API's host port 8080
+      # published by compose.yml (audit P1 remediation).
+      - "127.0.0.1:8081:8080"
     environment:
       TRAEFIK_ACME_EMAIL: "${TRAEFIK_ACME_EMAIL:?Set TRAEFIK_ACME_EMAIL in infra/.env}"
       TRAEFIK_CERTIFICATE_RESOLVER: ${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}
+      DOCKER_HOST: tcp://traefik-docker-proxy:2375
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - letsencrypt:/letsencrypt
       - ./traefik/dynamic:/etc/traefik/dynamic:ro
     networks:
       - frontend
+
+  traefik-docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      NETWORKS: "1"
+      SERVICES: "1"
+      TASKS: "1"
+      INFO: "1"
+      VERSION: "1"
+      EVENTS: "1"
+      POST: "0"
+      AUTH: "0"
+      IMAGES: "0"
+      VOLUMES: "0"
+      SECRETS: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - frontend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   web:
     labels:
@@ -75,6 +104,14 @@ services:
       traefik.http.routers.api.tls: "true"
       traefik.http.routers.api.tls.certresolver: "${TRAEFIK_CERTIFICATE_RESOLVER:-letsencrypt}"
       traefik.http.services.api.loadbalancer.server.port: "8080"
+    environment:
+      REDIS_ADDR: redis:6380
+      REDIS_TLS_ENABLED: "true"
+      REDIS_TLS_SKIP_VERIFY: "true"
+      DATABASE_URL: "${DATABASE_URL}?sslmode=require"
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
 
   # =========================================================================
   # Internal TLS — self-signed certificates for inter-service communication
@@ -160,16 +197,6 @@ services:
       - "ssl_key_file=/certs/pg-key.pem"
       - "-c"
       - "ssl_ca_file=/certs/ca.pem"
-    depends_on:
-      cert-init:
-        condition: service_completed_successfully
-
-  api:
-    environment:
-      REDIS_ADDR: redis:6380
-      REDIS_TLS_ENABLED: "true"
-      REDIS_TLS_SKIP_VERIFY: "true"
-      DATABASE_URL: "${DATABASE_URL}?sslmode=require"
     depends_on:
       cert-init:
         condition: service_completed_successfully

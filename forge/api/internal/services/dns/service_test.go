@@ -142,40 +142,16 @@ func TestCreateDNSProvider(t *testing.T) {
 	assert.True(t, called)
 	assert.NotNil(t, cp)
 
-	// Env vars should still be set during the provider's lifetime
-	assert.Equal(t, "set", os.Getenv("TEST_FLAG"))
-}
-
-func TestRestoringProvider(t *testing.T) {
-	restoreCalled := false
-	mp := &mockProvider{}
-
-	rp := &restoringProvider{
-		provider: mp,
-		restore: func() {
-			restoreCalled = true
-		},
-	}
-
-	os.Setenv("TEST_RP", "rp-value")
-
-	err := rp.Present("example.com", "token", "keyAuth")
-	require.NoError(t, err)
-	assert.Equal(t, 1, mp.presentCalls)
-
-	err = rp.CleanUp("example.com", "token", "keyAuth")
-	require.NoError(t, err)
-	assert.Equal(t, 1, mp.cleanUpCalls)
-	assert.True(t, restoreCalled, "restore should be called after CleanUp")
-
-	assert.Equal(t, "rp-value", os.Getenv("TEST_RP"))
-	_ = restoreCalled
+	// Credential env vars are restored immediately after construction so
+	// secrets never linger in the process environment.
+	_, present := os.LookupEnv("TEST_FLAG")
+	assert.False(t, present, "TEST_FLAG should be restored after construction")
 }
 
 type mockProvider struct {
-	presentCalls  int
-	cleanUpCalls  int
-	cleanUpHook   func()
+	presentCalls int
+	cleanUpCalls int
+	cleanUpHook  func()
 }
 
 func (m *mockProvider) Present(domain, token, keyAuth string) error {
@@ -215,28 +191,4 @@ func TestVerifyProviderInit(t *testing.T) {
 
 	_, ok = providerRegistry["route53"]
 	assert.True(t, ok, "route53 should be registered")
-}
-
-func TestRestoringProviderCleanupTriggersRestore(t *testing.T) {
-	restored := false
-	rp := &restoringProvider{
-		provider: &mockProvider{},
-		restore:  func() { restored = true },
-	}
-
-	err := rp.CleanUp("example.com", "token", "keyAuth")
-	require.NoError(t, err)
-	assert.True(t, restored, "CleanUp should trigger env restore")
-}
-
-func TestRestoringProviderPresentDoesNotTriggerRestore(t *testing.T) {
-	restored := false
-	rp := &restoringProvider{
-		provider: &mockProvider{},
-		restore:  func() { restored = true },
-	}
-
-	err := rp.Present("example.com", "token", "keyAuth")
-	require.NoError(t, err)
-	assert.False(t, restored, "Present should not trigger restore (provider still needed)")
 }

@@ -12,7 +12,6 @@ export function TenancyHydrator() {
   const setActiveProject = useTenancyStore((s) => s.setActiveProject);
   const setEnvironments = useTenancyStore((s) => s.setEnvironments);
   const setActiveEnvironment = useTenancyStore((s) => s.setActiveEnvironment);
-  const setMembers = useTenancyStore((s) => s.setMembers);
   const setLoading = useTenancyStore((s) => s.setLoading);
   const setError = useTenancyStore((s) => s.setError);
 

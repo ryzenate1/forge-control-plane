@@ -11,34 +11,36 @@ import { useBranding } from "@/components/branding";
 import { Pagination, ResourceBar, SearchInput, StatusPill, Switch } from "@/components/ui/primitives";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 import { ThemeToggle } from "@/components/ui/theme-toggle";
+import { useT } from "@/components/TranslationProvider";
 
 /* -------------------------------------------------------------------------- */
 /*  Status pill with suspended/transferring/installing                        */
 /* -------------------------------------------------------------------------- */
 
 function ServerStatus({ server }: { server: ApiServer }) {
+  const t = useT();
   if (server.suspended) {
     return (
-      <StatusPill tone="danger">Suspended</StatusPill>
+      <StatusPill tone="danger">{t("server.status.suspended")}</StatusPill>
     );
   }
   if (server.transferring) {
     return (
-      <StatusPill pulse tone="info">Transferring</StatusPill>
+      <StatusPill pulse tone="info">{t("servers.transferring")}</StatusPill>
     );
   }
   if (server.status === "running") {
     return (
-      <StatusPill tone="success">Running</StatusPill>
+      <StatusPill tone="success">{t("servers.running")}</StatusPill>
     );
   }
   if (server.status === "installing") {
     return (
-      <StatusPill pulse tone="warning">Installing</StatusPill>
+      <StatusPill pulse tone="warning">{t("server.status.installing")}</StatusPill>
     );
   }
   return (
-    <StatusPill>{server.status || "Offline"}</StatusPill>
+    <StatusPill>{server.status || t("server.status.offline")}</StatusPill>
   );
 }
 
@@ -51,6 +53,7 @@ function ServerStatus({ server }: { server: ApiServer }) {
 /* -------------------------------------------------------------------------- */
 
 export default function ServersPage() {
+  const t = useT();
   const router = useRouter();
   const { currentUser } = useServerStore();
   const { companyName } = useBranding();
@@ -111,11 +114,11 @@ export default function ServersPage() {
   }, [search, showAdmin]);
 
   if (sessionPending || userQuery.data === null) {
-    return <div className="grid min-h-screen place-items-center bg-surface-base text-slate-100"><LoadingSpinner label="Verifying session" /></div>;
+    return <div className="grid min-h-screen place-items-center bg-surface-base text-slate-100"><LoadingSpinner label={t("servers.verifyingSession")} /></div>;
   }
 
   if (userQuery.isError) {
-    return <div className="grid min-h-screen place-items-center bg-surface-base px-4 text-center text-slate-100"><div><p className="text-lg font-semibold">Session verification is unavailable</p><p className="mt-2 text-sm text-neutral-secondary">Please retry once the API is reachable.</p></div></div>;
+    return <div className="grid min-h-screen place-items-center bg-surface-base px-4 text-center text-slate-100"><div><p className="text-lg font-semibold">{t("servers.sessionVerificationUnavailable")}</p><p className="mt-2 text-sm text-neutral-secondary">{t("servers.retryOnceReachable")}</p></div></div>;
   }
 
   return (
@@ -130,7 +133,7 @@ export default function ServersPage() {
             href="/account"
           >
             <User className="h-4 w-4" />
-            Account
+            {t("account.title")}
           </Link>
           <button
             onClick={handleLogout}
@@ -138,7 +141,7 @@ export default function ServersPage() {
             type="button"
           >
             <LogOut className="w-4 h-4" />
-            Sign Out
+            {t("auth.logout")}
           </button>
         </div>
       </header>
@@ -148,29 +151,29 @@ export default function ServersPage() {
         <div className="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
           <div>
             <h1 className="text-2xl font-bold text-slate-100">
-              {showAdmin && isAdmin ? "All Servers" : "My Servers"}
+              {showAdmin && isAdmin ? t("servers.allServers") : t("servers.myServers")}
             </h1>
             <p className="mt-1 text-sm text-neutral-secondary">
-              Manage and monitor your game servers. Status refreshes every 15 seconds.
+              {t("servers.manageAndMonitor")}
             </p>
           </div>
           <div className="flex items-center gap-4">
             {isAdmin ? (
-              <Switch checked={showAdmin} label={showAdmin ? "Showing others' servers" : "Showing your servers"} onCheckedChange={setShowAdmin} />
+              <Switch checked={showAdmin} label={showAdmin ? t("servers.showingOthers") : t("servers.showingYours")} onCheckedChange={setShowAdmin} />
             ) : null}
-            <SearchInput className="w-full sm:max-w-sm" label="Search servers" onChange={(event) => setSearch(event.target.value)} placeholder="Search name, node, or address" value={search} />
+            <SearchInput className="w-full sm:max-w-sm" label={t("servers.searchServers")} onChange={(event) => setSearch(event.target.value)} placeholder={t("servers.searchPlaceholder")} value={search} />
           </div>
         </div>
 
         {isLoading && (
           <div className="flex items-center justify-center py-20">
-            <LoadingSpinner label="Loading servers" />
+            <LoadingSpinner label={t("servers.loadingServers")} />
           </div>
         )}
 
         {isError && (
           <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-300">
-            Failed to load servers. Please refresh or try again.
+            {t("servers.failedToLoad")}
           </div>
         )}
 
@@ -178,12 +181,12 @@ export default function ServersPage() {
           <div className="flex flex-col items-center justify-center rounded-xl border border-white/[0.06] bg-surface-card py-20 text-center">
             <Server className="mb-4 h-12 w-12 text-slate-600" />
             <p className="text-base font-semibold text-slate-300">
-              {search ? "No matching servers" : "No servers found"}
+              {search ? t("servers.noMatching") : t("servers.empty.title")}
             </p>
             <p className="mt-1 text-sm text-neutral-secondary">
               {search
-                ? "Try a different name, node, or address."
-                : "Contact your administrator to provision a server."}
+                ? t("servers.tryDifferentSearch")
+                : t("servers.empty.description")}
             </p>
           </div>
         )}
@@ -219,13 +222,13 @@ export default function ServersPage() {
                   <div className="mt-auto space-y-1.5 text-xs text-neutral-secondary">
                     {server.node && (
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-slate-400">Node:</span>
+                        <span className="font-medium text-slate-400">{t("servers.nodeLabel")}</span>
                         <span>{server.node}</span>
                       </div>
                     )}
                     {server.allocation && (
                       <div className="flex items-center gap-1.5">
-                        <span className="font-medium text-slate-400">Address:</span>
+                        <span className="font-medium text-slate-400">{t("servers.addressLabel")}</span>
                         <span className="font-mono">{server.allocation}</span>
                       </div>
                     )}
@@ -234,15 +237,15 @@ export default function ServersPage() {
                   {/* Resource usage bars */}
                   {!server.suspended && server.status !== "installing" && !server.transferring && (
                     <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3">
-                      <ResourceBar icon={Cpu} label="CPU" current={server.cpuShares ?? server.cpuLimit} limit={server.cpuLimit ?? server.cpuShares} unit="%" />
-                      <ResourceBar icon={MemoryStick} label="Memory" current={server.memoryMb} limit={server.memoryMb} unit=" MB" />
-                      <ResourceBar icon={HardDrive} label="Disk" current={server.diskMb} limit={server.diskMb} unit=" MB" />
+                      <ResourceBar icon={Cpu} label={t("server.cpu")} current={server.cpuShares ?? server.cpuLimit} limit={server.cpuLimit ?? server.cpuShares} unit="%" />
+                      <ResourceBar icon={MemoryStick} label={t("server.memory")} current={server.memoryMb} limit={server.memoryMb} unit=" MB" />
+                      <ResourceBar icon={HardDrive} label={t("server.disk")} current={server.diskMb} limit={server.diskMb} unit=" MB" />
                     </div>
                   )}
                 </Link>
               ))}
             </div>
-            <Pagination label="Server list pages" onPageChange={setPage} page={page} pageCount={pageCount} />
+            <Pagination label={t("servers.paginationLabel")} onPageChange={setPage} page={page} pageCount={pageCount} />
           </>
         )}
       </main>

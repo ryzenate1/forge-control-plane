@@ -12,22 +12,8 @@ import type {
   OneOffTask,
   ProcfileEntry,
 } from './types';
-import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, ApiServerDatabaseDeleteResult, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput } from './types';
-
-type PaginationMetadata = {
-  current: number;
-  total: number;
-  count: number;
-  per_page: number;
-  total_records: number;
-};
-
-type PaginatedEnvelope<T> = {
-  data: T[];
-  meta?: {
-    pagination?: PaginationMetadata;
-  };
-};
+import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, ApiServerDatabaseDeleteResult, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput, PaginatedEnvelope } from './types';
+// PaginatedEnvelope is the canonical paginated type from @forge/shared-types (re-exported via ./types).
 
 async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
@@ -81,7 +67,7 @@ export async function sendServerCommand(
   serverId: string,
   command: string,
 ): Promise<void> {
-  await postJSON<any>(`/servers/${encodeURIComponent(serverId)}/command`, {
+  await postJSON<void>(`/servers/${encodeURIComponent(serverId)}/command`, {
     command,
   });
 }
@@ -149,7 +135,7 @@ export async function deleteServerDatabase(serverId: string, databaseId: string,
 
 export async function fetchOrphanRemediations(status?: "pending" | "resolved"): Promise<ApiOrphanRemediations> {
   const query = status ? `?status=${encodeURIComponent(status)}` : "";
-  return fetchJSON<ApiOrphanRemediations>(`/admin/orphan-remediations/${query}`);
+  return fetchJSON<ApiOrphanRemediations>(`/admin/orphan-remediations${query}`);
 }
 
 export async function resolveDatabaseOrphanRemediation(id: string): Promise<ApiDatabaseOrphanRemediation> {
@@ -165,6 +151,7 @@ export async function rotateServerDatabasePassword(serverId: string, databaseId:
 }
 
 // Server backups
+
 export async function fetchBackups(serverId: string, page = 1, perPage = 20): Promise<{ data: ApiBackup[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }> {
   return fetchJSON<{ data: ApiBackup[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(`/servers/${encodeURIComponent(serverId)}/backups?page=${page}&per_page=${perPage}`);
 }
@@ -188,6 +175,7 @@ export async function unlockBackup(serverId: string, backupId: string): Promise<
 export async function downloadBackup(serverId: string, backupId: string): Promise<Blob> {
   const response = await fetch(`${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/backups/download?name=${encodeURIComponent(backupId)}`, {
     headers: getAuthHeaders(),
+    credentials: 'include',
   });
   if (!response.ok) throw new Error(`Failed to download backup: ${response.status}`);
   return response.blob();
@@ -260,8 +248,34 @@ export async function deleteServerScheduleTask(
 }
 
 // Server startup
-export async function fetchServerStartup(serverId: string): Promise<any> {
-  return fetchJSON<any>(`/servers/${encodeURIComponent(serverId)}/startup`);
+export interface ServerStartupVariable {
+  name: string;
+  description: string;
+  envVariable: string;
+  defaultValue: string;
+  serverValue: string;
+  isEditable: boolean;
+  rules: string;
+  id?: string;
+  env_variable?: string;
+  server_value?: string;
+  is_editable?: boolean;
+}
+
+export type ApiStartupVariable = ServerStartupVariable;
+
+export interface ServerStartup {
+  startupCommand: string;
+  rawStartupCommand: string;
+  dockerImages: Record<string, string>;
+  variables: ServerStartupVariable[];
+  startup_command?: string;
+  raw_startup_command?: string;
+  docker_images?: Record<string, string>;
+}
+
+export async function fetchServerStartup(serverId: string): Promise<ServerStartup> {
+  return fetchJSON<ServerStartup>(`/servers/${encodeURIComponent(serverId)}/startup`);
 }
 
 export async function updateServerStartupVariable(
@@ -291,17 +305,26 @@ export async function getBackupDownloadURL(serverId: string, backupId: string): 
   return { url: `${API_BASE_URL}/download/file?token=${encodeURIComponent(ticket.token)}` };
 }
 
+export interface ActivityPage {
+  data: ApiAuditEvent[];
+  pagination: { page: number; per_page: number; total: number; total_pages: number };
+}
+
 export async function fetchServerActivity(
   serverId: string,
   page = 1,
   perPage = 50,
-): Promise<{ data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }> {
-	return fetchJSON<ApiAuditEvent[] | { data: ApiAuditEvent[]; pagination: { page: number; per_page: number; total: number; total_pages: number } }>(
-		`/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
-	).then((response) => Array.isArray(response) ? {
-		data: response,
-		pagination: { page: 1, per_page: response.length, total: response.length, total_pages: 1 },
-	} : response);
+): Promise<ActivityPage> {
+  const response = await fetchJSON<ApiAuditEvent[] | ActivityPage>(
+    `/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
+  );
+  if (Array.isArray(response)) {
+    return {
+      data: response,
+      pagination: { page: 1, per_page: response.length, total: response.length, total_pages: 1 },
+    };
+  }
+  return response;
 }
 
 export async function fetchServerUsers(serverId: string): Promise<ApiServerSubuser[]> {

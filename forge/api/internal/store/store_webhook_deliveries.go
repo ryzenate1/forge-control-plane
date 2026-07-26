@@ -247,12 +247,7 @@ func (s *Store) ListDeadLetterDeliveries(ctx context.Context, webhookID string, 
 	if offset < 0 {
 		offset = 0
 	}
-	var rows interface {
-		Close()
-		Next() bool
-		Scan(dest ...any) error
-		Err() error
-	}
+	var rows pgxRows
 	var err error
 	if webhookID != "" {
 		rows, err = s.db.Query(ctx, `SELECT id::text, webhook_id, event_name, target_url, webhook_type, attempts, response_status, response_body_excerpt, last_error, next_attempt_at, state, delivered_at, created_at FROM webhook_deliveries WHERE state='failed' AND webhook_id=$1 ORDER BY created_at DESC OFFSET $2 LIMIT $3`, webhookID, offset, limit)

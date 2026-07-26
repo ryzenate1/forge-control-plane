@@ -175,7 +175,7 @@ func (r *instrumentedRuntime) InstallServer(ctx context.Context, target Target, 
 func (r *instrumentedRuntime) ReinstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
 	reinstaller, ok := r.runtime.(Reinstaller)
 	if !ok {
-		return InstallResponse{}, ErrNotImplemented
+		return InstallResponse{}, ErrUnsupportedRuntimeOperation
 	}
 	response, err := reinstaller.ReinstallServer(ctx, target, req)
 	r.registry.recordOperation(err)

@@ -4,10 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) CreateTimelineEvent(ctx context.Context, req CreateTimelineEventRequest) (TimelineEvent, error) {
@@ -114,7 +116,9 @@ func (s *Store) CreateNodeHeartbeatHistory(ctx context.Context, req CreateNodeHe
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	var previous sql.NullTime
-	_ = s.db.QueryRow(ctx, `SELECT observed_at FROM node_heartbeat_history WHERE node_id = $1 ORDER BY observed_at DESC LIMIT 1`, req.NodeID).Scan(&previous)
+	if err := s.db.QueryRow(ctx, `SELECT observed_at FROM node_heartbeat_history WHERE node_id = $1 ORDER BY observed_at DESC LIMIT 1`, req.NodeID).Scan(&previous); err != nil && !errors.Is(err, sql.ErrNoRows) && !errors.Is(err, pgx.ErrNoRows) {
+		return NodeHeartbeatHistory{}, err
+	}
 	var gapSeconds any
 	if previous.Valid {
 		gap := int(now.Sub(previous.Time).Seconds())

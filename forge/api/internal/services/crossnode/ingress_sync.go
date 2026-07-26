@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 
@@ -63,6 +64,13 @@ func (is *IngressSynchronizer) Start(ctx context.Context, interval time.Duration
 	is.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slog.Error("ingress sync panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 

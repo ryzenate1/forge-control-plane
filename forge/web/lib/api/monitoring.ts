@@ -72,5 +72,5 @@ export function getAlertHistory(params?: { page?: number; limit?: number }): Pro
 }
 
 export function acknowledgeAlert(id: string): Promise<void> {
-  return postJSON<void>(`/alerting/events/${id}/acknowledge`);
+  return postJSON<void>(`/alerting/events/${encodeURIComponent(id)}/acknowledge`);
 }

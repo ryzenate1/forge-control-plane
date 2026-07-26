@@ -97,7 +97,7 @@ fi
 POSTGRES_PASSWORD="$PG_PASSWORD"
 POSTGRES_DB="$PG_DB"
 POSTGRES_USER="$PG_USER"
-DATABASE_URL="postgres://${PG_USER}:${POSTGRES_PASSWORD}@postgres:5432/${PG_DB}?sslmode=disable"
+DATABASE_URL="postgres://${PG_USER}:${POSTGRES_PASSWORD}@postgres:5432/${PG_DB}?sslmode=prefer"
 
 API_AUTH_SECRET="$(rand_base64)"
 APP_KEY="$(rand_base64)"

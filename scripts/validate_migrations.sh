@@ -25,11 +25,21 @@ check_duplicates() {
     
     cd "$MIGRATION_DIR"
     
-    # Get all migration names without .sql extension
-    MIGRATIONS=$(ls *.sql | sed 's/\.sql$//' | sort)
-    
-    # Check for duplicates
-    DUPLICATES=$(echo "$MIGRATIONS" | uniq -d)
+    # Match the runtime runner: numeric migrations use their number, while
+    # letter-suffixed migrations use number+letter (for example, 103_a).
+    DUPLICATES=$(
+        for migration in *.sql; do
+            stem=${migration%.sql}
+            first=${stem%%_*}
+            remainder=${stem#*_}
+            letter=${remainder%%_*}
+            if [[ $letter =~ ^[a-z]$ ]] && [[ $remainder == *_* ]]; then
+                echo "${first}_${letter}"
+            else
+                echo "$first"
+            fi
+        done | sort | uniq -d
+    )
     
     if [ -n "$DUPLICATES" ]; then
         echo -e "${RED}❌ Found duplicate migration identifiers:${NC}"
@@ -69,13 +79,15 @@ check_batch2_migrations() {
     
     REQUIRED_BATCH2=(
         "100_team_tenancy.sql"
-        "101_app_platform_applications.sql"
-        "101_multi_node_replicas.sql"
-        "102_reconcile_plans.sql"
-        "102_uncloud_service_model.sql"
-        "103_backup_schedules_orchestration.sql"
-        "103_deployment_steps.sql"
-        "103_procedures.sql"
+        "100_z_app_platform_applications.sql"
+        "101_a_multi_node_replicas.sql"
+        "102_a_uncloud_service_model.sql"
+        "103_a_deployment_steps.sql"
+        "103_b_procedures.sql"
+        "104_a_backup_system.sql"
+        "130_app_platform_applications.sql"
+        "131_reconcile_plans.sql"
+        "132_backup_schedules_orchestration.sql"
     )
     
     MISSING=()
@@ -103,14 +115,14 @@ check_foreign_keys() {
     cd "$MIGRATION_DIR"
     
     # Extract all table names from CREATE TABLE statements
-    TABLES=$(grep -o 'CREATE TABLE IF NOT EXISTS [^ ]*' *.sql | sed 's/CREATE TABLE IF NOT EXISTS //' | sort | uniq)
+    TABLES=$(grep -h -o 'CREATE TABLE IF NOT EXISTS [^ (]*' ./*.sql | sed 's/CREATE TABLE IF NOT EXISTS //' | sort -u)
     
     # Extract all referenced tables from foreign key constraints
-    REFERENCES=$(grep -o 'REFERENCES [^ ]*' *.sql | sed 's/REFERENCES //' | sort | uniq)
+    REFERENCES=$(grep -h -o 'REFERENCES [^ (]*' ./*.sql | sed 's/REFERENCES //' | sort -u)
     
     ISSUES=()
     for REF in $REFERENCES; do
-        if ! echo "$TABLES" | grep -q -w "$REF"; then
+        if ! printf '%s\n' "$TABLES" | grep -Fxq "$REF"; then
             ISSUES+=("$REF")
         fi
     done
@@ -137,8 +149,8 @@ check_tenancy_columns() {
     
     MISSING_TENANCY=()
     for TABLE in "${TABLES_WITH_TENANCY[@]}"; do
-        # Check if table has org_id column
-        if ! grep -q "org_id" *.sql | grep -q "$TABLE"; then
+        if ! grep -h -E "(ALTER TABLE ${TABLE}.*org_id|CREATE TABLE.*${TABLE})" ./*.sql >/dev/null ||
+           ! grep -h "org_id" ./*.sql >/dev/null; then
             MISSING_TENANCY+=("$TABLE")
         fi
     done
@@ -171,7 +183,7 @@ check_batch2_entities() {
         "replica_applications:Service definitions"
         "instances:Replicas"
         "placement_decisions:Placement constraints"
-        "reservations:Resource reservations"
+        "placement_reservations:Resource reservations"
         "reconcile_plans:Drift records"
         "reconcile_events:Reconciliation events"
         "service_endpoints:Service discovery endpoints"
@@ -192,7 +204,7 @@ check_batch2_entities() {
         DESCRIPTION=${ENTITY#*:}
         
         # Check if table is created in any migration
-        if grep -q "CREATE TABLE" *.sql | grep -q "$TABLE"; then
+        if grep -h -E "CREATE TABLE( IF NOT EXISTS)? ${TABLE}[ (]" ./*.sql >/dev/null; then
             echo -e "  ${GREEN}✅${NC} $TABLE ($DESCRIPTION)"
         else
             echo -e "  ${YELLOW}⚠️${NC} $TABLE ($DESCRIPTION) - not found in CREATE TABLE statements"
@@ -207,8 +219,8 @@ check_cascading_behavior() {
     cd "$MIGRATION_DIR"
     
     # Look for ON DELETE CASCADE clauses
-    CASCADE_COUNT=$(grep -c "ON DELETE CASCADE" *.sql || echo "0")
-    RESTRICT_COUNT=$(grep -c -E "ON DELETE RESTRICT|ON DELETE NO ACTION" *.sql || echo "0")
+    CASCADE_COUNT=$(grep -h -c "ON DELETE CASCADE" ./*.sql | awk '{sum += $1} END {print sum + 0}')
+    RESTRICT_COUNT=$(grep -h -c -E "ON DELETE RESTRICT|ON DELETE NO ACTION" ./*.sql | awk '{sum += $1} END {print sum + 0}')
     
     echo "  ON DELETE CASCADE: $CASCADE_COUNT occurrences"
     echo "  ON DELETE RESTRICT/NO ACTION: $RESTRICT_COUNT occurrences"
@@ -225,7 +237,7 @@ check_unique_constraints() {
     
     cd "$MIGRATION_DIR"
     
-    UNIQUE_COUNT=$(grep -c "UNIQUE\|PRIMARY KEY" *.sql)
+    UNIQUE_COUNT=$(grep -h -c "UNIQUE\|PRIMARY KEY" ./*.sql | awk '{sum += $1} END {print sum + 0}')
     echo "  Unique constraints: $UNIQUE_COUNT occurrences"
     
     # Look for specific important unique constraints
@@ -250,8 +262,8 @@ check_nullable_fields() {
     
     cd "$MIGRATION_DIR"
     
-    NOT_NULL_COUNT=$(grep -c "NOT NULL" *.sql)
-    NULL_COUNT=$(grep -c "NULL\|DEFAULT NULL" *.sql)
+    NOT_NULL_COUNT=$(grep -h -c "NOT NULL" ./*.sql | awk '{sum += $1} END {print sum + 0}')
+    NULL_COUNT=$(grep -h -c "NULL\|DEFAULT NULL" ./*.sql | awk '{sum += $1} END {print sum + 0}')
     
     echo "  NOT NULL constraints: $NOT_NULL_COUNT occurrences"
     echo "  NULL/DDEFAULT NULL: $NULL_COUNT occurrences"
@@ -276,14 +288,14 @@ check_indexes() {
     
     cd "$MIGRATION_DIR"
     
-    INDEX_COUNT=$(grep -c "CREATE INDEX\|CREATE UNIQUE INDEX" *.sql)
+    INDEX_COUNT=$(grep -h -c "CREATE INDEX\|CREATE UNIQUE INDEX" ./*.sql | awk '{sum += $1} END {print sum + 0}')
     echo "  Indexes: $INDEX_COUNT occurrences"
     
     # Look for important indexes
     IMPORTANT_INDEXES=(
         "idx_applications_org_id"
-        "idx_servers_org_id"
-        "idx_deployments_org_id"
+        "servers_org_id_idx"
+        "deployments_org_id_idx"
         "idx_replica_applications_name"
         "idx_instances_app"
     )
@@ -304,8 +316,8 @@ generate_summary() {
     cd "$MIGRATION_DIR"
     
     TOTAL_MIGRATIONS=$(ls *.sql | wc -l)
-    BATCH1_MIGRATIONS=$(ls [0-9][0-9][0-9]_*.sql | wc -l)
-    BATCH2_MIGRATIONS=$(ls 1[0-9][0-9]_*.sql | wc -l)
+    BATCH1_MIGRATIONS=$(printf '%s\n' ./*.sql | awk -F/ '{name=$NF; number=substr(name,1,3)+0; if (number < 100) count++} END {print count+0}')
+    BATCH2_MIGRATIONS=$(printf '%s\n' ./*.sql | awk -F/ '{name=$NF; number=substr(name,1,3)+0; if (number >= 100) count++} END {print count+0}')
     
     echo "Total migrations: $TOTAL_MIGRATIONS"
     echo "Batch 1 migrations (001-099): $BATCH1_MIGRATIONS"

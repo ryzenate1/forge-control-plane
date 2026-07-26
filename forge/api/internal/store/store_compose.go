@@ -25,35 +25,35 @@ type ComposeStack struct {
 	CreatedAt     time.Time         `json:"createdAt"`
 	UpdatedAt     time.Time         `json:"updatedAt"`
 
-	GitSourceID          string     `json:"gitSourceId,omitempty"`
-	GitRepositoryURL     string     `json:"gitRepositoryUrl,omitempty"`
-	GitRepositoryPath    string     `json:"gitRepositoryPath,omitempty"`
-	ComposePath          string     `json:"composePath,omitempty"`
-	GitBranch            string     `json:"gitBranch,omitempty"`
-	GitCommitSHA         string     `json:"gitCommitSha,omitempty"`
-	GitDesiredCommitSHA  string     `json:"gitDesiredCommitSha,omitempty"`
-	GitPreviousCommitSHA string          `json:"gitPreviousCommitSha,omitempty"`
-	GitPreviousCompose   string          `json:"gitPreviousCompose,omitempty"`
+	GitSourceID          string           `json:"gitSourceId,omitempty"`
+	GitRepositoryURL     string           `json:"gitRepositoryUrl,omitempty"`
+	GitRepositoryPath    string           `json:"gitRepositoryPath,omitempty"`
+	ComposePath          string           `json:"composePath,omitempty"`
+	GitBranch            string           `json:"gitBranch,omitempty"`
+	GitCommitSHA         string           `json:"gitCommitSha,omitempty"`
+	GitDesiredCommitSHA  string           `json:"gitDesiredCommitSha,omitempty"`
+	GitPreviousCommitSHA string           `json:"gitPreviousCommitSha,omitempty"`
+	GitPreviousCompose   string           `json:"gitPreviousCompose,omitempty"`
 	GitPreviousManifest  *json.RawMessage `json:"gitPreviousManifest,omitempty"`
-	GitAutoUpdate        bool            `json:"gitAutoUpdate"`
-	GitPollIntervalSec   int        `json:"gitPollIntervalSec,omitempty"`
-	GitWebhookSecret     string     `json:"-"`
-	GitWebhookID         string     `json:"gitWebhookId,omitempty"`
-	GitLastWebhookAt     *time.Time `json:"gitLastWebhookAt,omitempty"`
-	GitUpdateStatus      string     `json:"gitUpdateStatus,omitempty"`
-	GitUpdateError       string     `json:"gitUpdateError,omitempty"`
-	GitReconcileMode     string     `json:"gitReconcileMode,omitempty"`
-	GitFailedSHA         string     `json:"gitFailedSha,omitempty"`
-	GitNextPollAt        *time.Time `json:"gitNextPollAt,omitempty"`
-	GitCredentialID      string     `json:"gitCredentialId,omitempty"`
-	GitUpdateClaimedBy   *string    `json:"-"`
-	GitUpdateClaimedAt   *time.Time `json:"-"`
-	GitLastDeliveryID    string     `json:"-"`
+	GitAutoUpdate        bool             `json:"gitAutoUpdate"`
+	GitPollIntervalSec   int              `json:"gitPollIntervalSec,omitempty"`
+	GitWebhookSecret     string           `json:"-"`
+	GitWebhookID         string           `json:"gitWebhookId,omitempty"`
+	GitLastWebhookAt     *time.Time       `json:"gitLastWebhookAt,omitempty"`
+	GitUpdateStatus      string           `json:"gitUpdateStatus,omitempty"`
+	GitUpdateError       string           `json:"gitUpdateError,omitempty"`
+	GitReconcileMode     string           `json:"gitReconcileMode,omitempty"`
+	GitFailedSHA         string           `json:"gitFailedSha,omitempty"`
+	GitNextPollAt        *time.Time       `json:"gitNextPollAt,omitempty"`
+	GitCredentialID      string           `json:"gitCredentialId,omitempty"`
+	GitUpdateClaimedBy   *string          `json:"-"`
+	GitUpdateClaimedAt   *time.Time       `json:"-"`
+	GitLastDeliveryID    string           `json:"-"`
 
-	ComposeType    string          `json:"composeType"`
-	SourceType     string          `json:"sourceType"`
-	EnvironmentID  string          `json:"environmentId,omitempty"`
-	ParsedConfig   json.RawMessage `json:"parsedConfig,omitempty"`
+	ComposeType   string          `json:"composeType"`
+	SourceType    string          `json:"sourceType"`
+	EnvironmentID string          `json:"environmentId,omitempty"`
+	ParsedConfig  json.RawMessage `json:"parsedConfig,omitempty"`
 }
 
 type ComposeService struct {
@@ -115,13 +115,25 @@ func (s *Store) CreateComposeStack(ctx context.Context, stack *ComposeStack) err
 	if stack.UpdatedAt.IsZero() {
 		stack.UpdatedAt = stack.CreatedAt
 	}
+	if stack.Status == "" {
+		stack.Status = "deploying"
+	}
+	if stack.ComposeType == "" {
+		stack.ComposeType = "docker-compose"
+	}
+	if stack.SourceType == "" {
+		stack.SourceType = "raw"
+	}
+	if stack.GitUpdateStatus == "" {
+		stack.GitUpdateStatus = "idle"
+	}
 	envJSON, err := marshalEnvVars(stack.EnvVars)
 	if err != nil {
 		return fmt.Errorf("marshal env vars: %w", err)
 	}
 
 	cols := composeStackCols
-	placeholders := "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43,$44"
+	placeholders := "$1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33,$34,$35,$36,$37,$38,$39,$40,$41,$42,$43"
 	updateSet := ""
 	for _, c := range cols {
 		if c == "id" || c == "created_at" {
@@ -141,8 +153,9 @@ func (s *Store) CreateComposeStack(ctx context.Context, stack *ComposeStack) err
 		stack.ComposeYAML, stack.ComposeHash, envJSON, stack.MemoryMB, stack.CPUShares,
 		stack.DiskMB, stack.Error, nullIfEmpty(stack.ReservationID),
 		stack.CreatedAt, stack.UpdatedAt,
+		stack.ComposeType, stack.SourceType, nullIfEmpty(stack.EnvironmentID),
 		nullIfEmpty(stack.GitSourceID), nullIfEmpty(stack.GitRepositoryURL),
-		nullIfEmpty(stack.GitRepositoryPath), nullIfEmpty(stack.ComposePath), nullIfEmpty(stack.GitBranch),
+		nullIfEmpty(stack.GitRepositoryPath), stack.ComposePath, nullIfEmpty(stack.GitBranch),
 		nullIfEmpty(stack.GitCommitSHA), nullIfEmpty(stack.GitDesiredCommitSHA),
 		nullIfEmpty(stack.GitPreviousCommitSHA), nullIfEmpty(stack.GitPreviousCompose),
 		manifestJSON(stack.GitPreviousManifest),
@@ -152,14 +165,14 @@ func (s *Store) CreateComposeStack(ctx context.Context, stack *ComposeStack) err
 		stack.GitNextPollAt, nullIfEmpty(stack.GitCredentialID),
 		stack.GitUpdateClaimedBy, stack.GitUpdateClaimedAt, nullIfEmpty(stack.GitLastDeliveryID),
 		stack.GitReconcileMode, nullIfEmpty(stack.GitFailedSHA),
-		stack.ComposeType, stack.SourceType, nullIfEmpty(stack.EnvironmentID),
 		parsedConfigJSON(stack.ParsedConfig))
 	return err
 }
 
 func parsedConfigJSON(pc json.RawMessage) *string {
 	if len(pc) == 0 {
-		return nil
+		empty := "{}"
+		return &empty
 	}
 	s := string(pc)
 	return &s
@@ -674,10 +687,14 @@ func (s *Store) CreateComposeProject(ctx context.Context, p *ProjectDocument) er
 	if p.ID == "" {
 		return fmt.Errorf("project ID is required")
 	}
+	parsedConfig := p.ParsedConfig
+	if len(parsedConfig) == 0 {
+		parsedConfig = []byte(`{}`)
+	}
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO compose_projects (id, name, server_id, compose_content, parsed_config, status, revision, created_at, updated_at)
-		VALUES ($1, $2, NULLIF($3, ''), $4, $5, $6, $7, NOW(), NOW())
-	`, p.ID, p.Name, p.ServerID, p.ComposeContent, p.ParsedConfig, p.Status, p.Revision)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4, $5, $6, $7, NOW(), NOW())
+	`, p.ID, p.Name, p.ServerID, p.ComposeContent, parsedConfig, p.Status, p.Revision)
 	return err
 }
 
@@ -721,11 +738,16 @@ func (s *Store) ListComposeProjects(ctx context.Context) ([]ProjectDocument, err
 }
 
 func (s *Store) UpdateComposeProject(ctx context.Context, p *ProjectDocument) error {
+	parsedConfig := p.ParsedConfig
+	if len(parsedConfig) == 0 {
+		parsedConfig = []byte(`{}`)
+	}
 	_, err := s.db.Exec(ctx, `
 		UPDATE compose_projects
-		SET name = $2, compose_content = $3, parsed_config = $4, status = $5, revision = $6, updated_at = NOW()
+		SET name = $2, server_id = NULLIF($3, '')::uuid, compose_content = $4,
+		    parsed_config = $5, status = $6, revision = $7, updated_at = NOW()
 		WHERE id = $1
-	`, p.ID, p.Name, p.ComposeContent, p.ParsedConfig, p.Status, p.Revision)
+	`, p.ID, p.Name, p.ServerID, p.ComposeContent, parsedConfig, p.Status, p.Revision)
 	return err
 }
 

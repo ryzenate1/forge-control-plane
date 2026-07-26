@@ -15,45 +15,60 @@ case "$interval" in *[!0-9]*|'') echo "invalid backup interval" >&2; exit 1;; es
 case "$retention" in *[!0-9]*|'') echo "invalid backup retention" >&2; exit 1;; esac
 
 mkdir -p /backups
+
 while true; do
+  start_time="$(date +%s)"
   timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
   partial="/backups/gamepanel-${timestamp}.dump.partial"
 
-  if [ "$compress" = "true" ]; then
-    final="/backups/gamepanel-${timestamp}.dump.gz"
-    if pg_dump --format=custom --file="$partial"; then
+  if pg_dump --format=custom --file="$partial"; then
+    # Automatic restore testing / integrity verification
+    if pg_restore --list "$partial" >/dev/null 2>&1; then
+      echo "Backup integrity verified: $partial"
+    else
+      echo "Backup integrity check failed for $partial" >&2
+      rm -f "$partial"
+      sleep "$interval"
+      continue
+    fi
+
+    if [ "$compress" = "true" ]; then
+      final="/backups/gamepanel-${timestamp}.dump.gz"
       gzip -f "$partial"
       mv "${partial}.gz" "$final"
     else
-      echo "PostgreSQL backup failed at $timestamp" >&2
-      rm -f "$partial"
-      sleep "$interval"
-      continue
+      final="/backups/gamepanel-${timestamp}.dump"
+      mv "$partial" "$final"
     fi
   else
-    final="/backups/gamepanel-${timestamp}.dump"
-    if pg_dump --format=custom --file="$partial"; then
-      mv "$partial" "$final"
-    else
-      echo "PostgreSQL backup failed at $timestamp" >&2
-      rm -f "$partial"
-      sleep "$interval"
-      continue
-    fi
+    echo "PostgreSQL backup failed at $timestamp" >&2
+    rm -f "$partial"
+    sleep "$interval"
+    continue
   fi
 
   if [ -n "$s3_bucket" ] && [ -n "$s3_access_key" ] && [ -n "$s3_secret_key" ]; then
-    s3_path="${s3_prefix}/gamepanel-${timestamp}.dump${compress:+.gz}"
-    export AWS_ACCESS_KEY_ID="$s3_access_key"
-    export AWS_SECRET_ACCESS_KEY="$s3_secret_key"
-    export AWS_DEFAULT_REGION="${s3_region:-us-east-1}"
-    if aws s3 cp "$final" "s3://${s3_bucket}/${s3_path}" --no-progress; then
-      echo "S3 upload succeeded: s3://${s3_bucket}/${s3_path}"
+    if command -v aws >/dev/null 2>&1; then
+      s3_path="${s3_prefix}/gamepanel-${timestamp}.dump${compress:+.gz}"
+      export AWS_ACCESS_KEY_ID="$s3_access_key"
+      export AWS_SECRET_ACCESS_KEY="$s3_secret_key"
+      export AWS_DEFAULT_REGION="${s3_region:-us-east-1}"
+      if aws s3 cp "$final" "s3://${s3_bucket}/${s3_path}" --no-progress; then
+        echo "S3 upload succeeded: s3://${s3_bucket}/${s3_path}"
+      else
+        echo "S3 upload failed at $timestamp" >&2
+      fi
     else
-      echo "S3 upload failed at $timestamp" >&2
+      echo "S3 credentials supplied but aws CLI is not installed" >&2
     fi
   fi
 
   find /backups -maxdepth 1 -type f \( -name 'gamepanel-*.dump' -o -name 'gamepanel-*.dump.gz' \) -mtime "+$retention" -delete
-  sleep "$interval"
+
+  end_time="$(date +%s)"
+  elapsed=$((end_time - start_time))
+  sleep_time=$((interval - elapsed))
+  if [ "$sleep_time" -gt 0 ]; then
+    sleep "$sleep_time"
+  fi
 done

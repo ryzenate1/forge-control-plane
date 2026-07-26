@@ -42,6 +42,27 @@ func (s *Store) ListAllocations(ctx context.Context) ([]Allocation, error) {
 	return s.ListAllocationsPaginated(ctx, 0, 1000)
 }
 
+func (s *Store) ListAllocationsWithTotal(ctx context.Context, page, perPage int) ([]Allocation, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage <= 0 {
+		perPage = 50
+	}
+	offset := (page - 1) * perPage
+
+	var total int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM allocations`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	allocations, err := s.ListAllocationsPaginated(ctx, offset, perPage)
+	if err != nil {
+		return nil, 0, err
+	}
+	return allocations, total, nil
+}
+
 func (s *Store) ListAllocationsPaginated(ctx context.Context, offset, limit int) ([]Allocation, error) {
 	if limit <= 0 {
 		limit = 1000

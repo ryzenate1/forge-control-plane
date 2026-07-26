@@ -47,7 +47,7 @@ func registerSettingsRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if req.SMTPPassword == maskedSecret || req.RecaptchaSecretKey == maskedSecret || req.DiscordWebhookURL == maskedSecret || req.SlackWebhookURL == maskedSecret || req.TelegramBotToken == maskedSecret {
+		if req.SMTPPassword == maskedSecret || req.RecaptchaSecretKey == maskedSecret || req.DiscordWebhookURL == maskedSecret || req.SlackWebhookURL == maskedSecret || req.TelegramBotToken == maskedSecret || req.S3SecretAccessKey == maskedSecret {
 			existing, err := cfg.Store.GetPanelSettings(ctx)
 			if err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "could not preserve stored secrets")
@@ -66,6 +66,9 @@ func registerSettingsRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 			}
 			if req.TelegramBotToken == maskedSecret {
 				req.TelegramBotToken = existing.TelegramBotToken
+			}
+			if req.S3SecretAccessKey == maskedSecret {
+				req.S3SecretAccessKey = existing.S3SecretAccessKey
 			}
 		}
 		if err := cfg.Store.UpdatePanelSettings(ctx, req); err != nil {
@@ -94,5 +97,8 @@ func maskPanelSettingsSecrets(settings *PanelSettings) {
 	}
 	if settings.TelegramBotToken != "" {
 		settings.TelegramBotToken = maskedSecret
+	}
+	if settings.S3SecretAccessKey != "" {
+		settings.S3SecretAccessKey = maskedSecret
 	}
 }

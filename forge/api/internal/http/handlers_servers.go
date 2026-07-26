@@ -3,14 +3,19 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/domain"
@@ -46,7 +51,7 @@ func validFileMode(mode string) bool {
 }
 
 func legacyServerTransferUnavailable(c *fiber.Ctx) error {
-	return fiber.NewError(fiber.StatusNotImplemented, "legacy server transfer endpoints are not implemented")
+	return fiber.NewError(fiber.StatusGone, "legacy server transfer endpoint retired; use /migrations")
 }
 
 func legacyServerTransferCallbackUnavailable(c *fiber.Ctx) error {
@@ -87,7 +92,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return err
 		}
-		return c.JSON(users)
+		return c.JSON(ToPublicUsers(users))
 	})
 
 	protected.Post("/users", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.write"), func(c *fiber.Ctx) error {
@@ -124,10 +129,19 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		if cfg.MailTriggerService != nil {
-			cfg.MailTriggerService.SendWelcome(ctx, user.Email, user.Email, req.Password)
+		if cfg.MailTriggerService != nil && cfg.PanelURL != "" {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err == nil {
+				plain := hex.EncodeToString(raw)
+				tokenHash, err := bcrypt.GenerateFromPassword([]byte(plain), store.BcryptCost())
+				if err == nil {
+					setPwdURL := strings.TrimRight(cfg.PanelURL, "/") + "/reset-password#token=" + url.QueryEscape(plain) + "&email=" + url.QueryEscape(user.Email)
+					cfg.Store.EnqueuePasswordReset(ctx, user.Email, string(tokenHash), 7*24*time.Hour, c.IP(), setPwdURL)
+					cfg.MailTriggerService.SendWelcome(ctx, user.Email, user.Email, setPwdURL)
+				}
+			}
 		}
-		return c.Status(fiber.StatusCreated).JSON(user)
+		return c.Status(fiber.StatusCreated).JSON(ToPublicUser(user))
 	})
 
 	protected.Patch("/users/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.write"), func(c *fiber.Ctx) error {
@@ -161,7 +175,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(user)
+		return c.JSON(ToPublicUser(user))
 	})
 
 	protected.Delete("/users/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.delete"), func(c *fiber.Ctx) error {
@@ -246,7 +260,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
 		}
-		if claims.Role == "admin" || claims.Sub == server.OwnerID {
+		if claims.Role == RoleAdmin || claims.Sub == server.OwnerID {
 			server.Permissions = []string{"*"}
 		} else {
 			subuser, err := cfg.Store.GetServerSubuser(ctx, server.ID, claims.Sub)
@@ -758,7 +772,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		if cfg.Store != nil {
-			cfg.Store.DispatchWebhookEvent("server:created", map[string]any{
+			_ = cfg.Store.DispatchWebhookEvent(c.Context(), "server:created", map[string]any{
 				"subject_type": "server",
 				"subject_id":   server.ID,
 				"name":         server.Name,
@@ -876,7 +890,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		if cfg.Store != nil {
-			cfg.Store.DispatchWebhookEvent("server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")})
+			_ = cfg.Store.DispatchWebhookEvent(c.Context(), "server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")})
 		}
 		return c.Status(fiber.StatusAccepted).JSON(response)
 	})
@@ -1150,7 +1164,9 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		var body struct {
 			Action string `json:"action"`
 		}
-		_ = c.BodyParser(&body)
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		switch body.Action {
 		case "suspend", "unsuspend":
 		default:
@@ -1179,7 +1195,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true, "suspended": suspended})
 	})
 
-	protected.Post("/servers/:id/suspend", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/servers/:id/suspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -1191,7 +1207,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/servers/:id/unsuspend", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/servers/:id/unsuspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -1811,7 +1827,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		defer body.Close()
 		c.Set("Content-Type", "application/zip")
-		c.Set("Content-Disposition", `attachment; filename="`+c.Query("name")+`"`)
+		c.Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(c.Query("name"))+`"`)
 		return c.SendStream(body)
 	})
 
@@ -1896,15 +1912,15 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			verified = verified && checksumMatch
 		}
 		return c.JSON(fiber.Map{
-			"ok":               true,
-			"name":             name,
-			"verified":         verified,
-			"checksumMatch":    checksumMatch,
-			"dbChecksum":       b.Checksum,
-			"daemonChecksum":   found.Checksum,
-			"daemonSize":       found.Size,
-			"dbSize":           b.Size,
-			"daemonStatus":     found.Status,
+			"ok":             true,
+			"name":           name,
+			"verified":       verified,
+			"checksumMatch":  checksumMatch,
+			"dbChecksum":     b.Checksum,
+			"daemonChecksum": found.Checksum,
+			"daemonSize":     found.Size,
+			"dbSize":         b.Size,
+			"daemonStatus":   found.Status,
 		})
 	})
 
@@ -1933,7 +1949,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		c.Set("Content-Type", "application/octet-stream")
-		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, name))
+		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeFilename(name)))
 		c.Set("Content-Length", strconv.Itoa(len(data)))
 		return c.Send(data)
 	})
@@ -2807,7 +2823,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		targetDirectory, fileName := "", ""
 		if destination != "" {
 			cleaned := path.Clean(destination)
-			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "\\") {
+			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "..") || strings.Contains(cleaned, "\\") {
 				return fiber.NewError(fiber.StatusBadRequest, "invalid destination path")
 			}
 			targetDirectory = path.Dir(cleaned)
@@ -2880,9 +2896,20 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		limit := c.QueryInt("limit", 50)
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+		offset := c.QueryInt("offset", 0)
+		if offset < 0 {
+			offset = 0
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		events, err := cfg.Store.ListAudit(ctx)
+		events, err := cfg.Store.ListAudit(ctx, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -2895,24 +2922,46 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		query := strings.TrimSpace(c.Query("q"))
 		if query == "" {
-			return c.JSON([]store.User{})
+			return c.JSON([]PublicUser{})
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		users, _, err := cfg.Store.SearchUsers(ctx, query, 1, 25)
+		page := c.QueryInt("page", 1)
+		if page < 1 {
+			page = 1
+		}
+		perPage := c.QueryInt("perPage", 25)
+		if perPage <= 0 {
+			perPage = 25
+		}
+		if perPage > 100 {
+			perPage = 100
+		}
+		users, _, err := cfg.Store.SearchUsers(ctx, query, page, perPage)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		return c.JSON(users)
+		return c.JSON(ToPublicUsers(users))
 	})
 
 	protected.Get("/audit", requireRole("admin"), requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		limit := c.QueryInt("limit", 50)
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+		offset := c.QueryInt("offset", 0)
+		if offset < 0 {
+			offset = 0
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		events, err := cfg.Store.ListAudit(ctx)
+		events, err := cfg.Store.ListAudit(ctx, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -2943,7 +2992,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		targetDirectory, fileName := "", ""
 		if destination != "" {
 			cleaned := path.Clean(destination)
-			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "\\") {
+			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "..") || strings.Contains(cleaned, "\\") {
 				return fiber.NewError(fiber.StatusBadRequest, "invalid destination path")
 			}
 			targetDirectory = path.Dir(cleaned)
@@ -3160,7 +3209,51 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(current)
 	})
 
-	protected.Post("/servers/:id/operations/run", mutationLimiter, requireServerPermission(cfg, store.PermSettingsReinstall), func(c *fiber.Ctx) error {
-		return fiber.NewError(fiber.StatusNotImplemented, "operation pipelines are disabled until durable execution, per-step authorization, and failure reporting are implemented")
+	protected.Post("/servers/:id/operations/run", mutationLimiter, func(c *fiber.Ctx) error {
+		if cfg.OperationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "operation service is not available")
+		}
+		var req struct {
+			Operations []struct {
+				Action string         `json:"action"`
+				Args   map[string]any `json:"args"`
+			} `json:"operations"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if len(req.Operations) == 0 || len(req.Operations) > 20 {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "operations must contain between 1 and 20 steps")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		idempotencyPrefix := strings.TrimSpace(c.Get("Idempotency-Key"))
+		operations := make([]any, 0, len(req.Operations))
+		for index, step := range req.Operations {
+			action := strings.ToLower(strings.TrimSpace(step.Action))
+			requiredPermission := store.PermControlStart
+			switch action {
+			case "stop", "kill":
+				requiredPermission = store.PermControlStop
+			case "restart":
+				requiredPermission = store.PermControlRestart
+			case "start":
+			default:
+				return fiber.NewError(fiber.StatusUnprocessableEntity, "unsupported operation action: "+action)
+			}
+			if err := checkServerPermission(c, cfg, requiredPermission); err != nil {
+				return err
+			}
+			key := ""
+			if idempotencyPrefix != "" {
+				key = fmt.Sprintf("%s:%d:%s", idempotencyPrefix, index, action)
+			}
+			op, err := cfg.OperationService.DispatchPower(ctx, c.Params("id"), action, key)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			}
+			operations = append(operations, op)
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true, "operations": operations})
 	})
 }

@@ -13,6 +13,7 @@ import (
 	fiberws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 	gorilla "github.com/gorilla/websocket"
+	"golang.org/x/time/rate"
 )
 
 // nodeTarget holds the resolved Beacon node connection details.
@@ -142,7 +143,24 @@ func registerHostTerminalRoute(protected fiber.Router, cfg Config) {
 		configureClientSocket(client)
 		configureUpstreamSocket(upstream)
 
+		// Ping keepalive — detects half-open connections.
+		pingTicker := time.NewTicker(30 * time.Second)
+		defer pingTicker.Stop()
+		go func() {
+			for {
+				select {
+				case <-pingTicker.C:
+					if err := upstream.WriteControl(gorilla.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
+						return
+					}
+				case <-ctx.Done():
+					return
+				}
+			}
+		}()
+
 		errs := make(chan error, 2)
+		clientLimiter := rate.NewLimiter(rate.Limit(10), 20)
 		go func() {
 			for {
 				if ctx.Err() != nil {
@@ -165,6 +183,10 @@ func registerHostTerminalRoute(protected fiber.Router, cfg Config) {
 			for {
 				if ctx.Err() != nil {
 					errs <- ctx.Err()
+					return
+				}
+				if err := clientLimiter.Wait(ctx); err != nil {
+					errs <- err
 					return
 				}
 				messageType, payload, readErr := client.ReadMessage()
@@ -363,7 +385,7 @@ func hostFilesDownload(cfg Config) fiber.Handler {
 		}
 
 		c.Set("Content-Type", "application/octet-stream")
-		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, filename))
+		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeFilename(filename)))
 		return c.SendStream(reader)
 	}
 }

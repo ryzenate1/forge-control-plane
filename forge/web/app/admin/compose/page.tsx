@@ -1,11 +1,10 @@
 "use client";
 
-import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import {
-  Plus, Play, Square, RotateCcw, Trash2, Loader2,
+  Plus, Play, Square, Trash2, Loader2,
   CheckCircle, XCircle, AlertTriangle, Clock, ArrowUpDown
 } from "lucide-react";
 

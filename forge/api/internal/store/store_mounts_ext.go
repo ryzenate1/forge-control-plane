@@ -174,6 +174,16 @@ func (s *Store) UpdateMount(ctx context.Context, mountID string, req UpdateMount
 	}
 
 	args = append(args, mountID)
+	var allowedMountColumns = map[string]bool{
+		"name": true, "description": true, "source": true, "target": true,
+		"read_only": true, "user_mountable": true,
+	}
+	for _, set := range setClauses {
+		col := strings.SplitN(set, " =", 2)[0]
+		if !allowedMountColumns[col] {
+			return Mount{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	query := fmt.Sprintf("UPDATE mounts SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argIdx)
 	if _, err := s.db.Exec(ctx, query, args...); err != nil {
 		return Mount{}, err

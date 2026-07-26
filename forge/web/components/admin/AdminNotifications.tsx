@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Globe, MessageSquare, Mail, Send, Terminal, Trash2, Plus, RefreshCw, Zap } from "lucide-react";
+import { Bell, Globe, MessageSquare, Mail, Send, Trash2, Plus, RefreshCw, Zap } from "lucide-react";
 import {
   fetchNotificationChannels,
   createNotificationChannel,
@@ -15,7 +15,6 @@ import {
   fetchNotificationLogs,
   type NotificationChannel,
   type NotificationChannelType,
-  type NotificationEventSubscription,
   AVAILABLE_EVENTS,
   EVENT_LABELS,
 } from "@/lib/api/notifications";

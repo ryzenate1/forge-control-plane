@@ -11,6 +11,8 @@ import (
 
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
+
+	"github.com/google/uuid"
 )
 
 type DBContainerService struct {
@@ -255,7 +257,7 @@ func (s *DBContainerService) Backup(ctx context.Context, containerID string) err
 		return errors.New("container not yet provisioned")
 	}
 	if s.daemon != nil {
-		_, err = s.daemon.BackupDatabase(ctx, s.beaconBaseURL, s.nodeToken, db.ContainerID, db.Engine)
+		_, err = s.daemon.BackupDatabase(ctx, s.beaconBaseURL, s.nodeToken, db.ContainerID, db.Engine, uuid.NewString())
 		return err
 	}
 	return errors.New("beacon client not available")

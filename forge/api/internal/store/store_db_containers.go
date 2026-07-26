@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 )
@@ -124,6 +125,25 @@ func (s *Store) CreateDBContainer(ctx context.Context, req CreateDBContainerRequ
 	return s.GetDBContainer(ctx, id)
 }
 
+func formatDBContainerTime(v any) string {
+	if v == nil {
+		return ""
+	}
+	switch t := v.(type) {
+	case time.Time:
+		return t.Format(time.RFC3339)
+	case *time.Time:
+		if t != nil {
+			return t.Format(time.RFC3339)
+		}
+		return ""
+	case string:
+		return t
+	default:
+		return fmt.Sprintf("%v", v)
+	}
+}
+
 func (s *Store) GetDBContainer(ctx context.Context, id string) (DBContainer, error) {
 	var db DBContainer
 	var updatedAt, createdAt any
@@ -137,8 +157,8 @@ func (s *Store) GetDBContainer(ctx context.Context, id string) (DBContainer, err
 	if err != nil {
 		return DBContainer{}, err
 	}
-	db.CreatedAt = fmt.Sprintf("%v", createdAt)
-	db.UpdatedAt = fmt.Sprintf("%v", updatedAt)
+	db.CreatedAt = formatDBContainerTime(createdAt)
+	db.UpdatedAt = formatDBContainerTime(updatedAt)
 	return db, nil
 }
 
@@ -161,19 +181,26 @@ func (s *Store) ListDBContainers(ctx context.Context, serverID string) ([]DBCont
 			&db.MemoryMB, &db.CPUShares, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		db.CreatedAt = fmt.Sprintf("%v", createdAt)
-		db.UpdatedAt = fmt.Sprintf("%v", updatedAt)
+		db.CreatedAt = formatDBContainerTime(createdAt)
+		db.UpdatedAt = formatDBContainerTime(updatedAt)
 		dbs = append(dbs, db)
 	}
 	return dbs, rows.Err()
 }
 
-func (s *Store) ListAllDBContainers(ctx context.Context) ([]DBContainer, error) {
+func (s *Store) ListAllDBContainers(ctx context.Context, limit ...int) ([]DBContainer, error) {
+	maxRows := 100
+	if len(limit) > 0 && limit[0] > 0 {
+		maxRows = limit[0]
+		if maxRows > 1000 {
+			maxRows = 1000
+		}
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT id, server_id, engine, version, container_id, connection_string,
 		       credentials, status, port, volume_id, memory_mb, cpu_shares, created_at, updated_at
-		FROM db_containers ORDER BY created_at DESC
-	`)
+		FROM db_containers ORDER BY created_at DESC LIMIT $1
+	`, maxRows)
 	if err != nil {
 		return nil, err
 	}
@@ -187,8 +214,8 @@ func (s *Store) ListAllDBContainers(ctx context.Context) ([]DBContainer, error) 
 			&db.MemoryMB, &db.CPUShares, &createdAt, &updatedAt); err != nil {
 			return nil, err
 		}
-		db.CreatedAt = fmt.Sprintf("%v", createdAt)
-		db.UpdatedAt = fmt.Sprintf("%v", updatedAt)
+		db.CreatedAt = formatDBContainerTime(createdAt)
+		db.UpdatedAt = formatDBContainerTime(updatedAt)
 		dbs = append(dbs, db)
 	}
 	return dbs, rows.Err()

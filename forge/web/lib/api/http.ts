@@ -1,7 +1,7 @@
 // HTTP helper functions for API calls
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL ??
-  (process.env.NODE_ENV === 'development' ? 'http://localhost:8080/api/v1' : '/api/v1');
+  '/api/v1';
 
 export class ApiError extends Error {
   constructor(
@@ -19,7 +19,7 @@ export function getAuthHeaders(): Record<string, string> {
 
 export function getCSRFToken(): string | null {
   if (typeof document === 'undefined') return null;
-  const match = document.cookie.match(/__Host-forge_csrf=([^;]+)/);
+  const match = document.cookie.match(/__Host-forge_csrf=([^;]+)/) ?? document.cookie.match(/(?:^|;\s*)forge_csrf=([^;]+)/);
   return match ? decodeURIComponent(match[1]) : null;
 }
 
@@ -31,29 +31,32 @@ function addCSRFToHeaders(headers: Record<string, string>, method: string): void
   }
 }
 
-export async function fetchJSON<T>(path: string): Promise<T> {
+/** Canonical request primitive for every web API client. */
+export async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = init.method ?? 'GET';
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    ...getAuthHeaders(),
+    ...(init.headers as Record<string, string> | undefined),
   };
-
-  return apiFetch<T>(path, {
-    headers,
-    credentials: 'include',
-  });
-}
-
-async function apiFetch<T>(path: string, init: RequestInit): Promise<T> {
+  addCSRFToHeaders(headers, method);
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, init);
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+      credentials: init.credentials ?? 'include',
+    });
     if (!response.ok) {
-      const errorMessage = await getErrorMessage(response, `API ${init.method ?? "GET"} ${path} failed with`);
+      const errorMessage = await getErrorMessage(response, `API ${method} ${path} failed with`);
       throw new ApiError(errorMessage, response.status);
     }
     if (response.status === 204) return undefined as T;
     const text = await response.text();
     if (!text) return undefined as T;
-    return JSON.parse(text) as T;
+    try {
+      return JSON.parse(text) as T;
+    } catch {
+      throw new Error(`API ${method} ${path} returned invalid JSON`);
+    }
   } catch (err) {
     if (err instanceof ApiError) throw err;
     const message = err instanceof TypeError
@@ -61,6 +64,10 @@ async function apiFetch<T>(path: string, init: RequestInit): Promise<T> {
       : err instanceof Error ? err.message : "Unknown error";
     throw new ApiError(message, 0);
   }
+}
+
+export async function fetchJSON<T>(path: string): Promise<T> {
+  return requestJSON<T>(path);
 }
 
 export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
@@ -73,7 +80,7 @@ export async function postJSON<T>(path: string, body?: unknown): Promise<T> {
   }
   addCSRFToHeaders(headers, 'POST');
 
-  return apiFetch<T>(path, {
+  return requestJSON<T>(path, {
     method: 'POST',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -91,7 +98,7 @@ export async function putJSON<T>(path: string, body?: unknown): Promise<T> {
   }
   addCSRFToHeaders(headers, 'PUT');
 
-  return apiFetch<T>(path, {
+  return requestJSON<T>(path, {
     method: 'PUT',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -109,7 +116,7 @@ export async function patchJSON<T>(path: string, body?: unknown): Promise<T> {
   }
   addCSRFToHeaders(headers, 'PATCH');
 
-  return apiFetch<T>(path, {
+  return requestJSON<T>(path, {
     method: 'PATCH',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -124,7 +131,7 @@ export async function deleteJSON<T = void>(path: string, body?: unknown): Promis
   };
   addCSRFToHeaders(headers, 'DELETE');
 
-  return apiFetch<T>(path, {
+  return requestJSON<T>(path, {
     method: 'DELETE',
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -141,7 +148,7 @@ function statusHint(status: number): string {
   return "";
 }
 
-async function getErrorMessage(response: Response, prefix: string): Promise<string> {
+export async function getErrorMessage(response: Response, prefix: string): Promise<string> {
   try {
     const error = await response.json();
     const msg = error.message || error.error || "";

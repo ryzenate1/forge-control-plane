@@ -1,20 +1,8 @@
-CREATE TABLE IF NOT EXISTS traffic_rules (
-    id          TEXT PRIMARY KEY,
-    name        TEXT NOT NULL DEFAULT '',
-    server_id   TEXT NOT NULL DEFAULT '',
-    domain      TEXT NOT NULL DEFAULT '',
-    path        TEXT NOT NULL DEFAULT '/',
-    target_host TEXT NOT NULL DEFAULT '',
-    target_port INTEGER NOT NULL DEFAULT 80,
-    protocol    TEXT NOT NULL DEFAULT 'http',
-    strategy    TEXT NOT NULL DEFAULT 'round_robin',
-    weight      INTEGER NOT NULL DEFAULT 1,
-    headers     JSONB NOT NULL DEFAULT '{}',
-    enabled     BOOLEAN NOT NULL DEFAULT TRUE,
-    web_socket  BOOLEAN NOT NULL DEFAULT FALSE,
-    created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
+-- traffic_rules table is defined in migration 083_a_traffic_rules.sql
+-- This migration adds the web_socket column if missing and FK constraints.
+
+ALTER TABLE traffic_rules ADD COLUMN IF NOT EXISTS web_socket BOOLEAN NOT NULL DEFAULT FALSE;
+DO $$ BEGIN ALTER TABLE traffic_rules ADD CONSTRAINT fk_traffic_rules_server FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE INDEX IF NOT EXISTS traffic_rules_server_id_idx ON traffic_rules (server_id);
 CREATE INDEX IF NOT EXISTS traffic_rules_enabled_idx ON traffic_rules (enabled);

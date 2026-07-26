@@ -839,7 +839,7 @@ func (m *mockIntegrationStore) CreateProcedureExecution(_ context.Context, proce
 		m.stepDefs[seID] = step
 	}
 	m.stepExecs[id] = stepExecs
-	exec.Steps = stepExecs
+	exec.Steps = append([]store.ProcedureStepExecution(nil), stepExecs...)
 	return exec, nil
 }
 
@@ -850,7 +850,7 @@ func (m *mockIntegrationStore) GetProcedureExecution(_ context.Context, id strin
 	if !ok {
 		return store.ProcedureExecution{}, fmt.Errorf("not found")
 	}
-	exec.Steps = m.stepExecs[id]
+	exec.Steps = append([]store.ProcedureStepExecution(nil), m.stepExecs[id]...)
 	return exec, nil
 }
 
@@ -860,7 +860,7 @@ func (m *mockIntegrationStore) ListProcedureExecutions(_ context.Context, proced
 	var result []store.ProcedureExecution
 	for _, e := range m.executions {
 		if e.ProcedureID == procedureID || procedureID == "" {
-			e.Steps = m.stepExecs[e.ID]
+			e.Steps = append([]store.ProcedureStepExecution(nil), m.stepExecs[e.ID]...)
 			result = append(result, e)
 		}
 	}
@@ -1090,7 +1090,7 @@ func (m *mockIntegrationStore) ListProcedureSteps(_ context.Context, procedureID
 func (m *mockIntegrationStore) ListProcedureStepExecutions(_ context.Context, executionID string) ([]store.ProcedureStepExecution, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.stepExecs[executionID], nil
+	return append([]store.ProcedureStepExecution(nil), m.stepExecs[executionID]...), nil
 }
 
 func (m *mockIntegrationStore) GetProcedureSchedule(_ context.Context, procedureID string) (store.ProcedureSchedule, error) {
@@ -1507,6 +1507,11 @@ func TestScenario5_ProcedureExecutionWithApprovals(t *testing.T) {
 	actorID := "operator-1"
 
 	procSvc := procedure.New(m, noopPub, logger, m)
+	noopExecutor := func(context.Context, string, string, store.ProcedureStep, func(string, string)) error {
+		return nil
+	}
+	procSvc.RegisterExecutor("run_command", noopExecutor)
+	procSvc.RegisterExecutor("deploy_stack", noopExecutor)
 
 	proc, err := procSvc.CreateProcedure(ctx, store.CreateProcedureRequest{
 		Name:        "deploy-with-approval",
@@ -1556,13 +1561,16 @@ func TestScenario5_ProcedureExecutionWithApprovals(t *testing.T) {
 	})
 
 	t.Run("approval flow blocks then allows", func(t *testing.T) {
-		stepExecs, _ := m.ListProcedureStepExecutions(ctx, exec.ID)
-		approvalStep := stepExecs[1]
-		m.UpdateProcedureStepExecution(ctx, approvalStep.ID, "waiting_approval", 0)
-
-		waiting, _ := m.FindWaitingApprovalStep(ctx, exec.ID)
+		var waiting *store.ProcedureStepExecution
+		deadline := time.Now().Add(time.Second)
+		for waiting == nil && time.Now().Before(deadline) {
+			waiting, _ = m.FindWaitingApprovalStep(ctx, exec.ID)
+			if waiting == nil {
+				time.Sleep(10 * time.Millisecond)
+			}
+		}
 		if waiting == nil {
-			t.Fatal("expected a step waiting for approval")
+			t.Fatal("procedure did not reach its approval step")
 		}
 		if waiting.Position != 2 {
 			t.Errorf("expected step 2 to require approval, got position %d", waiting.Position)
@@ -1578,13 +1586,22 @@ func TestScenario5_ProcedureExecutionWithApprovals(t *testing.T) {
 			t.Error("expected no steps waiting for approval after approval granted")
 		}
 
-		approvedStep, _ := m.ListProcedureStepExecutions(ctx, exec.ID)
-		for _, s := range approvedStep {
-			if s.ID == waiting.ID {
-				if s.Status != "queued" {
-					t.Errorf("expected queued status after approval, got %s", s.Status)
+		deadline = time.Now().Add(time.Second)
+		for {
+			approvedSteps, _ := m.ListProcedureStepExecutions(ctx, exec.ID)
+			var approvedStatus string
+			for _, step := range approvedSteps {
+				if step.ID == waiting.ID {
+					approvedStatus = step.Status
 				}
 			}
+			if approvedStatus == "succeeded" {
+				break
+			}
+			if approvedStatus == "failed" || time.Now().After(deadline) {
+				t.Fatalf("approved step did not complete, status=%s", approvedStatus)
+			}
+			time.Sleep(10 * time.Millisecond)
 		}
 	})
 }

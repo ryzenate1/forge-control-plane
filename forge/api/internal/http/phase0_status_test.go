@@ -36,7 +36,7 @@ func requestStatus(t *testing.T, app *fiber.App, method, path string, body []byt
 	return res, payload
 }
 
-func TestMigrationLifecycleRoutesReturnNotImplemented(t *testing.T) {
+func TestMigrationLifecycleRoutesReturnUnavailableWithoutRuntime(t *testing.T) {
 	service := migrationservice.New(nil, nil, nil, nil, nil)
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Post("/migrations/:id/prepare", prepareMigrationRoute(service))
@@ -44,18 +44,9 @@ func TestMigrationLifecycleRoutesReturnNotImplemented(t *testing.T) {
 
 	for _, path := range []string{"/migrations/migration-1/prepare", "/migrations/migration-1/execute"} {
 		res, _ := requestStatus(t, app, nethttp.MethodPost, path, nil)
-		if res.StatusCode != nethttp.StatusNotImplemented {
-			t.Fatalf("%s returned %d, want 501", path, res.StatusCode)
+		if res.StatusCode != nethttp.StatusServiceUnavailable {
+			t.Fatalf("%s returned %d, want 503", path, res.StatusCode)
 		}
-	}
-}
-
-func TestRecoveryExecutionReturnsNotImplemented(t *testing.T) {
-	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Post("/execute", workloadExecutionNotImplemented("recovery execution"))
-	res, _ := requestStatus(t, app, nethttp.MethodPost, "/execute", []byte(`{}`))
-	if res.StatusCode != nethttp.StatusNotImplemented {
-		t.Fatalf("recovery execution returned %d, want 501", res.StatusCode)
 	}
 }
 
@@ -100,8 +91,8 @@ func TestLegacyServerTransferEndpointsAreRetired(t *testing.T) {
 		statusCode int
 		message    string
 	}{
-		{"/servers/server-1/transfer", nethttp.StatusNotImplemented, "legacy server transfer endpoints are not implemented"},
-		{"/servers/server-1/transfer/cancel", nethttp.StatusNotImplemented, "legacy server transfer endpoints are not implemented"},
+		{"/servers/server-1/transfer", nethttp.StatusGone, "legacy server transfer endpoint retired"},
+		{"/servers/server-1/transfer/cancel", nethttp.StatusGone, "legacy server transfer endpoint retired"},
 		{"/remote/servers/server-1/transfer/success", nethttp.StatusGone, "legacy server transfer callbacks have been retired"},
 		{"/remote/servers/server-1/transfer/failure", nethttp.StatusGone, "legacy server transfer callbacks have been retired"},
 	}

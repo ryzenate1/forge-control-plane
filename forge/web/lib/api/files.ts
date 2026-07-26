@@ -21,6 +21,7 @@ export async function downloadServerFile(serverId: string, path: string): Promis
     headers: {
       ...getAuthHeaders(),
     },
+    credentials: 'include',
   });
 
   if (!response.ok) {

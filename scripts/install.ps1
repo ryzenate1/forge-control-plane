@@ -329,7 +329,7 @@ function New-Environment {
 POSTGRES_DB=gamepanel
 POSTGRES_USER=gamepanel
 POSTGRES_PASSWORD=$script:DbPassword
-DATABASE_URL=postgres://gamepanel:$script:DbPassword@postgres:5432/gamepanel?sslmode=disable
+DATABASE_URL=postgres://gamepanel:$script:DbPassword@postgres:5432/gamepanel?sslmode=prefer
 POSTGRES_BACKUP_HOST_DIR=/var/backups/gamepanel/postgres
 POSTGRES_BACKUP_INTERVAL_SECONDS=86400
 POSTGRES_BACKUP_RETENTION_DAYS=14

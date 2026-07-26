@@ -93,6 +93,60 @@ func cleanupExpiredUploads(fsys *rootfs.FS, now time.Time) {
 	}
 }
 
+// uploadCleanupInterval controls how often the background reaper started by
+// startUploadCleanupLoop scans for and removes stale chunked-upload temp
+// files. Previously, cleanupExpiredUploads only ran opportunistically when a
+// new chunk arrived for the same server/upload, so a crash (or an upload
+// that's simply abandoned) mid-upload left orphaned .uploads/*.part files on
+// disk indefinitely, until the process happened to receive another upload
+// request for that server.
+const uploadCleanupInterval = 30 * time.Minute
+
+// startUploadCleanupLoop periodically scans every server directory under
+// dataDir and removes chunked-upload temp files older than uploadExpiry
+// from each one's .uploads directory. It runs until ctx is cancelled, so
+// callers should tie ctx to the server's lifetime (see Server.Shutdown) to
+// avoid leaking the goroutine.
+func startUploadCleanupLoop(ctx context.Context, dataDir string) {
+	go func() {
+		ticker := time.NewTicker(uploadCleanupInterval)
+		defer ticker.Stop()
+		cleanupAllExpiredUploads(dataDir)
+		for {
+			select {
+			case <-ticker.C:
+				cleanupAllExpiredUploads(dataDir)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// cleanupAllExpiredUploads scans dataDir for per-server directories and
+// removes stale chunked-upload temp files from each one's .uploads
+// directory. Errors opening or reading an individual server's filesystem
+// are ignored so that one problematic directory doesn't stop the reaper
+// from cleaning up the rest.
+func cleanupAllExpiredUploads(dataDir string) {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		fsys, err := rootfs.New(path.Join(dataDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		cleanupExpiredUploads(fsys, now)
+		_ = fsys.Close()
+	}
+}
+
 type archiveLimits struct {
 	bytes   int64
 	entries int

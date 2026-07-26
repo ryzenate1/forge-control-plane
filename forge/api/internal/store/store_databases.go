@@ -109,13 +109,20 @@ func (s *Store) CreateServerDatabase(ctx context.Context, serverID string, req C
 	if err != nil {
 		return ServerDatabase{}, err
 	}
+
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ServerDatabase{}, err
+	}
+	defer tx.Rollback(ctx)
+
 	var limit int
-	if err := s.db.QueryRow(ctx, `SELECT database_limit FROM servers WHERE id = $1`, serverID).Scan(&limit); err != nil {
+	if err := tx.QueryRow(ctx, `SELECT database_limit FROM servers WHERE id = $1 FOR UPDATE`, serverID).Scan(&limit); err != nil {
 		return ServerDatabase{}, err
 	}
 	if limit > 0 {
 		var count int
-		if err := s.db.QueryRow(ctx, `SELECT count(*) FROM server_databases WHERE server_id = $1 AND provisioning_state <> 'failed'`, serverID).Scan(&count); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT count(*) FROM server_databases WHERE server_id = $1 AND provisioning_state <> 'failed'`, serverID).Scan(&count); err != nil {
 			return ServerDatabase{}, err
 		}
 		if count >= limit {
@@ -123,7 +130,7 @@ func (s *Store) CreateServerDatabase(ctx context.Context, serverID string, req C
 		}
 	}
 	var hostID string
-	if err := s.db.QueryRow(ctx, databaseHostSelectionSQL, serverID).Scan(&hostID); err != nil {
+	if err := tx.QueryRow(ctx, databaseHostSelectionSQL, serverID).Scan(&hostID); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ServerDatabase{}, errors.New("no database host available for this server")
 		}
@@ -148,7 +155,7 @@ func (s *Store) CreateServerDatabase(ctx context.Context, serverID string, req C
 	if err != nil {
 		return ServerDatabase{}, err
 	}
-	_, err = s.db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO server_databases
 		    (id, server_id, database_host_id, database_name, username, password, password_encrypted, remote, max_connections, provisioning_state)
 		VALUES ($1, $2, $3, $4, $5, '', $6, $7, $8, 'pending')
@@ -156,7 +163,12 @@ func (s *Store) CreateServerDatabase(ctx context.Context, serverID string, req C
 	if err != nil {
 		return ServerDatabase{}, err
 	}
-	_ = s.AppendAudit(ctx, actorID, "server database provisioning started", "server", &serverID, fmt.Sprintf(`{"databaseId":%q}`, id))
+	if err := s.AppendAudit(ctx, actorID, "server database provisioning started", "server", &serverID, fmt.Sprintf(`{"databaseId":%q}`, id)); err != nil {
+		return ServerDatabase{}, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ServerDatabase{}, err
+	}
 	return s.GetServerDatabaseForProvisioning(ctx, serverID, id)
 }
 
@@ -300,7 +312,7 @@ func (s *Store) CreateDatabaseHost(ctx context.Context, req CreateDatabaseHostRe
 	_, err = tx.Exec(ctx, `
 		INSERT INTO database_hosts
 		    (id, engine, name, host, port, username, password, password_encrypted, tls_mode, tls_ca, tls_server_name, max_databases)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, '', $8, $9, $10, $11, $12)
+		VALUES ($1, $2, $3, $4, $5, $6, '', $7, $8, $9, $10, $11)
 	`, id, host.Engine, host.Name, host.Host, host.Port, host.Username, encryptedPassword, host.TLSMode, host.TLSCA, host.TLSServerName, host.MaxDatabases)
 	if err != nil {
 		return DatabaseHost{}, err

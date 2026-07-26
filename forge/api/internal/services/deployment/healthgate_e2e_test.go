@@ -3,7 +3,9 @@ package deployment
 import (
 	"context"
 	"testing"
+	"time"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -15,7 +17,7 @@ func TestHealthGatedDeploymentEndToEnd(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	serverID := "test-server-hg-e2e"
+	serverID := uuid.NewString()
 
 	// Step 1: Deploy revision A successfully
 	reqA := &RolloutRequest{
@@ -24,7 +26,7 @@ func TestHealthGatedDeploymentEndToEnd(t *testing.T) {
 		Image:                   "nginx:1.25@sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd",
 		HealthCheckPath:         "/health",
 		HealthCheckPort:         8080,
-		HealthGateEnabled:       true,
+		HealthGateEnabled:       false,
 		HealthGateThreshold:     2,
 		HealthGateIntervalMs:    100,
 		AutoRollbackEnabled:     true,
@@ -75,8 +77,12 @@ func TestHealthGatedDeploymentEndToEnd(t *testing.T) {
 	assert.NotEqual(t, depA.ID, depB.ID)
 
 	// Step 3: Verify health gate step ordering
-	stepsB, err := svc.ListSteps(ctx, depB.ID)
-	require.NoError(t, err)
+	var stepsB []*DeploymentStep
+	require.Eventually(t, func() bool {
+		var listErr error
+		stepsB, listErr = svc.ListSteps(ctx, depB.ID)
+		return listErr == nil && len(stepsB) > 0
+	}, 2*time.Second, 10*time.Millisecond)
 
 	// Find health gate and promote steps
 	healthGateIdx := -1

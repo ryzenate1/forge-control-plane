@@ -10,7 +10,7 @@ CREATE TABLE IF NOT EXISTS mtls_certificates (
     serial_number VARCHAR(64) NOT NULL DEFAULT '',
     expires_at TIMESTAMPTZ NOT NULL,
     revoked_at TIMESTAMPTZ,
-    node_id VARCHAR(36) REFERENCES nodes(id) ON DELETE SET NULL,
+    node_id UUID REFERENCES nodes(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 

@@ -50,11 +50,11 @@ export async function listStacks(): Promise<ComposeStack[]> {
 }
 
 export async function getStack(id: string): Promise<ComposeStack> {
-  return fetchJSON<ComposeStack>(`/compose/${id}`);
+  return fetchJSON<ComposeStack>(`/compose/${encodeURIComponent(id)}`);
 }
 
 export async function getStackStatus(id: string): Promise<StackStatusResponse> {
-  return fetchJSON<StackStatusResponse>(`/compose/${id}/status`);
+  return fetchJSON<StackStatusResponse>(`/compose/${encodeURIComponent(id)}/status`);
 }
 
 export async function getStackLogs(id: string, service?: string, tail?: number): Promise<{ stackId: string; services: Record<string, string> }> {
@@ -62,7 +62,7 @@ export async function getStackLogs(id: string, service?: string, tail?: number):
   if (service) params.set('service', service);
   if (tail) params.set('tail', String(tail));
   const qs = params.toString();
-  return fetchJSON(`/compose/${id}/logs${qs ? `?${qs}` : ''}`);
+  return fetchJSON(`/compose/${encodeURIComponent(id)}/logs${qs ? `?${qs}` : ''}`);
 }
 
 export async function createStack(data: {
@@ -87,23 +87,23 @@ export async function updateStack(id: string, data: {
   cpuShares?: number;
   diskMb?: number;
 }): Promise<ComposeStack> {
-  return patchJSON<ComposeStack>(`/compose/${id}`, data);
+  return patchJSON<ComposeStack>(`/compose/${encodeURIComponent(id)}`, data);
 }
 
 export async function deleteStack(id: string): Promise<void> {
-  return deleteJSON(`/compose/${id}`);
+  return deleteJSON(`/compose/${encodeURIComponent(id)}`);
 }
 
 export async function deployStack(id: string): Promise<ComposeStack> {
-  return postJSON<ComposeStack>(`/compose/${id}/deploy`, {});
+  return postJSON<ComposeStack>(`/compose/${encodeURIComponent(id)}/deploy`, {});
 }
 
 export async function stopStack(id: string): Promise<ComposeStack> {
-  return postJSON<ComposeStack>(`/compose/${id}/stop`, {});
+  return postJSON<ComposeStack>(`/compose/${encodeURIComponent(id)}/stop`, {});
 }
 
 export async function startStack(id: string): Promise<ComposeStack> {
-  return postJSON<ComposeStack>(`/compose/${id}/start`, {});
+  return postJSON<ComposeStack>(`/compose/${encodeURIComponent(id)}/start`, {});
 }
 
 export async function validateCompose(content: string): Promise<ValidateResult> {

@@ -2,11 +2,8 @@ package replicamanager
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"log/slog"
-	"net/http"
-	"strings"
 
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
@@ -17,20 +14,18 @@ import (
 type BeaconHTTPClient struct {
 	store        *store.Store
 	daemonClient *daemon.Client
-	baseURL      string
 	logger       *slog.Logger
 }
 
 // NewBeaconHTTPClient creates a new BeaconHTTPClient that can dispatch commands
 // to Beacon nodes via HTTP.
-func NewBeaconHTTPClient(store *store.Store, daemonClient *daemon.Client, baseURL string, logger *slog.Logger) *BeaconHTTPClient {
+func NewBeaconHTTPClient(store *store.Store, daemonClient *daemon.Client, _ string, logger *slog.Logger) *BeaconHTTPClient {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return &BeaconHTTPClient{
 		store:        store,
 		daemonClient: daemonClient,
-		baseURL:      strings.TrimRight(baseURL, "/"),
 		logger:       logger,
 	}
 }
@@ -105,83 +100,6 @@ func (c *BeaconHTTPClient) DispatchCommand(ctx context.Context, nodeID string, c
 		"commandType", commandType,
 		"nodeUrl", node.BaseURL,
 	)
-
-	return nil
-}
-
-// dispatchViaBeaconAPI dispatches commands directly to the Beacon API endpoint
-// This is an alternative approach using the Beacon operations queue endpoint
-func (c *BeaconHTTPClient) dispatchViaBeaconAPI(ctx context.Context, nodeID string, commandID string, commandType InstanceCommandType, payload map[string]any) error {
-	if c.baseURL == "" {
-		return fmt.Errorf("beacon base URL is not configured")
-	}
-
-	token, err := c.store.GetNodeDaemonCredential(ctx, nodeID)
-	if err != nil {
-		return fmt.Errorf("failed to get node credentials for %s: %w", nodeID, err)
-	}
-
-	// Map command type to Beacon operation type
-	var opType string
-	switch commandType {
-	case StartInstanceCommand:
-		opType = "start"
-	case StopInstanceCommand:
-		opType = "stop"
-	default:
-		return fmt.Errorf("unsupported command type: %s", commandType)
-	}
-
-	// Build request payload
-	requestPayload := map[string]any{
-		"signal": opType,
-	}
-
-	// Add server ID if available in payload
-	if instanceID, ok := payload["instanceId"].(string); ok {
-		requestPayload["serverId"] = instanceID
-	}
-
-	// Marshal payload
-	body, err := json.Marshal(requestPayload)
-	if err != nil {
-		return fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	// Build URL for the specific server's power endpoint
-	// Beacon API: POST /servers/{serverId}/power
-	serverID, _ := payload["instanceId"].(string)
-	url := fmt.Sprintf("%s/servers/%s/power", c.baseURL, serverID)
-
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(body)))
-	if err != nil {
-		return fmt.Errorf("failed to create request: %w", err)
-	}
-
-	// Set headers
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	req.Header.Set("X-Forge-Command-ID", commandID)
-
-	// Execute request
-	httpClient := &http.Client{}
-	resp, err := httpClient.Do(req)
-	if err != nil {
-		return fmt.Errorf("failed to execute request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	// Check response
-	if resp.StatusCode >= 400 {
-		var errorBody map[string]string
-		if err := json.NewDecoder(resp.Body).Decode(&errorBody); err == nil {
-			if errorMsg, ok := errorBody["error"]; ok {
-				return fmt.Errorf("beacon API error: %s", errorMsg)
-			}
-		}
-		return fmt.Errorf("beacon API returned status %d", resp.StatusCode)
-	}
 
 	return nil
 }

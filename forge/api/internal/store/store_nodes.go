@@ -3,7 +3,10 @@ package store
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/sha256"
+	"crypto/subtle"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +18,30 @@ import (
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// hashNodeToken hashes a daemon node token with SHA-256. Node tokens are long,
+// high-entropy random strings (see newDaemonToken, 64 hex chars / 256+ bits of
+// randomness), so unlike user passwords they are not vulnerable to brute-force
+// or dictionary guessing. bcrypt's deliberate slowness therefore buys no extra
+// security here and only adds latency to every node heartbeat/auth request, so
+// a fast cryptographic hash is used instead.
+func hashNodeToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// nodeTokenHashMatches compares a plaintext node token against its stored
+// hash using a constant-time comparison to avoid leaking timing information
+// about the hash contents. It also supports verifying legacy bcrypt hashes
+// that may still be stored for nodes that haven't rotated their token since
+// this change, so existing tokens keep working until they're rotated.
+func nodeTokenHashMatches(stored, token string) bool {
+	if strings.HasPrefix(stored, "$2a$") || strings.HasPrefix(stored, "$2b$") || strings.HasPrefix(stored, "$2y$") {
+		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(token)) == nil
+	}
+	computed := hashNodeToken(token)
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(computed)) == 1
+}
 
 func (s *Store) ListNodes(ctx context.Context) ([]Node, error) {
 	return s.ListNodesPaginated(ctx, 0, 0)
@@ -97,8 +124,8 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 			&node.MaintenanceMessage, &node.DrainBeforeMaintenance,
 			&node.Labels, &node.ClusterGroupID, &node.Public,
 			&node.Description, &node.LocationID, &node.RegionID, &node.Draining, &node.DesiredState, &node.ActualState,
-		    &node.HeartbeatState, &node.HeartbeatRecoveryCount,
-		    &node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
+			&node.HeartbeatState, &node.HeartbeatRecoveryCount,
+			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
 			&node.SchedulerType, &schedulerConfig,
 		); err != nil {
@@ -145,9 +172,9 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 		       n.enable_health_checks, n.enable_metrics,
 		       COALESCE(n.prometheus_endpoint, ''),
 		       COALESCE(n.alert_threshold_cpu, 90), COALESCE(n.alert_threshold_memory, 90), COALESCE(n.alert_threshold_disk, 90),
-		   n.public,
 		   COALESCE(n.maintenance_message, ''), n.drain_before_maintenance,
 		   COALESCE(n.labels, '[]'), COALESCE(n.cluster_group_id, ''),
+		   n.public,
 		   COALESCE(n.description, ''), n.location_id::text,
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
 	       COALESCE(n.tags, '[]'),
@@ -229,10 +256,7 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 	if err != nil {
 		return Node{}, "", err
 	}
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
-	if err != nil {
-		return Node{}, "", errors.New("hash node credential")
-	}
+	tokenHash := hashNodeToken(token)
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO nodes (
 			id, uuid, name, description, region, region_id, base_url, fqdn, scheme, behind_proxy, status, maintenance_mode,
@@ -268,7 +292,7 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 	`, id, nodeUUID, req.Name, strings.TrimSpace(req.Description), req.Region, nullableUUID(req.RegionID), req.BaseURL, req.FQDN, req.Scheme, req.BehindProxy,
 		req.Maintenance,
 		req.MemoryMB, req.DiskMB, req.UploadSizeMB, req.DaemonBase, req.DaemonListen, req.DaemonSFTP,
-		string(tokenHash), tokenID, encryptedToken, nullableUUID(req.LocationID),
+		tokenHash, tokenID, encryptedToken, nullableUUID(req.LocationID),
 		req.DisplayName, req.PublicHostname, req.ListenPortMin, req.ListenPortMax, req.AllowedIPs, req.NetworkInterface,
 		req.DaemonSSLCert, req.DaemonSSLKey, req.AutoConnect, req.ConnectionRetries, req.HeartbeatInterval,
 		req.CPUCores, req.MemoryOverallocate, req.DiskOverallocate, req.ReservedMemoryMB, req.ReservedDiskMB,
@@ -539,6 +563,23 @@ func (s *Store) PatchNode(ctx context.Context, nodeID string, patch NodePatch, a
 		return current, nil
 	}
 	args = append(args, nodeID)
+	var allowedNodeColumns = map[string]bool{
+		"name": true, "description": true, "location_id": true, "region": true,
+		"base_url": true, "fqdn": true, "scheme": true, "behind_proxy": true,
+		"desired_state": true, "maintenance_mode": true, "draining": true,
+		"memory_mb": true, "disk_mb": true, "upload_size_mb": true,
+		"daemon_base": true, "daemon_listen": true, "daemon_sftp": true,
+		"memory_overallocate": true, "disk_overallocate": true, "cpu_cores": true,
+		"daemon_sftp_alias": true, "daemon_connect": true, "cpu_overallocate": true,
+		"tags": true, "display_name": true, "public_hostname": true, "public": true,
+		"status": true, "scheduler_type": true, "scheduler_config": true,
+	}
+	for _, set := range sets {
+		col := strings.SplitN(set, " =", 2)[0]
+		if !allowedNodeColumns[col] {
+			return Node{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	tag, err := s.db.Exec(ctx, "UPDATE nodes SET "+strings.Join(sets, ", ")+fmt.Sprintf(" WHERE id = $%d", len(args)), args...)
 	if err != nil {
 		return Node{}, err
@@ -615,11 +656,8 @@ func (s *Store) RotateNodeToken(ctx context.Context, nodeID string, actorID *str
 	if err != nil {
 		return "", err
 	}
-	tokenHash, err := bcrypt.GenerateFromPassword([]byte(token), bcrypt.DefaultCost)
-	if err != nil {
-		return "", errors.New("hash node credential")
-	}
-	commandTag, err := s.db.Exec(ctx, `UPDATE nodes SET token_hash = $1, daemon_token_id = $2, daemon_token = '', daemon_token_encrypted = $3 WHERE id = $4`, string(tokenHash), tokenID, encryptedToken, nodeID)
+	tokenHash := hashNodeToken(token)
+	commandTag, err := s.db.Exec(ctx, `UPDATE nodes SET token_hash = $1, daemon_token_id = $2, daemon_token = '', daemon_token_encrypted = $3 WHERE id = $4`, tokenHash, tokenID, encryptedToken, nodeID)
 	if err != nil {
 		return "", err
 	}
@@ -646,16 +684,16 @@ func (s *Store) VerifyNodeToken(ctx context.Context, nodeID, token string) (bool
 		if parts[0] != tokenID {
 			return false, nil
 		}
-		if strings.HasPrefix(stored, "$2") {
-			return bcrypt.CompareHashAndPassword([]byte(stored), []byte(parts[1])) == nil, nil
+		if strings.HasPrefix(stored, "$2") || len(stored) == sha256.Size*2 {
+			return nodeTokenHashMatches(stored, parts[1]), nil
 		}
 		storedToken, err := s.decryptSecret(encryptedToken, plaintextToken, secretAAD("nodes", nodeID, "daemon_token"))
 		return err == nil && hmac.Equal([]byte(parts[1]), []byte(storedToken)), err
 	}
-	if strings.HasPrefix(stored, "$2a$") || strings.HasPrefix(stored, "$2b$") || strings.HasPrefix(stored, "$2y$") {
-		return bcrypt.CompareHashAndPassword([]byte(stored), []byte(token)) == nil, nil
+	if strings.HasPrefix(stored, "$2a$") || strings.HasPrefix(stored, "$2b$") || strings.HasPrefix(stored, "$2y$") || len(stored) == sha256.Size*2 {
+		return nodeTokenHashMatches(stored, token), nil
 	}
-	return stored == token, nil
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(token)) == 1, nil
 }
 
 func (s *Store) AuthenticateRemoteNode(ctx context.Context, bearer string) (Node, error) {
@@ -675,7 +713,7 @@ func (s *Store) AuthenticateRemoteNode(ctx context.Context, bearer string) (Node
 		}
 		return Node{}, err
 	}
-	if bcrypt.CompareHashAndPassword([]byte(storedHash), []byte(parts[1])) != nil {
+	if !nodeTokenHashMatches(storedHash, parts[1]) {
 		return Node{}, errors.New("invalid daemon authorization")
 	}
 	return s.GetNode(ctx, nodeID)

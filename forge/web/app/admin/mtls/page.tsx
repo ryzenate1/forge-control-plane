@@ -41,7 +41,7 @@ export default function AdminMTLSPage() {
     refetchInterval: 15000,
   });
 
-  const { data: certsData, isLoading: certsLoading } = useQuery({
+  const { data: certsData } = useQuery({
     queryKey: ["mtls-certs"],
     queryFn: () => fetchJSON<MTLSCertListResponse>("/mtls/certificates?limit=100"),
   });

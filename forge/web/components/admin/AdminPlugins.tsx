@@ -26,22 +26,27 @@ export function AdminPlugins() {
     mutationFn: (id: string) => deleteJSON(`/admin/plugins/${encodeURIComponent(id)}`),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["plugins"] }),
   });
+  const lifecycleMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      postJSON(`/admin/plugins/${encodeURIComponent(id)}/${enabled ? "disable" : "enable"}`, {}),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["plugins"] }),
+  });
   const plugins = query.data ?? [];
   
   return <div>
-    <SectionHeader 
-      title="Plugins" 
-      sub="Plugin manifest registry. Forge has no plugin runtime, so install, enable, disable, update, and uninstall return HTTP 501 and are intentionally unavailable." 
+    <SectionHeader
+      title="Plugins"
+      sub="Plugin manifest registry with install, update, enable, disable, and uninstall lifecycle controls."
       action={
         <Btn onClick={() => setOpen(true)}><Plus size={14}/> Import Manifest URL</Btn>
       }
     />
-    <div className="mb-4 rounded-lg border border-amber-500/30 bg-amber-950/20 p-3 text-sm text-amber-200">
+    <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-3 text-sm text-emerald-200">
       <div className="flex items-start gap-2">
         <Zap className="h-4 w-4 mt-0.5 flex-shrink-0" />
         <div>
-          <p className="font-semibold">Plugin Runtime Status</p>
-          <p className="text-xs mt-1">Imported manifests are metadata only and do not execute code. A plugin runtime is required before install, enable, disable, update, or uninstall can succeed.</p>
+          <p className="font-semibold">Plugin lifecycle active</p>
+          <p className="text-xs mt-1">Manifests remain permission-scoped. Enable only reviewed plugins.</p>
         </div>
       </div>
     </div>
@@ -69,8 +74,11 @@ export function AdminPlugins() {
                  </td>
                  <td className="px-4 py-3">{plugin.kind}</td>
                  <td className="px-4 py-3 font-mono text-xs">{plugin.version}</td>
-                 <td className="px-4 py-3"><Pill tone="yellow">Unavailable (501)</Pill></td>
+                 <td className="px-4 py-3"><Pill tone={plugin.enabled ? "green" : "yellow"}>{plugin.enabled ? "Enabled" : "Disabled"}</Pill></td>
                  <td className="px-4 py-3 text-right">
+                   <Btn size="sm" tone="ghost" onClick={() => lifecycleMut.mutate({ id: plugin.id, enabled: plugin.enabled })}>
+                     {plugin.enabled ? "Disable" : "Enable"}
+                   </Btn>
                    <Btn size="sm" tone="danger" onClick={() => { if (confirm(`Delete metadata for ${plugin.name}?`)) deleteMut.mutate(plugin.id); }}>
                      <Trash2 size={12}/>
                    </Btn>

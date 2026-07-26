@@ -8,7 +8,6 @@ import {
   BuildStatus,
 } from "@/components/shared";
 import { fetchAppGitSource } from "@/lib/api/apps";
-import type { GitSource } from "@/lib/api/apps";
 import type { ReactNode } from "react";
 
 interface GitViewProps {
@@ -16,8 +15,22 @@ interface GitViewProps {
   action?: ReactNode;
 }
 
+interface GitConfig {
+  repoUrl?: string;
+  branch?: string;
+  provider?: string;
+  autoDeploy?: boolean;
+  webhookUrl?: string;
+  commits?: Array<{ sha: string; message: string; author: string; timestamp: string; url?: string }>;
+}
+
+function parseGitConfig(sourceConfig: unknown): GitConfig | null {
+  if (!sourceConfig || typeof sourceConfig !== "object") return null;
+  return sourceConfig as GitConfig;
+}
+
 export function GitView({ appId, action }: GitViewProps) {
-  const query = useQuery<GitSource>({
+  const query = useQuery({
     queryKey: ["app-git", appId],
     queryFn: () => fetchAppGitSource(appId),
     enabled: Boolean(appId),
@@ -28,13 +41,13 @@ export function GitView({ appId, action }: GitViewProps) {
     return <ErrorAlert error={query.error} title="Failed to load source" onRetry={() => void query.refetch()} />;
   }
 
-  const git = query.data;
+  const git = query.data ? parseGitConfig(query.data.sourceConfig) : null;
 
   if (!git) {
     return <EmptyGit action={action} />;
   }
 
-  const lastCommit = git.commits?.[0];
+  const lastCommit = Array.isArray(git.commits) ? git.commits[0] : null;
 
   return (
     <div className="ui-card">
@@ -48,15 +61,15 @@ export function GitView({ appId, action }: GitViewProps) {
         <div className="grid gap-4 md:grid-cols-3">
           <div>
             <p className="text-xs text-slate-500">Provider</p>
-            <p className="text-sm font-semibold text-slate-200">{git.provider}</p>
+            <p className="text-sm font-semibold text-slate-200">{git.provider ?? "—"}</p>
           </div>
           <div>
             <p className="text-xs text-slate-500">Repository</p>
-            <p className="text-sm font-semibold text-slate-200">{git.repoUrl}</p>
+            <p className="text-sm font-semibold text-slate-200">{git.repoUrl ?? "—"}</p>
           </div>
           <div>
             <p className="text-xs text-slate-500">Branch</p>
-            <p className="text-sm font-semibold text-slate-200">{git.branch}</p>
+            <p className="text-sm font-semibold text-slate-200">{git.branch ?? "—"}</p>
           </div>
         </div>
         {lastCommit ? (

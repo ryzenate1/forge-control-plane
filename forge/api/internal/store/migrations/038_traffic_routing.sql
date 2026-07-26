@@ -1,7 +1,7 @@
 CREATE TABLE IF NOT EXISTS traffic_rules (
-    id         TEXT PRIMARY KEY,
+    id         UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name       TEXT NOT NULL DEFAULT '',
-    server_id  TEXT REFERENCES servers(id) ON DELETE CASCADE,
+    server_id  UUID REFERENCES servers(id) ON DELETE CASCADE,
     domain     TEXT NOT NULL DEFAULT '',
     path       TEXT NOT NULL DEFAULT '/',
     target_port INTEGER NOT NULL DEFAULT 80,
@@ -19,7 +19,7 @@ CREATE INDEX IF NOT EXISTS traffic_rules_server_idx ON traffic_rules (server_id)
 CREATE INDEX IF NOT EXISTS traffic_rules_domain_idx ON traffic_rules (domain);
 
 CREATE TABLE IF NOT EXISTS traffic_policies (
-    id                       TEXT PRIMARY KEY,
+    id                       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name                     TEXT NOT NULL DEFAULT '',
     rate_limit               INTEGER NOT NULL DEFAULT 0,
     rate_limit_burst         INTEGER NOT NULL DEFAULT 0,

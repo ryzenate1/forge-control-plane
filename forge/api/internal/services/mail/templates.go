@@ -52,7 +52,6 @@ type EmailData struct {
 	ActorName      string
 	ActorEmail     string
 	NewEmail       string
-	NewPassword    string
 	FailureReason  string
 }
 
@@ -101,8 +100,7 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;m
 <h2>Account Created</h2>
 <p>Hello{{if .RecipientName}} {{.RecipientName}}{{end}},</p>
 <p>Your {{.ProductName}} account has been created successfully.</p>
-{{if .NewPassword}}<p>Your temporary password is: <strong>{{.NewPassword}}</strong></p>
-<p style="color:#dc2626">Please change your password after logging in.</p>{{end}}
+{{if .ResetURL}}<p style="text-align:center;margin:32px 0"><a href="{{.ResetURL}}" class="button">Set your password</a></p>{{end}}
 <p style="text-align:center;margin:32px 0"><a href="{{.PanelURL}}" class="button">Go to Panel</a></p>
 </div>
 <div class="footer">

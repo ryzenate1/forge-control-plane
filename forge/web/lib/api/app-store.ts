@@ -1,6 +1,4 @@
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL ??
-  (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");
+import { API_BASE_URL, getCSRFToken } from './http';
 
 export type AppStoreApp = {
   id: string;
@@ -51,14 +49,20 @@ export type InstallRequest = {
 };
 
 async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, {
+  const method = options?.method ?? 'GET';
+  const headers: Record<string, string> = { Accept: 'application/json', ...options?.headers as Record<string, string> };
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const csrf = getCSRFToken();
+    if (csrf) headers['X-CSRF-Token'] = csrf;
+  }
+  const res = await fetch(`${API_BASE_URL}${path}`, {
     credentials: "include",
-    headers: { Accept: "application/json", ...options?.headers },
     ...options,
+    headers,
   });
   if (!res.ok) {
     const err = await res.text();
-    throw new Error(`API ${options?.method ?? "GET"} ${path}: ${res.status} ${err}`);
+    throw new Error(`API ${method} ${path}: ${res.status} ${err}`);
   }
   const body = await res.json();
   return body?.data ?? body;

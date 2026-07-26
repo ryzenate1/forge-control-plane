@@ -42,6 +42,9 @@ func ValidateSessionCookieConfig(cfg SessionCookieConfig, appEnv string) error {
 	if appEnv == "production" && !cfg.Secure {
 		return ErrInsecureCookieConfig
 	}
+	if cfg.SameSite == http.SameSiteNoneMode && !cfg.Secure {
+		return errors.New("SameSite=None requires Secure=true")
+	}
 	return nil
 }
 
@@ -55,9 +58,16 @@ func generateCSRFToken() (string, error) {
 
 var ErrInsecureCookieConfig = errors.New("SESSION_COOKIE_SECURE must be true in production")
 
+func secureCookieName(baseName string, secure bool) string {
+	if secure {
+		return baseName
+	}
+	return strings.TrimPrefix(baseName, "__Host-")
+}
+
 func setSessionCookie(w http.ResponseWriter, token string, expires time.Time, cfg SessionCookieConfig) {
 	cookie := &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     secureCookieName(SessionCookieName, cfg.Secure),
 		Value:    token,
 		Path:     "/",
 		HttpOnly: true,
@@ -71,7 +81,7 @@ func setSessionCookie(w http.ResponseWriter, token string, expires time.Time, cf
 
 func setCSRFCookie(w http.ResponseWriter, token string, expires time.Time, cfg SessionCookieConfig) {
 	cookie := &http.Cookie{
-		Name:     CSRFCookieName,
+		Name:     secureCookieName(CSRFCookieName, cfg.Secure),
 		Value:    token,
 		Path:     "/",
 		HttpOnly: false,
@@ -85,7 +95,7 @@ func setCSRFCookie(w http.ResponseWriter, token string, expires time.Time, cfg S
 
 func clearSessionCookie(w http.ResponseWriter, cfg SessionCookieConfig) {
 	cookie := &http.Cookie{
-		Name:     SessionCookieName,
+		Name:     secureCookieName(SessionCookieName, cfg.Secure),
 		Value:    "",
 		Path:     "/",
 		HttpOnly: true,
@@ -99,7 +109,7 @@ func clearSessionCookie(w http.ResponseWriter, cfg SessionCookieConfig) {
 
 func clearCSRFCookie(w http.ResponseWriter, cfg SessionCookieConfig) {
 	cookie := &http.Cookie{
-		Name:     CSRFCookieName,
+		Name:     secureCookieName(CSRFCookieName, cfg.Secure),
 		Value:    "",
 		Path:     "/",
 		HttpOnly: false,
@@ -111,16 +121,16 @@ func clearCSRFCookie(w http.ResponseWriter, cfg SessionCookieConfig) {
 	http.SetCookie(w, cookie)
 }
 
-func getCSRFTokenFromCookie(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie(CSRFCookieName)
+func getCSRFTokenFromCookie(r *http.Request, secure bool) (string, bool) {
+	cookie, err := r.Cookie(secureCookieName(CSRFCookieName, secure))
 	if err != nil {
 		return "", false
 	}
 	return cookie.Value, true
 }
 
-func getSessionTokenFromCookie(r *http.Request) (string, bool) {
-	cookie, err := r.Cookie(SessionCookieName)
+func getSessionTokenFromCookie(r *http.Request, secure bool) (string, bool) {
+	cookie, err := r.Cookie(secureCookieName(SessionCookieName, secure))
 	if err != nil {
 		return "", false
 	}
@@ -136,6 +146,10 @@ type exchangeCodeEntry struct {
 
 // exchangeCodeStore is an in-memory store for single-use session exchange codes.
 // Codes are short-lived (60s) and can be claimed exactly once.
+//
+// NOTE: This is a single-process, in-memory store. In multi-instance deployments,
+// exchange codes issued by one instance cannot be redeemed on another. For
+// horizontal scaling, this should be replaced with a Redis-backed store.
 type exchangeCodeStore struct {
 	mu   sync.Mutex
 	data map[string]*exchangeCodeEntry

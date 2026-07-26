@@ -2,8 +2,11 @@ package http
 
 import (
 	"encoding/json"
+	"fmt"
+	"time"
 
 	"gamepanel/forge/internal/services/apphosting"
+	"gamepanel/forge/internal/services/backup"
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/store"
 
@@ -35,6 +38,8 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 		}
 		return c.Next()
 	}
+	appBackupSvc := backup.NewMainService(cfg.Store, backup.NewSlogLogger(nil))
+	appBackupSvc.SetDaemonClient(cfg.Daemon)
 
 	resolveOrg := func(c *fiber.Ctx) (tenancy.OrgContext, error) {
 		claims, ok := c.Locals("user").(tokenClaims)
@@ -432,7 +437,22 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"data": []store.Deployment{}})
+		var deployments []store.Deployment
+		if app.ServerID != nil && *app.ServerID != "" {
+			deployments, err = cfg.Store.ListDeployments(ctx, *app.ServerID)
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to list deployments")
+			}
+		} else if app.CurrentDeploymentID != nil && *app.CurrentDeploymentID != "" {
+			depl, derr := cfg.Store.GetDeployment(ctx, *app.CurrentDeploymentID)
+			if derr == nil {
+				deployments = append(deployments, depl)
+			}
+		}
+		if deployments == nil {
+			deployments = []store.Deployment{}
+		}
+		return c.JSON(fiber.Map{"data": deployments})
 	})
 
 	// ---- Logs ----
@@ -454,7 +474,15 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"data": []any{}})
+		logs := []store.BuildLog{}
+		if app.CurrentDeploymentID != nil && *app.CurrentDeploymentID != "" {
+			entries, lerr := cfg.Store.ListDeploymentBuildLogs(ctx, *app.CurrentDeploymentID)
+			if lerr != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to list logs")
+			}
+			logs = entries
+		}
+		return c.JSON(fiber.Map{"data": logs})
 	})
 
 	// ---- Domains ----
@@ -476,7 +504,16 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"data": []any{}})
+		appID := c.Params("id")
+		svcType := "app"
+		domains, derr := cfg.Store.ListProxyDomains(ctx, store.ProxyDomainFilter{ServiceID: &appID, ServiceType: &svcType})
+		if derr != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to list domains")
+		}
+		if domains == nil {
+			domains = []store.ProxyDomain{}
+		}
+		return c.JSON(fiber.Map{"data": domains})
 	})
 
 	protected.Post("/apps/:id/domains", mutationLimiter, func(c *fiber.Ctx) error {
@@ -505,7 +542,21 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 		if req.Domain == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "domain is required")
 		}
-		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true, "domain": req.Domain})
+		if existing, _ := cfg.Store.GetProxyDomainByHostname(ctx, req.Domain); existing != nil {
+			return fiber.NewError(fiber.StatusConflict, "domain already in use")
+		}
+		created, cerr := cfg.Store.CreateProxyDomain(ctx, store.ProxyDomain{
+			Hostname:    req.Domain,
+			ServiceID:   c.Params("id"),
+			ServiceType: "app",
+			HTTPS:       true,
+			AutoRenew:   true,
+			Path:        "/",
+		})
+		if cerr != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to create domain")
+		}
+		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true, "domain": created})
 	})
 
 	protected.Delete("/apps/:id/domains/:domainId", mutationLimiter, func(c *fiber.Ctx) error {
@@ -524,6 +575,13 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 			if !isMember {
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
+		}
+		domain, derr := cfg.Store.GetProxyDomain(ctx, c.Params("domainId"))
+		if derr != nil || domain == nil || domain.ServiceID != c.Params("id") || domain.ServiceType != "app" {
+			return fiber.NewError(fiber.StatusNotFound, "domain not found")
+		}
+		if err := cfg.Store.DeleteProxyDomain(ctx, domain.ID); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to delete domain")
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -547,7 +605,14 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"data": []any{}})
+		appID := c.Params("id")
+		artifacts, total, err := appBackupSvc.ListBackupArtifacts(ctx, backup.ArtifactFilter{
+			SourceAppID: &appID, Page: c.QueryInt("page", 1), PerPage: c.QueryInt("perPage", 50),
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to list application backups")
+		}
+		return c.JSON(fiber.Map{"data": artifacts, "total": total})
 	})
 
 	protected.Post("/apps/:id/backups", mutationLimiter, func(c *fiber.Ctx) error {
@@ -567,7 +632,33 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"ok": true})
+		var body struct {
+			Name        string `json:"name"`
+			Description string `json:"description"`
+		}
+		if len(c.Body()) > 0 {
+			if err := c.BodyParser(&body); err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+			}
+		}
+		if body.Name == "" {
+			body.Name = "app-" + app.ID + "-" + time.Now().UTC().Format("20060102-150405")
+		}
+		job, err := appBackupSvc.CreateBackupJob(ctx, backup.CreateBackupJobRequest{
+			JobType: backup.BackupTypeApp, AppID: &app.ID, Name: body.Name,
+			Description: body.Description, TriggeredBy: "manual",
+		}, claims.Sub)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+		}
+		if err := appBackupSvc.ExecuteBackupJob(ctx, job.ID, claims.Sub); err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, fmt.Sprintf("application backup failed: %v", err))
+		}
+		completed, err := appBackupSvc.GetBackupJob(ctx, job.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(completed)
 	})
 
 	protected.Post("/apps/:id/backups/:backupId/restore", mutationLimiter, func(c *fiber.Ctx) error {
@@ -587,7 +678,21 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"ok": true})
+		artifact, err := appBackupSvc.GetBackupArtifact(ctx, c.Params("backupId"))
+		if err != nil || artifact.SourceAppID == nil || *artifact.SourceAppID != app.ID {
+			return fiber.NewError(fiber.StatusNotFound, "application backup not found")
+		}
+		restore, err := appBackupSvc.CreateRestore(ctx, backup.CreateRestoreRequest{
+			ArtifactID: artifact.ID, RestoreType: backup.BackupTypeApp,
+			TargetAppID: &app.ID, TriggeredBy: "manual",
+		}, claims.Sub)
+		if err != nil {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
+		}
+		if err := appBackupSvc.ExecuteRestore(ctx, restore.ID, claims.Sub); err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+		}
+		return c.JSON(restore)
 	})
 
 	protected.Delete("/apps/:id/backups/:backupId", mutationLimiter, func(c *fiber.Ctx) error {
@@ -607,7 +712,14 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		return c.JSON(fiber.Map{"ok": true})
+		artifact, err := appBackupSvc.GetBackupArtifact(ctx, c.Params("backupId"))
+		if err != nil || artifact.SourceAppID == nil || *artifact.SourceAppID != app.ID {
+			return fiber.NewError(fiber.StatusNotFound, "application backup not found")
+		}
+		if err := appBackupSvc.DeleteBackupArtifact(ctx, artifact.ID, claims.Sub); err != nil {
+			return fiber.NewError(fiber.StatusConflict, err.Error())
+		}
+		return c.SendStatus(fiber.StatusNoContent)
 	})
 
 	// ---- Compose ----
@@ -781,4 +893,92 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 		}
 		return c.JSON(fiber.Map{"ok": true, "autoDeploy": *req.AutoDeploy})
 	})
+
+	// ---- App templates ----
+	// Serves the curated application template catalog. This backs the
+	// frontend's GET /admin/app-templates call, which previously 404'd and
+	// silently fell back to bundled data (audit P2 remediation).
+	protected.Get("/admin/app-templates", func(c *fiber.Ctx) error {
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		if claims.Role != "admin" {
+			return fiber.NewError(fiber.StatusForbidden, "admin access required")
+		}
+		return c.JSON(fiber.Map{"data": defaultAppTemplates()})
+	})
+}
+
+type appTemplatePort struct {
+	HostPort      int    `json:"hostPort"`
+	ContainerPort int    `json:"containerPort"`
+	Protocol      string `json:"protocol"`
+	Name          string `json:"name"`
+}
+
+type appTemplateResources struct {
+	CPU    string `json:"cpu"`
+	Memory string `json:"memory"`
+	Disk   string `json:"disk"`
+}
+
+type appTemplate struct {
+	ID               string               `json:"id"`
+	Name             string               `json:"name"`
+	Description      string               `json:"description"`
+	Type             string               `json:"type"`
+	Image            string               `json:"image,omitempty"`
+	ComposeContent   string               `json:"composeContent,omitempty"`
+	DefaultPorts     []appTemplatePort    `json:"defaultPorts"`
+	DefaultEnvVars   map[string]string    `json:"defaultEnvVars"`
+	DefaultResources appTemplateResources `json:"defaultResources"`
+}
+
+// defaultAppTemplates is the server-side source of truth for the app
+// template catalog, mirroring forge/web/lib/app-templates-data.ts.
+func defaultAppTemplates() []appTemplate {
+	return []appTemplate{
+		{
+			ID: "nginx", Name: "Nginx",
+			Description: "A lightweight production web server and reverse proxy.",
+			Type:        "image", Image: "nginx:1.27-alpine",
+			DefaultPorts:     []appTemplatePort{{HostPort: 8080, ContainerPort: 80, Protocol: "tcp", Name: "http"}},
+			DefaultEnvVars:   map[string]string{},
+			DefaultResources: appTemplateResources{CPU: "0.5", Memory: "256", Disk: "1024"},
+		},
+		{
+			ID: "node", Name: "Node.js",
+			Description:      "Build and run a Node.js application from a Git repository.",
+			Type:             "git",
+			DefaultPorts:     []appTemplatePort{{HostPort: 3000, ContainerPort: 3000, Protocol: "tcp", Name: "http"}},
+			DefaultEnvVars:   map[string]string{"NODE_ENV": "production"},
+			DefaultResources: appTemplateResources{CPU: "1", Memory: "512", Disk: "2048"},
+		},
+		{
+			ID: "python", Name: "Python Web",
+			Description:      "Deploy a Python web service from a Git repository.",
+			Type:             "git",
+			DefaultPorts:     []appTemplatePort{{HostPort: 8000, ContainerPort: 8000, Protocol: "tcp", Name: "http"}},
+			DefaultEnvVars:   map[string]string{"PYTHONUNBUFFERED": "1"},
+			DefaultResources: appTemplateResources{CPU: "1", Memory: "512", Disk: "2048"},
+		},
+		{
+			ID: "postgres-compose", Name: "PostgreSQL",
+			Description:      "A PostgreSQL database stack with persistent storage.",
+			Type:             "compose",
+			ComposeContent:   "services:\n  postgres:\n    image: postgres:16-alpine\n    environment:\n      POSTGRES_DB: app\n      POSTGRES_USER: app\n      POSTGRES_PASSWORD: change-me\n    ports:\n      - \"5432:5432\"\n    volumes:\n      - postgres-data:/var/lib/postgresql/data\nvolumes:\n  postgres-data:\n",
+			DefaultPorts:     []appTemplatePort{{HostPort: 5432, ContainerPort: 5432, Protocol: "tcp", Name: "postgres"}},
+			DefaultEnvVars:   map[string]string{"POSTGRES_DB": "app", "POSTGRES_USER": "app", "POSTGRES_PASSWORD": ""},
+			DefaultResources: appTemplateResources{CPU: "1", Memory: "1024", Disk: "10240"},
+		},
+		{
+			ID: "redis", Name: "Redis",
+			Description: "An in-memory cache and queue service.",
+			Type:        "image", Image: "redis:7-alpine",
+			DefaultPorts:     []appTemplatePort{{HostPort: 6379, ContainerPort: 6379, Protocol: "tcp", Name: "redis"}},
+			DefaultEnvVars:   map[string]string{},
+			DefaultResources: appTemplateResources{CPU: "0.5", Memory: "256", Disk: "1024"},
+		},
+	}
 }

@@ -27,7 +27,7 @@ func registerBuildRoutes(v1 fiber.Router, cfg Config, buildSvc *build.Service, m
 		return
 	}
 
-	builds := v1.Group("/builds")
+	builds := v1.Group("/builds", requireRole("admin"))
 
 	builds.Post("/", mutationLimiter, func(c *fiber.Ctx) error {
 		var req startBuildRequest
@@ -80,6 +80,10 @@ func registerBuildRoutes(v1 fiber.Router, cfg Config, buildSvc *build.Service, m
 		record, err := buildSvc.GetBuild(c.Context(), c.Params("id"))
 		if err != nil {
 			return c.Status(fiber.StatusNotFound).JSON(fiber.Map{"error": err.Error()})
+		}
+		claims := c.Locals("user").(tokenClaims)
+		if claims.Role != RoleAdmin && record.SourceID != "" {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "access denied"})
 		}
 		return c.JSON(fiber.Map{"data": record})
 	})

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -34,10 +35,43 @@ var restrictedNetworks = []*net.IPNet{
 }
 
 type gitCloneRequest struct {
-	RepoURL   string `json:"repoUrl"`
-	Branch    string `json:"branch"`
-	SourceID  string `json:"sourceId"`
-	CommitSHA string `json:"commitSha,omitempty"`
+	RepoURL     string `json:"repoUrl"`
+	Branch      string `json:"branch"`
+	SourceID    string `json:"sourceId"`
+	CommitSHA   string `json:"commitSha,omitempty"`
+	Username    string `json:"username,omitempty"`
+	AccessToken string `json:"accessToken,omitempty"`
+}
+
+// gitRefNamePattern is a strict allowlist for git ref-like inputs (branch names,
+// tags, etc.) supplied by callers. It only allows the characters that make up a
+// valid, unambiguous git ref component and is intentionally conservative: it does
+// not attempt to implement git's full ref-name grammar, it just excludes anything
+// that could be misinterpreted as a flag or shell/argument-injection vector.
+var gitRefNamePattern = regexp.MustCompile(`^[A-Za-z0-9._/-]+$`)
+
+// validateGitRefName defends against argument/option injection when a user-supplied
+// ref name (branch, tag, etc.) is later passed to git. It is used as the primary
+// defense; callers should additionally avoid passing the value as a separate exec
+// arg after a bare flag (prefer "--branch=<value>" or a "--" separator) as a
+// defense-in-depth measure.
+func validateGitRefName(name string) error {
+	if name == "" {
+		return fmt.Errorf("ref name must not be empty")
+	}
+	if len(name) > 256 {
+		return fmt.Errorf("ref name too long")
+	}
+	if strings.HasPrefix(name, "-") {
+		return fmt.Errorf("ref name must not start with '-'")
+	}
+	if !gitRefNamePattern.MatchString(name) {
+		return fmt.Errorf("ref name contains disallowed characters")
+	}
+	if strings.Contains(name, "..") || strings.Contains(name, "/.") {
+		return fmt.Errorf("ref name contains disallowed sequence")
+	}
+	return nil
 }
 
 type gitCloneResponse struct {
@@ -87,8 +121,8 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if strings.Contains(req.Branch, "..") || strings.Contains(req.Branch, "/.") || strings.Contains(req.Branch, " ") || strings.Contains(req.Branch, "`") || strings.Contains(req.Branch, ";") {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid branch name"})
+	if err := validateGitRefName(req.Branch); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": fmt.Sprintf("invalid branch name: %v", err)})
 		return
 	}
 
@@ -131,12 +165,24 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 	cloneCtx, cancel := context.WithTimeout(r.Context(), maxCloneTime)
 	defer cancel()
 
+	// Build a request-scoped environment, including a hardened, request-scoped
+	// GIT_ASKPASS helper if HTTPS credentials were supplied. cleanupCreds MUST
+	// run on every path out of this handler, including error returns, so it is
+	// deferred immediately.
+	credEnv, cleanupCreds, err := gitEnvironmentForRequest(req, cloneBase)
+	if err != nil {
+		_ = os.RemoveAll(cloneDir)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "failed to prepare git credentials"})
+		return
+	}
+	defer cleanupCreds()
+
 	var commitSHA string
 
 	if req.CommitSHA != "" {
 		// Exact commit checkout flow
 		initCmd := exec.CommandContext(cloneCtx, "git", "-C", cloneDir, "init")
-		initCmd.Env = gitEnv()
+		initCmd.Env = credEnv
 		if out, err := initCmd.CombinedOutput(); err != nil {
 			log.Printf("[beacon] git init failed: %v (output: %s)", err, string(out))
 			_ = os.RemoveAll(cloneDir)
@@ -145,7 +191,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 		}
 
 		remoteCmd := exec.CommandContext(cloneCtx, "git", "-C", cloneDir, "remote", "add", "origin", req.RepoURL)
-		remoteCmd.Env = gitEnv()
+		remoteCmd.Env = credEnv
 		if out, err := remoteCmd.CombinedOutput(); err != nil {
 			log.Printf("[beacon] git remote add failed: %v (output: %s)", err, string(out))
 			_ = os.RemoveAll(cloneDir)
@@ -155,7 +201,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 
 		fetchArgs := []string{"-C", cloneDir, "fetch", "--depth", "1", "origin", req.CommitSHA, "--no-tags", "--filter=blob:none"}
 		fetchCmd := exec.CommandContext(cloneCtx, "git", fetchArgs...)
-		fetchCmd.Env = gitEnv()
+		fetchCmd.Env = credEnv
 		if out, err := fetchCmd.CombinedOutput(); err != nil {
 			log.Printf("[beacon] git fetch sha failed: %v (output: %s)", err, string(out))
 			_ = os.RemoveAll(cloneDir)
@@ -164,7 +210,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 		}
 
 		checkoutCmd := exec.CommandContext(cloneCtx, "git", "-C", cloneDir, "checkout", "--detach", "FETCH_HEAD")
-		checkoutCmd.Env = gitEnv()
+		checkoutCmd.Env = credEnv
 		if out, err := checkoutCmd.CombinedOutput(); err != nil {
 			log.Printf("[beacon] git checkout sha failed: %v (output: %s)", err, string(out))
 			_ = os.RemoveAll(cloneDir)
@@ -176,7 +222,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 
 		// Verify checked-out HEAD matches requested SHA
 		revCmd := exec.CommandContext(cloneCtx, "git", "-C", cloneDir, "rev-parse", "HEAD")
-		revCmd.Env = gitEnv()
+		revCmd.Env = credEnv
 		revOut, err := revCmd.Output()
 		if err != nil {
 			_ = os.RemoveAll(cloneDir)
@@ -190,20 +236,27 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	} else {
-		// Branch-head checkout (legacy, use exact SHA for reproducibility)
+		// Branch-head checkout (legacy, use exact SHA for reproducibility).
+		// The branch name is validated against a strict allowlist above (primary
+		// defense). As defense-in-depth, it is also passed as a single
+		// "--branch=<value>" token (rather than "--branch", "<value>" as two
+		// separate argv entries) so it cannot be split apart to smuggle in an
+		// unrelated flag, and a "--" separator is used before the positional
+		// repo/directory arguments so git never treats them as options.
 		cloneCmd := exec.CommandContext(cloneCtx, "git", "clone",
 			"--depth", "1",
 			"--single-branch",
-			"--branch", req.Branch,
+			"--branch="+req.Branch,
 			"--no-tags",
 			"--config", "core.symlinks=false",
 			"-c", "filter.lfs.required=false",
 			"-c", "protocol.file.allow=never",
 			"-c", "protocol.ext.allow=never",
 			"-c", "core.gitProxy=none",
+			"--",
 			req.RepoURL, cloneDir,
 		)
-		cloneCmd.Env = gitEnv()
+		cloneCmd.Env = credEnv
 		out, err := cloneCmd.CombinedOutput()
 		if err != nil {
 			log.Printf("[beacon] git clone failed for %s: %v (output: %s)", req.RepoURL, err, string(out))
@@ -213,7 +266,7 @@ func (s *Server) handleGitClone(w http.ResponseWriter, r *http.Request) {
 		}
 
 		revCmd := exec.CommandContext(cloneCtx, "git", "-C", cloneDir, "rev-parse", "HEAD")
-		revCmd.Env = gitEnv()
+		revCmd.Env = credEnv
 		revOut, err := revCmd.Output()
 		if err != nil {
 			_ = os.RemoveAll(cloneDir)
@@ -259,6 +312,96 @@ func gitEnv() []string {
 		"GIT_LFS_SKIP_SMUDGE=1",
 		"HOME="+os.TempDir(),
 	)
+}
+
+// gitAskPassDir is the name of the dedicated, per-request subdirectory created
+// under the server's data directory (or the OS temp dir as a fallback) to hold
+// the transient git askpass helper script. Using a dedicated 0700 directory,
+// rather than dropping the script directly into the shared OS temp dir, means
+// the script is never briefly readable by other local users/processes via a
+// world-readable or group-readable temp directory.
+const gitAskPassDir = "forge-git-askpass"
+
+// gitEnvironmentForRequest builds the environment to use for git subprocesses
+// for a single clone request, optionally configuring GIT_ASKPASS so that HTTPS
+// credentials (username/access token) can be supplied without ever embedding
+// them in the repository URL (which would otherwise leak them into process
+// listings, shell history, and git's on-disk remote configuration).
+//
+// The returned cleanup function removes the askpass helper (and its dedicated
+// directory) and must be called by the caller once the git subprocess(es) for
+// this request have finished, including on every error path - callers should
+// invoke it via "defer" immediately after this function returns successfully.
+//
+// Residual risk: git's askpass mechanism only supports pointing at an
+// executable script/program on disk (there is no way to hand git credentials
+// via an in-memory pipe), so there is an inherent, unavoidable window between
+// when the helper is written and when it is removed during which the
+// credential-bearing environment exists on disk for this process only. We
+// minimize that window by using a dedicated 0700 directory, 0600 file
+// permissions, and deferred removal that runs even on error paths, but the
+// window itself cannot be fully eliminated while using GIT_ASKPASS.
+func gitEnvironmentForRequest(req gitCloneRequest, dataDir string) ([]string, func(), error) {
+	env := gitEnv()
+	noop := func() {}
+
+	if req.Username == "" && req.AccessToken == "" {
+		return env, noop, nil
+	}
+
+	parentDir := dataDir
+	if parentDir == "" {
+		parentDir = os.TempDir()
+	}
+	if err := os.MkdirAll(parentDir, 0o700); err != nil {
+		return nil, noop, fmt.Errorf("prepare askpass parent directory: %w", err)
+	}
+
+	// Dedicated, per-request 0700 directory: never share the OS-wide temp dir,
+	// which may be world-readable/traversable on some platforms.
+	askPassDir, err := os.MkdirTemp(parentDir, gitAskPassDir+"-*")
+	if err != nil {
+		return nil, noop, fmt.Errorf("create askpass directory: %w", err)
+	}
+	cleanup := func() { _ = os.RemoveAll(askPassDir) }
+
+	scriptFile, err := os.CreateTemp(askPassDir, "forge-git-askpass-*.sh")
+	if err != nil {
+		cleanup()
+		return nil, noop, fmt.Errorf("create askpass script: %w", err)
+	}
+	scriptPath := scriptFile.Name()
+	// Harden permissions immediately, before any content (including the
+	// credential-bearing environment variable names) is written, and ensure
+	// removal happens on every subsequent error path via defer.
+	if err := scriptFile.Chmod(0o700); err != nil {
+		_ = scriptFile.Close()
+		cleanup()
+		return nil, noop, fmt.Errorf("chmod askpass script: %w", err)
+	}
+
+	// The script itself never contains the credential values - it only reads
+	// them from environment variables that are scoped to this one git
+	// subprocess invocation. This avoids having to shell-escape untrusted
+	// username/token values into a script body.
+	const script = "#!/bin/sh\ncase \"$1\" in\n\t*[Uu]sername*) printf '%s' \"$FORGE_GIT_ASKPASS_USERNAME\" ;;\n\t*) printf '%s' \"$FORGE_GIT_ASKPASS_PASSWORD\" ;;\nesac\n"
+	if _, err := scriptFile.WriteString(script); err != nil {
+		_ = scriptFile.Close()
+		cleanup()
+		return nil, noop, fmt.Errorf("write askpass script: %w", err)
+	}
+	if err := scriptFile.Close(); err != nil {
+		cleanup()
+		return nil, noop, fmt.Errorf("close askpass script: %w", err)
+	}
+
+	env = append(env,
+		"GIT_ASKPASS="+scriptPath,
+		"FORGE_GIT_ASKPASS_USERNAME="+req.Username,
+		"FORGE_GIT_ASKPASS_PASSWORD="+req.AccessToken,
+	)
+
+	return env, cleanup, nil
 }
 
 func isHex40(s string) bool {

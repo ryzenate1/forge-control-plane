@@ -115,10 +115,10 @@ func testUpgradeInstallation(t *testing.T, dbType DatabaseType) {
 			}
 		}
 
-		// Record migration as applied
+		// Record migration as applied (version = full file name, matching
+		// the production runner)
 		recordSQL := getRecordMigrationSQL(dbType)
-		migrationID := strings.TrimSuffix(migrationFile, ".sql")
-		if _, err := db.Exec(ctx, recordSQL, migrationID); err != nil {
+		if _, err := db.Exec(ctx, recordSQL, migrationFile); err != nil {
 			t.Fatalf("Failed to record migration %s: %v", migrationFile, err)
 		}
 	}
@@ -145,10 +145,10 @@ func testUpgradeInstallation(t *testing.T, dbType DatabaseType) {
 			}
 		}
 
-		// Record migration as applied
+		// Record migration as applied (version = full file name, matching
+		// the production runner)
 		recordSQL := getRecordMigrationSQL(dbType)
-		migrationID := strings.TrimSuffix(migrationFile, ".sql")
-		if _, err := db.Exec(ctx, recordSQL, migrationID); err != nil {
+		if _, err := db.Exec(ctx, recordSQL, migrationFile); err != nil {
 			t.Fatalf("Failed to record Batch 2 migration %s: %v", migrationFile, err)
 		}
 	}

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -90,21 +91,47 @@ func (s *Service) runBackup(ctx context.Context, d store.ManagedDatabase, backup
 		return fmt.Errorf("unsupported engine for backup: %s", d.Engine)
 	}
 
-	dockerArgs := []string{"exec", "-i", d.ContainerID, tool}
-	dockerArgs = append(dockerArgs, args...)
+	// Security: avoid ever passing the database password via a PGPASSWORD
+	// (or similar) environment variable. Environment variables of a running
+	// process are readable by anyone with access to /proc/<pid>/environ on
+	// Linux (or by anyone who can inspect the process table via other
+	// means), so they are a poor place to carry secrets. Instead, stage a
+	// short-lived, mode-0600 .pgpass file inside the target container and
+	// point pg_dump at it via PGPASSFILE; the file is removed immediately
+	// after the command completes.
+	//
+	// redis-cli has no equivalent "password file" option in the version
+	// range this project supports, so its password is passed via the -a
+	// flag in backupCommandForEngine/engines.go rather than an env var. That
+	// is a narrower exposure than a process-wide env var (visible only via
+	// the container's own process listing/cmdline, not via a host-wide
+	// environ dump), but it is still a known residual risk; consider moving
+	// to a Redis ACL user with a config-file-based credential if this needs
+	// to be hardened further.
+	var dockerArgs []string
+	var cleanupPgPass func()
+	if d.Engine == "postgresql" || d.Engine == "postgres" {
+		remotePath, cleanup, err := s.stagePgPassFile(ctx, d.ContainerID, d.Host, d.Port, d.DatabaseName, d.Username, password)
+		if err != nil {
+			return fmt.Errorf("stage pgpass file: %w", err)
+		}
+		cleanupPgPass = cleanup
+		dockerArgs = append([]string{"exec", "-i", "-e", "PGPASSFILE=" + remotePath}, append([]string{d.ContainerID, tool}, args...)...)
+	} else {
+		dockerArgs = []string{"exec", "-i", d.ContainerID, tool}
+		dockerArgs = append(dockerArgs, args...)
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	env := cmd.Environ()
-	if d.Engine == "postgresql" || d.Engine == "postgres" {
-		env = append(env, fmt.Sprintf("PGPASSWORD=%s", password))
+	runErr := cmd.Run()
+	if cleanupPgPass != nil {
+		cleanupPgPass()
 	}
-	_ = env
-
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("backup command failed: %w, stderr: %s", err, stderr.String())
+	if runErr != nil {
+		return fmt.Errorf("backup command failed: %w, stderr: %s", runErr, stderr.String())
 	}
 
 	data, err := s.readFile(ctx, outputFile)
@@ -197,15 +224,33 @@ func (s *Service) runRestore(ctx context.Context, db store.ManagedDatabase, back
 		return fmt.Errorf("unsupported engine for restore: %s", db.Engine)
 	}
 
-	dockerArgs := []string{"exec", "-i", db.ContainerID, tool}
-	dockerArgs = append(dockerArgs, args...)
+	// See the matching comment in runBackup: avoid PGPASSWORD-style env vars
+	// for the password and instead stage a short-lived, mode-0600 .pgpass
+	// file inside the container for PostgreSQL restores.
+	var dockerArgs []string
+	var cleanupPgPass func()
+	if db.Engine == "postgresql" || db.Engine == "postgres" {
+		remotePath, cleanup, err := s.stagePgPassFile(ctx, db.ContainerID, db.Host, db.Port, db.DatabaseName, db.Username, password)
+		if err != nil {
+			return fmt.Errorf("stage pgpass file: %w", err)
+		}
+		cleanupPgPass = cleanup
+		dockerArgs = append([]string{"exec", "-i", "-e", "PGPASSFILE=" + remotePath}, append([]string{db.ContainerID, tool}, args...)...)
+	} else {
+		dockerArgs = []string{"exec", "-i", db.ContainerID, tool}
+		dockerArgs = append(dockerArgs, args...)
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", dockerArgs...)
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("restore command failed: %w, stderr: %s", err, stderr.String())
+	runErr := cmd.Run()
+	if cleanupPgPass != nil {
+		cleanupPgPass()
+	}
+	if runErr != nil {
+		return fmt.Errorf("restore command failed: %w, stderr: %s", runErr, stderr.String())
 	}
 
 	if err := s.store.UpdateManagedDatabaseRestoreStatus(ctx, restore.ID, store.ManagedDBRestoreCompleted, ""); err != nil {
@@ -257,6 +302,73 @@ func (s *Service) DeleteBackup(ctx context.Context, backupID string) error {
 
 func (s *Service) encryptPassword(password string) (string, error) {
 	return password, nil
+}
+
+// stagePgPassFile writes a short-lived, mode-0600 pgpass file describing how
+// to authenticate to a PostgreSQL database, copies it into the target
+// container, and returns the in-container path plus a cleanup function that
+// removes both the local and in-container copies. Callers should always
+// invoke the returned cleanup function (e.g. via a plain call once the
+// backup/restore command has finished) so the credential does not linger on
+// disk any longer than necessary.
+//
+// This avoids passing the password via a PGPASSWORD environment variable,
+// which would otherwise be readable by anyone able to inspect the process's
+// environment (e.g. /proc/<pid>/environ on Linux).
+func (s *Service) stagePgPassFile(ctx context.Context, containerID, host string, port int, database, username, password string) (string, func(), error) {
+	localFile, err := os.CreateTemp(backupDir, "pgpass-*")
+	if err != nil {
+		return "", nil, fmt.Errorf("create local pgpass file: %w", err)
+	}
+	localPath := localFile.Name()
+	cleanupLocal := func() { _ = os.Remove(localPath) }
+
+	line := fmt.Sprintf("%s:%d:%s:%s:%s\n",
+		escapePgPassField(host),
+		port,
+		escapePgPassField(database),
+		escapePgPassField(username),
+		escapePgPassField(password),
+	)
+	if _, err := localFile.WriteString(line); err != nil {
+		_ = localFile.Close()
+		cleanupLocal()
+		return "", nil, fmt.Errorf("write local pgpass file: %w", err)
+	}
+	if err := localFile.Close(); err != nil {
+		cleanupLocal()
+		return "", nil, fmt.Errorf("close local pgpass file: %w", err)
+	}
+	if err := os.Chmod(localPath, 0o600); err != nil {
+		cleanupLocal()
+		return "", nil, fmt.Errorf("chmod local pgpass file: %w", err)
+	}
+
+	remotePath := "/tmp/.pgpass-" + filepath.Base(localPath)
+	if err := exec.CommandContext(ctx, "docker", "cp", localPath, containerID+":"+remotePath).Run(); err != nil {
+		cleanupLocal()
+		return "", nil, fmt.Errorf("copy pgpass into container: %w", err)
+	}
+	if err := exec.CommandContext(ctx, "docker", "exec", containerID, "chmod", "0600", remotePath).Run(); err != nil {
+		cleanupLocal()
+		_ = exec.Command("docker", "exec", containerID, "rm", "-f", remotePath).Run()
+		return "", nil, fmt.Errorf("chmod pgpass in container: %w", err)
+	}
+
+	cleanup := func() {
+		cleanupLocal()
+		_ = exec.Command("docker", "exec", containerID, "rm", "-f", remotePath).Run()
+	}
+	return remotePath, cleanup, nil
+}
+
+// escapePgPassField escapes ':' and '\\' per the pgpass file format so that
+// values containing those characters (e.g. a generated password) don't
+// corrupt the field layout.
+func escapePgPassField(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, ":", `\:`)
+	return s
 }
 
 func extractPassword(creds json.RawMessage) string {

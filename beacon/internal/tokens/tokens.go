@@ -46,8 +46,36 @@ var (
 	ErrInvalidSignature = errors.New("invalid token signature")
 )
 
+// Generator signs and verifies scoped tokens using an HMAC-SHA256 secret.
+//
+// The secret is held in memory as a plain []byte for the lifetime of the
+// process. This is a best-effort-only protection: a co-located attacker
+// with sufficient privilege (e.g. root, or ptrace access to this process)
+// can read the secret out of /proc/<pid>/mem regardless of anything this
+// package does, and Go's garbage collector does not promptly or reliably
+// zero freed memory. There is no way to fully eliminate this risk from
+// within a long-lived Go process holding a secret.
+//
+// Compensating controls should be applied at the OS/deployment level:
+//   - mount /proc with hidepid=2 so only the owning user can see process
+//     memory maps of this process;
+//   - restrict ptrace via the Linux YAMA security module
+//     (kernel.yama.ptrace_scope >= 1, ideally 2 or 3);
+//   - run the process in a container or namespace with no other
+//     co-tenants that could plausibly gain ptrace/proc access.
 type Generator struct {
 	secret []byte
+}
+
+// Zero overwrites the in-memory secret bytes with zeros in place. Callers
+// that are discarding a Generator (e.g. during secret rotation) may call
+// this to reduce the window during which the old secret remains readable
+// in this process's memory. It is not called automatically, since the
+// Generator remains unusable for signing/validation afterward.
+func (g *Generator) Zero() {
+	for i := range g.secret {
+		g.secret[i] = 0
+	}
 }
 
 func NewGenerator(secret []byte) *Generator {

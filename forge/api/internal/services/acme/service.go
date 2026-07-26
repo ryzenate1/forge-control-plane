@@ -13,6 +13,7 @@ import (
 	"log/slog"
 	"math"
 	"net/http"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -363,6 +364,13 @@ func (s *Service) StartAutoRenewal(ctx context.Context) {
 	s.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				s.logger.Error("acme auto-renewal panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
 

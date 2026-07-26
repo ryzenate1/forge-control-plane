@@ -127,10 +127,12 @@ describe("backend DTO and mutation field names", () => {
     const { calls } = mockFetch(
       jsonResponse({ events: [], total: 0 }),
       new Response("id,event\nevent-1,server.created\n", { headers: { "Content-Type": "text/csv" } }),
-    );
+	    );
 
-    await fetchAdminActivity(filter);
-    await expect(exportAdminActivity("csv", filter)).resolves.toBeInstanceOf(Blob);
+	    await fetchAdminActivity(filter);
+	    const exported = await exportAdminActivity("csv", filter);
+	    expect(exported.type).toBe("text/csv");
+	    expect(exported.size).toBe(32);
 
     expect(calls[0].url).toContain("/admin/activity?actorId=user-1&subjectType=server&subjectId=server-1&event=server.created&level=info&source=panel&from=2026-01-01T00%3A00%3A00.000Z&to=2026-01-31T23%3A59%3A59.999Z&limit=25&offset=50");
     expect(calls[1].url).toContain("/admin/activity/export?actorId=user-1&subjectType=server&subjectId=server-1&event=server.created&level=info&source=panel&from=2026-01-01T00%3A00%3A00.000Z&to=2026-01-31T23%3A59%3A59.999Z&limit=25&offset=50&format=csv");
@@ -239,7 +241,7 @@ describe("backend DTO and mutation field names", () => {
     await resolveServerOrphanRemediation("server/remediation");
     await expect(deleteServerDatabase("server/id", "database/id", true)).resolves.toEqual({ ok: true, orphanRemediation: true });
 
-    expect(calls[0].url).toContain("/admin/orphan-remediations/?status=resolved");
+    expect(calls[0].url).toContain("/admin/orphan-remediations?status=resolved");
     expect(calls[1].url).toContain("/admin/orphan-remediations/databases/database%2Fremediation/resolve");
     expect(calls[1].init?.method).toBe("POST");
     expect(calls[2].url).toContain("/admin/orphan-remediations/servers/server%2Fremediation/resolve");

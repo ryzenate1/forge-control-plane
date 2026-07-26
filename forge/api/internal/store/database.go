@@ -69,6 +69,14 @@ func (c DBConfig) DSN() string {
 	}
 }
 
+func (c DBConfig) RedactedDSN() string {
+	redacted := c
+	if redacted.Password != "" {
+		redacted.Password = "*****"
+	}
+	return redacted.DSN()
+}
+
 func NewDatabaseDriver(ctx context.Context, cfg DBConfig) (DatabaseDriver, error) {
 	switch cfg.Type {
 	case DatabasePostgres:

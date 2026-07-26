@@ -6,11 +6,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"log/slog"
 	nethttp "net/http"
 	"os"
 	"os/signal"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -30,6 +32,7 @@ import (
 	"gamepanel/forge/internal/secrets"
 
 	"github.com/go-acme/lego/v4/challenge"
+	"github.com/gofiber/fiber/v2"
 
 	"gamepanel/forge/internal/services"
 	acmesvc "gamepanel/forge/internal/services/acme"
@@ -115,8 +118,8 @@ func main() {
 		log.Fatal(err)
 	}
 	authSecret := env("API_AUTH_SECRET", "dev-api-secret")
-	if production && (authSecret == "" || authSecret == "dev-api-secret") {
-		log.Fatal("API_AUTH_SECRET must be set to a production secret")
+	if production && (authSecret == "" || authSecret == "dev-api-secret" || len(authSecret) < 32) {
+		log.Fatal("API_AUTH_SECRET must be set to a production secret with at least 32 characters")
 	}
 
 	slogLogger := logger.New(logger.Config{
@@ -129,11 +132,11 @@ func main() {
 	var masterKeyring *secrets.Keyring
 	if databaseURL := os.Getenv("DATABASE_URL"); databaseURL != "" {
 		kr, ephemeral, err := masterKeyringFromEnvironment(production)
-		masterKeyring = kr
-		keyring := kr
 		if err != nil {
 			log.Fatal(err)
 		}
+		masterKeyring = kr
+		keyring := kr
 		if ephemeral {
 			slogLogger.Warn("FORGE_ALLOW_EPHEMERAL_MASTER_KEY is enabled; encrypted data will be unrecoverable after this process exits")
 		}
@@ -143,27 +146,6 @@ func main() {
 		}
 		defer connected.Close()
 		if err := connected.RunMigrations(ctx, env("MIGRATIONS_DIR", "migrations")); err != nil {
-			log.Fatal(err)
-		}
-		if err := connected.RunSelectedMigrations(ctx, env("BATCH2_MIGRATIONS_DIR", "internal/store/migrations"), []string{
-			"024_a_sftp_config.sql",
-			"025_a_install_workflows.sql",
-			"026_a_external_ids.sql",
-			"033_node_onboarding.sql",
-			"034_build_pipeline.sql",
-			"035_compose_gitops.sql",
-			"035_a_infra_endpoints.sql",
-			"035_b_observability_monitoring.sql",
-			"036_compose_concurrency.sql",
-			"037_build_extended_fields.sql",
-			"038_traffic_routing.sql",
-			"040_git_deployment.sql",
-			"041_a_placement_intents.sql",
-			"041_buildpack_support.sql",
-			"042_service_discovery_endpoints.sql",
-			"043_webhook_idempotency.sql",
-			"114_e_zero_downtime_deploy.sql",
-		}); err != nil {
 			log.Fatal(err)
 		}
 		if err := eventstore.Migrate(connected.GetDB()); err != nil {
@@ -195,7 +177,7 @@ func main() {
 	redisEnabled := false
 	if redisAddr := os.Getenv("REDIS_ADDR"); redisAddr != "" {
 		redisEnabled = true
-		redisClient = redis.NewClient(&redis.Options{Addr: redisAddr})
+		redisClient = redis.NewClient(&redis.Options{Addr: redisAddr, Password: os.Getenv("REDIS_PASSWORD")})
 		defer redisClient.Close()
 		if err := redisClient.Ping(ctx).Err(); err != nil {
 			slogLogger.Warn("redis ping failed at startup", slog.String("error", err.Error()))
@@ -203,6 +185,9 @@ func main() {
 	}
 
 	daemonClient := daemon.NewClient()
+	if production && os.Getenv("DAEMON_NODE_TOKEN") == "" {
+		log.Fatal("DAEMON_NODE_TOKEN must be set in production")
+	}
 	if !production {
 		// Backward-compatible Phase 0 fallback for development only. Normal
 		// outbound requests always pass the current target node credential.
@@ -372,7 +357,9 @@ func main() {
 				if err == nil {
 					event := map[string]string{"start": "server:started", "stop": "server:stopped", "restart": "server:restarted", "kill": "server:stopped"}[signal]
 					if event != "" {
-						db.DispatchWebhookEvent(event, map[string]any{"subject_type": "server", "subject_id": job.ServerID, "signal": signal, "operation_id": job.ID})
+						if err := db.DispatchWebhookEvent(ctx, event, map[string]any{"subject_type": "server", "subject_id": job.ServerID, "signal": signal, "operation_id": job.ID}); err != nil {
+							slogLogger.Error("webhook dispatch failed", slog.String("event", event), slog.String("error", err.Error()))
+						}
 					}
 				}
 				return err
@@ -444,7 +431,9 @@ func main() {
 				if err == nil {
 					event := map[string]string{"start": "server:started", "stop": "server:stopped", "restart": "server:restarted", "kill": "server:stopped"}[signal]
 					if event != "" {
-						db.DispatchWebhookEvent(event, map[string]any{"subject_type": "server", "subject_id": op.ResourceID, "signal": signal, "operation_id": op.ID})
+						if err := db.DispatchWebhookEvent(ctx, event, map[string]any{"subject_type": "server", "subject_id": op.ResourceID, "signal": signal, "operation_id": op.ID}); err != nil {
+							slogLogger.Error("webhook dispatch failed", slog.String("event", event), slog.String("error", err.Error()))
+						}
 					}
 				}
 				return err
@@ -509,16 +498,22 @@ func main() {
 				}
 				switch d.Status {
 				case string(deployment.StatusInProgress), string(deployment.StatusPending), string(deployment.StatusProvisioning), string(deployment.StatusAwaitingHealth), string(deployment.StatusPromoting), string(deployment.StatusRollbackPending), string(deployment.StatusRollingBack):
-					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollbackPending),
-						fmt.Sprintf("auto-rollback triggered by runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures))
+					if err := db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollbackPending),
+						fmt.Sprintf("auto-rollback triggered by runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures)); err != nil {
+						slogLogger.Error("health check bridge: update status", slog.String("deploymentId", d.ID), slog.String("error", err.Error()))
+					}
 					_, rollbackErr := deploySvc.RollbackToPrevious(ctx, d.ID)
 					if rollbackErr != nil {
 						slogLogger.Error("health check bridge: auto-rollback failed", slog.String("deploymentId", d.ID), slog.String("serverId", serverID), slog.String("error", rollbackErr.Error()))
 						continue
 					}
-					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollingBack), "")
-					db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRolledBack),
-						fmt.Sprintf("auto-rollback due to runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures))
+					if err := db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRollingBack), ""); err != nil {
+						slogLogger.Error("health check bridge: update status", slog.String("deploymentId", d.ID), slog.String("error", err.Error()))
+					}
+					if err := db.UpdateDeploymentStatus(ctx, d.ID, string(deployment.StatusRolledBack),
+						fmt.Sprintf("auto-rollback due to runtime health degradation (target %s, %d failures)", targetID, consecutiveFailures)); err != nil {
+						slogLogger.Error("health check bridge: update status", slog.String("deploymentId", d.ID), slog.String("error", err.Error()))
+					}
 				}
 			}
 		})
@@ -566,6 +561,17 @@ func main() {
 			// is launched, preventing relay retries from starting duplicates.
 			eventCopy := *event
 			go func() {
+				defer func() {
+					if r := recover(); r != nil {
+						buf := make([]byte, 4096)
+						n := runtime.Stack(buf, false)
+						slogLogger.Error("failover action panic recovered",
+							slog.String("node_id", eventCopy.NodeID),
+							slog.String("action", string(eventCopy.Action)),
+							slog.String("panic", fmt.Sprintf("%v", r)),
+							slog.String("stack", string(buf[:n])))
+					}
+				}()
 				ctx, cancel := context.WithTimeout(appCtx, 2*time.Hour)
 				defer cancel()
 				if err := runFailoverAction(ctx, &eventCopy); err != nil {
@@ -686,21 +692,27 @@ func main() {
 		eventRegistry.Subscribe(events.EventNodeOnline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				_ = ingressSync.Sync(ctx)
+				if err := ingressSync.Sync(ctx); err != nil {
+					slogLogger.Error("ingress sync failed", slog.String("event", "node.online"), slog.String("error", err.Error()))
+				}
 			}
 			return nil
 		}))
 		eventRegistry.Subscribe(events.EventNodeOffline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				_ = ingressSync.Sync(ctx)
+				if err := ingressSync.Sync(ctx); err != nil {
+					slogLogger.Error("ingress sync failed", slog.String("event", "node.offline"), slog.String("error", err.Error()))
+				}
 			}
 			return nil
 		}))
 		eventRegistry.Subscribe(events.EventNodeRecovered, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				_ = ingressSync.Sync(ctx)
+				if err := ingressSync.Sync(ctx); err != nil {
+					slogLogger.Error("ingress sync failed", slog.String("event", "node.recovered"), slog.String("error", err.Error()))
+				}
 			}
 			return nil
 		}))
@@ -723,7 +735,13 @@ func main() {
 		zdSvc = zerodowntime.New(db)
 
 		processSvc = processsvc.New(db, &processDaemonAdapter{store: db, daemon: daemonClient}, slogLogger)
-		buildpackSvc = buildpacksvc.NewService(db)
+		buildpackSvc = buildpacksvc.NewService(db, buildSvc)
+		if err := buildSvc.Start(appCtx); err != nil {
+			log.Fatalf("failed to start build recovery: %v", err)
+		}
+		if err := buildpackSvc.Start(appCtx); err != nil {
+			log.Fatalf("failed to recover app builds: %v", err)
+		}
 
 		certSvc = services.NewCertService(db, db, slogLogger)
 		mtlsCfg = forgecfg.MTLSConfig()
@@ -747,7 +765,9 @@ func main() {
 		ep.Start(appCtx)
 		mailWorker.Start(appCtx)
 		whSvc.Start(appCtx)
-		_ = failSvc.Start(appCtx)
+		if err := failSvc.Start(appCtx); err != nil {
+			slogLogger.Error("failover startup failed", slog.String("error", err.Error()))
+		}
 		bkWorker.Start(appCtx)
 		eventRelay.Start(appCtx)
 		domainSvc.StartReverify(appCtx)
@@ -760,6 +780,13 @@ func main() {
 
 		sessionStore = auth.NewPostgresSessionStore(db.GetDB())
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					slogLogger.Error("session cleanup panic recovered", "panic", r, "stack", string(buf[:n]))
+				}
+			}()
 			ticker := time.NewTicker(time.Hour)
 			defer ticker.Stop()
 			for {
@@ -802,14 +829,18 @@ func main() {
 				}, nil
 			},
 		))
-	} else {
-		healthSvc.AddCheck(health.NewDatabaseCheck(nil, nil))
 	}
 	healthSvc.AddCheck(health.NewCacheCheck(
 		func(ctx context.Context) error {
+			if redisClient == nil {
+				return nil
+			}
 			return redisClient.Ping(ctx).Err()
 		},
 		func(ctx context.Context) (map[string]any, error) {
+			if redisClient == nil {
+				return nil, nil
+			}
 			info, err := redisClient.Info(ctx, "memory", "clients").Result()
 			if err != nil {
 				return nil, err
@@ -873,7 +904,6 @@ func main() {
 	}))
 	healthSvc.AddCheck(health.NewAPIRuntimeCheck(started))
 	healthSvc.AddCheck(health.NewMemoryCheck(0))
-	healthSvc.AddCheck(health.NewDockerCheck())
 	healthSvc.AddCheck(health.NewSystemCheck(started))
 
 	cfg := config.Config{
@@ -881,7 +911,7 @@ func main() {
 			Env:            appEnv,
 			Name:           env("APP_NAME", "GamePanel"),
 			URL:            env("PANEL_URL", "http://localhost:3000"),
-			Debug:          env("APP_ENV", "development") != "production",
+			Debug:          envBool("APP_DEBUG", false),
 			Version:        env("APP_VERSION", "0.1.0"),
 			Key:            env("APP_KEY", ""),
 			Cipher:         env("APP_CIPHER", "AES-256-GCM"),
@@ -911,7 +941,7 @@ func main() {
 		},
 		Auth: config.AuthConfig{
 			Secret:   authSecret,
-			TokenTTL: 24 * time.Hour,
+			TokenTTL: time.Duration(envInt("AUTH_TOKEN_TTL", 24)) * time.Hour,
 		},
 		Mail: config.MailConfig{
 			Driver:      env("MAIL_MAILER", "log"),
@@ -938,13 +968,19 @@ func main() {
 		},
 	}
 
-	validateConfig(&cfg, db != nil)
+	if cfg.App.Key == "" && strings.HasPrefix(cfg.App.Cipher, "AES-") {
+		log.Fatal("APP_KEY must be non-empty when APP_CIPHER is AES-based")
+	}
+	validateConfig(&cfg, db != nil, slogLogger)
 
 	appCfg := http.Config{
 		Logger:                     slogLogger,
 		Addr:                       env("API_ADDR", ":8080"),
 		ReadTimeout:                5 * time.Second,
+		TokenTTL:                   cfg.Auth.TokenTTL,
+		AppEnv:                     appEnv,
 		AuthSecret:                 authSecret,
+		LangsDir:                   langsDir,
 		Store:                      db,
 		Redis:                      redisClient,
 		RedisEnabled:               redisEnabled,
@@ -1029,178 +1065,141 @@ func main() {
 
 	app := http.NewServer(appCfg)
 	listenErr := make(chan error, 1)
-	go func() { listenErr <- app.Listen(appCfg.Addr) }()
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slogLogger.Error("http listener panic recovered", "panic", r, "stack", string(buf[:n]))
+				listenErr <- fmt.Errorf("http listener panic: %v", r)
+			}
+		}()
+		listenErr <- app.Listen(appCfg.Addr)
+	}()
 	slogLogger.Info("api listening", slog.String("addr", appCfg.Addr))
 	signalCtx, stopSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stopSignals()
 	select {
 	case <-signalCtx.Done():
 		appCancel()
-		if err := app.Shutdown(); err != nil {
-			slogLogger.Warn("api shutdown error", slog.String("error", err.Error()))
-		}
-		if mailWorker != nil {
-			mailWorker.Wait()
-		}
-		if whSvc != nil {
-			whSvc.Wait()
-		}
-		if queueSvc != nil {
-			queueSvc.Stop()
-		}
-		if opSvc != nil {
-			opSvc.Stop()
-		}
-		if procedureSvc != nil {
-			procedureSvc.Stop()
-		}
-		if gitOpsController != nil {
-			gitOpsController.Stop()
-		}
-		if eventRelay != nil {
-			eventRelay.Stop()
-		}
-		if replicaMgr != nil {
-			replicaMgr.Stop()
-		}
-		if discoverySvc != nil {
-			discoverySvc.Stop()
-		}
-		if ingressSync != nil {
-			ingressSync.Stop()
-		}
-		if healthFilter != nil {
-			healthFilter.StopReaper()
-		}
-		if resMgr != nil {
-			resMgr.Stop()
-		}
-		if hbm != nil {
-			hbm.Stop()
-		}
-		if rec != nil {
-			rec.Stop()
-		}
-		if mig != nil {
-			_ = mig.Shutdown(context.Background())
-		}
-		if ep != nil {
-			ep.Stop()
-		}
-		if failSvc != nil {
-			failSvc.Stop()
-		}
-		if bkWorker != nil {
-			bkWorker.Stop()
-		}
-		if healthCheckRunner != nil {
-			healthCheckRunner.Stop()
-		}
-		if lbSvc != nil {
-			lbSvc.Shutdown()
-		}
-		if autoSvc != nil {
-			autoSvc.Stop()
-		}
-		if tmSvc != nil {
-			tmSvc.Stop()
-		}
-		if cleanupSvc != nil {
-			cleanupSvc.Stop()
-		}
-		if cronJobSvc != nil {
-			cronJobSvc.Stop()
-		}
-		if domainSvc != nil {
-			domainSvc.StopReverify()
-		}
-		if acmeSvc != nil {
-			acmeSvc.StopAutoRenewal()
-		}
+		shutdownServices(app, nil, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc)
 	case err := <-listenErr:
 		appCancel()
-		_ = app.Shutdown()
-		if mailWorker != nil {
-			mailWorker.Wait()
-		}
-		if whSvc != nil {
-			whSvc.Wait()
-		}
-		if queueSvc != nil {
-			queueSvc.Stop()
-		}
-		if opSvc != nil {
-			opSvc.Stop()
-		}
-		if gitOpsController != nil {
-			gitOpsController.Stop()
-		}
-		if procedureSvc != nil {
-			procedureSvc.Stop()
-		}
-		if eventRelay != nil {
-			eventRelay.Stop()
-		}
-		if replicaMgr != nil {
-			replicaMgr.Stop()
-		}
-		if discoverySvc != nil {
-			discoverySvc.Stop()
-		}
-		if ingressSync != nil {
-			ingressSync.Stop()
-		}
-		if healthFilter != nil {
-			healthFilter.StopReaper()
-		}
-		if resMgr != nil {
-			resMgr.Stop()
-		}
-		if hbm != nil {
-			hbm.Stop()
-		}
-		if rec != nil {
-			rec.Stop()
-		}
-		if mig != nil {
-			_ = mig.Shutdown(context.Background())
-		}
-		if ep != nil {
-			ep.Stop()
-		}
-		if failSvc != nil {
-			failSvc.Stop()
-		}
-		if bkWorker != nil {
-			bkWorker.Stop()
-		}
-		if healthCheckRunner != nil {
-			healthCheckRunner.Stop()
-		}
-		if lbSvc != nil {
-			lbSvc.Shutdown()
-		}
-		if autoSvc != nil {
-			autoSvc.Stop()
-		}
-		if tmSvc != nil {
-			tmSvc.Stop()
-		}
-		if cleanupSvc != nil {
-			cleanupSvc.Stop()
-		}
-		if cronJobSvc != nil {
-			cronJobSvc.Stop()
-		}
-		if domainSvc != nil {
-			domainSvc.StopReverify()
-		}
-		if acmeSvc != nil {
-			acmeSvc.StopAutoRenewal()
-		}
-		if err != nil {
-			slogLogger.Warn("api listener stopped", slog.String("error", err.Error()))
-		}
+		shutdownServices(app, err, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc)
+	}
+}
+
+func shutdownServices(app *fiber.App, listenErr error, log *slog.Logger,
+	mailWorker *mailservice.Worker,
+	whSvc *webhook.Service,
+	queueSvc *queue.Service,
+	opSvc *operationsvc.Service,
+	procedureSvc *proceduresvc.Service,
+	gitOpsController *composesvc.GitOpsController,
+	eventRelay *eventstore.Relay,
+	replicaMgr *replicamanager.Manager,
+	discoverySvc *servicediscovery.Service,
+	ingressSync *crossnode.IngressSynchronizer,
+	healthFilter *crossnode.HealthFilter,
+	resMgr *reservations.Manager,
+	hbm *heartbeatmonitor.Service,
+	rec *reconciler.Service,
+	mig *migration.Service,
+	ep *evacuationplanner.Service,
+	failSvc *failover.Service,
+	bkWorker *backup.Worker,
+	healthCheckRunner *healthchecksvc.Service,
+	lbSvc *loadbalancer.Service,
+	autoSvc *autoscaler.Service,
+	tmSvc *trafficmanager.Service,
+	cleanupSvc *cleanupsvc.Service,
+	cronJobSvc *cronjobsvc.Service,
+	domainSvc *domains.Service,
+	acmeSvc *acmesvc.Service,
+) {
+	if err := app.Shutdown(); err != nil {
+		log.Warn("api shutdown error", slog.String("error", err.Error()))
+	}
+	if mailWorker != nil {
+		mailWorker.Wait()
+	}
+	if whSvc != nil {
+		whSvc.Wait()
+	}
+	if queueSvc != nil {
+		queueSvc.Stop()
+	}
+	if opSvc != nil {
+		opSvc.Stop()
+	}
+	if procedureSvc != nil {
+		procedureSvc.Stop()
+	}
+	if gitOpsController != nil {
+		gitOpsController.Stop()
+	}
+	if eventRelay != nil {
+		eventRelay.Stop()
+	}
+	if replicaMgr != nil {
+		replicaMgr.Stop()
+	}
+	if discoverySvc != nil {
+		discoverySvc.Stop()
+	}
+	if ingressSync != nil {
+		ingressSync.Stop()
+	}
+	if healthFilter != nil {
+		healthFilter.StopReaper()
+	}
+	if resMgr != nil {
+		resMgr.Stop()
+	}
+	if hbm != nil {
+		hbm.Stop()
+	}
+	if rec != nil {
+		rec.Stop()
+	}
+	if mig != nil {
+		_ = mig.Shutdown(context.Background())
+	}
+	if ep != nil {
+		ep.Stop()
+	}
+	if failSvc != nil {
+		failSvc.Stop()
+	}
+	if bkWorker != nil {
+		bkWorker.Stop()
+	}
+	if healthCheckRunner != nil {
+		healthCheckRunner.Stop()
+	}
+	if lbSvc != nil {
+		lbSvc.Shutdown()
+	}
+	if autoSvc != nil {
+		autoSvc.Stop()
+	}
+	if tmSvc != nil {
+		tmSvc.Stop()
+	}
+	if cleanupSvc != nil {
+		cleanupSvc.Stop()
+	}
+	if cronJobSvc != nil {
+		cronJobSvc.Stop()
+	}
+	if domainSvc != nil {
+		domainSvc.StopReverify()
+	}
+	if acmeSvc != nil {
+		acmeSvc.StopAutoRenewal()
+	}
+	if listenErr != nil {
+		log.Warn("api listener stopped", slog.String("error", listenErr.Error()))
 	}
 }
 
@@ -1223,7 +1222,10 @@ func healthcheck(target string) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	defer res.Body.Close()
+	defer func() {
+		_, _ = io.Copy(io.Discard, res.Body)
+		res.Body.Close()
+	}()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		fmt.Fprintf(os.Stderr, "unhealthy status %d\n", res.StatusCode)
 		os.Exit(1)
@@ -1238,11 +1240,22 @@ func env(key, fallback string) string {
 	return value
 }
 
+func envBool(key string, fallback bool) bool {
+	if val := os.Getenv(key); val != "" {
+		if b, err := strconv.ParseBool(val); err == nil {
+			return b
+		}
+		log.Printf("WARNING: invalid boolean value for %s=%q, using fallback %t", key, val, fallback)
+	}
+	return fallback
+}
+
 func envInt(key string, fallback int) int {
 	if val := os.Getenv(key); val != "" {
 		if i, err := strconv.Atoi(val); err == nil {
 			return i
 		}
+		log.Printf("WARNING: invalid integer value for %s=%q, using fallback %d", key, val, fallback)
 	}
 	return fallback
 }
@@ -1296,12 +1309,13 @@ func parsePreviousMasterKeys(raw string) (map[string]string, error) {
 	return keys, nil
 }
 
-func validateConfig(cfg *config.Config, _ bool) {
+func validateConfig(cfg *config.Config, _ bool, log *slog.Logger) {
 	if errs := configvalidator.Validate(cfg); len(errs) > 0 {
 		for _, e := range errs {
-			log.Printf("CONFIG ERROR: %s - %s", e.Field, e.Message)
+			log.Error("config validation error", slog.String("field", e.Field), slog.String("message", e.Message))
 		}
-		log.Fatal("invalid configuration; see errors above")
+		log.Error("invalid configuration; see errors above")
+		os.Exit(1)
 	}
 }
 
@@ -1353,8 +1367,7 @@ func (a *processDaemonAdapter) RunContainer(ctx context.Context, serverID, comma
 	if err != nil {
 		return "", err
 	}
-	err = a.daemon.SendCommand(ctx, target.NodeURL, target.NodeToken, serverID, command)
-	return "", err
+	return a.daemon.SendCommandWithOutput(ctx, target.NodeURL, target.NodeToken, serverID, command)
 }
 
 // predictiveStore adapts *store.Store to scheduler.predictiveStore.

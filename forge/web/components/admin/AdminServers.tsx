@@ -148,7 +148,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
   users: ApiUser[];
   nodes: ApiNode[];
   allocations: ApiAllocation[];
-  templates: any[];
+  templates: ApiEgg[];
   eggs: ApiEgg[];
   regions: ApiRegion[];
   onClose: () => void;
@@ -578,18 +578,23 @@ function ServerStartupTab({ server }: { server: ApiServer }) {
         <Card>
           <CardHeader title="Service Variables" icon={KeyRound} />
           <div className="space-y-3 p-4">
-            {startup.variables.map((variable: any) => (
-              <label className="block text-sm font-medium text-slate-300" key={variable.env_variable}>
-                <span className="mb-1.5 block">{variable.name} ({variable.env_variable})</span>
-                <input
-                  className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={!variable.is_editable}
-                  onChange={(event) => updateVar(variable.env_variable, event.target.value)}
-                  value={vars[variable.env_variable] ?? variable.server_value}
-                />
-                {variable.description && <span className="mt-1 block text-xs text-slate-500">{variable.description}</span>}
-              </label>
-            ))}
+            {startup.variables.map((variable) => {
+              const envVarKey = variable.env_variable || variable.envVariable || "";
+              const isEditable = variable.is_editable ?? variable.isEditable ?? false;
+              const serverValue = variable.server_value ?? variable.serverValue ?? "";
+              return (
+                <label className="block text-sm font-medium text-slate-300" key={envVarKey}>
+                  <span className="mb-1.5 block">{variable.name} ({envVarKey})</span>
+                  <input
+                    className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-slate-100 disabled:cursor-not-allowed disabled:opacity-60"
+                    disabled={!isEditable}
+                    onChange={(event) => updateVar(envVarKey, event.target.value)}
+                    value={vars[envVarKey] ?? serverValue}
+                  />
+                  {variable.description && <span className="mt-1 block text-xs text-slate-500">{variable.description}</span>}
+                </label>
+              );
+            })}
           </div>
         </Card>
       )}

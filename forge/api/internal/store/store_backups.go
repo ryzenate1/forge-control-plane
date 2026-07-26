@@ -128,10 +128,15 @@ func (s *Store) MarkBackupStatus(ctx context.Context, serverID, name, status str
 }
 
 func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID *string) error {
-	// Check if backup is locked before deletion
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	var isLocked bool
-	err := s.db.QueryRow(ctx, `
-		SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2
+	err = tx.QueryRow(ctx, `
+		SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2 FOR UPDATE
 	`, serverID, name).Scan(&isLocked)
 	if err != nil {
 		return errors.New("backup not found")
@@ -140,7 +145,7 @@ func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID
 		return errors.New("backup is locked and cannot be deleted")
 	}
 
-	commandTag, err := s.db.Exec(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE server_id = $1 AND name = $2
 	`, serverID, name)
@@ -150,7 +155,10 @@ func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID
 	if commandTag.RowsAffected() == 0 {
 		return errors.New("backup not found")
 	}
-	return s.AppendAudit(ctx, actorID, "backup deleted", "server", &serverID, mustAuditJSON(map[string]any{"name": name}))
+	if err := s.AppendAudit(ctx, actorID, "backup deleted", "server", &serverID, mustAuditJSON(map[string]any{"name": name})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) LockBackup(ctx context.Context, serverID, name string, actorID *string) error {
@@ -188,8 +196,14 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 		return errors.New("backup name is required")
 	}
 
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	var isLocked bool
-	err := s.db.QueryRow(ctx, `SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2`, serverID, oldName).Scan(&isLocked)
+	err = tx.QueryRow(ctx, `SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2 FOR UPDATE`, serverID, oldName).Scan(&isLocked)
 	if err != nil {
 		return errors.New("backup not found")
 	}
@@ -198,7 +212,7 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 	}
 
 	var exists bool
-	err = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM backups WHERE server_id = $1 AND name = $2)`, serverID, newName).Scan(&exists)
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM backups WHERE server_id = $1 AND name = $2)`, serverID, newName).Scan(&exists)
 	if err != nil {
 		return err
 	}
@@ -206,7 +220,7 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 		return errors.New("a backup with the new name already exists")
 	}
 
-	commandTag, err := s.db.Exec(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		UPDATE backups
 		SET name = $3, updated_at = now()
 		WHERE server_id = $1 AND name = $2
@@ -217,7 +231,10 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 	if commandTag.RowsAffected() == 0 {
 		return errors.New("backup not found")
 	}
-	return s.AppendAudit(ctx, actorID, "backup renamed", "server", &serverID, mustAuditJSON(map[string]any{"from": oldName, "to": newName}))
+	if err := s.AppendAudit(ctx, actorID, "backup renamed", "server", &serverID, mustAuditJSON(map[string]any{"from": oldName, "to": newName})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 // CleanupOldBackups removes backups that exceed the retention policy

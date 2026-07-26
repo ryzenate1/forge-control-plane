@@ -1,0 +1,89 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "teamspeak3",
+  "name": "TeamSpeak 3",
+  "description": "TeamSpeak 3 voice server. The high-quality voice communication platform for online multiplayer gaming and communities.",
+  "version": "1.0.0",
+  "game": "TeamSpeak 3",
+  "author": "GamePanel",
+  "image": "ghcr.io/pterodactyl/yolks:ubuntu",
+  "images": {
+    "Ubuntu": "ghcr.io/pterodactyl/yolks:ubuntu"
+  },
+  "startup": "./ts3server default_voice_port={{PORT}} query_port={{QUERY_PORT}} filetransfer_port={{FILE_PORT}} serveradmin_password='{{SERVERADMIN_PASSWORD}}'",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "listening on"
+    },
+    "stop": "exit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 9987,
+      "protocol": "udp",
+      "public": true,
+      "description": "TeamSpeak 3 voice communication"
+    },
+    {
+      "port": 10011,
+      "protocol": "tcp",
+      "public": true,
+      "description": "ServerQuery port for remote administration"
+    },
+    {
+      "port": 30033,
+      "protocol": "tcp",
+      "public": true,
+      "description": "File transfer port"
+    }
+  ],
+  "env": [
+    {
+      "name": "Query Port",
+      "env_variable": "QUERY_PORT",
+      "description": "ServerQuery port.",
+      "default_value": "10011",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|integer|min:1024|max:65535"
+    },
+    {
+      "name": "File Transfer Port",
+      "env_variable": "FILE_PORT",
+      "description": "File transfer port.",
+      "default_value": "30033",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|integer|min:1024|max:65535"
+    },
+    {
+      "name": "Admin Password",
+      "env_variable": "SERVERADMIN_PASSWORD",
+      "description": "Server admin password. If left empty, a random one is generated on first start.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:64"
+    }
+  ],
+  "resources": {
+    "cpu": 100,
+    "memory_mb": 512,
+    "memory_max_mb": 2048,
+    "disk_mb": 1024,
+    "cpu_shares": 512,
+    "io_weight": 500,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# TeamSpeak 3 Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\n# Download TeamSpeak 3 server\nDOWNLOAD_URL=\"https://files.teamspeak-services.com/releases/server/3.13.7/teamspeak3-server_linux_amd64-3.13.7.tar.bz2\"\ncurl -L -o ts3.tar.bz2 \"$DOWNLOAD_URL\"\ntar -xf ts3.tar.bz2 --strip-components=1\nrm ts3.tar.bz2\n\n# Accept license\ntouch .ts3server_license_accepted\n\necho \"TeamSpeak 3 server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["voice", "communication", "social"],
+  "file_denylist": [],
+  "features": ["pid_limit"]
+}

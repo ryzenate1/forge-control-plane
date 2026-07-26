@@ -66,7 +66,7 @@ func (m *Manager) Start(_ context.Context, serverID, sourceNode, targetNode, ser
 		return nil, fmt.Errorf("resume offset cannot be negative")
 	}
 	if resumeOffset != 0 {
-		return nil, fmt.Errorf("transfer resume is not supported by the destination")
+		return nil, fmt.Errorf("legacy transfer resume offset requires zero; resumable migrations use protocol v1")
 	}
 	transferID := fmt.Sprintf("transfer-%s-%d", serverID, time.Now().Unix())
 

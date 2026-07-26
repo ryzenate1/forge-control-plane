@@ -32,6 +32,9 @@ func setupTestStore(t *testing.T, ctx context.Context) *Store {
 	if err != nil {
 		t.Skipf("no test database: %v", err)
 	}
+	if err := pool.Ping(ctx); err != nil {
+		t.Skipf("no test database reachable: %v", err)
+	}
 	return &Store{db: pool}
 }
 

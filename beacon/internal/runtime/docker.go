@@ -409,10 +409,14 @@ func (r *DockerRuntime) AttachConsole(ctx context.Context, serverID string) (Con
 }
 
 func (r *DockerRuntime) Delete(ctx context.Context, serverID string) error {
-	return r.client.ContainerRemove(ctx, containerName(serverID), container.RemoveOptions{
+	err := r.client.ContainerRemove(ctx, containerName(serverID), container.RemoveOptions{
 		Force:         true,
 		RemoveVolumes: true,
 	})
+	if errdefs.IsNotFound(err) {
+		return nil
+	}
+	return err
 }
 
 func (r *DockerRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEvent, <-chan error) {

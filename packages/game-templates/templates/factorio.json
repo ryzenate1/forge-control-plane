@@ -1,0 +1,77 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "factorio",
+  "name": "Factorio",
+  "description": "Factorio dedicated server. Build and manage automated factories in this legendary optimization and resource-management simulation game.",
+  "version": "1.0.0",
+  "game": "Factorio",
+  "author": "GamePanel",
+  "image": "ghcr.io/pterodactyl/yolks:ubuntu",
+  "images": {
+    "Ubuntu": "ghcr.io/pterodactyl/yolks:ubuntu"
+  },
+  "startup": "./factorio/bin/x64/factorio --start-server {{SAVE_NAME}} --port {{PORT}} --server-settings ./data/server-settings.json",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Server isUP"
+    },
+    "stop": "/quit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 34197,
+      "protocol": "udp",
+      "public": true,
+      "description": "Factorio game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Save Name",
+      "env_variable": "SAVE_NAME",
+      "description": "Name of the save file to load or create.",
+      "default_value": "factorio",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of players.",
+      "default_value": "100",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:65535"
+    },
+    {
+      "name": "Game Password",
+      "env_variable": "GAME_PASSWORD",
+      "description": "Server password.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 2048,
+    "memory_max_mb": 8192,
+    "disk_mb": 5120,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:debian",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Factorio Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\n# Fetch latest stable headless version\nLATEST_VERSION=$(curl -s https://factorio.com/api/latest-releases | jq -r '.stable.headless')\nDOWNLOAD_URL=\"https://factorio.com/get-download/${LATEST_VERSION}/headless/linux64\"\n\n# Download and extract Factorio\ncurl -L -o factorio.tar.xz \"$DOWNLOAD_URL\"\ntar -xf factorio.tar.xz\nrm factorio.tar.xz\n\necho \"Factorio server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["simulation", "sandbox", "building"],
+  "file_denylist": [],
+  "features": ["pid_limit"]
+}

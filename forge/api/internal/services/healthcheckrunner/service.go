@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"runtime"
 	"sync"
 	"time"
 
@@ -138,6 +139,13 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				fmt.Printf("health check runner panic recovered: %v\nstack: %s", r, buf[:n])
+			}
+		}()
 		s.loadExistingStates(ctx)
 		s.runOnce(ctx)
 		ticker := time.NewTicker(s.config.Interval)
@@ -373,7 +381,14 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 				}
 				s.persistTargetStatus(ctx, target.ID, "unhealthy")
 				if s.onUnhealthy != nil {
-					go s.onUnhealthy(ctx, target.ServerID, target.ID, state.ConsecutiveFailures)
+					go func(serverID, targetID string, failures int) {
+						defer func() {
+							if r := recover(); r != nil {
+								fmt.Printf("health check onUnhealthy callback panic: %v", r)
+							}
+						}()
+						s.onUnhealthy(ctx, serverID, targetID, failures)
+					}(target.ServerID, target.ID, state.ConsecutiveFailures)
 				}
 			}
 		} else if previousStatus == TargetStatusSuspected {
@@ -381,7 +396,14 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 				state.Status = TargetStatusUnhealthy
 				s.persistTargetStatus(ctx, target.ID, "unhealthy")
 				if s.onUnhealthy != nil {
-					go s.onUnhealthy(ctx, target.ServerID, target.ID, state.ConsecutiveFailures)
+					go func(serverID, targetID string, failures int) {
+						defer func() {
+							if r := recover(); r != nil {
+								fmt.Printf("health check onUnhealthy callback panic: %v", r)
+							}
+						}()
+						s.onUnhealthy(ctx, serverID, targetID, failures)
+					}(target.ServerID, target.ID, state.ConsecutiveFailures)
 				}
 			}
 		}

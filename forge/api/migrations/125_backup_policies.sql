@@ -1,13 +1,7 @@
-CREATE TABLE IF NOT EXISTS backup_policies (
-    id uuid PRIMARY KEY,
-    server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-    interval text NOT NULL,
-    max_backups integer NOT NULL DEFAULT 10,
-    retention_days integer NOT NULL DEFAULT 30,
-    storage text NOT NULL DEFAULT 's3',
-    enabled boolean NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
+-- backup_policies is defined in migration 119_z_backup_policies.sql
+-- This migration adds constraints and indexes.
+
+DO $$ BEGIN ALTER TABLE backup_policies ADD CONSTRAINT backup_policies_storage_check CHECK (storage IN ('s3', 'local', 'sftp', 'gcs', 'azure')); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN ALTER TABLE backup_policies ADD CONSTRAINT backup_policies_interval_check CHECK (interval ~ '^(\d+\s+(minute|hour|day|week|month)s?|@(daily|weekly|monthly|yearly)|(\d+|\*)(/\d+)?(\s+\d+|\s+\*){4,5})$'); EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 CREATE INDEX IF NOT EXISTS idx_backup_policies_server ON backup_policies(server_id);

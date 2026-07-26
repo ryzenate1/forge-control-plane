@@ -11,10 +11,10 @@ import { UserLimitsGrid } from "./user-limits";
 export function AdminUsers() {
  const qc = useQueryClient();
  const usersQuery = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
- const users = usersQuery.data ?? [];
+ const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
  const isLoading = usersQuery.isLoading;
  const serversQuery = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
- const servers = serversQuery.data ?? [];
+ const servers = useMemo(() => serversQuery.data ?? [], [serversQuery.data]);
 
  const [modal, setModal] = useState(false);
  const [selectedUser, setSelectedUser] = useState<ApiUser | null>(null);
@@ -328,7 +328,7 @@ export function AdminUsers() {
  <ModalFooter
  onCancel={() => setModal(false)}
  onConfirm={() => createMut.mutate()}
- disabled={email.trim() === "" || password.length < 6 || createMut.isPending}
+  disabled={email.trim() === "" || password.length < 8 || createMut.isPending}
  confirmLabel="Create User"
  />
  </Modal>

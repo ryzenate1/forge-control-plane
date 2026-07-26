@@ -9,6 +9,7 @@ data:
   DAEMON_ADDR: ":9090"
   DAEMON_SFTP_ADDR: ":2022"
   DAEMON_DATA_DIR: "/srv/game-panel/servers"
+  DAEMON_BACKUP_DIR: "/srv/game-panel/servers/.beacon/backups"
   DAEMON_ALLOW_MOCK_RUNTIME: "false"
   REDIS_ADDR: "redis:6379"
   PANEL_URL: "https://panel.example.com"

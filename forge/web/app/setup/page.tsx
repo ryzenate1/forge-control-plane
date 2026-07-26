@@ -8,10 +8,12 @@ import { Check, Database, Eye, EyeOff, Globe, Mail, Server, ShieldCheck, HardDri
 import { fetchSetupStatus, runSetup } from "@/lib/api";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input, Select } from "@/components/ui/primitives";
+import { useT } from "@/components/TranslationProvider";
 
 type SetupStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 export default function SetupPage() {
+  const t = useT();
   const router = useRouter();
   const [step, setStep] = useState<SetupStep>(1);
   const [email, setEmail] = useState("");
@@ -53,58 +55,58 @@ export default function SetupPage() {
         ...setupData,
       }),
     onSuccess: () => setStep(8),
-    onError: (error) => setErrors({ form: error instanceof Error ? error.message : "Setup could not be completed." }),
+    onError: (error) => setErrors({ form: error instanceof Error ? error.message : t("setupWizard.genericError") }),
   });
 
   if (statusQuery.isPending)
     return (
       <AuthShell
-        eyebrow="First-run setup"
-        title="Checking readiness"
-        description="Connecting to the panel API before setup begins."
+        eyebrow={t("setupWizard.eyebrow")}
+        title={t("setupWizard.checkingReadiness")}
+        description={t("setupWizard.checkingReadinessDesc")}
       >
         <div className="ui-card p-6 text-sm text-slate-400" role="status">
-          Verifying environment…
+          {t("setupWizard.verifyingEnvironment")}
         </div>
       </AuthShell>
     );
   if (statusQuery.isError)
     return (
       <AuthShell
-        eyebrow="First-run setup"
-        title="Readiness check failed"
-        description="Setup remains locked until the API confirms its state."
+        eyebrow={t("setupWizard.eyebrow")}
+        title={t("setupWizard.readinessFailed")}
+        description={t("setupWizard.readinessFailedDesc")}
       >
         <Alert
           actions={
             <Button loading={statusQuery.isFetching} onClick={() => void statusQuery.refetch()} variant="secondary">
-              Retry
+              {t("common.retry")}
             </Button>
           }
-          title="Unable to verify setup status"
+          title={t("setupWizard.unableToVerify")}
           tone="error"
         >
-          No setup state has been assumed. Confirm the API and database services are reachable, then retry.
+          {t("setupWizard.noStateAssumed")}
         </Alert>
       </AuthShell>
     );
   if (!statusQuery.data?.required && step !== 8)
     return (
-      <AuthShell title="Setup already complete" description="This panel already has an administrator.">
+      <AuthShell title={t("setupWizard.alreadyComplete")} description={t("setupWizard.alreadyCompleteDesc")}>
         <div className="ui-card p-6 text-sm text-slate-400" role="status">
-          Returning to sign in…
+          {t("setupWizard.returningToSignIn")}
         </div>
       </AuthShell>
     );
 
   const stepLabels = [
-    { n: 1, label: "Readiness" },
-    { n: 2, label: "Administrator" },
-    { n: 3, label: "Organization" },
-    { n: 4, label: "Node" },
-    { n: 5, label: "SMTP" },
-    { n: 6, label: "Backup" },
-    { n: 7, label: "Domain" },
+    { n: 1, label: t("setupWizard.steps.readiness") },
+    { n: 2, label: t("setupWizard.steps.administrator") },
+    { n: 3, label: t("setupWizard.steps.organization") },
+    { n: 4, label: t("setupWizard.steps.node") },
+    { n: 5, label: t("setupWizard.steps.smtp") },
+    { n: 6, label: t("setupWizard.steps.backup") },
+    { n: 7, label: t("setupWizard.steps.domain") },
   ];
 
   const visibleSteps = stepLabels.slice(
@@ -114,43 +116,43 @@ export default function SetupPage() {
 
   return (
     <AuthShell
-      eyebrow="First-run setup"
+      eyebrow={t("setupWizard.eyebrow")}
       title={
         step === 1
-          ? "Panel readiness"
+          ? t("setupWizard.step1.title")
           : step === 2
-            ? "Create the first administrator"
+            ? t("setupWizard.step2.title")
             : step === 3
-              ? "Organization setup"
+              ? t("setupWizard.step3.title")
               : step === 4
-                ? "Node configuration"
+                ? t("setupWizard.step4.title")
                 : step === 5
-                  ? "SMTP configuration"
+                  ? t("setupWizard.step5.title")
                   : step === 6
-                    ? "Backup destination"
+                    ? t("setupWizard.step6.title")
                     : step === 7
-                      ? "Domain & TLS"
-                      : "Setup complete"
+                      ? t("setupWizard.step7.title")
+                      : t("setupWizard.step8.title")
       }
       description={
         step === 1
-          ? "Review the state reported by the setup API before configuring the panel."
+          ? t("setupWizard.step1.description")
           : step === 2
-            ? "These credentials will have full administrative access to the panel."
+            ? t("setupWizard.step2.description")
             : step === 3
-              ? "Set up your organization details."
+              ? t("setupWizard.step3.description")
               : step === 4
-                ? "Configure the first game server node."
+                ? t("setupWizard.step4.description")
                 : step === 5
-                  ? "Configure email delivery for notifications."
+                  ? t("setupWizard.step5.description")
                   : step === 6
-                    ? "Choose where backups are stored."
+                    ? t("setupWizard.step6.description")
                     : step === 7
-                      ? "Configure your domain and TLS certificate."
-                      : "Your administrator account and initial configuration are ready."
+                      ? t("setupWizard.step7.description")
+                      : t("setupWizard.step8.description")
       }
     >
-      <ol aria-label="Setup progress" className="mb-5 flex flex-wrap gap-2 text-xs">
+      <ol aria-label={t("setupWizard.progressLabel")} className="mb-5 flex flex-wrap gap-2 text-xs">
         {visibleSteps.map((item) => (
           <li
             aria-current={step === item.n ? "step" : undefined}
@@ -177,28 +179,27 @@ export default function SetupPage() {
               <Database className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">API is ready</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step1.apiReady")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                The API reports that setup is required and no administrator exists.
+                {t("setupWizard.step1.apiReadyDesc")}
               </p>
               <dl className="mt-4 grid grid-cols-2 gap-3 text-xs">
                 <div className="rounded-lg bg-black/20 p-3">
-                  <dt className="text-slate-500">Version</dt>
-                  <dd className="mt-1 font-mono text-slate-200">{statusQuery.data?.appVersion || "Not reported"}</dd>
+                  <dt className="text-slate-500">{t("setupWizard.step1.version")}</dt>
+                  <dd className="mt-1 font-mono text-slate-200">{statusQuery.data?.appVersion || t("setupWizard.step1.notReported")}</dd>
                 </div>
                 <div className="rounded-lg bg-black/20 p-3">
-                  <dt className="text-slate-500">Administrator</dt>
-                  <dd className="mt-1 text-slate-200">{statusQuery.data?.hasAdmin ? "Present" : "Not created"}</dd>
+                  <dt className="text-slate-500">{t("setupWizard.step1.administrator")}</dt>
+                  <dd className="mt-1 text-slate-200">{statusQuery.data?.hasAdmin ? t("setupWizard.step1.present") : t("setupWizard.step1.notCreated")}</dd>
                 </div>
               </dl>
             </div>
           </div>
           <Alert className="mt-5" tone="info">
-            This check confirms only the setup API state. Optional services (SMTP, backup, TLS) can be configured now or
-            later in settings.
+            {t("setupWizard.step1.infoNote")}
           </Alert>
           <Button className="mt-5 w-full" onClick={() => setStep(2)}>
-            Continue
+            {t("common.continue")}
           </Button>
         </div>
       ) : null}
@@ -211,15 +212,15 @@ export default function SetupPage() {
           onSubmit={(event) => {
             event.preventDefault();
             const next: Record<string, string> = {};
-            if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = "Enter a valid email address.";
-            if (password.length < 12) next.password = "Use at least 12 characters.";
-            else if (password === email) next.password = "Choose a password that differs from your email.";
-            if (confirm !== password) next.confirm = "Passwords do not match.";
+            if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = t("setupWizard.step2.errors.invalidEmail");
+            if (password.length < 12) next.password = t("setupWizard.step2.errors.tooShort");
+            else if (password === email) next.password = t("setupWizard.step2.errors.sameAsEmail");
+            if (confirm !== password) next.confirm = t("setupWizard.step2.errors.mismatch");
             setErrors(next);
             if (!next.email && !next.password && !next.confirm) setStep(3);
           }}
         >
-          <Field error={errors.email} id="setup-email" label="Administrator email">
+          <Field error={errors.email} id="setup-email" label={t("setupWizard.step2.emailLabel")}>
             <Input
               autoComplete="email"
               autoFocus
@@ -233,9 +234,9 @@ export default function SetupPage() {
           </Field>
           <Field
             error={errors.password}
-            hint="At least 12 characters. A longer, unique passphrase is recommended."
+            hint={t("setupWizard.step2.passwordHint")}
             id="setup-password"
-            label="Password"
+            label={t("auth.password")}
           >
             <div className="relative">
               <Input
@@ -249,7 +250,7 @@ export default function SetupPage() {
                 value={password}
               />
               <button
-                aria-label={showPassword ? "Hide passwords" : "Show passwords"}
+                aria-label={showPassword ? t("setupWizard.step2.hidePasswords") : t("setupWizard.step2.showPasswords")}
                 className="ui-icon-button absolute right-1 top-1"
                 onClick={() => setShowPassword((value) => !value)}
                 type="button"
@@ -258,7 +259,7 @@ export default function SetupPage() {
               </button>
             </div>
           </Field>
-          <Field error={errors.confirm} id="setup-confirm" label="Confirm password">
+          <Field error={errors.confirm} id="setup-confirm" label={t("setupWizard.step2.confirmLabel")}>
             <Input
               autoComplete="new-password"
               id="setup-confirm"
@@ -271,9 +272,9 @@ export default function SetupPage() {
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(1)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
-            <Button type="submit">Continue</Button>
+            <Button type="submit">{t("common.continue")}</Button>
           </div>
         </form>
       ) : null}
@@ -293,13 +294,13 @@ export default function SetupPage() {
               <Building2 className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">Organization</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step3.heading")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                Set up your organization or personal workspace name.
+                {t("setupWizard.step3.subheading")}
               </p>
             </div>
           </div>
-          <Field hint="Your organization name shown throughout the panel." id="setup-org" label="Organization name">
+          <Field hint={t("setupWizard.step3.orgHint")} id="setup-org" label={t("setupWizard.step3.orgLabel")}>
             <Input
               autoFocus
               id="setup-org"
@@ -311,9 +312,9 @@ export default function SetupPage() {
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(2)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
-            <Button type="submit">Continue</Button>
+            <Button type="submit">{t("common.continue")}</Button>
           </div>
         </form>
       ) : null}
@@ -333,13 +334,13 @@ export default function SetupPage() {
               <Server className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">Node configuration</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step4.heading")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                Configure the first game server node. This can also be done later in Admin &rarr; Nodes.
+                {t("setupWizard.step4.subheading")}
               </p>
             </div>
           </div>
-          <Field hint="A display name for this node." id="setup-node-name" label="Node name">
+          <Field hint={t("setupWizard.step4.nameHint")} id="setup-node-name" label={t("setupWizard.step4.nameLabel")}>
             <Input
               autoFocus
               id="setup-node-name"
@@ -348,7 +349,7 @@ export default function SetupPage() {
               value={setupData.nodeName}
             />
           </Field>
-          <Field hint="Public FQDN or IP address of this node." id="setup-node-fqdn" label="Node FQDN">
+          <Field hint={t("setupWizard.step4.fqdnHint")} id="setup-node-fqdn" label={t("setupWizard.step4.fqdnLabel")}>
             <Input
               id="setup-node-fqdn"
               onChange={(event) => setSetupData({ ...setupData, nodeFqdn: event.target.value })}
@@ -359,9 +360,9 @@ export default function SetupPage() {
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(3)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
-            <Button type="submit">Continue</Button>
+            <Button type="submit">{t("common.continue")}</Button>
           </div>
         </form>
       ) : null}
@@ -381,13 +382,13 @@ export default function SetupPage() {
               <Mail className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">SMTP configuration</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step5.heading")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                Configure email delivery for password resets and notifications. Can be skipped and configured later.
+                {t("setupWizard.step5.subheading")}
               </p>
             </div>
           </div>
-          <Field hint="SMTP server hostname" id="setup-smtp-host" label="SMTP host">
+          <Field hint={t("setupWizard.step5.hostHint")} id="setup-smtp-host" label={t("setupWizard.step5.hostLabel")}>
             <Input
               autoFocus
               id="setup-smtp-host"
@@ -397,7 +398,7 @@ export default function SetupPage() {
             />
           </Field>
           <div className="grid grid-cols-2 gap-4">
-            <Field id="setup-smtp-port" label="SMTP port">
+            <Field id="setup-smtp-port" label={t("setupWizard.step5.portLabel")}>
               <Input
                 id="setup-smtp-port"
                 onChange={(event) => setSetupData({ ...setupData, smtpPort: event.target.value })}
@@ -405,19 +406,19 @@ export default function SetupPage() {
                 value={setupData.smtpPort}
               />
             </Field>
-            <Field id="setup-smtp-encryption" label="Encryption">
+            <Field id="setup-smtp-encryption" label={t("setupWizard.step5.encryptionLabel")}>
               <Select
                 id="setup-smtp-encryption"
                 onChange={(event) => setSetupData({ ...setupData, smtpEncryption: event.target.value })}
                 value={setupData.smtpEncryption}
               >
-                <option value="tls">STARTTLS (587)</option>
-                <option value="ssl">SSL/TLS (465)</option>
-                <option value="">None</option>
+                <option value="tls">{t("setupWizard.step5.starttls")}</option>
+                <option value="ssl">{t("setupWizard.step5.ssl")}</option>
+                <option value="">{t("setupWizard.step5.none")}</option>
               </Select>
             </Field>
           </div>
-          <Field id="setup-smtp-user" label="SMTP username">
+          <Field id="setup-smtp-user" label={t("setupWizard.step5.userLabel")}>
             <Input
               id="setup-smtp-user"
               onChange={(event) => setSetupData({ ...setupData, smtpUser: event.target.value })}
@@ -425,7 +426,7 @@ export default function SetupPage() {
               value={setupData.smtpUser}
             />
           </Field>
-          <Field id="setup-smtp-pass" label="SMTP password">
+          <Field id="setup-smtp-pass" label={t("setupWizard.step5.passLabel")}>
             <Input
               id="setup-smtp-pass"
               onChange={(event) => setSetupData({ ...setupData, smtpPass: event.target.value })}
@@ -433,7 +434,7 @@ export default function SetupPage() {
               value={setupData.smtpPass}
             />
           </Field>
-          <Field id="setup-smtp-from" label="From address">
+          <Field id="setup-smtp-from" label={t("setupWizard.step5.fromLabel")}>
             <Input
               id="setup-smtp-from"
               onChange={(event) => setSetupData({ ...setupData, smtpFrom: event.target.value })}
@@ -444,9 +445,9 @@ export default function SetupPage() {
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(4)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
-            <Button type="submit">Continue</Button>
+            <Button type="submit">{t("common.continue")}</Button>
           </div>
         </form>
       ) : null}
@@ -466,25 +467,25 @@ export default function SetupPage() {
               <HardDrive className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">Backup destination</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step6.heading")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                Choose where game server backups are stored. Can be changed later in settings.
+                {t("setupWizard.step6.subheading")}
               </p>
             </div>
           </div>
-          <Field id="setup-backup-driver" label="Backup driver">
+          <Field id="setup-backup-driver" label={t("setupWizard.step6.driverLabel")}>
             <Select
               id="setup-backup-driver"
               onChange={(event) => setSetupData({ ...setupData, backupDriver: event.target.value })}
               value={setupData.backupDriver}
             >
-              <option value="local">Local disk</option>
-              <option value="s3">S3-compatible</option>
+              <option value="local">{t("setupWizard.step6.local")}</option>
+              <option value="s3">{t("setupWizard.step6.s3")}</option>
             </Select>
           </Field>
           {setupData.backupDriver === "s3" ? (
             <>
-              <Field id="setup-s3-bucket" label="S3 bucket">
+              <Field id="setup-s3-bucket" label={t("setupWizard.step6.bucketLabel")}>
                 <Input
                   id="setup-s3-bucket"
                   onChange={(event) => setSetupData({ ...setupData, s3Bucket: event.target.value })}
@@ -492,7 +493,7 @@ export default function SetupPage() {
                   value={setupData.s3Bucket}
                 />
               </Field>
-              <Field id="setup-s3-region" label="S3 region">
+              <Field id="setup-s3-region" label={t("setupWizard.step6.regionLabel")}>
                 <Input
                   id="setup-s3-region"
                   onChange={(event) => setSetupData({ ...setupData, s3Region: event.target.value })}
@@ -500,7 +501,7 @@ export default function SetupPage() {
                   value={setupData.s3Region}
                 />
               </Field>
-              <Field id="setup-s3-endpoint" label="S3 endpoint">
+              <Field id="setup-s3-endpoint" label={t("setupWizard.step6.endpointLabel")}>
                 <Input
                   id="setup-s3-endpoint"
                   onChange={(event) => setSetupData({ ...setupData, s3Endpoint: event.target.value })}
@@ -513,9 +514,9 @@ export default function SetupPage() {
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(5)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
-            <Button type="submit">Continue</Button>
+            <Button type="submit">{t("common.continue")}</Button>
           </div>
         </form>
       ) : null}
@@ -535,13 +536,13 @@ export default function SetupPage() {
               <Globe className="h-5 w-5" />
             </span>
             <div>
-              <h2 className="font-semibold text-slate-100">Domain &amp; TLS</h2>
+              <h2 className="font-semibold text-slate-100">{t("setupWizard.step7.heading")}</h2>
               <p className="mt-1 text-sm leading-6 text-slate-400">
-                Configure your panel domain and automatic TLS certificate via Let&rsquo;s Encrypt.
+                {t("setupWizard.step7.subheading")}
               </p>
             </div>
           </div>
-          <Field hint="The domain name where the panel will be accessible." id="setup-domain" label="Panel domain">
+          <Field hint={t("setupWizard.step7.domainHint")} id="setup-domain" label={t("setupWizard.step7.domainLabel")}>
             <Input
               autoFocus
               id="setup-domain"
@@ -551,9 +552,9 @@ export default function SetupPage() {
             />
           </Field>
           <Field
-            hint="Email for Let's Encrypt certificate notifications."
+            hint={t("setupWizard.step7.tlsEmailHint")}
             id="setup-tls-email"
-            label="TLS contact email"
+            label={t("setupWizard.step7.tlsEmailLabel")}
           >
             <Input
               id="setup-tls-email"
@@ -564,15 +565,14 @@ export default function SetupPage() {
           </Field>
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
           <Alert tone="info">
-            TLS certificates are provisioned automatically via Let&rsquo;s Encrypt when the domain is configured with a
-            reverse proxy. This can also be set up manually later.
+            {t("setupWizard.step7.tlsInfo")}
           </Alert>
           <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
             <Button onClick={() => setStep(6)} type="button" variant="ghost">
-              Back
+              {t("common.back")}
             </Button>
             <Button loading={setupMutation.isPending} type="submit">
-              Complete setup
+              {t("setupWizard.step7.completeSetup")}
             </Button>
           </div>
         </form>
@@ -584,25 +584,24 @@ export default function SetupPage() {
           <span className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-emerald-500/10 text-emerald-400">
             <ShieldCheck className="h-7 w-7" />
           </span>
-          <h2 className="mt-4 text-lg font-semibold text-white">Setup complete</h2>
+          <h2 className="mt-4 text-lg font-semibold text-white">{t("setupWizard.step8.title")}</h2>
           <p className="mt-2 text-sm leading-6 text-slate-400">
-            Your administrator account and initial configuration are ready. Sign in with{" "}
-            <strong className="font-medium text-slate-200">{email.trim().toLowerCase()}</strong> to continue
-            configuring the panel.
+            {t("setupWizard.step8.readyIntro")}{" "}
+            <strong className="font-medium text-slate-200">{email.trim().toLowerCase()}</strong> {t("setupWizard.step8.readyOutro")}
           </p>
           <div className="mt-4 rounded-lg bg-black/20 p-4 text-left text-xs text-slate-400">
-            <p className="font-medium text-slate-300">What was configured:</p>
+            <p className="font-medium text-slate-300">{t("setupWizard.step8.whatConfigured")}</p>
             <ul className="mt-2 list-inside list-disc space-y-1">
-              <li>Administrator account created</li>
-              {setupData.orgName ? <li>Organization: {setupData.orgName}</li> : null}
-              {setupData.nodeName ? <li>Node: {setupData.nodeName}</li> : null}
-              {setupData.smtpHost ? <li>SMTP: {setupData.smtpHost}</li> : <li>SMTP: Not configured (can be set later)</li>}
-              <li>Backup: {setupData.backupDriver === "s3" ? "S3-compatible storage" : "Local disk"}</li>
-              {setupData.domainName ? <li>Domain: {setupData.domainName}</li> : null}
+              <li>{t("setupWizard.step8.adminCreated")}</li>
+              {setupData.orgName ? <li>{t("setupWizard.step8.organizationLine", { name: setupData.orgName })}</li> : null}
+              {setupData.nodeName ? <li>{t("setupWizard.step8.nodeLine", { name: setupData.nodeName })}</li> : null}
+              {setupData.smtpHost ? <li>{t("setupWizard.step8.smtpLine", { host: setupData.smtpHost })}</li> : <li>{t("setupWizard.step8.smtpNotConfigured")}</li>}
+              <li>{t("setupWizard.step8.backupLine", { driver: setupData.backupDriver === "s3" ? t("setupWizard.step6.s3") : t("setupWizard.step6.local") })}</li>
+              {setupData.domainName ? <li>{t("setupWizard.step8.domainLine", { domain: setupData.domainName })}</li> : null}
             </ul>
           </div>
           <Link className="ui-button ui-button-primary mt-6 w-full" href="/?setup=complete">
-            Continue to sign in
+            {t("setupWizard.step8.continueToSignIn")}
           </Link>
         </div>
       ) : null}

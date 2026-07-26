@@ -228,7 +228,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		pullClientFactory: securePullClient,
 		transferProtocol:  protocol,
 		composeStacks:     newComposeStackManager(dataDir),
-		enrollmentMgr:     NewEnrollmentManager(filepath.Join(filepath.Dir(dataDir), "enrollment")),
+		enrollmentMgr:     NewEnrollmentManager(filepath.Join(dataDir, ".beacon", "enrollment")),
 		ctx:               serverCtx,
 		cancel:            cancel,
 	}
@@ -246,7 +246,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 		}
 		return manager.HandlePower(ctx, op.ServerID, string(op.Type))
 	}
-	journalPath := filepath.Join(filepath.Dir(dataDir), "journal", "operations.db")
+	journalPath := filepath.Join(dataDir, ".beacon", "journal", "operations.db")
 	operationQueue, journalErr := NewPersistentOperationQueue(journalPath, 2, operationHandler)
 	if journalErr != nil {
 		log.Printf("[beacon] persistent command journal unavailable, using memory queue: %v", journalErr)
@@ -267,6 +267,10 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 			}
 		}
 	}()
+	// Periodically reap orphaned chunked-upload temp files (.uploads/*.part)
+	// left behind by crashes or abandoned uploads, instead of relying solely
+	// on cleanup-on-next-chunk. Stops when serverCtx is cancelled by Shutdown.
+	startUploadCleanupLoop(serverCtx, dataDir)
 	if rt == nil {
 		server.dockerState = "error"
 	}
@@ -352,6 +356,9 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /database/provision", server.handleDatabaseProvision)
 	mux.HandleFunc("DELETE /database/provision", server.handleDatabaseDeProvision)
 	mux.HandleFunc("POST /database/backup", server.handleDatabaseBackup)
+	mux.HandleFunc("GET /database/backups/{backupId}", server.handleDatabaseBackupDownload)
+	mux.HandleFunc("DELETE /database/backups/{backupId}", server.handleDatabaseBackupDelete)
+	mux.HandleFunc("POST /database/restore", server.handleDatabaseRestore)
 	mux.HandleFunc("GET /database/status/{containerId}", server.handleDatabaseStatus)
 	// Build endpoints
 	mux.HandleFunc("POST /build/dockerfile", server.handleDockerfileBuild)
@@ -1186,9 +1193,31 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serverID := r.PathValue("id")
+	root, err := s.safePath(serverID, "")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	s.consoles.Stop(serverID)
 	if err := s.runtime.Delete(r.Context(), serverID); err != nil {
 		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+		return
+	}
+	if s.backups != nil {
+		backups, err := s.backups.List(serverID)
+		if err != nil {
+			http.Error(w, "container removed but backup cleanup failed: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, item := range backups {
+			if err := s.backups.Delete(serverID, item.Name); err != nil {
+				http.Error(w, "container removed but backup cleanup failed: "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+		}
+	}
+	if err := os.RemoveAll(root); err != nil {
+		http.Error(w, "container removed but server data cleanup failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
 	s.manager.Delete(serverID)
@@ -2549,17 +2578,20 @@ func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid transfer id", http.StatusBadRequest)
 		return
 	}
-	resumeOffset := strings.TrimSpace(r.Header.Get("X-Transfer-Resume-Offset"))
-	if resumeOffset != "" {
-		offset, err := strconv.ParseInt(resumeOffset, 10, 64)
-		if err != nil || offset < 0 {
+	var offset int64
+	if value := strings.TrimSpace(r.Header.Get("X-Transfer-Resume-Offset")); value != "" {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil || parsed < 0 {
 			http.Error(w, "invalid transfer resume offset", http.StatusBadRequest)
 			return
 		}
-		if offset != 0 {
-			http.Error(w, "transfer resume is not supported by the destination", http.StatusNotImplemented)
-			return
-		}
+		offset = parsed
+	}
+	totalSize, err := strconv.ParseInt(strings.TrimSpace(r.Header.Get("X-Transfer-Size")), 10, 64)
+	const transferLimit = int64(32 * 1024 * 1024 * 1024)
+	if err != nil || totalSize < 1 || totalSize > transferLimit || offset > totalSize {
+		http.Error(w, "invalid X-Transfer-Size header", http.StatusBadRequest)
+		return
 	}
 	expectedChecksum := r.Header.Get("X-Checksum")
 	if expectedChecksum == "" {
@@ -2578,24 +2610,53 @@ func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	tempName := path.Join(".backups", ".transfer-"+transferID+".tar.gz")
-	out, err := fsys.OpenFile(tempName, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
+	if offset > 0 {
+		info, statErr := fsys.Stat(tempName)
+		if statErr != nil || info.Size() != offset {
+			http.Error(w, "transfer resume offset does not match persisted bytes", http.StatusConflict)
+			return
+		}
+		flags = os.O_WRONLY | os.O_APPEND
+	}
+	out, err := fsys.OpenFile(tempName, flags, 0o640)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	written, copyErr := io.Copy(out, io.LimitReader(r.Body, totalSize-offset+1))
+	closeErr := out.Close()
+	persisted := offset + written
+	if closeErr != nil || persisted > totalSize {
+		_ = fsys.RemoveAll(tempName)
+		if persisted > totalSize {
+			http.Error(w, "transfer archive too large", http.StatusRequestEntityTooLarge)
+		} else {
+			http.Error(w, closeErr.Error(), http.StatusInternalServerError)
+		}
+		return
+	}
+	if copyErr != nil {
+		http.Error(w, copyErr.Error(), http.StatusBadRequest)
+		return
+	}
+	if persisted < totalSize {
+		writeJSON(w, http.StatusAccepted, map[string]any{
+			"ok": false, "serverId": serverID, "transferId": transferID,
+			"offset": persisted, "totalBytes": totalSize,
+		})
+		return
+	}
+	archive, err := fsys.Open(tempName)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	hasher := sha256.New()
-	const transferLimit = int64(32 * 1024 * 1024 * 1024)
-	written, copyErr := io.Copy(io.MultiWriter(out, hasher), io.LimitReader(r.Body, transferLimit+1))
-	closeErr := out.Close()
-	if copyErr != nil || closeErr != nil || written > transferLimit {
-		_ = fsys.RemoveAll(tempName)
-		if written > transferLimit {
-			http.Error(w, "transfer archive too large", http.StatusRequestEntityTooLarge)
-		} else if copyErr != nil {
-			http.Error(w, copyErr.Error(), http.StatusBadRequest)
-		} else {
-			http.Error(w, closeErr.Error(), http.StatusInternalServerError)
-		}
+	_, hashErr := io.Copy(hasher, archive)
+	closeErr = archive.Close()
+	if hashErr != nil || closeErr != nil {
+		http.Error(w, "failed to verify transfer archive", http.StatusInternalServerError)
 		return
 	}
 	actualChecksum := hex.EncodeToString(hasher.Sum(nil))
@@ -2615,7 +2676,7 @@ func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) 
 		"ok":         true,
 		"serverId":   serverID,
 		"transferId": transferID,
-		"bytes":      written,
+		"bytes":      persisted,
 		"checksum":   actualChecksum,
 	})
 }
@@ -3105,7 +3166,20 @@ func configureWebSocket(conn *websocket.Conn) {
 
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if s.token == "" || r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/download/backup" || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
+		// /health and /metrics are intentionally exempt from the panel HMAC auth
+		// even when a token is configured. This is a deliberate, reviewed choice:
+		//   - /health returns only {ok, service, runtime-available} — no secrets,
+		//     hostnames, container names, or resource data.
+		//   - /metrics (see (*Server).metrics) exposes only process-level Prometheus
+		//     counters/gauges: daemon uptime, whether the Docker runtime is enabled,
+		//     goroutine count, and Go heap allocation bytes. None of this identifies
+		//     the host, tenants, or running containers.
+		// Because the payloads carry no sensitive data, keeping them unauthenticated
+		// preserves compatibility with common scrape/liveness setups (Prometheus,
+		// load balancer health checks) that can't attach a signed request. If a
+		// future change adds sensitive fields to either endpoint, this exemption
+		// must be revisited.
+		if s.token == "" || r.URL.Path == "/health" || r.URL.Path == "/metrics" || r.URL.Path == "/download/backup" || isScopedTokenRoute(r.URL.Path) || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -3139,6 +3213,10 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func isScopedTokenRoute(path string) bool {
+	return strings.HasPrefix(path, "/servers/") && (strings.Contains(path, "/ws/") || strings.HasSuffix(path, "/install/ws"))
 }
 
 func isStreamingUpload(r *http.Request) bool {

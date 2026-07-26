@@ -1,7 +1,10 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useParams } from "next/navigation";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
+import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
+import { errorMessage } from "@/lib/utils";
 
 interface GitDeployment {
   id: string;
@@ -35,78 +38,59 @@ export default function GitDeployPage() {
   const [loading, setLoading] = useState(true);
   const [repoUrl, setRepoUrl] = useState("");
   const [branch, setBranch] = useState("main");
-  const [serverId, setServerId] = useState<string | null>(null);
+  const params = useParams();
+  const serverId = String(params.id ?? "");
 
   const fetchData = useCallback(async (sid: string) => {
     try {
-      const [deployRes, hookRes] = await Promise.all([
-        fetch(`/api/v1/git/servers/${sid}/deployments`),
-        fetch(`/api/v1/git/servers/${sid}/hooks`),
+      const [deployments, hooks] = await Promise.all([
+        fetchJSON<GitDeployment[]>(`/git/servers/${sid}/deployments`),
+        fetchJSON<GitDeploymentHook[]>(`/git/servers/${sid}/hooks`),
       ]);
-      if (deployRes.ok) {
-        const data = await deployRes.json();
-        setDeployments(Array.isArray(data) ? data : data.data ?? []);
-      }
-      if (hookRes.ok) {
-        const data = await hookRes.json();
-        setHooks(Array.isArray(data) ? data : data.data ?? []);
-      }
-    } catch {
-      // ignore
+      setDeployments(Array.isArray(deployments) ? deployments : []);
+      setHooks(Array.isArray(hooks) ? hooks : []);
+    } catch (err) {
+      console.error("Failed to load git data:", errorMessage(err, ""));
     } finally {
       setLoading(false);
     }
   }, []);
 
   useEffect(() => {
-    const sid = window.location.pathname.split("/").at(-2);
-    if (sid && sid !== "git") {
-      setServerId(sid);
-      fetchData(sid);
+    if (serverId) {
+      fetchData(serverId);
     }
-  }, [fetchData]);
+  }, [serverId, fetchData]);
 
   const triggerDeploy = async () => {
     if (!serverId || !repoUrl) return;
     try {
-      const res = await fetch(`/api/v1/git/servers/${serverId}/deployments`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ repoUrl, branch }),
-      });
-      if (res.ok) {
-        setRepoUrl("");
-        setBranch("main");
-        fetchData(serverId);
-      }
-    } catch {
-      // ignore
+      await postJSON(`/git/servers/${serverId}/deployments`, { repoUrl, branch });
+      setRepoUrl("");
+      setBranch("main");
+      fetchData(serverId);
+    } catch (err) {
+      console.error("Deploy failed:", errorMessage(err, ""));
     }
   };
 
   const createHook = async () => {
     if (!serverId) return;
     try {
-      await fetch(`/api/v1/git/servers/${serverId}/hooks`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ events: ["push"] }),
-      });
+      await postJSON(`/git/servers/${serverId}/hooks`, { events: ["push"] });
       fetchData(serverId);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to create hook:", errorMessage(err, ""));
     }
   };
 
   const deleteHook = async (hookId: string) => {
     if (!serverId) return;
     try {
-      await fetch(`/api/v1/git/servers/${serverId}/hooks/${hookId}`, {
-        method: "DELETE",
-      });
+      await deleteJSON(`/git/servers/${serverId}/hooks/${hookId}`);
       fetchData(serverId);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error("Failed to delete hook:", errorMessage(err, ""));
     }
   };
 
@@ -115,58 +99,58 @@ export default function GitDeployPage() {
       case "success": return "text-green-400";
       case "failed": return "text-red-400";
       case "building": return "text-yellow-400";
-      default: return "text-gray-400";
+      default: return "text-slate-400";
     }
   };
 
   return (
-    <ServerConsoleLayout activeTab="console">
-      {(server) => (
+    <ServerConsoleLayout activeTab="git">
+      {() => (
         <div className="p-6 space-y-8">
-          <h2 className="text-2xl font-bold">Git Deployments</h2>
+          <h2 className="text-2xl font-bold text-slate-100">Git Deployments</h2>
 
-          <div className="bg-gray-800 rounded-lg p-4 space-y-4">
-            <h3 className="text-lg font-semibold">Trigger Deployment</h3>
+          <div className="bg-[#1e2536] rounded-lg p-4 space-y-4">
+            <h3 className="text-lg font-semibold text-slate-100">Trigger Deployment</h3>
             <div className="flex gap-3">
               <input
                 type="text"
                 placeholder="Repository URL"
                 value={repoUrl}
                 onChange={(e) => setRepoUrl(e.target.value)}
-                className="flex-1 bg-gray-700 rounded px-3 py-2 text-sm"
+                className="flex-1 bg-[#151b27] rounded px-3 py-2 text-sm text-slate-100 placeholder-slate-500"
               />
               <input
                 type="text"
                 placeholder="Branch"
                 value={branch}
                 onChange={(e) => setBranch(e.target.value)}
-                className="w-32 bg-gray-700 rounded px-3 py-2 text-sm"
+                className="w-32 bg-[#151b27] rounded px-3 py-2 text-sm text-slate-100 placeholder-slate-500"
               />
               <button
                 onClick={triggerDeploy}
                 disabled={!repoUrl}
-                className="bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded px-4 py-2 text-sm font-medium"
+                className="bg-red-600 hover:bg-red-500 disabled:opacity-40 rounded px-4 py-2 text-sm font-bold text-white"
               >
                 Deploy
               </button>
             </div>
           </div>
 
-          <div className="bg-gray-800 rounded-lg p-4">
+          <div className="bg-[#1e2536] rounded-lg p-4">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Deployments</h3>
+              <h3 className="text-lg font-semibold text-slate-100">Deployments</h3>
             </div>
             {loading ? (
-              <p className="text-gray-400">Loading...</p>
+              <p className="text-slate-400">Loading...</p>
             ) : deployments.length === 0 ? (
-              <p className="text-gray-500">No deployments yet.</p>
+              <p className="text-slate-500">No deployments yet.</p>
             ) : (
               <div className="space-y-2">
                 {deployments.map((d) => (
-                    <div key={d.id} className="bg-gray-700 rounded p-3 text-sm flex items-center justify-between">
+                    <div key={d.id} className="bg-[#151b27] rounded p-3 text-sm flex items-center justify-between">
                     <div className="flex-1 min-w-0">
-                      <p className="truncate font-medium">{d.gitSourceId || "N/A"}</p>
-                      <p className="text-gray-400 text-xs">
+                      <p className="truncate font-medium text-slate-100">{d.gitSourceId || "N/A"}</p>
+                      <p className="text-slate-400 text-xs">
                         {d.branch} @ {d.commitSha.slice(0, 8)} — {new Date(d.createdAt).toLocaleString()}
                       </p>
                     </div>
@@ -179,25 +163,25 @@ export default function GitDeployPage() {
             )}
           </div>
 
-          <div className="bg-gray-800 rounded-lg p-4">
+          <div className="bg-[#1e2536] rounded-lg p-4">
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-lg font-semibold">Webhook Hooks</h3>
+              <h3 className="text-lg font-semibold text-slate-100">Webhook Hooks</h3>
               <button
                 onClick={createHook}
-                className="bg-green-600 hover:bg-green-700 rounded px-3 py-1.5 text-sm font-medium"
+                className="bg-green-700 hover:bg-green-600 rounded px-3 py-1.5 text-sm font-bold text-white"
               >
                 Create Hook
               </button>
             </div>
             {hooks.length === 0 ? (
-              <p className="text-gray-500">No hooks configured.</p>
+              <p className="text-slate-500">No hooks configured.</p>
             ) : (
               <div className="space-y-2">
                 {hooks.map((h) => (
-                  <div key={h.id} className="bg-gray-700 rounded p-3 text-sm flex items-center justify-between">
+                  <div key={h.id} className="bg-[#151b27] rounded p-3 text-sm flex items-center justify-between">
                     <div>
-                      <p className="font-medium">Hook ID: {h.id.slice(0, 8)}...</p>
-                      <p className="text-gray-400 text-xs">
+                      <p className="font-medium text-slate-100">Hook ID: {h.id.slice(0, 8)}...</p>
+                      <p className="text-slate-400 text-xs">
                         Events: {h.events.join(", ")} — Created {new Date(h.createdAt).toLocaleString()}
                       </p>
                     </div>

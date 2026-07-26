@@ -2,7 +2,7 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowDownUp, Check, Copy, Edit3, Globe, Network, Plus, Server, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowDownUp, Copy, Edit3, Globe, Network, Plus, Server, Trash2 } from "lucide-react";
 import type { ApiAllocation, ApiAllocationNode } from "@/lib/api";
 import { createAllocation, deleteAllocations, fetchAllocationNodes, fetchAllocations, setAdminAllocationAlias } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";

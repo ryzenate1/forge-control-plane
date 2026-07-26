@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"gamepanel/forge/internal/events"
+	"gamepanel/forge/internal/models"
 	"gamepanel/forge/internal/store"
 )
 
@@ -20,7 +21,7 @@ type Service struct {
 	emailService       *EmailService
 	slackService       *SlackService
 	webhookService     *WebhookService
-	alertService        *AlertService
+	alertService       *AlertService
 	notificationStore  store.Store
 	mu                 sync.RWMutex
 	channels           []store.NotificationChannel
@@ -502,13 +503,22 @@ func (svc *Service) ListChannels(ctx context.Context) ([]store.NotificationChann
 	return svc.notificationStore.ListNotificationChannels(ctx)
 }
 
+func (svc *Service) ListUserNotifications(ctx context.Context, userID string, limit int) ([]models.Notification, error) {
+	if limit < 1 || limit > 100 {
+		limit = 50
+	}
+	return svc.notificationStore.ListNotificationsByUser(ctx, userID, limit, 0)
+}
+
 // CreateChannel creates a new notification channel
 func (svc *Service) CreateChannel(ctx context.Context, req store.CreateNotificationChannelRequest) (store.NotificationChannel, error) {
 	ch, err := svc.notificationStore.CreateNotificationChannel(ctx, req)
 	if err != nil {
 		return store.NotificationChannel{}, err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after create", "error", err)
+	}
 	return ch, nil
 }
 
@@ -523,7 +533,9 @@ func (svc *Service) UpdateChannel(ctx context.Context, id string, req store.Upda
 	if err != nil {
 		return store.NotificationChannel{}, err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after update", "error", err)
+	}
 	return ch, nil
 }
 
@@ -533,7 +545,9 @@ func (svc *Service) DeleteChannel(ctx context.Context, id string) error {
 	if err != nil {
 		return err
 	}
-	_ = svc.RefreshChannels(ctx)
+	if err := svc.RefreshChannels(ctx); err != nil {
+		svc.logger.Error("refresh channels after delete", "error", err)
+	}
 	return nil
 }
 
@@ -614,7 +628,9 @@ func formatEventMessage(eventName string, ev events.Envelope) string {
 func (svc *Service) EvaluateThreshold(ctx context.Context, entityType EntityType, entityID, metricName string, currentValue float64) {
 	if svc.alertService != nil {
 		metrics := map[string]float64{metricName: currentValue}
-		_, _ = svc.alertService.EvaluateEntity(ctx, entityType, entityID, metrics, nil)
+		if _, err := svc.alertService.EvaluateEntity(ctx, entityType, entityID, metrics, nil); err != nil {
+			svc.logger.Error("evaluate threshold alert", "entityID", entityID, "metric", metricName, "error", err)
+		}
 	}
 }
 

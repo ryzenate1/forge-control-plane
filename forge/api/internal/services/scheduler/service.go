@@ -150,9 +150,7 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 		}
 		return domain.PlacementDecision{
 			RegionID:      regionID,
-			RegionIDRaw:   regionID,
 			NodeID:        scored.Node.ID,
-			NodeIDRaw:     scored.Node.ID,
 			AllocationID:  req.AllocationID,
 			ReservationID: reservation.ID,
 			Manual:        req.RequiredNode != "",

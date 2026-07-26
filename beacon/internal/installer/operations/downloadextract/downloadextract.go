@@ -5,9 +5,12 @@ import (
 	"archive/zip"
 	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -18,10 +21,16 @@ import (
 )
 
 type DownloadExtract struct {
-	URL        string `json:"url"`
-	Dest       string `json:"dest"`
-	Strip      int    `json:"strip,omitempty"`
-	Timeout    int    `json:"timeout,omitempty"`
+	URL     string `json:"url"`
+	Dest    string `json:"dest"`
+	Strip   int    `json:"strip,omitempty"`
+	Timeout int    `json:"timeout,omitempty"`
+	// ExpectedSHA256 is an optional hex-encoded SHA-256 digest of the
+	// downloaded archive. When set, the archive is hashed in full before
+	// any of its contents are extracted; a mismatch aborts the operation
+	// and deletes the downloaded artifact. When empty, integrity
+	// verification is skipped and a warning is logged.
+	ExpectedSHA256 string `json:"expectedSha256,omitempty"`
 }
 
 func init() {
@@ -68,32 +77,82 @@ func (op *DownloadExtract) Execute(ctx context.Context, serverDir string) error 
 	contentType := resp.Header.Get("Content-Type")
 	disposition := resp.Header.Get("Content-Disposition")
 
+	// Download the full archive to a temp file first so it can be hashed in
+	// its entirety and verified *before* any of its contents are extracted.
+	// Streaming straight into the extractor would mean a checksum mismatch
+	// is only discoverable after files have already been written to disk.
+	archivePath, err := op.downloadToTemp(resp.Body)
+	if err != nil {
+		return err
+	}
+	defer os.Remove(archivePath)
+
+	if err := op.verifyChecksum(archivePath); err != nil {
+		return err
+	}
+
+	archive, err := os.Open(archivePath)
+	if err != nil {
+		return fmt.Errorf("open downloaded archive: %w", err)
+	}
+	defer archive.Close()
+
 	if strings.Contains(contentType, "zip") || strings.HasSuffix(op.URL, ".zip") || strings.Contains(disposition, ".zip") {
-		return op.extractZip(ctx, resp.Body, dest)
+		return op.extractZip(ctx, archivePath, dest)
 	}
 	if strings.Contains(contentType, "gzip") || strings.HasSuffix(op.URL, ".tar.gz") || strings.HasSuffix(op.URL, ".tgz") || strings.Contains(disposition, ".tar.gz") {
-		return op.extractTarGz(resp.Body, dest)
+		return op.extractTarGz(archive, dest)
 	}
 	if strings.HasSuffix(op.URL, ".tar") || strings.Contains(contentType, "tar") {
-		return op.extractTar(resp.Body, dest)
+		return op.extractTar(archive, dest)
 	}
 	return fmt.Errorf("unsupported archive format for %q (content-type: %s)", op.URL, contentType)
 }
 
-func (op *DownloadExtract) extractZip(ctx context.Context, r io.Reader, dest string) error {
-	tmp, err := os.CreateTemp("", "gamepanel-dl-*.zip")
+// downloadToTemp copies r into a new temporary file and returns its path.
+func (op *DownloadExtract) downloadToTemp(r io.Reader) (string, error) {
+	tmp, err := os.CreateTemp("", "gamepanel-dl-*.archive")
 	if err != nil {
-		return fmt.Errorf("create temp: %w", err)
+		return "", fmt.Errorf("create temp: %w", err)
 	}
-	defer os.Remove(tmp.Name())
 	defer tmp.Close()
 
 	if _, err := io.Copy(tmp, r); err != nil {
-		return fmt.Errorf("copy to temp: %w", err)
+		_ = os.Remove(tmp.Name())
+		return "", fmt.Errorf("copy to temp: %w", err)
 	}
-	tmp.Close()
+	return tmp.Name(), nil
+}
 
-	zipReader, err := zip.OpenReader(tmp.Name())
+// verifyChecksum checks the downloaded archive's SHA-256 digest against
+// ExpectedSHA256, if one was supplied. If no checksum was supplied,
+// verification is skipped but a warning is logged so the gap is visible.
+func (op *DownloadExtract) verifyChecksum(path string) error {
+	if op.ExpectedSHA256 == "" {
+		log.Printf("[installer] warning: downloadExtract %q has no expectedSha256; integrity verification skipped", op.URL)
+		return nil
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open downloaded archive for checksum: %w", err)
+	}
+	defer f.Close()
+
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return fmt.Errorf("hash downloaded archive: %w", err)
+	}
+
+	got := hex.EncodeToString(hasher.Sum(nil))
+	if !strings.EqualFold(got, op.ExpectedSHA256) {
+		return fmt.Errorf("downloaded archive sha256 mismatch: got %s, expected %s", got, op.ExpectedSHA256)
+	}
+	return nil
+}
+
+func (op *DownloadExtract) extractZip(ctx context.Context, archivePath, dest string) error {
+	zipReader, err := zip.OpenReader(archivePath)
 	if err != nil {
 		return fmt.Errorf("open zip: %w", err)
 	}

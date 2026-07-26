@@ -50,12 +50,21 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// The DOCKER_CONFIG directory may contain docker's config.json, which
+	// can embed base64-encoded registry credentials on disk. Create it
+	// with explicit 0700 permissions (owner-only) so it is not
+	// world-discoverable via the shared /tmp namespace, and always remove
+	// it once we're done with it.
 	dockerConfigDir, err := os.MkdirTemp("", "docker-config-*")
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to create docker config"})
 		return
 	}
 	defer os.RemoveAll(dockerConfigDir)
+	if err := os.Chmod(dockerConfigDir, 0o700); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to secure docker config"})
+		return
+	}
 	dockerEnv := append(os.Environ(), "DOCKER_CONFIG="+dockerConfigDir)
 
 	if req.RegistryAuth != nil {
@@ -69,10 +78,15 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request) {
 			args = append(args, req.RegistryAuth.ServerAddress)
 		}
 
+		// The password is passed exclusively via cmd.Stdin below
+		// (--password-stdin), never via argv, so it never appears in
+		// cmd.Args, /proc/<pid>/cmdline, or process listings.
 		cmd := exec.Command("docker", args...)
 		cmd.Env = dockerEnv
+		cmd.SysProcAttr = getSysProcAttr()
 		cmd.Stdin = strings.NewReader(req.RegistryAuth.Password)
 		out, err := cmd.CombinedOutput()
+		req.RegistryAuth.Password = ""
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]string{
 				"error": fmt.Sprintf("docker login failed: %v", err),
@@ -85,6 +99,17 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 15*time.Minute)
 	defer cancel()
 
+	// docker push runs as a subprocess of this agent. getSysProcAttr() puts
+	// it in its own process group so it can be signaled/reaped
+	// independently, but this alone is NOT subprocess sandboxing: Go's
+	// exec.Cmd cannot itself apply seccomp filters, drop Linux
+	// capabilities, or apply resource limits (cgroups/rlimits) to the
+	// child. For real isolation, run the whole beacon agent under a
+	// hardened systemd unit (NoNewPrivileges=yes, ProtectSystem=strict,
+	// ProtectHome=yes, CapabilityBoundingSet=, MemoryMax=/CPUQuota=,
+	// PrivateTmp=yes) or an equivalent container/namespace policy, so
+	// that docker (and everything it spawns) inherits those restrictions
+	// as defense in depth.
 	cmd := exec.CommandContext(ctx, "docker", "push", req.ImageRef)
 	cmd.Env = dockerEnv
 	cmd.SysProcAttr = getSysProcAttr()
@@ -183,6 +208,10 @@ func (s *Server) handleRegistryLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer os.RemoveAll(dockerConfigDir)
+	if err := os.Chmod(dockerConfigDir, 0o700); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to secure docker config"})
+		return
+	}
 
 	args := []string{"login"}
 	if req.Username != "" {
@@ -194,10 +223,14 @@ func (s *Server) handleRegistryLogin(w http.ResponseWriter, r *http.Request) {
 		args = append(args, req.ServerAddress)
 	}
 
+	// The password is passed exclusively via cmd.Stdin (--password-stdin),
+	// never via argv, so it never appears in cmd.Args or process listings.
 	cmd := exec.Command("docker", args...)
 	cmd.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfigDir)
+	cmd.SysProcAttr = getSysProcAttr()
 	cmd.Stdin = strings.NewReader(req.Password)
 	out, err := cmd.CombinedOutput()
+	req.Password = ""
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{
 			"error": fmt.Sprintf("docker login failed: %v", err),

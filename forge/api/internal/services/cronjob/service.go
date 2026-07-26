@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -154,11 +155,44 @@ func (s *Service) executeJob(ctx context.Context, jobID string) {
 	}
 }
 
+// defaultMaxCronTimeoutSeconds bounds how long a single cron job execution is
+// allowed to run when the job's configured timeout is missing or invalid.
+// This is a defense-in-depth safeguard so a misconfigured job can't run (or
+// hang) indefinitely.
+const defaultMaxCronTimeoutSeconds = 3600 // 1 hour
+
+// runShellCommand executes an administrator-configured cron job command via
+// "sh -c". This is intentionally unsanitized: cron jobs are free-form shell
+// commands by design (pipelines, redirection, env expansion, etc.), so
+// rejecting "dangerous" shell metacharacters would break legitimate use cases
+// without meaningfully improving security.
+//
+// Security posture (defense-in-depth, since arbitrary shell execution here is
+// intentional functionality, not a bug):
+//   - Authorization: creating/editing cron jobs MUST be restricted to
+//     admin/owner roles at the HTTP handler layer. This function trusts that
+//     anything it is asked to execute has already been authored by a
+//     trusted, privileged operator - it does not re-validate the command
+//     text itself.
+//   - Bounded execution: every invocation runs under a hard timeout so a
+//     runaway or hung command cannot block the scheduler indefinitely.
+//   - Minimal environment: the child process inherits a scrubbed environment
+//     (only PATH/HOME) rather than the full environment of the API process,
+//     reducing the blast radius if a command is compromised or malicious
+//     (e.g. it cannot read unrelated secrets present in the parent
+//     process's environment).
 func (s *Service) runShellCommand(command string, timeoutSeconds int) (int, string, string) {
+	if timeoutSeconds <= 0 {
+		timeoutSeconds = defaultMaxCronTimeoutSeconds
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	cmd.Env = []string{
+		"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+		"HOME=/tmp",
+	}
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
@@ -185,7 +219,16 @@ func (s *Service) TriggerNow(ctx context.Context, jobID string) (store.CronJobEx
 		return store.CronJobExecution{}, err
 	}
 
-	go s.executeJob(context.Background(), jobID)
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				s.logger.Error("cron job trigger panic recovered", "job_id", jobID, "panic", r, "stack", string(buf[:n]))
+			}
+		}()
+		s.executeJob(context.Background(), jobID)
+	}()
 
 	return execution, nil
 }

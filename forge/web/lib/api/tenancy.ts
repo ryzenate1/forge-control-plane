@@ -85,6 +85,7 @@ export interface EnvVarRevision {
 }
 
 import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON } from "./http";
+import { deleteEnvVar as deleteEnvVarById } from './env-vars';
 
 // ---- Organizations ----
 
@@ -192,11 +193,12 @@ export function updateMemberPermissions(orgId: string, userId: string, permissio
 
 // ---- Environment Variables ----
 
-export function fetchEnvVars(envId: string): Promise<EnvironmentVariable[]> {
+export { fetchEnvVars, createEnvVar } from './env-vars';
+export function fetchEnvironmentEnvVars(envId: string): Promise<EnvironmentVariable[]> {
   return fetchJSON<EnvironmentVariable[]>(`/environments/${encodeURIComponent(envId)}/env-vars`);
 }
 
-export function createEnvVar(envId: string, key: string, value: string, isSensitive: boolean): Promise<EnvironmentVariable> {
+export function createEnvironmentEnvVar(envId: string, key: string, value: string, isSensitive: boolean): Promise<EnvironmentVariable> {
   return postJSON<EnvironmentVariable>(`/environments/${encodeURIComponent(envId)}/env-vars`, { key, value, isSensitive });
 }
 
@@ -204,9 +206,7 @@ export function updateEnvVar(id: string, value: string, isSensitive: boolean): P
   return putJSON<EnvironmentVariable>(`/env-vars/${encodeURIComponent(id)}`, { value, isSensitive });
 }
 
-export function deleteEnvVar(id: string): Promise<void> {
-  return deleteJSON<void>(`/env-vars/${encodeURIComponent(id)}`);
-}
+export { deleteEnvVar } from './env-vars';
 
 export function resolveEnvVars(envId: string): Promise<Record<string, string>> {
   return fetchJSON<Record<string, string>>(`/environments/${encodeURIComponent(envId)}/env-vars/resolved`);

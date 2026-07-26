@@ -1,8 +1,15 @@
 const fs = require('fs');
 const path = require('path');
 
-const dir = path.join(__dirname, 'apps/frontend/components/admin');
-const files = fs.readdirSync(dir).filter(f => f.endsWith('.tsx')).map(f => path.join(dir, f));
+const targetDir = fs.existsSync(path.join(__dirname, '../forge/web/components/admin'))
+  ? path.join(__dirname, '../forge/web/components/admin')
+  : path.join(__dirname, '../apps/frontend/components/admin');
+
+if (!fs.existsSync(targetDir)) {
+  console.log('Target directory not found:', targetDir);
+  process.exit(0);
+}
+const files = fs.readdirSync(targetDir).filter(f => f.endsWith('.tsx')).map(f => path.join(targetDir, f));
 let total = 0;
 
 for (const f of files) {

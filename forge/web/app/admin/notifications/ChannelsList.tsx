@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Globe, MessageSquare, Mail, Send, Terminal, Trash2, Plus, RefreshCw, Zap, Edit2, Play, Pause } from "lucide-react";
+import { Bell, Globe, MessageSquare, Mail, Send, Trash2, Plus, Edit2 } from "lucide-react";
 import {
   fetchNotificationChannels,
   createNotificationChannel,
@@ -47,7 +47,6 @@ export function ChannelsList() {
   const qc = useQueryClient();
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
-  const [detailId, setDetailId] = useState<string | null>(null);
 
   // Create/Edit form state
   const [type, setType] = useState<NotificationChannelType>("slack");

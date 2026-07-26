@@ -6,7 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerSFTPRoutes(protected fiber.Router, cfg Config) {
+func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
 	admin := protected.Group("/admin", requireRole("admin"))
 
 	admin.Get("/sftp/settings", func(c *fiber.Ctx) error {
@@ -22,7 +22,7 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(settings)
 	})
 
-	admin.Put("/sftp/settings", func(c *fiber.Ctx) error {
+	admin.Put("/sftp/settings", mutationLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

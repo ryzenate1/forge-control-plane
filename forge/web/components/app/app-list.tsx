@@ -3,7 +3,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Server } from "lucide-react";
 import { fetchApps, type ApiApp } from "@/lib/api/apps";
-import { Cpu, MemoryStick, HardDrive } from "lucide-react";
 import { SkeletonList, EmptyList, ErrorAlert } from "@/components/shared";
 import type { ReactNode } from "react";
 

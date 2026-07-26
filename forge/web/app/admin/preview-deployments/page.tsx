@@ -3,10 +3,10 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ExternalLink, GitPullRequest, Globe, Play, Trash2,
+  ExternalLink, GitPullRequest, Play, Trash2,
 } from "lucide-react";
 import { fetchJSON, postJSON } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { formatDate } from "@/lib/utils";
 
 type PreviewDeployment = {

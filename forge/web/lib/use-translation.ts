@@ -1,10 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
-import { DEFAULT_I18N_CONFIG, type Locale } from "@/lib/api/shared-types";
-
-// TODO: Bridge solution - replace with proper next-intl integration
-// See: https://next-intl.dev/docs/getting-started/app-router
+import { useCallback, useEffect, useRef, useState } from "react";
+import { DEFAULT_I18N_CONFIG, type Locale } from "@forge/shared-types";
 
 type Messages = Record<string, unknown>;
 
@@ -17,8 +14,14 @@ function resolveNested(obj: unknown, path: string): unknown {
   }, obj);
 }
 
-function interpolate(str: string, args?: Record<string, string | number>): string {
+export function interpolate(str: string, args?: Record<string, string | number> | (string | number)[]): string {
   if (!args) return str;
+  if (Array.isArray(args)) {
+    return str.replace(/\{(\d+)\}/g, (_, index: string) => {
+      const value = args[Number(index)];
+      return value == null ? `{${index}}` : String(value);
+    });
+  }
   return str.replace(/\{(\w+)\}/g, (_, key) => {
     const val = args[key];
     return val != null ? String(val) : `{${key}}`;
@@ -39,29 +42,47 @@ export function useTranslation() {
   const [locale, setLocale] = useState<Locale>(getInitialLocale);
   const [messages, setMessages] = useState<Messages | null>(null);
   const [loading, setLoading] = useState(true);
+  const translationCache = useRef(new Map<Locale, Messages>()).current;
 
   useEffect(() => {
+    const cached = translationCache.get(locale);
+    if (cached) {
+      setMessages(cached);
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     setLoading(true);
-    fetch(`/api/i18n/${locale}`)
+    fetch(`/api/i18n/${locale}`, { signal: controller.signal })
       .then((res) => {
         if (!res.ok) throw new Error(`Failed to load locale: ${locale}`);
         return res.json();
       })
       .then((data) => {
-        setMessages(data as Messages);
+        const nextMessages = data as Messages;
+        translationCache.set(locale, nextMessages);
+        setMessages(nextMessages);
       })
-      .catch(() => {
-        // Fallback: try English
-        fetch("/api/i18n/en")
+      .catch((err) => {
+        if (err?.name === "AbortError") return;
+        fetch("/api/i18n/en", { signal: controller.signal })
           .then((res) => res.json())
-          .then((data) => setMessages(data as Messages))
-          .catch(() => setMessages({}));
+          .then((data) => {
+            setMessages(data as Messages);
+          })
+          .catch((fallbackErr) => {
+            if (fallbackErr?.name === "AbortError") return;
+            setMessages((prev) => prev ?? {});
+          });
       })
-      .finally(() => setLoading(false));
-  }, [locale]);
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false);
+      });
+    return () => { controller.abort(); };
+  }, [locale, translationCache]);
 
   const t = useCallback(
-    (key: string, args?: Record<string, string | number>): string => {
+    (key: string, args?: Record<string, string | number> | (string | number)[]): string => {
       if (!messages) return key;
       const value = resolveNested(messages, key);
       if (typeof value !== "string") return key;
@@ -75,5 +96,15 @@ export function useTranslation() {
     setLocale(newLocale);
   }, []);
 
-  return { t, locale, changeLocale, loading, supportedLocales: DEFAULT_I18N_CONFIG.supportedLocales };
+  const preloadLocale = useCallback((localeToPreload: Locale) => {
+    if (translationCache.has(localeToPreload) || localeToPreload === locale) return;
+    fetch(`/api/i18n/${localeToPreload}`)
+      .then((res) => res.json())
+      .then((data) => {
+        translationCache.set(localeToPreload, data as Messages);
+      })
+      .catch(() => {});
+  }, [locale, translationCache]);
+
+  return { t, locale, changeLocale, loading, supportedLocales: DEFAULT_I18N_CONFIG.supportedLocales, preloadLocale };
 }

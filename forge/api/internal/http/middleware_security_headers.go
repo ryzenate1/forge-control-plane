@@ -1,6 +1,8 @@
 package http
 
 import (
+	"strconv"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -26,7 +28,7 @@ func DefaultSecurityHeadersConfig() SecurityHeadersConfig {
 		ContentSecurityPolicy: true,
 		ReferrerPolicy:        true,
 		PermissionsPolicy:     true,
-		CSPValue:              "default-src 'self'",
+		CSPValue:              "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 		HSTSMaxAge:            31536000,
 		FrameOptionsValue:     "DENY",
 	}
@@ -45,7 +47,7 @@ func SecurityHeadersMiddleware(cfg SecurityHeadersConfig) fiber.Handler {
 		}
 		if cfg.StrictTransport {
 			c.Set("Strict-Transport-Security",
-				"max-age="+intToStr(cfg.HSTSMaxAge)+"; includeSubDomains")
+				"max-age="+strconv.Itoa(cfg.HSTSMaxAge)+"; includeSubDomains; preload")
 		}
 		if cfg.ContentSecurityPolicy {
 			c.Set("Content-Security-Policy", cfg.CSPValue)
@@ -58,26 +60,4 @@ func SecurityHeadersMiddleware(cfg SecurityHeadersConfig) fiber.Handler {
 		}
 		return c.Next()
 	}
-}
-
-func intToStr(i int) string {
-	if i == 0 {
-		return "0"
-	}
-	var b [20]byte
-	pos := len(b)
-	neg := i < 0
-	if neg {
-		i = -i
-	}
-	for i > 0 {
-		pos--
-		b[pos] = byte('0' + i%10)
-		i /= 10
-	}
-	if neg {
-		pos--
-		b[pos] = '-'
-	}
-	return string(b[pos:])
 }

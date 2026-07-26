@@ -1,73 +1,25 @@
-# Logging override — apply with:
+# Logging override — customize logging driver and options (e.g., syslog, journald, or larger file retention)
+# Apply with:
 #   docker compose -f compose.yml -f compose.logging.yml --env-file .env up -d
 
 services:
-  postgres:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  redis:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  postgres-backup:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
   api:
     logging:
-      driver: "json-file"
+      driver: "${LOG_DRIVER:-json-file}"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"
 
   daemon:
     logging:
-      driver: "json-file"
+      driver: "${LOG_DRIVER:-json-file}"
       options:
-        max-size: "10m"
-        max-file: "3"
-
-  prometheus:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  alertmanager:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  grafana:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
-
-  caddy:
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"
 
   web:
     logging:
-      driver: "json-file"
+      driver: "${LOG_DRIVER:-json-file}"
       options:
-        max-size: "10m"
-        max-file: "3"
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"

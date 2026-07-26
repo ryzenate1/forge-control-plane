@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -222,6 +224,16 @@ func (s *Store) UpdateCertificate(ctx context.Context, id string, req UpdateCert
 		return s.GetCertificate(ctx, id)
 	}
 
+	var allowedCertificateColumns = map[string]bool{
+		"certificate": true, "expires_at": true, "auto_renew": true,
+		"updated_at": true, "private_key_encrypted": true,
+	}
+	for _, u := range updates {
+		col := strings.SplitN(u, " =", 2)[0]
+		if !allowedCertificateColumns[col] {
+			return Certificate{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	q := "UPDATE certificates SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		q += ", " + updates[i]

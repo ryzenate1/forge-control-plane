@@ -76,8 +76,11 @@ rollback_images() {
   local target_tag=$1
   header "Rolling Back Docker Images to $target_tag"
 
+  local registry="${IMAGE_REGISTRY:-ghcr.io}"
+  local owner="${IMAGE_OWNER:-${GITHUB_REPOSITORY_OWNER:-gamepanel}}"
+
   for service in forge-api forge-web beacon; do
-    local full_image="ghcr.io/${GITHUB_REPOSITORY_OWNER:-gamepanel}/gamepanel/${service}:${target_tag}"
+    local full_image="${registry}/${owner}/gamepanel/${service}:${target_tag}"
     info "Pulling $full_image..."
     docker pull "$full_image" 2>&1 | sed 's/^/  /'
     docker tag "$full_image" "infra-${service}:latest"

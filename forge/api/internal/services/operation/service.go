@@ -15,12 +15,12 @@ import (
 type Status string
 
 const (
-	StatusQueued     Status = "queued"
-	StatusRunning    Status = "running"
-	StatusSucceeded  Status = "succeeded"
-	StatusFailed     Status = "failed"
-	StatusRetrying   Status = "retrying"
-	StatusCancelled  Status = "cancelled"
+	StatusQueued    Status = "queued"
+	StatusRunning   Status = "running"
+	StatusSucceeded Status = "succeeded"
+	StatusFailed    Status = "failed"
+	StatusRetrying  Status = "retrying"
+	StatusCancelled Status = "cancelled"
 )
 
 type OperationType string
@@ -45,20 +45,20 @@ const (
 )
 
 type Operation struct {
-	ID              string          `json:"id"`
-	Kind            string          `json:"kind"`
-	ResourceType    string          `json:"resourceType"`
-	ResourceID      string          `json:"resourceId"`
-	Status          Status          `json:"status"`
-	Error           string          `json:"error,omitempty"`
-	Input           json.RawMessage `json:"input,omitempty"`
-	IdempotencyKey  string          `json:"idempotencyKey,omitempty"`
-	DesiredGen      int             `json:"desired_generation"`
-	ObservedGen     int             `json:"observed_generation"`
-	CreatedAt       time.Time       `json:"createdAt"`
-	UpdatedAt       time.Time       `json:"updatedAt"`
-	StartedAt       *time.Time      `json:"startedAt,omitempty"`
-	CompletedAt     *time.Time      `json:"completedAt,omitempty"`
+	ID             string          `json:"id"`
+	Kind           string          `json:"kind"`
+	ResourceType   string          `json:"resourceType"`
+	ResourceID     string          `json:"resourceId"`
+	Status         Status          `json:"status"`
+	Error          string          `json:"error,omitempty"`
+	Input          json.RawMessage `json:"input,omitempty"`
+	IdempotencyKey string          `json:"idempotencyKey,omitempty"`
+	DesiredGen     int             `json:"desired_generation"`
+	ObservedGen    int             `json:"observed_generation"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
+	StartedAt      *time.Time      `json:"startedAt,omitempty"`
+	CompletedAt    *time.Time      `json:"completedAt,omitempty"`
 }
 
 type Store interface {
@@ -68,17 +68,18 @@ type Store interface {
 	ListByResource(ctx context.Context, resourceType, resourceID string) ([]Operation, error)
 	ListPending(ctx context.Context, limit int) ([]Operation, error)
 	UpdateStatus(ctx context.Context, id string, status Status, errMsg string) error
+	AttemptCount(ctx context.Context, id string) (int, error)
 	Cancel(ctx context.Context, id string) error
 }
 
 type HandlerFunc func(ctx context.Context, op *Operation) error
 
 type Config struct {
-	MaxWorkers    int
-	PollInterval  time.Duration
-	MaxRetries    int
-	BaseBackoff   time.Duration
-	MaxBackoff    time.Duration
+	MaxWorkers   int
+	PollInterval time.Duration
+	MaxRetries   int
+	BaseBackoff  time.Duration
+	MaxBackoff   time.Duration
 }
 
 func DefaultConfig() Config {
@@ -215,6 +216,11 @@ func (s *Service) process(ctx context.Context, op *Operation) {
 		slog.Error("operation: failed to mark running", "id", op.ID, "error", err)
 		return
 	}
+	attemptCount, err := s.store.AttemptCount(ctx, op.ID)
+	if err != nil {
+		_ = s.store.UpdateStatus(ctx, op.ID, StatusFailed, "read attempt count: "+err.Error())
+		return
+	}
 
 	s.mu.RLock()
 	handler, ok := s.handlers[OperationType(op.Kind)]
@@ -225,28 +231,27 @@ func (s *Service) process(ctx context.Context, op *Operation) {
 		return
 	}
 
-	err := handler(opCtx, op)
+	err = handler(opCtx, op)
 	if err != nil {
-		opRetry, retryErr := s.store.Get(ctx, op.ID)
-		if retryErr == nil {
-			retryCount := 0
-			if opRetry.Status == StatusRetrying {
-				retryCount = 1
+		if attemptCount >= s.config.MaxRetries {
+			_ = s.store.UpdateStatus(ctx, op.ID, StatusFailed, err.Error())
+			return
+		}
+		backoff := s.config.BaseBackoff
+		for i := 1; i < attemptCount; i++ {
+			backoff *= 2
+			if backoff > s.config.MaxBackoff {
+				backoff = s.config.MaxBackoff
+				break
 			}
-			retryCount++
-			if retryCount > s.config.MaxRetries {
-				_ = s.store.UpdateStatus(ctx, op.ID, StatusFailed, err.Error())
-				return
-			}
-			backoff := s.config.BaseBackoff
-			for i := 1; i < retryCount; i++ {
-				backoff *= 2
-				if backoff > s.config.MaxBackoff {
-					backoff = s.config.MaxBackoff
-					break
-				}
-			}
-			time.Sleep(backoff)
+		}
+		timer := time.NewTimer(backoff)
+		defer timer.Stop()
+		select {
+		case <-ctx.Done():
+			_ = s.store.UpdateStatus(context.Background(), op.ID, StatusCancelled, ctx.Err().Error())
+			return
+		case <-timer.C:
 			_ = s.store.UpdateStatus(ctx, op.ID, StatusRetrying, err.Error())
 		}
 		return
@@ -282,14 +287,15 @@ func (s *Service) DispatchPower(ctx context.Context, serverID, signal string, id
 		id = uuid.NewSHA1(uuid.NameSpaceURL, []byte("forge-op:"+idempotencyKey)).String()
 	}
 	op := &Operation{
-		ID:           id,
-		Kind:         string(OpServerStart),
-		ResourceType: "server",
-		ResourceID:   serverID,
-		Status:       StatusQueued,
-		Input:        payload,
-		CreatedAt:    time.Now().UTC(),
-		UpdatedAt:    time.Now().UTC(),
+		ID:             id,
+		Kind:           string(OpServerStart),
+		ResourceType:   "server",
+		ResourceID:     serverID,
+		Status:         StatusQueued,
+		Input:          payload,
+		IdempotencyKey: idempotencyKey,
+		CreatedAt:      time.Now().UTC(),
+		UpdatedAt:      time.Now().UTC(),
 	}
 	switch signal {
 	case "stop":
@@ -301,6 +307,9 @@ func (s *Service) DispatchPower(ctx context.Context, serverID, signal string, id
 	}
 	if err := s.store.Create(ctx, op); err != nil {
 		return nil, err
+	}
+	if idempotencyKey != "" {
+		return s.store.Get(ctx, id)
 	}
 	return op, nil
 }

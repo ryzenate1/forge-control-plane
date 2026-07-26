@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 type EmailTrigger interface {
@@ -55,14 +56,30 @@ func (ts *TriggerService) SendPasswordReset(ctx context.Context, email, resetURL
 	return ts.worker.Enqueue(ctx, email, "Password Reset Request", text, html)
 }
 
-func (ts *TriggerService) SendWelcome(ctx context.Context, email, recipientName, password string) error {
+// SendWelcome sends the account-created email for a new user.
+//
+// Security: this MUST NOT include the user's plaintext password. Emails are
+// routinely stored well beyond the panel's control (mailbox, SMTP relay
+// logs, spam filters, forwarding rules), so any plaintext credential placed
+// in an email body is effectively a durable, hard-to-revoke leak of that
+// credential.
+//
+// setPasswordURL should be a single-use, time-limited link that lets the new
+// user set their own password (the same kind of link used by
+// SendPasswordReset). It is passed through as the template's ResetURL field
+// so the welcome email can render a "Set your password" call-to-action
+// instead of showing a temporary password.
+func (ts *TriggerService) SendWelcome(ctx context.Context, email, recipientName, setPasswordURL string) error {
+	if setPasswordURL == "" {
+		log.Printf("mail: SendWelcome called without a setPasswordURL for %s; welcome email will omit the password/setup link", email)
+	}
 	text, html, err := ts.renderer.Render(TemplateWelcome, EmailData{
 		RecipientName:  recipientName,
 		RecipientEmail: email,
 		PanelURL:       ts.panelURL,
 		CompanyName:    ts.companyName,
 		ProductName:    ts.productName,
-		NewPassword:    password,
+		ResetURL:       setPasswordURL,
 	})
 	if err != nil {
 		return err

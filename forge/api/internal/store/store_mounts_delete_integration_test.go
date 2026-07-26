@@ -247,11 +247,14 @@ func TestDeleteMountPreservesAuditLog(t *testing.T) {
 		t.Fatal(err)
 	}
 	actorID := uuid.NewString()
+	if _, err := s.db.Exec(ctx, `INSERT INTO users (id, email, password_hash, role) VALUES ($1, $2, 'hash', 'admin')`, actorID, actorID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.DeleteMount(ctx, mount.ID, &actorID); err != nil {
 		t.Fatal(err)
 	}
 	var auditCount int
-	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM audit_logs WHERE entity_type = 'mount' AND entity_id = $1`, mount.ID).Scan(&auditCount); err != nil {
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM audit_events WHERE target_type = 'mount' AND target_id = $1`, mount.ID).Scan(&auditCount); err != nil {
 		t.Fatal(err)
 	}
 	if auditCount < 1 {

@@ -182,6 +182,12 @@ func (s *Store) CreateServer(ctx context.Context, req CreateServerRequest) (Serv
 	if req.MemoryMB <= 0 {
 		req.MemoryMB = defaultMemoryMB
 	}
+	if req.IOWeight == 0 {
+		req.IOWeight = 500
+	}
+	if req.DockerLabels == nil {
+		req.DockerLabels = map[string]string{}
+	}
 	if req.MemoryMB <= 0 || req.CPUShares <= 0 || req.CPULimit < 0 || req.DiskMB <= 0 || req.DatabaseLimit < 0 || req.BackupLimit < 0 || req.AllocationLimit < 0 || req.IOWeight < 10 || req.IOWeight > 1000 || req.SwapMB < -1 {
 		return Server{}, errors.New("invalid server resource limits")
 	}

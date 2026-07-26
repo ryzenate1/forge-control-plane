@@ -97,6 +97,20 @@ func (s *Store) ListRestoreJobs(ctx context.Context, status, targetServerID, tar
 
 	whereClause := strings.Join(where, " AND ")
 
+	var allowedRestoreColumns = map[string]bool{
+		"status": true, "target_server_id": true, "target_app_id": true,
+		"target_database_id": true, "target_volume_id": true, "node_id": true,
+	}
+	for _, w := range where {
+		if !strings.Contains(w, " =") {
+			continue
+		}
+		col := strings.SplitN(w, " =", 2)[0]
+		if !allowedRestoreColumns[col] {
+			return nil, 0, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
+
 	var total int
 	err := s.db.QueryRow(ctx, "SELECT count(*) FROM backup_restores WHERE "+whereClause, args...).Scan(&total)
 	if err != nil {

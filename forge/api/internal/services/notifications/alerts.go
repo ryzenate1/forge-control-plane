@@ -70,7 +70,9 @@ func (s *AlertService) CreateAlertRule(ctx context.Context, req CreateAlertRuleR
 	if err != nil {
 		return AlertRule{}, err
 	}
-	_ = s.RefreshAlertRules(ctx)
+	if err := s.RefreshAlertRules(ctx); err != nil {
+		s.logger.Error("refresh alert rules after create", "error", err)
+	}
 	return rule, nil
 }
 
@@ -82,7 +84,9 @@ func (s *AlertService) UpdateAlertRule(ctx context.Context, id string, req Updat
 	if err != nil {
 		return AlertRule{}, err
 	}
-	_ = s.RefreshAlertRules(ctx)
+	if err := s.RefreshAlertRules(ctx); err != nil {
+		s.logger.Error("refresh alert rules after update", "error", err)
+	}
 	return rule, nil
 }
 
@@ -93,7 +97,9 @@ func (s *AlertService) DeleteAlertRule(ctx context.Context, id string) error {
 	if err := s.repo.DeleteAlertRule(ctx, id); err != nil {
 		return err
 	}
-	_ = s.RefreshAlertRules(ctx)
+	if err := s.RefreshAlertRules(ctx); err != nil {
+		s.logger.Error("refresh alert rules after delete", "error", err)
+	}
 	return nil
 }
 
@@ -330,7 +336,9 @@ func (s *AlertService) sendAlertNotifications(ctx context.Context, rule *AlertRu
 				Payload:      map[string]interface{}{"alert_rule_id": rule.ID, "message": message},
 				SentAt:       time.Now().UTC(),
 			}
-			_, _ = s.repo.CreateNotificationLog(ctx, logEntry)
+			if _, err := s.repo.CreateNotificationLog(ctx, logEntry); err != nil {
+				s.logger.Error("create notification log for failed alert", "alert_rule_id", rule.ID, "error", err)
+			}
 		} else {
 			logEntry := NotificationLog{
 				ID:          GenerateID(),
@@ -342,7 +350,9 @@ func (s *AlertService) sendAlertNotifications(ctx context.Context, rule *AlertRu
 				Payload:     map[string]interface{}{"alert_rule_id": rule.ID, "message": message},
 				SentAt:      time.Now().UTC(),
 			}
-			_, _ = s.repo.CreateNotificationLog(ctx, logEntry)
+			if _, err := s.repo.CreateNotificationLog(ctx, logEntry); err != nil {
+				s.logger.Error("create notification log for delivered alert", "alert_rule_id", rule.ID, "error", err)
+			}
 		}
 	}
 }

@@ -1,5 +1,5 @@
 CREATE TABLE IF NOT EXISTS target_groups (
-    id TEXT PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
     algorithm TEXT NOT NULL DEFAULT 'round_robin',
     port INTEGER NOT NULL,
@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS target_groups (
 );
 
 CREATE TABLE IF NOT EXISTS target_group_targets (
-    id TEXT PRIMARY KEY,
-    group_id TEXT NOT NULL REFERENCES target_groups(id) ON DELETE CASCADE,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    group_id UUID NOT NULL REFERENCES target_groups(id) ON DELETE CASCADE,
     server_id TEXT NOT NULL,
     node_id TEXT NOT NULL,
     ip TEXT NOT NULL,

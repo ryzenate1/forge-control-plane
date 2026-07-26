@@ -128,8 +128,15 @@ export async function deleteSourceDeployment(id: string): Promise<void> {
   await deleteJSON<void>(`/source-deployments/${encodeURIComponent(id)}`);
 }
 
-export async function deploySourceDeployment(id: string): Promise<void> {
-  return postJSON<void>(`/source-deployments/${encodeURIComponent(id)}/deploy`);
+export interface DeployResponse {
+  ok: boolean;
+  deployment: SourceDeployment;
+  /** Not currently returned by the backend deploy endpoint. Reserved for future async operation tracking. */
+  operationId?: string;
+}
+
+export async function deploySourceDeployment(id: string): Promise<DeployResponse> {
+  return postJSON<DeployResponse>(`/source-deployments/${encodeURIComponent(id)}/deploy`);
 }
 
 export async function cancelSourceDeployment(id: string): Promise<void> {

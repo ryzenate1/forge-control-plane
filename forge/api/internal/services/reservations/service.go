@@ -2,6 +2,8 @@ package reservations
 
 import (
 	"context"
+	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -47,6 +49,13 @@ func (m *Manager) Start(ctx context.Context) {
 	}
 	ctx, m.cancel = context.WithCancel(ctx)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				fmt.Printf("reservation manager panic: %v\nstack: %s", r, buf[:n])
+			}
+		}()
 		ticker := time.NewTicker(time.Minute)
 		defer ticker.Stop()
 		for {

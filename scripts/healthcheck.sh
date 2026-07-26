@@ -34,7 +34,11 @@ if ! docker compose version >/dev/null 2>&1; then
   fail "Docker Compose v2 not available"
 fi
 
-all_services=("postgres" "redis" "api" "web" "daemon" "prometheus" "alertmanager" "grafana")
+if services_output=$("${COMPOSE_CMD[@]}" config --services 2>/dev/null); then
+  mapfile -t all_services <<< "$services_output"
+else
+  all_services=("postgres" "redis" "api" "web" "daemon" "prometheus" "alertmanager" "grafana")
+fi
 
 for svc in "${all_services[@]}"; do
   local_status=$("${COMPOSE_CMD[@]}" ps --format json "$svc" 2>/dev/null || true)

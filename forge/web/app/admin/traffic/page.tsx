@@ -100,12 +100,20 @@ export default function AdminTrafficPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "routes"] }),
   });
 
+  const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
+
   const createPolicyMutation = useMutation({
-    mutationFn: () => postJSON("/admin/traffic/policies", { ...policyForm, config: JSON.parse(policyForm.config) }),
+    mutationFn: () => {
+      let parsedConfig: Record<string, unknown>;
+      try { parsedConfig = JSON.parse(policyForm.config) as Record<string, unknown>; }
+      catch { setPolicyConfigError("Config must be valid JSON."); throw new Error("Invalid JSON config"); }
+      return postJSON("/admin/traffic/policies", { ...policyForm, config: parsedConfig });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] });
       setShowCreatePolicy(false);
       setPolicyForm(defaultPolicyForm);
+      setPolicyConfigError(null);
     },
   });
 
@@ -281,7 +289,7 @@ export default function AdminTrafficPage() {
       )}
 
       {showCreatePolicy && (
-        <Modal title="Create Traffic Policy" onClose={() => setShowCreatePolicy(false)}>
+        <Modal title="Create Traffic Policy" onClose={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}>
           <div className="grid gap-4">
             <Input label="Name" value={policyForm.name} onChange={(v) => setPolicyForm({ ...policyForm, name: v })} placeholder="Rate limit API" />
             <div>
@@ -298,14 +306,15 @@ export default function AdminTrafficPage() {
               </select>
             </div>
             <Input label="Config (JSON)" value={policyForm.config} onChange={(v) => setPolicyForm({ ...policyForm, config: v })} placeholder='{"requests_per_second": 100}' />
+            {policyConfigError ? <p className="text-xs text-red-400">{policyConfigError}</p> : null}
             <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
               <input type="checkbox" checked={policyForm.enabled} onChange={(e) => setPolicyForm({ ...policyForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[#161b28]" />
               Enabled
             </label>
           </div>
           <ModalFooter
-            onCancel={() => setShowCreatePolicy(false)}
-            onConfirm={() => createPolicyMutation.mutate()}
+            onCancel={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}
+            onConfirm={() => { setPolicyConfigError(null); createPolicyMutation.mutate(); }}
             confirmLabel={createPolicyMutation.isPending ? "Creating..." : "Create"}
             disabled={createPolicyMutation.isPending || !policyForm.name}
           />

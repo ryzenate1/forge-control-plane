@@ -1,18 +1,12 @@
 package http
 
 import (
-	"bytes"
 	"context"
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
-	"net/http"
 	"strconv"
 	"strings"
 	"time"
@@ -167,7 +161,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		cfg.Store.DispatchWebhookEvent("node:created", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:created", map[string]any{
 			"subject_type": "node",
 			"subject_id":   node.ID,
 			"name":         node.Name,
@@ -270,7 +264,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		cfg.Store.DispatchWebhookEvent("node:updated", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:updated", map[string]any{
 			"subject_type": "node",
 			"subject_id":   node.ID,
 			"name":         node.Name,
@@ -297,7 +291,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to delete node")
 		}
-		cfg.Store.DispatchWebhookEvent("node:deleted", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:deleted", map[string]any{
 			"subject_type": "node",
 			"subject_id":   c.Params("id"),
 		})
@@ -2402,18 +2396,10 @@ func executeRecoveryRoute(coordinator *recoverysvc.Coordinator) fiber.Handler {
 	}
 }
 
-// workloadExecutionNotImplemented remains available for routes whose runtime
-// has no executor. Recovery and evacuation no longer use this handler.
-func workloadExecutionNotImplemented(operation string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		return fiber.NewError(fiber.StatusNotImplemented, operation+" is not implemented; no workload executor is available")
-	}
-}
-
 func migrationRouteError(err error) error {
-	var notImplemented *migrationservice.NotImplementedError
-	if errors.As(err, &notImplemented) {
-		return fiber.NewError(fiber.StatusNotImplemented, err.Error())
+	var unavailable *migrationservice.ExecutorUnavailableError
+	if errors.As(err, &unavailable) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 	}
 	return fiber.NewError(fiber.StatusBadRequest, err.Error())
 }

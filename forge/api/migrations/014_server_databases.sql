@@ -12,8 +12,7 @@ CREATE TABLE IF NOT EXISTS database_hosts (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE database_hosts
-    ADD COLUMN IF NOT EXISTS engine TEXT NOT NULL DEFAULT 'postgresql';
+-- engine column already defined in CREATE TABLE above
 
 CREATE TABLE IF NOT EXISTS server_databases (
     id UUID PRIMARY KEY,
@@ -32,6 +31,8 @@ CREATE TABLE IF NOT EXISTS server_databases (
 
 CREATE INDEX IF NOT EXISTS server_databases_server_id_idx ON server_databases (server_id);
 CREATE INDEX IF NOT EXISTS database_hosts_node_id_idx ON database_hosts (node_id);
+CREATE INDEX IF NOT EXISTS idx_server_databases_username ON server_databases (username);
+CREATE INDEX IF NOT EXISTS idx_database_hosts_host_port ON database_hosts (host, port);
 
 INSERT INTO database_hosts (id, node_id, engine, name, host, port, username, password, max_databases)
 SELECT '99999999-9999-9999-9999-999999999999', n.id, 'postgresql', 'Local PostgreSQL', 'postgres', 5432, 'gamepanel', '', NULL

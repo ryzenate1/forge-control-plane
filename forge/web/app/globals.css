@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -34,7 +32,7 @@
 
 * { box-sizing: border-box; }
 html { min-height: 100%; background: var(--canvas); scroll-behavior: smooth; }
-body { min-height: 100vh; margin: 0; background: var(--canvas); color: var(--text); font-family: 'Plus Jakarta Sans', system-ui, sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
+body { min-height: 100vh; margin: 0; background: var(--canvas); color: var(--text); font-family: var(--font-sans), sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
 button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
@@ -45,7 +43,7 @@ a { text-underline-offset: 3px; }
 
 @layer base {
   code, pre, kbd, samp {
-    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+    font-family: var(--font-mono), ui-monospace, monospace;
   }
 }
 

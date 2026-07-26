@@ -17,7 +17,7 @@ type DeploymentStatus string
 
 const (
 	DeploymentStatusPending   DeploymentStatus = "pending"
-	DeploymentStatusBuilding   DeploymentStatus = "building"
+	DeploymentStatusBuilding  DeploymentStatus = "building"
 	DeploymentStatusDeploying DeploymentStatus = "deploying"
 	DeploymentStatusCompleted DeploymentStatus = "completed"
 	DeploymentStatusFailed    DeploymentStatus = "failed"
@@ -26,20 +26,20 @@ const (
 
 // GitDeployment represents a Git-based deployment
 type GitDeployment struct {
-	ID             string            `json:"id"`
-	GitSourceID    string            `json:"gitSourceId"`
-	CommitSHA      string            `json:"commitSha"`
-	Branch         string            `json:"branch"`
-	Status         DeploymentStatus  `json:"status"`
-	StatusMessage  string            `json:"statusMessage,omitempty"`
-	ImageTag       string            `json:"imageTag,omitempty"`
-	BuildLog       string            `json:"buildLog,omitempty"`
-	DeployLog      string            `json:"deployLog,omitempty"`
-	Error          string            `json:"error,omitempty"`
-	StartedAt      time.Time         `json:"startedAt"`
-	CompletedAt    *time.Time        `json:"completedAt,omitempty"`
-	CreatedAt      time.Time         `json:"createdAt"`
-	UpdatedAt      time.Time         `json:"updatedAt"`
+	ID            string           `json:"id"`
+	GitSourceID   string           `json:"gitSourceId"`
+	CommitSHA     string           `json:"commitSha"`
+	Branch        string           `json:"branch"`
+	Status        DeploymentStatus `json:"status"`
+	StatusMessage string           `json:"statusMessage,omitempty"`
+	ImageTag      string           `json:"imageTag,omitempty"`
+	BuildLog      string           `json:"buildLog,omitempty"`
+	DeployLog     string           `json:"deployLog,omitempty"`
+	Error         string           `json:"error,omitempty"`
+	StartedAt     time.Time        `json:"startedAt"`
+	CompletedAt   *time.Time       `json:"completedAt,omitempty"`
+	CreatedAt     time.Time        `json:"createdAt"`
+	UpdatedAt     time.Time        `json:"updatedAt"`
 }
 
 // GitDeploymentService provides Git-based deployment functionality
@@ -58,10 +58,31 @@ type BuildServiceInterface interface {
 	GetBuildStatus(ctx context.Context, buildID string) (string, error)
 }
 
-// ComposeServiceInterface defines the interface for compose service integration
+// ComposeServiceInterface defines the interface for compose service integration.
+// It is implemented by the compose package's GitDeployAdapter, which routes
+// deployments through the live GitOpsService compose deploy path.
 type ComposeServiceInterface interface {
-	ParseCompose(content []byte, workingDir string) (*interface{}, error)
-	ValidateCompose(content []byte, workingDir string) interface{}
+	// ValidateComposeContent returns a non-nil error when the compose
+	// content fails validation.
+	ValidateComposeContent(content []byte, workingDir string) error
+	// DeployComposeFromGit performs a real compose deployment for the
+	// cloned repository and returns a human-readable deploy log.
+	DeployComposeFromGit(ctx context.Context, req ComposeGitDeployRequest) (string, error)
+}
+
+// ComposeGitDeployRequest carries everything a compose deployer needs to turn
+// a cloned git compose project into a running stack.
+type ComposeGitDeployRequest struct {
+	GitSourceID    string
+	RepositoryURL  string
+	RepositoryName string
+	Branch         string
+	CommitSHA      string
+	CloneDir       string
+	ComposeContent []byte
+	CredentialID   string
+	NodeID         string
+	UserID         string
 }
 
 // NewGitDeploymentService creates a new Git deployment service
@@ -95,16 +116,21 @@ type DeployRequest struct {
 	BuildArgs      map[string]string `json:"buildArgs,omitempty"`
 	ImageTag       string            `json:"imageTag,omitempty"`
 	ForceRebuild   bool              `json:"forceRebuild,omitempty"`
+	// NodeID selects the Beacon node for compose deployments. When empty the
+	// compose deployer falls back to its configured node resolution.
+	NodeID string `json:"nodeId,omitempty"`
+	// UserID attributes the resulting compose stack to a panel user.
+	UserID string `json:"userId,omitempty"`
 }
 
 // DeployResult represents the result of a Git deployment
 type DeployResult struct {
-	Deployment     *GitDeployment    `json:"deployment"`
-	GitSource      *store.GitSource  `json:"gitSource,omitempty"`
-	ImageTag       string            `json:"imageTag,omitempty"`
-	CommitSHA      string            `json:"commitSha,omitempty"`
-	Status         DeploymentStatus  `json:"status"`
-	Error          string            `json:"error,omitempty"`
+	Deployment *GitDeployment   `json:"deployment"`
+	GitSource  *store.GitSource `json:"gitSource,omitempty"`
+	ImageTag   string           `json:"imageTag,omitempty"`
+	CommitSHA  string           `json:"commitSha,omitempty"`
+	Status     DeploymentStatus `json:"status"`
+	Error      string           `json:"error,omitempty"`
 }
 
 // TriggerDeployment triggers a deployment from a Git source
@@ -142,21 +168,33 @@ func (s *GitDeploymentService) TriggerDeployment(ctx context.Context, req *Deplo
 
 	// Create a deployment record
 	deployment := &GitDeployment{
-		ID:        "", // Will be generated
-		GitSourceID: req.GitSourceID,
-		CommitSHA:   commitSHA,
-		Branch:      branch,
-		Status:      DeploymentStatusPending,
+		ID:            "", // Will be generated
+		GitSourceID:   req.GitSourceID,
+		CommitSHA:     commitSHA,
+		Branch:        branch,
+		Status:        DeploymentStatusPending,
 		StatusMessage: "Deployment queued",
-		StartedAt:   time.Now().UTC(),
-		CreatedAt:   time.Now().UTC(),
-		UpdatedAt:   time.Now().UTC(),
+		StartedAt:     time.Now().UTC(),
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
 	}
 
 	// Save the deployment record
 	if s.store != nil {
-		// Note: This would require a new store method to be implemented
-		// For now, we'll just log it
+		created, cerr := s.store.CreateGitDeployment(ctx, store.CreateGitDeploymentRequest{
+			GitSourceID:   deployment.GitSourceID,
+			CommitSHA:     deployment.CommitSHA,
+			Branch:        deployment.Branch,
+			Status:        string(deployment.Status),
+			StatusMessage: deployment.StatusMessage,
+			StartedAt:     deployment.StartedAt,
+		})
+		if cerr != nil {
+			return nil, fmt.Errorf("failed to persist deployment record: %w", cerr)
+		}
+		if created != nil {
+			deployment.ID = created.ID
+		}
 		s.logger.Info("Created deployment record", "deploymentId", deployment.ID)
 	}
 
@@ -170,11 +208,12 @@ func (s *GitDeploymentService) TriggerDeployment(ctx context.Context, req *Deplo
 		deployment.Status = DeploymentStatusFailed
 		deployment.Error = fmt.Sprintf("failed to clone repository: %v", err)
 		deployment.UpdatedAt = time.Now().UTC()
+		s.persistDeploymentState(ctx, deployment)
 		return &DeployResult{
 			Deployment: deployment,
-			GitSource: &gitSource,
-			Status:    DeploymentStatusFailed,
-			Error:     deployment.Error,
+			GitSource:  &gitSource,
+			Status:     DeploymentStatusFailed,
+			Error:      deployment.Error,
 		}, fmt.Errorf("failed to clone repository: %w", err)
 	}
 	defer s.deployService.CleanupClone(cloneResult.Dir)
@@ -186,6 +225,30 @@ func (s *GitDeploymentService) TriggerDeployment(ctx context.Context, req *Deplo
 
 	// Handle Dockerfile project
 	return s.handleDockerfileDeployment(ctx, req, deployment, gitSource, cloneResult)
+}
+
+// persistDeploymentState mirrors in-memory deployment state to the store.
+func (s *GitDeploymentService) persistDeploymentState(ctx context.Context, d *GitDeployment) {
+	if s.store == nil || d == nil || d.ID == "" {
+		return
+	}
+	var err error
+	switch d.Status {
+	case DeploymentStatusFailed:
+		err = s.store.FailGitDeployment(ctx, d.ID, d.Error)
+	case DeploymentStatusCompleted:
+		if d.ImageTag != "" {
+			if uerr := s.store.UpdateGitDeploymentWithImage(ctx, d.ID, d.ImageTag, d.BuildLog); uerr != nil {
+				s.logger.Warn("Failed to persist deployment image", "deploymentId", d.ID, "error", uerr)
+			}
+		}
+		err = s.store.CompleteGitDeployment(ctx, d.ID, d.DeployLog)
+	default:
+		err = s.store.UpdateGitDeployment(ctx, d.ID, string(d.Status), d.StatusMessage, d.Error)
+	}
+	if err != nil {
+		s.logger.Warn("Failed to persist deployment state", "deploymentId", d.ID, "status", d.Status, "error", err)
+	}
 }
 
 // handleComposeDeployment handles deployment for Compose projects
@@ -211,42 +274,97 @@ func (s *GitDeploymentService) handleComposeDeployment(
 			deployment.Status = DeploymentStatusFailed
 			deployment.Error = fmt.Sprintf("no Compose file found: %v", err)
 			deployment.UpdatedAt = time.Now().UTC()
+			s.persistDeploymentState(ctx, deployment)
 			return &DeployResult{
 				Deployment: deployment,
-				GitSource: &gitSource,
-				Status:    DeploymentStatusFailed,
-				Error:     deployment.Error,
+				GitSource:  &gitSource,
+				Status:     DeploymentStatusFailed,
+				Error:      deployment.Error,
 			}, fmt.Errorf("no Compose file found: %w", err)
 		}
 	}
 
-	// Validate the Compose file
+	// Validate the Compose file and fail the deployment on validation errors.
 	if s.composeService != nil {
-		validationResult := s.composeService.ValidateCompose(composeContent, cloneResult.Dir)
-		if validationResult != nil {
-			// Check if validation failed
-			// This would depend on the actual ValidateCompose return type
-			// For now, we'll assume it returns an error or validation result
+		if verr := s.composeService.ValidateComposeContent(composeContent, cloneResult.Dir); verr != nil {
+			deployment.Status = DeploymentStatusFailed
+			deployment.Error = fmt.Sprintf("compose validation failed: %v", verr)
+			deployment.UpdatedAt = time.Now().UTC()
+			s.persistDeploymentState(ctx, deployment)
+			return &DeployResult{
+				Deployment: deployment,
+				GitSource:  &gitSource,
+				Status:     DeploymentStatusFailed,
+				Error:      deployment.Error,
+			}, fmt.Errorf("compose validation failed: %w", verr)
 		}
 	}
 
-	// For Compose projects, we would typically:
-	// 1. Parse the Compose file
-	// 2. Create individual services based on the Compose configuration
-	// 3. Deploy each service
+	// A compose deployer is required for a real deployment. Fail honestly
+	// instead of reporting success for work that never happened.
+	if s.composeService == nil {
+		deployment.Status = DeploymentStatusFailed
+		deployment.Error = "compose deployments are not configured for this service; deploy git-backed compose stacks through the compose git deploy endpoint instead"
+		deployment.UpdatedAt = time.Now().UTC()
+		s.persistDeploymentState(ctx, deployment)
+		return &DeployResult{
+			Deployment: deployment,
+			GitSource:  &gitSource,
+			Status:     DeploymentStatusFailed,
+			Error:      deployment.Error,
+		}, fmt.Errorf("compose deployer not configured")
+	}
 
-	// For now, we'll just mark it as completed since the full Compose deployment
-	// would require more integration with the existing system
+	deployment.Status = DeploymentStatusDeploying
+	deployment.StatusMessage = "Deploying compose stack"
+	deployment.UpdatedAt = time.Now().UTC()
+	s.persistDeploymentState(ctx, deployment)
+
+	credentialID := ""
+	if gitSource.CredentialID != nil {
+		credentialID = *gitSource.CredentialID
+	}
+	deployLog, err := s.composeService.DeployComposeFromGit(ctx, ComposeGitDeployRequest{
+		GitSourceID:    gitSource.ID,
+		RepositoryURL:  gitSource.RepositoryURL,
+		RepositoryName: gitSource.RepositoryName,
+		Branch:         cloneResult.Branch,
+		CommitSHA:      cloneResult.CommitSHA,
+		CloneDir:       cloneResult.Dir,
+		ComposeContent: composeContent,
+		CredentialID:   credentialID,
+		NodeID:         req.NodeID,
+		UserID:         req.UserID,
+	})
+	if err != nil {
+		deployment.Status = DeploymentStatusFailed
+		deployment.Error = fmt.Sprintf("compose deploy failed: %v", err)
+		deployment.UpdatedAt = time.Now().UTC()
+		s.persistDeploymentState(ctx, deployment)
+		return &DeployResult{
+			Deployment: deployment,
+			GitSource:  &gitSource,
+			Status:     DeploymentStatusFailed,
+			Error:      deployment.Error,
+		}, fmt.Errorf("compose deploy failed: %w", err)
+	}
+
 	deployment.Status = DeploymentStatusCompleted
-	deployment.StatusMessage = "Compose project validated successfully"
+	deployment.StatusMessage = "Compose stack deployed successfully"
+	deployment.DeployLog = deployLog
 	deployment.CompletedAt = timePtr(time.Now().UTC())
 	deployment.UpdatedAt = time.Now().UTC()
+	s.persistDeploymentState(ctx, deployment)
+
+	if err := s.store.UpdateGitSourceDeploy(ctx, gitSource.ID, cloneResult.CommitSHA, "", ""); err != nil {
+		s.logger.Warn("Failed to update git source deploy info", "error", err)
+	}
 
 	return &DeployResult{
 		Deployment: deployment,
-		GitSource: &gitSource,
+		GitSource:  &gitSource,
 		CommitSHA:  cloneResult.CommitSHA,
-		Status:    DeploymentStatusCompleted,
+		Status:     DeploymentStatusCompleted,
 	}, nil
 }
 
@@ -262,6 +380,7 @@ func (s *GitDeploymentService) handleDockerfileDeployment(
 	deployment.Status = DeploymentStatusBuilding
 	deployment.StatusMessage = "Building Docker image"
 	deployment.UpdatedAt = time.Now().UTC()
+	s.persistDeploymentState(ctx, deployment)
 
 	// Build the Docker image
 	dockerfilePath := req.DockerfilePath
@@ -288,11 +407,12 @@ func (s *GitDeploymentService) handleDockerfileDeployment(
 		deployment.Status = DeploymentStatusFailed
 		deployment.Error = fmt.Sprintf("failed to build and deploy: %v", err)
 		deployment.UpdatedAt = time.Now().UTC()
+		s.persistDeploymentState(ctx, deployment)
 		return &DeployResult{
 			Deployment: deployment,
-			GitSource: &gitSource,
-			Status:    DeploymentStatusFailed,
-			Error:     deployment.Error,
+			GitSource:  &gitSource,
+			Status:     DeploymentStatusFailed,
+			Error:      deployment.Error,
 		}, fmt.Errorf("failed to build and deploy: %w", err)
 	}
 
@@ -302,6 +422,7 @@ func (s *GitDeploymentService) handleDockerfileDeployment(
 	deployment.ImageTag = imageTag
 	deployment.CompletedAt = timePtr(time.Now().UTC())
 	deployment.UpdatedAt = time.Now().UTC()
+	s.persistDeploymentState(ctx, deployment)
 
 	// Update the Git source with the latest deployment info
 	if err := s.store.UpdateGitSourceDeploy(ctx, gitSource.ID, cloneResult.CommitSHA, "", ""); err != nil {
@@ -310,10 +431,10 @@ func (s *GitDeploymentService) handleDockerfileDeployment(
 
 	return &DeployResult{
 		Deployment: deployment,
-		GitSource: &gitSource,
-		ImageTag:  imageTag,
-		CommitSHA: cloneResult.CommitSHA,
-		Status:    DeploymentStatusCompleted,
+		GitSource:  &gitSource,
+		ImageTag:   imageTag,
+		CommitSHA:  cloneResult.CommitSHA,
+		Status:     DeploymentStatusCompleted,
 	}, nil
 }
 

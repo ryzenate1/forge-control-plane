@@ -9,10 +9,13 @@ import (
 
 // DispatchWebhookEvent is retained for legacy call sites. It synchronously
 // persists the event; delivery is always performed by the durable worker.
-func (s *Store) DispatchWebhookEvent(event string, payload map[string]any) {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_ = s.EnqueueWebhookEvent(ctx, event, payload)
+func (s *Store) DispatchWebhookEvent(ctx context.Context, event string, payload map[string]any) error {
+	if ctx == nil {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+	}
+	return s.EnqueueWebhookEvent(ctx, event, payload)
 }
 
 // eventMatchesSubscription supports exact, global, and prefix wildcard event subscriptions.

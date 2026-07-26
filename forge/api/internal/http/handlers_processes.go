@@ -76,6 +76,9 @@ func registerProcessRoutes(protected fiber.Router, cfg Config, processSvc *proce
 		if req.Command == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "command is required")
 		}
+		if len(req.Command) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "command too long")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		task, err := processSvc.RunOneOffTask(ctx, c.Params("id"), req.Command)
@@ -120,6 +123,9 @@ func registerProcessRoutes(protected fiber.Router, cfg Config, processSvc *proce
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if len(req.Content) > 65536 {
+			return fiber.NewError(fiber.StatusBadRequest, "procfile content too large")
 		}
 		entries, err := process.ParseProcfile(req.Content)
 		if err != nil {

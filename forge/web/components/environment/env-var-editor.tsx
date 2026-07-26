@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Eye, EyeOff, Plus, Trash2 } from "lucide-react";
 import { Btn, Card, CardHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
 import { fetchEnvVars, createEnvVar, deleteEnvVar, type EnvVarResponse } from "@/lib/api/env-vars";
@@ -20,7 +20,7 @@ export function EnvVarEditor({
   const [value, setValue] = useState("");
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
 
-  const loadVars = async () => {
+  const loadVars = useCallback(async () => {
     if (!scopeId) return;
     setLoading(true);
     try {
@@ -29,11 +29,11 @@ export function EnvVarEditor({
     } finally {
       setLoading(false);
     }
-  };
+  }, [scopeId, scopeType]);
 
   useEffect(() => {
     loadVars();
-  }, [scopeId, scopeType]);
+  }, [loadVars]);
 
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();

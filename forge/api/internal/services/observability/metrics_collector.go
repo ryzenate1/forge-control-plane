@@ -2,6 +2,7 @@ package observability
 
 import (
 	"context"
+	"fmt"
 	"runtime"
 	"sync"
 	"time"
@@ -90,6 +91,11 @@ func (h *MetricsHistory) Latest() *SystemMetrics {
 
 func (h *MetricsHistory) StartCollection(ctx context.Context, interval time.Duration) {
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				fmt.Printf("metrics collector panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {

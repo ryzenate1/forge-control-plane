@@ -46,11 +46,11 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
             Server has crashed {crashes.length} time{crashes.length !== 1 ? "s" : ""}
           </p>
           <p className="mt-1 text-xs text-red-200/70">
-            Last crash: {new Date(lastCrash.created_at).toLocaleString()}
-            {lastCrash.exit_code !== 0 && (
-              <> · Exit code: {lastCrash.exit_code}</>
+            Last crash: {new Date(lastCrash.createdAt).toLocaleString()}
+            {lastCrash.exitCode !== 0 && (
+              <> · Exit code: {lastCrash.exitCode}</>
             )}
-            {lastCrash.oom_killed && <> · Out of memory</>}
+            {lastCrash.oomKilled && <> · Out of memory</>}
           </p>
           {recentCrashes.length > 1 && (
             <details className="mt-2">
@@ -60,10 +60,10 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
               <ul className="mt-2 space-y-1">
                 {recentCrashes.map((crash) => (
                   <li key={crash.id} className="flex items-center gap-2 font-mono text-[10px] text-red-200/40">
-                    <span>{new Date(crash.created_at).toLocaleString()}</span>
-                    {crash.exit_code !== 0 && <span className="text-red-200/60">exit={crash.exit_code}</span>}
-                    {crash.oom_killed && <span className="text-red-200/60">OOM</span>}
-                    {crash.auto_restarted && <span className="text-emerald-400/60">auto-restarted</span>}
+                    <span>{new Date(crash.createdAt).toLocaleString()}</span>
+                    {crash.exitCode !== 0 && <span className="text-red-200/60">exit={crash.exitCode}</span>}
+                    {crash.oomKilled && <span className="text-red-200/60">OOM</span>}
+                    {crash.autoRestarted && <span className="text-emerald-400/60">auto-restarted</span>}
                   </li>
                 ))}
               </ul>

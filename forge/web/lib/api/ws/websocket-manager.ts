@@ -53,6 +53,10 @@ export class WebSocketManager {
     this.config.onStatusChange = handler;
   }
 
+  set onError(handler: ((error: Event) => void) | undefined) {
+    this.config.onError = handler;
+  }
+
   private setStatus(status: ConnectionStatus) {
     this._status = status;
     this.config.onStatusChange?.(status);
@@ -104,7 +108,9 @@ export class WebSocketManager {
         const data = JSON.parse(event.data);
         this.config.onMessage?.(data);
       } catch {
-        this.config.onMessage?.(event.data);
+        if (typeof event.data === 'string') {
+          console.warn('[WebSocketManager] received non-JSON message', event.data.slice(0, 200));
+        }
       }
     };
 
@@ -186,17 +192,25 @@ export class WebSocketManager {
 
 export function useWebSocket(config: WebSocketConfig) {
   const managerRef = useRef<WebSocketManager | null>(null);
+  const { url, factory, onMessage, onStatusChange, onError, maxRetries, baseDelay, maxDelay } = config;
 
   useEffect(() => {
-    const manager = new WebSocketManager(config);
+    const manager = new WebSocketManager({ url, factory, maxRetries, baseDelay, maxDelay });
     managerRef.current = manager;
     void manager.connect();
     return () => {
       manager.disconnect();
       managerRef.current = null;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [url, factory, maxRetries, baseDelay, maxDelay]);
+
+  useEffect(() => {
+    if (managerRef.current) {
+      managerRef.current.onMessage = onMessage;
+      managerRef.current.onStatusChange = onStatusChange;
+      managerRef.current.onError = onError;
+    }
+  }, [onError, onMessage, onStatusChange]);
 
   return useMemo(
     () => ({

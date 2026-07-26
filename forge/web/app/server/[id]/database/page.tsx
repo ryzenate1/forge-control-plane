@@ -6,14 +6,9 @@ import { Database, Plus, RotateCcw, Archive, Eye } from "lucide-react";
 import { Btn, Card, CardHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
 import { useToast } from "@/components/ui/toast";
-import { useParams } from "next/navigation";
 import {
-  type DatabaseService,
-  type DatabaseServiceBackup,
   listServerDatabaseServices,
   createServiceBackup,
-  listServiceCredentials,
-  revokeServiceCredential,
   linkDatabaseServiceToServer,
   unlinkDatabaseServiceFromServer,
   listDatabaseServices,

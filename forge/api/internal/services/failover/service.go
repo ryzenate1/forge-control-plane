@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"sync"
 	"time"
 
@@ -110,6 +111,8 @@ type Service struct {
 var ErrPolicyNotFound = errors.New("failover policy not found")
 
 const activeIncidentWindow = 10 * time.Minute
+const defaultFailureWindowSec = 300
+const defaultCooldownSec = 600
 
 func New(db *store.Store, publishers ...events.Publisher) *Service {
 	var publisher events.Publisher
@@ -196,7 +199,7 @@ func (s *Service) HandleNodeOffline(ctx context.Context, nodeID string, payload 
 						ID:          uuid.New().String(),
 						Action:      action,
 						MaxFailures: 1,
-						CooldownSec: 600,
+						CooldownSec: defaultCooldownSec,
 					}
 				} else {
 					matchingPolicy.Action = action
@@ -210,7 +213,7 @@ func (s *Service) HandleNodeOffline(ctx context.Context, nodeID string, payload 
 					ID:          uuid.New().String(),
 					Action:      FailoverActionEvacuate,
 					MaxFailures: 1,
-					CooldownSec: 600,
+					CooldownSec: defaultCooldownSec,
 				}
 			} else {
 				matchingPolicy.Action = FailoverActionEvacuate
@@ -291,9 +294,11 @@ func (s *Service) CreatePolicy(ctx context.Context, policy *Policy) error {
 	policy.UpdatedAt = sp.UpdatedAt
 
 	if s.publisher != nil {
-		_ = s.publisher.Publish(ctx, events.NewEnvelope("failover_policy_created", "failover", "policy", policy.ID, map[string]any{
+		if err := s.publisher.Publish(ctx, events.NewEnvelope("failover_policy_created", "failover", "policy", policy.ID, map[string]any{
 			"nodeId": policy.NodeID, "action": policy.Action,
-		}))
+		})); err != nil {
+			log.Printf("failover: publish policy created event: %v", err)
+		}
 	}
 	return nil
 }
@@ -327,10 +332,10 @@ func applyPolicyDefaults(policy *Policy) {
 		policy.MaxFailures = 3
 	}
 	if policy.FailureWindowSec == 0 {
-		policy.FailureWindowSec = 300
+		policy.FailureWindowSec = defaultFailureWindowSec
 	}
 	if policy.CooldownSec == 0 {
-		policy.CooldownSec = 600
+		policy.CooldownSec = defaultCooldownSec
 	}
 	if policy.Action == "" {
 		policy.Action = FailoverActionEvacuate
@@ -474,9 +479,11 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 	case FailoverActionEvacuate:
 		event.Status = "evacuating"
 		if s.publisher != nil {
-			_ = s.publisher.Publish(ctx, events.NewEnvelope("node_evacuation_triggered", "failover", "node", nodeID, map[string]any{
+			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_evacuation_triggered", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "reason": message,
-			}))
+			})); err != nil {
+				log.Printf("failover: publish evacuation event: %v", err)
+			}
 		}
 		s.mu.Lock()
 		s.metrics.EvacuationsTriggered++
@@ -485,9 +492,11 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 	case FailoverActionRestart:
 		event.Status = "restarting"
 		if s.publisher != nil {
-			_ = s.publisher.Publish(ctx, events.NewEnvelope("node_restart_triggered", "failover", "node", nodeID, map[string]any{
+			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_restart_triggered", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "reason": message,
-			}))
+			})); err != nil {
+				log.Printf("failover: publish restart event: %v", err)
+			}
 		}
 		s.mu.Lock()
 		s.metrics.RestartsTriggered++
@@ -496,9 +505,11 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 	case FailoverActionNotify:
 		event.Status = "notified"
 		if s.publisher != nil {
-			_ = s.publisher.Publish(ctx, events.NewEnvelope("node_failure_notified", "failover", "node", nodeID, map[string]any{
+			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_failure_notified", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "failures": message,
-			}))
+			})); err != nil {
+				log.Printf("failover: publish notify event: %v", err)
+			}
 		}
 		s.mu.Lock()
 		s.metrics.NotificationsSent++
@@ -510,7 +521,9 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 			event.Status = "failed"
 			event.Message = message + ": " + err.Error()
 			se := toStoreEvent(event)
-			_ = s.db.CreateFailoverEvent(ctx, &se)
+			if createErr := s.db.CreateFailoverEvent(ctx, &se); createErr != nil {
+				log.Printf("failover: create failover event: %v", createErr)
+			}
 			return event, err
 		}
 	}
@@ -558,7 +571,7 @@ func (s *Service) loop(ctx context.Context) {
 			s.mu.Lock()
 			now := time.Now().UTC()
 			for id, failures := range s.failures {
-				windowStart := now.Add(-time.Duration(300) * time.Second)
+				windowStart := now.Add(-time.Duration(defaultFailureWindowSec) * time.Second)
 				var recent []time.Time
 				for _, t := range failures {
 					if t.After(windowStart) {

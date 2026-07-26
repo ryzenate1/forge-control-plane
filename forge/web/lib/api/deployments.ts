@@ -38,7 +38,7 @@ export type DeploymentRecord = {
   id: string;
   serverId: string;
   serviceId?: string;
-  status: "pending" | "running" | "done" | "error" | "cancelled";
+  status: "pending" | "running" | "done" | "completed" | "error" | "failed" | "cancelled";
   logPath?: string;
   commitHash?: string;
   commitMessage?: string;
@@ -86,35 +86,43 @@ export type RevisionDiff = {
 };
 
 export async function fetchDeploymentSteps(deploymentId: string): Promise<DeploymentStep[]> {
-  return fetchJSON<DeploymentStep[]>(`/admin/deployments/${encodeURIComponent(deploymentId)}/steps`);
+  const res = await fetchJSON<{ data: DeploymentStep[] }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/steps`);
+  return res.data;
 }
 
 export async function fetchDeploymentStep(deploymentId: string, stepId: string): Promise<DeploymentStep> {
-  return fetchJSON<DeploymentStep>(`/admin/deployments/${encodeURIComponent(deploymentId)}/steps/${encodeURIComponent(stepId)}`);
+  const res = await fetchJSON<{ data: DeploymentStep }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/steps/${encodeURIComponent(stepId)}`);
+  return res.data;
 }
 
 export async function fetchDeployment(id: string): Promise<Deployment> {
-  return fetchJSON<Deployment>(`/admin/deployments/${encodeURIComponent(id)}`);
+  const res = await fetchJSON<{ data: Deployment }>(`/admin/deployments/${encodeURIComponent(id)}`);
+  return res.data;
 }
 
 export async function fetchDeploymentRevisions(deploymentId: string): Promise<Revision[]> {
-  return fetchJSON<Revision[]>(`/admin/deployments/${encodeURIComponent(deploymentId)}/revisions`);
+  const res = await fetchJSON<{ data: Revision[] }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/revisions`);
+  return res.data;
 }
 
 export async function compareRevisions(deploymentId: string, fromId: string, toId: string): Promise<RevisionDiff> {
-  return fetchJSON<RevisionDiff>(`/admin/deployments/${encodeURIComponent(deploymentId)}/compare?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`);
+  const res = await fetchJSON<{ data: RevisionDiff }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/compare?from=${encodeURIComponent(fromId)}&to=${encodeURIComponent(toId)}`);
+  return res.data;
 }
 
 export async function rollbackToRevision(deploymentId: string, revisionId: string): Promise<Deployment> {
-  return postJSON<Deployment>(`/admin/deployments/${encodeURIComponent(deploymentId)}/revisions/${encodeURIComponent(revisionId)}/rollback`);
+  const res = await postJSON<{ data: Deployment }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/revisions/${encodeURIComponent(revisionId)}/rollback`);
+  return res.data;
 }
 
 export async function rollbackToPrevious(deploymentId: string): Promise<Deployment> {
-  return postJSON<Deployment>(`/admin/deployments/${encodeURIComponent(deploymentId)}/rollback-previous`);
+  const res = await postJSON<{ data: Deployment }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/rollback-previous`);
+  return res.data;
 }
 
 export async function cancelDeployment(deploymentId: string): Promise<Deployment> {
-  return postJSON<Deployment>(`/admin/deployments/${encodeURIComponent(deploymentId)}/cancel`);
+  const res = await postJSON<{ data: Deployment }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/cancel`);
+  return res.data;
 }
 
 export async function executeDeployment(deploymentId: string): Promise<void> {
@@ -122,24 +130,29 @@ export async function executeDeployment(deploymentId: string): Promise<void> {
 }
 
 export async function completeDeployment(deploymentId: string): Promise<Deployment> {
-  return postJSON<Deployment>(`/admin/deployments/${encodeURIComponent(deploymentId)}/complete`);
+  const res = await postJSON<{ data: Deployment }>(`/admin/deployments/${encodeURIComponent(deploymentId)}/complete`);
+  return res.data;
 }
 
 export async function fetchDeploymentRecords(serverId?: string): Promise<DeploymentRecord[]> {
   const path = serverId
     ? `/admin/deployment-history?serverId=${encodeURIComponent(serverId)}`
     : "/admin/deployment-history";
-  return fetchJSON<DeploymentRecord[]>(path);
+  const res = await fetchJSON<{ data: DeploymentRecord[] }>(path);
+  return res.data;
 }
 
 export async function fetchDeploymentRecord(id: string): Promise<DeploymentRecord> {
-  return fetchJSON<DeploymentRecord>(`/admin/deployment-history/${encodeURIComponent(id)}`);
+  const res = await fetchJSON<{ data: DeploymentRecord }>(`/admin/deployment-history/${encodeURIComponent(id)}`);
+  return res.data;
 }
 
 export async function fetchDeploymentLogs(deploymentId: string): Promise<{ id: string; content: string; createdAt: string }[]> {
-  return fetchJSON(`/admin/deployment-history/${encodeURIComponent(deploymentId)}/logs`);
+  const res = await fetchJSON<{ data: { id: string; content: string; createdAt: string }[] }>(`/admin/deployment-history/${encodeURIComponent(deploymentId)}/logs`);
+  return res.data;
 }
 
 export async function fetchRollbacks(deploymentId: string): Promise<Rollback[]> {
-  return fetchJSON<Rollback[]>(`/admin/deployment-history/${encodeURIComponent(deploymentId)}/rollbacks`);
+  const res = await fetchJSON<{ data: Rollback[] }>(`/admin/deployment-history/${encodeURIComponent(deploymentId)}/rollbacks`);
+  return res.data;
 }

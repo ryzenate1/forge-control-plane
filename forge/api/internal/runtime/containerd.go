@@ -23,7 +23,7 @@ func (r *ContainerdAdapter) Capabilities() Capabilities {
 }
 
 func (r *ContainerdAdapter) SupportsMigration() bool {
-	return r != nil && r.client != nil
+	return false
 }
 
 func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
@@ -96,7 +96,7 @@ func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, mem
 		return ErrRuntimeUnavailable
 	}
 	return r.client.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, target.ServerID, daemon.ServerConfiguration{
-		UUID: target.ServerID,
+		UUID:  target.ServerID,
 		Build: map[string]any{"memoryLimit": memoryMB, "cpuShares": cpu},
 	})
 }
@@ -158,15 +158,15 @@ func (r *ContainerdAdapter) Inspect(ctx context.Context, target Target) (Inspect
 }
 
 func (r *ContainerdAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {

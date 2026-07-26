@@ -1,12 +1,12 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Terminal as XTerm } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
-import { WebLinksAddon } from "@xterm/addon-web-links";
+import type { Terminal as XTerm } from "@xterm/xterm";
+import type { FitAddon } from "@xterm/addon-fit";
 import { Terminal as TerminalIcon, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { API_BASE_URL } from "@/lib/api/http";
 import { Card, CardHeader, SectionHeader, Btn } from "@/components/admin/admin-ui";
+import { NodeSelect } from "@/components/admin/node-select";
 import { cn } from "@/lib/utils";
 import "@xterm/xterm/css/xterm.css";
 
@@ -51,52 +51,69 @@ export default function AdminTerminalPage() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const [terminalReady, setTerminalReady] = useState(false);
   const [connected, setConnected] = useState(false);
   const [nonce, setNonce] = useState(0);
   const [error, setError] = useState("");
+  const [nodeId, setNodeId] = useState("");
 
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
 
-    const terminal = new XTerm({
-      theme: TERMINAL_THEME,
-      fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 13,
-      cursorBlink: true,
-      cursorStyle: "block",
-      allowTransparency: true,
-      rows: 30,
-      scrollback: 5000,
-    });
+    let disposed = false;
+    void Promise.all([
+      import("@xterm/xterm"),
+      import("@xterm/addon-fit"),
+      import("@xterm/addon-web-links"),
+    ]).then(([xtermModule, fitModule, linksModule]) => {
+      if (disposed || !terminalRef.current) return;
 
-    const fitAddon = new FitAddon();
-    const webLinksAddon = new WebLinksAddon();
+      const terminal = new xtermModule.Terminal({
+        theme: TERMINAL_THEME,
+        fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+        fontSize: 13,
+        cursorBlink: true,
+        cursorStyle: "block",
+        allowTransparency: true,
+        rows: 30,
+        scrollback: 5000,
+      });
+      const fitAddon = new fitModule.FitAddon();
 
-    terminal.loadAddon(fitAddon);
-    terminal.loadAddon(webLinksAddon);
+      terminal.loadAddon(fitAddon);
+      terminal.loadAddon(new linksModule.WebLinksAddon());
+      terminal.open(terminalRef.current);
 
-    terminal.open(terminalRef.current);
+      xtermRef.current = terminal;
+      fitAddonRef.current = fitAddon;
+      setTerminalReady(true);
 
-    xtermRef.current = terminal;
-    fitAddonRef.current = fitAddon;
+      terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "c") {
+          const selection = terminal.getSelection();
+          if (selection) navigator.clipboard.writeText(selection).catch(() => {});
+          return false;
+        }
+        return true;
+      });
 
-    terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "c") {
-        const selection = terminal.getSelection();
-        if (selection) navigator.clipboard.writeText(selection).catch(() => {});
-        return false;
-      }
-      return true;
-    });
-
-    terminal.onData((data) => {
-      if (wsRef.current?.readyState === WebSocket.OPEN) {
-        wsRef.current.send(data);
+      terminal.onData((data) => {
+        if (wsRef.current?.readyState === WebSocket.OPEN) {
+          wsRef.current.send(data);
+        }
+      });
+    }).catch(() => {
+      if (!disposed) {
+        setError("Terminal runtime failed to load");
       }
     });
 
     return () => {
-      terminal.dispose();
+      disposed = true;
+      xtermRef.current?.dispose();
+      xtermRef.current = null;
+      fitAddonRef.current = null;
+      setTerminalReady(false);
     };
   }, []);
 
@@ -111,7 +128,8 @@ export default function AdminTerminalPage() {
 
     let aborted = false;
 
-    const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/host/terminal/ws";
+    const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/host/terminal/ws"
+      + (nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "");
     const apiBase = API_BASE_URL;
 
     void (async () => {
@@ -178,10 +196,16 @@ export default function AdminTerminalPage() {
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [nonce]);
+  }, [nonce, nodeId, terminalReady]);
 
   const handleRetry = useCallback(() => {
     setNonce((v) => v + 1);
+  }, []);
+
+  // Switching nodes resets the reconnect backoff and re-runs the WS effect.
+  const handleNodeChange = useCallback((next: string) => {
+    reconnectAttempt.current = 0;
+    setNodeId(next);
   }, []);
 
   return (
@@ -196,6 +220,7 @@ export default function AdminTerminalPage() {
           icon={TerminalIcon}
           action={
             <div className="flex items-center gap-3">
+              <NodeSelect value={nodeId} onChange={handleNodeChange} />
               <span
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider border",

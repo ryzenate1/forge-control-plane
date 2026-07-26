@@ -132,7 +132,65 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 	if err := migrateRecoveryCodeHashes(ctx, tx); err != nil {
 		return err
 	}
+	if err := migrateBackupStorageProviderSecrets(ctx, tx, s); err != nil {
+		return err
+	}
 	return tx.Commit(ctx)
+}
+
+func migrateBackupStorageProviderSecrets(ctx context.Context, tx pgx.Tx, s *Store) error {
+	rows, err := tx.Query(ctx, `
+		SELECT id, config::text, COALESCE(config_encrypted, '')
+		FROM backup_storage_providers
+		FOR UPDATE
+	`)
+	if err != nil {
+		return fmt.Errorf("scan backup storage provider secrets: %w", err)
+	}
+	type providerSecret struct {
+		id, plaintext, encrypted string
+	}
+	var providers []providerSecret
+	for rows.Next() {
+		var provider providerSecret
+		if err := rows.Scan(&provider.id, &provider.plaintext, &provider.encrypted); err != nil {
+			rows.Close()
+			return err
+		}
+		providers = append(providers, provider)
+	}
+	if err := rows.Err(); err != nil {
+		rows.Close()
+		return err
+	}
+	rows.Close()
+	for _, provider := range providers {
+		aad := secretAAD("backup_storage_providers", provider.id, "config")
+		plaintext := provider.plaintext
+		if provider.encrypted != "" {
+			plaintext, err = s.decryptSecret(provider.encrypted, "", aad)
+			if err != nil {
+				return fmt.Errorf("decrypt backup storage provider config: %w", err)
+			}
+		}
+		if plaintext == "" {
+			plaintext = "{}"
+		}
+		if provider.encrypted == "" || s.secrets.NeedsRotation(provider.encrypted) {
+			provider.encrypted, err = s.encryptSecret(plaintext, aad)
+			if err != nil {
+				return err
+			}
+		}
+		if _, err := tx.Exec(ctx, `
+			UPDATE backup_storage_providers
+			SET config = '{}'::jsonb, config_encrypted = $2
+			WHERE id = $1
+		`, provider.id, provider.encrypted); err != nil {
+			return fmt.Errorf("persist encrypted backup storage provider config: %w", err)
+		}
+	}
+	return nil
 }
 
 // RestoreOperationalSecrets repopulates reversible legacy columns without

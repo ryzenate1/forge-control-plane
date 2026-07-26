@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"strings"
 	"testing"
@@ -130,6 +131,25 @@ func TestMemoryAdapter_Exists(t *testing.T) {
 	exists, err = adapter.Exists(ctx, "test.dat")
 	require.NoError(t, err)
 	assert.True(t, exists)
+}
+
+func TestSlogLoggerWritesFormattedEntries(t *testing.T) {
+	t.Parallel()
+
+	var output bytes.Buffer
+	logger := NewSlogLogger(slog.New(slog.NewTextHandler(&output, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+	logger.Infof("backup %s completed", "backup-1")
+	logger.Warnf("backup %s delayed", "backup-2")
+	logger.Errorf("backup %s failed", "backup-3")
+
+	logs := output.String()
+	assert.Contains(t, logs, "level=INFO")
+	assert.Contains(t, logs, "msg=\"backup backup-1 completed\"")
+	assert.Contains(t, logs, "level=WARN")
+	assert.Contains(t, logs, "msg=\"backup backup-2 delayed\"")
+	assert.Contains(t, logs, "level=ERROR")
+	assert.Contains(t, logs, "msg=\"backup backup-3 failed\"")
 }
 
 func TestMemoryAdapter_Delete(t *testing.T) {
@@ -459,19 +479,28 @@ func TestS3Adapter_InterfaceSatisfied(t *testing.T) {
 }
 
 func TestRegisteredProviders_EmptyByDefault(t *testing.T) {
-	t.Parallel()
+	providerFactoriesMu.Lock()
+	previous := providerFactories
+	providerFactories = nil
+	providerFactoriesMu.Unlock()
+	t.Cleanup(func() {
+		providerFactoriesMu.Lock()
+		providerFactories = previous
+		providerFactoriesMu.Unlock()
+	})
 	names := RegisteredProviders()
 	assert.Empty(t, names)
 }
 
 func TestRegisterAndGetProvider(t *testing.T) {
-	t.Parallel()
 	factory := func(config map[string]string) (StorageAdapter, error) {
 		return newMemoryAdapter(), nil
 	}
 	RegisterProvider("test-provider", factory)
 	defer func() {
+		providerFactoriesMu.Lock()
 		delete(providerFactories, "test-provider")
+		providerFactoriesMu.Unlock()
 	}()
 
 	names := RegisteredProviders()
@@ -768,13 +797,13 @@ func TestService_CreateDatabaseBackupRequest(t *testing.T) {
 func TestService_CreateVolumeBackupRequest(t *testing.T) {
 	t.Parallel()
 	req := CreateVolumeBackupRequest{
-		ServerID:       "server-1",
-		BackupName:     "vol-backup-1",
-		VolumeName:     "data-volume",
+		ServerID:        "server-1",
+		BackupName:      "vol-backup-1",
+		VolumeName:      "data-volume",
 		VolumeMountPath: "/mnt/data",
-		IncludePaths:   []string{"/data"},
-		Locked:         false,
-		Storage:        "gcs",
+		IncludePaths:    []string{"/data"},
+		Locked:          false,
+		Storage:         "gcs",
 	}
 	assert.Equal(t, "server-1", req.ServerID)
 	assert.Equal(t, "data-volume", req.VolumeName)
@@ -1233,14 +1262,14 @@ func TestScenario_ScheduledBackup(t *testing.T) {
 	svc.RegisterAdapter(adapter)
 
 	policy := store.BackupPolicy{
-		ID:           "policy-sched-1",
-		ServerID:     "server-1",
-		AppID:        "app-1",
-		Interval:     "* * * * *",
-		MaxBackups:   5,
+		ID:            "policy-sched-1",
+		ServerID:      "server-1",
+		AppID:         "app-1",
+		Interval:      "* * * * *",
+		MaxBackups:    5,
 		RetentionDays: 7,
-		Storage:      "memory",
-		Enabled:      true,
+		Storage:       "memory",
+		Enabled:       true,
 	}
 
 	next, err := svc.NextCronRun(policy, time.Now())
@@ -1461,11 +1490,11 @@ func TestScenario_BeaconReconnect(t *testing.T) {
 // application and the cascading cleanup when the owning app is deleted.
 func TestScenario_WorkloadPolicyAppOwned(t *testing.T) {
 	policy := store.BackupPolicy{
-		ID:        "policy-app-owned",
-		ServerID:  "server-1",
-		AppID:     "app-owned-1",
-		ServiceID: "service-1",
-		Interval:  "0 0 * * *",
+		ID:         "policy-app-owned",
+		ServerID:   "server-1",
+		AppID:      "app-owned-1",
+		ServiceID:  "service-1",
+		Interval:   "0 0 * * *",
 		MaxBackups: 7,
 		Storage:    "s3",
 		Enabled:    true,
@@ -1512,13 +1541,13 @@ func TestScenario_DatabaseBackupEngine(t *testing.T) {
 // include/exclude path specifications.
 func TestScenario_VolumeBackupWithPaths(t *testing.T) {
 	req := CreateVolumeBackupRequest{
-		ServerID:       "server-1",
-		BackupName:     "vol-backup-paths",
-		VolumeName:     "app-data",
+		ServerID:        "server-1",
+		BackupName:      "vol-backup-paths",
+		VolumeName:      "app-data",
 		VolumeMountPath: "/mnt/data",
-		IncludePaths:   []string{"/data/app", "/data/config"},
-		ExcludePaths:   []string{"/data/cache", "/data/tmp"},
-		Storage:        "s3",
+		IncludePaths:    []string{"/data/app", "/data/config"},
+		ExcludePaths:    []string{"/data/cache", "/data/tmp"},
+		Storage:         "s3",
 	}
 
 	assert.Equal(t, "app-data", req.VolumeName)
@@ -1589,11 +1618,11 @@ func TestScenario_PolicyCRUD(t *testing.T) {
 	svc := New(nil)
 
 	p := &store.BackupPolicy{
-		ID:           "policy-crud-test",
-		ServerID:     "server-crud",
-		AppID:        "app-crud",
-		Interval:     "0 */6 * * *",
-		MaxBackups:   10,
+		ID:            "policy-crud-test",
+		ServerID:      "server-crud",
+		AppID:         "app-crud",
+		Interval:      "0 */6 * * *",
+		MaxBackups:    10,
 		RetentionDays: 30,
 		Storage:       "s3",
 		Enabled:       true,

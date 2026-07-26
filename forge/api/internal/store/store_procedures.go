@@ -119,8 +119,14 @@ func (s *Store) CreateProcedure(ctx context.Context, req CreateProcedureRequest)
 	if strings.TrimSpace(req.Name) == "" {
 		return Procedure{}, errors.New("name is required")
 	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Procedure{}, err
+	}
+	defer tx.Rollback(ctx)
+
 	id := uuid.NewString()
-	_, err := s.db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO procedures (id, name, description, tenant_id, enabled)
 		VALUES ($1, $2, $3, $4, $5)
 	`, id, strings.TrimSpace(req.Name), req.Description, req.TenantID, req.Enabled)
@@ -133,7 +139,7 @@ func (s *Store) CreateProcedure(ctx context.Context, req CreateProcedureRequest)
 			configRaw = []byte("{}")
 		}
 		stepID := uuid.NewString()
-		_, err = s.db.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO procedure_steps (id, procedure_id, position, name, action, config, max_retries, timeout_seconds, requires_approval, continue_on_failure, rollback_enabled)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`, stepID, id, step.Position, step.Name, step.Action, string(configRaw), step.MaxRetries, step.TimeoutSeconds, step.RequiresApproval, step.ContinueOnFailure, step.RollbackEnabled)
@@ -146,13 +152,16 @@ func (s *Store) CreateProcedure(ctx context.Context, req CreateProcedureRequest)
 		if timezone == "" {
 			timezone = "UTC"
 		}
-		_, err = s.db.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO procedure_schedules (id, procedure_id, cron_expression, timezone, enabled)
 			VALUES ($1, $2, $3, $4, $5)
 		`, uuid.NewString(), id, strings.TrimSpace(req.Schedule.CronExpression), timezone, req.Schedule.Enabled)
 		if err != nil {
 			return Procedure{}, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Procedure{}, err
 	}
 	return s.GetProcedure(ctx, id)
 }
@@ -207,9 +216,34 @@ func (s *Store) ListProcedures(ctx context.Context, tenantID *string) ([]Procedu
 		return nil, err
 	}
 	for i := range procedures {
-		steps, err := s.ListProcedureSteps(ctx, procedures[i].ID)
+		procedures[i].Steps = []ProcedureStep{}
+	}
+	if len(procedures) > 0 {
+		procIDs := make([]string, len(procedures))
+		procMap := make(map[string]*Procedure, len(procedures))
+		for i := range procedures {
+			procIDs[i] = procedures[i].ID
+			procMap[procedures[i].ID] = &procedures[i]
+		}
+		stepRows, err := s.db.Query(ctx, `
+			SELECT id::text, procedure_id::text, position, name, action, config, max_retries, timeout_seconds, requires_approval, continue_on_failure, rollback_enabled, created_at
+			FROM procedure_steps WHERE procedure_id = ANY($1) ORDER BY position
+		`, procIDs)
 		if err == nil {
-			procedures[i].Steps = steps
+			defer stepRows.Close()
+			for stepRows.Next() {
+				var step ProcedureStep
+				var configRaw []byte
+				if err := stepRows.Scan(&step.ID, &step.ProcedureID, &step.Position, &step.Name, &step.Action, &configRaw, &step.MaxRetries, &step.TimeoutSeconds, &step.RequiresApproval, &step.ContinueOnFailure, &step.RollbackEnabled, &step.CreatedAt); err == nil {
+					step.Config = map[string]any{}
+					if len(configRaw) > 0 {
+						_ = json.Unmarshal(configRaw, &step.Config)
+					}
+					if proc, ok := procMap[step.ProcedureID]; ok {
+						proc.Steps = append(proc.Steps, step)
+					}
+				}
+			}
 		}
 	}
 	return procedures, nil
@@ -244,21 +278,32 @@ func (s *Store) UpdateProcedure(ctx context.Context, id string, req CreateProced
 	if strings.TrimSpace(req.Name) == "" {
 		return Procedure{}, errors.New("name is required")
 	}
-	_, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return Procedure{}, err
+	}
+	defer tx.Rollback(ctx)
+
+	res, err := tx.Exec(ctx, `
 		UPDATE procedures SET name=$1, description=$2, tenant_id=$3, enabled=$4, updated_at=now()
 		WHERE id=$5
 	`, strings.TrimSpace(req.Name), req.Description, req.TenantID, req.Enabled, id)
 	if err != nil {
 		return Procedure{}, err
 	}
-	_, _ = s.db.Exec(ctx, `DELETE FROM procedure_steps WHERE procedure_id = $1`, id)
+	if res.RowsAffected() == 0 {
+		return Procedure{}, errors.New("procedure not found")
+	}
+	if _, err := tx.Exec(ctx, `DELETE FROM procedure_steps WHERE procedure_id = $1`, id); err != nil {
+		return Procedure{}, err
+	}
 	for _, step := range req.Steps {
 		configRaw, _ := json.Marshal(step.Config)
 		if configRaw == nil {
 			configRaw = []byte("{}")
 		}
 		stepID := uuid.NewString()
-		_, err = s.db.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO procedure_steps (id, procedure_id, position, name, action, config, max_retries, timeout_seconds, requires_approval, continue_on_failure, rollback_enabled)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 		`, stepID, id, step.Position, step.Name, step.Action, string(configRaw), step.MaxRetries, step.TimeoutSeconds, step.RequiresApproval, step.ContinueOnFailure, step.RollbackEnabled)
@@ -271,8 +316,10 @@ func (s *Store) UpdateProcedure(ctx context.Context, id string, req CreateProced
 		if timezone == "" {
 			timezone = "UTC"
 		}
-		_, _ = s.db.Exec(ctx, `DELETE FROM procedure_schedules WHERE procedure_id = $1`, id)
-		_, err = s.db.Exec(ctx, `
+		if _, err := tx.Exec(ctx, `DELETE FROM procedure_schedules WHERE procedure_id = $1`, id); err != nil {
+			return Procedure{}, err
+		}
+		_, err = tx.Exec(ctx, `
 			INSERT INTO procedure_schedules (id, procedure_id, cron_expression, timezone, enabled)
 			VALUES ($1, $2, $3, $4, $5)
 		`, uuid.NewString(), id, strings.TrimSpace(req.Schedule.CronExpression), timezone, req.Schedule.Enabled)
@@ -280,7 +327,12 @@ func (s *Store) UpdateProcedure(ctx context.Context, id string, req CreateProced
 			return Procedure{}, err
 		}
 	} else {
-		_, _ = s.db.Exec(ctx, `DELETE FROM procedure_schedules WHERE procedure_id = $1`, id)
+		if _, err := tx.Exec(ctx, `DELETE FROM procedure_schedules WHERE procedure_id = $1`, id); err != nil {
+			return Procedure{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Procedure{}, err
 	}
 	return s.GetProcedure(ctx, id)
 }
@@ -363,8 +415,14 @@ func (s *Store) NextProcedureScheduleRunAt(ctx context.Context, now time.Time) (
 }
 
 func (s *Store) CreateProcedureExecution(ctx context.Context, procedureID, trigger string, tenantID, actorID *string) (ProcedureExecution, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return ProcedureExecution{}, err
+	}
+	defer tx.Rollback(ctx)
+
 	id := uuid.NewString()
-	_, err := s.db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO procedure_executions (id, procedure_id, status, trigger, tenant_id, actor_id)
 		VALUES ($1, $2, 'queued', $3, $4, $5)
 	`, id, procedureID, trigger, tenantID, actorID)
@@ -377,13 +435,16 @@ func (s *Store) CreateProcedureExecution(ctx context.Context, procedureID, trigg
 	}
 	for _, step := range steps {
 		stepExecID := uuid.NewString()
-		_, err = s.db.Exec(ctx, `
+		_, err = tx.Exec(ctx, `
 			INSERT INTO procedure_step_executions (id, execution_id, step_id, position, status, max_attempts)
 			VALUES ($1, $2, $3, $4, 'queued', $5)
 		`, stepExecID, id, step.ID, step.Position, step.MaxRetries)
 		if err != nil {
 			return ProcedureExecution{}, err
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return ProcedureExecution{}, err
 	}
 	return s.GetProcedureExecution(ctx, id)
 }
@@ -432,9 +493,29 @@ func (s *Store) ListProcedureExecutions(ctx context.Context, procedureID string,
 		return nil, err
 	}
 	for i := range execs {
-		steps, err := s.ListProcedureStepExecutions(ctx, execs[i].ID)
+		execs[i].Steps = []ProcedureStepExecution{}
+	}
+	if len(execs) > 0 {
+		execIDs := make([]string, len(execs))
+		execMap := make(map[string]*ProcedureExecution, len(execs))
+		for i := range execs {
+			execIDs[i] = execs[i].ID
+			execMap[execs[i].ID] = &execs[i]
+		}
+		stepRows, err := s.db.Query(ctx, `
+			SELECT id::text, execution_id::text, step_id::text, position, status, attempt, max_attempts, output, error, started_at, completed_at, operation_id::text
+			FROM procedure_step_executions WHERE execution_id = ANY($1) ORDER BY position
+		`, execIDs)
 		if err == nil {
-			execs[i].Steps = steps
+			defer stepRows.Close()
+			for stepRows.Next() {
+				var pse ProcedureStepExecution
+				if err := stepRows.Scan(&pse.ID, &pse.ExecutionID, &pse.StepID, &pse.Position, &pse.Status, &pse.Attempt, &pse.MaxAttempts, &pse.Output, &pse.Error, &pse.StartedAt, &pse.CompletedAt, &pse.OperationID); err == nil {
+					if pe, ok := execMap[pse.ExecutionID]; ok {
+						pe.Steps = append(pe.Steps, pse)
+					}
+				}
+			}
 		}
 	}
 	return execs, nil

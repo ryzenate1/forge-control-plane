@@ -129,9 +129,7 @@ type PlacementRequest struct {
 
 type PlacementDecision struct {
 	RegionID      string   `json:"regionId,omitempty"`
-	RegionIDRaw   string   `json:"region_id,omitempty"`
 	NodeID        string   `json:"nodeId"`
-	NodeIDRaw     string   `json:"node_id"`
 	AllocationID  string   `json:"allocationId,omitempty"`
 	ReservationID string   `json:"reservationId,omitempty"`
 	Manual        bool     `json:"manual"`

@@ -13,7 +13,7 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 
 	store := protected.Group("/app-store", mutationLimiter)
 
-	store.Get("/apps", func(c *fiber.Ctx) error {
+	listAppsHandler := func(c *fiber.Ctx) error {
 		category := c.Query("category")
 		search := c.Query("search")
 		apps, err := svc.ListApps(c.Context(), category, search)
@@ -21,7 +21,14 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.JSON(fiber.Map{"data": apps})
-	})
+	}
+
+	store.Get("/apps", listAppsHandler)
+	// The frontend's GET /admin/app-templates is served by the default
+	// template catalog in handlers_apphosting.go (registered earlier, so it
+	// wins in Fiber). Expose the app-store catalog on a distinct admin path
+	// instead of colliding with that route.
+	protected.Get("/admin/app-store-templates", requireRole("admin"), listAppsHandler)
 
 	store.Get("/apps/:key", func(c *fiber.Ctx) error {
 		app, err := svc.GetApp(c.Context(), c.Params("key"))

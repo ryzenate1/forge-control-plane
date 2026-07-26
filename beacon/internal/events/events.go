@@ -30,6 +30,17 @@ func NewBus() *Bus {
 // subscriber channel is full, it waits up to 10ms and then drops the oldest
 // message from the channel to make room, matching the Wings SinkPool ring
 // buffer pattern. All channel sends happen concurrently.
+//
+// Send/close invariant: Publish holds b.mu (RLock) for the entire duration
+// of every send attempt below, and Unsubscribe holds b.mu (Lock) for the
+// entire duration of its "remove from registry + close channel" operation.
+// Since a read-lock and a write-lock on the same sync.RWMutex can never be
+// held concurrently, Publish can never be sending on a channel that
+// Unsubscribe is concurrently closing, which is what would otherwise cause
+// a "send on closed channel" panic. The per-channel sends are still
+// dispatched to goroutines (and Publish waits for them via the WaitGroup
+// before releasing the lock) so that one slow/full subscriber can't block
+// delivery to the others.
 func (b *Bus) Publish(topic string, data interface{}) {
 	enc, err := json.Marshal(Event{Topic: topic, Data: data})
 	if err != nil {
@@ -79,6 +90,13 @@ func (b *Bus) Subscribe(topic string) <-chan []byte {
 
 // Unsubscribe removes a channel from the given topic's listener list and closes
 // it. If the channel is not found, this function is a no-op.
+//
+// Safety: this removal-and-close is done entirely under b.mu (Lock), and
+// Publish holds b.mu (RLock) around its entire send attempt to every
+// listener. Because those two lock modes are mutually exclusive on the
+// same sync.RWMutex, Publish can never observe a channel mid-close (or
+// send to one after it has been closed), so this can't trigger a "send on
+// closed channel" panic. See the comment on Publish for the full invariant.
 func (b *Bus) Unsubscribe(topic string, ch <-chan []byte) {
 	b.mu.Lock()
 	defer b.mu.Unlock()

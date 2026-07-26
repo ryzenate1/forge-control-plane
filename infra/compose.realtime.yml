@@ -15,9 +15,21 @@ services:
       SOKETI_APP_SECRET: "${SOKETI_APP_SECRET:?Set SOKETI_APP_SECRET in infra/.env}"
       SOKETI_METRICS_PORT: ${SOKETI_METRICS_PORT:-9601}
     ports:
-      - "6001:6001"
+      - "${SOKETI_BIND_ADDR:-127.0.0.1}:6001:6001"
     depends_on:
       redis:
         condition: service_healthy
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL

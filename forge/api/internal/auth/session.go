@@ -262,7 +262,7 @@ func GetSessionFromFiberCtx(c *fiber.Ctx) *Session {
 	return nil
 }
 
-const SessionCookieName = "__Host-forge_session_v2"
+const SessionCookieName = "__Host-forge_session"
 
 func SetSessionCookie(c *fiber.Ctx, token string, expiresAt time.Time) {
 	c.Cookie(&fiber.Cookie{

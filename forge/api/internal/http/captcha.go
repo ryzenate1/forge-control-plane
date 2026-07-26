@@ -31,6 +31,13 @@ func detectCaptchaProvider(responseField string) captchaProvider {
 	return captchaProviderRecaptcha
 }
 
+func detectCaptchaProviderFromHeader(c *fiber.Ctx) captchaProvider {
+	if c.Get("cf-turnstile-response") != "" {
+		return captchaProviderTurnstile
+	}
+	return captchaProviderRecaptcha
+}
+
 func getCaptchaVerifyURL(provider captchaProvider) string {
 	switch provider {
 	case captchaProviderTurnstile:
@@ -101,16 +108,21 @@ func CaptchaMiddleware(cfg Config) fiber.Handler {
 			return c.Next()
 		}
 
+		provider := detectCaptchaProviderFromHeader(c)
 		token := c.Get("g-recaptcha-response")
-		if token == "" {
+		if provider == captchaProviderTurnstile {
 			token = c.Get("cf-turnstile-response")
 		}
 		if token == "" {
 			var body struct {
 				RecaptchaToken string `json:"recaptchaToken"`
 			}
-			if err := c.BodyParser(&body); err == nil && body.RecaptchaToken != "" {
-				token = body.RecaptchaToken
+			bodyBytes := c.Body()
+			if len(bodyBytes) > 0 && len(bodyBytes) < 65536 {
+				if err := c.BodyParser(&body); err == nil && body.RecaptchaToken != "" {
+					token = body.RecaptchaToken
+					provider = detectCaptchaProvider(token)
+				}
 			}
 		}
 

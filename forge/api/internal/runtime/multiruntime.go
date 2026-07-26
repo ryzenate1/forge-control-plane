@@ -111,7 +111,7 @@ func (m *MultiRuntimeAdapter) ReinstallServer(ctx context.Context, target Target
 	if reinstaller, ok := rt.(Reinstaller); ok {
 		return reinstaller.ReinstallServer(ctx, target, req)
 	}
-	return InstallResponse{}, ErrNotImplemented
+	return InstallResponse{}, ErrUnsupportedRuntimeOperation
 }
 
 // SyncServerConfiguration syncs server configuration using the appropriate runtime
@@ -210,7 +210,7 @@ func (m *MultiRuntimeAdapter) PrepareMigration(ctx context.Context, req Migratio
 	if rt != nil {
 		return rt.PrepareMigration(ctx, req)
 	}
-	return MigrationResponse{}, ErrNotImplemented
+	return MigrationResponse{}, ErrMigrationManagedByControlPlane
 }
 
 // ExecuteMigration executes a migration using the default runtime
@@ -219,7 +219,7 @@ func (m *MultiRuntimeAdapter) ExecuteMigration(ctx context.Context, req Migratio
 	if rt != nil {
 		return rt.ExecuteMigration(ctx, req)
 	}
-	return MigrationResponse{}, ErrNotImplemented
+	return MigrationResponse{}, ErrMigrationManagedByControlPlane
 }
 
 // CancelMigration cancels a migration
@@ -228,7 +228,7 @@ func (m *MultiRuntimeAdapter) CancelMigration(ctx context.Context, req Migration
 	if rt != nil {
 		return rt.CancelMigration(ctx, req)
 	}
-	return MigrationResponse{}, ErrNotImplemented
+	return MigrationResponse{}, ErrMigrationManagedByControlPlane
 }
 
 // TransferClient returns the daemon client for transfer operations

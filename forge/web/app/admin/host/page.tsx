@@ -11,8 +11,6 @@ import {
   fetchHostNetwork,
   fetchHostProcesses,
   type DiskPartition,
-  type HostInfo,
-  type MemoryInfo,
   type NetworkInterface,
   type ProcessEntry,
 } from "@/lib/api/host";

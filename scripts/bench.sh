@@ -1,8 +1,10 @@
 #!/bin/bash
-set -e
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 echo "=== Running Go Benchmarks ==="
-cd forge/api
+cd "$ROOT/forge/api"
 
 echo "--- i18n benchmarks ---"
 go test -bench=. -benchmem -count=5 ./internal/services/i18n/...
@@ -16,5 +18,4 @@ go test -bench=. -benchmem -count=5 ./internal/services/health/...
 echo "--- Policy benchmarks ---"
 go test -bench=. -benchmem -count=5 ./internal/policies/...
 
-cd ../..
 echo "=== Benchmarks complete ==="

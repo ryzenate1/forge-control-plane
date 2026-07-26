@@ -8,7 +8,7 @@ import (
 )
 
 const (
-	defaultMaxRetries = 3
+	defaultMaxRetries  = 3
 	defaultBaseBackoff = 500 * time.Millisecond
 	defaultMaxBackoff  = 30 * time.Second
 )

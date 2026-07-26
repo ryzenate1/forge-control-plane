@@ -36,27 +36,27 @@ var DefaultBackoffConfig = BackoffConfig{
 }
 
 type EdgeAgent struct {
-	panelURL       string
-	nodeToken      string
-	nodeID         string
-	beaconVersion  string
+	panelURL      string
+	nodeToken     string
+	nodeID        string
+	beaconVersion string
 
 	state          EdgeState
 	stateChangedAt time.Time
 	mu             sync.RWMutex
 
-	stopCh         chan struct{}
-	stopped        chan struct{}
+	stopCh  chan struct{}
+	stopped chan struct{}
 
 	backoffCfg     BackoffConfig
 	offlineTimeout time.Duration
 	hbInterval     time.Duration
 
-	lastHeartbeat    time.Time
-	lastConnectTime  time.Time
-	connectAttempts  int64
-	reconnectCount   int64
-	offlineDetected  bool
+	lastHeartbeat   time.Time
+	lastConnectTime time.Time
+	connectAttempts int64
+	reconnectCount  int64
+	offlineDetected bool
 
 	onConnect    func()
 	onDisconnect func()
@@ -91,10 +91,13 @@ func NewEdgeAgent(panelURL, nodeToken, nodeID, beaconVersion string) *EdgeAgent 
 
 func (a *EdgeAgent) Start(ctx context.Context) {
 	defer close(a.stopped)
-	a.setState(EdgeStateConnected)
+	a.mu.Lock()
+	a.setStateLocked(EdgeStateConnected)
 	a.lastConnectTime = time.Now()
-	if a.onConnect != nil {
-		a.onConnect()
+	onConnect := a.onConnect
+	a.mu.Unlock()
+	if onConnect != nil {
+		onConnect()
 	}
 	heartbeat := time.NewTicker(a.hbInterval)
 	defer heartbeat.Stop()
@@ -119,14 +122,15 @@ func (a *EdgeAgent) Start(ctx context.Context) {
 			a.lastHeartbeat = time.Now()
 			a.mu.Unlock()
 		case <-offlineCheck.C:
-			a.mu.RLock()
+			a.mu.Lock()
 			lastHB := a.lastHeartbeat
-			a.mu.RUnlock()
-			if !lastHB.IsZero() && time.Since(lastHB) > a.offlineTimeout && !a.offlineDetected {
-				a.mu.Lock()
+			offline := !lastHB.IsZero() && time.Since(lastHB) > a.offlineTimeout && !a.offlineDetected
+			if offline {
 				a.offlineDetected = true
 				a.setStateLocked(EdgeStateOffline)
-				a.mu.Unlock()
+			}
+			a.mu.Unlock()
+			if offline {
 				log.Printf("[edge] offline detected: no heartbeat for %v", time.Since(lastHB))
 				go a.reconnectLoop(ctx)
 			}
@@ -149,10 +153,13 @@ func (a *EdgeAgent) reconnectLoop(ctx context.Context) {
 			return
 		default:
 		}
-		a.setState(EdgeStateReconnecting)
+		a.mu.Lock()
+		a.setStateLocked(EdgeStateReconnecting)
 		a.reconnectCount++
 		a.connectAttempts++
-		log.Printf("[edge] reconnecting (attempt %d, backoff %v)...", a.connectAttempts, backoff)
+		attempt := a.connectAttempts
+		a.mu.Unlock()
+		log.Printf("[edge] reconnecting (attempt %d, backoff %v)...", attempt, backoff)
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -161,12 +168,15 @@ func (a *EdgeAgent) reconnectLoop(ctx context.Context) {
 			return
 		}
 		if a.tryReconnect() {
-			a.setState(EdgeStateConnected)
+			a.mu.Lock()
+			a.setStateLocked(EdgeStateConnected)
 			a.offlineDetected = false
 			a.connectAttempts = 0
 			a.lastConnectTime = time.Now()
-			if a.onConnect != nil {
-				a.onConnect()
+			onConnect := a.onConnect
+			a.mu.Unlock()
+			if onConnect != nil {
+				onConnect()
 			}
 			return
 		}
@@ -182,9 +192,9 @@ func (a *EdgeAgent) reconnectLoop(ctx context.Context) {
 }
 
 type connectRequest struct {
-	NodeID     string `json:"nodeId"`
-	Token      string `json:"token"`
-	Version    string `json:"version"`
+	NodeID       string   `json:"nodeId"`
+	Token        string   `json:"token"`
+	Version      string   `json:"version"`
 	Capabilities []string `json:"capabilities,omitempty"`
 }
 
@@ -196,9 +206,9 @@ type connectResponse struct {
 
 func (a *EdgeAgent) tryReconnect() bool {
 	req := connectRequest{
-		NodeID:    a.nodeID,
-		Token:     a.nodeToken,
-		Version:   a.beaconVersion,
+		NodeID:  a.nodeID,
+		Token:   a.nodeToken,
+		Version: a.beaconVersion,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
@@ -238,21 +248,29 @@ func (a *EdgeAgent) tryReconnect() bool {
 
 // SetHTTPClient replaces the default HTTP client (for testing).
 func (a *EdgeAgent) SetHTTPClient(client *http.Client) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.httpClient = client
 }
 
 // SetBackoffConfig overrides the default backoff configuration.
 func (a *EdgeAgent) SetBackoffConfig(cfg BackoffConfig) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.backoffCfg = cfg
 }
 
 // SetOfflineTimeout overrides the default offline detection timeout.
 func (a *EdgeAgent) SetOfflineTimeout(timeout time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.offlineTimeout = timeout
 }
 
 // SetHBInterval overrides the default heartbeat interval.
 func (a *EdgeAgent) SetHBInterval(interval time.Duration) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
 	a.hbInterval = interval
 }
 
@@ -300,14 +318,14 @@ func (a *EdgeAgent) Stats() map[string]any {
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 	return map[string]any{
-		"state":           string(a.state),
-		"stateDurationMs": time.Since(a.stateChangedAt).Milliseconds(),
-		"lastHeartbeatMs": time.Since(a.lastHeartbeat).Milliseconds(),
-		"lastConnectMs":   time.Since(a.lastConnectTime).Milliseconds(),
-		"connectAttempts": a.connectAttempts,
-		"reconnectCount":  a.reconnectCount,
-		"offlineDetected": a.offlineDetected,
+		"state":            string(a.state),
+		"stateDurationMs":  time.Since(a.stateChangedAt).Milliseconds(),
+		"lastHeartbeatMs":  time.Since(a.lastHeartbeat).Milliseconds(),
+		"lastConnectMs":    time.Since(a.lastConnectTime).Milliseconds(),
+		"connectAttempts":  a.connectAttempts,
+		"reconnectCount":   a.reconnectCount,
+		"offlineDetected":  a.offlineDetected,
 		"offlineTimeoutMs": a.offlineTimeout.Milliseconds(),
-		"hbIntervalMs":    a.hbInterval.Milliseconds(),
+		"hbIntervalMs":     a.hbInterval.Milliseconds(),
 	}
 }

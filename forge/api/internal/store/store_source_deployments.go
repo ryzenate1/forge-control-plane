@@ -241,6 +241,18 @@ func (s *Store) UpdateSourceDeployment(ctx context.Context, id string, req Updat
 
 	add("updated_at", time.Now().UTC())
 	args = append(args, id)
+	var allowedSourceDeploymentColumns = map[string]bool{
+		"server_id": true, "git_provider_id": true, "repository": true, "branch": true,
+		"build_type": true, "build_context": true, "dockerfile_path": true,
+		"auto_deploy": true, "registry": true, "registry_credential_id": true,
+		"health_check_path": true, "health_check_port": true, "rollback_on_health_failure": true, "updated_at": true,
+	}
+	for _, set := range sets {
+		col := strings.SplitN(set, " =", 2)[0]
+		if !allowedSourceDeploymentColumns[col] {
+			return SourceDeployment{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	_, err := s.db.Exec(ctx, "UPDATE source_deployments SET "+strings.Join(sets, ", ")+
 		fmt.Sprintf(" WHERE id = $%d", len(args)), args...)
 	if err != nil {
@@ -279,7 +291,7 @@ func (s *Store) CreateDeploymentBuildLog(ctx context.Context, deploymentID, stag
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO build_logs (id, deployment_id, stage, message, created_at)
+		INSERT INTO source_build_logs (id, deployment_id, stage, message, created_at)
 		VALUES ($1, $2, $3, $4, $5)
 	`, id, deploymentID, stage, message, now)
 	if err != nil {
@@ -297,7 +309,7 @@ func (s *Store) CreateDeploymentBuildLog(ctx context.Context, deploymentID, stag
 func (s *Store) ListDeploymentBuildLogs(ctx context.Context, deploymentID string) ([]BuildLog, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, deployment_id, stage, message, COALESCE(metadata, '{}'::jsonb), created_at
-		FROM build_logs WHERE deployment_id = $1 ORDER BY created_at ASC
+		FROM source_build_logs WHERE deployment_id = $1 ORDER BY created_at ASC
 	`, deploymentID)
 	if err != nil {
 		return nil, err
@@ -315,6 +327,6 @@ func (s *Store) ListDeploymentBuildLogs(ctx context.Context, deploymentID string
 }
 
 func (s *Store) DeleteBuildLogs(ctx context.Context, deploymentID string) error {
-	_, err := s.db.Exec(ctx, `DELETE FROM build_logs WHERE deployment_id = $1`, deploymentID)
+	_, err := s.db.Exec(ctx, `DELETE FROM source_build_logs WHERE deployment_id = $1`, deploymentID)
 	return err
 }

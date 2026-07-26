@@ -47,13 +47,13 @@ func TestCrossOrgAccessRejection(t *testing.T) {
 	ctx := context.Background()
 
 	owner1, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "owner1@example.com", Password: "TestPassword123!",
+		Email: "owner1@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
 
 	owner2, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "owner2@example.com", Password: "TestPassword123!",
+		Email: "owner2@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
@@ -91,13 +91,13 @@ func TestTeamMemberCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	owner, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "teamowner@example.com", Password: "TestPassword123!",
+		Email: "teamowner@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
 
 	member, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "teammember@example.com", Password: "TestPassword123!",
+		Email: "teammember@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
@@ -135,19 +135,19 @@ func TestRoleBasedPermissions(t *testing.T) {
 	ctx := context.Background()
 
 	owner, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "rbacowner@example.com", Password: "TestPassword123!",
+		Email: "rbacowner@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
 
 	admin, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "rbacadmin@example.com", Password: "TestPassword123!",
+		Email: "rbacadmin@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
 
 	viewer, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "rbacviewer@example.com", Password: "TestPassword123!",
+		Email: "rbacviewer@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
@@ -179,7 +179,7 @@ func TestProjectCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	owner, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "projectowner@example.com", Password: "TestPassword123!",
+		Email: "projectowner@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
@@ -215,7 +215,7 @@ func TestEnvironmentCRUD(t *testing.T) {
 	ctx := context.Background()
 
 	owner, err := store.CreateUser(ctx, CreateUserRequest{
-		Email:    "envowner@example.com", Password: "TestPassword123!",
+		Email: "envowner@example.com", Password: "TestPassword123!",
 		Role: "user",
 	}, nil)
 	require.NoError(t, err)
@@ -288,16 +288,19 @@ func setupCrossTenantTest(t *testing.T, store *Store, ctx context.Context) (owne
 	// Set up a minimal node and egg for server creation
 	nodeID := uuid.NewString()
 	_, err = store.DB().Exec(ctx, `
-		INSERT INTO nodes (id, uuid, name, region, base_url, fqdn, scheme, status, daemon_listen, daemon_sftp, daemon_base, last_seen_at)
-		VALUES ($1, $1, 'cross-test-node', 'cross', 'http://localhost:9090', 'localhost', 'http', 'online', 9090, 2022, '/tmp', now())
+		INSERT INTO nodes (id, uuid, name, region, base_url, fqdn, scheme, status, daemon_listen, daemon_sftp, daemon_base, token_hash, last_seen_at)
+		VALUES ($1, $1, 'cross-test-node', 'cross', 'http://localhost:9090', 'localhost', 'http', 'online', 9090, 2022, '/tmp', 'test-token-hash', now())
 	`, nodeID)
 	require.NoError(t, err)
 
 	eggID := uuid.NewString()
+	var nestID string
+	err = store.DB().QueryRow(ctx, `SELECT id::text FROM nests WHERE name = 'Games'`).Scan(&nestID)
+	require.NoError(t, err)
 	_, err = store.DB().Exec(ctx, `
 		INSERT INTO eggs (id, nest_id, name, description, docker_images, startup, config, default_memory_mb)
-		VALUES ($1, $1, 'cross-test-egg', '', '{"test":"alpine:latest"}', '', '{}'::jsonb, 1024)
-	`, eggID)
+		VALUES ($1, $2, $3, '', '{"test":"alpine:latest"}', '', '{}'::jsonb, 1024)
+	`, eggID, nestID, "cross-test-egg-"+eggID)
 	require.NoError(t, err)
 
 	// Create servers in each org

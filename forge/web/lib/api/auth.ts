@@ -128,7 +128,7 @@ export async function changeEmail(
   newEmail: string,
   currentPassword: string,
 ): Promise<{ status: string }> {
-  return patchJSON<{ status: string }>('/auth/email/change', {
+  return patchJSON<{ status: string }>('/account/email', {
     newEmail,
     currentPassword,
   });

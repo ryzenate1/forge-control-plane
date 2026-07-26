@@ -31,6 +31,16 @@ func (f *linuxFS) openRelative(dirfd int, name string, flags int, perm os.FileMo
 	if name == "" {
 		return unix.Dup(dirfd)
 	}
+	// RESOLVE_BENEATH rejects any resolution that would escape rootfd (including
+	// via ".." or absolute components baked into a symlink target).
+	// RESOLVE_NO_MAGICLINKS rejects procfs magic links such as /proc/1/root or
+	// /proc/self/root, which is what prevents a crafted symlink inside the
+	// chroot from being used to reach the real host filesystem via /proc.
+	// RESOLVE_NO_SYMLINKS additionally rejects ordinary symlinks outright.
+	// Together these make it impossible for client-supplied SFTP paths (which
+	// are always relative, never absolute host paths - see Clean in rootfs.go)
+	// to ever be resolved outside root, so no separate /proc-specific check is
+	// required here.
 	how := &unix.OpenHow{
 		Flags:   uint64(flags | unix.O_CLOEXEC | unix.O_NOFOLLOW),
 		Mode:    uint64(perm.Perm()),

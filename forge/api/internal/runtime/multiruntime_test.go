@@ -14,25 +14,37 @@ type mockRuntime struct {
 	reinstallSupport bool
 }
 
-func (m *mockRuntime) Name() string                                 { return m.name }
-func (m *mockRuntime) Capabilities() Capabilities                   { return m.caps }
-func (m *mockRuntime) SupportsMigration() bool                      { return m.supportsMigrate }
+func (m *mockRuntime) Name() string               { return m.name }
+func (m *mockRuntime) Capabilities() Capabilities { return m.caps }
+func (m *mockRuntime) SupportsMigration() bool    { return m.supportsMigrate }
 func (m *mockRuntime) CreateServer(context.Context, Target, CreateServerRequest) (CreateResponse, error) {
 	return CreateResponse{}, nil
 }
 func (m *mockRuntime) InstallServer(context.Context, Target, InstallRequest) (InstallResponse, error) {
 	return InstallResponse{}, nil
 }
-func (m *mockRuntime) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error { return nil }
-func (m *mockRuntime) ResizeServer(context.Context, Target, int64, int64) error                   { return nil }
-func (m *mockRuntime) DeleteServer(context.Context, Target) (PowerResponse, error)                 { return PowerResponse{}, nil }
-func (m *mockRuntime) StartServer(context.Context, Target) (PowerResponse, error)                  { return PowerResponse{}, nil }
-func (m *mockRuntime) StopServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (m *mockRuntime) RestartServer(context.Context, Target) (PowerResponse, error)                { return PowerResponse{}, nil }
-func (m *mockRuntime) KillServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (m *mockRuntime) Stats(context.Context, Target) (Stats, error)                                { return Stats{}, nil }
-func (m *mockRuntime) Exists(context.Context, Target) (bool, error)                                { return true, nil }
-func (m *mockRuntime) Inspect(context.Context, Target) (Inspection, error)                         { return Inspection{}, nil }
+func (m *mockRuntime) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error {
+	return nil
+}
+func (m *mockRuntime) ResizeServer(context.Context, Target, int64, int64) error { return nil }
+func (m *mockRuntime) DeleteServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) StartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) StopServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) RestartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) KillServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) Stats(context.Context, Target) (Stats, error)        { return Stats{}, nil }
+func (m *mockRuntime) Exists(context.Context, Target) (bool, error)        { return true, nil }
+func (m *mockRuntime) Inspect(context.Context, Target) (Inspection, error) { return Inspection{}, nil }
 func (m *mockRuntime) PrepareMigration(context.Context, MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{}, ErrNotImplemented
 }

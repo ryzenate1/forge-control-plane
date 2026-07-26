@@ -2,6 +2,8 @@ package server
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,8 +26,17 @@ const (
 	EnrollmentExpired    EnrollmentState = "expired"
 )
 
+// EnrollmentToken represents a single enrollment token's lifecycle state.
+//
+// Token holds the plaintext token value. It is only ever kept in memory
+// (for the lifetime of the process) and is never persisted to disk: it is
+// tagged json:"-" so it is excluded from marshaling. Only TokenHash (the
+// hex-encoded SHA-256 digest of the token) is written to
+// enrollment_tokens.json. Incoming tokens are validated by hashing them
+// and comparing against TokenHash using a constant-time comparison.
 type EnrollmentToken struct {
-	Token      string          `json:"token"`
+	Token      string          `json:"-"`
+	TokenHash  string          `json:"tokenHash"`
 	NodeID     string          `json:"nodeId"`
 	CreatedAt  time.Time       `json:"createdAt"`
 	ExpiresAt  time.Time       `json:"expiresAt"`
@@ -34,9 +45,24 @@ type EnrollmentToken struct {
 	Reason     string          `json:"reason,omitempty"`
 }
 
+// hashToken returns the hex-encoded SHA-256 digest of a raw enrollment
+// token. Only this digest is ever persisted to disk.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
+}
+
+// tokensEqual performs a constant-time comparison of two hex-encoded
+// token hashes.
+func tokensEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// EnrollmentManager keeps tokens indexed by their SHA-256 hash (not the
+// plaintext value), so that only hashes ever need to be written to disk.
 type EnrollmentManager struct {
 	mu         sync.RWMutex
-	tokens     map[string]*EnrollmentToken
+	tokens     map[string]*EnrollmentToken // keyed by TokenHash
 	nodeIDs    map[string]*EnrollmentToken
 	storageDir string
 }
@@ -66,16 +92,18 @@ func (m *EnrollmentManager) GenerateToken(nodeID string, ttl time.Duration) (*En
 		return nil, fmt.Errorf("generate token: %w", err)
 	}
 	token := hex.EncodeToString(tokenBytes)
+	tokenHash := hashToken(token)
 
 	now := time.Now().UTC()
 	et := &EnrollmentToken{
 		Token:     token,
+		TokenHash: tokenHash,
 		NodeID:    nodeID,
 		CreatedAt: now,
 		ExpiresAt: now.Add(ttl),
 		State:     EnrollmentPending,
 	}
-	m.tokens[token] = et
+	m.tokens[tokenHash] = et
 	m.nodeIDs[nodeID] = et
 	if err := m.save(); err != nil {
 		log.Printf("[enrollment] failed to persist: %v", err)
@@ -87,8 +115,9 @@ func (m *EnrollmentManager) ValidateToken(token string) (*EnrollmentToken, error
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
-	et, ok := m.tokens[token]
-	if !ok {
+	tokenHash := hashToken(token)
+	et, ok := m.tokens[tokenHash]
+	if !ok || !tokensEqual(et.TokenHash, tokenHash) {
 		return nil, errors.New("enrollment token not found")
 	}
 	if et.State == EnrollmentRevoked {
@@ -110,7 +139,7 @@ func (m *EnrollmentManager) Approve(token, approvedBy string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	et, ok := m.tokens[token]
+	et, ok := m.tokens[hashToken(token)]
 	if !ok {
 		return errors.New("enrollment token not found")
 	}
@@ -126,7 +155,7 @@ func (m *EnrollmentManager) Reject(token, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	et, ok := m.tokens[token]
+	et, ok := m.tokens[hashToken(token)]
 	if !ok {
 		return errors.New("enrollment token not found")
 	}
@@ -142,7 +171,7 @@ func (m *EnrollmentManager) Revoke(token, reason string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	et, ok := m.tokens[token]
+	et, ok := m.tokens[hashToken(token)]
 	if !ok {
 		return errors.New("enrollment token not found")
 	}
@@ -240,7 +269,14 @@ func (m *EnrollmentManager) load() {
 		return
 	}
 	for _, et := range data.Tokens {
-		m.tokens[et.Token] = et
+		// Only TokenHash is ever persisted; plaintext tokens loaded from
+		// disk are never available here (Token is not serialized), so
+		// tokens can no longer be validated by their raw value after a
+		// restart until re-issued. Index strictly by TokenHash.
+		if et.TokenHash == "" {
+			continue
+		}
+		m.tokens[et.TokenHash] = et
 		m.nodeIDs[et.NodeID] = et
 	}
 }

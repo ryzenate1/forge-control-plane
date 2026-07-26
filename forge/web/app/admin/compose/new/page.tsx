@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
-import { Upload, CheckCircle, XCircle, AlertTriangle, Loader2, ArrowLeft } from "lucide-react";
+import { Upload, CheckCircle, XCircle, AlertTriangle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");

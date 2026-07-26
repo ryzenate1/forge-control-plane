@@ -15,11 +15,12 @@ import (
 
 // RateLimitConfig defines rate limiting configuration
 type RateLimitConfig struct {
-	Enabled       bool
-	Redis         *redis.Client
-	WindowSeconds int
-	MaxRequests   int
-	KeyPrefix     string
+	Enabled                bool
+	Redis                  *redis.Client
+	WindowSeconds          int
+	MaxRequests            int
+	KeyPrefix              string
+	FailClosedOnRedisError bool
 	// TrustedIPs bypass rate limiting entirely
 	TrustedIPs []string
 }
@@ -36,6 +37,15 @@ type memRateLimiter struct {
 }
 
 var globalMemLimiter = &memRateLimiter{bkt: make(map[string]*memBucket)}
+
+func init() {
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			globalMemLimiter.cleanup()
+		}
+	}()
+}
 
 func (m *memRateLimiter) allow(key string, maxRequests int, window time.Duration) (bool, int) {
 	m.mu.Lock()
@@ -59,6 +69,17 @@ func (m *memRateLimiter) allow(key string, maxRequests int, window time.Duration
 		remaining = 0
 	}
 	return true, remaining
+}
+
+func (m *memRateLimiter) cleanup() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for key, b := range m.bkt {
+		if now.After(b.expiresAt) {
+			delete(m.bkt, key)
+		}
+	}
 }
 
 // ExtractClientIP extracts the real client IP from request headers, respecting
@@ -96,8 +117,9 @@ func isTrustedIP(clientIP string, trustedIPs []string) bool {
 	return false
 }
 
-// RateLimiter creates a rate limiting middleware using Redis with an in-memory
-// fallback so the limiter never fails open when the backing store is unavailable.
+// RateLimiter creates a rate limiting middleware using Redis. Development can
+// fall back to memory, but production shared-limit deployments fail closed when
+// Redis is unavailable so limits cannot be bypassed per API instance.
 func RateLimiter(cfg RateLimitConfig) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Skip if rate limiting is disabled
@@ -113,12 +135,15 @@ func RateLimiter(cfg RateLimitConfig) fiber.Handler {
 		}
 
 		// Build rate limit key based on IP address and path
-		key := fmt.Sprintf("%s:ratelimit:%s:%s", cfg.KeyPrefix, clientIP, c.Path())
+		key := fmt.Sprintf("%s:ratelimit:%s", cfg.KeyPrefix, clientIP)
 		window := time.Duration(cfg.WindowSeconds) * time.Second
 
 		// Try Redis first, fall back to in-memory on any error
 		count, err := tryRedis(cfg, key, window)
 		if err != nil {
+			if cfg.FailClosedOnRedisError {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "rate limiter unavailable")
+			}
 			allowed, remaining := globalMemLimiter.allow(key, cfg.MaxRequests, window)
 			if !allowed {
 				c.Set("Retry-After", strconv.Itoa(cfg.WindowSeconds))
@@ -167,9 +192,7 @@ func tryRedis(cfg RateLimitConfig, key string, window time.Duration) (int64, err
 	if count == 1 {
 		cfg.Redis.Expire(ctx, key, window)
 	}
-	if count > int64(cfg.MaxRequests) {
-		cfg.Redis.Decr(ctx, key)
-	}
+	// Do NOT decrement on overflow - just reject. The DECR was causing a TOCTOU race.
 	return count, nil
 }
 
@@ -183,41 +206,45 @@ func getTTL(cfg RateLimitConfig, key string) (time.Duration, error) {
 }
 
 // GetRateLimitForEndpoint returns appropriate rate limit configuration for different endpoint types.
-// Rate limiting is always enabled regardless of Redis availability. When Redis is not configured,
-// the in-memory fallback is used instead of disabling rate limiting entirely.
-func GetRateLimitForEndpoint(endpointType string, redis *redis.Client) RateLimitConfig {
+// Rate limiting is always enabled. Development may use an in-memory fallback,
+// while production can require Redis for shared, cross-instance enforcement.
+func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClosedOnRedisError bool) RateLimitConfig {
 	switch endpointType {
 	case "auth":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   5,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            5,
+			KeyPrefix:              "api",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "mutation":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   30,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            30,
+			KeyPrefix:              "api",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "read":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   120,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            120,
+			KeyPrefix:              "api",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	default:
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   60,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            60,
+			KeyPrefix:              "api",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	}
 }

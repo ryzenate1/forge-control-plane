@@ -34,6 +34,7 @@ func TestOperationalSecretPlaintextMigrationIsIdempotent(t *testing.T) {
 		{`UPDATE panel_mail_settings SET smtp_password='mail-plaintext' WHERE id=TRUE`, nil},
 		{`UPDATE panel_advanced_settings SET recaptcha_secret_key='advanced-plaintext' WHERE id=TRUE`, nil},
 		{`UPDATE panel_settings_expanded SET settings='{"discordWebhookUrl":"https://discord.example/secret","slackWebhookUrl":"https://slack.example/secret","telegramBotToken":"telegram-plaintext"}' WHERE id=TRUE`, nil},
+		{`INSERT INTO backup_storage_providers (id,name,provider_type,config,enabled,is_default) VALUES ($1,'legacy-backups','s3','{"accessKeyId":"legacy-key","secretAccessKey":"legacy-secret"}',TRUE,FALSE)`, []any{uuid.NewString()}},
 	}
 	for _, statement := range statements {
 		if _, err := s.db.Exec(ctx, statement.query, statement.args...); err != nil {
@@ -56,12 +57,17 @@ func TestOperationalSecretPlaintextMigrationIsIdempotent(t *testing.T) {
 		`SELECT count(*) FROM recovery_tokens WHERE token<>'' OR token_hash NOT LIKE '$2%'`,
 		`SELECT count(*) FROM panel_settings_expanded WHERE settings ?| ARRAY['discordWebhookUrl','slackWebhookUrl','telegramBotToken']`,
 		`SELECT count(*) FROM panel_settings WHERE discord_webhook_url<>'' OR slack_webhook_url<>'' OR telegram_bot_token<>''`,
+		`SELECT count(*) FROM backup_storage_providers WHERE config<>'{}'::jsonb OR config_encrypted NOT LIKE 'forge:v1:%'`,
 	}
 	for _, query := range checks {
 		var count int
 		if err := s.db.QueryRow(ctx, query).Scan(&count); err != nil || count != 0 {
 			t.Fatalf("plaintext check %q = %d, %v", query, count, err)
 		}
+	}
+	provider, err := s.GetBackupStorageProvider(ctx, "legacy-backups")
+	if err != nil || !strings.Contains(string(provider.Config), "legacy-secret") {
+		t.Fatalf("migrated backup provider config = %s, %v", provider.Config, err)
 	}
 	token, err := s.GetNodeDaemonToken(ctx, nodeID)
 	if err != nil || token != "node-plaintext" {

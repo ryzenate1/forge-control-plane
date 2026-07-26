@@ -67,17 +67,21 @@ func (s *Service) ProbeNode(ctx context.Context, nodeID string) (NodeSystemInfor
 		info.Error = err.Error()
 		return info, nil
 	}
-	scheme := strings.TrimSpace(node.Scheme)
-	if scheme == "" {
-		scheme = "https"
-	}
 	fqdn := strings.TrimSpace(node.FQDN)
 	if fqdn == "" {
 		info.Online = false
 		info.Error = "node has no FQDN configured"
 		return info, nil
 	}
-	endpoint := fmt.Sprintf("%s://%s/api/system", scheme, fqdn)
+	baseURL := strings.TrimRight(strings.TrimSpace(node.BaseURL), "/")
+	if baseURL == "" {
+		scheme := strings.TrimSpace(node.Scheme)
+		if scheme == "" {
+			scheme = "https"
+		}
+		baseURL = fmt.Sprintf("%s://%s", scheme, fqdn)
+	}
+	endpoint := baseURL + "/api/system"
 
 	// Build an HMAC-signed request with this node's current credential.
 	token, err := s.store.GetNodeDaemonCredential(ctx, node.ID)

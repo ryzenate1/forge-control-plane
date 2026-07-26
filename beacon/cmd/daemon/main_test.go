@@ -3,14 +3,75 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"gamepanel/beacon/internal/runtime"
+	daemonhttp "gamepanel/beacon/internal/server"
 )
 
 type testPinger struct {
 	called bool
 	err    error
 }
+
+type recoveryRuntime struct {
+	starts   atomic.Int32
+	restarts atomic.Int32
+}
+
+type recoveryConsole struct{}
+
+func (*recoveryConsole) Read([]byte) (int, error)    { return 0, io.EOF }
+func (*recoveryConsole) Write(p []byte) (int, error) { return len(p), nil }
+func (*recoveryConsole) Close() error                { return nil }
+
+func (*recoveryRuntime) Create(context.Context, runtime.CreateRequest) error { return nil }
+func (*recoveryRuntime) Install(context.Context, runtime.InstallRequest) (runtime.InstallResult, error) {
+	return runtime.InstallResult{}, nil
+}
+func (*recoveryRuntime) Inspect(context.Context, string) (runtime.ContainerState, error) {
+	return runtime.ContainerState{Exists: true, Running: true}, nil
+}
+func (*recoveryRuntime) List(context.Context) ([]runtime.ContainerState, error) { return nil, nil }
+func (r *recoveryRuntime) Start(context.Context, string) error {
+	r.starts.Add(1)
+	return nil
+}
+func (*recoveryRuntime) SendCommand(context.Context, string, string) error { return nil }
+func (*recoveryRuntime) Stop(context.Context, string) error                { return nil }
+func (*recoveryRuntime) WaitForStop(context.Context, string, time.Duration, bool) error {
+	return nil
+}
+func (*recoveryRuntime) Kill(context.Context, string) error           { return nil }
+func (*recoveryRuntime) Signal(context.Context, string, string) error { return nil }
+func (r *recoveryRuntime) Restart(context.Context, string) error {
+	r.restarts.Add(1)
+	return nil
+}
+func (*recoveryRuntime) Stats(context.Context, string) (runtime.Stats, error) {
+	return runtime.Stats{}, nil
+}
+func (*recoveryRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) LogsStream(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) StatsStream(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) AttachConsole(context.Context, string) (runtime.ConsoleSession, error) {
+	return &recoveryConsole{}, nil
+}
+func (*recoveryRuntime) Delete(context.Context, string) error { return nil }
 
 func (p *testPinger) Ping(context.Context) error {
 	p.called = true
@@ -74,6 +135,35 @@ func TestPanelServerStateExtractsReconstructionFlags(t *testing.T) {
 	disk, suspended, installation = panelServerState([]byte(`{"installed":false,"disk_mb":512}`))
 	if disk != 512 || suspended || installation != "uninstalled" {
 		t.Fatalf("unexpected uninstalled panel state: disk=%d suspended=%v installation=%q", disk, suspended, installation)
+	}
+}
+
+func TestRecoverServersFromDiskRestoresPowerOperations(t *testing.T) {
+	const serverID = "123e4567-e89b-12d3-a456-426614174099"
+	dataDir := t.TempDir()
+	configDir := filepath.Join(dataDir, serverID, ".config")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "server.json"), []byte(`{"settings":{"build":{"disk_space":64}},"installed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recoveryRuntime{}
+	server, handler := daemonhttp.NewServer(rt, dataDir)
+	defer server.Shutdown()
+
+	if err := recoverServersFromDisk(context.Background(), dataDir, server); err != nil {
+		t.Fatalf("recover servers: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/servers/"+serverID+"/power", strings.NewReader(`{"signal":"restart"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected recovered server power operation to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rt.starts.Load() != 1 {
+		t.Fatalf("expected recovered restart operation to start the container once, got %d", rt.starts.Load())
 	}
 }
 

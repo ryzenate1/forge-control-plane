@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -24,6 +26,13 @@ func (s *Service) Start(parent context.Context) {
 	s.cancel = cancel
 	s.mu.Unlock()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				log.Printf("load balancer main loop panic: %v\nstack: %s", r, buf[:n])
+			}
+		}()
 		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -104,6 +113,11 @@ func (s *Service) closeAll() {
 }
 
 func (s *Service) serveTCP(ctx context.Context, groupID string, ln net.Listener) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("load balancer serveTCP panic: %v", r)
+		}
+	}()
 	for {
 		client, err := ln.Accept()
 		if err != nil {
@@ -115,6 +129,11 @@ func (s *Service) serveTCP(ctx context.Context, groupID string, ln net.Listener)
 
 func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn) {
 	defer client.Close()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("load balancer proxyTCP panic: %v", r)
+		}
+	}()
 	host, _, _ := net.SplitHostPort(client.RemoteAddr().String())
 	target, err := s.NextTarget(ctx, groupID, host)
 	if err != nil {
@@ -129,6 +148,11 @@ func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn)
 	defer s.releaseConnection(target.ID)
 	done := make(chan struct{}, 2)
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("load balancer proxyTCP copy panic: %v", r)
+			}
+		}()
 		_, _ = io.Copy(backend, client)
 		if c, ok := backend.(*net.TCPConn); ok {
 			_ = c.CloseWrite()
@@ -136,6 +160,11 @@ func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn)
 		done <- struct{}{}
 	}()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("load balancer proxyTCP copy panic: %v", r)
+			}
+		}()
 		_, _ = io.Copy(client, backend)
 		if c, ok := client.(*net.TCPConn); ok {
 			_ = c.CloseWrite()
@@ -156,9 +185,19 @@ type udpSession struct {
 }
 
 func (s *Service) serveUDP(ctx context.Context, groupID string, listener net.PacketConn) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("load balancer serveUDP panic: %v", r)
+		}
+	}()
 	sessions := map[string]*udpSession{}
 	var sessionsMu sync.Mutex
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("load balancer UDP reaper panic: %v", r)
+			}
+		}()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		for {
@@ -215,6 +254,11 @@ func (s *Service) serveUDP(ctx context.Context, groupID string, listener net.Pac
 }
 
 func relayUDPResponses(listener net.PacketConn, session *udpSession) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("load balancer relayUDPResponses panic: %v", r)
+		}
+	}()
 	buffer := make([]byte, 65535)
 	for {
 		n, err := session.backend.Read(buffer)

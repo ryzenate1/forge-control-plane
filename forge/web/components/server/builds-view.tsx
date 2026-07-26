@@ -1,14 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { AlertCircle, Code2, Eye, EyeOff, Play, RefreshCw } from "lucide-react";
+import { Code2, Eye, EyeOff, Play } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type ApiServer } from "@/lib/api/types";
 import {
   type ApiAppBuild,
-  type ApiBuildpack,
   type ApiServerBuildpack,
-  triggerBuild,
   fetchServerBuilds,
   fetchBuild,
   fetchBuildpacks,
@@ -67,15 +65,9 @@ export function BuildsView({ server }: { server?: ApiServer }) {
     enabled: Boolean(serverId && selectedBuildId),
   });
 
-  const invalidate = () => {
-    void queryClient.invalidateQueries({ queryKey: ["server-builds", serverId] });
-  };
-
-  const triggerMutation = useMutation({
-    mutationFn: () => triggerBuild(serverId, selectedBuildpackId || undefined),
-    onSuccess: invalidate,
-  });
-
+  // Buildpack builds are not wired to a real build executor yet; the backend
+  // fails them honestly, so the trigger is disabled here rather than offering
+  // an action guaranteed to fail.
   const assignMutation = useMutation({
     mutationFn: (buildpackId: string) => assignBuildpackToServer(serverId, buildpackId),
     onSuccess: () => {
@@ -90,7 +82,7 @@ export function BuildsView({ server }: { server?: ApiServer }) {
     },
   });
 
-  const actionError = triggerMutation.error ?? assignMutation.error ?? removeMutation.error;
+  const actionError = assignMutation.error ?? removeMutation.error;
   const buildList = builds.data ?? [];
   const bpList = buildpacks.data ?? [];
   const bpAssignments = serverBps.data ?? [];
@@ -114,16 +106,12 @@ export function BuildsView({ server }: { server?: ApiServer }) {
             ))}
           </select>
           <button
-            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:opacity-50"
-            disabled={triggerMutation.isPending}
-            onClick={() => triggerMutation.mutate()}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-red-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-50"
+            disabled
+            title="Buildpack builds are not implemented yet. Deploy this application from a git source or a compose stack instead."
             type="button"
           >
-            {triggerMutation.isPending ? (
-              <RefreshCw size={14} className="animate-spin" />
-            ) : (
-              <Play size={14} />
-            )}
+            <Play size={14} />
             Build
           </button>
           <button

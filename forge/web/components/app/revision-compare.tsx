@@ -63,8 +63,6 @@ export function RevisionCompare({ deploymentId, onRollback }: RevisionComparePro
     setRollingBack(null);
   };
 
-  const getRevNumber = (id: string) => revisions.find((r) => r.id === id)?.revisionNumber ?? "?";
-
   return (
     <Card>
       <CardHeader

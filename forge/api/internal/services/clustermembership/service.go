@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"sync"
 
 	"gamepanel/forge/internal/events"
@@ -191,6 +192,13 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 
 	go func() {
 		defer close(done)
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slog.Error("cluster membership drain panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
 		result, err := s.evacuationPlanner().CreatePlan(ctx, nodeID)
 		if err != nil {
 			s.publish(ctx, events.EventEvacuationPlanFailed, "node", nodeID, map[string]any{"error": err.Error()})

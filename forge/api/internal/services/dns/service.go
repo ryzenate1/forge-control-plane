@@ -487,27 +487,14 @@ var providerRegistry = map[string]providerFactory{
 }
 
 func createDNSProvider(credentials map[string]string, newProvider func() (challenge.Provider, error)) (challenge.Provider, error) {
+	// lego providers capture their configuration at construction time, so the
+	// credential env vars are restored immediately after NewDNSProvider returns.
+	// This keeps the exposure window to microseconds instead of leaving secrets
+	// in the process environment for the lifetime of the ACME challenge
+	// (audit P1: avoid long-lived process-global credential env mutation).
 	restore := setEnvRestore(credentials)
-	p, err := newProvider()
-	if err != nil {
-		restore()
-		return nil, err
-	}
-	return &restoringProvider{provider: p, restore: restore}, nil
-}
-
-type restoringProvider struct {
-	provider challenge.Provider
-	restore  func()
-}
-
-func (r *restoringProvider) Present(domain, token, keyAuth string) error {
-	return r.provider.Present(domain, token, keyAuth)
-}
-
-func (r *restoringProvider) CleanUp(domain, token, keyAuth string) error {
-	defer r.restore()
-	return r.provider.CleanUp(domain, token, keyAuth)
+	defer restore()
+	return newProvider()
 }
 
 func (s *Service) ListSupportedProviders() []ProviderDefinition {

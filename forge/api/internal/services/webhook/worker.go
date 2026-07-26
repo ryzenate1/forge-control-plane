@@ -30,7 +30,15 @@ type deliveryResult struct {
 func (s *Service) Start(ctx context.Context) {
 	if s != nil && s.store != nil {
 		s.wg.Add(1)
-		go func() { defer s.wg.Done(); s.loop(ctx) }()
+		go func() {
+			defer s.wg.Done()
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("webhook worker panic: %v", r)
+				}
+			}()
+			s.loop(ctx)
+		}()
 	}
 }
 func (s *Service) loop(ctx context.Context) {

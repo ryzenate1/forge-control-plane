@@ -491,7 +491,6 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - gamepanel_data:/data
       - gamepanel_config:/config
     environment:

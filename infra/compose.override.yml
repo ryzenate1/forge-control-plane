@@ -6,6 +6,22 @@ services:
   postgres:
     ports:
       - "${DB_PORT:-5432}:5432"
+    # The base compose drops ALL capabilities for production hardening, but the
+    # postgres:16-alpine entrypoint must chown/chmod its data directory and
+    # su-exec to the postgres user during first-time init. Grant back only the
+    # minimal capabilities required so local development bootstraps cleanly.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
   redis:
     ports:
       - "${REDIS_PORT:-6379}:6379"
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID

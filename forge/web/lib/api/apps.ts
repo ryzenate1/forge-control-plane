@@ -208,7 +208,7 @@ export type AppLogEntry = {
   stream: "stdout" | "stderr";
 };
 
-import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON } from "./http";
+import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, API_BASE_URL } from "./http";
 import { getAllTemplates } from "@/lib/app-templates-data";
 
 export function fetchApps(): Promise<ApiApp[]> {
@@ -239,8 +239,8 @@ export function stopApp(id: string): Promise<{ ok: boolean }> {
   return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(id)}/stop`);
 }
 
-export function restartApp(id: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(id)}/restart`);
+export function restartApp(id: string): Promise<{ id: string; status: string }> {
+  return postJSON<{ id: string; status: string }>(`/apps/${encodeURIComponent(id)}/restart`);
 }
 
 export function fetchAppDeployments(appId: string): Promise<AppDeployment[]> {
@@ -248,12 +248,11 @@ export function fetchAppDeployments(appId: string): Promise<AppDeployment[]> {
 }
 
 export async function fetchAllDeployments(): Promise<AppDeployment[]> {
-  const res = await fetchJSON<{ data: AppDeployment[] }>("/admin/deployments?type=app");
-  return res.data ?? [];
+  return fetchJSON<AppDeployment[]>("/admin/deployments");
 }
 
-export function triggerDeploy(appId: string): Promise<AppDeployment> {
-  return postJSON<AppDeployment>(`/apps/${encodeURIComponent(appId)}/deploy`);
+export function triggerDeploy(appId: string): Promise<{ id: string; status: string }> {
+  return postJSON<{ id: string; status: string }>(`/apps/${encodeURIComponent(appId)}/deploy`);
 }
 
 export function fetchAppLogs(appId: string): Promise<AppLogEntry[]> {
@@ -268,8 +267,8 @@ export function fetchAppDomains(appId: string): Promise<AppDomain[]> {
   return fetchJSON<AppDomain[]>(`/apps/${encodeURIComponent(appId)}/domains`);
 }
 
-export function addAppDomain(appId: string, domain: string, enableTls?: boolean): Promise<AppDomain> {
-  return postJSON<AppDomain>(`/apps/${encodeURIComponent(appId)}/domains`, { domain, enableTls });
+export function addAppDomain(appId: string, domain: string, enableTls?: boolean): Promise<{ ok: boolean; domain: string }> {
+  return postJSON<{ ok: boolean; domain: string }>(`/apps/${encodeURIComponent(appId)}/domains`, { domain, enableTls });
 }
 
 export function deleteAppDomain(appId: string, domainId: string): Promise<void> {
@@ -280,8 +279,8 @@ export function fetchAppBackups(appId: string): Promise<AppBackup[]> {
   return fetchJSON<AppBackup[]>(`/apps/${encodeURIComponent(appId)}/backups`);
 }
 
-export function createAppBackup(appId: string, name?: string): Promise<AppBackup> {
-  return postJSON<AppBackup>(`/apps/${encodeURIComponent(appId)}/backups`, { name });
+export function createAppBackup(appId: string, name?: string): Promise<{ ok: boolean }> {
+  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/backups`, { name });
 }
 
 export function restoreAppBackup(appId: string, backupId: string): Promise<{ ok: boolean }> {
@@ -292,37 +291,34 @@ export function deleteAppBackup(appId: string, backupId: string): Promise<void> 
   return deleteJSON(`/apps/${encodeURIComponent(appId)}/backups/${encodeURIComponent(backupId)}`);
 }
 
-export function fetchAppComposeConfig(appId: string): Promise<{ content: string; services: ComposeService[] }> {
-  return fetchJSON<{ content: string; services: ComposeService[] }>(`/apps/${encodeURIComponent(appId)}/compose`);
+export function fetchAppComposeConfig(appId: string): Promise<{ sourceType: string; sourceConfig: unknown }> {
+  return fetchJSON<{ sourceType: string; sourceConfig: unknown }>(`/apps/${encodeURIComponent(appId)}/compose`);
 }
 
-export function updateAppComposeConfig(appId: string, content: string): Promise<{ ok: boolean }> {
-  return putJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/compose`, { content });
+export function updateAppComposeConfig(appId: string, sourceConfig: unknown): Promise<{ sourceType: string; sourceConfig: unknown }> {
+  return putJSON<{ sourceType: string; sourceConfig: unknown }>(`/apps/${encodeURIComponent(appId)}/compose`, { sourceConfig });
 }
 
-export function redeployComposeStack(appId: string): Promise<{ ok: boolean }> {
-  return postJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/compose/redeploy`);
+export function redeployComposeStack(appId: string): Promise<{ id: string; status: string }> {
+  return postJSON<{ id: string; status: string }>(`/apps/${encodeURIComponent(appId)}/compose/redeploy`);
 }
 
-export function fetchAppGitSource(appId: string): Promise<GitSource> {
-  return fetchJSON<GitSource>(`/apps/${encodeURIComponent(appId)}/git`);
+export function fetchAppGitSource(appId: string): Promise<{ sourceType: string; sourceConfig: unknown }> {
+  return fetchJSON<{ sourceType: string; sourceConfig: unknown }>(`/apps/${encodeURIComponent(appId)}/git`);
 }
 
-export function updateAppGitBranch(appId: string, branch: string): Promise<{ ok: boolean }> {
-  return patchJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/git`, { branch });
+export function updateAppGitBranch(appId: string, branch: string): Promise<{ sourceType: string; sourceConfig: unknown }> {
+  return patchJSON<{ sourceType: string; sourceConfig: unknown }>(`/apps/${encodeURIComponent(appId)}/git`, { branch });
 }
 
 export function toggleAppAutoDeploy(appId: string, enabled: boolean): Promise<{ ok: boolean }> {
-  return patchJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/git/auto-deploy`, { enabled });
+  return patchJSON<{ ok: boolean }>(`/apps/${encodeURIComponent(appId)}/git/auto-deploy`, { autoDeploy: enabled });
 }
 
-export function fetchAppConsoleWSURL(appId: string): string {
-  const API_BASE_URL =
-    process.env.NEXT_PUBLIC_API_URL ??
-    (process.env.NODE_ENV === "development" ? "http://localhost:8080/api/v1" : "/api/v1");
+export function fetchAppConsoleWSURL(serverId: string): string {
   const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsBase = API_BASE_URL.replace("http:", protocol).replace("https:", protocol);
-  return `${wsBase}/apps/${encodeURIComponent(appId)}/ws/console`;
+  return `${wsBase}/servers/${encodeURIComponent(serverId)}/ws/console`;
 }
 
 export async function fetchAppTemplates(): Promise<AppTemplate[]> {
@@ -369,14 +365,4 @@ export function deploymentStatusTone(status: DeploymentStatus): "green" | "red" 
   }
 }
 
-export type DNSProvider = {
-  id: string;
-  name: string;
-  provider: string;
-  verificationStatus?: string;
-  createdAt: string;
-};
-
-export function fetchDNSProviders(): Promise<DNSProvider[]> {
-  return fetchJSON<DNSProvider[]>("/dns/providers");
-}
+export { fetchDnsProviders, fetchDnsProviders as fetchDNSProviders } from "./dns";

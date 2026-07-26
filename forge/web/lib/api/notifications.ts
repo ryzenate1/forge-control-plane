@@ -75,38 +75,38 @@ export async function createNotificationChannel(data: {
 }
 
 export async function getNotificationChannel(id: string): Promise<NotificationChannel> {
-  return fetchJSON<NotificationChannel>(`/notification-channels/${id}`);
+  return fetchJSON<NotificationChannel>(`/notification-channels/${encodeURIComponent(id)}`);
 }
 
 export async function updateNotificationChannel(
   id: string,
   data: { name?: string; config?: Record<string, unknown>; enabled?: boolean },
 ): Promise<NotificationChannel> {
-  return patchJSON<NotificationChannel>(`/notification-channels/${id}`, data);
+  return patchJSON<NotificationChannel>(`/notification-channels/${encodeURIComponent(id)}`, data);
 }
 
 export async function deleteNotificationChannel(id: string): Promise<void> {
-  return deleteJSON(`/notification-channels/${id}`);
+  return deleteJSON(`/notification-channels/${encodeURIComponent(id)}`);
 }
 
 export async function testNotificationChannel(id: string): Promise<void> {
-  await postJSON(`/notification-channels/${id}/test`);
+  await postJSON(`/notification-channels/${encodeURIComponent(id)}/test`);
 }
 
 export async function fetchSubscriptions(channelId: string): Promise<NotificationEventSubscription[]> {
-  const res = await fetchJSON<SubscriptionsResponse>(`/notification-channels/${channelId}/subscribe`);
+  const res = await fetchJSON<SubscriptionsResponse>(`/notification-channels/${encodeURIComponent(channelId)}/subscribe`);
   return res.subscriptions;
 }
 
 export async function createSubscription(channelId: string, eventType: string, template?: string): Promise<NotificationEventSubscription> {
-  return postJSON<NotificationEventSubscription>(`/notification-channels/${channelId}/subscribe`, {
+  return postJSON<NotificationEventSubscription>(`/notification-channels/${encodeURIComponent(channelId)}/subscribe`, {
     eventType,
     template: template ?? "",
   });
 }
 
 export async function deleteSubscription(channelId: string, subId: string): Promise<void> {
-  return deleteJSON(`/notification-channels/${channelId}/subscribe/${subId}`);
+  return deleteJSON(`/notification-channels/${encodeURIComponent(channelId)}/subscribe/${encodeURIComponent(subId)}`);
 }
 
 export async function fetchNotificationLogs(channelId?: string, limit = 100, offset = 0): Promise<NotificationLog[]> {

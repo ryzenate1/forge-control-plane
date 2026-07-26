@@ -3,16 +3,11 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Database, Plus, Trash2, RotateCcw, Archive, Eye, Link2, Unlink,
+  Database, Plus, Trash2, RotateCcw, Archive, Eye,
 } from "lucide-react";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import {
-  type DatabaseService,
-  type DatabaseServiceBackup,
-  type DatabaseServiceCredential,
-  type ServiceTemplate,
-  type ProvisionDBServiceRequest,
   listDatabaseServices,
   provisionDatabaseService,
   deleteDatabaseService,
@@ -27,8 +22,6 @@ import {
   createServiceTemplate,
   getServiceLogs,
   getDatabaseService,
-  linkDatabaseServiceToServer,
-  unlinkDatabaseServiceFromServer,
 } from "@/lib/api/database-services";
 
 type Tab = "services" | "templates";
@@ -54,7 +47,6 @@ export default function AdminDatabaseServicesPage() {
   const [showProvision, setShowProvision] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [detailId, setDetailId] = useState<string | null>(null);
-  const [showCreds, setShowCreds] = useState<string | null>(null);
 
   return (
     <div>
@@ -86,9 +78,6 @@ export default function AdminDatabaseServicesPage() {
           onCloseProvision={() => setShowProvision(false)}
           detailId={detailId}
           onCloseDetail={() => setDetailId(null)}
-          showCreds={showCreds}
-          onShowCreds={(id) => setShowCreds(id)}
-          onCloseCreds={() => setShowCreds(null)}
         />
       ) : (
         <TemplatesTab
@@ -103,7 +92,7 @@ export default function AdminDatabaseServicesPage() {
 
 function ServicesTab({
   onProvision, onDetail, showProvision, onCloseProvision,
-  detailId, onCloseDetail, showCreds, onShowCreds, onCloseCreds,
+  detailId, onCloseDetail,
 }: {
   onProvision: () => void;
   onDetail: (id: string) => void;
@@ -111,9 +100,6 @@ function ServicesTab({
   onCloseProvision: () => void;
   detailId: string | null;
   onCloseDetail: () => void;
-  showCreds: string | null;
-  onShowCreds: (id: string) => void;
-  onCloseCreds: () => void;
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -194,7 +180,7 @@ function ServicesTab({
       </Card>
 
       {showProvision && <ProvisionModal onClose={onCloseProvision} onCreated={invalidate} />}
-      {detailId && <DetailModal serviceId={detailId} onClose={onCloseDetail} onInvalidate={invalidate} />}
+      {detailId && <DetailModal serviceId={detailId} onClose={onCloseDetail} />}
     </div>
   );
 }
@@ -263,7 +249,7 @@ function ProvisionModal({ onClose, onCreated }: { onClose: () => void; onCreated
   );
 }
 
-function DetailModal({ serviceId, onClose, onInvalidate }: { serviceId: string; onClose: () => void; onInvalidate: () => void }) {
+function DetailModal({ serviceId, onClose }: { serviceId: string; onClose: () => void; }) {
   const qc = useQueryClient();
   const { toast } = useToast();
 

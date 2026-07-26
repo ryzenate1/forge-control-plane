@@ -1081,19 +1081,64 @@ func filterNetworkInspect(net network.Inspect) network.Inspect {
 	return net
 }
 
+// sensitiveEnvKeywords is a broad, deliberately over-inclusive list of substrings
+// that, when found (case-insensitively) anywhere in an environment variable's
+// name, indicate the value is likely sensitive and should be redacted. Over-redacting
+// is far safer than under-redacting here, since this feeds an admin-facing API response.
+var sensitiveEnvKeywords = []string{
+	"PASSWORD",
+	"PASSWD",
+	"SECRET",
+	"TOKEN",
+	"API_KEY",
+	"APIKEY",
+	"KEY",
+	"CREDENTIAL",
+	"DATABASE_URL",
+	"DSN",
+	"CONNECTION_STRING",
+	"PRIVATE",
+	"AUTH",
+	"ACCESS_KEY",
+	"CERT",
+	"SESSION",
+	"COOKIE",
+	"SIGNING",
+	"ENCRYPTION",
+}
+
+// looksLikeSensitiveEnvName reports whether the given environment variable name
+// contains any known sensitive-keyword fragment, using case-insensitive substring
+// matching rather than exact-prefix matching so names like DATABASE_URL, JWT_SECRET,
+// AWS_SECRET_ACCESS_KEY, and CONNECTION_STRING are all caught.
+func looksLikeSensitiveEnvName(name string) bool {
+	upper := strings.ToUpper(name)
+	for _, keyword := range sensitiveEnvKeywords {
+		if strings.Contains(upper, keyword) {
+			return true
+		}
+	}
+	return false
+}
+
+// looksLikeSensitiveEnvValue reports whether the value itself appears to contain
+// key material (e.g. a PEM block), regardless of what the variable is named.
+func looksLikeSensitiveEnvValue(value string) bool {
+	return strings.Contains(value, "-----BEGIN")
+}
+
 // filterContainerInspect removes sensitive information from container inspect results
 func filterContainerInspect(inspect types.ContainerJSON) types.ContainerJSON {
-	// Remove sensitive environment variables
+	// Redact sensitive environment variables
 	if inspect.Config != nil {
 		filteredEnv := make([]string, 0, len(inspect.Config.Env))
 		for _, env := range inspect.Config.Env {
-			// Keep only non-sensitive environment variables
-			if !strings.HasPrefix(env, "PASSWORD=") &&
-				!strings.HasPrefix(env, "SECRET=") &&
-				!strings.HasPrefix(env, "TOKEN=") &&
-				!strings.HasPrefix(env, "API_KEY=") {
-				filteredEnv = append(filteredEnv, env)
+			name, value, hasValue := strings.Cut(env, "=")
+			if looksLikeSensitiveEnvName(name) || (hasValue && looksLikeSensitiveEnvValue(value)) {
+				filteredEnv = append(filteredEnv, name+"=[REDACTED]")
+				continue
 			}
+			filteredEnv = append(filteredEnv, env)
 		}
 		inspect.Config.Env = filteredEnv
 	}
@@ -1611,6 +1656,56 @@ func (s *Server) handleContainerFilesUpload(w http.ResponseWriter, r *http.Reque
 
 // --- Container Files Delete ---
 
+// containerDataRoot is the directory inside a game server container where the
+// server's own files live. Destructive file operations triggered from the admin
+// API must be confined to this subtree and must never be allowed to reach the
+// container's system directories, even though the container itself is not the
+// host filesystem.
+const containerDataRoot = "/home/container"
+
+// dangerousContainerPaths lists directories that must never be targeted by a
+// recursive delete, even if a caller tried to escape containerDataRoot.
+var dangerousContainerPaths = []string{
+	"/", "/etc", "/bin", "/usr", "/lib", "/lib64", "/root", "/var",
+	"/boot", "/sys", "/proc", "/dev", "/sbin", "/opt", "/home",
+}
+
+// validateContainerDeletePath ensures a user-supplied path is safe to pass to a
+// recursive delete inside a container: it must be non-empty, must resolve
+// (after cleaning) to a location within containerDataRoot, and must not be
+// containerDataRoot itself (to avoid wiping out the entire server directory in
+// one shot) or any of the well-known dangerous system directories.
+func validateContainerDeletePath(rawPath string) (string, error) {
+	if rawPath == "" {
+		return "", fmt.Errorf("path is required")
+	}
+
+	// Normalize to an absolute container path rooted at containerDataRoot if it
+	// wasn't already absolute, then clean it (resolves ".", "..", duplicate slashes).
+	candidate := rawPath
+	if !path.IsAbs(candidate) {
+		candidate = path.Join(containerDataRoot, candidate)
+	}
+	cleaned := path.Clean(candidate)
+
+	for _, dangerous := range dangerousContainerPaths {
+		if cleaned == dangerous {
+			return "", fmt.Errorf("refusing to delete restricted path %q", cleaned)
+		}
+	}
+
+	if cleaned == containerDataRoot {
+		return "", fmt.Errorf("refusing to delete the server's entire data directory")
+	}
+
+	rel := strings.TrimPrefix(cleaned, containerDataRoot+"/")
+	if rel == cleaned || rel == "" || strings.HasPrefix(rel, "../") || rel == ".." {
+		return "", fmt.Errorf("path must be within %q", containerDataRoot)
+	}
+
+	return cleaned, nil
+}
+
 func (s *Server) handleContainerFilesDelete(w http.ResponseWriter, r *http.Request) {
 	userInfo, err := s.getAdminUserInfo(r)
 	if err != nil {
@@ -1640,6 +1735,12 @@ func (s *Server) handleContainerFilesDelete(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	safePath, err := validateContainerDeletePath(body.Path)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
 	docker, err := s.adminDockerClient()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
@@ -1647,7 +1748,7 @@ func (s *Server) handleContainerFilesDelete(w http.ResponseWriter, r *http.Reque
 	}
 
 	execConfig := container.ExecOptions{
-		Cmd:          []string{"rm", "-rf", body.Path},
+		Cmd:          []string{"rm", "-rf", "--", safePath},
 		AttachStdout: false,
 		AttachStderr: true,
 	}

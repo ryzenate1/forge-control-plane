@@ -37,7 +37,7 @@ interface TenancyState {
   selectEnvironment: (env: Environment | null) => void;
 }
 
-export const useTenancyStore = create<TenancyState>((set, get) => ({
+export const useTenancyStore = create<TenancyState>((set) => ({
   organizations: [],
   activeOrg: null,
   projects: [],
@@ -74,11 +74,14 @@ export const useTenancyStore = create<TenancyState>((set, get) => ({
     if (!org) return;
     set({ loading: true, error: null });
     try {
-      const [projects, members] = await Promise.all([
+      const results = await Promise.allSettled([
         apiFetchProjects(org.id),
         fetchTeamMembers(org.id),
       ]);
-      set({ projects, members, loading: false });
+      const projects = results[0].status === 'fulfilled' ? results[0].value : [];
+      const members = results[1].status === 'fulfilled' ? results[1].value : [];
+      const errors = results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason);
+      set({ projects, members, loading: false, error: errors.length > 0 ? (errors[0] instanceof Error ? errors[0].message : 'Failed to load org details') : null });
     } catch (err) {
       set({ error: err instanceof Error ? err.message : 'Failed to load org details', loading: false });
     }

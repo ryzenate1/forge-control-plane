@@ -8,23 +8,31 @@ import (
 	"gamepanel/forge/internal/store"
 )
 
-func TestNewCronJobService(t *testing.T) {
-	svc, _ := New(nil, nil)
-	if svc == nil {
-		t.Fatal("expected non-nil service")
+func newTestService(t *testing.T) *Service {
+	t.Helper()
+	svc, err := New(&store.Store{}, nil)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if svc.cron == nil {
-		t.Error("expected cron instance to be initialized")
+	return svc
+}
+
+func TestNewCronJobService(t *testing.T) {
+	if svc, err := New(nil, nil); err == nil || svc != nil {
+		t.Fatal("expected nil store to be rejected")
 	}
 
-	svc2, _ := New(nil, slog.Default())
+	svc2, err := New(&store.Store{}, slog.Default())
+	if err != nil {
+		t.Fatal(err)
+	}
 	if svc2 == nil {
 		t.Fatal("expected non-nil service with logger")
 	}
 }
 
 func TestGenerateExecutionID(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	id1 := svc.GenerateExecutionID()
 	id2 := svc.GenerateExecutionID()
 	if id1 == "" {
@@ -36,12 +44,12 @@ func TestGenerateExecutionID(t *testing.T) {
 }
 
 func TestStopWithoutStart(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.Stop()
 }
 
 func TestNextRunWithNoEntries(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	job := store.CronJob{ID: "nonexistent", Schedule: "*/5 * * * * *"}
 	next := svc.NextRun(job)
 	if next != nil {
@@ -50,7 +58,7 @@ func TestNextRunWithNoEntries(t *testing.T) {
 }
 
 func TestNextRunAfterScheduling(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.cron.Start()
 	defer svc.Stop()
 
@@ -68,7 +76,7 @@ func TestNextRunAfterScheduling(t *testing.T) {
 
 func TestRescheduleJobDisables(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.cron.Start()
 	defer svc.Stop()
 
@@ -95,7 +103,7 @@ func TestRescheduleJobDisables(t *testing.T) {
 
 func TestRescheduleJobEnabled(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.cron.Start()
 	defer svc.Stop()
 
@@ -120,7 +128,7 @@ func TestRescheduleJobEnabled(t *testing.T) {
 
 func TestRescheduleJobReschedules(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.cron.Start()
 	defer svc.Stop()
 
@@ -147,7 +155,7 @@ func TestRescheduleJobReschedules(t *testing.T) {
 }
 
 func TestRunShellCommandEcho(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	exitCode, stdout, stderr := svc.runShellCommand("echo hello world", 5)
 
 	if exitCode != 0 {
@@ -162,7 +170,7 @@ func TestRunShellCommandEcho(t *testing.T) {
 }
 
 func TestRunShellCommandFailure(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	exitCode, _, _ := svc.runShellCommand("exit 42", 5)
 
 	if exitCode != 1 {
@@ -171,7 +179,7 @@ func TestRunShellCommandFailure(t *testing.T) {
 }
 
 func TestRunShellCommandTimeout(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	exitCode, _, stderr := svc.runShellCommand("sleep 10", 1)
 
 	if exitCode != -1 {
@@ -184,7 +192,7 @@ func TestRunShellCommandTimeout(t *testing.T) {
 
 func TestTriggerNowReturnsErrorWithNilStore(t *testing.T) {
 	ctx := context.Background()
-	svc, _ := New(nil, nil)
+	svc := &Service{}
 	_, err := svc.TriggerNow(ctx, "nonexistent-job")
 	if err == nil {
 		t.Error("expected error when calling TriggerNow with nil store")
@@ -192,14 +200,14 @@ func TestTriggerNowReturnsErrorWithNilStore(t *testing.T) {
 }
 
 func TestNewServiceLoggerDefault(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	if svc.logger == nil {
 		t.Error("expected default logger when nil is passed")
 	}
 }
 
 func TestMultipleEntriesNextRun(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	svc.cron.Start()
 	defer svc.Stop()
 
@@ -225,7 +233,7 @@ func TestMultipleEntriesNextRun(t *testing.T) {
 }
 
 func TestTriggerNowGeneratesExecutionID(t *testing.T) {
-	svc, _ := New(nil, nil)
+	svc := newTestService(t)
 	id := svc.GenerateExecutionID()
 	if len(id) == 0 {
 		t.Error("expected a non-empty UUID string")

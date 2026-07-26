@@ -115,7 +115,6 @@ export function ConsoleView({ server }: { server: ApiServer }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [autoScroll, setAutoScroll] = useState(true);
   const [showTimestamps, setShowTimestamps] = useState(false);
-  const reconnectAttempt = useRef(0);
   const messageCount = useRef(0);
   const connectedAt = useRef<number | null>(null);
   const HISTORY_KEY = `console-history-${server.id}`;
@@ -173,7 +172,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
             break;
         }
       },
-      onError: (_error: Event) => { setConnectionError("The console connection failed."); },
+      onError: () => { setConnectionError("The console connection failed."); },
     });
 
     const proxySocket = { send: (data: string) => { manager.send(data); }, close: () => manager.disconnect(), get readyState() { return manager.status === "connected" ? WebSocket.OPEN : WebSocket.CLOSED; } } as WebSocket;
@@ -185,9 +184,25 @@ export function ConsoleView({ server }: { server: ApiServer }) {
 
   useEffect(() => {
     if (!canConsole) return;
-    let closed = false; let socket: WebSocket | null = null;
-    void connectServerWebSocket(server.id, "stats").then((next) => { if (closed) { next.close(); return; } socket = next; next.onmessage = (event) => { try { const data = JSON.parse(String(event.data)) as ApiStats & { error?: string }; if (data.error) return; setStats(data); const memory = data.memoryLimit > 0 ? (data.memoryBytes / data.memoryLimit) * 100 : 0; const network = data.networkRxBytes + data.networkTxBytes; setCpuHistory((items) => [...items.slice(-(MAX_POINTS - 1)), data.cpuPercent]); setMemoryHistory((items) => [...items.slice(-(MAX_POINTS - 1)), memory]); setNetworkHistory((items) => [...items.slice(-(MAX_POINTS - 1)), network]); } catch { /* ignore malformed telemetry without inventing values */ } }; next.onerror = () => { setConnectionError("Stats connection failed."); }; }).catch((error) => { if (!closed) setConnectionError(error instanceof Error ? error.message : "Stats connection failed."); });
-    return () => { closed = true; socket?.close(); };
+    const statsManager = new WebSocketManager({
+      maxRetries: 20,
+      baseDelay: 1000,
+      maxDelay: 30000,
+      factory: () => connectServerWebSocket(server.id, "stats"),
+      onMessage: (data) => {
+        const statsData = data as ApiStats & { error?: string };
+        if (statsData.error) return;
+        setStats(statsData);
+        const memory = statsData.memoryLimit > 0 ? (statsData.memoryBytes / statsData.memoryLimit) * 100 : 0;
+        const network = statsData.networkRxBytes + statsData.networkTxBytes;
+        setCpuHistory((items) => [...items.slice(-(MAX_POINTS - 1)), statsData.cpuPercent]);
+        setMemoryHistory((items) => [...items.slice(-(MAX_POINTS - 1)), memory]);
+        setNetworkHistory((items) => [...items.slice(-(MAX_POINTS - 1)), network]);
+      },
+      onError: () => { setConnectionError("Stats connection failed."); },
+    });
+    void statsManager.connect();
+    return () => { statsManager.disconnect(); };
   }, [canConsole, server.id]);
 
   useEffect(() => {

@@ -134,11 +134,13 @@ detect_versions() {
     fi
     info "Target version: $NEW_VERSION"
 
-    if [ "$PREVIOUS_VERSION" = "$NEW_VERSION" ] && [ "$FORCE" = "false" ]; then
+    # Extract tag portion if PREVIOUS_VERSION is a full image reference
+    local prev_tag="${PREVIOUS_VERSION##*:}"
+    if [ "$PREVIOUS_VERSION" != "unknown" ] && [ "$prev_tag" = "$NEW_VERSION" ] && [ "$FORCE" = "false" ]; then
         if [ "$ROLLBACK" = "true" ]; then
             warn "Rollback requested. Bypassing version check."
         else
-            info "Already at latest version. Use --force to re-run."
+            info "Already at latest version ($NEW_VERSION). Use --force to re-run."
             exit 0
         fi
     fi

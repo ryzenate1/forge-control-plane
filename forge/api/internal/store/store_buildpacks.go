@@ -194,6 +194,28 @@ func (s *Store) ListAppBuilds(ctx context.Context, serverID string) ([]AppBuild,
 	return out, rows.Err()
 }
 
+func (s *Store) ListActiveAppBuilds(ctx context.Context) ([]AppBuild, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id, server_id, buildpack_id, status, build_log, image_tag, created_at
+		FROM app_builds
+		WHERE status IN ('pending', 'running')
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []AppBuild
+	for rows.Next() {
+		var build AppBuild
+		if err := rows.Scan(&build.ID, &build.ServerID, &build.BuildpackID, &build.Status, &build.BuildLog, &build.ImageTag, &build.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, build)
+	}
+	return out, rows.Err()
+}
+
 func (s *Store) GetAppBuild(ctx context.Context, id string) (*AppBuild, error) {
 	row := s.db.QueryRow(ctx, `
 		SELECT ab.id, ab.server_id, ab.buildpack_id, ab.status, ab.build_log, ab.image_tag, ab.created_at,

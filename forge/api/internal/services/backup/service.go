@@ -9,6 +9,7 @@ import (
 	"io"
 	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,6 +29,7 @@ const (
 	BackupRestoring   BackupStatus = "restoring"
 	BackupRestored    BackupStatus = "restored"
 	BackupRestoreFail BackupStatus = "restore_failed"
+	BackupCancelled   BackupStatus = "cancelled"
 )
 
 type DatabaseEngine string
@@ -130,9 +132,14 @@ type CreateVolumeBackupRequest struct {
 
 type ProviderFactory func(config map[string]string) (StorageAdapter, error)
 
-var providerFactories map[string]ProviderFactory
+var (
+	providerFactories   map[string]ProviderFactory
+	providerFactoriesMu sync.RWMutex
+)
 
 func RegisterProvider(name string, factory ProviderFactory) {
+	providerFactoriesMu.Lock()
+	defer providerFactoriesMu.Unlock()
 	if providerFactories == nil {
 		providerFactories = make(map[string]ProviderFactory)
 	}
@@ -140,7 +147,9 @@ func RegisterProvider(name string, factory ProviderFactory) {
 }
 
 func GetProvider(name string, config map[string]string) (StorageAdapter, error) {
+	providerFactoriesMu.RLock()
 	factory, ok := providerFactories[name]
+	providerFactoriesMu.RUnlock()
 	if !ok {
 		return nil, fmt.Errorf("provider %q not registered", name)
 	}
@@ -148,6 +157,8 @@ func GetProvider(name string, config map[string]string) (StorageAdapter, error) 
 }
 
 func RegisteredProviders() []string {
+	providerFactoriesMu.RLock()
+	defer providerFactoriesMu.RUnlock()
 	var names []string
 	for name := range providerFactories {
 		names = append(names, name)
@@ -780,8 +791,8 @@ func (s *Service) EnforceRetentionPolicy(ctx context.Context, serverID string, p
 		loHours, hiHours int
 		max              int
 	}{
-		{0, 24, policy.MaxBackups},     // KeepDaily maps via MaxBackups
-		{24, 168, policy.MaxBackups / 7},  // approximate KeepWeekly
+		{0, 24, policy.MaxBackups},         // KeepDaily maps via MaxBackups
+		{24, 168, policy.MaxBackups / 7},   // approximate KeepWeekly
 		{168, 720, policy.MaxBackups / 30}, // approximate KeepMonthly
 	} {
 		if period.max <= 0 {

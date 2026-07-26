@@ -1,11 +1,14 @@
 package http
 
 import (
+	"context"
 	"strconv"
+	"time"
 
 	notificationsvc "gamepanel/forge/internal/services/notifications"
 	"gamepanel/forge/internal/store"
 
+	"github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -374,10 +377,53 @@ func handleTestNotification(svc *notificationsvc.Service) fiber.Handler {
 // WebSocket Notification Handler
 
 func handleNotificationWebSocket(svc *notificationsvc.Service) fiber.Handler {
+	upgrader := websocket.New(func(conn *websocket.Conn) {
+		claims, ok := conn.Locals("user").(tokenClaims)
+		if !ok || claims.Sub == "" || svc == nil {
+			_ = conn.WriteControl(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.ClosePolicyViolation, "authentication required"),
+				time.Now().Add(time.Second))
+			return
+		}
+		seen := make(map[string]struct{})
+		ticker := time.NewTicker(2 * time.Second)
+		defer ticker.Stop()
+		for {
+			pollCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			notifications, err := svc.ListUserNotifications(pollCtx, claims.Sub, 50)
+			cancel()
+			if err != nil {
+				_ = conn.WriteControl(websocket.CloseMessage,
+					websocket.FormatCloseMessage(websocket.CloseInternalServerErr, "notification store unavailable"),
+					time.Now().Add(time.Second))
+				return
+			}
+			for index := len(notifications) - 1; index >= 0; index-- {
+				notification := notifications[index]
+				if _, exists := seen[notification.ID]; exists {
+					continue
+				}
+				if err := conn.SetWriteDeadline(time.Now().Add(5 * time.Second)); err != nil {
+					return
+				}
+				if err := conn.WriteJSON(fiber.Map{"type": "notification", "notification": notification}); err != nil {
+					return
+				}
+				seen[notification.ID] = struct{}{}
+			}
+			select {
+			case <-ticker.C:
+				if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(5*time.Second)); err != nil {
+					return
+				}
+			}
+		}
+	})
 	return func(c *fiber.Ctx) error {
-		// WebSocket upgrade logic would go here
-		// For now, return not implemented as WebSocket support depends on the framework
-		return fiber.NewError(fiber.StatusNotImplemented, "WebSocket notifications not yet implemented")
+		if !websocket.IsWebSocketUpgrade(c) {
+			return fiber.NewError(fiber.StatusUpgradeRequired, "WebSocket upgrade required")
+		}
+		return upgrader(c)
 	}
 }
 

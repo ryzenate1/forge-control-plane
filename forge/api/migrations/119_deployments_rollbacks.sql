@@ -1,7 +1,10 @@
 CREATE TABLE IF NOT EXISTS deployment_history (
     id UUID PRIMARY KEY,
-    server_id UUID NOT NULL,
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     service_id UUID,
+    deployment_id UUID REFERENCES deployments(id) ON DELETE SET NULL,
+    revision_id UUID REFERENCES deployment_revisions(id) ON DELETE SET NULL,
+    release_id UUID REFERENCES deployment_releases(id) ON DELETE SET NULL,
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'done', 'error', 'cancelled')),
     log_path TEXT DEFAULT '',
     commit_hash TEXT DEFAULT '',
@@ -23,7 +26,7 @@ CREATE TABLE IF NOT EXISTS rollbacks (
 
 CREATE TABLE IF NOT EXISTS preview_deployments (
     id UUID PRIMARY KEY,
-    server_id UUID NOT NULL,
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     service_id UUID,
     pr_number INTEGER NOT NULL DEFAULT 0,
     pr_title TEXT DEFAULT '',
@@ -38,7 +41,7 @@ CREATE TABLE IF NOT EXISTS preview_deployments (
     source TEXT NOT NULL DEFAULT 'github' CHECK (source IN ('github', 'gitlab')),
     unique_suffix TEXT DEFAULT '',
     is_isolated BOOLEAN DEFAULT true,
-    created_by UUID,
+    created_by UUID REFERENCES users(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     cleaned_at TIMESTAMPTZ

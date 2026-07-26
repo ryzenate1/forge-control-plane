@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -99,6 +101,7 @@ type RestoreService struct {
 	jobService      *JobService
 	beaconClient    BeaconClient
 	scheduler       Scheduler
+	daemonClient    *daemon.Client
 }
 
 func NewRestoreService(store *store.Store, logger Logger) *RestoreService {
@@ -118,6 +121,10 @@ func (s *RestoreService) SetJobService(jobService *JobService) {
 
 func (s *RestoreService) SetBeaconClient(beaconClient BeaconClient) {
 	s.beaconClient = beaconClient
+}
+
+func (s *RestoreService) SetDaemonClient(client *daemon.Client) {
+	s.daemonClient = client
 }
 
 func (s *RestoreService) SetScheduler(scheduler Scheduler) {
@@ -371,6 +378,70 @@ func (s *RestoreService) Execute(ctx context.Context, restoreID string, userID s
 	if err != nil {
 		return fmt.Errorf("failed to get backup artifact: %w", err)
 	}
+	if s.daemonClient != nil {
+		switch restore.RestoreType {
+		case BackupTypeApp:
+			appID := restore.TargetAppID
+			if appID == nil {
+				appID = artifact.SourceAppID
+			}
+			if appID == nil || *appID == "" {
+				return fmt.Errorf("app restore target is required")
+			}
+			app, err := s.store.GetApplication(ctx, *appID)
+			if err != nil {
+				return fmt.Errorf("resolve app restore target: %w", err)
+			}
+			if app.ServerID == nil || *app.ServerID == "" {
+				return fmt.Errorf("application %s has no backing server", *appID)
+			}
+			target, err := s.store.ServerControlTarget(ctx, *app.ServerID)
+			if err != nil {
+				return fmt.Errorf("resolve app restore node: %w", err)
+			}
+			if err := s.daemonClient.RestoreBackup(ctx, target.NodeURL, target.NodeToken, *app.ServerID, artifact.Name, false); err != nil {
+				return fmt.Errorf("beacon app restore: %w", err)
+			}
+			return s.completeDirectRestore(ctx, restore)
+		case BackupTypeServer:
+			serverID := restore.TargetServerID
+			if serverID == nil {
+				serverID = artifact.SourceServerID
+			}
+			if serverID == nil || *serverID == "" {
+				return fmt.Errorf("server restore target is required")
+			}
+			target, err := s.store.ServerControlTarget(ctx, *serverID)
+			if err != nil {
+				return fmt.Errorf("resolve server restore target: %w", err)
+			}
+			if err := s.daemonClient.RestoreBackup(ctx, target.NodeURL, target.NodeToken, *serverID, artifact.Name, false); err != nil {
+				return fmt.Errorf("beacon server restore: %w", err)
+			}
+			return s.completeDirectRestore(ctx, restore)
+		case BackupTypeDatabase:
+			databaseID := restore.TargetDatabaseID
+			if databaseID == nil {
+				databaseID = artifact.SourceDatabaseID
+			}
+			if databaseID == nil || *databaseID == "" {
+				return fmt.Errorf("database restore target is required")
+			}
+			databaseTarget, err := s.store.GetDBContainerBackupTarget(ctx, *databaseID)
+			if err != nil {
+				return fmt.Errorf("resolve database restore target: %w", err)
+			}
+			serverTarget, err := s.store.ServerControlTarget(ctx, databaseTarget.ServerID)
+			if err != nil {
+				return fmt.Errorf("resolve database restore node: %w", err)
+			}
+			if err := s.daemonClient.RestoreDatabase(ctx, serverTarget.NodeURL, serverTarget.NodeToken,
+				databaseTarget.ContainerID, databaseTarget.Engine, strings.TrimSuffix(filepath.Base(artifact.StoragePath), ".backup.gz")); err != nil {
+				return fmt.Errorf("beacon database restore: %w", err)
+			}
+			return s.completeDirectRestore(ctx, restore)
+		}
+	}
 
 	var execErr error
 	switch restore.RestoreType {
@@ -427,6 +498,19 @@ func (s *RestoreService) Execute(ctx context.Context, restoreID string, userID s
 	s.logger.Infof("Restore operation %s completed successfully in %d seconds", restore.Name, *restore.DurationSeconds)
 
 	return nil
+}
+
+func (s *RestoreService) completeDirectRestore(ctx context.Context, restore *BackupRestore) error {
+	restore.Status = "completed"
+	restore.CurrentPhase = "completed"
+	restore.ProgressPercentage = 100
+	completed := time.Now().UTC()
+	restore.CompletedAt = &completed
+	if restore.StartedAt != nil {
+		duration := int(completed.Sub(*restore.StartedAt).Seconds())
+		restore.DurationSeconds = &duration
+	}
+	return s.persistRestore(ctx, restore)
 }
 
 func (s *RestoreService) Cancel(ctx context.Context, restoreID string, userID string) error {

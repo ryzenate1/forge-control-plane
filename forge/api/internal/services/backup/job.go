@@ -4,10 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
+	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
 )
 
@@ -89,6 +91,11 @@ type JobService struct {
 	restoreService  *RestoreService
 	beaconClient    BeaconClient
 	scheduler       Scheduler
+	daemonClient    *daemon.Client
+}
+
+func (s *JobService) SetDaemonClient(client *daemon.Client) {
+	s.daemonClient = client
 }
 
 // NewJobService creates a new JobService
@@ -138,23 +145,8 @@ func (s *JobService) Create(ctx context.Context, req CreateBackupJobRequest, use
 		return nil, fmt.Errorf("invalid job type: %s", req.JobType)
 	}
 
-	// Validate that exactly one target is specified
-	targetCount := 0
-	if req.ServerID != nil && *req.ServerID != "" {
-		targetCount++
-	}
-	if req.AppID != nil && *req.AppID != "" {
-		targetCount++
-	}
-	if req.DatabaseID != nil && *req.DatabaseID != "" {
-		targetCount++
-	}
-	if req.VolumeID != nil && *req.VolumeID != "" {
-		targetCount++
-	}
-
-	if targetCount != 1 {
-		return nil, fmt.Errorf("exactly one target (server, app, database, or volume) must be specified")
+	if err := validateBackupTargets(req.JobType, req.ServerID, req.AppID, req.DatabaseID, req.VolumeID); err != nil {
+		return nil, err
 	}
 
 	// Set defaults
@@ -189,6 +181,15 @@ func (s *JobService) Create(ctx context.Context, req CreateBackupJobRequest, use
 		CreatedAt:          now,
 		UpdatedAt:          now,
 	}
+	record, err := backupJobToStore(job)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.store.CreateBackupJob(ctx, &record); err != nil {
+		return nil, fmt.Errorf("persist backup job: %w", err)
+	}
+	job.CreatedAt = record.CreatedAt
+	job.UpdatedAt = record.UpdatedAt
 
 	s.logger.Infof("Created backup job: %s (type: %s, target: %s)", job.Name, job.JobType, job.getTargetDescription())
 
@@ -224,23 +225,110 @@ func (s *JobService) CreateFromConfig(ctx context.Context, config *BackupConfig,
 
 // Get retrieves a backup job by ID
 func (s *JobService) Get(ctx context.Context, jobID string) (*BackupJob, error) {
-	// TODO: Implement database retrieval
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Get backup job")
+	record, err := s.store.GetBackupJob(ctx, jobID)
+	if err != nil {
+		return nil, fmt.Errorf("get backup job: %w", err)
+	}
+	return backupJobFromStore(record), nil
 }
 
 // List retrieves backup jobs with optional filtering
 func (s *JobService) List(ctx context.Context, filters JobFilter) ([]*BackupJob, int, error) {
-	// TODO: Implement database listing with filters
-	// Placeholder implementation
-	return []*BackupJob{}, 0, nil
+	records, err := s.store.ListAllBackupJobs(ctx)
+	if err != nil {
+		return nil, 0, err
+	}
+	jobs := make([]*BackupJob, 0, len(records))
+	for _, record := range records {
+		job := backupJobFromStore(record)
+		if filters.ConfigurationID != nil && !sameStringPointer(job.ConfigurationID, filters.ConfigurationID) {
+			continue
+		}
+		if filters.JobType != nil && job.JobType != *filters.JobType {
+			continue
+		}
+		if filters.ServerID != nil && !sameStringPointer(job.ServerID, filters.ServerID) {
+			continue
+		}
+		if filters.AppID != nil && !sameStringPointer(job.AppID, filters.AppID) {
+			continue
+		}
+		if filters.DatabaseID != nil && !sameStringPointer(job.DatabaseID, filters.DatabaseID) {
+			continue
+		}
+		if filters.VolumeID != nil && !sameStringPointer(job.VolumeID, filters.VolumeID) {
+			continue
+		}
+		if filters.Status != nil && job.Status != *filters.Status {
+			continue
+		}
+		if filters.TriggeredBy != nil && job.TriggeredBy != *filters.TriggeredBy {
+			continue
+		}
+		if filters.Search != nil {
+			query := strings.ToLower(strings.TrimSpace(*filters.Search))
+			if query != "" && !strings.Contains(strings.ToLower(job.Name+" "+job.Description), query) {
+				continue
+			}
+		}
+		if filters.StartDate != nil && job.CreatedAt.Before(*filters.StartDate) {
+			continue
+		}
+		if filters.EndDate != nil && job.CreatedAt.After(*filters.EndDate) {
+			continue
+		}
+		jobs = append(jobs, job)
+	}
+	total := len(jobs)
+	page, perPage := filters.Page, filters.PerPage
+	if page < 1 {
+		page = 1
+	}
+	if perPage < 1 {
+		perPage = 50
+	}
+	if perPage > 200 {
+		perPage = 200
+	}
+	start := (page - 1) * perPage
+	if start > total {
+		start = total
+	}
+	end := start + perPage
+	if end > total {
+		end = total
+	}
+	return jobs[start:end], total, nil
 }
 
 // Update updates a backup job
 func (s *JobService) Update(ctx context.Context, jobID string, updates map[string]interface{}) (*BackupJob, error) {
-	// TODO: Implement database update
-	// Placeholder implementation
-	return nil, fmt.Errorf("not implemented: Update backup job")
+	job, err := s.Get(ctx, jobID)
+	if err != nil {
+		return nil, err
+	}
+	if value, ok := updates["status"].(string); ok {
+		job.Status = BackupStatus(value)
+	}
+	if value, ok := updates["currentPhase"].(string); ok {
+		job.CurrentPhase = value
+	}
+	if value, ok := updates["progressPercentage"].(float64); ok {
+		if value < 0 || value > 100 {
+			return nil, fmt.Errorf("progress percentage must be between 0 and 100")
+		}
+		job.ProgressPercentage = value
+	}
+	if value, ok := updates["bytesProcessed"].(int64); ok {
+		job.BytesProcessed = value
+	}
+	if value, ok := updates["errorMessage"].(string); ok {
+		job.ErrorMessage = &value
+	}
+	if err := s.persistJob(ctx, job); err != nil {
+		return nil, err
+	}
+	return job, nil
 }
 
 // Execute executes a backup job
@@ -262,7 +350,9 @@ func (s *JobService) Execute(ctx context.Context, jobID string, userID string) e
 	job.ProgressPercentage = 0
 	job.BytesProcessed = 0
 
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	s.logger.Infof("Starting backup job execution: %s (type: %s)", job.Name, job.JobType)
 
@@ -289,7 +379,7 @@ func (s *JobService) Execute(ctx context.Context, jobID string, userID string) e
 			job.LastRetryAt = &now
 			errMsg := err.Error()
 			job.ErrorMessage = &errMsg
-			// TODO: Update in database
+			_ = s.persistJob(ctx, job)
 			s.logger.Warnf("Backup job %s failed, retry %d/%d: %v", job.Name, job.RetryCount, job.MaxRetries, err)
 			return fmt.Errorf("backup failed, will retry: %w", err)
 		}
@@ -300,7 +390,7 @@ func (s *JobService) Execute(ctx context.Context, jobID string, userID string) e
 		job.ErrorMessage = &errMsg
 		now = time.Now()
 		job.CompletedAt = &now
-		// TODO: Update in database
+		_ = s.persistJob(ctx, job)
 		s.logger.Errorf("Backup job %s failed after %d retries: %v", job.Name, job.MaxRetries, err)
 		return fmt.Errorf("backup failed after max retries: %w", err)
 	}
@@ -317,7 +407,9 @@ func (s *JobService) Execute(ctx context.Context, jobID string, userID string) e
 		job.DurationSeconds = &duration
 	}
 
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 	s.logger.Infof("Backup job %s completed successfully in %d seconds", job.Name, *job.DurationSeconds)
 
 	return nil
@@ -334,16 +426,18 @@ func (s *JobService) Cancel(ctx context.Context, jobID string, userID string) er
 		return fmt.Errorf("backup job is not in a cancellable state (current: %s)", job.Status)
 	}
 
-	// TODO: Implement cancellation logic
-	// This would involve:
-	// 1. Updating job status to cancelled
-	// 2. Stopping any running beacon tasks
-	// 3. Cleaning up temporary files
-
-	job.Status = BackupFailed // Using failed for now, could add cancelled status
+	job.Status = BackupCancelled
 	job.ErrorMessage = stringPtr("Backup cancelled by user")
 	now := time.Now()
 	job.CompletedAt = &now
+	if job.BeaconTaskID != nil && s.beaconClient != nil {
+		if err := s.beaconClient.CancelTask(ctx, *job.BeaconTaskID); err != nil {
+			return fmt.Errorf("cancel beacon task: %w", err)
+		}
+	}
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	s.logger.Infof("Backup job %s cancelled by user %s", job.Name, userID)
 
@@ -373,7 +467,9 @@ func (s *JobService) Retry(ctx context.Context, jobID string, userID string) (*B
 	job.ProgressPercentage = 0
 	job.CurrentPhase = ""
 
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return nil, err
+	}
 
 	// Execute the job
 	err = s.Execute(ctx, jobID, userID)
@@ -386,9 +482,11 @@ func (s *JobService) Retry(ctx context.Context, jobID string, userID string) (*B
 
 // Delete deletes a backup job
 func (s *JobService) Delete(ctx context.Context, jobID string, userID string) error {
-	// TODO: Implement deletion
-	// This should also clean up any associated artifacts if they exist
-	return fmt.Errorf("not implemented: Delete backup job")
+	if err := s.store.DeleteBackupJob(ctx, jobID); err != nil {
+		return fmt.Errorf("delete backup job: %w", err)
+	}
+	s.logger.Infof("Deleted backup job %s by user %s", jobID, userID)
+	return nil
 }
 
 // executeAppBackup executes an app backup
@@ -397,19 +495,49 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 
 	// Update phase
 	job.CurrentPhase = "validating"
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	// Validate app exists
 	if job.AppID == nil || *job.AppID == "" {
 		return fmt.Errorf("app ID is required for app backup")
 	}
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
-	// Get app details from database
-	// TODO: Implement app retrieval
+	app, err := s.store.GetApplication(ctx, *job.AppID)
+	if err != nil {
+		return fmt.Errorf("resolve app backup target: %w", err)
+	}
+	if app.ServerID == nil || *app.ServerID == "" {
+		return fmt.Errorf("application %s has no backing server", *job.AppID)
+	}
+	if s.daemonClient != nil {
+		target, err := s.store.ServerControlTarget(ctx, *app.ServerID)
+		if err != nil {
+			return fmt.Errorf("resolve app node: %w", err)
+		}
+		entry, err := s.daemonClient.CreateBackup(ctx, target.NodeURL, target.NodeToken, *app.ServerID, nil)
+		if err != nil {
+			return fmt.Errorf("beacon app backup: %w", err)
+		}
+		job.StorageProvider = "beacon"
+		result := &BackupResult{
+			ArtifactName: entry.Name, StoragePath: entry.Name, FileSize: entry.Size,
+			FileHash: entry.Checksum, HashAlgorithm: "sha256", SourceType: "app",
+			SourceID: *job.AppID, AppName: &app.Name, IsCompressed: true,
+		}
+		_, err = s.artifactService.CreateFromBackupResult(ctx, job, result)
+		return err
+	}
 
 	// Update phase
 	job.CurrentPhase = "preparing storage"
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	// Prepare storage adapter
 	storageAdapter, err := s.prepareStorageAdapter(job)
@@ -419,7 +547,9 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 
 	// Update phase
 	job.CurrentPhase = "creating backup"
-	// TODO: Update in database
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	// Execute backup via beacon
 	if s.beaconClient != nil {
@@ -430,7 +560,9 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 		}
 
 		job.NodeID = &nodeID
-		// TODO: Update in database
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		// Execute backup command on node via beacon
 		taskID, err := s.beaconClient.ExecuteBackup(ctx, nodeID, BackupTypeApp, *job.AppID, job.Name, storageAdapter)
@@ -439,7 +571,9 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 		}
 
 		job.BeaconTaskID = &taskID
-		// TODO: Update in database
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		// Wait for task completion
 		err = s.waitForBeaconTaskCompletion(ctx, taskID)
@@ -460,7 +594,9 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 		}
 
 		job.CurrentPhase = "verifying backup"
-		// TODO: Update in database
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		// Verify the backup
 		err = s.artifactService.Verify(ctx, artifact.ID)
@@ -469,7 +605,9 @@ func (s *JobService) executeAppBackup(ctx context.Context, job *BackupJob) error
 		}
 
 		job.CurrentPhase = "completing"
-		// TODO: Update in database
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 	} else {
 		return fmt.Errorf("beacon client not available")
@@ -485,9 +623,33 @@ func (s *JobService) executeVolumeBackup(ctx context.Context, job *BackupJob) er
 	// Similar implementation to app backup but for volumes
 	// Update phase
 	job.CurrentPhase = "validating"
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	if job.VolumeID == nil || *job.VolumeID == "" {
 		return fmt.Errorf("volume ID is required for volume backup")
+	}
+	if job.ServerID == nil || *job.ServerID == "" {
+		return fmt.Errorf("server ID is required for volume backup")
+	}
+	if s.daemonClient != nil {
+		target, err := s.store.ServerControlTarget(ctx, *job.ServerID)
+		if err != nil {
+			return fmt.Errorf("resolve volume node: %w", err)
+		}
+		entry, err := s.daemonClient.BackupVolume(ctx, target.NodeURL, target.NodeToken, *job.ServerID, *job.VolumeID)
+		if err != nil {
+			return fmt.Errorf("beacon volume backup: %w", err)
+		}
+		job.StorageProvider = "beacon"
+		result := &BackupResult{
+			ArtifactName: entry.Name, StoragePath: entry.Name, FileSize: entry.Size,
+			FileHash: entry.Checksum, HashAlgorithm: "sha256", SourceType: "volume",
+			SourceID: *job.VolumeID, VolumeName: job.VolumeID, IsCompressed: true,
+		}
+		_, err = s.artifactService.CreateFromBackupResult(ctx, job, result)
+		return err
 	}
 
 	// Prepare storage adapter
@@ -498,12 +660,15 @@ func (s *JobService) executeVolumeBackup(ctx context.Context, job *BackupJob) er
 
 	// Execute via beacon
 	if s.beaconClient != nil {
-		nodeID, err := s.determineNodeForVolume(*job.VolumeID)
+		nodeID, err := s.determineNodeForServer(*job.ServerID)
 		if err != nil {
 			return fmt.Errorf("failed to determine node for volume: %w", err)
 		}
 
 		job.NodeID = &nodeID
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		taskID, err := s.beaconClient.ExecuteBackup(ctx, nodeID, BackupTypeVolume, *job.VolumeID, job.Name, storageAdapter)
 		if err != nil {
@@ -511,6 +676,9 @@ func (s *JobService) executeVolumeBackup(ctx context.Context, job *BackupJob) er
 		}
 
 		job.BeaconTaskID = &taskID
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		err = s.waitForBeaconTaskCompletion(ctx, taskID)
 		if err != nil {
@@ -545,14 +713,45 @@ func (s *JobService) executeDatabaseBackup(ctx context.Context, job *BackupJob) 
 
 	// Similar implementation but for databases
 	job.CurrentPhase = "validating"
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	if job.DatabaseID == nil || *job.DatabaseID == "" {
 		return fmt.Errorf("database ID is required for database backup")
 	}
+	if s.daemonClient != nil {
+		databaseTarget, err := s.store.GetDBContainerBackupTarget(ctx, *job.DatabaseID)
+		if err != nil {
+			return fmt.Errorf("resolve database backup target: %w", err)
+		}
+		serverTarget, err := s.store.ServerControlTarget(ctx, databaseTarget.ServerID)
+		if err != nil {
+			return fmt.Errorf("resolve database node: %w", err)
+		}
+		entry, err := s.daemonClient.BackupDatabase(ctx, serverTarget.NodeURL, serverTarget.NodeToken,
+			databaseTarget.ContainerID, databaseTarget.Engine, job.ID)
+		if err != nil {
+			return fmt.Errorf("beacon database backup: %w", err)
+		}
+		job.StorageProvider = "beacon"
+		engine := DatabaseEngine(databaseTarget.Engine)
+		result := &BackupResult{
+			ArtifactName: entry.Name, StoragePath: entry.Name, FileSize: entry.Size,
+			FileHash: entry.Checksum, HashAlgorithm: "sha256", SourceType: "database",
+			SourceID: *job.DatabaseID, DatabaseEngine: &engine, IsCompressed: true,
+		}
+		if _, err := s.artifactService.CreateFromBackupResult(ctx, job, result); err != nil {
+			return fmt.Errorf("persist database backup artifact: %w", err)
+		}
+		return nil
+	}
 
-	// Get database details to determine engine
-	// TODO: Implement database retrieval
-	databaseEngine := DatabasePostgres // Default, should be retrieved from DB
+	databaseTarget, err := s.store.GetDBContainerBackupTarget(ctx, *job.DatabaseID)
+	if err != nil {
+		return fmt.Errorf("resolve database backup target: %w", err)
+	}
+	databaseEngine := DatabaseEngine(databaseTarget.Engine)
 
 	// Prepare storage adapter
 	storageAdapter, err := s.prepareStorageAdapter(job)
@@ -568,6 +767,9 @@ func (s *JobService) executeDatabaseBackup(ctx context.Context, job *BackupJob) 
 		}
 
 		job.NodeID = &nodeID
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		// For database backups, we need to pass the engine type
 		taskID, err := s.beaconClient.ExecuteDatabaseBackup(ctx, nodeID, databaseEngine, *job.DatabaseID, job.Name, storageAdapter)
@@ -576,6 +778,9 @@ func (s *JobService) executeDatabaseBackup(ctx context.Context, job *BackupJob) 
 		}
 
 		job.BeaconTaskID = &taskID
+		if err := s.persistJob(ctx, job); err != nil {
+			return err
+		}
 
 		err = s.waitForBeaconTaskCompletion(ctx, taskID)
 		if err != nil {
@@ -595,7 +800,9 @@ func (s *JobService) executeDatabaseBackup(ctx context.Context, job *BackupJob) 
 		// For database backups, we might want to test the restore
 		if s.shouldTestDatabaseRestore(databaseEngine) {
 			job.CurrentPhase = "testing restore"
-			// TODO: Update in database
+			if err := s.persistJob(ctx, job); err != nil {
+				return err
+			}
 
 			_, err = s.restoreService.TestRestore(ctx, artifact.ID)
 			if err != nil {
@@ -617,9 +824,32 @@ func (s *JobService) executeServerBackup(ctx context.Context, job *BackupJob) er
 
 	// Similar implementation but for entire servers
 	job.CurrentPhase = "validating"
+	if err := s.persistJob(ctx, job); err != nil {
+		return err
+	}
 
 	if job.ServerID == nil || *job.ServerID == "" {
 		return fmt.Errorf("server ID is required for server backup")
+	}
+	if s.daemonClient != nil {
+		target, err := s.store.ServerControlTarget(ctx, *job.ServerID)
+		if err != nil {
+			return fmt.Errorf("resolve server backup target: %w", err)
+		}
+		entry, err := s.daemonClient.CreateBackup(ctx, target.NodeURL, target.NodeToken, *job.ServerID, nil)
+		if err != nil {
+			return fmt.Errorf("beacon server backup: %w", err)
+		}
+		job.StorageProvider = "beacon"
+		result := &BackupResult{
+			ArtifactName: entry.Name, StoragePath: entry.Name, FileSize: entry.Size,
+			FileHash: entry.Checksum, HashAlgorithm: "sha256", SourceType: "server",
+			SourceID: *job.ServerID, IsCompressed: true,
+		}
+		if _, err := s.artifactService.CreateFromBackupResult(ctx, job, result); err != nil {
+			return fmt.Errorf("persist server backup artifact: %w", err)
+		}
+		return nil
 	}
 
 	// Prepare storage adapter
@@ -708,34 +938,60 @@ func (s *JobService) prepareStorageAdapter(job *BackupJob) (StorageAdapter, erro
 
 // determineNodeForApp determines which node to use for an app backup
 func (s *JobService) determineNodeForApp(appID string) (string, error) {
-	// TODO: Implement logic to find which node the app is running on
-	// This would query the database for app placement information
-	return "", fmt.Errorf("not implemented: determineNodeForApp")
-}
-
-// determineNodeForVolume determines which node to use for a volume backup
-func (s *JobService) determineNodeForVolume(volumeID string) (string, error) {
-	// TODO: Implement logic to find which node the volume is on
-	return "", fmt.Errorf("not implemented: determineNodeForVolume")
+	instances, err := s.store.ListInstancesByApp(context.Background(), appID)
+	if err != nil {
+		return "", err
+	}
+	for _, instance := range instances {
+		if instance.NodeID != "" && instance.Status != "failed" && instance.Status != "stopped" {
+			return instance.NodeID, nil
+		}
+	}
+	return "", fmt.Errorf("application %s has no active instance", appID)
 }
 
 // determineNodeForDatabase determines which node to use for a database backup
 func (s *JobService) determineNodeForDatabase(databaseID string) (string, error) {
-	// TODO: Implement logic to find which node the database is on
-	return "", fmt.Errorf("not implemented: determineNodeForDatabase")
+	target, err := s.store.GetDBContainerBackupTarget(context.Background(), databaseID)
+	if err != nil {
+		return "", err
+	}
+	return s.determineNodeForServer(target.ServerID)
 }
 
 // determineNodeForServer determines which node to use for a server backup
 func (s *JobService) determineNodeForServer(serverID string) (string, error) {
-	// TODO: Implement logic to find which node the server is on
-	return "", fmt.Errorf("not implemented: determineNodeForServer")
+	return s.store.ServerNodeID(context.Background(), serverID)
 }
 
 // waitForBeaconTaskCompletion waits for a beacon task to complete
 func (s *JobService) waitForBeaconTaskCompletion(ctx context.Context, taskID string) error {
-	// TODO: Implement polling or callback-based waiting
-	// For now, just return nil as if it completed
-	return nil
+	if s.beaconClient == nil {
+		return fmt.Errorf("beacon client not available")
+	}
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	timeout := time.NewTimer(30 * time.Minute)
+	defer timeout.Stop()
+	for {
+		status, err := s.beaconClient.GetTaskStatus(ctx, taskID)
+		if err != nil {
+			return fmt.Errorf("get beacon task status: %w", err)
+		}
+		switch strings.ToLower(status) {
+		case "completed", "success":
+			return nil
+		case "failed", "error", "cancelled":
+			return fmt.Errorf("beacon task %s ended with status %s", taskID, status)
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("wait for beacon task: %w", ctx.Err())
+		case <-timeout.C:
+			return fmt.Errorf("beacon task %s timed out", taskID)
+		case <-ticker.C:
+		}
+	}
 }
 
 // shouldTestDatabaseRestore determines if we should test database restore
@@ -759,6 +1015,70 @@ func (j *BackupJob) getTargetDescription() string {
 		return fmt.Sprintf("volume:%s", *j.VolumeID)
 	}
 	return "unknown"
+}
+
+func backupJobToStore(job *BackupJob) (store.BackupJob, error) {
+	data, err := json.Marshal(job)
+	if err != nil {
+		return store.BackupJob{}, fmt.Errorf("encode backup job: %w", err)
+	}
+	return store.BackupJob{
+		ID: job.ID, ConfigurationID: job.ConfigurationID, JobType: string(job.JobType),
+		ServerID: job.ServerID, AppID: job.AppID, DatabaseID: job.DatabaseID,
+		VolumeID: job.VolumeID, Name: job.Name, Description: job.Description,
+		Status: string(job.Status), StartedAt: job.StartedAt, CompletedAt: job.CompletedAt,
+		DurationSeconds: job.DurationSeconds, BytesProcessed: job.BytesProcessed,
+		TotalBytes: job.TotalBytes, CurrentPhase: job.CurrentPhase,
+		ErrorMessage: job.ErrorMessage, RetryCount: job.RetryCount,
+		MaxRetries: job.MaxRetries, LastRetryAt: job.LastRetryAt,
+		TriggeredBy: job.TriggeredBy, TriggeredByUserID: job.TriggeredByUserID,
+		NodeID: job.NodeID, BeaconTaskID: job.BeaconTaskID,
+		CreatedAt: job.CreatedAt, UpdatedAt: job.UpdatedAt, Data: data,
+	}, nil
+}
+
+func backupJobFromStore(record store.BackupJob) *BackupJob {
+	var job BackupJob
+	_ = json.Unmarshal(record.Data, &job)
+	job.ID = record.ID
+	job.ConfigurationID = record.ConfigurationID
+	job.JobType = BackupType(record.JobType)
+	job.ServerID = record.ServerID
+	job.AppID = record.AppID
+	job.DatabaseID = record.DatabaseID
+	job.VolumeID = record.VolumeID
+	job.Name = record.Name
+	job.Description = record.Description
+	job.Status = BackupStatus(record.Status)
+	job.StartedAt = record.StartedAt
+	job.CompletedAt = record.CompletedAt
+	job.DurationSeconds = record.DurationSeconds
+	job.BytesProcessed = record.BytesProcessed
+	job.TotalBytes = record.TotalBytes
+	job.CurrentPhase = record.CurrentPhase
+	job.ErrorMessage = record.ErrorMessage
+	job.RetryCount = record.RetryCount
+	job.MaxRetries = record.MaxRetries
+	job.LastRetryAt = record.LastRetryAt
+	job.TriggeredBy = record.TriggeredBy
+	job.TriggeredByUserID = record.TriggeredByUserID
+	job.NodeID = record.NodeID
+	job.BeaconTaskID = record.BeaconTaskID
+	job.CreatedAt = record.CreatedAt
+	job.UpdatedAt = record.UpdatedAt
+	return &job
+}
+
+func (s *JobService) persistJob(ctx context.Context, job *BackupJob) error {
+	record, err := backupJobToStore(job)
+	if err != nil {
+		return err
+	}
+	if err := s.store.UpdateBackupJob(ctx, &record); err != nil {
+		return fmt.Errorf("persist backup job: %w", err)
+	}
+	job.UpdatedAt = record.UpdatedAt
+	return nil
 }
 
 // stringPtr is a helper to create a string pointer

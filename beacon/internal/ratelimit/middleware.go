@@ -68,7 +68,18 @@ func (l *Limiter) Start(ctx context.Context) {
 func (l *Limiter) cleanup() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	threshold := time.Now().Add(-3 * l.config.CleanupInterval)
+	// Note: this compares time.Time values (via Before), not raw
+	// time.Now().UnixNano() wall-clock integers, so there's no risk of int
+	// overflow/truncation or of a manually-subtracted negative duration
+	// being misinterpreted here. As a defensive measure against a
+	// non-positive CleanupInterval (which should never happen given
+	// withDefaults, but could in principle make every visitor look stale
+	// if ever mutated directly), clamp it to a sane minimum before use.
+	interval := l.config.CleanupInterval
+	if interval <= 0 {
+		interval = time.Minute
+	}
+	threshold := time.Now().Add(-3 * interval)
 	for ip, v := range l.visitors {
 		if v.lastSeen.Before(threshold) {
 			delete(l.visitors, ip)

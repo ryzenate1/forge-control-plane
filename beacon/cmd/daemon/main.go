@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"gamepanel/beacon/config"
-	"gamepanel/beacon/internal/auth"
 	"gamepanel/beacon/internal/backup"
 	"gamepanel/beacon/internal/cron"
 	"gamepanel/beacon/internal/logrotate"
@@ -124,6 +123,9 @@ func main() {
 	}
 
 	if err != nil {
+		if appEnv == "production" {
+			log.Fatalf("runtime unavailable in production mode: %v", err)
+		}
 		if env("DAEMON_ALLOW_MOCK_RUNTIME", "false") != "true" {
 			log.Fatalf("runtime unavailable and DAEMON_ALLOW_MOCK_RUNTIME is not true: %v", err)
 		}
@@ -181,10 +183,6 @@ func main() {
 		log.Fatalf("token generator initialization failed")
 	}
 	server.SetTokenGenerator(tokenGen)
-
-	if !allowInsecureNoAuth && nodeToken != "" {
-		handler = auth.NewAuthMiddleware(tokenGen)(handler)
-	}
 
 	cronScheduler, cronErr := cron.NewScheduler("UTC")
 	if cronErr != nil {
@@ -276,6 +274,10 @@ func main() {
 			}
 		}
 		go heartbeatLoop(daemonCtx, panelAPIURL, nodeID, nodeToken, dataDir, pinger, runtimeProvider)
+	} else {
+		if err := recoverServersFromDisk(daemonCtx, dataDir, server); err != nil {
+			log.Printf("local server recovery failed: %v", err)
+		}
 	}
 
 	tlsCfg := &tls.Config{Mode: tls.ModeNone}

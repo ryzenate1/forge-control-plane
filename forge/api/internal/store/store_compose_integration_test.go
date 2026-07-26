@@ -52,6 +52,18 @@ func composeTestStore(t *testing.T) *Store {
 	return s
 }
 
+func createComposeStackForTest(t *testing.T, ctx context.Context, s *Store, stack *ComposeStack) error {
+	t.Helper()
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO nodes (id, name, region, base_url, token_hash)
+		VALUES ($1, $2, 'test', $3, 'hash')
+		ON CONFLICT (id) DO NOTHING
+	`, stack.NodeID, "compose-"+stack.NodeID, "https://"+stack.NodeID+".example.test"); err != nil {
+		t.Fatal(err)
+	}
+	return s.CreateComposeStack(ctx, stack)
+}
+
 // A8 - Compose lifecycle: deploy/create/fetch
 
 func TestA8_ComposeStackCRUD(t *testing.T) {
@@ -77,7 +89,7 @@ func TestA8_ComposeStackCRUD(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
@@ -119,7 +131,7 @@ func TestA8_ComposeStackCreateWithDefaults(t *testing.T) {
 	stack.CreatedAt = time.Now().UTC()
 	stack.UpdatedAt = stack.CreatedAt
 
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
@@ -173,7 +185,7 @@ func TestA8_ComposeStackList(t *testing.T) {
 		UpdatedAt:   time.Now().UTC(),
 	}
 	for _, st := range []*ComposeStack{stack1, stack2, stack3} {
-		err = s.CreateComposeStack(ctx, st)
+		err = createComposeStackForTest(t, ctx, s, st)
 		requireNoError(t, err)
 	}
 
@@ -210,7 +222,7 @@ func TestA8_ComposeStackDelete(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	_, err = s.GetComposeStack(ctx, stack.ID)
@@ -243,20 +255,27 @@ func TestA8_ComposeStackUpdateReservationID(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
 	requireNoError(t, err)
 	assertEqual(t, "", fetched.ReservationID)
 
-	stack.ReservationID = "res-123456"
+	stack.ReservationID = uuid.NewString()
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO placement_reservations
+			(id, node_id, reservation_type, cpu, memory, disk, status, expires_at)
+		VALUES ($1, $2, 'placement', 0, 0, 0, 'pending', NOW() + INTERVAL '5 minutes')
+	`, stack.ReservationID, stack.NodeID); err != nil {
+		t.Fatal(err)
+	}
 	err = s.UpdateComposeStack(ctx, stack)
 	requireNoError(t, err)
 
 	fetched, err = s.GetComposeStack(ctx, stack.ID)
 	requireNoError(t, err)
-	assertEqual(t, "res-123456", fetched.ReservationID)
+	assertEqual(t, stack.ReservationID, fetched.ReservationID)
 }
 
 func TestA8_ComposeStackErrorField(t *testing.T) {
@@ -278,7 +297,7 @@ func TestA8_ComposeStackErrorField(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
@@ -307,7 +326,7 @@ func TestA8_ComposeStackStatusTransitions(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	statuses := []string{"running", "stopped", "updating", "running", "degraded", "stopped", "deleting", "deleted", "failed"}
@@ -342,7 +361,7 @@ func TestA8_ComposeStackListOrderedByCreatedAtDesc(t *testing.T) {
 			CreatedAt:   time.Now().UTC().Add(-time.Duration(5-i) * time.Minute),
 			UpdatedAt:   time.Now().UTC(),
 		}
-		err = s.CreateComposeStack(ctx, stack)
+		err = createComposeStackForTest(t, ctx, s, stack)
 		requireNoError(t, err)
 	}
 
@@ -453,7 +472,25 @@ func TestA8_ComposeProjectWithServerID(t *testing.T) {
 	s := composeTestStore(t)
 	ctx := context.Background()
 
+	userID := uuid.NewString()
+	nodeID := uuid.NewString()
+	templateID := uuid.NewString()
 	serverID := uuid.NewString()
+	if _, err := s.db.Exec(ctx, `INSERT INTO users (id, email, password_hash, role) VALUES ($1, $2, 'hash', 'admin')`, userID, userID+"@example.test"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `INSERT INTO nodes (id, name, region, base_url, token_hash) VALUES ($1, 'compose-node', 'test', 'https://node.example.test', 'hash')`, nodeID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `
+		INSERT INTO eggs (id, nest_id, name, docker_images, startup)
+		VALUES ($1, 'dddddddd-dddd-dddd-dddd-dddddddddddd', $2, '["alpine:latest"]', 'sleep infinity')
+	`, templateID, "compose-template-"+templateID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(ctx, `INSERT INTO servers (id, node_id, owner_id, template_id, name, memory_mb, cpu_shares, disk_mb) VALUES ($1, $2, $3, $4, 'compose-server', 128, 100, 512)`, serverID, nodeID, userID, templateID); err != nil {
+		t.Fatal(err)
+	}
 	p := &ProjectDocument{
 		ID:             uuid.NewString(),
 		Name:           "server-project",
@@ -542,11 +579,11 @@ func TestA8_ComposeStackUpsertBehavior(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	stack.ID = "cps-" + uuid.NewString()[:12]
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	stacks, err := s.ListComposeStacks(ctx, userID)
@@ -572,7 +609,7 @@ func TestA8_ComposeStackEmptyEnvVars(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
@@ -609,7 +646,7 @@ func TestA8_ComposeStackLargeYAML(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s, stack)
 	requireNoError(t, err)
 
 	fetched, err := s.GetComposeStack(ctx, stack.ID)
@@ -635,7 +672,7 @@ func TestA8_ComposeStackDBIsolation(t *testing.T) {
 		CreatedAt:   time.Now().UTC(),
 		UpdatedAt:   time.Now().UTC(),
 	}
-	err = s1.CreateComposeStack(ctx, stack)
+	err = createComposeStackForTest(t, ctx, s1, stack)
 	requireNoError(t, err)
 
 	s2 := composeTestStore(t)
@@ -708,11 +745,11 @@ func TestSmoke_MultiComposeProjectImport(t *testing.T) {
 
 	for i := 0; i < 5; i++ {
 		p := &ProjectDocument{
-			ID:   uuid.NewString(),
-			Name: "multi-project-" + string(rune('A'+i)),
+			ID:             uuid.NewString(),
+			Name:           "multi-project-" + string(rune('A'+i)),
 			ComposeContent: "version: '3'\nservices:\n  svc" + string(rune('A'+i)) + ":\n    image: test:" + string(rune('A'+i)),
-			Status:   "imported",
-			Revision: 1,
+			Status:         "imported",
+			Revision:       1,
 		}
 		err := s.CreateComposeProject(ctx, p)
 		requireNoError(t, err)

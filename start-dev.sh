@@ -34,15 +34,25 @@ BEACON_PORT=9090
 # Environment variables
 export DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:${DB_PORT}/${DB_NAME}?sslmode=disable"
 export API_ADDR=":${API_PORT}"
-export API_AUTH_SECRET="dev-api-secret"
+export API_AUTH_SECRET="dev-api-secret-for-development-only-123456789"
 export APP_ENV="development"
-export DAEMON_NODE_TOKEN="dev-node-token"
-export DAEMON_NODE_ID="1"
-export API_SEED_DEMO="false"
+export APP_KEY="base64:ZGV2LWFwcC1rZXktZm9yLWRldmVsb3BtZW50LTMyY2hhcg=="
+export APP_CIPHER="AES-256-GCM"
+# Token format is "<daemon_token_id>.<secret>" so it satisfies both the node
+# heartbeat check (VerifyNodeToken) and the remote server sync check
+# (AuthenticateRemoteNode, which requires the tokenID.secret form). These values
+# match the demo node seeded by the API (API_SEED_DEMO=true).
+export DAEMON_NODE_TOKEN="devnodetoken0001.dev-node-token"
+export DAEMON_NODE_ID="22222222-2222-2222-2222-222222222222"
+# Seed the demo node/admin so the daemon can authenticate against the panel.
+export API_SEED_DEMO="true"
 export REDIS_ADDR="localhost:${REDIS_PORT}"
-export MIGRATIONS_DIR="${ROOT}/forge/api/migrations"
-export NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}/api/v1"
-export FORGE_ALLOW_EPHEMERAL_MASTER_KEY="true"
+export REDIS_PASSWORD="CHANGE_ME"
+export NEXT_PUBLIC_API_URL="/api/v1"
+export SESSION_COOKIE_SECURE="false"
+export FORGE_MASTER_KEY="yi9pOL6gBpg6Vm7SFaGfYA6pwai4e4S8wxjG2E2+Z7o="
+export FORGE_MASTER_KEY_ID="primary"
+export FORGE_ALLOW_EPHEMERAL_MASTER_KEY="false"
 
 # Colors
 RED='\033[0;31m'
@@ -199,15 +209,15 @@ echo "  Building API..."
         exit 1
     fi
     
-    go build -o "$ROOT/forge/api/api" ./cmd/api >/dev/null 2>&1)
+    go build -o "$ROOT/forge/api/api" ./cmd/api > /dev/null 2>&1)
 
 if [ $? -ne 0 ]; then
     echo -e "  ${RED}API build failed!${NC}"
     exit 1
 fi
 
-# Start API in background
-"$ROOT/forge/api/api" > "$ROOT/api-dev.log" 2> "$ROOT/api-dev.err.log" &
+# Start API in background FROM ITS OWN DIRECTORY (required for relative migration paths)
+(cd "$ROOT/forge/api" && nohup ./api > "$ROOT/api-dev.log" 2> "$ROOT/api-dev.err.log" &)
 API_PID=$!
 
 echo -n "  Waiting for API..."
@@ -243,8 +253,8 @@ else
 fi
 write_status "[ok]" "Frontend on http://localhost:${FRONTEND_PORT} (PID: $FE_PID)" "$GREEN"
 
-# Step 4: Beacon Daemon
-write_header "Starting Beacon Daemon"
+# Step 4: Beacon Daemon (macOS launchd native daemon)
+write_header "Starting Beacon Daemon (launchd)"
 
 echo "  Building Beacon..."
 (cd "$ROOT/beacon" && \
@@ -253,25 +263,79 @@ echo "  Building Beacon..."
         exit 1
     fi
     
-    go build -o "$ROOT/beacon/daemon" ./cmd/daemon >/dev/null 2>&1)
+    go build -o "$ROOT/beacon/daemon" ./cmd/daemon > /dev/null 2>&1)
 
 if [ $? -ne 0 ]; then
     echo -e "  ${RED}Beacon build failed!${NC}"
     exit 1
 fi
 
-# Start beacon in background with required env vars
-(cd "$ROOT/beacon" && \
-    DAEMON_ALLOW_INSECURE_NO_AUTH=true \
-    DAEMON_DATA_DIR=/tmp/beacon-data \
-    PANEL_API_URL=http://localhost:8080/api/v1 \
-    ./daemon > "$ROOT/beacon-dev.log" 2> "$ROOT/beacon-dev.err.log" &)
-BEACON_PID=$!
+# Create beacon data directory
+mkdir -p /tmp/beacon-data
+
+# Use macOS launchd for native demonizing
+PLIST_PATH="$HOME/Library/LaunchAgents/com.gamepanel.beacon.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+
+# Write the launchd plist
+cat > "$PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gamepanel.beacon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$ROOT/beacon/daemon</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DAEMON_ADDR</key>
+        <string>:$BEACON_PORT</string>
+        <key>DAEMON_DATA_DIR</key>
+        <string>/tmp/beacon-data</string>
+        <key>DAEMON_NODE_ID</key>
+        <string>22222222-2222-2222-2222-222222222222</string>
+        <key>DAEMON_NODE_TOKEN</key>
+        <string>devnodetoken0001.dev-node-token</string>
+        <key>PANEL_API_URL</key>
+        <string>http://localhost:${API_PORT}/api/v1</string>
+        <key>DAEMON_ALLOW_INSECURE_NO_AUTH</key>
+        <string>true</string>
+        <key>DAEMON_ALLOW_MOCK_RUNTIME</key>
+        <string>true</string>
+        <key>APP_ENV</key>
+        <string>development</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>/tmp/beacon-data</string>
+    <key>StandardOutPath</key>
+    <string>$ROOT/beacon-dev.log</string>
+    <key>StandardErrorPath</key>
+    <string>$ROOT/beacon-dev.err.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+PLIST
+
+# Unload existing instance if running, then load fresh
+launchctl unload "$PLIST_PATH" 2>/dev/null || true
+sleep 1
+launchctl load "$PLIST_PATH" 2>&1
 
 echo -n "  Waiting for Beacon..."
 if test_port $BEACON_PORT 15; then
     echo -e " ${GREEN}Ready!${NC}"
-    write_status "[ok]" "Beacon on http://localhost:${BEACON_PORT}/health (PID: $BEACON_PID)" "$GREEN"
+    write_status "[ok]" "Beacon on http://localhost:${BEACON_PORT}/health (launchd)" "$GREEN"
 else
     echo -e " ${YELLOW}(daemon may take longer to start)${NC}"
 fi

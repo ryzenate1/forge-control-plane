@@ -10,6 +10,7 @@ import {
   listFiles, readFile, writeFile, createDir, deleteFile, renameFile, copyFile, chmodFile, downloadFile, uploadFile,
   type FileEntry,
 } from "@/lib/api/host-files";
+import { NodeSelect } from "./node-select";
 
 const btn = cn(
   "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-white/10",
@@ -64,10 +65,11 @@ export function HostFilesView() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"name" | "size" | "date">("name");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
+  const [nodeId, setNodeId] = useState("");
 
   const refresh = useCallback(async () => {
-    await queryClient.invalidateQueries({ queryKey: ["host-files", directory] });
-  }, [queryClient, directory]);
+    await queryClient.invalidateQueries({ queryKey: ["host-files", nodeId, directory] });
+  }, [queryClient, nodeId, directory]);
 
   const run = useCallback(async (label: string, action: () => Promise<void>) => {
     setBusy(true);
@@ -85,8 +87,8 @@ export function HostFilesView() {
   }, []);
 
   const files = useQuery({
-    queryKey: ["host-files", directory],
-    queryFn: () => listFiles(directory),
+    queryKey: ["host-files", nodeId, directory],
+    queryFn: () => listFiles(directory, nodeId || undefined),
     retry: 1,
     staleTime: 10_000,
   });
@@ -111,7 +113,7 @@ export function HostFilesView() {
     setError("");
     setStatus("Loading");
     try {
-      const value = await readFile(path);
+      const value = await readFile(path, nodeId || undefined);
       setContent(value);
       setFileLoaded(true);
       setStatus("Loaded");
@@ -124,7 +126,7 @@ export function HostFilesView() {
   const save = () =>
     run("Saving", async () => {
       if (!editing || !fileLoaded) return;
-      await writeFile(editing, content);
+      await writeFile(editing, content, nodeId || undefined);
     });
 
   const promptName = (kind: "file" | "folder") => {
@@ -140,7 +142,7 @@ export function HostFilesView() {
     const name = promptName("folder");
     if (!name) return;
     void run("Creating folder", async () => {
-      await createDir(directory === "/" ? "/" + name : directory + "/" + name);
+      await createDir(directory === "/" ? "/" + name : directory + "/" + name, nodeId || undefined);
       await refresh();
     });
   };
@@ -152,7 +154,7 @@ export function HostFilesView() {
     if (!uploadFiles.length) return;
     await run("Uploading", async () => {
       for (const file of uploadFiles) {
-        await uploadFile(directory, file);
+        await uploadFile(directory, file, nodeId || undefined);
       }
       await refresh();
     });
@@ -163,7 +165,7 @@ export function HostFilesView() {
     if (!name || name === entry.name || name.includes("/")) return;
     void run("Renaming", async () => {
       const parentPath = entry.path.includes("/") ? entry.path.substring(0, entry.path.lastIndexOf("/") + 1) : "";
-      await renameFile(entry.path, parentPath + name);
+      await renameFile(entry.path, parentPath + name, nodeId || undefined);
       await refresh();
     });
   };
@@ -173,7 +175,7 @@ export function HostFilesView() {
     if (!name || name.includes("/")) return;
     void run("Copying", async () => {
       const parentPath = entry.path.includes("/") ? entry.path.substring(0, entry.path.lastIndexOf("/") + 1) : "";
-      await copyFile(entry.path, parentPath + name);
+      await copyFile(entry.path, parentPath + name, nodeId || undefined);
       await refresh();
     });
   };
@@ -181,7 +183,7 @@ export function HostFilesView() {
   const handleDelete = (entry: FileEntry) => {
     if (!window.confirm(`Permanently delete ${entry.isDir ? "directory" : "file"} "${entry.name}"?`)) return;
     void run("Deleting", async () => {
-      await deleteFile(entry.path);
+      await deleteFile(entry.path, nodeId || undefined);
       await refresh();
     });
   };
@@ -193,14 +195,14 @@ export function HostFilesView() {
       return;
     }
     void run("Changing permissions", async () => {
-      await chmodFile(entry.path, mode);
+      await chmodFile(entry.path, mode, nodeId || undefined);
       await refresh();
     });
   };
 
   const handleDownload = (entry: FileEntry) => {
     void run("Downloading", async () => {
-      const blob = await downloadFile(entry.path);
+      const blob = await downloadFile(entry.path, nodeId || undefined);
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -224,6 +226,17 @@ export function HostFilesView() {
   useEffect(() => {
     setSearch("");
   }, [directory]);
+
+  // Switching nodes returns to root and closes any open editor, since paths
+  // from one node are not meaningful on another.
+  const handleNodeChange = useCallback((next: string) => {
+    setNodeId(next);
+    setDirectory("/");
+    setEditing(null);
+    setFileLoaded(false);
+    setError("");
+    setStatus("Ready");
+  }, []);
 
   if (editing) {
     return (
@@ -269,6 +282,7 @@ export function HostFilesView() {
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <Breadcrumbs directory={directory} onOpen={setDirectory} />
         <div className="flex flex-wrap gap-2">
+          <NodeSelect value={nodeId} onChange={handleNodeChange} />
           <label className="relative">
             <Search className="absolute left-3 top-2.5 text-slate-500 pointer-events-none" size={14} />
             <span className="sr-only">Filter files</span>

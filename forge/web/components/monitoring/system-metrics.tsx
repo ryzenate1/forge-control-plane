@@ -34,7 +34,7 @@ function MetricCardSkeleton() {
 }
 
 export function SystemMetrics() {
-  const { data: metrics, isLoading, isError, error } = useQuery({
+  const { data: metrics, isLoading, isError } = useQuery({
     queryKey: ["node-metrics"],
     queryFn: () => getNodeMetrics({ period: "5m" }),
     refetchInterval: 15_000,

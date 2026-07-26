@@ -16,9 +16,9 @@ CREATE INDEX IF NOT EXISTS domains_server_id_idx ON domains (server_id);
 CREATE INDEX IF NOT EXISTS domains_verified_idx ON domains (verified);
 
 CREATE TABLE IF NOT EXISTS compose_projects (
-    id TEXT PRIMARY KEY,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name TEXT NOT NULL,
-    server_id TEXT,
+    server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
     compose_content TEXT NOT NULL DEFAULT '',
     parsed_config JSONB NOT NULL DEFAULT '{}',
     status TEXT NOT NULL DEFAULT 'imported',
@@ -28,10 +28,10 @@ CREATE TABLE IF NOT EXISTS compose_projects (
 );
 
 CREATE TABLE IF NOT EXISTS compose_stacks (
-    id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    node_id TEXT NOT NULL,
+    node_id UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,
     status TEXT NOT NULL DEFAULT 'deploying',
     compose_yaml TEXT NOT NULL DEFAULT '',
     compose_hash TEXT NOT NULL DEFAULT '',
@@ -40,7 +40,7 @@ CREATE TABLE IF NOT EXISTS compose_stacks (
     cpu_shares BIGINT NOT NULL DEFAULT 0,
     disk_mb BIGINT NOT NULL DEFAULT 0,
     error TEXT NOT NULL DEFAULT '',
-    reservation_id TEXT,
+    reservation_id UUID REFERENCES placement_reservations(id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -48,8 +48,8 @@ CREATE INDEX IF NOT EXISTS compose_stacks_user_idx ON compose_stacks (user_id, c
 CREATE INDEX IF NOT EXISTS compose_stacks_node_idx ON compose_stacks (node_id);
 
 CREATE TABLE IF NOT EXISTS db_containers (
-    id TEXT PRIMARY KEY,
-    server_id TEXT NOT NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    server_id UUID NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
     engine TEXT NOT NULL,
     version TEXT NOT NULL,
     container_id TEXT NOT NULL DEFAULT '',
@@ -66,8 +66,8 @@ CREATE TABLE IF NOT EXISTS db_containers (
 CREATE INDEX IF NOT EXISTS db_containers_server_idx ON db_containers (server_id, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS builds (
-    id TEXT PRIMARY KEY,
-    source_id TEXT NOT NULL,
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_id UUID NOT NULL,
     builder_type TEXT NOT NULL CHECK (builder_type IN ('dockerfile', 'nixpacks')),
     status TEXT NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'succeeded', 'failed', 'canceled', 'abandoned')),
     image_ref TEXT,

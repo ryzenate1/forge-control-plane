@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Bell, Globe, MessageSquare, Mail, Send, Check, X } from "lucide-react";
 import {

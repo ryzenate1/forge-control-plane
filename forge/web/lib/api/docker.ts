@@ -100,29 +100,35 @@ export async function listContainers(params?: { all?: boolean }): Promise<Docker
   return flat;
 }
 
-export async function getContainer(id: string): Promise<unknown> {
-  return fetchJSON(`/docker/containers/${encodeURIComponent(id)}`);
+export type DockerContainerDetail = Record<string, unknown>;
+
+export type DockerContainerStats = Record<string, unknown>;
+
+export type DockerOperationResult = { ok: boolean };
+
+export async function getContainer(id: string): Promise<DockerContainerDetail> {
+  return fetchJSON<DockerContainerDetail>(`/docker/containers/${encodeURIComponent(id)}`);
 }
 
-export async function createContainer(config: CreateContainerRequest): Promise<unknown> {
+export async function createContainer(config: CreateContainerRequest): Promise<DockerContainerDetail> {
   const nodeParam = config.nodeId ? `?node=${encodeURIComponent(config.nodeId)}` : "";
-  return postJSON(`/docker/containers${nodeParam}`, config);
+  return postJSON<DockerContainerDetail>(`/docker/containers${nodeParam}`, config);
 }
 
 export async function operateContainer(
   id: string,
   action: "start" | "stop" | "restart" | "pause" | "unpause",
   nodeId?: string,
-): Promise<unknown> {
-  return postJSON(`/docker/containers/${encodeURIComponent(id)}/operate${pickNodeParam(nodeId)}`, { action });
+): Promise<DockerOperationResult> {
+  return postJSON<DockerOperationResult>(`/docker/containers/${encodeURIComponent(id)}/operate${pickNodeParam(nodeId)}`, { action });
 }
 
-export async function deleteContainer(id: string, force?: boolean, nodeId?: string): Promise<unknown> {
+export async function deleteContainer(id: string, force?: boolean, nodeId?: string): Promise<DockerOperationResult> {
   const params = new URLSearchParams();
   if (force) params.set("force", "true");
   if (nodeId) params.set("node", nodeId);
   const qs = params.toString();
-  return deleteJSON(`/docker/containers/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`);
+  return deleteJSON<DockerOperationResult>(`/docker/containers/${encodeURIComponent(id)}${qs ? `?${qs}` : ""}`);
 }
 
 export async function getContainerLogs(id: string, tail?: number, nodeId?: string): Promise<string> {
@@ -134,48 +140,86 @@ export async function getContainerLogs(id: string, tail?: number, nodeId?: strin
   return typeof response === "string" ? response : String(response);
 }
 
-export async function getContainerStats(id: string, nodeId?: string): Promise<unknown> {
-  return fetchJSON(`/docker/containers/${encodeURIComponent(id)}/stats${pickNodeParam(nodeId)}`);
+export async function getContainerStats(id: string, nodeId?: string): Promise<DockerContainerStats> {
+  return fetchJSON<DockerContainerStats>(`/docker/containers/${encodeURIComponent(id)}/stats${pickNodeParam(nodeId)}`);
 }
 
 export async function listImages(): Promise<DockerImage[]> {
   return fetchJSON<DockerImage[]>("/docker/images");
 }
 
-export async function pullImage(image: string, tag?: string, nodeId?: string): Promise<unknown> {
-  return postJSON("/docker/images/pull", { image, tag, nodeId });
+export async function pullImage(image: string, tag?: string, nodeId?: string): Promise<DockerOperationResult> {
+  return postJSON<DockerOperationResult>("/docker/images/pull", { image, tag, nodeId });
 }
 
-export async function deleteImage(id: string, nodeId: string): Promise<unknown> {
-  return deleteJSON(`/docker/images/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
+export async function deleteImage(id: string, nodeId: string): Promise<DockerOperationResult> {
+  return deleteJSON<DockerOperationResult>(`/docker/images/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
 }
 
 export async function listNetworks(): Promise<DockerNetwork[]> {
   return fetchJSON<DockerNetwork[]>("/docker/networks");
 }
 
-export async function createNetwork(config: CreateNetworkRequest): Promise<unknown> {
+export async function createNetwork(config: CreateNetworkRequest): Promise<DockerNetwork> {
   const nodeParam = config.nodeId ? `?node=${encodeURIComponent(config.nodeId)}` : "";
-  return postJSON(`/docker/networks${nodeParam}`, config);
+  return postJSON<DockerNetwork>(`/docker/networks${nodeParam}`, config);
 }
 
-export async function deleteNetwork(id: string, nodeId: string): Promise<unknown> {
-  return deleteJSON(`/docker/networks/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
+export async function deleteNetwork(id: string, nodeId: string): Promise<DockerOperationResult> {
+  return deleteJSON<DockerOperationResult>(`/docker/networks/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
 }
 
 export async function listVolumes(): Promise<DockerVolume[]> {
   return fetchJSON<DockerVolume[]>("/docker/volumes");
 }
 
-export async function createVolume(config: CreateVolumeRequest): Promise<unknown> {
+export async function createVolume(config: CreateVolumeRequest): Promise<DockerVolume> {
   const nodeParam = config.nodeId ? `?node=${encodeURIComponent(config.nodeId)}` : "";
-  return postJSON(`/docker/volumes${nodeParam}`, config);
+  return postJSON<DockerVolume>(`/docker/volumes${nodeParam}`, config);
 }
 
-export async function deleteVolume(id: string, nodeId: string): Promise<unknown> {
-  return deleteJSON(`/docker/volumes/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
+export async function deleteVolume(id: string, nodeId: string): Promise<DockerOperationResult> {
+  return deleteJSON<DockerOperationResult>(`/docker/volumes/${encodeURIComponent(id)}?node=${encodeURIComponent(nodeId)}`);
 }
 
-export async function pruneVolumes(): Promise<unknown> {
-  return postJSON("/docker/volumes/prune");
+export async function pruneVolumes(): Promise<DockerOperationResult> {
+  return postJSON<DockerOperationResult>("/docker/volumes/prune");
+}
+
+export async function buildImage(dockerfile: string, tag: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/images/build${pickNodeParam(nodeId)}`, { dockerfile, tag });
+}
+
+export async function pushImage(id: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/images/${encodeURIComponent(id)}/push${pickNodeParam(nodeId)}`);
+}
+
+export async function tagImage(id: string, tag: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/images/${encodeURIComponent(id)}/tag${pickNodeParam(nodeId)}`, { tag });
+}
+
+export async function searchImages(term: string, nodeId?: string): Promise<unknown> {
+  const params = new URLSearchParams({ term });
+  if (nodeId) params.set("node", nodeId);
+  return fetchJSON(`/docker/images/search?${params.toString()}`);
+}
+
+export async function listContainerFiles(id: string, path?: string, nodeId?: string): Promise<unknown> {
+  const params = new URLSearchParams();
+  if (path) params.set("path", path);
+  if (nodeId) params.set("node", nodeId);
+  const qs = params.toString();
+  return fetchJSON(`/docker/containers/${encodeURIComponent(id)}/files${qs ? `?${qs}` : ""}`);
+}
+
+export async function readContainerFile(id: string, path: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/containers/${encodeURIComponent(id)}/files/read${pickNodeParam(nodeId)}`, { path });
+}
+
+export async function uploadContainerFile(id: string, path: string, content: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/containers/${encodeURIComponent(id)}/files/upload${pickNodeParam(nodeId)}`, { path, content });
+}
+
+export async function deleteContainerFile(id: string, path: string, nodeId?: string): Promise<unknown> {
+  return postJSON(`/docker/containers/${encodeURIComponent(id)}/files/delete${pickNodeParam(nodeId)}`, { path });
 }

@@ -73,7 +73,7 @@ compose_up() {
     return 0
   fi
   info "Starting $label..."
-  docker compose -f "$INFRA_DIR/compose.yml" -f "$INFRA_DIR/compose.production.yml" --env-file "$INFRA_DIR/.env" up -d --no-deps --wait "$service" 2>&1 | sed 's/^/  /'
+  docker compose -f "$INFRA_DIR/compose.yml" -f "$INFRA_DIR/compose.production.yml" --env-file "$INFRA_DIR/.env" up -d --wait "$service" 2>&1 | sed 's/^/  /'
 }
 
 healthcheck_service() {

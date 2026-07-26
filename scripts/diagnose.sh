@@ -50,14 +50,17 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | tee
 # === PostgreSQL check ===
 echo "" | tee -a "$REPORT"
 echo "--- PostgreSQL ---" | tee -a "$REPORT"
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q postgres; then
-  PG_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep postgres | head -1)
-  if docker exec "$PG_CONTAINER" pg_isready -U gamepanel > /dev/null 2>&1; then
+if (docker ps --format '{{.Names}}' 2>/dev/null || true) | grep -q postgres; then
+  PG_CONTAINER=$((docker ps --format '{{.Names}}' 2>/dev/null || true) | grep postgres | head -1 || echo "")
+  if [ -n "$PG_CONTAINER" ] && docker exec "$PG_CONTAINER" pg_isready -U gamepanel > /dev/null 2>&1; then
     ok "PostgreSQL is ready"
     # Query database stats
-      info "Migrations applied: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM schema_migrations" 2>/dev/null | tr -d ' ' || echo 'N/A')"
-    info "Servers: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM servers" 2>/dev/null | tr -d ' ' || echo 'N/A')"
-    info "Nodes: $(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM nodes" 2>/dev/null | tr -d ' ' || echo 'N/A')"
+    migrations_cnt=$(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM schema_migrations" 2>/dev/null | tr -d ' ' || echo 'N/A')
+    servers_cnt=$(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM servers" 2>/dev/null | tr -d ' ' || echo 'N/A')
+    nodes_cnt=$(docker exec "$PG_CONTAINER" psql -U gamepanel -d gamepanel -t -c "SELECT COUNT(*) FROM nodes" 2>/dev/null | tr -d ' ' || echo 'N/A')
+    info "Migrations applied: $migrations_cnt"
+    info "Servers: $servers_cnt"
+    info "Nodes: $nodes_cnt"
   else
     fail "PostgreSQL is not responding"
   fi
@@ -68,11 +71,12 @@ fi
 # === Redis check ===
 echo "" | tee -a "$REPORT"
 echo "--- Redis ---" | tee -a "$REPORT"
-if docker ps --format '{{.Names}}' 2>/dev/null | grep -q redis; then
-  REDIS_CONTAINER=$(docker ps --format '{{.Names}}' 2>/dev/null | grep redis | head -1)
-  if docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null | grep -q PONG; then
+if (docker ps --format '{{.Names}}' 2>/dev/null || true) | grep -q redis; then
+  REDIS_CONTAINER=$((docker ps --format '{{.Names}}' 2>/dev/null || true) | grep redis | head -1 || echo "")
+  if [ -n "$REDIS_CONTAINER" ] && (docker exec "$REDIS_CONTAINER" redis-cli ping 2>/dev/null || true) | grep -q PONG; then
     ok "Redis is responding"
-    info "Redis info: $(docker exec "$REDIS_CONTAINER" redis-cli INFO server 2>/dev/null | grep -E '^(redis_version|uptime_in_seconds|used_memory_human):' | tr '\n' ', ')"
+    redis_info=$(docker exec "$REDIS_CONTAINER" redis-cli INFO server 2>/dev/null | grep -E '^(redis_version|uptime_in_seconds|used_memory_human):' | tr '\n' ', ' || echo 'N/A')
+    info "Redis info: $redis_info"
   else
     fail "Redis is not responding"
   fi

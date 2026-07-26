@@ -1,8 +1,10 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,9 +22,9 @@ type composeLockEntry struct {
 }
 
 type composeStack struct {
-	mu       sync.RWMutex
-	stacks   map[string]*composeLockEntry
-	dir      string
+	mu     sync.RWMutex
+	stacks map[string]*composeLockEntry
+	dir    string
 }
 
 func newComposeStackManager(dataDir string) *composeStack {
@@ -54,7 +56,71 @@ func (cs *composeStack) unlock(stackID string) {
 }
 
 func validStackID(stackID string) bool {
-	return !strings.Contains(stackID, "..") && !strings.Contains(stackID, "/") && stackID != "" && stackID != "."
+	if stackID == "" || len(stackID) > 128 || stackID[0] < 'a' || stackID[0] > 'z' {
+		if stackID == "" || stackID[0] < '0' || stackID[0] > '9' {
+			return false
+		}
+	}
+	for _, r := range stackID {
+		if (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '-' && r != '_' {
+			return false
+		}
+	}
+	return true
+}
+
+func validateComposePolicy(yamlContent string) error {
+	if strings.Contains(yamlContent, "privileged: true") || strings.Contains(yamlContent, "privileged: True") {
+		return errors.New("privileged mode is not allowed in compose deployments")
+	}
+	if strings.Contains(yamlContent, "network_mode: \"host\"") || strings.Contains(yamlContent, "network_mode: host") {
+		return errors.New("host network mode is not allowed")
+	}
+	if strings.Contains(yamlContent, "pid: \"host\"") || strings.Contains(yamlContent, "pid: host") {
+		return errors.New("host pid namespace is not allowed")
+	}
+	if strings.Contains(yamlContent, "userns_mode: \"host\"") || strings.Contains(yamlContent, "userns_mode: host") {
+		return errors.New("host userns mode is not allowed")
+	}
+	lines := strings.Split(yamlContent, "\n")
+	inVolumes := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "volumes:") {
+			inVolumes = true
+			continue
+		}
+		if inVolumes && strings.HasPrefix(trimmed, "services:") {
+			inVolumes = false
+			continue
+		}
+		if inVolumes && strings.HasPrefix(trimmed, "- ") {
+			volPath := strings.TrimPrefix(trimmed, "- ")
+			if strings.HasPrefix(volPath, "/") {
+				return errors.New("host bind mounts are not allowed in compose deployments")
+			}
+		}
+	}
+	return nil
+}
+
+func encodeComposeEnv(envVars map[string]string) ([]byte, error) {
+	var buf bytes.Buffer
+	for key, value := range envVars {
+		if key == "" {
+			return nil, errors.New("environment variable key must not be empty")
+		}
+		for _, c := range key {
+			if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_') {
+				return nil, fmt.Errorf("invalid environment variable key %q: only alphanumeric and underscore allowed", key)
+			}
+		}
+		safeValue := strings.ReplaceAll(strings.ReplaceAll(value, "\n", ""), "\r", "")
+		if _, err := fmt.Fprintf(&buf, "%s=%s\n", key, safeValue); err != nil {
+			return nil, err
+		}
+	}
+	return buf.Bytes(), nil
 }
 
 func (cs *composeStack) dirForID(stackID string) string {
@@ -65,9 +131,17 @@ func (cs *composeStack) dirForID(stackID string) string {
 }
 
 type composeDeployRequest struct {
-	StackID       string `json:"stackId"`
-	ComposeYAML   string `json:"composeYaml"`
-	EnvVars       map[string]string `json:"envVars,omitempty"`
+	StackID     string            `json:"stackId"`
+	ComposeYAML string            `json:"composeYaml"`
+	EnvVars     map[string]string `json:"envVars,omitempty"`
+	// RemoveOrphans is opt-in and defaults to false. When true, it passes
+	// --remove-orphans to `docker compose up`, which removes any containers
+	// Compose considers orphaned relative to the *current* compose file.
+	// This can unexpectedly kill containers left over from a previous
+	// version of the same project (or otherwise unrelated containers docker
+	// compose associates with this project name) that the caller did not
+	// intend to remove. Callers must explicitly request this behavior.
+	RemoveOrphans bool `json:"removeOrphans,omitempty"`
 }
 
 type composeDeployResponse struct {
@@ -76,23 +150,23 @@ type composeDeployResponse struct {
 }
 
 type composeStatusResponse struct {
-	StackID  string              `json:"stackId"`
+	StackID  string                `json:"stackId"`
 	Services []composeServiceState `json:"services"`
 }
 
 type composeServiceState struct {
-	Name    string `json:"name"`
-	Image   string `json:"image"`
-	Status  string `json:"status"`
-	State   string `json:"state"`
-	Ports   string `json:"ports"`
+	Name   string `json:"name"`
+	Image  string `json:"image"`
+	Status string `json:"status"`
+	State  string `json:"state"`
+	Ports  string `json:"ports"`
 }
 
 type composeLogsRequest struct {
-	StackID  string `json:"stackId"`
-	Service  string `json:"service,omitempty"`
-	Tail     int    `json:"tail,omitempty"`
-	Follow   bool   `json:"follow,omitempty"`
+	StackID string `json:"stackId"`
+	Service string `json:"service,omitempty"`
+	Tail    int    `json:"tail,omitempty"`
+	Follow  bool   `json:"follow,omitempty"`
 }
 
 type composeOperationResponse struct {
@@ -120,6 +194,14 @@ func (s *Server) handleComposeDeploy(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "stackId and composeYaml are required")
 		return
 	}
+	if !validStackID(req.StackID) {
+		writeError(w, http.StatusBadRequest, "invalid stackId")
+		return
+	}
+	if err := validateComposePolicy(req.ComposeYAML); err != nil {
+		writeError(w, http.StatusBadRequest, "compose policy violation: "+err.Error())
+		return
+	}
 
 	cs := s.composeStackManager()
 	cs.lock(req.StackID)
@@ -139,11 +221,12 @@ func (s *Server) handleComposeDeploy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if len(req.EnvVars) > 0 {
-		envContent := ""
-		for key, value := range req.EnvVars {
-			envContent += fmt.Sprintf("%s=%s\n", key, value)
+		envContent, err := encodeComposeEnv(req.EnvVars)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "invalid environment variables: "+err.Error())
+			return
 		}
-		if err := os.WriteFile(filepath.Join(stackDir, ".env"), []byte(envContent), 0o640); err != nil {
+		if err := os.WriteFile(filepath.Join(stackDir, ".env"), envContent, 0o640); err != nil {
 			writeError(w, http.StatusInternalServerError, "write env file: "+err.Error())
 			return
 		}
@@ -152,7 +235,11 @@ func (s *Server) handleComposeDeploy(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", composePath, "-p", req.StackID, "up", "-d", "--remove-orphans")
+	upArgs := []string{"compose", "-f", composePath, "-p", req.StackID, "up", "-d"}
+	if req.RemoveOrphans {
+		upArgs = append(upArgs, "--remove-orphans")
+	}
+	cmd := exec.CommandContext(ctx, "docker", upArgs...)
 	cmd.Dir = stackDir
 	output, err := cmd.CombinedOutput()
 
@@ -324,9 +411,18 @@ func (s *Server) handleComposeDelete(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
+	// RemoveOrphans is opt-in (see composeDeployRequest.RemoveOrphans doc)
+	// and defaults to false to avoid unexpectedly killing unrelated
+	// containers docker compose associates with this project name.
+	removeOrphans := r.URL.Query().Get("removeOrphans") == "true"
+
 	var output string
 	if _, err := os.Stat(composePath); err == nil {
-		cmd := exec.CommandContext(ctx, "docker", "compose", "-f", composePath, "-p", stackID, "down", "-v", "--remove-orphans")
+		downArgs := []string{"compose", "-f", composePath, "-p", stackID, "down", "-v"}
+		if removeOrphans {
+			downArgs = append(downArgs, "--remove-orphans")
+		}
+		cmd := exec.CommandContext(ctx, "docker", downArgs...)
 		cmd.Dir = stackDir
 		downOutput, downErr := cmd.CombinedOutput()
 		output = string(downOutput)

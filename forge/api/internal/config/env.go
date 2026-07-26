@@ -11,7 +11,7 @@ func FromEnv() Config {
 			Env:           env("APP_ENV", "development"),
 			Name:          "GamePanel",
 			URL:           env("PANEL_URL", "http://localhost:3000"),
-			Debug:         env("APP_ENV", "development") != "production",
+			Debug:         env("APP_ENV", "development") != "production" && env("APP_DEBUG", "false") == "true",
 			Version:       "0.1.0",
 			MigrationsDir: env("MIGRATIONS_DIR", "migrations"),
 			PluginsDir:    env("PLUGINS_DIR", ""),

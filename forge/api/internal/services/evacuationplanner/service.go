@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -104,6 +105,13 @@ func (s *Service) Start(ctx context.Context) {
 	s.startOnce.Do(func() {
 		ctx, s.cancel = context.WithCancel(ctx)
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					fmt.Printf("evacuation planner main loop panic: %v\nstack: %s", r, buf[:n])
+				}
+			}()
 			s.resumeRunningPlans(ctx)
 			ticker := time.NewTicker(30 * time.Second)
 			defer ticker.Stop()
@@ -144,6 +152,13 @@ func (s *Service) startObserver(parentCtx context.Context, planID, correlationID
 	s.observers[planID] = struct{}{}
 	s.mu.Unlock()
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				fmt.Printf("evacuation plan observer panic: %v\nstack: %s", r, buf[:n])
+			}
+		}()
 		defer func() {
 			s.mu.Lock()
 			delete(s.observers, planID)

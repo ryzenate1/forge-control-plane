@@ -29,5 +29,8 @@
   },
   "engines": {
     "node": ">=20"
+  },
+  "dependencies": {
+    "vite": "^8.1.5"
   }
 }

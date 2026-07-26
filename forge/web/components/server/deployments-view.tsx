@@ -90,11 +90,9 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
   const [showConfig, setShowConfig] = useState(false);
 
   const serverId = server.id;
-  const apiPath = (path: string) => `/servers/${serverId}${path}`;
-
   const loadReleases = useCallback(async () => {
     try {
-      const res = await fetchJSON<{ data: Release[] }>(apiPath("/deployments"));
+      const res = await fetchJSON<{ data: Release[] }>(`/servers/${serverId}/deployments`);
       setReleases(res.data);
       const live = res.data.find((r) => r.status === "live");
       setActiveRelease(live ?? null);
@@ -107,7 +105,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
 
   const loadHealthConfig = useCallback(async () => {
     try {
-      const res = await fetchJSON<{ data: HealthCheckConfig }>(apiPath("/health-check"));
+      const res = await fetchJSON<{ data: HealthCheckConfig }>(`/servers/${serverId}/health-check`);
       setHcConfig(res.data);
     } catch {
       // No config yet - use defaults
@@ -116,7 +114,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
 
   const loadHealthResults = useCallback(async (releaseId: string) => {
     try {
-      const res = await fetchJSON<{ data: HealthCheckResult[] }>(apiPath(`/deployments/${releaseId}/health`));
+      const res = await fetchJSON<{ data: HealthCheckResult[] }>(`/servers/${serverId}/deployments/${releaseId}/health`);
       setHealthResults(res.data);
     } catch {
       setHealthResults([]);
@@ -125,7 +123,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
 
   const loadEvents = useCallback(async (releaseId: string) => {
     try {
-      const res = await fetchJSON<{ data: DeploymentEvent[] }>(apiPath(`/deployments/${releaseId}/events`));
+      const res = await fetchJSON<{ data: DeploymentEvent[] }>(`/servers/${serverId}/deployments/${releaseId}/events`);
       setEvents(res.data);
     } catch {
       setEvents([]);
@@ -142,7 +140,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
     setDeploying(true);
     setError(null);
     try {
-      await postJSON(apiPath("/deployments"), { imageTag: imageTag.trim() });
+      await postJSON(`/servers/${serverId}/deployments`, { imageTag: imageTag.trim() });
       setImageTag("");
       setTimeout(loadReleases, 1000);
     } catch (err) {
@@ -154,7 +152,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
 
   const handleRollback = async (releaseId: string) => {
     try {
-      await postJSON(apiPath(`/deployments/${releaseId}/rollback`));
+      await postJSON(`/servers/${serverId}/deployments/${releaseId}/rollback`);
       setTimeout(loadReleases, 1000);
     } catch (err) {
       setError(errorMessage(err, "Rollback failed"));
@@ -163,7 +161,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
 
   const handleForcePromote = async (releaseId: string) => {
     try {
-      await postJSON(apiPath(`/deployments/${releaseId}/promote`));
+      await postJSON(`/servers/${serverId}/deployments/${releaseId}/promote`);
       setTimeout(loadReleases, 1000);
     } catch (err) {
       setError(errorMessage(err, "Promotion failed"));
@@ -173,7 +171,7 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
   const handleSaveConfig = async () => {
     setConfigError(null);
     try {
-      await putJSON(apiPath("/health-check"), hcConfig);
+      await putJSON(`/servers/${serverId}/health-check`, hcConfig);
       setConfigSaved(true);
       setTimeout(() => setConfigSaved(false), 2000);
     } catch (err) {

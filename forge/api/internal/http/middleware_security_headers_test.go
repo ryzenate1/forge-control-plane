@@ -32,7 +32,7 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 		"X-XSS-Protection":        "1; mode=block",
 		"Referrer-Policy":         "strict-origin-when-cross-origin",
 		"Permissions-Policy":      "geolocation=(), microphone=(), camera=()",
-		"Content-Security-Policy": "default-src 'self'",
+		"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
 	}
 
 	for header, expected := range headers {
@@ -43,8 +43,8 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 	}
 
 	hsts := resp.Header.Get("Strict-Transport-Security")
-	if hsts != "max-age=31536000; includeSubDomains" {
-		t.Errorf("HSTS: expected max-age=31536000; includeSubDomains, got %q", hsts)
+	if hsts != "max-age=31536000; includeSubDomains; preload" {
+		t.Errorf("HSTS: expected max-age=31536000; includeSubDomains; preload, got %q", hsts)
 	}
 }
 
@@ -149,7 +149,7 @@ func TestSecurityHeadersMiddleware_CustomHSTSMaxAge(t *testing.T) {
 	}
 
 	got := resp.Header.Get("Strict-Transport-Security")
-	if got != "max-age=86400; includeSubDomains" {
-		t.Errorf("expected max-age=86400; includeSubDomains, got %q", got)
+	if got != "max-age=86400; includeSubDomains; preload" {
+		t.Errorf("expected max-age=86400; includeSubDomains; preload, got %q", got)
 	}
 }

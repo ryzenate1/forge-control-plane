@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -36,7 +37,17 @@ func newScheduleRunner(cfg Config) *scheduleRunner {
 
 func (r *scheduleRunner) Start(ctx context.Context) {
 	r.wg.Add(1)
-	go func() { defer r.wg.Done(); r.loop(ctx) }()
+	go func() {
+		defer r.wg.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				r.cfg.Logger.Error("schedule runner panic recovered", "panic", recovered, "stack", string(buf[:n]))
+			}
+		}()
+		r.loop(ctx)
+	}()
 }
 
 func (r *scheduleRunner) Wait() { r.wg.Wait() }

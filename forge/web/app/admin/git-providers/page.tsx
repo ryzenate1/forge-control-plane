@@ -1,10 +1,11 @@
 "use client";
 
 import { useState } from "react";
+import Image from "next/image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
-import { listGitProviders, connectGitProvider, disconnectGitProvider, listProviderRepos, listProviderBranches, type GitProvider, type GitProviderRepo, type GitProviderBranch } from "@/lib/api/source-deployments";
-import { Plus, Trash2, RefreshCw, Globe, Key, GitBranch, CheckCircle, XCircle } from "lucide-react";
+import { listGitProviders, connectGitProvider, disconnectGitProvider } from "@/lib/api/source-deployments";
+import { Plus, Trash2, Globe, Key } from "lucide-react";
 
 const providerIcons: Record<string, string> = {
   github: "https://github.com/favicon.ico",
@@ -17,9 +18,12 @@ const providerIcons: Record<string, string> = {
 function ProviderIcon({ provider }: { provider: string }) {
   if (provider === "generic") return <Globe className="w-5 h-5" />;
   return (
-    <img
+    <Image
       src={providerIcons[provider] || `https://${provider}.com/favicon.ico`}
       alt={provider}
+      width={20}
+      height={20}
+      unoptimized
       className="w-5 h-5 rounded"
       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
     />
@@ -75,20 +79,20 @@ export default function GitProvidersPage() {
         </div>
         <button
           onClick={() => setShowConnect(!showConnect)}
-          className="btn btn-primary flex items-center gap-2"
+          className="inline-flex items-center gap-2 rounded-lg border border-red-500/70 bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-red-950/40 transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-50"
         >
           <Plus className="w-4 h-4" /> Connect Provider
         </button>
       </div>
 
       {showConnect && (
-        <div className="card p-4 mb-6">
+        <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#111722] p-4 mb-6 shadow-xl shadow-black/10">
           <h2 className="text-lg font-semibold mb-4">Connect a Git Provider</h2>
           <div className="grid gap-4">
             <div>
               <label className="block text-sm font-medium mb-1">Provider</label>
               <select
-                className="input w-full"
+                className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                 value={connectForm.provider}
                 onChange={(e) => setConnectForm({ ...connectForm, provider: e.target.value })}
               >
@@ -103,7 +107,7 @@ export default function GitProvidersPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Provider Name</label>
                 <input
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   placeholder="My Git Server"
                   value={connectForm.name}
                   onChange={(e) => setConnectForm({ ...connectForm, name: e.target.value })}
@@ -114,7 +118,7 @@ export default function GitProvidersPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Base URL</label>
                 <input
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   placeholder="https://gitea.example.com"
                   value={connectForm.baseUrl}
                   onChange={(e) => setConnectForm({ ...connectForm, baseUrl: e.target.value })}
@@ -124,7 +128,7 @@ export default function GitProvidersPage() {
             <div>
               <label className="block text-sm font-medium mb-1">Access Token</label>
               <input
-                className="input w-full"
+                className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                 type="password"
                 placeholder="Personal access token"
                 value={connectForm.accessToken}
@@ -134,7 +138,7 @@ export default function GitProvidersPage() {
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowConnect(false)}
-                className="btn btn-ghost"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-4 py-2 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -155,7 +159,7 @@ export default function GitProvidersPage() {
       ) : providers && providers.length > 0 ? (
         <div className="grid gap-4">
           {providers.map((p) => (
-            <div key={p.id} className="card p-4 flex items-center justify-between">
+            <div key={p.id} className="rounded-xl border border-white/[0.08] bg-[#111722] p-4 flex items-center justify-between shadow-xl shadow-black/10">
               <div className="flex items-center gap-3">
                 <ProviderIcon provider={p.type} />
                 <div>
@@ -175,7 +179,7 @@ export default function GitProvidersPage() {
                 </span>
                 <button
                   onClick={() => disconnectMutation.mutate(p.id)}
-                  className="btn btn-ghost btn-sm text-red-400"
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-red-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -184,7 +188,7 @@ export default function GitProvidersPage() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-12 card">
+        <div className="text-center py-12 rounded-xl border border-white/[0.08] bg-[#111722] shadow-xl shadow-black/10">
           <Globe className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="opacity-60">No git providers connected yet.</p>
           <p className="text-sm opacity-40">Connect a provider to deploy from repositories.</p>

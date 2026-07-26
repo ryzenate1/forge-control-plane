@@ -13,7 +13,6 @@ import {
   toggleCronJob,
   fetchCronJobExecutions,
   type CronJob,
-  type CronJobExecution,
   type CreateCronJobInput,
 } from "@/lib/api/cron-jobs";
 

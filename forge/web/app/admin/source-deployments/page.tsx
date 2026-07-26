@@ -3,8 +3,8 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
-import { listSourceDeployments, createSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, listGitProviders, listProviderRepos, type SourceDeployment, type GitProvider, type GitProviderRepo } from "@/lib/api/source-deployments";
-import { Plus, Play, XCircle, Trash2, GitBranch, Github, RefreshCw, CheckCircle, Loader2, Clock, AlertTriangle } from "lucide-react";
+import { listSourceDeployments, createSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, listGitProviders, type SourceDeployment, type GitProvider } from "@/lib/api/source-deployments";
+import { Plus, Play, XCircle, Trash2, GitBranch, CheckCircle, Loader2, Clock, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 
 const statusIcons: Record<string, typeof Clock> = {
@@ -130,21 +130,21 @@ export default function SourceDeploymentsPage() {
         </div>
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="btn btn-primary flex items-center gap-2"
+          className="inline-flex items-center gap-2 rounded-lg border border-red-500/70 bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-red-950/40 transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-50"
         >
           <Plus className="w-4 h-4" /> New Deployment
         </button>
       </div>
 
       {showCreate && (
-        <div className="card p-4 mb-6">
+        <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[#111722] p-4 mb-6 shadow-xl shadow-black/10">
           <h2 className="text-lg font-semibold mb-4">Create Source Deployment</h2>
           <div className="grid gap-4">
             <div className="grid grid-cols-2 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Repository URL</label>
                 <input
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   placeholder="https://github.com/user/repo.git"
                   value={form.repository}
                   onChange={(e) => setForm({ ...form, repository: e.target.value })}
@@ -153,7 +153,7 @@ export default function SourceDeploymentsPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Branch</label>
                 <input
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   placeholder="main"
                   value={form.branch}
                   onChange={(e) => setForm({ ...form, branch: e.target.value })}
@@ -164,7 +164,7 @@ export default function SourceDeploymentsPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Build Type</label>
                 <select
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   value={form.buildType}
                   onChange={(e) => setForm({ ...form, buildType: e.target.value })}
                 >
@@ -178,7 +178,7 @@ export default function SourceDeploymentsPage() {
               <div>
                 <label className="block text-sm font-medium mb-1">Git Provider (optional)</label>
                 <select
-                  className="input w-full"
+                  className="block min-h-11 w-full rounded-lg border border-white/10 bg-[#0d131d] px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   value={form.gitProviderId}
                   onChange={(e) => setForm({ ...form, gitProviderId: e.target.value })}
                 >
@@ -195,7 +195,7 @@ export default function SourceDeploymentsPage() {
                   type="checkbox"
                   checked={form.autoDeploy}
                   onChange={(e) => setForm({ ...form, autoDeploy: e.target.checked })}
-                  className="checkbox"
+                  className="rounded border-white/10 bg-[#161b28]"
                 />
                 <span className="text-sm">Auto-deploy on push</span>
               </label>
@@ -203,7 +203,7 @@ export default function SourceDeploymentsPage() {
             <div className="flex gap-2 justify-end">
               <button
                 onClick={() => setShowCreate(false)}
-                className="btn btn-ghost"
+                className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-4 py-2 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
               >
                 Cancel
               </button>
@@ -224,7 +224,7 @@ export default function SourceDeploymentsPage() {
       ) : deployments && deployments.length > 0 ? (
         <div className="grid gap-3">
           {deployments.map((d: SourceDeployment) => (
-            <div key={d.id} className="card p-4">
+            <div key={d.id} className="rounded-xl border border-white/[0.08] bg-[#111722] p-4 shadow-xl shadow-black/10">
               <div className="flex items-center justify-between">
                 <Link href={`/admin/source-deployments/${d.id}`} className="flex items-center gap-3 flex-1 hover:opacity-80">
                   <StatusIcon status={d.status} />
@@ -247,7 +247,7 @@ export default function SourceDeploymentsPage() {
                   {!(["completed", "failed", "canceled"].includes(d.status)) && (
                     <button
                       onClick={() => cancelMutation.mutate(d.id)}
-                      className="btn btn-ghost btn-sm"
+                      className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
                       title="Cancel"
                     >
                       <XCircle className="w-4 h-4" />
@@ -255,14 +255,14 @@ export default function SourceDeploymentsPage() {
                   )}
                   <button
                     onClick={() => deployMutation.mutate(d.id)}
-                    className="btn btn-ghost btn-sm"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-slate-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
                     title="Deploy"
                   >
                     <Play className="w-4 h-4" />
                   </button>
                   <button
                     onClick={() => deleteMutation.mutate(d.id)}
-                    className="btn btn-ghost btn-sm text-red-400"
+                    className="inline-flex items-center justify-center gap-2 rounded-lg border border-transparent bg-transparent px-3 py-1.5 text-sm font-semibold text-red-400 shadow-none transition-colors hover:bg-white/[0.06] hover:text-white disabled:pointer-events-none disabled:opacity-50"
                     title="Delete"
                   >
                     <Trash2 className="w-4 h-4" />
@@ -273,7 +273,7 @@ export default function SourceDeploymentsPage() {
           ))}
         </div>
       ) : (
-        <div className="text-center py-12 card">
+        <div className="text-center py-12 rounded-xl border border-white/[0.08] bg-[#111722] shadow-xl shadow-black/10">
           <GitBranch className="w-12 h-12 mx-auto mb-3 opacity-30" />
           <p className="opacity-60">No source deployments yet.</p>
           <p className="text-sm opacity-40">Create a deployment to build and deploy from a git repository.</p>

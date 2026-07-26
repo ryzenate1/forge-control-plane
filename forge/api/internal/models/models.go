@@ -42,7 +42,7 @@ type Server struct {
 	Env         map[string]string `json:"env" gorm:"type:jsonb"`
 	CreatedAt   time.Time         `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
-	DeletedAt   *time.Time        `json:"deleted_at,omitempty" gorm:"index"`
+	DeletedAt   *time.Time        `json:"deleted_at,omitempty" gorm:"index;softDelete"`
 }
 
 func (s *Server) Validate() error {

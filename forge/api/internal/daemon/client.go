@@ -364,6 +364,7 @@ type TransferPushRequest struct {
 }
 
 type BackupEntry struct {
+	BackupID  string `json:"backupId"`
 	UUID      string `json:"uuid"`
 	Name      string `json:"name"`
 	Checksum  string `json:"checksum"`
@@ -598,24 +599,37 @@ func (c *Client) Logs(ctx context.Context, baseURL, nodeToken, serverID string) 
 }
 
 func (c *Client) SendCommand(ctx context.Context, baseURL, nodeToken, serverID, command string) error {
+	_, err := c.sendCommandWithBody(ctx, baseURL, nodeToken, serverID, command)
+	return err
+}
+
+func (c *Client) SendCommandWithOutput(ctx context.Context, baseURL, nodeToken, serverID, command string) (string, error) {
+	return c.sendCommandWithBody(ctx, baseURL, nodeToken, serverID, command)
+}
+
+func (c *Client) sendCommandWithBody(ctx context.Context, baseURL, nodeToken, serverID, command string) (string, error) {
 	body, err := json.Marshal(map[string]string{"command": command})
 	if err != nil {
-		return err
+		return "", err
 	}
 	url := strings.TrimRight(baseURL, "/") + "/servers/" + serverID + "/command"
 	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon command request failed with status %d", res.StatusCode)
+		return "", fmt.Errorf("daemon command request failed with status %d", res.StatusCode)
 	}
-	return nil
+	respBody, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(respBody), nil
 }
 
 func (c *Client) SendPower(ctx context.Context, baseURL, nodeToken, serverID, signal string) (PowerResponse, error) {

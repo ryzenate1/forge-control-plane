@@ -29,8 +29,12 @@ route:
 
 receivers:
   - name: "default"
-    # No-op fallback.  Alertmanager logs every notification attempt so
-    # unmatched alerts are visible in `docker logs alertmanager`.
+    email_configs:
+      - to: "${ALERTMANAGER_ADMIN_EMAIL}"
+        send_resolved: true
+    webhook_configs:
+      - url: "${ALERTMANAGER_WEBHOOK_URL}"
+        send_resolved: true
   - name: "admin-email"
     email_configs:
       - to: "${ALERTMANAGER_ADMIN_EMAIL}"

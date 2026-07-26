@@ -4,8 +4,43 @@ export * from './api/servers';
 export * from './api/auth';
 export * from './api/mounts';
 export * from './api/files';
-export * from './api/backup';
+export {
+  listBackupProviders, listBackupPolicies, createBackupPolicy, deleteBackupPolicy, triggerBackup, cleanupExpiredBackups, lockBackupPolicy, unlockBackupPolicy,
+  type BackupPolicy, type BackupPolicyConfig, type BackupProvider, type BackupProvidersResponse, type BackupPoliciesResponse,
+} from './api/backup';
 export * from './api/types';
+export * from './api/apps';
+export * from './api/app-store';
+export * from './api/compose';
+export * from './api/notifications';
+export * from './api/monitoring';
+export * from './api/acme';
+export * from './api/docker';
+export * from './api/env-vars';
+export * from './api/deployments';
+export {
+  listGitCredentials, listGitProviderTokens, listGitSources, createGitCredential, deleteGitCredential,
+  generateGitDeployKey, connectGitProviderToken, disconnectGitProviderToken, createGitSource, deleteGitSource,
+  listGitProviderRepos, listGitProviderBranches,
+  type GitCredential, type GitProviderToken,
+} from './api/git-admin';
+export * from './api/host-files';
+export {
+  fetchOrganizations, fetchProjects, fetchEnvironments, fetchTeamMembers,
+  createOrganization, updateOrganization, deleteOrganization, createProject, updateProject, deleteProject,
+  createEnvironment, updateEnvironment, deleteEnvironment, addTeamMember, removeTeamMember, updateTeamMember,
+  type Organization, type Project, type Environment, type TeamMember,
+} from './api/tenancy';
+export * from './api/retry-client';
+export * from './api/dns';
+export * from './api/firewall';
+export * from './api/builds';
+export * from './api/cron-jobs';
+export * from './api/database-containers';
+export * from './api/database-services';
+export * from './api/preview-deployments';
+export * from './api/source-deployments';
+export * from './api/domains';
 
 import type {
   ApiUser, ApiServer, ApiNode, ApiAllocationNode, ApiAllocation, ApiDatabase, ApiBackup,
@@ -17,7 +52,7 @@ import type {
   ApiActivityLog, ApiAuditEvent, ApiFileEntry, ApiServerSubuser,
   ApiStartupVariable, ApiHealthCheck, ApiHealthReport, ApiTemplate, ApiUserSearchResult,
   ApiEvacuationResult, ApiEvacuationPlan, ApiRecoveryItem, ApiRecoveryPlan, ApiReservation, CreateRecoveryPlanInput, ApiLegacyTransferStatus,
-  ApiPanelSettings, ApiPublicPanelSettings, ApiNodeLifecycle,
+  ApiPanelSettings, ApiPublicPanelSettings, ApiNodeLifecycle, ApiNodeHealth, ApiNodeCapacity, ApiServerConfiguration, ApiNodeSystemInformation,
   ApiSetupStatus, ApiSetupRequest, ApiWSTicket, ApiUserSession, LoginResponse,
   ApiOrphanRemediations, ApiDatabaseOrphanRemediation, ApiServerOrphanRemediation,
   ApiSchedule, ServerCreateInput, ServerUpdateInput,
@@ -31,7 +66,11 @@ import type {
   ApiEndpoint, ApiEndpointDiagnostics, ApiEndpointInventorySummary, ApiEndpointHealthRecord, ApiEndpointAccessPolicy, ApiEndpointNodeMember,
   BackupCreateInput,
 } from './api/types';
-import { API_BASE_URL } from './api/http';
+import { API_BASE_URL, getErrorMessage, requestJSON } from './api/http';
+export { API_BASE_URL } from './api/http';
+import type { PaginationMeta as PaginationMetadata } from '@forge/shared-types';
+
+export type { PaginationMeta as PaginationMetadata } from '@forge/shared-types';
 
 // Functions below this line are NOT yet available in the modular API files
 // and are provided here for backward compatibility until they are migrated.
@@ -46,7 +85,7 @@ export type {
   ApiActivityLog, ApiAuditEvent, ApiFileEntry, ApiServerSubuser,
   ApiStartupVariable, ApiHealthCheck, ApiHealthReport, ApiTemplate, ApiUserSearchResult,
   ApiEvacuationResult, ApiEvacuationPlan, ApiRecoveryItem, ApiRecoveryPlan, ApiReservation, CreateRecoveryPlanInput, ApiLegacyTransferStatus,
-  ApiPanelSettings, ApiPublicPanelSettings, ApiNodeLifecycle, ApiUserSession,
+  ApiPanelSettings, ApiPublicPanelSettings, ApiNodeLifecycle, ApiNodeHealth, ApiNodeCapacity, ApiServerConfiguration, ApiNodeSystemInformation, ApiUserSession,
   LoginResponse, ApiSetupStatus, ApiSetupRequest, ApiWSTicket,
   ApiOrphanRemediations, ApiDatabaseOrphanRemediation, ApiServerOrphanRemediation,
   ApiSchedule, ServerCreateInput, ServerUpdateInput,
@@ -70,7 +109,7 @@ export type {
 export function getBeaconPanelURL(): string {
   if (/^https?:\/\//i.test(API_BASE_URL)) return API_BASE_URL.replace(/\/$/, "");
   if (typeof window !== "undefined") return new URL(API_BASE_URL, window.location.origin).toString().replace(/\/$/, "");
-  return "https://panel.example.com/api/v1";
+  return "";
 }
 
 const API_WS_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
@@ -79,80 +118,15 @@ const API_WS_URL = API_BASE_URL.replace(/^http:/, "ws:").replace(
 );
 
 /**
- * Gets the CSRF token from the cookie for state-changing requests
- */
-function getCSRFToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const match = document.cookie.match(/__Host-forge_csrf=([^;]+)/);
-    return match ? decodeURIComponent(match[1]) : null;
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Builds headers for API requests
- * - For mutations (POST, PATCH, DELETE): includes CSRF token
- * - For GET/HEAD: no CSRF needed
- */
-function buildHeaders(
-  method: string,
-  extraHeaders: Record<string, string> = {},
-): Record<string, string> {
-  const headers: Record<string, string> = {
-    Accept: "application/json",
-    ...extraHeaders,
-  };
-
-  // Add CSRF token for state-changing methods
-  if (["POST", "PATCH", "PUT", "DELETE"].includes(method.toUpperCase())) {
-    const csrfToken = getCSRFToken();
-    if (csrfToken) {
-      headers["X-CSRF-Token"] = csrfToken;
-    }
-  }
-
-  return headers;
-}
-
-/**
- * Core fetch wrapper that uses HttpOnly cookies for authentication
+ * Compatibility response shaping for legacy callers. Transport, CSRF, and
+ * errors are handled by the canonical HTTP client.
  */
 async function apiFetch<T>(
   path: string,
   options: RequestInit = {},
   preserveDataArrayEnvelope = false,
 ): Promise<T> {
-  const method = options.method ?? "GET";
-  const headers = buildHeaders(method, options.headers as Record<string, string>);
-
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...options,
-    headers,
-    credentials: "include", // Critical: sends HttpOnly cookies
-  });
-
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, `API ${method} ${path} failed with`);
-    throw new ApiError(errorMessage, response.status);
-  }
-
-  if (response.status === 204) {
-    return undefined as T;
-  }
-
-  const text = await response.text();
-  if (!text) {
-    return undefined as T;
-  }
-
-  let body: unknown;
-  try {
-    body = JSON.parse(text);
-  } catch {
-    throw new Error(`API ${method} ${path} returned invalid JSON`);
-  }
+  const body: unknown = await requestJSON<unknown>(path, options);
 
   // Admin list routes may use { data: [...] }, while older routes return the
   // array directly. Preserve envelopes only for callers that expose metadata.
@@ -169,39 +143,11 @@ function isDataArrayEnvelope(value: unknown): value is { data: unknown[] } {
 /**
  * Custom error that preserves the HTTP status code from API responses.
  */
-export class ApiError extends Error {
-  status: number;
-  constructor(message: string, status: number) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-  }
-}
+export { ApiError } from './api/http';
 
 /**
  * Helper to extract error message from response body
  */
-async function getErrorMessage(response: Response, defaultPrefix: string): Promise<string> {
-  const fallback = `${defaultPrefix} ${response.status}`;
-  try {
-    const text = await response.text();
-    if (!text) return fallback;
-    try {
-      const body = JSON.parse(text) as { message?: unknown; error?: unknown };
-      if (typeof body.message === "string" && body.message.trim()) return body.message;
-      if (typeof body.error === "string" && body.error.trim()) return body.error;
-      if (body.error && typeof body.error === "object" && "message" in body.error) {
-        const message = (body.error as { message?: unknown }).message;
-        if (typeof message === "string" && message.trim()) return message;
-      }
-    } catch {
-      // Preserve a useful non-JSON response below.
-    }
-    return text;
-  } catch {
-    return fallback;
-  }
-}
 
 // No mock fallbacks -- all data comes from the real backend API
 
@@ -220,6 +166,7 @@ export async function fetchSetupStatus(): Promise<ApiSetupStatus> {
   const response = await fetch(`${API_BASE_URL}/setup/status`, {
     headers: { Accept: "application/json" },
     credentials: "include",
+    signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) {
     const errorMessage = await getErrorMessage(response, "Setup status request failed with");
@@ -279,7 +226,7 @@ export async function patchJSON<T>(path: string, body: unknown): Promise<T> {
   });
 }
 
-export async function deleteJSON(path: string, body?: unknown): Promise<void> {
+export async function deleteJSON<T = void>(path: string, body?: unknown): Promise<T> {
   const options: RequestInit = {
     method: "DELETE",
   };
@@ -287,7 +234,7 @@ export async function deleteJSON(path: string, body?: unknown): Promise<void> {
     options.headers = { "Content-Type": "application/json" };
     options.body = JSON.stringify(body);
   }
-  await apiFetch<void>(path, options);
+  return apiFetch<T>(path, options);
 }
 
 export function serverWebSocketURL(
@@ -295,7 +242,7 @@ export function serverWebSocketURL(
   stream: "stats" | "logs" | "console",
 ): string {
   const base = API_BASE_URL.replace("/api/v1", "");
-  const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsBase = base.replace(/^https?:/, protocol);
   // Uses ticket-based auth - ticket is fetched at connection time
   return `${wsBase}/api/v1/servers/${encodeURIComponent(serverId)}/ws/${stream}`;
@@ -378,16 +325,16 @@ export async function fetchNodeServers(id: string): Promise<ApiServer[]> {
   return apiFetch<ApiServer[]>(`/nodes/${encodeURIComponent(id)}/servers`);
 }
 
-export async function fetchNodeHealth(id: string): Promise<any> {
-  return apiFetch<any>(`/nodes/${encodeURIComponent(id)}/health`);
+export async function fetchNodeHealth(id: string): Promise<ApiNodeHealth> {
+  return apiFetch<ApiNodeHealth>(`/nodes/${encodeURIComponent(id)}/health`);
 }
 
 export async function fetchNodeLifecycle(id: string): Promise<ApiNodeLifecycle> {
   return apiFetch<ApiNodeLifecycle>(`/nodes/${encodeURIComponent(id)}/lifecycle`);
 }
 
-export async function fetchNodeCapacity(id: string): Promise<any> {
-  return apiFetch<any>(`/nodes/${encodeURIComponent(id)}/capacity`);
+export async function fetchNodeCapacity(id: string): Promise<ApiNodeCapacity> {
+  return apiFetch<ApiNodeCapacity>(`/nodes/${encodeURIComponent(id)}/capacity`);
 }
 
 export async function downloadFileToServer(
@@ -419,8 +366,8 @@ export async function runServerOperations(
   );
 }
 
-export async function fetchServerConfiguration(id: string): Promise<any> {
-  return apiFetch<any>(`/servers/${encodeURIComponent(id)}/configuration`);
+export async function fetchServerConfiguration(id: string): Promise<ApiServerConfiguration> {
+  return apiFetch<ApiServerConfiguration>(`/servers/${encodeURIComponent(id)}/configuration`);
 }
 
 export async function fetchUser(id: string): Promise<ApiUser> {
@@ -430,14 +377,6 @@ export async function fetchUser(id: string): Promise<ApiUser> {
 export async function fetchDatabaseHost(id: string): Promise<ApiDatabaseHost> {
   return apiFetch<ApiDatabaseHost>(`/database-hosts/${encodeURIComponent(id)}`);
 }
-
-export type PaginationMetadata = {
-  current: number;
-  total: number;
-  count: number;
-  per_page: number;
-  total_records: number;
-};
 
 export type PaginatedResponse<T> = {
   data: T[];
@@ -825,8 +764,8 @@ export async function searchUsers(query: string): Promise<ApiUser[]> {
 
 export async function fetchNodeSystemInformation(
   nodeId: string,
-): Promise<any> {
-  return apiFetch<any>(`/nodes/${encodeURIComponent(nodeId)}/system-information`);
+): Promise<ApiNodeSystemInformation> {
+  return apiFetch<ApiNodeSystemInformation>(`/nodes/${encodeURIComponent(nodeId)}/system-information`);
 }
 
 export async function generateNodeConfigToken(
@@ -1481,7 +1420,7 @@ export async function fetchServerTransferStatus(
   }
 }
 
-/** @deprecated Legacy transfer cancellation is retired and the API returns HTTP 501. */
+/** @deprecated Legacy transfer cancellation is retired and the API returns HTTP 410. */
 export async function cancelTransfer(serverId: string): Promise<never> {
   return apiFetch<never>(
     `/servers/${encodeURIComponent(serverId)}/transfer/cancel`,

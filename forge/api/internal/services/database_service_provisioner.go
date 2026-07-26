@@ -173,6 +173,12 @@ func (p *DatabaseServiceProvisioner) ProvisionService(ctx context.Context, name,
 	if err := store.ValidateDBEngine(engine, version); err != nil {
 		return store.DatabaseService{}, err
 	}
+	if p.daemon == nil || p.beaconBaseURL == "" || p.nodeToken == "" {
+		return store.DatabaseService{}, errors.New("authenticated beacon client is required for database provisioning")
+	}
+	if p.keyring == nil {
+		return store.DatabaseService{}, errors.New("credential keyring is not configured")
+	}
 
 	svc, err := p.store.CreateDatabaseService(ctx, store.CreateDatabaseServiceRequest{
 		Name:      name,
@@ -191,34 +197,32 @@ func (p *DatabaseServiceProvisioner) ProvisionService(ctx context.Context, name,
 	volumeName := "mgp-dbsvc-" + svc.ID[:12]
 	port := defaultPortForEngine(engine)
 
-	if p.daemon != nil {
-		daemonReq := daemon.DBContainerProvisionRequest{
-			ServerID:   svc.ID,
-			Engine:     engine,
-			Version:    version,
-			MemoryMB:   memoryMB,
-			CPUShares:  cpuShares,
-			DBName:     dbName,
-			Username:   username,
-			Password:   password,
-			Port:       port,
-			VolumeName: volumeName,
-		}
-		resp, err := p.daemon.ProvisionDatabase(ctx, p.beaconBaseURL, p.nodeToken, daemonReq)
-		if err != nil {
-			_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", "", "", "", nil)
-			return store.DatabaseService{}, fmt.Errorf("provision via beacon: %w", err)
-		}
-
-		encPass, _ := p.keyring.Encrypt([]byte(password), svc.ID)
-		connStr := connectionString(engine, dbName, username, password, p.dockerHost, resp.Port)
-		creds := credsJSON(engine, dbName, username, password)
-		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", p.dockerHost, resp.Port, username, encPass, dbName, resp.ContainerID, resp.VolumeID, connStr, creds)
-	} else {
-		encPass, _ := p.keyring.Encrypt([]byte(password), svc.ID)
-		connStr := connectionString(engine, dbName, username, password, "127.0.0.1", port)
-		creds := credsJSON(engine, dbName, username, password)
-		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", "127.0.0.1", port, username, encPass, dbName, "", volumeName, connStr, creds)
+	daemonReq := daemon.DBContainerProvisionRequest{
+		ServerID:   svc.ID,
+		Engine:     engine,
+		Version:    version,
+		MemoryMB:   memoryMB,
+		CPUShares:  cpuShares,
+		DBName:     dbName,
+		Username:   username,
+		Password:   password,
+		Port:       port,
+		VolumeName: volumeName,
+	}
+	resp, err := p.daemon.ProvisionDatabase(ctx, p.beaconBaseURL, p.nodeToken, daemonReq)
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", "", "", "", nil)
+		return store.DatabaseService{}, fmt.Errorf("provision via beacon: %w", err)
+	}
+	encPass, err := p.keyring.Encrypt([]byte(password), svc.ID)
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", resp.ContainerID, resp.VolumeID, "", nil)
+		return store.DatabaseService{}, fmt.Errorf("encrypt database credential: %w", err)
+	}
+	connStr := connectionString(engine, dbName, username, password, p.dockerHost, resp.Port)
+	creds := credsJSON(engine, dbName, username, password)
+	if err := p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", p.dockerHost, resp.Port, username, encPass, dbName, resp.ContainerID, resp.VolumeID, connStr, creds); err != nil {
+		return store.DatabaseService{}, fmt.Errorf("persist provisioned service: %w", err)
 	}
 
 	return p.store.GetDatabaseService(ctx, svc.ID)
@@ -229,8 +233,11 @@ func (p *DatabaseServiceProvisioner) StopService(ctx context.Context, id string)
 	if err != nil {
 		return err
 	}
-	if svc.ContainerID != "" && p.daemon != nil {
-		_ = p.daemon.DeProvisionDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.VolumeID)
+	if svc.ContainerID == "" || p.daemon == nil {
+		return errors.New("database service container is unavailable")
+	}
+	if err := p.daemon.AdminContainerStop(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID); err != nil {
+		return fmt.Errorf("stop database container: %w", err)
 	}
 	return p.store.UpdateDatabaseServiceStatus(ctx, id, "stopped", "", 0, "", "", "", "", "", "", nil)
 }
@@ -240,8 +247,11 @@ func (p *DatabaseServiceProvisioner) StartService(ctx context.Context, id string
 	if err != nil {
 		return err
 	}
-	if svc.ContainerID == "" {
-		return errors.New("container not yet provisioned; reprovision required")
+	if svc.ContainerID == "" || p.daemon == nil {
+		return errors.New("database service container is unavailable")
+	}
+	if err := p.daemon.AdminContainerStart(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID); err != nil {
+		return fmt.Errorf("start database container: %w", err)
 	}
 	return p.store.UpdateDatabaseServiceStatus(ctx, id, "running", "", 0, "", "", "", "", "", "", nil)
 }
@@ -252,8 +262,14 @@ func (p *DatabaseServiceProvisioner) DeleteService(ctx context.Context, id strin
 		return err
 	}
 	_ = p.store.UpdateDatabaseServiceStatus(ctx, id, "deleting", "", 0, "", "", "", "", "", "", nil)
-	if svc.ContainerID != "" && p.daemon != nil {
-		_ = p.daemon.DeProvisionDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.VolumeID)
+	if svc.ContainerID != "" {
+		if p.daemon == nil {
+			return errors.New("daemon not available for database deletion")
+		}
+		if err := p.daemon.DeProvisionDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.VolumeID); err != nil {
+			_ = p.store.UpdateDatabaseServiceStatus(ctx, id, "failed", "", 0, "", "", "", "", "", "", nil)
+			return fmt.Errorf("delete database container: %w", err)
+		}
 	}
 	return p.store.DeleteDatabaseService(ctx, id)
 }
@@ -297,7 +313,13 @@ func (p *DatabaseServiceProvisioner) CreateUser(ctx context.Context, serviceID, 
 	if err != nil {
 		return store.DatabaseServiceCredential{}, fmt.Errorf("create user: %w", err)
 	}
-	encPass, _ := p.keyring.Encrypt([]byte(password), serviceID)
+	if p.keyring == nil {
+		return store.DatabaseServiceCredential{}, errors.New("credential keyring is not configured")
+	}
+	encPass, err := p.keyring.Encrypt([]byte(password), serviceID)
+	if err != nil {
+		return store.DatabaseServiceCredential{}, fmt.Errorf("encrypt database credential: %w", err)
+	}
 	return p.store.CreateServiceCredential(ctx, store.CreateServiceCredentialRequest{
 		ServiceID:     serviceID,
 		Username:      username,
@@ -352,8 +374,16 @@ func (p *DatabaseServiceProvisioner) RotateCredentials(ctx context.Context, serv
 	if err != nil {
 		return store.DatabaseService{}, fmt.Errorf("rotate password: %w", err)
 	}
-	encPass, _ := p.keyring.Encrypt([]byte(newPassword), serviceID)
-	_ = p.store.UpdateDatabaseServiceStatus(ctx, serviceID, svc.Status, "", 0, "", encPass, "", "", "", "", nil)
+	if p.keyring == nil {
+		return store.DatabaseService{}, errors.New("credential keyring is not configured")
+	}
+	encPass, err := p.keyring.Encrypt([]byte(newPassword), serviceID)
+	if err != nil {
+		return store.DatabaseService{}, fmt.Errorf("encrypt rotated credential: %w", err)
+	}
+	if err := p.store.UpdateDatabaseServiceStatus(ctx, serviceID, svc.Status, "", 0, "", encPass, "", "", "", "", nil); err != nil {
+		return store.DatabaseService{}, err
+	}
 	return p.store.GetDatabaseService(ctx, serviceID)
 }
 
@@ -369,15 +399,22 @@ func (p *DatabaseServiceProvisioner) CreateBackup(ctx context.Context, serviceID
 	if err != nil {
 		return store.DatabaseServiceBackup{}, err
 	}
-	if svc.ContainerID != "" && p.daemon != nil {
-		_, err = p.daemon.BackupDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.Type)
+	if svc.ContainerID == "" {
+		_ = p.store.UpdateServiceBackupStatus(ctx, backup.ID, "failed", "", 0)
+		return store.DatabaseServiceBackup{}, errors.New("database service container is not provisioned")
 	}
-	status := "completed"
-	filePath := fmt.Sprintf("/backups/%s/%s.sql", serviceID, backup.ID)
+	if p.daemon == nil || p.beaconBaseURL == "" || p.nodeToken == "" {
+		_ = p.store.UpdateServiceBackupStatus(ctx, backup.ID, "failed", "", 0)
+		return store.DatabaseServiceBackup{}, errors.New("authenticated beacon client is required for database backup")
+	}
+	entry, err := p.daemon.BackupDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.Type, backup.ID)
 	if err != nil {
-		status = "failed"
+		_ = p.store.UpdateServiceBackupStatus(ctx, backup.ID, "failed", "", 0)
+		return store.DatabaseServiceBackup{}, err
 	}
-	_ = p.store.UpdateServiceBackupStatus(ctx, backup.ID, status, filePath, 0)
+	if err := p.store.UpdateServiceBackupStatus(ctx, backup.ID, "completed", entry.Name, entry.Size); err != nil {
+		return store.DatabaseServiceBackup{}, err
+	}
 	return p.store.GetServiceBackup(ctx, backup.ID)
 }
 
@@ -396,7 +433,7 @@ func (p *DatabaseServiceProvisioner) RestoreBackup(ctx context.Context, serviceI
 	if backup.ServiceID != serviceID {
 		return errors.New("backup does not belong to this service")
 	}
-	if backup.FilePath == "" {
+	if backup.FilePath == "" || backup.Status != "completed" {
 		return errors.New("backup file path is empty")
 	}
 	_ = p.store.UpdateServiceBackupStatus(ctx, backupID, "running", "", 0)
@@ -405,7 +442,7 @@ func (p *DatabaseServiceProvisioner) RestoreBackup(ctx context.Context, serviceI
 		_ = p.store.UpdateServiceBackupStatus(ctx, backupID, "failed", "", 0)
 		return err
 	}
-	if err := p.daemon.RestoreDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.Type); err != nil {
+	if err := p.daemon.RestoreDatabase(ctx, p.beaconBaseURL, p.nodeToken, svc.ContainerID, svc.Type, backupID); err != nil {
 		_ = p.store.UpdateServiceBackupStatus(ctx, backupID, "failed", "", 0)
 		return err
 	}

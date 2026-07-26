@@ -1,7 +1,9 @@
 "use client";
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { API_BASE_URL, fetchJSON, postJSON, patchJSON, deleteJSON } from '@/lib/api/http';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -13,7 +15,7 @@ import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Plus, Search, Filter, MoreVertical, RefreshCw, Trash2, Lock, Unlock, Play, XCircle, RotateCcw, Download, Upload, Database, Server, AppWindow, Folder } from 'lucide-react';
+import { Plus, Search, MoreVertical, RefreshCw, Trash2, Lock, Unlock, Play, XCircle, RotateCcw, Download, Database, Server, AppWindow, Folder } from 'lucide-react';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { toast, Toaster } from '@/components/ui/sonner';
 
@@ -23,6 +25,10 @@ interface BackupConfiguration {
   name: string;
   description: string;
   backupType: 'app' | 'volume' | 'database' | 'server';
+  serverId?: string;
+  appId?: string;
+  databaseId?: string;
+  volumeId?: string;
   isScheduled: boolean;
   cronExpression: string;
   storageProvider: string;
@@ -50,6 +56,16 @@ interface BackupJob {
   completedAt: string | null;
   triggeredBy: string;
   createdAt: string;
+}
+
+interface CreateBackupJobRequest {
+  name: string;
+  jobType: 'app' | 'volume' | 'database' | 'server';
+  serverId?: string;
+  appId?: string;
+  databaseId?: string;
+  volumeId?: string;
+  description?: string;
 }
 
 interface BackupArtifact {
@@ -117,138 +133,70 @@ interface BackupSystemStatus {
 
 // API Functions
 const api = {
-  // Backup Configurations
-  getBackupConfigs: async (): Promise<BackupConfiguration[]> => {
-    const response = await fetch('/api/v1/admin/backups/configs');
-    if (!response.ok) throw new Error('Failed to fetch backup configurations');
-    return response.json();
-  },
+  getBackupConfigs: (): Promise<BackupConfiguration[]> =>
+    fetchJSON<BackupConfiguration[]>('/admin/backups/configs'),
 
-  createBackupConfig: async (data: Partial<BackupConfiguration>): Promise<BackupConfiguration> => {
-    const response = await fetch('/api/v1/admin/backups/configs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to create backup configuration');
-    return response.json();
-  },
+  createBackupConfig: (data: Partial<BackupConfiguration>): Promise<BackupConfiguration> =>
+    postJSON<BackupConfiguration>('/admin/backups/configs', data),
 
-  updateBackupConfig: async (id: string, data: Partial<BackupConfiguration>): Promise<BackupConfiguration> => {
-    const response = await fetch(`/api/v1/admin/backups/configs/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to update backup configuration');
-    return response.json();
-  },
+  updateBackupConfig: (id: string, data: Partial<BackupConfiguration>): Promise<BackupConfiguration> =>
+    patchJSON<BackupConfiguration>(`/admin/backups/configs/${encodeURIComponent(id)}`, data),
 
-  deleteBackupConfig: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/configs/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete backup configuration');
-  },
+  deleteBackupConfig: (id: string): Promise<void> =>
+    deleteJSON(`/admin/backups/configs/${encodeURIComponent(id)}`),
 
-  executeBackupConfig: async (id: string): Promise<BackupJob> => {
-    const response = await fetch(`/api/v1/admin/backups/configs/${id}/execute`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to execute backup configuration');
-    return response.json();
-  },
+  executeBackupConfig: (id: string): Promise<BackupJob> =>
+    postJSON<BackupJob>(`/admin/backups/configs/${encodeURIComponent(id)}/execute`),
 
-  // Backup Jobs
-  getBackupJobs: async (): Promise<BackupJob[]> => {
-    const response = await fetch('/api/v1/admin/backups/jobs');
-    if (!response.ok) throw new Error('Failed to fetch backup jobs');
-    return response.json();
-  },
+  getBackupJobs: (): Promise<BackupJob[]> =>
+    fetchJSON<BackupJob[]>('/admin/backups/jobs'),
 
-  createBackupJob: async (data: Partial<BackupJob>): Promise<BackupJob> => {
-    const response = await fetch('/api/v1/admin/backups/jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to create backup job');
-    return response.json();
-  },
+  createBackupJob: (data: CreateBackupJobRequest): Promise<BackupJob> =>
+    postJSON<BackupJob>('/admin/backups/jobs', data),
 
   cancelBackupJob: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/jobs/${id}/cancel`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to cancel backup job');
+    await postJSON(`/admin/backups/jobs/${encodeURIComponent(id)}/cancel`);
   },
 
-  deleteBackupJob: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/jobs/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete backup job');
-  },
+  deleteBackupJob: (id: string): Promise<void> =>
+    deleteJSON(`/admin/backups/jobs/${encodeURIComponent(id)}`),
 
-  // Backup Artifacts
-  getBackupArtifacts: async (): Promise<BackupArtifact[]> => {
-    const response = await fetch('/api/v1/admin/backups/artifacts');
-    if (!response.ok) throw new Error('Failed to fetch backup artifacts');
-    return response.json();
-  },
+  getBackupArtifacts: (): Promise<BackupArtifact[]> =>
+    fetchJSON<BackupArtifact[]>('/admin/backups/artifacts'),
 
-  deleteBackupArtifact: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/artifacts/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete backup artifact');
-  },
+  deleteBackupArtifact: (id: string): Promise<void> =>
+    deleteJSON(`/admin/backups/artifacts/${encodeURIComponent(id)}`),
 
   lockBackupArtifact: async (id: string, reason: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/artifacts/${id}/lock`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ reason }),
-    });
-    if (!response.ok) throw new Error('Failed to lock backup artifact');
+    await postJSON(`/admin/backups/artifacts/${encodeURIComponent(id)}/lock`, { reason });
   },
 
   unlockBackupArtifact: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/artifacts/${id}/unlock`, { method: 'POST' });
-    if (!response.ok) throw new Error('Failed to unlock backup artifact');
+    await postJSON(`/admin/backups/artifacts/${encodeURIComponent(id)}/unlock`);
   },
 
   downloadBackupArtifact: async (id: string): Promise<Blob> => {
-    const response = await fetch(`/api/v1/admin/backups/artifacts/${id}/download`);
+    const response = await fetch(`${API_BASE_URL}/admin/backups/artifacts/${encodeURIComponent(id)}/download`, {
+      credentials: 'include',
+    });
     if (!response.ok) throw new Error('Failed to download backup artifact');
     return response.blob();
   },
 
-  // Restore Operations
-  getBackupRestores: async (): Promise<BackupRestore[]> => {
-    const response = await fetch('/api/v1/admin/backups/restores');
-    if (!response.ok) throw new Error('Failed to fetch backup restores');
-    return response.json();
-  },
+  getBackupRestores: (): Promise<BackupRestore[]> =>
+    fetchJSON<BackupRestore[]>('/admin/backups/restores'),
 
-  createRestore: async (data: Partial<BackupRestore> & { artifactId: string }): Promise<BackupRestore> => {
-    const response = await fetch('/api/v1/admin/backups/restore', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(data),
-    });
-    if (!response.ok) throw new Error('Failed to create restore');
-    return response.json();
-  },
+  createRestore: (data: Partial<BackupRestore> & { artifactId: string }): Promise<BackupRestore> =>
+    postJSON<BackupRestore>('/admin/backups/restore', data),
 
-  deleteBackupRestore: async (id: string): Promise<void> => {
-    const response = await fetch(`/api/v1/admin/backups/restores/${id}`, { method: 'DELETE' });
-    if (!response.ok) throw new Error('Failed to delete backup restore');
-  },
+  deleteBackupRestore: (id: string): Promise<void> =>
+    deleteJSON(`/admin/backups/restores/${encodeURIComponent(id)}`),
 
-  // Storage Providers
-  getStorageProviders: async (): Promise<StorageProvider[]> => {
-    const response = await fetch('/api/v1/admin/backups/storage-providers');
-    if (!response.ok) throw new Error('Failed to fetch storage providers');
-    return response.json();
-  },
+  getStorageProviders: (): Promise<StorageProvider[]> =>
+    fetchJSON<StorageProvider[]>('/admin/backups/storage-providers'),
 
-  // System Status
-  getBackupSystemStatus: async (): Promise<BackupSystemStatus> => {
-    const response = await fetch('/api/v1/admin/backups/status');
-    if (!response.ok) throw new Error('Failed to fetch backup system status');
-    return response.json();
-  },
+  getBackupSystemStatus: (): Promise<BackupSystemStatus> =>
+    fetchJSON<BackupSystemStatus>('/admin/backups/status'),
 };
 
 // Helper Functions
@@ -303,190 +251,124 @@ const getBackupTypeIcon = (type: string) => {
 // Main Component
 export default function BackupManagementPage() {
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [activeTab, setActiveTab] = useState('overview');
   const [searchQuery, setSearchQuery] = useState('');
-  const [backupConfigs, setBackupConfigs] = useState<BackupConfiguration[]>([]);
-  const [backupJobs, setBackupJobs] = useState<BackupJob[]>([]);
-  const [backupArtifacts, setBackupArtifacts] = useState<BackupArtifact[]>([]);
-  const [backupRestores, setBackupRestores] = useState<BackupRestore[]>([]);
-  const [storageProviders, setStorageProviders] = useState<StorageProvider[]>([]);
-  const [systemStatus, setSystemStatus] = useState<BackupSystemStatus | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [refreshing, setRefreshing] = useState(false);
 
-  // Dialog states
   const [isCreateConfigOpen, setIsCreateConfigOpen] = useState(false);
   const [isCreateJobOpen, setIsCreateJobOpen] = useState(false);
   const [isRestoreOpen, setIsRestoreOpen] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<BackupArtifact | null>(null);
 
-  // Fetch data
-  const fetchData = useCallback(async () => {
-    try {
-      setLoading(true);
-      setError(null);
-      
-      const [configs, jobs, artifacts, restores, providers, status] = await Promise.all([
-        api.getBackupConfigs(),
-        api.getBackupJobs(),
-        api.getBackupArtifacts(),
-        api.getBackupRestores(),
-        api.getStorageProviders(),
-        api.getBackupSystemStatus(),
-      ]);
+  const ALL_KEY = ["admin", "backups"];
 
-      setBackupConfigs(configs);
-      setBackupJobs(jobs);
-      setBackupArtifacts(artifacts);
-      setBackupRestores(restores);
-      setStorageProviders(providers);
-      setSystemStatus(status);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to fetch data');
-      toast.error('Failed to fetch backup data');
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  }, []);
+  const backupConfigsQuery = useQuery({
+    queryKey: [...ALL_KEY, "configs"],
+    queryFn: api.getBackupConfigs,
+    refetchInterval: 30_000,
+  });
 
-  useEffect(() => {
-    fetchData();
-  }, [fetchData]);
+  const backupJobsQuery = useQuery({
+    queryKey: [...ALL_KEY, "jobs"],
+    queryFn: api.getBackupJobs,
+    refetchInterval: 30_000,
+  });
 
-  // Auto-refresh every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      fetchData();
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [fetchData]);
+  const backupArtifactsQuery = useQuery({
+    queryKey: [...ALL_KEY, "artifacts"],
+    queryFn: api.getBackupArtifacts,
+    refetchInterval: 30_000,
+  });
 
-  const handleRefresh = () => {
-    setRefreshing(true);
-    fetchData();
-  };
+  const backupRestoresQuery = useQuery({
+    queryKey: [...ALL_KEY, "restores"],
+    queryFn: api.getBackupRestores,
+    refetchInterval: 30_000,
+  });
 
-  const handleSearch = (query: string) => {
-    setSearchQuery(query);
-  };
+  const storageProvidersQuery = useQuery({
+    queryKey: [...ALL_KEY, "storage-providers"],
+    queryFn: api.getStorageProviders,
+    refetchInterval: 30_000,
+  });
 
-  // Filter functions
-  const filteredConfigs = backupConfigs.filter(config => 
-    config.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    config.description.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const systemStatusQuery = useQuery({
+    queryKey: [...ALL_KEY, "status"],
+    queryFn: api.getBackupSystemStatus,
+    refetchInterval: 30_000,
+  });
 
-  const filteredJobs = backupJobs.filter(job => 
-    job.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    job.status.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const backupConfigs = backupConfigsQuery.data ?? [];
+  const backupJobs = backupJobsQuery.data ?? [];
+  const backupArtifacts = backupArtifactsQuery.data ?? [];
+  const backupRestores = backupRestoresQuery.data ?? [];
+  const storageProviders = storageProvidersQuery.data ?? [];
+  const systemStatus = systemStatusQuery.data ?? null;
+  const loading = backupConfigsQuery.isLoading || backupJobsQuery.isLoading || backupArtifactsQuery.isLoading || backupRestoresQuery.isLoading || storageProvidersQuery.isLoading || systemStatusQuery.isLoading;
+  const error = backupConfigsQuery.error || backupJobsQuery.error || backupArtifactsQuery.error || backupRestoresQuery.error || storageProvidersQuery.error || systemStatusQuery.error;
 
-  const filteredArtifacts = backupArtifacts.filter(artifact => 
-    artifact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    artifact.displayName.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const invalidateAll = () => queryClient.invalidateQueries({ queryKey: ALL_KEY });
 
-  const filteredRestores = backupRestores.filter(restore => 
-    restore.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    restore.status.toLowerCase().includes(searchQuery.toLowerCase())
-  );
+  const createConfigMut = useMutation({
+    mutationFn: (data: Partial<BackupConfiguration>) => api.createBackupConfig(data),
+    onSuccess: () => { invalidateAll(); toast.success('Backup configuration created successfully'); setIsCreateConfigOpen(false); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to create backup configuration'),
+  });
 
-  // Action handlers
-  const handleCreateConfig = async (data: Partial<BackupConfiguration>) => {
-    try {
-      await api.createBackupConfig(data);
-      toast.success('Backup configuration created successfully');
-      fetchData();
-      setIsCreateConfigOpen(false);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create backup configuration');
-    }
-  };
+  const executeConfigMut = useMutation({
+    mutationFn: (id: string) => api.executeBackupConfig(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup configuration executed successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to execute backup configuration'),
+  });
 
-  const handleExecuteConfig = async (id: string) => {
-    try {
-      await api.executeBackupConfig(id);
-      toast.success('Backup configuration executed successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to execute backup configuration');
-    }
-  };
+  const createJobMut = useMutation({
+    mutationFn: (data: CreateBackupJobRequest) => api.createBackupJob(data),
+    onSuccess: () => {
+      invalidateAll();
+      toast.success('Backup job created successfully');
+      setIsCreateJobOpen(false);
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to create backup job'),
+  });
 
-  const handleDeleteConfig = async (id: string) => {
-    try {
-      await api.deleteBackupConfig(id);
-      toast.success('Backup configuration deleted successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete backup configuration');
-    }
-  };
+  const deleteConfigMut = useMutation({
+    mutationFn: (id: string) => api.deleteBackupConfig(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup configuration deleted successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete backup configuration'),
+  });
 
-  const handleDeleteJob = async (id: string) => {
-    try {
-      await api.deleteBackupJob(id);
-      toast.success('Backup job deleted successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete backup job');
-    }
-  };
+  const deleteJobMut = useMutation({
+    mutationFn: (id: string) => api.deleteBackupJob(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup job deleted successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete backup job'),
+  });
 
-  const handleDeleteRestore = async (id: string) => {
-    try {
-      await api.deleteBackupRestore(id);
-      toast.success('Backup restore deleted successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete backup restore');
-    }
-  };
+  const cancelJobMut = useMutation({
+    mutationFn: (id: string) => api.cancelBackupJob(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup job cancelled successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to cancel backup job'),
+  });
 
-  const handleCancelJob = async (id: string) => {
-    try {
-      await api.cancelBackupJob(id);
-      toast.success('Backup job cancelled successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to cancel backup job');
-    }
-  };
+  const deleteArtifactMut = useMutation({
+    mutationFn: (id: string) => api.deleteBackupArtifact(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup artifact deleted successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete backup artifact'),
+  });
 
-  const handleDeleteArtifact = async (id: string) => {
-    try {
-      await api.deleteBackupArtifact(id);
-      toast.success('Backup artifact deleted successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to delete backup artifact');
-    }
-  };
+  const lockArtifactMut = useMutation({
+    mutationFn: (id: string) => api.lockBackupArtifact(id, 'Manual lock'),
+    onSuccess: () => { invalidateAll(); toast.success('Backup artifact locked successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to lock backup artifact'),
+  });
 
-  const handleLockArtifact = async (id: string) => {
-    try {
-      await api.lockBackupArtifact(id, 'Manual lock');
-      toast.success('Backup artifact locked successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to lock backup artifact');
-    }
-  };
+  const unlockArtifactMut = useMutation({
+    mutationFn: (id: string) => api.unlockBackupArtifact(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup artifact unlocked successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to unlock backup artifact'),
+  });
 
-  const handleUnlockArtifact = async (id: string) => {
-    try {
-      await api.unlockBackupArtifact(id);
-      toast.success('Backup artifact unlocked successfully');
-      fetchData();
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to unlock backup artifact');
-    }
-  };
-
-  const handleDownloadArtifact = async (id: string, name: string) => {
-    try {
+  const downloadArtifactMut = useMutation({
+    mutationFn: async ({ id, name }: { id: string; name: string }) => {
       const blob = await api.downloadBackupArtifact(id);
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
@@ -496,24 +378,44 @@ export default function BackupManagementPage() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to download backup artifact');
-    }
-  };
+    },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to download backup artifact'),
+  });
 
-  const handleCreateRestore = async (data: Partial<BackupRestore> & { artifactId: string }) => {
-    try {
-      await api.createRestore(data);
-      toast.success('Restore operation created successfully');
-      fetchData();
-      setIsRestoreOpen(false);
-      setSelectedArtifact(null);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Failed to create restore operation');
-    }
-  };
+  const createRestoreMut = useMutation({
+    mutationFn: (data: Partial<BackupRestore> & { artifactId: string }) => api.createRestore(data),
+    onSuccess: () => { invalidateAll(); toast.success('Restore operation created successfully'); setIsRestoreOpen(false); setSelectedArtifact(null); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to create restore operation'),
+  });
 
-  // Render functions
+  const deleteRestoreMut = useMutation({
+    mutationFn: (id: string) => api.deleteBackupRestore(id),
+    onSuccess: () => { invalidateAll(); toast.success('Backup restore deleted successfully'); },
+    onError: (err) => toast.error(err instanceof Error ? err.message : 'Failed to delete backup restore'),
+  });
+
+  const handleSearch = (query: string) => setSearchQuery(query);
+
+  const filteredConfigs = backupConfigs.filter(config =>
+    config.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    config.description.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredJobs = backupJobs.filter(job =>
+    job.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    job.status.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredArtifacts = backupArtifacts.filter(artifact =>
+    artifact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    artifact.displayName.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  const filteredRestores = backupRestores.filter(restore =>
+    restore.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    restore.status.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
   const renderStatusBadge = (status: string) => (
     <Badge className={getStatusColor(status)}>
       {status}
@@ -530,12 +432,13 @@ export default function BackupManagementPage() {
   const renderProgressBar = (progress: number) => (
     <div className="w-full max-w-xs">
       <Progress value={progress} className="h-2" />
-      <span className="text-xs text-muted-foreground">{Math.round(progress)}%</span>
+      <span className="text-xs text-slate-500">{Math.round(progress)}%</span>
     </div>
   );
 
-  // Dialog Components
   const CreateConfigDialog = () => {
+    const [targetId, setTargetId] = useState('');
+    const [volumeServerId, setVolumeServerId] = useState('');
     const [formData, setFormData] = useState<Partial<BackupConfiguration>>({
       backupType: 'app',
       isScheduled: false,
@@ -549,7 +452,18 @@ export default function BackupManagementPage() {
 
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
-      handleCreateConfig(formData);
+      const backupType = formData.backupType || 'server';
+      const targetField = {
+        app: 'appId',
+        volume: 'volumeId',
+        database: 'databaseId',
+        server: 'serverId',
+      }[backupType];
+      createConfigMut.mutate({
+        ...formData,
+        [targetField]: targetId.trim(),
+        ...(backupType === 'volume' ? { serverId: volumeServerId.trim() } : {}),
+      });
     };
 
     return (
@@ -566,7 +480,7 @@ export default function BackupManagementPage() {
               Create a new backup configuration for scheduled or on-demand backups.
             </DialogDescription>
           </DialogHeader>
-          
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
@@ -578,7 +492,7 @@ export default function BackupManagementPage() {
                   required
                 />
               </div>
-              
+
               <div className="space-y-2">
                 <Label htmlFor="backupType">Backup Type *</Label>
                 <Select
@@ -605,6 +519,19 @@ export default function BackupManagementPage() {
                 value={formData.description || ''}
                 onChange={(e) => setFormData({...formData, description: e.target.value})}
               />
+            </div>
+
+            <div className={formData.backupType === 'volume' ? "grid grid-cols-2 gap-4" : "space-y-2"}>
+              <div className="space-y-2">
+                <Label htmlFor="config-target">Target ID *</Label>
+                <Input id="config-target" value={targetId} onChange={(e) => setTargetId(e.target.value)} required />
+              </div>
+              {formData.backupType === 'volume' && (
+                <div className="space-y-2">
+                  <Label htmlFor="config-volume-server">Server ID *</Label>
+                  <Input id="config-volume-server" value={volumeServerId} onChange={(e) => setVolumeServerId(e.target.value)} required />
+                </div>
+              )}
             </div>
 
             <div className="grid grid-cols-2 gap-4">
@@ -671,7 +598,7 @@ export default function BackupManagementPage() {
                 />
                 Enable Compression
               </Label>
-              
+
               <Label className="flex items-center gap-2 cursor-pointer">
                 <Input
                   type="checkbox"
@@ -680,7 +607,7 @@ export default function BackupManagementPage() {
                 />
                 Enable Encryption
               </Label>
-              
+
               <Label className="flex items-center gap-2 cursor-pointer">
                 <Input
                   type="checkbox"
@@ -695,7 +622,83 @@ export default function BackupManagementPage() {
               <Button type="button" variant="outline" onClick={() => setIsCreateConfigOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Create Configuration</Button>
+              <Button type="submit" disabled={createConfigMut.isPending || !targetId.trim() || (formData.backupType === 'volume' && !volumeServerId.trim())}>Create Configuration</Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+    );
+  };
+
+  const CreateJobDialog = () => {
+    const [name, setName] = useState('');
+    const [jobType, setJobType] = useState<CreateBackupJobRequest['jobType']>('server');
+    const [targetId, setTargetId] = useState('');
+    const [volumeServerId, setVolumeServerId] = useState('');
+    const [description, setDescription] = useState('');
+
+    const handleSubmit = (e: React.FormEvent) => {
+      e.preventDefault();
+      const targetField = {
+        app: 'appId',
+        volume: 'volumeId',
+        database: 'databaseId',
+        server: 'serverId',
+      }[jobType];
+      createJobMut.mutate({
+        name: name.trim(),
+        jobType,
+        description: description.trim() || undefined,
+        [targetField]: targetId.trim(),
+        ...(jobType === 'volume' ? { serverId: volumeServerId.trim() } : {}),
+      });
+    };
+
+    return (
+      <Dialog open={isCreateJobOpen} onOpenChange={setIsCreateJobOpen}>
+        <DialogContent className="sm:max-w-[520px]">
+          <DialogHeader>
+            <DialogTitle>Create Backup Job</DialogTitle>
+            <DialogDescription>Create an on-demand backup for one application resource.</DialogDescription>
+          </DialogHeader>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="job-name">Name *</Label>
+              <Input id="job-name" value={name} onChange={(e) => setName(e.target.value)} required />
+            </div>
+            {jobType === 'volume' && (
+              <div className="space-y-2">
+                <Label htmlFor="job-volume-server">Server ID *</Label>
+                <Input id="job-volume-server" value={volumeServerId} onChange={(e) => setVolumeServerId(e.target.value)} required />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="job-type">Backup Type *</Label>
+                <Select value={jobType} onValueChange={(value) => setJobType(value as CreateBackupJobRequest['jobType'])}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="app">App</SelectItem>
+                    <SelectItem value="volume">Volume</SelectItem>
+                    <SelectItem value="database">Database</SelectItem>
+                    <SelectItem value="server">Server</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="job-target">Target ID *</Label>
+                <Input id="job-target" value={targetId} onChange={(e) => setTargetId(e.target.value)} required />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="job-description">Description</Label>
+              <Input id="job-description" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+            <DialogFooter>
+              <Button type="button" variant="outline" onClick={() => setIsCreateJobOpen(false)}>Cancel</Button>
+              <Button type="submit" disabled={createJobMut.isPending || !name.trim() || !targetId.trim() || (jobType === 'volume' && !volumeServerId.trim())}>
+                {createJobMut.isPending ? 'Creating...' : 'Create Job'}
+              </Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -710,19 +713,9 @@ export default function BackupManagementPage() {
       triggeredBy: 'manual',
     });
 
-    useEffect(() => {
-      if (selectedArtifact) {
-        setFormData({
-          artifactId: selectedArtifact.id,
-          restoreType: selectedArtifact.artifactType,
-          triggeredBy: 'manual',
-        });
-      }
-    }, [selectedArtifact]);
-
     const handleSubmit = (e: React.FormEvent) => {
       e.preventDefault();
-      handleCreateRestore(formData);
+      createRestoreMut.mutate(formData);
     };
 
     if (!selectedArtifact) return null;
@@ -736,7 +729,7 @@ export default function BackupManagementPage() {
               Restore from backup artifact: {selectedArtifact.displayName || selectedArtifact.name}
             </DialogDescription>
           </DialogHeader>
-          
+
           <form onSubmit={handleSubmit} className="space-y-4">
             <div className="space-y-2">
               <Label htmlFor="name">Restore Name</Label>
@@ -792,7 +785,7 @@ export default function BackupManagementPage() {
               <Button type="button" variant="outline" onClick={() => setIsRestoreOpen(false)}>
                 Cancel
               </Button>
-              <Button type="submit">Start Restore</Button>
+              <Button type="submit" disabled={createRestoreMut.isPending}>Start Restore</Button>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -800,13 +793,12 @@ export default function BackupManagementPage() {
     );
   };
 
-  // Tab Components
   const OverviewTab = () => (
     <div className="space-y-6">
       {error && (
         <Alert variant="destructive">
           <AlertTitle>Error</AlertTitle>
-          <AlertDescription>{error}</AlertDescription>
+          <AlertDescription>{error instanceof Error ? error.message : 'Failed to fetch data'}</AlertDescription>
         </Alert>
       )}
 
@@ -814,11 +806,11 @@ export default function BackupManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Backup Configurations</CardTitle>
-            <Server className="h-4 w-4 text-muted-foreground" />
+            <Server className="h-4 w-4 text-slate-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{systemStatus?.backupConfigurations.total || 0}</div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               {systemStatus?.backupConfigurations.scheduled || 0} scheduled, {systemStatus?.backupConfigurations.enabled || 0} enabled
             </p>
           </CardContent>
@@ -827,11 +819,11 @@ export default function BackupManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Backup Jobs</CardTitle>
-            <Database className="h-4 w-4 text-muted-foreground" />
+            <Database className="h-4 w-4 text-slate-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{systemStatus?.backupJobs.total || 0}</div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               {systemStatus?.backupJobs.running || 0} running, {systemStatus?.backupJobs.pending || 0} pending
             </p>
           </CardContent>
@@ -840,11 +832,11 @@ export default function BackupManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Backup Artifacts</CardTitle>
-            <Folder className="h-4 w-4 text-muted-foreground" />
+            <Folder className="h-4 w-4 text-slate-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{systemStatus?.backupArtifacts.total || 0}</div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               {systemStatus?.backupArtifacts.verified || 0} verified, {systemStatus?.backupArtifacts.locked || 0} locked
             </p>
           </CardContent>
@@ -853,11 +845,11 @@ export default function BackupManagementPage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
             <CardTitle className="text-sm font-medium">Restore Operations</CardTitle>
-            <RotateCcw className="h-4 w-4 text-muted-foreground" />
+            <RotateCcw className="h-4 w-4 text-slate-500" />
           </CardHeader>
           <CardContent>
             <div className="text-2xl font-bold">{systemStatus?.backupRestores.total || 0}</div>
-            <p className="text-xs text-muted-foreground">
+            <p className="text-xs text-slate-500">
               {systemStatus?.backupRestores.completed || 0} completed
             </p>
           </CardContent>
@@ -899,7 +891,7 @@ export default function BackupManagementPage() {
           <Button variant="outline" onClick={() => setIsCreateJobOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> Create Backup Job
           </Button>
-          <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+          <Button variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} disabled={loading}>
             <RefreshCw className="mr-2 h-4 w-4" /> Refresh Data
           </Button>
         </CardContent>
@@ -911,7 +903,7 @@ export default function BackupManagementPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Search configurations..."
             value={searchQuery}
@@ -947,13 +939,13 @@ export default function BackupManagementPage() {
                         <span className="text-sm">
                           {config.cronExpression}
                           {config.nextRunAt && (
-                            <span className="block text-xs text-muted-foreground">
+                            <span className="block text-xs text-slate-500">
                               Next: {formatDate(config.nextRunAt)}
                             </span>
                           )}
                         </span>
                       ) : (
-                        <span className="text-sm text-muted-foreground">Manual</span>
+                        <span className="text-sm text-slate-500">Manual</span>
                       )}
                     </TableCell>
                     <TableCell>{renderStatusBadge(config.enabled ? 'enabled' : 'disabled')}</TableCell>
@@ -966,7 +958,7 @@ export default function BackupManagementPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => handleExecuteConfig(config.id)}>
+                          <DropdownMenuItem onClick={() => executeConfigMut.mutate(config.id)}>
                             <Play className="mr-2 h-4 w-4" /> Execute Now
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
@@ -977,7 +969,7 @@ export default function BackupManagementPage() {
                             <Server className="mr-2 h-4 w-4" /> Edit
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => handleDeleteConfig(config.id)} className="text-destructive">
+                          <DropdownMenuItem onClick={() => deleteConfigMut.mutate(config.id)} className="text-red-500">
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -987,7 +979,7 @@ export default function BackupManagementPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={6} className="text-center text-muted-foreground">
+                  <TableCell colSpan={6} className="text-center text-slate-500">
                     No backup configurations found
                   </TableCell>
                 </TableRow>
@@ -1003,7 +995,7 @@ export default function BackupManagementPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Search jobs..."
             value={searchQuery}
@@ -1053,7 +1045,7 @@ export default function BackupManagementPage() {
                         <DropdownMenuContent align="end">
                           <DropdownMenuLabel>Actions</DropdownMenuLabel>
                           {job.status === 'running' && (
-                            <DropdownMenuItem onClick={() => handleCancelJob(job.id)}>
+                            <DropdownMenuItem onClick={() => cancelJobMut.mutate(job.id)}>
                               <XCircle className="mr-2 h-4 w-4" /> Cancel
                             </DropdownMenuItem>
                           )}
@@ -1061,7 +1053,7 @@ export default function BackupManagementPage() {
                             <Server className="mr-2 h-4 w-4" /> View Details
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => handleDeleteJob(job.id)} className="text-destructive">
+                          <DropdownMenuItem onClick={() => deleteJobMut.mutate(job.id)} className="text-red-500">
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -1071,7 +1063,7 @@ export default function BackupManagementPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-slate-500">
                     No backup jobs found
                   </TableCell>
                 </TableRow>
@@ -1087,7 +1079,7 @@ export default function BackupManagementPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Search artifacts..."
             value={searchQuery}
@@ -1144,15 +1136,15 @@ export default function BackupManagementPage() {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                          <DropdownMenuItem onClick={() => handleDownloadArtifact(artifact.id, artifact.name)}>
+                          <DropdownMenuItem onClick={() => downloadArtifactMut.mutate({ id: artifact.id, name: artifact.name })}>
                             <Download className="mr-2 h-4 w-4" /> Download
                           </DropdownMenuItem>
                           {artifact.isLocked ? (
-                            <DropdownMenuItem onClick={() => handleUnlockArtifact(artifact.id)}>
+                            <DropdownMenuItem onClick={() => unlockArtifactMut.mutate(artifact.id)}>
                               <Unlock className="mr-2 h-4 w-4" /> Unlock
                             </DropdownMenuItem>
                           ) : (
-                            <DropdownMenuItem onClick={() => handleLockArtifact(artifact.id)}>
+                            <DropdownMenuItem onClick={() => lockArtifactMut.mutate(artifact.id)}>
                               <Lock className="mr-2 h-4 w-4" /> Lock
                             </DropdownMenuItem>
                           )}
@@ -1163,7 +1155,7 @@ export default function BackupManagementPage() {
                             <RotateCcw className="mr-2 h-4 w-4" /> Restore
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => handleDeleteArtifact(artifact.id)} className="text-destructive">
+                          <DropdownMenuItem onClick={() => deleteArtifactMut.mutate(artifact.id)} className="text-red-500">
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -1173,7 +1165,7 @@ export default function BackupManagementPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={8} className="text-center text-muted-foreground">
+                  <TableCell colSpan={8} className="text-center text-slate-500">
                     No backup artifacts found
                   </TableCell>
                 </TableRow>
@@ -1189,7 +1181,7 @@ export default function BackupManagementPage() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div className="relative">
-          <Search className="absolute left-2 top-2.5 h-4 w-4 text-muted-foreground" />
+          <Search className="absolute left-2 top-2.5 h-4 w-4 text-slate-500" />
           <Input
             placeholder="Search restores..."
             value={searchQuery}
@@ -1239,7 +1231,7 @@ export default function BackupManagementPage() {
                             <Server className="mr-2 h-4 w-4" /> View Details
                           </DropdownMenuItem>
                           <DropdownMenuSeparator />
-                          <DropdownMenuItem onClick={() => handleDeleteRestore(restore.id)} className="text-destructive">
+                          <DropdownMenuItem onClick={() => deleteRestoreMut.mutate(restore.id)} className="text-red-500">
                             <Trash2 className="mr-2 h-4 w-4" /> Delete
                           </DropdownMenuItem>
                         </DropdownMenuContent>
@@ -1249,7 +1241,7 @@ export default function BackupManagementPage() {
                 ))
               ) : (
                 <TableRow>
-                  <TableCell colSpan={7} className="text-center text-muted-foreground">
+                  <TableCell colSpan={7} className="text-center text-slate-500">
                     No restore operations found
                   </TableCell>
                 </TableRow>
@@ -1261,15 +1253,14 @@ export default function BackupManagementPage() {
     </div>
   );
 
-  // Main Render
   return (
     <div className="container mx-auto py-6">
       <div className="flex items-center justify-between mb-6">
         <div>
           <h1 className="text-3xl font-bold">Backup & Recovery</h1>
-          <p className="text-muted-foreground">Manage backup configurations, jobs, artifacts, and restore operations</p>
+          <p className="text-slate-500">Manage backup configurations, jobs, artifacts, and restore operations</p>
         </div>
-        <Button variant="outline" onClick={handleRefresh} disabled={refreshing}>
+        <Button variant="outline" onClick={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} disabled={loading}>
           <RefreshCw className="mr-2 h-4 w-4" /> Refresh
         </Button>
       </div>
@@ -1305,6 +1296,7 @@ export default function BackupManagementPage() {
       </Tabs>
 
       <RestoreDialog />
+      <CreateJobDialog />
       <Toaster />
     </div>
   );

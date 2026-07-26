@@ -2,6 +2,8 @@ package configvalidator
 
 import (
 	"fmt"
+	"os"
+
 	"gamepanel/forge/internal/config"
 )
 
@@ -53,6 +55,12 @@ func ValidateOrFail(cfg *config.Config) {
 				fmt.Printf(" (got %v)", e.Value)
 			}
 			fmt.Println()
+		}
+		// Fail closed in production: refuse to start with an invalid
+		// configuration (audit P1: ValidateOrFail must halt, not just warn).
+		if cfg.App.Env == "production" {
+			fmt.Println("refusing to start in production with invalid configuration")
+			os.Exit(1)
 		}
 	}
 }

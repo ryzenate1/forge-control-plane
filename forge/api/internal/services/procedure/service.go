@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -108,7 +109,17 @@ func (s *Service) RegisterExecutor(action string, executor StepExecutor) {
 func (s *Service) Start(ctx context.Context) {
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.wg.Add(1)
-	go func() { defer s.wg.Done(); s.scheduleLoop(ctx) }()
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				s.logger.Error("procedure schedule loop panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
+		s.scheduleLoop(ctx)
+	}()
 }
 
 func (s *Service) Stop() {
@@ -188,7 +199,18 @@ func (s *Service) tick(ctx context.Context) {
 		}
 		_ = s.store.UpdateProcedureScheduleMeta(ctx, schedule.ID, &now, &nextRun)
 		go func(execID, procID string) {
-			runCtx, runCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+			defer func() {
+				if r := recover(); r != nil {
+					buf := make([]byte, 4096)
+					n := runtime.Stack(buf, false)
+					s.logger.Error("procedure execution panic recovered",
+						slog.String("execution_id", execID),
+						slog.String("procedure_id", procID),
+						slog.String("panic", fmt.Sprintf("%v", r)),
+						slog.String("stack", string(buf[:n])))
+				}
+			}()
+			runCtx, runCancel := context.WithTimeout(ctx, 30*time.Minute)
 			defer runCancel()
 			if execErr := s.executeProcedure(runCtx, execID, procID); execErr != nil {
 				s.logger.Error("procedure execution failed",
@@ -214,6 +236,17 @@ func (s *Service) ExecuteProcedure(ctx context.Context, procedureID string, trig
 		return store.ProcedureExecution{}, err
 	}
 	go func(execID, procID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				s.logger.Error("procedure execution panic recovered",
+					slog.String("execution_id", execID),
+					slog.String("procedure_id", procID),
+					slog.String("panic", fmt.Sprintf("%v", r)),
+					slog.String("stack", string(buf[:n])))
+			}
+		}()
 		runCtx, runCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer runCancel()
 		if execErr := s.executeProcedure(runCtx, execID, procID); execErr != nil {
@@ -358,6 +391,16 @@ func (s *Service) runStepWithRetries(ctx context.Context, executionID string, st
 					"rollback_execution_id": rollbackID,
 				})
 				go func(rbID string) {
+					defer func() {
+						if r := recover(); r != nil {
+							buf := make([]byte, 4096)
+							n := runtime.Stack(buf, false)
+							s.logger.Error("rollback panic recovered",
+								slog.String("rollback_id", rbID),
+								slog.String("panic", fmt.Sprintf("%v", r)),
+								slog.String("stack", string(buf[:n])))
+						}
+					}()
 					rbCtx, rbCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 					defer rbCancel()
 					if rbExecErr := s.executeRollback(rbCtx, rbID); rbExecErr != nil {
@@ -507,6 +550,17 @@ func (s *Service) ApproveStep(ctx context.Context, stepExecID string, actorID *s
 	_ = s.store.UpdateProcedureExecutionStatus(ctx, step.ExecutionID, "running")
 
 	go func(execID, stepExecID string) {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				s.logger.Error("approve step goroutine panic recovered",
+					slog.String("execution_id", execID),
+					slog.String("step_exec_id", stepExecID),
+					slog.String("panic", fmt.Sprintf("%v", r)),
+					slog.String("stack", string(buf[:n])))
+			}
+		}()
 		runCtx, runCancel := context.WithTimeout(context.Background(), 30*time.Minute)
 		defer runCancel()
 		exec, err := s.store.GetProcedureExecution(runCtx, execID)

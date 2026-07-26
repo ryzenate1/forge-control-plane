@@ -39,9 +39,11 @@ function requestJSON(method, url, body, headers = {}) {
 }
 
 async function login() {
+  const email = process.env.ADMIN_EMAIL || "admin@example.com";
+  const password = process.env.ADMIN_PASSWORD || "admin123";
   const payload = await requestJSON("POST", "http://127.0.0.1:8080/api/v1/auth/login", {
-    email: "admin@example.com",
-    password: "admin123",
+    email,
+    password,
   });
   return payload.token;
 }

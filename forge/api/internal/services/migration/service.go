@@ -44,19 +44,18 @@ type CreateMigrationRequest struct {
 	TargetNodeID string `json:"targetNodeId,omitempty"`
 }
 
-// NotImplementedError reports a migration lifecycle operation that has no
-// workload executor. Callers can use errors.As to map it to an HTTP 501.
-type NotImplementedError struct {
+// ExecutorUnavailableError reports missing migration runtime dependencies.
+type ExecutorUnavailableError struct {
 	Operation   string
 	MigrationID string
 }
 
-func (e *NotImplementedError) Error() string {
-	return e.Operation + " is not implemented; no workload transfer and restore executor is available"
+func (e *ExecutorUnavailableError) Error() string {
+	return e.Operation + " is unavailable because workload transfer runtime dependencies are missing"
 }
 
-func (e *NotImplementedError) Unwrap() error {
-	return gpruntime.ErrNotImplemented
+func (e *ExecutorUnavailableError) Unwrap() error {
+	return gpruntime.ErrRuntimeUnavailable
 }
 
 type Service struct {
@@ -223,7 +222,7 @@ func (s *Service) ValidateMigration(ctx context.Context, req CreateMigrationRequ
 
 func (s *Service) PrepareMigration(ctx context.Context, migrationID string) (store.Migration, error) {
 	if s == nil || s.store == nil || s.daemon == nil || s.runtime == nil {
-		return store.Migration{}, &NotImplementedError{Operation: "migration preparation", MigrationID: migrationID}
+		return store.Migration{}, &ExecutorUnavailableError{Operation: "migration preparation", MigrationID: migrationID}
 	}
 	migration, err := s.store.GetMigration(ctx, migrationID)
 	if err != nil {

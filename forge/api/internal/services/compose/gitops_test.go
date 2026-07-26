@@ -613,7 +613,8 @@ func (m *mockStore) ListComposeStacksForReconciliation(ctx context.Context) ([]s
 	return nil, nil
 }
 
-func (m *mockStore) DispatchWebhookEvent(event string, payload map[string]any) {
+func (m *mockStore) DispatchWebhookEvent(ctx context.Context, event string, payload map[string]any) error {
+	return nil
 }
 
 func strPtr(s string) *string { return &s }

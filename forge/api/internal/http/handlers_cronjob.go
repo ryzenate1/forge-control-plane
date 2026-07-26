@@ -2,6 +2,7 @@ package http
 
 import (
 	"strconv"
+	"strings"
 	"time"
 
 	cronjobsvc "gamepanel/forge/internal/services/cronjob"
@@ -9,6 +10,20 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 )
+
+func validateCronSchedule(schedule string) error {
+	if schedule == "" {
+		return fiber.ErrBadRequest
+	}
+	parts := strings.Fields(schedule)
+	if len(parts) != 5 {
+		return fiber.NewError(fiber.StatusBadRequest, "cron schedule must have 5 fields")
+	}
+	if parts[1] == "*" && parts[0] == "*" {
+		return fiber.NewError(fiber.StatusBadRequest, "minimum cron interval of 1 minute is required")
+	}
+	return nil
+}
 
 func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *cronjobsvc.Service) {
 	protected.Get("/cron-jobs", requireRole("admin"), func(c *fiber.Ctx) error {
@@ -55,6 +70,12 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		}
 		if req.Name == "" || req.Schedule == "" || req.Command == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "name, schedule, and command are required")
+		}
+		if len(req.Command) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "command too long")
+		}
+		if err := validateCronSchedule(req.Schedule); err != nil {
+			return err
 		}
 		if req.Type == "" {
 			req.Type = "shell"
@@ -118,6 +139,14 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.Schedule != nil {
+			if err := validateCronSchedule(*req.Schedule); err != nil {
+				return err
+			}
+		}
+		if req.Command != nil && len(*req.Command) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "command too long")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()

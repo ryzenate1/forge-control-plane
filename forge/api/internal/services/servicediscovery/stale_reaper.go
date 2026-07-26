@@ -3,6 +3,7 @@ package servicediscovery
 import (
 	"context"
 	"log/slog"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -51,6 +52,13 @@ func (r *StaleEndpointReaper) Start(ctx context.Context) {
 	r.mu.Unlock()
 
 	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slog.Error("stale endpoint reaper panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
 		ticker := time.NewTicker(r.interval)
 		defer ticker.Stop()
 

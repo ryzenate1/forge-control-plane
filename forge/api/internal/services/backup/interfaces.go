@@ -5,23 +5,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"time"
 )
 
 // Logger is the interface for logging
 type Logger interface {
-	Debug(args ...interface{})
-	Debugf(format string, args ...interface{})
-	Info(args ...interface{})
 	Infof(format string, args ...interface{})
-	Warn(args ...interface{})
 	Warnf(format string, args ...interface{})
-	Error(args ...interface{})
 	Errorf(format string, args ...interface{})
-	Fatal(args ...interface{})
-	Fatalf(format string, args ...interface{})
-	Panic(args ...interface{})
-	Panicf(format string, args ...interface{})
 }
 
 // Scheduler is the interface for scheduling backup jobs
@@ -130,87 +122,25 @@ type FileInfo struct {
 	IsDir    bool      `json:"isDir"`
 }
 
-// NoOpLogger is a no-op logger implementation
-type NoOpLogger struct{}
-
-func (l *NoOpLogger) Debug(args ...interface{})                 {}
-func (l *NoOpLogger) Debugf(format string, args ...interface{}) {}
-func (l *NoOpLogger) Info(args ...interface{})                  {}
-func (l *NoOpLogger) Infof(format string, args ...interface{})  {}
-func (l *NoOpLogger) Warn(args ...interface{})                  {}
-func (l *NoOpLogger) Warnf(format string, args ...interface{})  {}
-func (l *NoOpLogger) Error(args ...interface{})                 {}
-func (l *NoOpLogger) Errorf(format string, args ...interface{}) {}
-func (l *NoOpLogger) Fatal(args ...interface{})                 {}
-func (l *NoOpLogger) Fatalf(format string, args ...interface{}) {}
-func (l *NoOpLogger) Panic(args ...interface{})                 {}
-func (l *NoOpLogger) Panicf(format string, args ...interface{}) {}
-
-// NewNoOpLogger creates a new no-op logger
-func NewNoOpLogger() Logger {
-	return &NoOpLogger{}
+type SlogLogger struct {
+	logger *slog.Logger
 }
 
-// NoOpScheduler is a no-op scheduler implementation
-type NoOpScheduler struct{}
-
-func (s *NoOpScheduler) ScheduleBackupJob(ctx context.Context, configID string, cronExpr string) error {
-	return nil
+func NewSlogLogger(logger *slog.Logger) Logger {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	return &SlogLogger{logger: logger}
 }
 
-func (s *NoOpScheduler) UnscheduleBackupJob(ctx context.Context, configID string) error {
-	return nil
+func (l *SlogLogger) Infof(format string, args ...interface{}) {
+	l.logger.Info(fmt.Sprintf(format, args...))
 }
 
-func (s *NoOpScheduler) ListScheduledJobs(ctx context.Context) ([]ScheduledJob, error) {
-	return []ScheduledJob{}, nil
+func (l *SlogLogger) Warnf(format string, args ...interface{}) {
+	l.logger.Warn(fmt.Sprintf(format, args...))
 }
 
-func (s *NoOpScheduler) GetNextRunTime(cronExpr string) (time.Time, error) {
-	return time.Now().Add(24 * time.Hour), nil
-}
-
-// NewNoOpScheduler creates a new no-op scheduler
-func NewNoOpScheduler() Scheduler {
-	return &NoOpScheduler{}
-}
-
-// NoOpBeaconClient is a no-op beacon client implementation
-type NoOpBeaconClient struct{}
-
-func (c *NoOpBeaconClient) ExecuteBackup(ctx context.Context, nodeID string, backupType BackupType, targetID string, name string, storage StorageAdapter) (string, error) {
-	return "", fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) ExecuteDatabaseBackup(ctx context.Context, nodeID string, engine DatabaseEngine, databaseID string, name string, storage StorageAdapter) (string, error) {
-	return "", fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) ExecuteRestore(ctx context.Context, nodeID string, restoreType BackupType, targetID string, backupFile string, restorePath string, options RestoreOptions) (string, error) {
-	return "", fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) ExecuteDatabaseRestore(ctx context.Context, nodeID string, engine DatabaseEngine, databaseID string, backupFile string, options RestoreOptions) (string, error) {
-	return "", fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) GetBackupResult(ctx context.Context, taskID string) (*BackupResult, error) {
-	return nil, fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) GetRestoreResult(ctx context.Context, taskID string) (*RestoreResult, error) {
-	return nil, fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) GetTaskStatus(ctx context.Context, taskID string) (string, error) {
-	return "unknown", fmt.Errorf("beacon client not available")
-}
-
-func (c *NoOpBeaconClient) CancelTask(ctx context.Context, taskID string) error {
-	return fmt.Errorf("beacon client not available")
-}
-
-// NewNoOpBeaconClient creates a new no-op beacon client
-func NewNoOpBeaconClient() BeaconClient {
-	return &NoOpBeaconClient{}
+func (l *SlogLogger) Errorf(format string, args ...interface{}) {
+	l.logger.Error(fmt.Sprintf(format, args...))
 }

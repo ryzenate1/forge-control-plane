@@ -716,6 +716,81 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		return c.Status(fiber.StatusCreated).JSON(v)
 	})
 
+	protected.Get("/environments/:id/env-vars", func(c *fiber.Ctx) error {
+		ctx, cancel := requestContext()
+		defer cancel()
+		vars, err := envvarSvc.List(ctx, "environment", c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(vars)
+	})
+
+	protected.Post("/environments/:id/env-vars", func(c *fiber.Ctx) error {
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		var req struct {
+			Key         string `json:"key"`
+			Value       string `json:"value"`
+			IsSensitive bool   `json:"isSensitive"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		actorID := claims.Sub
+		envID := c.Params("id")
+		v, err := envvarSvc.Create(c.Context(), envvars.CreateEnvVarInput{
+			EnvironmentID: &envID,
+			Scope:         "environment",
+			Key:           req.Key,
+			Value:         req.Value,
+			IsSensitive:   req.IsSensitive,
+			Actor:         &actorID,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(v)
+	})
+
+	protected.Put("/env-vars/:id", func(c *fiber.Ctx) error {
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		var req struct {
+			Value       string `json:"value"`
+			IsSensitive bool   `json:"isSensitive"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		actorID := claims.Sub
+		v, err := envvarSvc.Update(c.Context(), c.Params("id"), envvars.UpdateEnvVarInput{
+			Value:       req.Value,
+			IsSensitive: req.IsSensitive,
+			Actor:       &actorID,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(v)
+	})
+
+	protected.Delete("/env-vars/:id", func(c *fiber.Ctx) error {
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		actorID := claims.Sub
+		if err := envvarSvc.Delete(c.Context(), c.Params("id"), &actorID); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
 	// ---- Org-scoped server listing ----
 
 	protected.Get("/organizations/:id/servers", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {

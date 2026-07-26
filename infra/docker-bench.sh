@@ -38,7 +38,7 @@ check_container() {
   # 2. no-new-privileges security_opt
   local sec
   sec=$(docker inspect "$c" --format '{{json .HostConfig.SecurityOpt}}' 2>/dev/null || echo "[]")
-  if echo "$sec" | grep -q "no-new-privileges"; then
+  if (echo "$sec" | grep -q "no-new-privileges" || true) && echo "$sec" | grep -q "no-new-privileges"; then
     pass "$c has no-new-privileges"
   else
     fail "$c missing no-new-privileges"
@@ -47,7 +47,7 @@ check_container() {
   # 3. Capabilities dropped (ALL)
   local cap
   cap=$(docker inspect "$c" --format '{{json .HostConfig.CapDrop}}' 2>/dev/null || echo "[]")
-  if echo "$cap" | grep -q "ALL"; then
+  if (echo "$cap" | grep -q "ALL" || true) && echo "$cap" | grep -q "ALL"; then
     pass "$c drops ALL capabilities"
   else
     fail "$c does not drop ALL capabilities (CapDrop: $cap)"
