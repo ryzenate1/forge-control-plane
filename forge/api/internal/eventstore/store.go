@@ -72,7 +72,7 @@ func (s *EventStore) ClaimPending(ctx context.Context, limit int, claimToken str
 		SELECT id FROM events WHERE dispatched=false AND failure_count < $1
 		AND (claimed_until IS NULL OR claimed_until < NOW())
 		ORDER BY created_at ASC LIMIT $2 FOR UPDATE SKIP LOCKED)
-		UPDATE events e SET claimed_by=$3, claimed_until=NOW()+$4::interval
+		UPDATE events e SET claimed_by=$3 || ':' || e.id, claimed_until=NOW()+$4::interval
 		FROM candidates WHERE e.id=candidates.id
 		RETURNING e.id,e.type,e.source,e.resource_type,e.resource_id,e.correlation_id,e.payload,e.created_at,
 		e.dispatched,e.failure_count,e.last_error,e.claimed_by`, maxFailureCount, limit, claimToken, lease.String())
@@ -173,23 +173,38 @@ func (s *EventStore) MarkFailed(ctx context.Context, id string, lastErr string) 
 }
 
 func (s *EventStore) MoveToDeadLetter(ctx context.Context, id string) error {
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO events_dead_letter (id, type, source, resource_type, resource_id, correlation_id, payload, created_at, failed_at, failure_count, last_error)
-		 SELECT id, type, source, resource_type, resource_id, correlation_id, payload, created_at, NOW(), failure_count, last_error
-		 FROM events WHERE id = $1`, id)
+	_, err := s.db.Exec(ctx, `
+		WITH moved AS (
+			INSERT INTO events_dead_letter (id, type, source, resource_type, resource_id, correlation_id, payload, created_at, failed_at, failure_count, last_error)
+			SELECT id, type, source, resource_type, resource_id, correlation_id, payload, created_at, NOW(), failure_count, last_error
+			FROM events WHERE id = $1
+			RETURNING id
+		)
+		DELETE FROM events WHERE id IN (SELECT id FROM moved)
+	`, id)
 	if err != nil {
-		return fmt.Errorf("eventstore move to dead letter insert: %w", err)
-	}
-	_, err = s.db.Exec(ctx, `DELETE FROM events WHERE id = $1`, id)
-	if err != nil {
-		return fmt.Errorf("eventstore move to dead letter delete: %w", err)
+		return fmt.Errorf("eventstore move to dead letter: %w", err)
 	}
 	return nil
 }
 
+func (s *EventStore) Prune(ctx context.Context, dispatchedBefore, deadLetterBefore time.Time) error {
+	if _, err := s.db.Exec(ctx, `DELETE FROM events WHERE dispatched=true AND created_at < $1`, dispatchedBefore); err != nil {
+		return fmt.Errorf("eventstore prune dispatched: %w", err)
+	}
+	if _, err := s.db.Exec(ctx, `DELETE FROM events_dead_letter WHERE failed_at < $1`, deadLetterBefore); err != nil {
+		return fmt.Errorf("eventstore prune dead letters: %w", err)
+	}
+	return nil
+}
+
+type eventPublisher interface {
+	Publish(ctx context.Context, envelope events.Envelope) error
+}
+
 type OutboxPublisher struct {
 	store    *EventStore
-	registry *events.Registry
+	registry eventPublisher
 }
 
 func NewOutboxPublisher(store *EventStore, registry *events.Registry) *OutboxPublisher {
@@ -200,7 +215,10 @@ func (p *OutboxPublisher) Publish(ctx context.Context, envelope events.Envelope)
 	if err := p.store.Publish(ctx, envelope); err != nil {
 		return err
 	}
-	return p.registry.Publish(ctx, envelope)
+	if err := p.registry.Publish(ctx, envelope); err != nil {
+		return fmt.Errorf("event %s persisted to DB but in-memory delivery failed: %w", envelope.ID, err)
+	}
+	return nil
 }
 
 func (s *EventStore) Count(ctx context.Context, dispatched bool) (int, error) {

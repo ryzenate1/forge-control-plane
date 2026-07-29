@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -72,9 +73,16 @@ func (r *Relay) Stop() {
 
 func (r *Relay) pollLoop(ctx context.Context) {
 	defer r.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("event relay poll loop panicked", "panic", r)
+		}
+	}()
 
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
+	retentionTicker := time.NewTicker(time.Hour)
+	defer retentionTicker.Stop()
 
 	for {
 		select {
@@ -82,6 +90,11 @@ func (r *Relay) pollLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			r.processBatch(ctx)
+		case <-retentionTicker.C:
+			now := time.Now().UTC()
+			if err := r.store.Prune(ctx, now.Add(-7*24*time.Hour), now.Add(-30*24*time.Hour)); err != nil {
+				slog.Warn("event relay retention failed", "error", err)
+			}
 		}
 	}
 }
@@ -89,6 +102,7 @@ func (r *Relay) pollLoop(ctx context.Context) {
 func (r *Relay) processBatch(ctx context.Context) {
 	pending, err := r.store.ClaimPending(ctx, defaultBatchSize, uuid.NewString(), time.Duration(defaultBatchSize+1)*r.eventTimeout)
 	if err != nil {
+		slog.Warn("event relay claim failed", "error", err)
 		return
 	}
 
@@ -100,7 +114,7 @@ func (r *Relay) processBatch(ctx context.Context) {
 		}
 
 		if err := r.processEvent(ctx, stored); err != nil {
-			return
+			slog.Error("event relay process failed", "event", stored.ID, "error", err)
 		}
 	}
 }
@@ -112,7 +126,10 @@ func (r *Relay) processEvent(ctx context.Context, stored StoredEvent) error {
 	var payload map[string]any
 	if stored.Payload != "" {
 		if err := json.Unmarshal([]byte(stored.Payload), &payload); err != nil {
-			payload = map[string]any{}
+			if markErr := r.markFailedOrDeadLetter(ctx, stored, fmt.Errorf("invalid event payload: %w", err)); markErr != nil {
+				return markErr
+			}
+			return fmt.Errorf("invalid payload for event %s: %w", stored.ID, err)
 		}
 	} else {
 		payload = map[string]any{}
@@ -138,51 +155,73 @@ func (r *Relay) processEvent(ctx context.Context, stored StoredEvent) error {
 		return err
 	}
 
-	if err := r.store.MarkDispatched(ctx, stored.ID); err != nil {
-		return fmt.Errorf("relay mark dispatched %s: %w", stored.ID, err)
+	var markErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		if markErr = r.store.MarkDispatched(ctx, stored.ID); markErr == nil {
+			return nil
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
+		}
 	}
-	return nil
+	return fmt.Errorf("relay mark dispatched %s: %w", stored.ID, markErr)
 }
 
 func (r *Relay) deliverWithRetries(ctx context.Context, subs []func(context.Context, events.Envelope) error, envelope events.Envelope, stored StoredEvent) error {
 	var lastErr error
-	wait := 100 * time.Millisecond
-
-	for attempt := 0; attempt <= r.maxRetries; attempt++ {
-		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
+	for _, handler := range subs {
+		wait := 100 * time.Millisecond
+		delivered := false
+	attempts:
+		for attempt := 0; attempt <= r.maxRetries; attempt++ {
+			if attempt > 0 {
+				select {
+				case <-ctx.Done():
+					// The relay is shutting down. Stop retrying but keep the last
+					// handler failure so it is still recorded below — otherwise the
+					// delivery error would be lost and failure_count/last_error left
+					// untouched.
+					break attempts
+				case <-time.After(wait):
+				}
+				wait *= 2
 			}
-			wait *= 2
-		}
-
-		success := true
-		for _, handler := range subs {
 			if err := handler(ctx, envelope); err != nil {
 				lastErr = fmt.Errorf("handler error for event %s: %w", envelope.ID, err)
-				success = false
-				break
+				continue
 			}
+			delivered = true
+			break
 		}
-
-		if success {
-			return nil
+		if !delivered && lastErr == nil {
+			lastErr = fmt.Errorf("handler failed for event %s", envelope.ID)
 		}
 	}
 
-	errStr := lastErr.Error()
-	if err := r.store.MarkFailed(ctx, stored.ID, errStr); err != nil {
+	if lastErr == nil {
+		return nil
+	}
+	if err := r.markFailedOrDeadLetter(ctx, stored, lastErr); err != nil {
+		return err
+	}
+	return lastErr
+}
+
+func (r *Relay) markFailedOrDeadLetter(ctx context.Context, stored StoredEvent, failure error) error {
+	// Bookkeeping must survive relay shutdown: the delivery failure is real even
+	// when the request context is already cancelled, so detach from cancellation
+	// while keeping a bounded deadline for the DB write itself.
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.store.MarkFailed(dbCtx, stored.ID, failure.Error()); err != nil {
 		return fmt.Errorf("relay mark failed %s: %w", stored.ID, err)
 	}
-
-	failureCount := stored.FailureCount + (r.maxRetries + 1)
-	if failureCount >= maxFailureCount {
-		if err := r.store.MoveToDeadLetter(ctx, stored.ID); err != nil {
+	if stored.FailureCount+1 >= maxFailureCount {
+		if err := r.store.MoveToDeadLetter(dbCtx, stored.ID); err != nil {
 			return fmt.Errorf("relay dead letter %s: %w", stored.ID, err)
 		}
 	}
-
-	return lastErr
+	return nil
 }

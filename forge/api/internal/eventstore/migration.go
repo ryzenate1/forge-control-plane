@@ -36,6 +36,7 @@ func MigrateWithContext(ctx context.Context, pool *pgxpool.Pool) error {
 		`ALTER TABLE events ADD COLUMN IF NOT EXISTS claimed_by TEXT`,
 		`ALTER TABLE events ADD COLUMN IF NOT EXISTS claimed_until TIMESTAMPTZ`,
 		`CREATE INDEX IF NOT EXISTS idx_events_claimed_until ON events (claimed_until) WHERE dispatched = false`,
+		`CREATE INDEX IF NOT EXISTS idx_events_pending_created ON events (created_at) WHERE dispatched = false AND failure_count < 5`,
 		`CREATE TABLE IF NOT EXISTS events_dead_letter (
 			id TEXT PRIMARY KEY,
 			type TEXT NOT NULL,
