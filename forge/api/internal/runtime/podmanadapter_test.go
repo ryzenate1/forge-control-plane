@@ -50,8 +50,8 @@ func TestPodmanAdapterPrepareMigrationReturnsErrNotImplemented(t *testing.T) {
 	if resp.Accepted {
 		t.Error("PrepareMigration should not be accepted")
 	}
-	if resp.Mode != "not_implemented" {
-		t.Errorf("PrepareMigration mode = %q, want %q", resp.Mode, "not_implemented")
+	if resp.Mode != "control_plane" {
+		t.Errorf("PrepareMigration mode = %q, want %q", resp.Mode, "control_plane")
 	}
 }
 

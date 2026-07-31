@@ -6,34 +6,25 @@ import (
 	"gamepanel/forge/internal/daemon"
 )
 
-type ContainerdAdapter struct {
+type LXCAdapter struct {
 	client *daemon.Client
 }
 
-func NewContainerdAdapter(client *daemon.Client) *ContainerdAdapter {
-	return &ContainerdAdapter{client: client}
+func NewLXCAdapter(client *daemon.Client) *LXCAdapter {
+	return &LXCAdapter{client: client}
 }
 
-func (r *ContainerdAdapter) Name() string {
-	return ContainerdProvider
-}
+func (r *LXCAdapter) Name() string { return LXCProvider }
 
-func (r *ContainerdAdapter) Capabilities() Capabilities {
-	return ContainerdCapabilities()
-}
+func (r *LXCAdapter) Capabilities() Capabilities { return Capabilities{} }
 
-func (r *ContainerdAdapter) SupportsMigration() bool {
-	return false
-}
+func (r *LXCAdapter) SupportsMigration() bool { return false }
 
-func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
+func (r *LXCAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
 	if r == nil || r.client == nil {
 		return CreateResponse{}, ErrRuntimeUnavailable
 	}
-	networkName := req.NetworkName
-	if networkName == "" {
-		networkName = "gamepanel"
-	}
+	// LXC is proxied via the beacon's generic server endpoint; reuse docker-style mapping.
 	response, err := r.client.CreateServer(ctx, target.NodeURL, target.NodeToken, daemon.CreateRequest{
 		ServerID: firstNonEmpty(req.ServerID, target.ServerID),
 		Image:    req.Image,
@@ -44,8 +35,8 @@ func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req
 		MemoryMB: req.MemoryMB, SwapMB: req.SwapMB, CPUShares: req.CPUShares, CPUPercent: req.CPULimit,
 		CPUSet: req.Threads, IOWeight: req.IOWeight, OOMKillDisabled: req.OOMDisabled, PIDLimit: req.PIDLimit,
 		StopSignal: req.StopSignal, StopTimeout: req.StopTimeout, UID: req.UID, GID: req.GID, DNS: req.DNS,
-		NetworkName: networkName, NetworkSubnet: req.NetworkSubnet, NetworkGateway: req.NetworkGateway, NetworkIP: req.NetworkIP,
-		RegistryAuth: daemonRegistryAuth(req.RegistryAuth), DiskMB: req.DiskMB, Provider: ContainerdProvider,
+		NetworkName: req.NetworkName, NetworkSubnet: req.NetworkSubnet, NetworkGateway: req.NetworkGateway, NetworkIP: req.NetworkIP,
+		RegistryAuth: daemonRegistryAuth(req.RegistryAuth), DiskMB: req.DiskMB, Provider: LXCProvider,
 	})
 	if err != nil {
 		return CreateResponse{}, err
@@ -53,15 +44,15 @@ func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req
 	return CreateResponse{ServerID: response.ServerID, Accepted: response.Accepted, Mode: response.Mode}, nil
 }
 
-func (r *ContainerdAdapter) InstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
+func (r *LXCAdapter) InstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
 	return r.runInstaller(ctx, target, req, false)
 }
 
-func (r *ContainerdAdapter) ReinstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
+func (r *LXCAdapter) ReinstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
 	return r.runInstaller(ctx, target, req, true)
 }
 
-func (r *ContainerdAdapter) runInstaller(ctx context.Context, target Target, req InstallRequest, reinstall bool) (InstallResponse, error) {
+func (r *LXCAdapter) runInstaller(ctx context.Context, target Target, req InstallRequest, reinstall bool) (InstallResponse, error) {
 	if r == nil || r.client == nil {
 		return InstallResponse{}, ErrRuntimeUnavailable
 	}
@@ -79,7 +70,7 @@ func (r *ContainerdAdapter) runInstaller(ctx context.Context, target Target, req
 	return InstallResponse{ServerID: response.ServerID, Accepted: response.Accepted, Mode: response.Mode, ExitCode: response.ExitCode, Logs: response.Logs}, nil
 }
 
-func (r *ContainerdAdapter) SyncServerConfiguration(ctx context.Context, target Target, config ServerConfiguration) error {
+func (r *LXCAdapter) SyncServerConfiguration(ctx context.Context, target Target, config ServerConfiguration) error {
 	if r == nil || r.client == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -87,11 +78,11 @@ func (r *ContainerdAdapter) SyncServerConfiguration(ctx context.Context, target 
 		UUID: config.UUID, Name: config.Name, Suspended: config.Suspended, Environment: config.Environment,
 		Invocation: config.Invocation, DockerImage: config.DockerImage, Egg: config.Egg, Build: config.Build,
 		Allocations: config.Allocations, Config: config.Config, Mounts: daemonMounts(config.Mounts),
-		UID: config.UID, GID: config.GID, Provider: ContainerdProvider,
+		UID: config.UID, GID: config.GID, Provider: LXCProvider,
 	})
 }
 
-func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, memoryMB, cpu int64) error {
+func (r *LXCAdapter) ResizeServer(ctx context.Context, target Target, memoryMB, cpu int64) error {
 	if r == nil || r.client == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -101,7 +92,7 @@ func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, mem
 	})
 }
 
-func (r *ContainerdAdapter) DeleteServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *LXCAdapter) DeleteServer(ctx context.Context, target Target) (PowerResponse, error) {
 	if r == nil || r.client == nil {
 		return PowerResponse{}, ErrRuntimeUnavailable
 	}
@@ -109,23 +100,20 @@ func (r *ContainerdAdapter) DeleteServer(ctx context.Context, target Target) (Po
 	return powerResponse(response), err
 }
 
-func (r *ContainerdAdapter) StartServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *LXCAdapter) StartServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "start")
 }
-
-func (r *ContainerdAdapter) StopServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *LXCAdapter) StopServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "stop")
 }
-
-func (r *ContainerdAdapter) RestartServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *LXCAdapter) RestartServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "restart")
 }
-
-func (r *ContainerdAdapter) KillServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *LXCAdapter) KillServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "kill")
 }
 
-func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
+func (r *LXCAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
 	if r == nil || r.client == nil {
 		return Stats{}, ErrRuntimeUnavailable
 	}
@@ -142,27 +130,27 @@ func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, er
 	}, nil
 }
 
-func (r *ContainerdAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	return existsWorkload(ctx, r.client, target, ContainerdProvider)
+func (r *LXCAdapter) Exists(ctx context.Context, target Target) (bool, error) {
+	return existsWorkload(ctx, r.client, target, LXCProvider)
 }
 
-func (r *ContainerdAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	return inspectWorkload(ctx, r.client, target, ContainerdProvider)
+func (r *LXCAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
+	return inspectWorkload(ctx, r.client, target, LXCProvider)
 }
 
-func (r *ContainerdAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *LXCAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *LXCAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *LXCAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {
+func (r *LXCAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {
 	if r == nil || r.client == nil {
 		return PowerResponse{}, ErrRuntimeUnavailable
 	}

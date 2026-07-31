@@ -30,7 +30,7 @@ func (r *DockerAdapter) Capabilities() Capabilities {
 }
 
 func (r *DockerAdapter) SupportsMigration() bool {
-	return r != nil && r.client != nil
+	return false
 }
 
 func (r *DockerAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
@@ -94,7 +94,7 @@ func (r *DockerAdapter) SyncServerConfiguration(ctx context.Context, target Targ
 		UUID: config.UUID, Name: config.Name, Suspended: config.Suspended, Environment: config.Environment,
 		Invocation: config.Invocation, DockerImage: config.DockerImage, Egg: config.Egg, Build: config.Build,
 		Allocations: config.Allocations, Config: config.Config, Mounts: daemonMounts(config.Mounts),
-		Provider: DockerProvider,
+		UID: config.UID, GID: config.GID, Provider: DockerProvider,
 	})
 }
 
@@ -103,7 +103,7 @@ func (r *DockerAdapter) ResizeServer(ctx context.Context, target Target, memoryM
 		return ErrRuntimeUnavailable
 	}
 	return r.client.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, target.ServerID, daemon.ServerConfiguration{
-		UUID: target.ServerID,
+		UUID:  target.ServerID,
 		Build: map[string]any{"memoryLimit": memoryMB, "cpuShares": cpu},
 	})
 }
@@ -150,30 +150,23 @@ func (r *DockerAdapter) Stats(ctx context.Context, target Target) (Stats, error)
 }
 
 func (r *DockerAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, DockerProvider)
 }
 
 func (r *DockerAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: DockerProvider}, nil
+	return inspectWorkload(ctx, r.client, target, DockerProvider)
 }
 
 func (r *DockerAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *DockerAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *DockerAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *DockerAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {

@@ -23,7 +23,7 @@ func (r *PodmanAdapter) Capabilities() Capabilities {
 }
 
 func (r *PodmanAdapter) SupportsMigration() bool {
-	return r != nil && r.client != nil
+	return false
 }
 
 func (r *PodmanAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
@@ -96,7 +96,7 @@ func (r *PodmanAdapter) ResizeServer(ctx context.Context, target Target, memoryM
 		return ErrRuntimeUnavailable
 	}
 	return r.client.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, target.ServerID, daemon.ServerConfiguration{
-		UUID: target.ServerID,
+		UUID:  target.ServerID,
 		Build: map[string]any{"memoryLimit": memoryMB, "cpuShares": cpu},
 	})
 }
@@ -143,30 +143,23 @@ func (r *PodmanAdapter) Stats(ctx context.Context, target Target) (Stats, error)
 }
 
 func (r *PodmanAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, PodmanProvider)
 }
 
 func (r *PodmanAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: PodmanProvider}, nil
+	return inspectWorkload(ctx, r.client, target, PodmanProvider)
 }
 
 func (r *PodmanAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *PodmanAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *PodmanAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *PodmanAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {

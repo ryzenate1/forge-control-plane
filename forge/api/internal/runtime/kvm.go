@@ -6,33 +6,23 @@ import (
 	"gamepanel/forge/internal/daemon"
 )
 
-type ContainerdAdapter struct {
+type KVMAdapter struct {
 	client *daemon.Client
 }
 
-func NewContainerdAdapter(client *daemon.Client) *ContainerdAdapter {
-	return &ContainerdAdapter{client: client}
+func NewKVMAdapter(client *daemon.Client) *KVMAdapter {
+	return &KVMAdapter{client: client}
 }
 
-func (r *ContainerdAdapter) Name() string {
-	return ContainerdProvider
-}
+func (r *KVMAdapter) Name() string { return KVMProvider }
 
-func (r *ContainerdAdapter) Capabilities() Capabilities {
-	return ContainerdCapabilities()
-}
+func (r *KVMAdapter) Capabilities() Capabilities { return Capabilities{} }
 
-func (r *ContainerdAdapter) SupportsMigration() bool {
-	return false
-}
+func (r *KVMAdapter) SupportsMigration() bool { return false }
 
-func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
+func (r *KVMAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
 	if r == nil || r.client == nil {
 		return CreateResponse{}, ErrRuntimeUnavailable
-	}
-	networkName := req.NetworkName
-	if networkName == "" {
-		networkName = "gamepanel"
 	}
 	response, err := r.client.CreateServer(ctx, target.NodeURL, target.NodeToken, daemon.CreateRequest{
 		ServerID: firstNonEmpty(req.ServerID, target.ServerID),
@@ -44,8 +34,8 @@ func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req
 		MemoryMB: req.MemoryMB, SwapMB: req.SwapMB, CPUShares: req.CPUShares, CPUPercent: req.CPULimit,
 		CPUSet: req.Threads, IOWeight: req.IOWeight, OOMKillDisabled: req.OOMDisabled, PIDLimit: req.PIDLimit,
 		StopSignal: req.StopSignal, StopTimeout: req.StopTimeout, UID: req.UID, GID: req.GID, DNS: req.DNS,
-		NetworkName: networkName, NetworkSubnet: req.NetworkSubnet, NetworkGateway: req.NetworkGateway, NetworkIP: req.NetworkIP,
-		RegistryAuth: daemonRegistryAuth(req.RegistryAuth), DiskMB: req.DiskMB, Provider: ContainerdProvider,
+		NetworkName: req.NetworkName, NetworkSubnet: req.NetworkSubnet, NetworkGateway: req.NetworkGateway, NetworkIP: req.NetworkIP,
+		RegistryAuth: daemonRegistryAuth(req.RegistryAuth), DiskMB: req.DiskMB, Provider: KVMProvider,
 	})
 	if err != nil {
 		return CreateResponse{}, err
@@ -53,15 +43,15 @@ func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req
 	return CreateResponse{ServerID: response.ServerID, Accepted: response.Accepted, Mode: response.Mode}, nil
 }
 
-func (r *ContainerdAdapter) InstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
+func (r *KVMAdapter) InstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
 	return r.runInstaller(ctx, target, req, false)
 }
 
-func (r *ContainerdAdapter) ReinstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
+func (r *KVMAdapter) ReinstallServer(ctx context.Context, target Target, req InstallRequest) (InstallResponse, error) {
 	return r.runInstaller(ctx, target, req, true)
 }
 
-func (r *ContainerdAdapter) runInstaller(ctx context.Context, target Target, req InstallRequest, reinstall bool) (InstallResponse, error) {
+func (r *KVMAdapter) runInstaller(ctx context.Context, target Target, req InstallRequest, reinstall bool) (InstallResponse, error) {
 	if r == nil || r.client == nil {
 		return InstallResponse{}, ErrRuntimeUnavailable
 	}
@@ -79,7 +69,7 @@ func (r *ContainerdAdapter) runInstaller(ctx context.Context, target Target, req
 	return InstallResponse{ServerID: response.ServerID, Accepted: response.Accepted, Mode: response.Mode, ExitCode: response.ExitCode, Logs: response.Logs}, nil
 }
 
-func (r *ContainerdAdapter) SyncServerConfiguration(ctx context.Context, target Target, config ServerConfiguration) error {
+func (r *KVMAdapter) SyncServerConfiguration(ctx context.Context, target Target, config ServerConfiguration) error {
 	if r == nil || r.client == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -87,11 +77,11 @@ func (r *ContainerdAdapter) SyncServerConfiguration(ctx context.Context, target 
 		UUID: config.UUID, Name: config.Name, Suspended: config.Suspended, Environment: config.Environment,
 		Invocation: config.Invocation, DockerImage: config.DockerImage, Egg: config.Egg, Build: config.Build,
 		Allocations: config.Allocations, Config: config.Config, Mounts: daemonMounts(config.Mounts),
-		UID: config.UID, GID: config.GID, Provider: ContainerdProvider,
+		UID: config.UID, GID: config.GID, Provider: KVMProvider,
 	})
 }
 
-func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, memoryMB, cpu int64) error {
+func (r *KVMAdapter) ResizeServer(ctx context.Context, target Target, memoryMB, cpu int64) error {
 	if r == nil || r.client == nil {
 		return ErrRuntimeUnavailable
 	}
@@ -101,7 +91,7 @@ func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, mem
 	})
 }
 
-func (r *ContainerdAdapter) DeleteServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *KVMAdapter) DeleteServer(ctx context.Context, target Target) (PowerResponse, error) {
 	if r == nil || r.client == nil {
 		return PowerResponse{}, ErrRuntimeUnavailable
 	}
@@ -109,23 +99,20 @@ func (r *ContainerdAdapter) DeleteServer(ctx context.Context, target Target) (Po
 	return powerResponse(response), err
 }
 
-func (r *ContainerdAdapter) StartServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *KVMAdapter) StartServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "start")
 }
-
-func (r *ContainerdAdapter) StopServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *KVMAdapter) StopServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "stop")
 }
-
-func (r *ContainerdAdapter) RestartServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *KVMAdapter) RestartServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "restart")
 }
-
-func (r *ContainerdAdapter) KillServer(ctx context.Context, target Target) (PowerResponse, error) {
+func (r *KVMAdapter) KillServer(ctx context.Context, target Target) (PowerResponse, error) {
 	return r.sendPower(ctx, target, "kill")
 }
 
-func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
+func (r *KVMAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
 	if r == nil || r.client == nil {
 		return Stats{}, ErrRuntimeUnavailable
 	}
@@ -142,27 +129,27 @@ func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, er
 	}, nil
 }
 
-func (r *ContainerdAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	return existsWorkload(ctx, r.client, target, ContainerdProvider)
+func (r *KVMAdapter) Exists(ctx context.Context, target Target) (bool, error) {
+	return existsWorkload(ctx, r.client, target, KVMProvider)
 }
 
-func (r *ContainerdAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	return inspectWorkload(ctx, r.client, target, ContainerdProvider)
+func (r *KVMAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
+	return inspectWorkload(ctx, r.client, target, KVMProvider)
 }
 
-func (r *ContainerdAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *KVMAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *KVMAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
+func (r *KVMAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
-func (r *ContainerdAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {
+func (r *KVMAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {
 	if r == nil || r.client == nil {
 		return PowerResponse{}, ErrRuntimeUnavailable
 	}
