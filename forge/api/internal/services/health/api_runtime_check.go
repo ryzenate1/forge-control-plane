@@ -2,7 +2,6 @@ package health
 
 import (
 	"context"
-	"runtime"
 	"time"
 )
 
@@ -21,22 +20,13 @@ func (c *APIRuntimeCheck) Name() string  { return "api" }
 func (c *APIRuntimeCheck) Label() string { return "API Runtime" }
 
 func (c *APIRuntimeCheck) Run(context.Context) CheckResult {
-	var mem runtime.MemStats
-	runtime.ReadMemStats(&mem)
-
 	return CheckResult{
 		Name:    c.Name(),
 		Label:   c.Label(),
 		Status:  StatusOK,
 		Message: "API process is serving health diagnostics",
 		Details: map[string]any{
-			"goroutines":     runtime.NumGoroutine(),
-			"heapAllocBytes": mem.Alloc,
-			"heapSysBytes":   mem.HeapSys,
-			"goVersion":      runtime.Version(),
-			"goArch":         runtime.GOARCH,
-			"goOS":           runtime.GOOS,
-			"uptimeSeconds":  time.Since(c.startTime).Seconds(),
+			"uptimeSeconds": time.Since(c.startTime).Seconds(),
 		},
 	}
 }
