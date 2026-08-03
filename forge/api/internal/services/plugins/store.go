@@ -3,8 +3,11 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -39,6 +42,9 @@ func scanPlugin(scanner interface {
 		&settingsBytes,
 	)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Plugin{}, ErrPluginNotFound
+		}
 		return Plugin{}, err
 	}
 
@@ -47,10 +53,11 @@ func scanPlugin(scanner interface {
 	p.UpdatedAt = updatedAt
 	p.Error = errorMsg
 
-	if len(manifestBytes) > 0 {
-		if err := json.Unmarshal(manifestBytes, &p.Manifest); err != nil {
-			p.Manifest = PluginManifest{}
-		}
+	// A stored manifest that cannot be decoded is corrupt data, not an empty
+	// manifest. Surface it instead of handing back a plugin that looks installed
+	// with no hooks, permissions or version.
+	if err := json.Unmarshal(manifestBytes, &p.Manifest); err != nil {
+		return Plugin{}, fmt.Errorf("plugin %s (%s) has an unreadable manifest: %w", p.ID, p.Name, err)
 	}
 
 	if p.Manifest.Author == "" {
@@ -69,20 +76,24 @@ func scanPlugin(scanner interface {
 		p.Manifest.MaxVersion = maxVersion
 	}
 	if p.Manifest.Hooks == nil && len(hooksJSON) > 0 {
-		json.Unmarshal(hooksJSON, &p.Manifest.Hooks)
+		if err := json.Unmarshal(hooksJSON, &p.Manifest.Hooks); err != nil {
+			return Plugin{}, fmt.Errorf("plugin %s (%s) has unreadable hooks: %w", p.ID, p.Name, err)
+		}
 	}
 	if p.Manifest.Dependencies == nil && len(depsJSON) > 0 {
-		json.Unmarshal(depsJSON, &p.Manifest.Dependencies)
+		if err := json.Unmarshal(depsJSON, &p.Manifest.Dependencies); err != nil {
+			return Plugin{}, fmt.Errorf("plugin %s (%s) has unreadable dependencies: %w", p.ID, p.Name, err)
+		}
 	}
 
 	if len(settingsBytes) > 0 {
 		p.Settings = settingsBytes
 	}
-	if len(p.Settings) == 0 && len(manifestBytes) > 0 {
+	if len(p.Settings) == 0 || string(p.Settings) == "null" {
 		var raw struct {
 			Settings json.RawMessage `json:"settings"`
 		}
-		if err := json.Unmarshal(manifestBytes, &raw); err == nil {
+		if err := json.Unmarshal(manifestBytes, &raw); err == nil && len(raw.Settings) > 0 {
 			p.Settings = raw.Settings
 		}
 	}

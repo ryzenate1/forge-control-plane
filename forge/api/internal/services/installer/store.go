@@ -3,7 +3,9 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -73,6 +75,105 @@ func (s *PostgresStore) ListWorkflows(ctx context.Context, serverID string) ([]W
 	return workflows, rows.Err()
 }
 
+func (s *PostgresStore) ListRecentWorkflows(ctx context.Context, limit int) ([]Workflow, error) {
+	if limit <= 0 {
+		limit = 20
+	}
+	rows, err := s.pool.Query(ctx, `
+		SELECT id::text, server_id::text, type, status, steps, metadata, created_at, completed_at
+		FROM install_workflows ORDER BY created_at DESC LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var workflows []Workflow
+	for rows.Next() {
+		var wf Workflow
+		var stepsJSON, metaJSON []byte
+		var status, wfType string
+		if err := rows.Scan(&wf.ID, &wf.ServerID, &wfType, &status, &stepsJSON, &metaJSON, &wf.CreatedAt, &wf.CompletedAt); err != nil {
+			return nil, err
+		}
+		wf.Type = WorkflowType(wfType)
+		wf.Status = InstallStatus(status)
+		json.Unmarshal(stepsJSON, &wf.Steps)
+		json.Unmarshal(metaJSON, &wf.Metadata)
+		workflows = append(workflows, wf)
+	}
+	return workflows, rows.Err()
+}
+
 func (s *PostgresStore) UpdateStep(ctx context.Context, stepID string, status InstallStatus, errMsg string) error {
-	panic("not implemented")
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+	var workflowID string
+	var stepsJSON []byte
+	if err := tx.QueryRow(ctx, `
+		SELECT id::text, steps
+		FROM install_workflows
+		WHERE EXISTS (SELECT 1 FROM jsonb_array_elements(steps) step WHERE step->>'id' = $1)
+		FOR UPDATE
+	`, stepID).Scan(&workflowID, &stepsJSON); err != nil {
+		return err
+	}
+	var steps []InstallStep
+	if err := json.Unmarshal(stepsJSON, &steps); err != nil {
+		return err
+	}
+	found := false
+	now := time.Now().UTC()
+	for index := range steps {
+		if steps[index].ID != stepID {
+			continue
+		}
+		found = true
+		steps[index].Status = status
+		steps[index].Error = errMsg
+		if status == InstallRunning && steps[index].StartedAt == nil {
+			steps[index].StartedAt = &now
+		}
+		if status == InstallCompleted || status == InstallFailed {
+			steps[index].CompletedAt = &now
+		}
+		break
+	}
+	if !found {
+		return pgx.ErrNoRows
+	}
+	workflowStatus := InstallRunning
+	allCompleted := true
+	for _, step := range steps {
+		if step.Status == InstallFailed {
+			workflowStatus = InstallFailed
+			allCompleted = false
+			break
+		}
+		if step.Status != InstallCompleted {
+			allCompleted = false
+		}
+	}
+	var completedAt *time.Time
+	if allCompleted {
+		workflowStatus = InstallCompleted
+		completedAt = &now
+	} else if workflowStatus == InstallFailed {
+		completedAt = &now
+	}
+	encoded, err := json.Marshal(steps)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.Exec(ctx, `
+		UPDATE install_workflows
+		SET steps = $2, status = $3, completed_at = $4
+		WHERE id = $1
+	`, workflowID, encoded, string(workflowStatus), completedAt); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
