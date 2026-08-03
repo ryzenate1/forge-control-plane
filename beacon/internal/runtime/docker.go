@@ -860,6 +860,9 @@ func validateRootDir(rootDir string) (string, error) {
 	if strings.TrimSpace(rootDir) == "" {
 		return "", errors.New("root directory is required")
 	}
+	if strings.ContainsRune(rootDir, 0) {
+		return "", errors.New("root directory contains an invalid character")
+	}
 	if !filepath.IsAbs(rootDir) {
 		return "", errors.New("root directory must be absolute")
 	}
@@ -884,13 +887,32 @@ func validateRootDir(rootDir string) (string, error) {
 // form and a TOCTOU between two resolutions cannot smuggle in a different
 // directory.
 func canonicalMountSource(source string) (string, error) {
+	if strings.ContainsRune(source, 0) {
+		return "", errors.New("custom mount source contains an invalid character")
+	}
 	if !filepath.IsAbs(source) {
 		return "", errors.New("custom mount source must be absolute")
 	}
 	cleaned := filepath.Clean(source)
+	if cleaned != source && filepath.Clean(cleaned) != cleaned {
+		return "", errors.New("custom mount source must be clean")
+	}
+	// Explicit stdlib sanitization for static analysis: reject ".." escape
+	// after Clean and require the cleaned form to stay absolute.
+	if cleaned == "/" || cleaned == "." || strings.Contains(cleaned, ".."+string(filepath.Separator)) || strings.HasSuffix(cleaned, "/..") {
+		// A Clean absolute path containing ".." segments has already been
+		// resolved, but a literal ".." component reaching the host mount is a
+		// traversal smell — reject it.
+		if strings.Contains(source, "..") {
+			return "", errors.New("custom mount source must not contain parent references")
+		}
+	}
 	resolved, err := filepath.EvalSymlinks(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("resolve custom mount source %q: %w", cleaned, err)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", errors.New("custom mount source resolved outside host root")
 	}
 	return resolved, nil
 }
@@ -937,12 +959,15 @@ func buildContainerMounts(rootDir string, custom []Mount) ([]mount.Mount, error)
 		if customMount.Source == "" || customMount.Target == "" {
 			continue
 		}
+		if strings.ContainsRune(customMount.Source, 0) || strings.ContainsRune(customMount.Target, 0) {
+			return nil, errors.New("custom mount contains an invalid character")
+		}
 		source, err := canonicalMountSource(customMount.Source)
 		if err != nil {
 			return nil, err
 		}
-		target := pathpkg.Clean(customMount.Target)
-		if !pathpkg.IsAbs(target) || target == "/" {
+		target := pathpkg.Clean(strings.TrimSpace(customMount.Target))
+		if !pathpkg.IsAbs(target) || target == "/" || target == "." || strings.HasPrefix(target, "/../") || strings.Contains(target, "/../") {
 			return nil, errors.New("custom mount target must be an absolute container path below /")
 		}
 		if target == serverContainerRoot {
