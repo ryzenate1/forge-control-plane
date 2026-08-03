@@ -289,15 +289,39 @@ func (s *S3Backup) downloadToStaging(ctx context.Context, namespace, name string
 	if !validNamespace(namespace) || !validBackupName(name) {
 		return "", func() {}, ErrInvalidName
 	}
+	// Explicit stdlib sanitization at the sinks: namespace/name must already
+	// be basenames with no separators.
+	if namespace != filepath.Base(namespace) || name != filepath.Base(name) ||
+		strings.ContainsAny(namespace+name, `/\`+"\x00") || strings.Contains(namespace, "..") || strings.Contains(name, "..") {
+		return "", func() {}, ErrInvalidName
+	}
 	dir, err := s.local.namespaceDir(namespace, true)
 	if err != nil {
 		return "", func() {}, err
 	}
-	temp, err := os.CreateTemp(dir, ".s3-download-*.zip")
+	// Containment: staging dir must stay within the local backup root.
+	cleanDir := filepath.Clean(dir)
+	if cleanDir != dir || !filepath.IsAbs(cleanDir) {
+		return "", func() {}, ErrInvalidName
+	}
+	temp, err := os.CreateTemp(cleanDir, ".s3-download-*.zip")
 	if err != nil {
 		return "", func() {}, err
 	}
+	// Base sanitizes for static analysis; temp names are daemon-generated and
+	// always clean, but the staged name re-enters the backup namespace via
+	// archivePath, so validate it explicitly (path traversal).
 	stagedName := filepath.Base(temp.Name())
+	if !validBackupName(stagedName) && !strings.HasPrefix(stagedName, ".s3-download-") {
+		_ = temp.Close()
+		_ = os.Remove(temp.Name())
+		return "", func() {}, ErrInvalidName
+	}
+	if stagedName != filepath.Base(stagedName) || strings.Contains(stagedName, "..") || strings.ContainsRune(stagedName, 0) {
+		_ = temp.Close()
+		_ = os.Remove(temp.Name())
+		return "", func() {}, ErrInvalidName
+	}
 	cleanup := func() {
 		_ = temp.Close()
 		_ = os.Remove(temp.Name())
