@@ -34,38 +34,38 @@ CREATE TABLE IF NOT EXISTS backup_configurations (
     app_id UUID REFERENCES apps(id) ON DELETE CASCADE,
     database_id UUID REFERENCES databases(id) ON DELETE CASCADE,
     volume_id UUID REFERENCES volumes(id) ON DELETE CASCADE,
-
+    
     -- Backup type configuration
     backup_type VARCHAR(50) NOT NULL CHECK (backup_type IN ('app', 'volume', 'database', 'server')),
-
+    
     -- Schedule configuration
     is_scheduled BOOLEAN NOT NULL DEFAULT FALSE,
     cron_expression VARCHAR(100),
     next_run_at TIMESTAMPTZ,
     last_run_at TIMESTAMPTZ,
-
+    
     -- Storage configuration
     storage_provider VARCHAR(50) NOT NULL DEFAULT 'local',
     storage_config JSONB,
-
+    
     -- Retention policy
     max_backups INTEGER NOT NULL DEFAULT 10,
     retention_days INTEGER NOT NULL DEFAULT 30,
-
+    
     -- Backup settings
     compression_enabled BOOLEAN NOT NULL DEFAULT TRUE,
     encryption_enabled BOOLEAN NOT NULL DEFAULT FALSE,
     encryption_key_id UUID REFERENCES encryption_keys(id) ON DELETE SET NULL,
-
+    
     -- Status
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     last_status VARCHAR(50),
     last_error TEXT,
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    
     -- Constraints
     CONSTRAINT backup_config_unique_name UNIQUE (name),
     CONSTRAINT backup_config_server_or_app_or_db CHECK (
@@ -90,48 +90,48 @@ CREATE INDEX IF NOT EXISTS idx_backup_configurations_next_run ON backup_configur
 CREATE TABLE IF NOT EXISTS backup_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     configuration_id UUID REFERENCES backup_configurations(id) ON DELETE CASCADE,
-
+    
     -- Job type and target
     job_type VARCHAR(50) NOT NULL CHECK (job_type IN ('app', 'volume', 'database', 'server', 'manual')),
     server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
     app_id UUID REFERENCES apps(id) ON DELETE CASCADE,
     database_id UUID REFERENCES databases(id) ON DELETE CASCADE,
     volume_id UUID REFERENCES volumes(id) ON DELETE CASCADE,
-
+    
     -- Job details
     name VARCHAR(255) NOT NULL,
     description TEXT,
-
+    
     -- Execution details
     status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'completed', 'failed', 'cancelled')),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     duration_seconds INTEGER,
-
+    
     -- Progress tracking
     bytes_processed BIGINT NOT NULL DEFAULT 0,
     total_bytes BIGINT,
     current_phase VARCHAR(100),
     progress_percentage DECIMAL(5,2) NOT NULL DEFAULT 0,
-
+    
     -- Error handling
     error_message TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
     max_retries INTEGER NOT NULL DEFAULT 3,
     last_retry_at TIMESTAMPTZ,
-
+    
     -- Trigger information
     triggered_by VARCHAR(50) NOT NULL DEFAULT 'manual' CHECK (triggered_by IN ('manual', 'schedule', 'api', 'system')),
     triggered_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-
+    
     -- Node execution
     node_id UUID REFERENCES nodes(id) ON DELETE SET NULL,
     beacon_task_id VARCHAR(255),
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    
     -- Constraints
     CONSTRAINT backup_job_unique_name UNIQUE (name)
 );
@@ -152,66 +152,66 @@ CREATE TABLE IF NOT EXISTS backup_artifacts (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     job_id UUID REFERENCES backup_jobs(id) ON DELETE CASCADE,
     configuration_id UUID REFERENCES backup_configurations(id) ON DELETE CASCADE,
-
+    
     -- Artifact details
     artifact_type VARCHAR(50) NOT NULL CHECK (artifact_type IN ('app', 'volume', 'database', 'server')),
     name VARCHAR(255) NOT NULL,
     display_name VARCHAR(255),
-
+    
     -- Storage information
     storage_provider VARCHAR(50) NOT NULL,
     storage_path VARCHAR(1024) NOT NULL,
     storage_url VARCHAR(2048),
-
+    
     -- File metadata
     file_size BIGINT NOT NULL DEFAULT 0,
     file_hash VARCHAR(128),
     hash_algorithm VARCHAR(50) NOT NULL DEFAULT 'sha256',
-
+    
     -- Content information
     source_server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
     source_app_id UUID REFERENCES apps(id) ON DELETE CASCADE,
     source_database_id UUID REFERENCES databases(id) ON DELETE CASCADE,
     source_volume_id UUID REFERENCES volumes(id) ON DELETE CASCADE,
-
+    
     -- Database-specific info
     database_engine VARCHAR(50),
     database_name VARCHAR(255),
-
+    
     -- Volume-specific info
     volume_name VARCHAR(255),
     volume_mount_path VARCHAR(1024),
-
+    
     -- App-specific info
     app_name VARCHAR(255),
     app_version VARCHAR(100),
-
+    
     -- Compression and encryption
     is_compressed BOOLEAN NOT NULL DEFAULT FALSE,
     compression_algorithm VARCHAR(50),
     is_encrypted BOOLEAN NOT NULL DEFAULT FALSE,
     encryption_algorithm VARCHAR(50),
-
+    
     -- Status and validation
     status VARCHAR(50) NOT NULL DEFAULT 'created' CHECK (status IN ('created', 'uploading', 'uploaded', 'verifying', 'verified', 'failed', 'corrupted', 'deleted')),
     is_verified BOOLEAN NOT NULL DEFAULT FALSE,
     verification_attempts INTEGER NOT NULL DEFAULT 0,
     last_verified_at TIMESTAMPTZ,
-
+    
     -- Retention and lifecycle
     is_locked BOOLEAN NOT NULL DEFAULT FALSE,
     lock_reason VARCHAR(255),
     expires_at TIMESTAMPTZ,
-
+    
     -- Manifest and metadata
     manifest JSONB,
     metadata JSONB,
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     uploaded_at TIMESTAMPTZ,
-
+    
     -- Constraints
     CONSTRAINT backup_artifact_unique_path UNIQUE (storage_provider, storage_path)
 );
@@ -234,58 +234,58 @@ CREATE TABLE IF NOT EXISTS backup_restores (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     artifact_id UUID REFERENCES backup_artifacts(id) ON DELETE CASCADE,
     job_id UUID REFERENCES backup_jobs(id) ON DELETE SET NULL,
-
+    
     -- Restore target
     restore_type VARCHAR(50) NOT NULL CHECK (restore_type IN ('app', 'volume', 'database', 'server')),
     target_server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
     target_app_id UUID REFERENCES apps(id) ON DELETE CASCADE,
     target_database_id UUID REFERENCES databases(id) ON DELETE CASCADE,
     target_volume_id UUID REFERENCES volumes(id) ON DELETE CASCADE,
-
+    
     -- Restore details
     name VARCHAR(255) NOT NULL,
     description TEXT,
-
+    
     -- Execution details
     status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'preparing', 'downloading', 'restoring', 'verifying', 'completed', 'failed', 'cancelled', 'rollback')),
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     duration_seconds INTEGER,
-
+    
     -- Progress tracking
     bytes_processed BIGINT NOT NULL DEFAULT 0,
     total_bytes BIGINT,
     current_phase VARCHAR(100),
     progress_percentage DECIMAL(5,2) NOT NULL DEFAULT 0,
-
+    
     -- Error handling
     error_message TEXT,
     retry_count INTEGER NOT NULL DEFAULT 0,
     max_retries INTEGER NOT NULL DEFAULT 3,
-
+    
     -- Node execution
     node_id UUID REFERENCES nodes(id) ON DELETE SET NULL,
     beacon_task_id VARCHAR(255),
-
+    
     -- Restore options
     restore_options JSONB,
-
+    
     -- Verification results
     verification_status VARCHAR(50),
     verification_results JSONB,
-
+    
     -- Rollback information
     can_rollback BOOLEAN NOT NULL DEFAULT FALSE,
     rollback_artifact_id UUID REFERENCES backup_artifacts(id) ON DELETE SET NULL,
-
+    
     -- Trigger information
     triggered_by VARCHAR(50) NOT NULL DEFAULT 'manual' CHECK (triggered_by IN ('manual', 'api', 'system', 'disaster_recovery')),
     triggered_by_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    
     -- Constraints
     CONSTRAINT backup_restore_unique_name UNIQUE (name),
     CONSTRAINT backup_restore_target_check CHECK (
@@ -311,27 +311,27 @@ CREATE TABLE IF NOT EXISTS backup_verifications (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     artifact_id UUID REFERENCES backup_artifacts(id) ON DELETE CASCADE,
     restore_id UUID REFERENCES backup_restores(id) ON DELETE CASCADE,
-
+    
     -- Verification type
     verification_type VARCHAR(50) NOT NULL CHECK (verification_type IN ('checksum', 'integrity', 'restore_test', 'database_connectivity', 'app_functionality')),
-
+    
     -- Verification details
     status VARCHAR(50) NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'running', 'passed', 'failed', 'skipped')),
-
+    
     -- Results
     passed_checks INTEGER NOT NULL DEFAULT 0,
     failed_checks INTEGER NOT NULL DEFAULT 0,
     total_checks INTEGER NOT NULL DEFAULT 0,
-
+    
     -- Timing
     started_at TIMESTAMPTZ,
     completed_at TIMESTAMPTZ,
     duration_seconds INTEGER,
-
+    
     -- Details
     details JSONB,
     error_message TEXT,
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -349,35 +349,35 @@ CREATE TABLE IF NOT EXISTS backup_retention_policies (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     description TEXT,
-
+    
     -- Policy scope
     scope VARCHAR(50) NOT NULL CHECK (scope IN ('global', 'server', 'app', 'database', 'volume')),
     server_id UUID REFERENCES servers(id) ON DELETE CASCADE,
     app_id UUID REFERENCES apps(id) ON DELETE CASCADE,
     database_id UUID REFERENCES databases(id) ON DELETE CASCADE,
     volume_id UUID REFERENCES volumes(id) ON DELETE CASCADE,
-
+    
     -- Retention rules
     max_backups INTEGER,
     retention_days INTEGER,
     retention_weeks INTEGER,
     retention_months INTEGER,
-
+    
     -- Cleanup schedule
     cleanup_schedule VARCHAR(100),
     last_cleanup_at TIMESTAMPTZ,
     next_cleanup_at TIMESTAMPTZ,
-
+    
     -- Priority (lower number = higher priority)
     priority INTEGER NOT NULL DEFAULT 100,
-
+    
     -- Status
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    
     -- Constraints
     CONSTRAINT backup_retention_unique_name UNIQUE (name),
     CONSTRAINT backup_retention_scope_check CHECK (
@@ -401,20 +401,20 @@ CREATE TABLE IF NOT EXISTS backup_storage_providers (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
     provider_type VARCHAR(50) NOT NULL CHECK (provider_type IN ('local', 's3', 'minio', 'azure', 'gcs')),
-
+    
     -- Configuration
     config JSONB NOT NULL,
-
+    
     -- Status
     enabled BOOLEAN NOT NULL DEFAULT TRUE,
     is_default BOOLEAN NOT NULL DEFAULT FALSE,
     last_test_at TIMESTAMPTZ,
     last_test_status VARCHAR(50),
-
+    
     -- Timestamps
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-
+    
     -- Constraints
     CONSTRAINT backup_storage_unique_name UNIQUE (name)
 );
@@ -493,25 +493,25 @@ END;
 
 -- Create views for common queries
 CREATE VIEW backup_system_overview AS
-SELECT
+SELECT 
     'configurations' as entity_type,
     COUNT(*) as total_count,
     SUM(CASE WHEN enabled = TRUE THEN 1 ELSE 0 END) as active_count
 FROM backup_configurations
 UNION ALL
-SELECT
+SELECT 
     'jobs' as entity_type,
     COUNT(*) as total_count,
     SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as active_count
 FROM backup_jobs
 UNION ALL
-SELECT
+SELECT 
     'artifacts' as entity_type,
     COUNT(*) as total_count,
     SUM(CASE WHEN status = 'verified' THEN 1 ELSE 0 END) as active_count
 FROM backup_artifacts
 UNION ALL
-SELECT
+SELECT 
     'restores' as entity_type,
     COUNT(*) as total_count,
     SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as active_count
@@ -519,7 +519,7 @@ FROM backup_restores;
 
 -- Create a view for backup statistics
 CREATE VIEW backup_statistics AS
-SELECT
+SELECT 
     DATE(created_at) as date,
     artifact_type,
     COUNT(*) as backup_count,
