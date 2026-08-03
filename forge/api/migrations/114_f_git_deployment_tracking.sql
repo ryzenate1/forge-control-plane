@@ -25,7 +25,7 @@ CREATE INDEX IF NOT EXISTS idx_git_deployments_status ON git_deployments(status)
 CREATE INDEX IF NOT EXISTS idx_git_deployments_created ON git_deployments(created_at);
 
 -- Add deployment tracking columns to git_sources table if they don't exist
-ALTER TABLE git_sources
+ALTER TABLE git_sources 
 ADD COLUMN IF NOT EXISTS last_deployment_id VARCHAR(36),
 ADD COLUMN IF NOT EXISTS last_deployment_status VARCHAR(20),
 ADD COLUMN IF NOT EXISTS last_deployment_at TIMESTAMP WITH TIME ZONE,
