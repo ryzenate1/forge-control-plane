@@ -438,14 +438,28 @@ func (m *UpgradeManager) downloadAndVerify(ctx context.Context, payload UpgradeP
 	m.progressPct = 10
 	m.mu.Unlock()
 
-	downloadPath := filepath.Join(m.upgradeDir, "beacon.download")
+	downloadPath := filepath.Join(m.upgradeDir, filepath.Base("beacon.download"))
+	// Re-validate at the sink (SSRF): only a freshly validated canonical URL
+	// reaches http.NewRequest.
+	trimmed := strings.TrimSpace(payload.DownloadURL)
+	if trimmed == "" || strings.Contains(trimmed, "\x00") {
+		return errors.New("invalid upgrade download URL")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return fmt.Errorf("invalid upgrade download URL: %w", err)
+	}
+	if err := validateUpgradeURL(parsed); err != nil {
+		return err
+	}
+	safeURL := (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.EscapedPath(), RawQuery: parsed.RawQuery}).String()
 	out, err := os.OpenFile(downloadPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("create download file: %w", err)
 	}
 	defer out.Close()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, payload.DownloadURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, safeURL, nil)
 	if err != nil {
 		return fmt.Errorf("create request: %w", err)
 	}

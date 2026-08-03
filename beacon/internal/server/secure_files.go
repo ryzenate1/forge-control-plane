@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,20 +62,26 @@ func (s *Server) serverFilesystem(serverID string, create bool) (*rootfs.FS, err
 	if err := serverid.Validate(serverID); err != nil {
 		return nil, err
 	}
+	// Base sanitizes for static analysis; Validate already guarantees the ID
+	// is a canonical UUID with no separators, so Base is identity.
+	safeID := filepath.Base(serverID)
+	if safeID != serverID || strings.Contains(safeID, "\x00") {
+		return nil, errors.New("invalid server ID")
+	}
 	base, err := rootfs.New(s.dataDir)
 	if err != nil {
 		return nil, err
 	}
 	if create {
-		err = base.MkdirAll(serverID, 0o750)
+		err = base.MkdirAll(safeID, 0o750)
 	} else {
-		_, err = base.Stat(serverID)
+		_, err = base.Stat(safeID)
 	}
 	_ = base.Close()
 	if err != nil {
 		return nil, err
 	}
-	return rootfs.New(path.Join(s.dataDir, serverID))
+	return rootfs.New(path.Join(s.dataDir, safeID))
 }
 
 func cleanupExpiredUploads(fsys *rootfs.FS, now time.Time) {
@@ -181,11 +188,25 @@ func (t *archivePathTracker) add(name string, directory bool) error {
 }
 
 func validateArchiveName(name string) (string, error) {
+	// Zip-Slip/path-traversal sanitization using stdlib checks that static
+	// analysis recognizes, plus rootfs.Clean confinement.
+	if name == "" || strings.ContainsRune(name, 0) {
+		return "", errors.New("archive contains an invalid path")
+	}
 	if strings.HasPrefix(name, "/") || strings.Contains(name, "\\") {
 		return "", errors.New("archive contains an absolute or platform-specific path")
 	}
+	stdClean := strings.TrimSuffix(path.Clean(name), "/")
+	if stdClean == "" || stdClean == "." || stdClean == ".." || strings.HasPrefix(stdClean, "../") || strings.HasPrefix(stdClean, "/") {
+		return "", errors.New("archive contains an invalid path")
+	}
+	for _, component := range strings.Split(stdClean, "/") {
+		if component == ".." || component == "" {
+			return "", errors.New("archive contains an invalid path")
+		}
+	}
 	clean, err := rootfs.Clean(name)
-	if err != nil || clean == "" {
+	if err != nil || clean == "" || clean != stdClean {
 		return "", errors.New("archive contains an invalid path")
 	}
 	return clean, nil
