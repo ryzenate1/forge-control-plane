@@ -31,6 +31,13 @@ func (f *linuxFS) openRelative(dirfd int, name string, flags int, perm os.FileMo
 	if name == "" {
 		return unix.Dup(dirfd)
 	}
+	// Defense in depth for path traversal: every low-level open validates with
+	// stdlib checks (Clean + ".."/absolute/backslash/NUL rejection) even
+	// though FS methods already call Clean. This makes the sanitization visible
+	// to static analysis at the raw-syscall sink (openat2/openat).
+	if err := validateRelativePath(name); err != nil {
+		return -1, err
+	}
 	// RESOLVE_BENEATH rejects any resolution that would escape rootfd (including
 	// via ".." or absolute components baked into a symlink target).
 	// RESOLVE_NO_MAGICLINKS rejects procfs magic links such as /proc/1/root or
@@ -62,7 +69,20 @@ func (f *linuxFS) openRelative(dirfd int, name string, flags int, perm os.FileMo
 }
 
 func (f *linuxFS) openatWalk(dirfd int, name string, flags int, perm os.FileMode) (int, error) {
+	if err := validateRelativePath(name); err != nil {
+		return -1, err
+	}
 	parts := strings.Split(name, "/")
+	// Explicit stdlib sanitization at the raw Openat sinks: every component
+	// must be a plain basename with no separators, "..", or NUL.
+	for _, component := range parts {
+		if component == "" || component == "." || component == ".." || strings.ContainsAny(component, `/\`+"\x00") {
+			return -1, errors.New("invalid path component")
+		}
+		if component != path.Clean(component) {
+			return -1, errors.New("invalid path component")
+		}
+	}
 	current, err := unix.Dup(dirfd)
 	if err != nil {
 		return -1, err
@@ -75,7 +95,12 @@ func (f *linuxFS) openatWalk(dirfd int, name string, flags int, perm os.FileMode
 		}
 		current = next
 	}
-	fd, err := unix.Openat(current, parts[len(parts)-1], flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, uint32(perm.Perm()))
+	base := parts[len(parts)-1]
+	if base == "" || base == "." || base == ".." || strings.ContainsAny(base, `/\`+"\x00") || base != path.Clean(base) {
+		_ = unix.Close(current)
+		return -1, errors.New("invalid path component")
+	}
+	fd, err := unix.Openat(current, base, flags|unix.O_CLOEXEC|unix.O_NOFOLLOW, uint32(perm.Perm()))
 	_ = unix.Close(current)
 	return fd, err
 }
@@ -93,6 +118,9 @@ func (f *linuxFS) openDir(name string) (int, error) {
 }
 
 func (f *linuxFS) parent(name string) (int, string, error) {
+	if err := validateRelativePath(name); err != nil {
+		return -1, "", err
+	}
 	dir, base := path.Split(name)
 	dir = strings.TrimSuffix(dir, "/")
 	if dir == "" {
@@ -104,6 +132,9 @@ func (f *linuxFS) parent(name string) (int, string, error) {
 }
 
 func (f *linuxFS) mkdirAll(name string, perm os.FileMode) error {
+	if err := validateRelativePath(name); err != nil {
+		return err
+	}
 	current, err := unix.Dup(f.rootfd)
 	if err != nil {
 		return err
@@ -128,6 +159,9 @@ func (f *linuxFS) mkdirAll(name string, perm os.FileMode) error {
 }
 
 func (f *linuxFS) removeAll(name string) error {
+	if err := validateRelativePath(name); err != nil {
+		return err
+	}
 	parent, base, err := f.parent(name)
 	if err != nil {
 		if errors.Is(err, unix.ENOENT) {
@@ -140,6 +174,11 @@ func (f *linuxFS) removeAll(name string) error {
 }
 
 func removeAt(parent int, name string) error {
+	// Each path component reaching unlinkat is validated: single basenames
+	// only, no separators, no "..", no NUL (path traversal).
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, "/\\\x00") {
+		return errors.New("invalid path component")
+	}
 	if err := unix.Unlinkat(parent, name, 0); err == nil || err == unix.ENOENT {
 		return nil
 	} else if err != unix.EISDIR && err != unix.EPERM && err != unix.EACCES {
@@ -183,6 +222,12 @@ func removeAt(parent int, name string) error {
 }
 
 func (f *linuxFS) rename(oldName, newName string) error {
+	if err := validateRelativePath(oldName); err != nil {
+		return err
+	}
+	if err := validateRelativePath(newName); err != nil {
+		return err
+	}
 	oldParent, oldBase, err := f.parent(oldName)
 	if err != nil {
 		return err
@@ -212,4 +257,41 @@ func (f *linuxFS) chmod(name string, mode os.FileMode) error {
 	}
 	defer file.Close()
 	return file.Chmod(mode.Perm())
+}
+
+// validateRelativePath enforces the rooted-filesystem path contract with
+// stdlib primitives: relative, slash-separated, no drive prefix, no NUL,
+// no backslash, no absolute, and no ".." component. All raw-syscall sinks
+// call it so path-traversal sanitization is visible at the sink.
+func validateRelativePath(name string) error {
+	if name == "" {
+		return errors.New("invalid path")
+	}
+	if strings.ContainsRune(name, 0) {
+		return errors.New("invalid path")
+	}
+	if strings.Contains(name, "\\") {
+		return errors.New("invalid path")
+	}
+	if strings.HasPrefix(name, "/") {
+		return errors.New("invalid path")
+	}
+	if len(name) >= 2 && name[1] == ':' {
+		return errors.New("invalid path")
+	}
+	clean := path.Clean(name)
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return errors.New("invalid path")
+	}
+	for _, component := range strings.Split(clean, "/") {
+		if component == ".." || component == "" {
+			return errors.New("invalid path")
+		}
+	}
+	if clean != name && clean != strings.TrimSuffix(name, "/") {
+		// Require already-clean input (no "./", "a//b"); rootfs.Clean callers
+		// satisfy this, and non-clean input is a traversal smell.
+		return errors.New("invalid path")
+	}
+	return nil
 }
