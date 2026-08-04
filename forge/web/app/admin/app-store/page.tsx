@@ -14,7 +14,7 @@ import {
 } from "@/components/shared";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { Pagination } from "@/components/ui/primitives";
-import { AdminPageLayout, Btn, Card, CardHeader, Modal, EmptyState, SectionHeader } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, Modal, ModalFooter, EmptyState, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import * as appStoreApi from "@/lib/api/app-store";
@@ -191,14 +191,14 @@ export default function AppStorePage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => { setView("browse"); setSelectedApp(null); setAppsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-line bg-white/[0.04] text-text-subtle hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-line bg-overlay-subtle text-text-subtle hover:bg-overlay-strong")}
             >
               <Grid3X3 className="mr-1.5 inline-block h-4 w-4" />
               Browse
             </button>
             <button
               onClick={() => { setView("installed"); setSelectedApp(null); setInstallsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-line bg-white/[0.04] text-text-subtle hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-line bg-overlay-subtle text-text-subtle hover:bg-overlay-strong")}
             >
               <Package className="mr-1.5 inline-block h-4 w-4" />
               Installed{installsQuery.isSuccess ? ` (${installs.length})` : ""}
@@ -206,7 +206,7 @@ export default function AppStorePage() {
             <button
               onClick={() => syncBundledMut.mutate()}
               disabled={syncBundledMut.isPending}
-              className="rounded-lg border border-line bg-white/[0.04] px-4 py-2 text-sm font-medium text-text-subtle hover:bg-white/[0.08] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="rounded-lg border border-line bg-overlay-subtle px-4 py-2 text-sm font-medium text-text-subtle hover:bg-overlay-strong disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="Import the bundled Coolify template catalog"
             >
               <RefreshCw className={`mr-1.5 inline-block h-4 w-4 ${syncBundledMut.isPending ? 'animate-spin' : ''}`} />
@@ -215,7 +215,7 @@ export default function AppStorePage() {
             <button
               onClick={refreshData}
               disabled={appsQuery.isFetching || installsQuery.isFetching}
-              className="rounded-lg border border-line bg-white/[0.04] px-4 py-2 text-sm font-medium text-text-subtle hover:bg-white/[0.08] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              className="rounded-lg border border-line bg-overlay-subtle px-4 py-2 text-sm font-medium text-text-subtle hover:bg-overlay-strong disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
               title="Refresh data"
               aria-label="Refresh app store"
             >
@@ -299,7 +299,7 @@ export default function AppStorePage() {
                   className="group relative flex min-h-56 flex-col rounded-xl border border-line bg-surface p-5 text-left transition-colors hover:border-brand hover:bg-overlay-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
                 >
                   {installedKeys.has(app.key) && (
-                    <span className="absolute right-3 top-3 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">
+                    <span className="absolute right-3 top-3 rounded-full bg-ok-subtle px-2 py-0.5 text-[10px] font-bold uppercase text-ok">
                       Installed
                     </span>
                   )}
@@ -427,8 +427,9 @@ function AppDetailView({
   onUpgrade: () => void;
 }) {
   return (
-    <div className="rounded-xl border border-line bg-surface p-6">
-      <button onClick={onBack} className="mb-4 flex items-center gap-1 text-sm text-text-subtle hover:text-white">
+    <Card>
+      <div className="p-6">
+      <button onClick={onBack} className="mb-4 flex items-center gap-1 text-sm text-text-subtle hover:text-text">
         <ChevronLeft className="h-4 w-4" />
         Back to browse
       </button>
@@ -462,17 +463,17 @@ function AppDetailView({
         <div className="flex shrink-0 gap-2">
           {isInstalled ? (
             <>
-              <button disabled={isBusy} onClick={onUpgrade} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)]">
+              <button disabled={isBusy} onClick={onUpgrade} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-text hover:bg-[var(--brand-hover)]">
                 <RefreshCw className="mr-1.5 inline-block h-4 w-4" />
                 Upgrade
               </button>
-              <button disabled={isBusy} onClick={onUninstall} className="rounded-lg bg-rose-500/10 px-4 py-2 text-sm font-medium text-rose-400 hover:bg-rose-500/20">
+              <button disabled={isBusy} onClick={onUninstall} className="rounded-lg bg-danger-subtle px-4 py-2 text-sm font-medium text-danger">
                 <Trash2 className="mr-1.5 inline-block h-4 w-4" />
                 Uninstall
               </button>
             </>
           ) : (
-            <button disabled={!installationStateKnown} onClick={onInstall} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)]">
+            <button disabled={!installationStateKnown} onClick={onInstall} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-text hover:bg-[var(--brand-hover)]">
               <Download className="mr-1.5 inline-block h-4 w-4" />
               Install
             </button>
@@ -496,7 +497,7 @@ function AppDetailView({
         </div>
         <div className="rounded-lg bg-overlay-subtle px-4 py-3">
           <p className="text-xs text-text-subtle">Category</p>
-          <p className="font-medium capitalize text-white">{app.category}</p>
+          <p className="font-medium capitalize text-text">{app.category}</p>
         </div>
       </div>
 
@@ -508,17 +509,18 @@ function AppDetailView({
       )}
 
       {isInstalled && install && (
-        <div className="mt-4 rounded-lg border border-line bg-white/[0.02] p-4">
+        <div className="mt-4 rounded-lg border border-line bg-overlay-subtle p-4">
           <h3 className="mb-2 text-sm font-semibold text-text-subtle">Install Details</h3>
           <div className="grid gap-2 text-sm sm:grid-cols-2">
             <div><span className="text-text-subtle">Name:</span> <span className="text-text-subtle">{install.name}</span></div>
             <div><span className="text-text-subtle">Status:</span> <StatusBadge status={install.status} /></div>
             <div><span className="text-text-subtle">Version:</span> <span className="text-text-subtle">v{install.appVersion}</span></div>
-            {install.errorMessage && <div className="col-span-2 text-rose-400">Error: {install.errorMessage}</div>}
+            {install.errorMessage && <div className="col-span-2 text-danger">Error: {install.errorMessage}</div>}
           </div>
         </div>
       )}
-    </div>
+      </div>
+    </Card>
   );
 }
 
@@ -535,7 +537,7 @@ function InstallFormModal({
   const [memoryMb, setMemoryMb] = useState(app.minMemoryMb || 256);
   const [diskMb, setDiskMb] = useState(app.minDiskMb || 1024);
   const [params, setParams] = useState<Record<string, string>>({});
-  const nodesQuery = useQuery({ queryKey: ["nodes", "all"], queryFn: () => fetchAllNodes() });
+  const nodesQuery = useQuery({ queryKey: queryKeys.nodes.allLists(), queryFn: () => fetchAllNodes() });
 
   useEffect(() => {
     if (app.params && typeof app.params === "object") {
@@ -644,7 +646,7 @@ function InstallFormModal({
             <button type="button" onClick={onClose} className="rounded-lg bg-overlay-subtle px-4 py-2 text-sm text-text-subtle hover:bg-overlay-strong">
               Cancel
             </button>
-            <button type="submit" disabled={isLoading || !nodeId || !nodesQuery.isSuccess} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)] disabled:opacity-50">
+            <button type="submit" disabled={isLoading || !nodeId || !nodesQuery.isSuccess} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-text hover:bg-[var(--brand-hover)] disabled:opacity-50">
               {isLoading ? "Installing..." : "Install"}
             </button>
           </div>
@@ -661,29 +663,19 @@ function UninstallConfirmModal({
   isLoading: boolean;
 }) {
   return (
-    <Modal title="Uninstall application" onClose={() => { if (!isLoading) onClose(); }}>
-        <p className="mb-4 text-sm text-text-subtle">
-          This removes the application installation. Review any persistent data you need to keep before continuing.
-        </p>
-        <div className="flex justify-end gap-3">
-          <button onClick={onClose} className="rounded-lg bg-overlay-subtle px-4 py-2 text-sm text-text-subtle hover:bg-overlay-strong">
-            Cancel
-          </button>
-          <button onClick={onConfirm} disabled={isLoading} className="rounded-lg bg-rose-600 px-4 py-2 text-sm font-medium text-text hover:bg-rose-500 disabled:opacity-50">
-            {isLoading ? "Uninstalling..." : "Uninstall"}
-          </button>
-        </div>
+    <Modal title="Uninstall application" description="This removes the application installation. Review any persistent data you need to keep before continuing." onClose={() => { if (!isLoading) onClose(); }}>
+        <ModalFooter onCancel={onClose} onConfirm={onConfirm} confirmLabel={isLoading ? "Uninstalling..." : "Uninstall"} disabled={isLoading} destructive />
     </Modal>
   );
 }
 
 const statusConfig: Record<string, { label: string; className: string }> = {
-  installing: { label: "Installing", className: "bg-sky-500/20 text-sky-400" },
-  running: { label: "Running", className: "bg-emerald-500/20 text-emerald-400" },
-  stopped: { label: "Stopped", className: "bg-slate-500/20 text-text-subtle" },
-  error: { label: "Error", className: "bg-rose-500/20 text-rose-400" },
-  upgrading: { label: "Upgrading", className: "bg-amber-500/20 text-amber-400" },
-  uninstalling: { label: "Uninstalling", className: "bg-slate-500/20 text-text-subtle" },
+  installing: { label: "Installing", className: "bg-brand-subtle text-brand" },
+  running: { label: "Running", className: "bg-ok-subtle text-ok" },
+  stopped: { label: "Stopped", className: "bg-overlay-subtle text-text-subtle" },
+  error: { label: "Error", className: "bg-danger-subtle text-danger" },
+  upgrading: { label: "Upgrading", className: "bg-warn-subtle text-warn" },
+  uninstalling: { label: "Uninstalling", className: "bg-overlay-subtle text-text-subtle" },
 };
 
 function StatusBadge({ status }: { status: string }) {
