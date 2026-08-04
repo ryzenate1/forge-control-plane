@@ -198,7 +198,7 @@ export default function AppTemplatesPage() {
                   <div className="flex gap-1">
                     <button
                       type="button"
-                      className="rounded p-1 text-text-muted transition hover:bg-white/[0.06] hover:text-text"
+                      className="rounded p-1 text-text-muted transition hover:bg-overlay-subtle hover:text-text"
                       aria-label={`Edit ${tpl.name}`}
                       onClick={() => openEdit(tpl)}
                     >
@@ -206,7 +206,7 @@ export default function AppTemplatesPage() {
                     </button>
                     <button
                       type="button"
-                      className="rounded p-1 text-text-muted transition hover:bg-white/[0.06] hover:text-red-400"
+                      className="rounded p-1 text-text-muted transition hover:bg-overlay-subtle hover:text-danger"
                       aria-label={`Delete ${tpl.name}`}
                       onClick={() => remove(tpl.id)}
                     >
@@ -277,7 +277,7 @@ export default function AppTemplatesPage() {
             <Input label="Ports (host:container, comma-separated)" value={form.ports} onChange={(v) => setForm((f) => ({ ...f, ports: v }))} placeholder="8080:80, 3000:3000" />
             <Input label="Env Vars (KEY=value, comma-separated)" value={form.envVars} onChange={(v) => setForm((f) => ({ ...f, envVars: v }))} placeholder="NODE_ENV=production, PORT=3000" />
 
-            {sourceMissing ? <p role="alert" className="text-xs text-amber-300">Add the required source for this template type before saving.</p> : null}
+            {sourceMissing ? <p role="alert" className="text-xs text-warn">Add the required source for this template type before saving.</p> : null}
             <ModalFooter onCancel={() => setShowModal(false)} onConfirm={save} confirmLabel="Save Template" disabled={!form.name.trim() || sourceMissing} />
           </div>
         </Modal>
