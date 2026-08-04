@@ -11,11 +11,12 @@ import {
   fetchApp, fetchAppGitSource, updateAppGitBranch,
   toggleAppAutoDeploy, triggerDeploy,
 } from "@/lib/api/apps";
-import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, AdminErrorState, AdminLoadingState, AdminPageLayout, cn } from "@/components/admin/admin-ui";
 import { formatDate } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
 import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 import { adminPageGuides } from "@/components/admin/admin-page-guides";
+import { queryKeys } from "@/lib/api/query-keys";
 
 interface GitConfig {
   repoUrl?: string;
@@ -45,8 +46,8 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
   const router = useRouter();
   const qc = useQueryClient();
 
-  const { data: app, isLoading: appLoading } = useQuery({
-    queryKey: ["app", id],
+  const { data: app, isLoading: appLoading, isError: appError, refetch: refetchApp } = useQuery({
+    queryKey: queryKeys.apps.detail(id),
     queryFn: () => fetchApp(id),
   });
 
@@ -77,7 +78,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
 
   const triggerMut = useMutation({
     mutationFn: () => triggerDeploy(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.detail(id) }),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to trigger deploy"),
   });
 
@@ -96,15 +97,24 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
 
   if (appLoading || gitLoading) {
     return (
-      <div className="space-y-6">
+      <AdminPageLayout>
         <SectionHeader title="Git Source" sub="Loading..." />
-        <div className="p-8 text-center text-sm text-slate-500">Loading Git source details...</div>
-      </div>
+        <AdminLoadingState label="Loading Git source details..." />
+      </AdminPageLayout>
+    );
+  }
+
+  if (appError || !app) {
+    return (
+      <AdminPageLayout>
+        <SectionHeader title="Git Source" sub="Repository configuration and deployment triggers" />
+        <AdminErrorState message="Could not load this Git source." retry={() => void refetchApp()} />
+      </AdminPageLayout>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title={app?.name ? `${app.name} · Git Source` : "Git Source"}
         sub="Repository configuration and deployment triggers"
@@ -114,8 +124,8 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
         action={
           <div className="flex items-center gap-3">
             {triggerMut.isPending && (
-              <span className="flex items-center gap-2 text-xs text-slate-400">
-                <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+              <span className="flex items-center gap-2 text-xs text-text-subtle">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-info" />
                 Build in progress...
               </span>
             )}
@@ -130,39 +140,39 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>
           <CardHeader title="Repository Info" icon={Globe} />
-          <div className="divide-y divide-white/[0.06] text-sm">
+          <div className="divide-y divide-line text-sm">
             <div className="flex justify-between px-4 py-3">
-              <span className="text-slate-400">URL</span>
+              <span className="text-text-subtle">URL</span>
               <a
                 href={gitSource?.repoUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="font-mono text-xs text-blue-400 hover:text-blue-300"
+                className="font-mono text-xs text-brand hover:text-brand"
               >
                 {gitSource?.repoUrl ?? app?.gitRepo ?? "—"}
               </a>
             </div>
             <div className="flex justify-between px-4 py-3">
-              <span className="text-slate-400">Branch</span>
-              <span className="font-mono text-xs text-slate-200">
+              <span className="text-text-subtle">Branch</span>
+              <span className="font-mono text-xs text-text">
                 <GitBranch size={12} className="inline mr-1" />
                 {gitSource?.branch ?? app?.gitBranch ?? "—"}
               </span>
             </div>
             <div className="flex justify-between px-4 py-3">
-              <span className="text-slate-400">Provider</span>
+              <span className="text-text-subtle">Provider</span>
               <Pill tone="blue">{gitSource?.provider ?? app?.gitProvider ?? "—"}</Pill>
             </div>
             <div className="flex justify-between px-4 py-3">
-              <span className="text-slate-400">Auto-deploy</span>
+              <span className="text-text-subtle">Auto-deploy</span>
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
                   checked={gitSource?.autoDeploy ?? false}
                   onChange={(e) => autoDeployMut.mutate(e.target.checked)}
-                  className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[var(--brand)]"
+                  className="h-3 w-3 rounded border-line bg-[var(--surface-input)] accent-[var(--brand)]"
                 />
-                <span className={cn("text-xs", gitSource?.autoDeploy ? "text-emerald-400" : "text-slate-500")}>
+                <span className={cn("text-xs", gitSource?.autoDeploy ? "text-ok" : "text-text-muted")}>
                   {gitSource?.autoDeploy ? "Enabled" : "Disabled"}
                 </span>
               </label>
@@ -173,15 +183,15 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
         <Card>
           <CardHeader title="Webhook URL" icon={Link} />
           <div className="space-y-3 p-4">
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-text-muted">
               Configure this URL in your Git provider to trigger automatic deployments.
             </p>
             <div className="flex items-center gap-2">
-              <code className="flex-1 break-all rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-2 font-mono text-xs text-slate-400">
+              <code className="flex-1 break-all rounded-lg border border-line bg-[var(--canvas)] p-2 font-mono text-xs text-text-subtle">
                 {gitSource?.webhookUrl ?? "Waiting for webhook URL..."}
               </code>
               <Btn tone="ghost" size="sm" onClick={copyWebhook} disabled={!gitSource?.webhookUrl}>
-                {webhookCopied ? <Check size={14} className="text-emerald-400" /> : <Copy size={14} />}
+                {webhookCopied ? <Check size={14} className="text-ok" /> : <Copy size={14} />}
               </Btn>
             </div>
           </div>
@@ -211,7 +221,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
           </Btn>
         </div>
         {branchMut.error && (
-          <div className="px-4 pb-3 text-sm text-red-400">{branchMut.error.message}</div>
+          <div className="px-4 pb-3 text-sm text-danger">{branchMut.error.message}</div>
         )}
       </Card>
 
@@ -220,14 +230,14 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
         {!gitSource?.commits || gitSource.commits.length === 0 ? (
           <EmptyState icon={GitCommit} message="No commits found." />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-line">
             {gitSource.commits.slice(0, 20).map((commit) => (
               <div key={commit.sha} className="flex items-start gap-3 px-4 py-3">
-                <GitCommit size={14} className="mt-0.5 shrink-0 text-slate-500" />
+                <GitCommit size={14} className="mt-0.5 shrink-0 text-text-muted" />
                 <div className="min-w-0 flex-1">
-                  <p className="text-sm text-slate-200 truncate">{commit.message}</p>
-                  <p className="mt-0.5 text-xs text-slate-500">
-                    <span className="font-mono text-slate-600">{commit.sha.slice(0, 7)}</span>
+                  <p className="text-sm text-text truncate">{commit.message}</p>
+                  <p className="mt-0.5 text-xs text-text-muted">
+                    <span className="font-mono text-text-muted">{commit.sha.slice(0, 7)}</span>
                     <span className="mx-1">by</span>
                     {commit.author}
                     <span className="mx-1">—</span>
@@ -239,7 +249,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
                     href={commit.url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="shrink-0 text-xs text-blue-400 hover:text-blue-300"
+                    className="shrink-0 text-xs text-brand hover:text-brand"
                   >
                     View
                   </a>
@@ -249,6 +259,6 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
           </div>
         )}
       </Card>
-    </div>
+    </AdminPageLayout>
   );
 }

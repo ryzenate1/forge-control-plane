@@ -12,19 +12,20 @@ import {
   startApp, stopApp, restartApp, redeployComposeStack,
 } from "@/lib/api/apps";
 import type { ComposeService } from "@/lib/api/apps";
-import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, Modal } from "@/components/admin/admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, Modal, AdminErrorState, AdminLoadingState, AdminPageLayout } from "@/components/admin/admin-ui";
 import { LogViewer } from "@/components/admin/AdminAppsShared";
 import { toast } from "@/components/ui/sonner";
 import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 import { adminPageGuides } from "@/components/admin/admin-page-guides";
+import { queryKeys } from "@/lib/api/query-keys";
 
 export default function ComposeStackPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
   const qc = useQueryClient();
 
-  const { data: app, isLoading: appLoading } = useQuery({
-    queryKey: ["app", id],
+  const { data: app, isLoading: appLoading, isError: appError, refetch: refetchApp } = useQuery({
+    queryKey: queryKeys.apps.detail(id),
     queryFn: () => fetchApp(id),
     refetchInterval: 10_000,
   });
@@ -39,21 +40,25 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
 
   const startMut = useMutation({
     mutationFn: () => startApp(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.detail(id) }),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to start stack"),
   });
   const stopMut = useMutation({
     mutationFn: () => stopApp(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.detail(id) }),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to stop stack"),
   });
   const restartMut = useMutation({
     mutationFn: () => restartApp(id),
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.detail(id) }),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to restart stack"),
   });
   const redeployMut = useMutation({
     mutationFn: () => redeployComposeStack(id),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: queryKeys.apps.detail(id) });
+      toast.success("Stack re-deploy queued");
+    },
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to redeploy stack"),
   });
 
@@ -74,15 +79,24 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
 
   if (appLoading) {
     return (
-      <div className="space-y-6">
+      <AdminPageLayout>
         <SectionHeader title="Compose Stack" sub="Loading..." />
-        <div className="p-8 text-center text-sm text-slate-500">Loading stack details...</div>
-      </div>
+        <AdminLoadingState label="Loading stack details..." />
+      </AdminPageLayout>
+    );
+  }
+
+  if (appError || !app) {
+    return (
+      <AdminPageLayout>
+        <SectionHeader title="Compose Stack" sub="Multi-service Docker Compose management" />
+        <AdminErrorState message="Could not load this compose stack." retry={() => void refetchApp()} />
+      </AdminPageLayout>
     );
   }
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title={app?.name ? `${app.name} · Compose Stack` : "Compose Stack"}
         sub="Multi-service Docker Compose management"
@@ -123,7 +137,7 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
                   <th className="px-4 py-3">Service</th>
                   <th className="px-4 py-3">Image</th>
                   <th className="px-4 py-3">Status</th>
@@ -131,11 +145,11 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
                   <th className="px-4 py-3">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {services.map((svc) => (
-                  <tr key={svc.name} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-semibold text-slate-200">{svc.name}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{svc.image}</td>
+                  <tr key={svc.name} className="hover:bg-overlay-subtle">
+                    <td className="px-4 py-3 font-semibold text-text">{svc.name}</td>
+                    <td className="px-4 py-3 font-mono text-xs text-text-subtle">{svc.image}</td>
                     <td className="px-4 py-3">
                       <Pill
                         tone={
@@ -148,7 +162,7 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
                         {svc.status}
                       </Pill>
                     </td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">
+                    <td className="px-4 py-3 font-mono text-xs text-text-subtle">
                       {svc.ports.length > 0 ? svc.ports.join(", ") : "—"}
                     </td>
                     <td className="px-4 py-3">
@@ -175,7 +189,7 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
       {showConfig && composeData && (
         <Modal title="Compose Configuration" onClose={() => setShowConfig(false)} wide>
           <div className="space-y-4">
-          <pre className="max-h-96 overflow-y-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-4 font-mono text-xs text-slate-400 whitespace-pre-wrap">
+          <pre className="max-h-96 overflow-y-auto rounded-lg border border-line bg-[var(--canvas)] p-4 font-mono text-xs text-text-subtle whitespace-pre-wrap">
             {composeContent || JSON.stringify(composeData.sourceConfig, null, 2)}
           </pre>
           </div>
@@ -183,11 +197,11 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
       )}
 
       {redeployMut.error && (
-        <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
-          {redeployMut.error.message}
+        <div className="p-4">
+          <AdminErrorState message={redeployMut.error.message} retry={() => redeployMut.mutate()} />
         </div>
       )}
-    </div>
+    </AdminPageLayout>
   );
 }
 
