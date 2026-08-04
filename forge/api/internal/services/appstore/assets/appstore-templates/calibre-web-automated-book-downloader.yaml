@@ -27,7 +27,7 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
+  
   calibre-web-downloader:
     image: ghcr.io/calibrain/calibre-web-automated-book-downloader:latest
     environment:

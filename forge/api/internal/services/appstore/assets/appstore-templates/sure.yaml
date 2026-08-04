@@ -34,7 +34,7 @@ services:
       interval: 15s
       timeout: 20s
       retries: 5
-
+      
   worker:
     image: ghcr.io/we-promise/sure:0.6.7
     command: bundle exec sidekiq
@@ -63,7 +63,7 @@ services:
       interval: 15s
       timeout: 20s
       retries: 5
-
+      
   postgresql:
     image: postgres:16-alpine
     volumes:

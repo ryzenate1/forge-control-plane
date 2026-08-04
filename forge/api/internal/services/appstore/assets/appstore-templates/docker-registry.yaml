@@ -24,7 +24,7 @@ services:
         mode: "0755"
         content: |
           #!/usr/bin/env sh
-          set -e
+          set -e 
 
           if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
               echo "Error: USERNAME and PASSWORD environment variables must be set"
@@ -65,8 +65,8 @@ services:
         - CMD
         - wget
         - "-q"
-        - "--spider"
-        - "http://localhost:5000/"
+        - "--spider"     
+        - "http://localhost:5000/"  
       interval: 5s
       timeout: 20s
       retries: 10
