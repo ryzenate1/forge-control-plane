@@ -88,7 +88,7 @@ services:
       interval: 10s
       timeout: 3s
       retries: 5
-
+      
   redis:
     image: redis:7-alpine
     command: redis-server

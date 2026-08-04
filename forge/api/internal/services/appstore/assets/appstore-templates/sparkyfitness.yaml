@@ -69,3 +69,4 @@ services:
       retries: 10
     volumes:
       - 'sparkyfitness-db-postgresql:/var/lib/postgresql'
+

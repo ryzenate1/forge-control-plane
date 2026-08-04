@@ -587,7 +587,7 @@ services:
       interval: 20s
       timeout: 5s
       retries: 3
-
+      
   appwrite-worker-migrations:
     image: appwrite/appwrite:1.7.4
     entrypoint: worker-migrations

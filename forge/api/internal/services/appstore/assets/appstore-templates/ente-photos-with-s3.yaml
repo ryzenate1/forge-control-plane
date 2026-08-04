@@ -100,7 +100,7 @@ services:
       interval: 5s
       timeout: 20s
       retries: 10
-
+      
   minio-init:
     image: 'minio/mc:RELEASE.2025-08-13T08-35-41Z' # Released at 2025-08-13T08-35-41Z
     depends_on:

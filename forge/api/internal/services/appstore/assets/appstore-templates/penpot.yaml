@@ -96,7 +96,7 @@ services:
       interval: 5s
       timeout: 20s
       retries: 10
-
+      
   penpot-valkey:
     image: 'valkey/valkey:8.1'
     volumes:
