@@ -33,26 +33,26 @@ export default function AdminAcmePage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="ACME / Let's Encrypt"
-        sub="ACME accounts for automatic TLS issuance, plus DNS accounts for DNS-01 challenges."
+        title="ACME Accounts"
+        sub="ACME accounts for automatic certificate issuance."
         action={<Btn tone="primary" onClick={() => setShowCreate(true)}><Plus size={12} /> New ACME Account</Btn>}
       />
       <Card>
-        <CardHeader title="ACME Accounts" icon={Shield} action={<span className="text-xs text-slate-400">{accountsQuery.data?.length ?? 0} accounts</span>} />
+        <CardHeader title="ACME Accounts" icon={Shield} action={<span className="text-xs text-text-subtle">{accountsQuery.data?.length ?? 0} accounts</span>} />
         {accountsQuery.isLoading ? <AdminLoadingState label="Loading ACME accounts…" />
           : accountsQuery.isError ? <div className="p-4"><AdminErrorState message={accountsQuery.error instanceof Error ? accountsQuery.error.message : "Failed"} retry={() => accountsQuery.refetch()} /></div>
           : (accountsQuery.data?.length ?? 0) === 0 ? <EmptyState icon={Shield} message="No ACME accounts. Create one with email and optional CA URL." />
           : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead><tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-400"><th className="px-4 py-3">Email</th><th className="px-4 py-3">CA</th><th className="px-4 py-3">Default</th><th className="px-4 py-3">Created</th><th className="px-4 py-3"></th></tr></thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <thead><tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-subtle"><th className="px-4 py-3">Email</th><th className="px-4 py-3">CA</th><th className="px-4 py-3">Default</th><th className="px-4 py-3">Created</th><th className="px-4 py-3"></th></tr></thead>
+                <tbody className="divide-y divide-line">
                   {accountsQuery.data?.map((a) => (
-                    <tr key={a.id} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-200">{a.email}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400 truncate max-w-[200px]">{a.caUrl}</td>
+                    <tr key={a.id} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{a.email}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle truncate max-w-[200px]">{a.caUrl}</td>
                       <td className="px-4 py-3">{a.isDefault ? <Pill tone="green">default</Pill> : <Pill>—</Pill>}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}</td>
                       <td className="px-4 py-3 text-right"><Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete ACME account ${a.email}?`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(a.id); })(); }}><Trash2 size={12} /></Btn></td>
                     </tr>
                   ))}
@@ -60,19 +60,19 @@ export default function AdminAcmePage() {
               </table>
             </div>
           )}
-        <div className="border-t border-white/[0.06] bg-white/[0.015] px-4 py-2 text-[11px] text-slate-400">
+        <div className="border-t border-line bg-overlay-subtle px-4 py-2 text-[11px] text-text-subtle">
           DNS provider accounts for DNS-01 challenges are listed below.
         </div>
       </Card>
 
       <Card>
         <CardHeader title="DNS Provider Accounts" icon={Shield} />
-        {dnsQuery.isLoading ? <div className="p-4 text-sm text-slate-400">Loading…</div>
-          : dnsQuery.isError ? <div className="p-4 text-sm text-amber-300">{dnsQuery.error instanceof Error ? dnsQuery.error.message : "failed"}</div>
+        {dnsQuery.isLoading ? <AdminLoadingState label="Loading DNS accounts…" />
+          : dnsQuery.isError ? <div className="p-4"><AdminErrorState message={dnsQuery.error instanceof Error ? dnsQuery.error.message : "Failed to load DNS accounts"} retry={() => dnsQuery.refetch()} /></div>
           : (
             <div className="p-4">
-              {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-slate-400">No DNS accounts yet. Add one from DNS Providers.</p>
-                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-white/[0.06] px-3 py-2 text-xs flex justify-between"><span className="font-mono text-slate-200">{d.name} · {d.provider}</span><span className="text-slate-400">{new Date(d.createdAt).toLocaleDateString()}</span></div>)}</div>}
+              {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-text-subtle">No DNS accounts yet. Add one from DNS Providers.</p>
+                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-line px-3 py-2 text-xs flex justify-between"><span className="font-mono text-text">{d.name} · {d.provider}</span><span className="text-text-subtle">{new Date(d.createdAt).toLocaleDateString()}</span></div>)}</div>}
             </div>
           )}
       </Card>
@@ -82,7 +82,7 @@ export default function AdminAcmePage() {
           <div className="space-y-4">
             <Input label="Email *" value={email} onChange={setEmail} placeholder="admin@example.com" />
             <Input label="CA URL (optional)" value={caUrl} onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" />
-            <p className="text-xs text-slate-400">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>
+            <p className="text-xs text-text-subtle">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>
           </div>
           <ModalFooter onCancel={() => setShowCreate(false)} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create"} disabled={!email || createMut.isPending} />
         </Modal>
