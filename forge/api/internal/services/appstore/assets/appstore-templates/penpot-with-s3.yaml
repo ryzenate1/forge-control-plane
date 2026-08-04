@@ -61,7 +61,7 @@ services:
       # S3 Credentials (MinIO)
       - AWS_ACCESS_KEY_ID=${SERVICE_USER_MINIO}
       - AWS_SECRET_ACCESS_KEY=${SERVICE_PASSWORD_MINIO}
-
+      
       # Email Configuration
       - PENPOT_SMTP_DEFAULT_FROM=${PENPOT_SMTP_DEFAULT_FROM:-no-reply@example.com}
       - PENPOT_SMTP_DEFAULT_REPLY_TO=${PENPOT_SMTP_DEFAULT_REPLY_TO:-no-reply@example.com}
@@ -109,7 +109,7 @@ services:
       interval: 5s
       timeout: 20s
       retries: 10
-
+      
   # S3 Bucket initialization
   minio-init:
     image: minio/mc:latest
@@ -154,7 +154,7 @@ services:
       timeout: 3s
       retries: 5
       start_period: 3s
-
+ 
   mailpit:
     image: axllent/mailpit:v1.28 # Released on 26 Nov 2025
     environment:

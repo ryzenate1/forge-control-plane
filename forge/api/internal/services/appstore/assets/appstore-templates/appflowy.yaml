@@ -48,7 +48,7 @@ services:
                       proxy_pass $gotrue_backend;
 
                       rewrite ^/gotrue(/.*)$ $1 break;
-
+                      
                       # Allow headers like redirect_to to be handed over to the gotrue
                       # for correct redirecting
                       proxy_set_header Host $http_host;
@@ -205,7 +205,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 12
-
+    
     depends_on:
       gotrue:
         condition: service_healthy
