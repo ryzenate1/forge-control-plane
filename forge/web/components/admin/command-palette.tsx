@@ -10,7 +10,7 @@ import {
   Layers,
 } from "lucide-react";
 import { ForgeCommandPalette, type ForgeCommandItem } from "@/components/ui/forge";
-import { adminPageRegistry } from "./admin-registry";
+import { adminEntryMatches, adminNavEntries, adminPageRegistry } from "./admin-registry";
 import { useT } from "@/components/TranslationProvider";
 
 interface CommandPaletteProps {
@@ -69,6 +69,17 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
   // the same order the cmdk palette used, so muscle memory survives the move
   // onto the hand-rolled ForgeCommandPalette (the single command surface;
   // there is no second primitive set).
+  //
+  // Items are built from adminNavEntries() — the same flat list the sidebar
+  // filter uses — and ForgeCommandPalette's substring filter over
+  // label/description/keywords/group is intentionally aligned with
+  // adminEntryMatches (label, description, href, keywords). Group titles come
+  // from the registry so hidden entries still resolve under their visible
+  // parent. See searchAdminEntries below for the canonical matcher.
+  const groupTitleByHref = new Map(
+    adminPageRegistry.flatMap((group) => group.items.map((item) => [item.href, group.title] as const)),
+  );
+  const entries = adminNavEntries();
   const items: ForgeCommandItem[] = [
     {
       id: "action-workloads",
@@ -115,14 +126,14 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
       keywords: "action host terminal remote shell console ssh",
       onSelect: () => handleSelect("/admin/terminal"),
     },
-    ...adminPageRegistry.flatMap((group) =>
-      group.items.map((item) => {
+    ...entries.map((item) => {
         const Icon = item.icon;
         const label = t(item.labelKey) !== item.labelKey ? t(item.labelKey) : item.label;
         // Keywords are the whole point of the registry's synonym list:
         // without them "docker" cannot find Containers and "postgres"
         // cannot find Databases, which is how people actually search.
-        // The href is searchable too, as it was in the cmdk value string.
+        // The href is searchable too, as it was in the cmdk value string,
+        // mirroring adminEntryMatches (label, description, href, keywords).
         const keywords = [...(item.keywords ?? []), item.href].join(" ");
         return {
           id: item.href,
@@ -134,13 +145,12 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
             item.capability === "metadata-only"
               ? `${item.description} · meta · ${item.href}`
               : `${item.description} · ${item.href}`,
-          group: group.title.toUpperCase(),
+          group: (groupTitleByHref.get(item.href) ?? "").toUpperCase(),
           icon: <Icon className="h-3.5 w-3.5 shrink-0" />,
           keywords,
           onSelect: () => handleSelect(item.href),
         } satisfies ForgeCommandItem;
-      })
-    ),
+      }),
   ];
 
   return (
@@ -152,4 +162,14 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
       emptyLabel="No matching pages or operations found."
     />
   );
+}
+
+/**
+ * Canonical admin search used by sidebar filter parity checks and tests.
+ * The palette itself filters via ForgeCommandPalette's substring match over
+ * label/description/keywords/group (see above); this helper exposes the same
+ * registry matcher directly so callers can verify parity without rendering.
+ */
+export function searchAdminEntries(query: string) {
+  return adminNavEntries().filter((entry) => adminEntryMatches(entry, query));
 }
