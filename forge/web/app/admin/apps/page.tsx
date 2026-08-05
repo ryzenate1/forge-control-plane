@@ -12,7 +12,7 @@ import {
   Terminal, Trash2,
 } from "lucide-react";
 import { fetchApps, startApp, stopApp, restartApp, deleteApp, typeLabel, type ApiApp, type AppType } from "@/lib/api/apps";
-import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, Modal, ModalFooter } from "@/components/admin/admin-ui";
+import { AdminPageLayout, AdminErrorState, AdminLoadingState, Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, Modal, ModalFooter } from "@/components/admin/admin-ui";
 import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";
 import { APP_TYPE_ICONS } from "@/lib/app-type-icons";
 
@@ -50,7 +50,9 @@ export default function AdminAppsPage() {
     onSuccess: () => {
       setDeleteTarget(null);
       void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() });
+      toast({ tone: "success", title: "Application deleted" });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const types: AppType[] = ["image", "git", "compose", "game_server"];
@@ -102,9 +104,9 @@ export default function AdminAppsPage() {
         </div>
 
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-text-muted">Loading applications...</div>
+          <AdminLoadingState label="Loading applications..." />
         ) : isError ? (
-          <div className="space-y-3 p-4"><EmptyState icon={Layers} title="Applications unavailable" message="Could not load applications." /><Btn onClick={() => void refetch()}>Retry</Btn></div>
+          <div className="p-4"><AdminErrorState message="Applications unavailable — could not load applications." retry={() => void refetch()} /></div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Layers} title={search || typeFilter ? "No matching applications" : "No applications yet"} message={search || typeFilter ? "Try a different name or application type." : "Create an application or start from the App Store."} />
         ) : (
@@ -120,7 +122,7 @@ export default function AdminAppsPage() {
                   <th className="px-4 py-3 text-right">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {filtered.map((app) => {
                   const Icon = APP_TYPE_ICONS[app.type] ?? Layers;
                   return (
@@ -193,11 +195,11 @@ export default function AdminAppsPage() {
         <Modal title={`Delete ${deleteTarget.name}`} onClose={() => setDeleteTarget(null)}>
           <div className="space-y-4">
           <p className="text-sm text-text-subtle">
-            Are you sure you want to delete <span className="font-semibold text-white">{deleteTarget.name}</span>?
+            Are you sure you want to delete <span className="font-semibold text-text">{deleteTarget.name}</span>?
             This action cannot be undone.
           </p>
           {deleteMut.error ? (
-            <p className="text-sm text-red-300">{deleteMut.error.message}</p>
+            <p className="text-sm text-danger">{deleteMut.error.message}</p>
           ) : null}
           </div>
           <ModalFooter

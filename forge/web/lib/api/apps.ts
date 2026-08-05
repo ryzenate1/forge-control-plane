@@ -1,3 +1,6 @@
+import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, buildWebSocketUrl, isApiError } from "./http";
+import { getAllTemplates } from "@/lib/app-templates-data";
+
 export type AppType = "image" | "git" | "compose" | "game_server";
 
 export type AppStatus =
@@ -237,9 +240,6 @@ export type AppLogEntry = {
   line: string;
   stream: "stdout" | "stderr";
 };
-
-import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, buildWebSocketUrl } from "./http";
-import { getAllTemplates } from "@/lib/app-templates-data";
 
 export async function fetchApps(): Promise<ApiApp[]> {
   const response = await fetchJSON<BackendApplication[] | { data: BackendApplication[] }>("/apps");
@@ -538,7 +538,9 @@ export async function fetchAppTemplates(): Promise<AppTemplate[]> {
   try {
     return await fetchJSON<AppTemplate[]>("/admin/app-templates");
   } catch (error) {
-    if (error instanceof TypeError) {
+    // `sendRequest` wraps transport failures as `ApiError` with status 0, so
+    // a raw `TypeError` never escapes the primitive — check both shapes.
+    if (error instanceof TypeError || (isApiError(error) && error.status === 0)) {
       console.warn("API unreachable, using local templates", error);
       return getAllTemplates();
     }
@@ -567,5 +569,8 @@ export function statusLabel(status: AppStatus | string | null | undefined): stri
 // exporting `./api/status` — so `import { statusTone } from "@/lib/api"`
 // resolved to these instead of the real ones. Both now live only in
 // `lib/api/status.ts`; import from there.
-
-export { fetchDnsProviders } from "./dns";
+//
+// NOTE: `fetchDnsProviders` is canonical in `./dns` (re-exported via the
+// barrel). It is deliberately NOT re-exported here: a second star-export path
+// for the same name would make the barrel's `fetchDnsProviders` ambiguous and
+// drop it from `@/lib/api` entirely. Import from `@/lib/api/dns` or `@/lib/api`.

@@ -14,9 +14,10 @@ import {
 } from "@/lib/api/apps";
 import { fetchNodes, fetchRegions } from "@/lib/api";
 import { validateCompose as validateComposeServer } from "@/lib/api/compose";
-import { AdminFormSection, AdminPageHeader, Btn, Card, CardHeader, Input, Pill, cn } from "@/components/admin/admin-ui";
+import { AdminFormSection, AdminPageLayout, Btn, Card, CardHeader, Input, Modal, ModalFooter, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { EnvVarEditor, PortMapper, VolumeEditor } from "@/components/admin/AdminAppsShared";
 import { adminPageGuides } from "@/components/admin/admin-page-guides";
+import { useToast } from "@/components/ui/toast";
 import { Switch } from "@/components/ui/primitives";
 
 const SOURCE_TYPES: { id: AppType; label: string; icon: typeof Box; desc: string }[] = [
@@ -74,6 +75,7 @@ type Step = (typeof STEPS)[number];
 export default function CreateAppPage() {
   const router = useRouter();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [step, setStep] = useState<Step>("source");
   const [sourceType, setSourceType] = useState<AppType>("image");
   const [name, setName] = useState("");
@@ -110,10 +112,10 @@ export default function CreateAppPage() {
   const [composeValidatorError, setComposeValidatorError] = useState("");
 
   const { data: templates = [] } = useQuery({
-    queryKey: ["app-templates"],
+    queryKey: [...queryKeys.apps.all, "templates"],
     queryFn: fetchAppTemplates,
   });
-  const { data: nodes = [] } = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const { data: nodes = [] } = useQuery({ queryKey: queryKeys.nodes.lists(), queryFn: fetchNodes });
   const { data: regions = [] } = useQuery({ queryKey: ["regions"], queryFn: fetchRegions });
 
   const recommendedNode = useMemo(() => {
@@ -299,15 +301,16 @@ export default function CreateAppPage() {
       void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() });
       router.push(`/admin/apps/${result.id}`);
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to create app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const stepIndex = STEPS.indexOf(step);
 
   return (
-    <div className="mx-auto max-w-4xl space-y-6 px-1 sm:px-0">
-      <AdminPageHeader
+    <AdminPageLayout className="mx-auto max-w-4xl px-1 sm:px-0">
+      <SectionHeader
         title="Create Application"
-        description="Deploy a Docker image, Git repository, or Compose stack"
+        sub="Deploy a Docker image, Git repository, or Compose stack"
         info={adminPageGuides.appCreation}
         backAction={() => {
           const prev = STEPS[STEPS.indexOf(step) - 1];
@@ -316,7 +319,7 @@ export default function CreateAppPage() {
         backLabel="Apps"
       />
 
-      <div className="flex gap-1 border-b border-white/[0.06] pb-4 sm:gap-2">
+      <div className="flex gap-1 border-b border-line pb-4 sm:gap-2">
         {STEPS.map((s, i) => (
           <div key={s} className="flex items-center gap-1.5 sm:gap-2">
             <div className={cn(
@@ -324,18 +327,18 @@ export default function CreateAppPage() {
               step === s
                 ? "bg-[var(--brand)] text-white"
                 : i < stepIndex
-                  ? "bg-emerald-500/20 text-emerald-400"
-                  : "bg-white/[0.06] text-slate-500",
+                  ? "bg-ok-subtle text-ok"
+                  : "bg-overlay-subtle text-text-muted",
             )}>
               {i < stepIndex ? <CheckCircle2 size={12} /> : i + 1}
             </div>
             <span className={cn(
               "text-[11px] sm:text-xs font-medium capitalize truncate",
-              step === s ? "text-white" : "text-slate-500",
+              step === s ? "text-text" : "text-text-muted",
             )}>
               {s}
             </span>
-            {i < STEPS.length - 1 && <div className="ml-1 hidden w-6 border-t border-white/[0.06] sm:block sm:w-10" />}
+            {i < STEPS.length - 1 && <div className="ml-1 hidden w-6 border-t border-line sm:block sm:w-10" />}
           </div>
         ))}
       </div>
@@ -353,17 +356,17 @@ export default function CreateAppPage() {
                     "flex flex-col items-center gap-3 rounded-xl border p-5 sm:p-6 text-center transition-all duration-200",
                     sourceType === id
                       ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,transparent)] shadow-sm shadow-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
-                      : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
+                      : "border-line bg-overlay-subtle hover:border-line-strong hover:bg-overlay-subtle",
                   )}
                   onClick={() => { setSourceType(id); setFieldsDirty(false); setTemplateConfirm(null); }}
                 >
                   <Icon size={28} className={cn(
                     "transition-colors duration-200",
-                    sourceType === id ? "text-[var(--brand)]" : "text-slate-500",
+                    sourceType === id ? "text-[var(--brand)]" : "text-text-muted",
                   )} />
                   <div>
-                    <p className="font-semibold text-slate-200 text-sm sm:text-base">{label}</p>
-                    <p className="mt-1 text-xs text-slate-500 leading-relaxed">{desc}</p>
+                    <p className="font-semibold text-text text-sm sm:text-base">{label}</p>
+                    <p className="mt-1 text-xs text-text-muted leading-relaxed">{desc}</p>
                   </div>
                 </button>
               ))}
@@ -386,7 +389,7 @@ export default function CreateAppPage() {
             <CardHeader title="Quick Templates (Optional)" icon={Zap} />
             <div className="p-4">
               {!Array.isArray(templates) || templates.length === 0 ? (
-                <p className="text-sm text-slate-500">No templates available.</p>
+                <p className="text-sm text-text-muted">No templates available.</p>
               ) : (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {templates.map((tpl) => (
@@ -397,26 +400,21 @@ export default function CreateAppPage() {
                         "rounded-xl border p-4 text-left transition-all duration-200",
                         selectedTemplate === tpl.id
                           ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,transparent)] shadow-sm shadow-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
-                          : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
+                          : "border-line bg-overlay-subtle hover:border-line-strong hover:bg-overlay-subtle",
                       )}
                       onClick={() => handleTemplateClick(tpl.id)}
                     >
                       <Pill tone="neutral">{typeLabel(tpl.type)}</Pill>
-                      <p className="mt-2 font-semibold text-slate-200 text-sm">{tpl.name}</p>
-                      <p className="mt-1 text-xs text-slate-500 line-clamp-2">{tpl.description}</p>
+                      <p className="mt-2 font-semibold text-text text-sm">{tpl.name}</p>
+                      <p className="mt-1 text-xs text-text-muted line-clamp-2">{tpl.description}</p>
                     </button>
                   ))}
                 </div>
               )}
               {templateConfirm && (
-                <div className="mx-4 mb-4 rounded-lg border border-amber-500/20 bg-amber-950/10 p-4 text-sm">
-                  <p className="font-semibold text-amber-200">Overwrite current configuration?</p>
-                  <p className="mt-1 text-amber-300/80">Selecting a new template will overwrite your current configuration values.</p>
-                  <div className="mt-3 flex gap-2">
-                    <Btn tone="danger" size="sm" onClick={() => { applyTemplate(templateConfirm); }}>Apply Template</Btn>
-                    <Btn tone="ghost" size="sm" onClick={() => setTemplateConfirm(null)}>Keep My Changes</Btn>
-                  </div>
-                </div>
+                <Modal title="Overwrite current configuration?" description="Selecting a new template will overwrite your current configuration values." onClose={() => setTemplateConfirm(null)}>
+                  <ModalFooter onCancel={() => setTemplateConfirm(null)} onConfirm={() => applyTemplate(templateConfirm)} confirmLabel="Apply Template" destructive />
+                </Modal>
               )}
             </div>
           </Card>
@@ -447,12 +445,12 @@ export default function CreateAppPage() {
                       required
                     />
                     {fieldErrors.name && (
-                      <p className="mt-1 text-xs text-red-400">{fieldErrors.name}</p>
+                      <p className="mt-1 text-xs text-danger">{fieldErrors.name}</p>
                     )}
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-300">Type</label>
-                    <div className="flex h-9 items-center rounded-lg border border-white/[0.06] bg-white/[0.02] px-3 text-sm text-slate-400">
+                    <label className="mb-1.5 block text-sm font-medium text-text-subtle">Type</label>
+                    <div className="flex h-9 items-center rounded-lg border border-line bg-overlay-subtle px-3 text-sm text-text-subtle">
                       <Pill tone="neutral">{typeLabel(sourceType)}</Pill>
                     </div>
                   </div>
@@ -474,7 +472,7 @@ export default function CreateAppPage() {
                     required
                   />
                   {fieldErrors.image && (
-                    <p className="mt-1 text-xs text-red-400">{fieldErrors.image}</p>
+                    <p className="mt-1 text-xs text-danger">{fieldErrors.image}</p>
                   )}
                 </div>
                 <Input label="Registry URL" value={registryUrl} onChange={setRegistryUrl} placeholder="registry.example.com" />
@@ -489,20 +487,20 @@ export default function CreateAppPage() {
               <CardHeader title="Git Repository" icon={GitBranch} />
               <div className="grid gap-4 p-4 sm:grid-cols-2">
                 <div className="sm:col-span-2">
-                  <label className="mb-1.5 block text-sm font-medium text-slate-300">
+                  <label className="mb-1.5 block text-sm font-medium text-text-subtle">
                     Repository URL
-                    <span className="ml-1 text-red-400">*</span>
+                    <span className="ml-1 text-danger">*</span>
                   </label>
                   <div className="relative">
                     <input
                       className={cn(
                         "block h-10 w-full rounded-lg border px-3.5 pr-10 text-sm outline-none transition-all duration-200",
-                        "bg-[var(--surface-input)] text-slate-100 shadow-inner shadow-black/10 placeholder:text-slate-600",
+                        "bg-[var(--surface-input)] text-text shadow-inner  placeholder:text-text-muted",
                         gitUrlStatus === "invalid"
-                          ? "border-red-400/70 focus:border-red-400 focus:ring-2 focus:ring-red-500/15"
+                          ? "border-danger focus:border-danger focus:ring-2 focus:ring-danger/20"
                           : gitUrlStatus === "valid"
-                            ? "border-emerald-500/50 focus:border-emerald-400 focus:ring-2 focus:ring-emerald-500/15"
-                            : "border-white/10 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15",
+                            ? "border-ok focus:border-ok focus:ring-2 focus:ring-ok/20"
+                            : "border-line hover:border-line focus:border-danger focus:ring-2 focus:ring-danger/20",
                       )}
                       value={gitUrl}
                       onChange={(e) => { setGitUrl(e.target.value); setFieldErrors((ef) => ({ ...ef, gitUrl: "" })); setFieldsDirty(true); }}
@@ -510,21 +508,21 @@ export default function CreateAppPage() {
                     />
                     <span className="absolute right-3 top-1/2 -translate-y-1/2">
                       {gitUrlStatus === "valid" && (
-                        <CheckCircle2 size={16} className="text-emerald-400" />
+                        <CheckCircle2 size={16} className="text-ok" />
                       )}
                       {gitUrlStatus === "invalid" && (
-                        <AlertCircle size={16} className="text-red-400" />
+                        <AlertCircle size={16} className="text-danger" />
                       )}
                     </span>
                   </div>
                   {gitUrlMessage && (
                     <p className={cn(
                       "mt-1 text-xs",
-                      gitUrlStatus === "invalid" ? "text-red-400" : "text-slate-500",
+                      gitUrlStatus === "invalid" ? "text-danger" : "text-text-muted",
                     )}>{gitUrlMessage}</p>
                   )}
                   {fieldErrors.gitUrl && (
-                    <p className="mt-1 text-xs text-red-400">{fieldErrors.gitUrl}</p>
+                    <p className="mt-1 text-xs text-danger">{fieldErrors.gitUrl}</p>
                   )}
                 </div>
                 <Input
@@ -534,9 +532,9 @@ export default function CreateAppPage() {
                   placeholder="main"
                 />
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-300">Provider</label>
+                  <label className="mb-1.5 block text-sm font-medium text-text-subtle">Provider</label>
                   <select
-                    className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
+                    className="h-10 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none transition hover:border-line focus:border-danger focus:ring-2 focus:ring-danger/20"
                     value={gitProvider}
                     onChange={(e) => setGitProvider(e.target.value as GitProviderType)}
                   >
@@ -572,15 +570,15 @@ export default function CreateAppPage() {
                 ) : undefined}
               />
               <div className="space-y-4 p-4">
-                <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2 text-xs leading-5 text-slate-400">
+                <div className="rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs leading-5 text-text-subtle">
                   Creates an app of type Compose. For full stack lifecycle (logs, rollback, GitOps), create a{" "}
-                  <button type="button" onClick={() => router.push("/admin/compose/new")} className="underline hover:text-slate-200">
+                  <button type="button" onClick={() => router.push("/admin/compose/new")} className="underline hover:text-text">
                     Compose Stack
                   </button>{" "}
                   instead — same file, managed deployment surface.
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-300">Upload compose file</label>
+                  <label className="mb-1.5 block text-sm font-medium text-text-subtle">Upload compose file</label>
                   <input
                     type="file"
                     accept=".yml,.yaml"
@@ -588,18 +586,18 @@ export default function CreateAppPage() {
                       const file = e.target.files?.[0];
                       if (file) setComposeFile(file);
                     }}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[var(--brand)] hover:file:bg-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                    className="block w-full text-xs text-text-subtle file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[var(--brand)] hover:file:bg-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                   />
                 </div>
                 <div>
-                  <label className="mb-1.5 block text-sm font-medium text-slate-300">
+                  <label className="mb-1.5 block text-sm font-medium text-text-subtle">
                     Or paste compose file content
                   </label>
                   <textarea
                     className={cn(
-                      "h-48 w-full rounded-lg border bg-[var(--surface-input)] p-3 font-mono text-xs text-slate-100 outline-none resize-none transition",
-                      fieldErrors.composeContent ? "border-red-400/70" : "border-white/10 hover:border-white/20",
-                      "focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15",
+                      "h-48 w-full rounded-lg border bg-[var(--surface-input)] p-3 font-mono text-xs text-text outline-none resize-none transition",
+                      fieldErrors.composeContent ? "border-danger" : "border-line hover:border-line",
+                      "focus:border-danger focus:ring-2 focus:ring-danger/20",
                     )}
                     value={composeContent}
                     onChange={(e) => { setComposeContent(e.target.value); setFieldErrors((ef) => ({ ...ef, composeContent: "" })); setFieldsDirty(true); }}
@@ -607,16 +605,16 @@ export default function CreateAppPage() {
                   />
                 </div>
                 {fieldErrors.composeContent && (
-                  <p className="text-xs text-red-400">{fieldErrors.composeContent}</p>
+                  <p className="text-xs text-danger">{fieldErrors.composeContent}</p>
                 )}
                 {composeValidatorError && (
-                  <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.07] p-3 text-xs leading-5 text-amber-200">
+                  <p className="rounded-lg border border-warn-line bg-warn-subtle p-3 text-xs leading-5 text-warn">
                     {composeValidatorError}
                   </p>
                 )}
                 {composeValidation && !composeValidation.valid && (
-                  <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
-                    <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-red-400">Validation Issues</p>
+                  <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+                    <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-danger">Validation Issues</p>
                     {composeValidation.errors.map((e, i) => (
                       <div key={i} className="text-xs leading-relaxed">- {e}</div>
                     ))}
@@ -629,15 +627,15 @@ export default function CreateAppPage() {
           <Card>
             <CardHeader title="Deployment target" icon={Cloud} />
             <div className="p-4 space-y-4">
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2 text-xs leading-5 text-slate-400">
+              <div className="rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs leading-5 text-text-subtle">
                 Select a Beacon and region when this application has a specific destination. Leave either setting automatic for Forge to choose from eligible infrastructure when it deploys.
               </div>
               <AdminFormSection title="Deployment Target">
                 <div className="grid gap-4 sm:grid-cols-2">
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-300">Beacon</label>
+                    <label className="mb-1.5 block text-sm font-medium text-text-subtle">Beacon</label>
                     <select
-                      className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
+                      className="h-10 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none transition hover:border-line focus:border-danger focus:ring-2 focus:ring-danger/20"
                       value={nodeId}
                       onChange={(e) => setNodeId(e.target.value)}
                     >
@@ -649,14 +647,14 @@ export default function CreateAppPage() {
                     {!nodeId && recommendedNode && (
                       <div className="mt-2 flex flex-wrap items-center gap-2">
                         <Btn size="sm" tone="ghost" onClick={() => setNodeId(recommendedNode.id)}>Use recommended: {recommendedNode.name}</Btn>
-                        <span className="text-xs text-slate-500">Based on its reported health and configured capacity.</span>
+                        <span className="text-xs text-text-muted">Based on its reported health and configured capacity.</span>
                       </div>
                     )}
                   </div>
                   <div>
-                    <label className="mb-1.5 block text-sm font-medium text-slate-300">Region</label>
+                    <label className="mb-1.5 block text-sm font-medium text-text-subtle">Region</label>
                     <select
-                      className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
+                      className="h-10 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none transition hover:border-line focus:border-danger focus:ring-2 focus:ring-danger/20"
                       value={regionId}
                       onChange={(e) => setRegionId(e.target.value)}
                     >
@@ -665,26 +663,26 @@ export default function CreateAppPage() {
                         <option key={r.id} value={r.id}>{r.name}</option>
                       ))}
                     </select>
-                    <p className="mt-1 text-xs text-slate-500">Leave this automatic to let the placement policy choose an eligible region.</p>
+                    <p className="mt-1 text-xs text-text-muted">Leave this automatic to let the placement policy choose an eligible region.</p>
                   </div>
                 </div>
               </AdminFormSection>
               {pickedNode ? (
-                <div className="rounded-xl border border-emerald-500/20 bg-emerald-500/[0.04] p-3">
+                <div className="rounded-xl border border-ok-line bg-ok-subtle p-3">
                   <div className="flex items-center justify-between gap-2">
-                    <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-emerald-300"><ShieldCheck size={12} /> Placement assessment · {pickedNode.id === recommendedNode?.id ? "Recommended" : "Selected"}</p>
+                    <p className="flex items-center gap-1.5 text-xs font-bold uppercase tracking-widest text-ok"><ShieldCheck size={12} /> Placement assessment · {pickedNode.id === recommendedNode?.id ? "Recommended" : "Selected"}</p>
                     <Pill tone={pickedNode.heartbeatState === "healthy" ? "green" : pickedNode.heartbeatState === "degraded" ? "yellow" : "red"}>{pickedNode.heartbeatState ?? "unknown"}</Pill>
                   </div>
-                  <ul className="mt-2 grid gap-1 text-xs leading-5 text-slate-400 sm:grid-cols-2">
-                    <li className="flex items-center gap-1.5"><span className={pickedNode.heartbeatState === "healthy" ? "text-emerald-400" : "text-red-400"}>{pickedNode.heartbeatState === "healthy" ? "✓" : "✗"}</span> Beacon heartbeat healthy</li>
-                    <li className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> FQDN {pickedNode.fqdn ?? "—"}</li>
-                    <li className="flex items-center gap-1.5"><Cpu size={10} className="text-slate-500" /> Configured capacity: {pickedNode.memoryMb ?? "?"} MiB memory, {pickedNode.diskMb ?? "?"} MiB disk; request: {memory} / {disk}</li>
-                    <li className="flex items-center gap-1.5"><span className="text-emerald-400">✓</span> Region {(Array.isArray(regions) ? regions : []).find((r: { id: string; name: string }) => r.id === regionId)?.name ?? (pickedNode.regionId ? `scoped` : "any")} compatible</li>
+                  <ul className="mt-2 grid gap-1 text-xs leading-5 text-text-subtle sm:grid-cols-2">
+                    <li className="flex items-center gap-1.5"><span className={pickedNode.heartbeatState === "healthy" ? "text-ok" : "text-danger"}>{pickedNode.heartbeatState === "healthy" ? "✓" : "✗"}</span> Beacon heartbeat healthy</li>
+                    <li className="flex items-center gap-1.5"><span className="text-ok">✓</span> FQDN {pickedNode.fqdn ?? "—"}</li>
+                    <li className="flex items-center gap-1.5"><Cpu size={10} className="text-text-muted" /> Configured capacity: {pickedNode.memoryMb ?? "?"} MiB memory, {pickedNode.diskMb ?? "?"} MiB disk; request: {memory} / {disk}</li>
+                    <li className="flex items-center gap-1.5"><span className="text-ok">✓</span> Region {(Array.isArray(regions) ? regions : []).find((r: { id: string; name: string }) => r.id === regionId)?.name ?? (pickedNode.regionId ? `scoped` : "any")} compatible</li>
                   </ul>
-                  <p className="mt-2 text-[11px] leading-4 text-slate-500">Forge evaluates the placement policy and the latest reported node state when it deploys the application.</p>
+                  <p className="mt-2 text-[11px] leading-4 text-text-muted">Forge evaluates the placement policy and the latest reported node state when it deploys the application.</p>
                 </div>
               ) : (
-                <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2 text-xs text-slate-500">Select a Beacon to review its placement details, or leave the choice automatic and Forge will select an eligible target during deployment.</div>
+                <div className="rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs text-text-muted">Select a Beacon to review its placement details, or leave the choice automatic and Forge will select an eligible target during deployment.</div>
               )}
             </div>
           </Card>
@@ -696,15 +694,15 @@ export default function CreateAppPage() {
                 <div className="grid gap-4 sm:grid-cols-3">
                   <div>
                     <Input label="CPU (cores)" value={cpu} onChange={(v) => { setCpu(v); setFieldErrors((e) => ({ ...e, cpu: "" })); setFieldsDirty(true); }} placeholder="1.0" />
-                    {fieldErrors.cpu && <p className="mt-1 text-xs text-red-400">{fieldErrors.cpu}</p>}
+                    {fieldErrors.cpu && <p className="mt-1 text-xs text-danger">{fieldErrors.cpu}</p>}
                   </div>
                   <div>
                     <Input label="Memory (MiB)" value={memory} onChange={(v) => { setMemory(v); setFieldErrors((e) => ({ ...e, memory: "" })); setFieldsDirty(true); }} placeholder="1024" />
-                    {fieldErrors.memory && <p className="mt-1 text-xs text-red-400">{fieldErrors.memory}</p>}
+                    {fieldErrors.memory && <p className="mt-1 text-xs text-danger">{fieldErrors.memory}</p>}
                   </div>
                   <div>
                     <Input label="Disk (MiB)" value={disk} onChange={(v) => { setDisk(v); setFieldErrors((e) => ({ ...e, disk: "" })); setFieldsDirty(true); }} placeholder="10240" />
-                    {fieldErrors.disk && <p className="mt-1 text-xs text-red-400">{fieldErrors.disk}</p>}
+                    {fieldErrors.disk && <p className="mt-1 text-xs text-danger">{fieldErrors.disk}</p>}
                   </div>
                 </div>
               </AdminFormSection>
@@ -744,7 +742,7 @@ export default function CreateAppPage() {
                     placeholder="example.com, www.example.com"
                   />
                   {fieldErrors.domains && (
-                    <p className="mt-1 text-xs text-red-400">{fieldErrors.domains}</p>
+                    <p className="mt-1 text-xs text-danger">{fieldErrors.domains}</p>
                   )}
                 </div>
                 <Switch
@@ -776,94 +774,94 @@ export default function CreateAppPage() {
         <div className="space-y-6">
           <Card>
             <CardHeader title="Review Configuration" icon={Layers} />
-            <div className="divide-y divide-white/[0.06] text-sm">
+            <div className="divide-y divide-line text-sm">
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Name</span>
-                <span className="font-semibold text-slate-200 break-all">{name}</span>
+                <span className="text-text-subtle">Name</span>
+                <span className="font-semibold text-text break-all">{name}</span>
               </div>
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Type</span>
+                <span className="text-text-subtle">Type</span>
                 <Pill tone="neutral">{typeLabel(sourceType)}</Pill>
               </div>
               {sourceType === "image" && (
                 <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-400">Image</span>
-                  <span className="font-mono text-xs text-slate-300 break-all">{image}</span>
+                  <span className="text-text-subtle">Image</span>
+                  <span className="font-mono text-xs text-text-subtle break-all">{image}</span>
                 </div>
               )}
               {sourceType === "git" && (
                 <>
                   <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-slate-400">Repository</span>
-                    <span className="font-mono text-xs text-slate-300 break-all">{gitUrl}</span>
+                    <span className="text-text-subtle">Repository</span>
+                    <span className="font-mono text-xs text-text-subtle break-all">{gitUrl}</span>
                   </div>
                   <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-slate-400">Branch</span>
-                    <span className="text-slate-200">{gitBranch}</span>
+                    <span className="text-text-subtle">Branch</span>
+                    <span className="text-text">{gitBranch}</span>
                   </div>
                   <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-slate-400">Provider</span>
+                    <span className="text-text-subtle">Provider</span>
                     <Pill tone="neutral">{gitProvider}</Pill>
                   </div>
                   <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                    <span className="text-slate-400">Auto-deploy</span>
-                    <span className={autoDeploy ? "text-emerald-400" : "text-slate-500"}>{autoDeploy ? "Enabled" : "Disabled"}</span>
+                    <span className="text-text-subtle">Auto-deploy</span>
+                    <span className={autoDeploy ? "text-ok" : "text-text-muted"}>{autoDeploy ? "Enabled" : "Disabled"}</span>
                   </div>
                 </>
               )}
               {sourceType === "compose" && (
                 <div className="px-4 py-3">
-                  <span className="text-slate-400">Compose File</span>
-                  <pre className="mt-1 max-h-24 overflow-y-auto rounded border border-white/[0.06] bg-[var(--canvas)] p-2 font-mono text-xs text-slate-400 whitespace-pre-wrap break-all">
+                  <span className="text-text-subtle">Compose File</span>
+                  <pre className="mt-1 max-h-24 overflow-y-auto rounded border border-line bg-[var(--canvas)] p-2 font-mono text-xs text-text-subtle whitespace-pre-wrap break-all">
                     {composeContent.slice(0, 300)}{composeContent.length > 300 ? "..." : ""}
                   </pre>
                 </div>
               )}
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Resources</span>
-                <span className="text-slate-200">{cpu} CPU / {memory} MiB / {disk} MiB</span>
+                <span className="text-text-subtle">Resources</span>
+                <span className="text-text">{cpu} CPU / {memory} MiB / {disk} MiB</span>
               </div>
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Ports</span>
-                <span className="text-slate-200 text-right">{ports.length > 0 ? ports.map((p) => `${p.hostPort}:${p.containerPort}/${p.protocol}`).join(", ") : "None"}</span>
+                <span className="text-text-subtle">Ports</span>
+                <span className="text-text text-right">{ports.length > 0 ? ports.map((p) => `${p.hostPort}:${p.containerPort}/${p.protocol}`).join(", ") : "None"}</span>
               </div>
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Env Vars</span>
-                <span className="text-slate-200">{Object.keys(envVars).length} variable{Object.keys(envVars).length === 1 ? "" : "s"}</span>
+                <span className="text-text-subtle">Env Vars</span>
+                <span className="text-text">{Object.keys(envVars).length} variable{Object.keys(envVars).length === 1 ? "" : "s"}</span>
               </div>
               <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                <span className="text-slate-400">Volumes</span>
-                <span className="text-slate-200">{volumes.length} mount{volumes.length === 1 ? "" : "s"}</span>
+                <span className="text-text-subtle">Volumes</span>
+                <span className="text-text">{volumes.length} mount{volumes.length === 1 ? "" : "s"}</span>
               </div>
               {domains.trim() && (
                 <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-400">Domains</span>
-                  <span className="text-slate-200 text-right break-all">{domains}</span>
+                  <span className="text-text-subtle">Domains</span>
+                  <span className="text-text text-right break-all">{domains}</span>
                 </div>
               )}
               {enableTls && (
                 <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-400">TLS/SSL</span>
-                  <span className="text-emerald-400">Enabled</span>
+                  <span className="text-text-subtle">TLS/SSL</span>
+                  <span className="text-ok">Enabled</span>
                 </div>
               )}
               {nodeId && (
                 <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-400">Node</span>
-                   <span className="text-slate-200">{(Array.isArray(nodes) ? nodes : []).find((n: { id: string; name: string }) => n.id === nodeId)?.name ?? nodeId}</span>
+                  <span className="text-text-subtle">Node</span>
+                   <span className="text-text">{(Array.isArray(nodes) ? nodes : []).find((n: { id: string; name: string }) => n.id === nodeId)?.name ?? nodeId}</span>
                 </div>
               )}
               {regionId && (
                 <div className="flex flex-col gap-1 px-4 py-3 sm:flex-row sm:items-center sm:justify-between">
-                  <span className="text-slate-400">Region</span>
-                   <span className="text-slate-200">{(Array.isArray(regions) ? regions : []).find((r: { id: string; name: string }) => r.id === regionId)?.name ?? regionId}</span>
+                  <span className="text-text-subtle">Region</span>
+                   <span className="text-text">{(Array.isArray(regions) ? regions : []).find((r: { id: string; name: string }) => r.id === regionId)?.name ?? regionId}</span>
                 </div>
               )}
             </div>
           </Card>
 
           {validationError && !createMut.isPending && (
-            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
+            <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <div className="flex items-center gap-2">
                 <AlertCircle size={14} />
                 <span>{validationError}</span>
@@ -872,7 +870,7 @@ export default function CreateAppPage() {
           )}
 
           {createMut.error && (
-            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
+            <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <div className="flex items-center gap-2">
                 <AlertCircle size={14} />
                 <span>{createMut.error.message}</span>
@@ -900,6 +898,6 @@ export default function CreateAppPage() {
           </div>
         </div>
       )}
-    </div>
+    </AdminPageLayout>
   );
 }
