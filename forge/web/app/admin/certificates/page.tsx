@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { Shield, Plus, Trash2, RotateCw, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
-import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type Certificate = {
@@ -94,8 +94,8 @@ export default function AdminCertificatesPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Certificate Management"
-        sub="Manage TLS/SSL certificates for proxy domains. Upload custom certificates or use Let's Encrypt auto-provisioning."
+        title="Certificates"
+        sub="Public TLS certificates and automated issuance."
         action={
           <div className="flex gap-2">
             <Btn size="sm" tone="primary" onClick={() => setShowIssueModal(true)}>
@@ -115,14 +115,21 @@ export default function AdminCertificatesPage() {
         </div>
 
         {certsQuery.isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading certificates...</div>
+          <AdminLoadingState label="Loading certificates…" />
+        ) : certsQuery.isError ? (
+          <div className="p-4">
+            <AdminErrorState
+              message={certsQuery.error instanceof Error ? certsQuery.error.message : "Failed to load certificates"}
+              retry={() => void certsQuery.refetch()}
+            />
+          </div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Shield} message="No certificates configured. Upload a certificate or use the ACME service to provision one." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
                   <th className="px-4 py-3">Domains</th>
                   <th className="px-4 py-3">Provider</th>
                   <th className="px-4 py-3">Expiry</th>
@@ -131,13 +138,13 @@ export default function AdminCertificatesPage() {
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {Array.isArray(filtered) && filtered.map((cert) => (
-                  <tr key={cert.id} className="hover:bg-white/[0.02]">
+                  <tr key={cert.id} className="hover:bg-overlay-subtle">
                     <td className="px-4 py-3">
                       <div className="flex flex-col gap-0.5">
                         {Array.isArray(cert.domains) && cert.domains.map((d, i) => (
-                          <span key={i} className="font-mono text-xs font-medium text-slate-200">{d}</span>
+                          <span key={i} className="font-mono text-xs font-medium text-text">{d}</span>
                         ))}
                       </div>
                     </td>
@@ -146,7 +153,7 @@ export default function AdminCertificatesPage() {
                         {cert.provider}
                       </Pill>
                     </td>
-                    <td className="px-4 py-3 text-xs text-slate-400">
+                    <td className="px-4 py-3 text-xs text-text-subtle">
                       {cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString() : "—"}
                     </td>
                     <td className="px-4 py-3">
@@ -156,11 +163,11 @@ export default function AdminCertificatesPage() {
                     </td>
                     <td className="px-4 py-3">
                       {isExpired(cert.expiresAt) ? (
-                        <div className="flex items-center gap-1.5"><XCircle size={14} className="text-red-400" /><Pill tone="red">Expired</Pill></div>
+                        <div className="flex items-center gap-1.5"><XCircle size={14} className="text-danger" /><Pill tone="red">Expired</Pill></div>
                       ) : isExpiring(cert.expiresAt) ? (
-                        <div className="flex items-center gap-1.5"><AlertTriangle size={14} className="text-amber-400" /><Pill tone="yellow">Expiring</Pill></div>
+                        <div className="flex items-center gap-1.5"><AlertTriangle size={14} className="text-warn" /><Pill tone="yellow">Expiring</Pill></div>
                       ) : (
-                        <div className="flex items-center gap-1.5"><CheckCircle size={14} className="text-emerald-400" /><Pill tone="green">Valid</Pill></div>
+                        <div className="flex items-center gap-1.5"><CheckCircle size={14} className="text-ok" /><Pill tone="green">Valid</Pill></div>
                       )}
                     </td>
                     <td className="px-4 py-3">
@@ -189,9 +196,9 @@ export default function AdminCertificatesPage() {
             <Input label="Domains" value={issueForm.domains} onChange={(v) => setIssueForm({ ...issueForm, domains: v })} placeholder="example.com, *.example.com" />
             <Input label="Contact Email" value={issueForm.email} onChange={(v) => setIssueForm({ ...issueForm, email: v })} placeholder="admin@example.com" />
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Challenge Type</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Challenge Type</label>
               <select
-                className="w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100 outline-none"
+                className="w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-sm text-text outline-none"
                 value={issueForm.challengeType}
                 onChange={(e) => setIssueForm({ ...issueForm, challengeType: e.target.value as "http-01" | "dns-01" })}
               >
@@ -202,7 +209,7 @@ export default function AdminCertificatesPage() {
             {issueForm.challengeType === "dns-01" && (
               <Input label="DNS Provider" value={issueForm.dnsProvider} onChange={(v) => setIssueForm({ ...issueForm, dnsProvider: v })} placeholder="cloudflare / route53 / gandi" />
             )}
-            <p className="text-xs text-slate-400">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
+            <p className="text-xs text-text-subtle">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
           </div>
           <ModalFooter
             onCancel={() => setShowIssueModal(false)}
@@ -218,26 +225,26 @@ export default function AdminCertificatesPage() {
           <div className="space-y-4">
             <Input label="Domain ID" value={uploadForm.domainId} onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Domain UUID" />
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Certificate (PEM)</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Certificate (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                className="h-24 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={uploadForm.certificate}
                 onChange={(e) => setUploadForm({ ...uploadForm, certificate: e.target.value })}
                 placeholder="-----BEGIN CERTIFICATE-----"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Private Key (PEM)</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Private Key (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                className="h-24 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={uploadForm.privateKey}
                 onChange={(e) => setUploadForm({ ...uploadForm, privateKey: e.target.value })}
                 placeholder="-----BEGIN PRIVATE KEY-----"
               />
             </div>
             <Input label="Issuer" value={uploadForm.issuer} onChange={(v) => setUploadForm({ ...uploadForm, issuer: v })} placeholder="custom" />
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <input type="checkbox" checked={uploadForm.autoRenew} onChange={(e) => setUploadForm({ ...uploadForm, autoRenew: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
+            <label className="flex items-center gap-2 text-sm font-medium text-text">
+              <input type="checkbox" checked={uploadForm.autoRenew} onChange={(e) => setUploadForm({ ...uploadForm, autoRenew: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
               Auto-renew (Caddy managed)
             </label>
           </div>
