@@ -40,15 +40,22 @@ func (m *memoryStore) Dequeue(_ context.Context, _ string, worker string, lease 
 func (m *memoryStore) Acknowledge(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[id].Status = JobStatusCompleted
+	// Mirrors PostgresStore: `UPDATE ... WHERE id=$1` is a no-op for unknown ids.
+	if j := m.jobs[id]; j != nil {
+		j.Status = JobStatusCompleted
+	}
 	return nil
 }
 func (m *memoryStore) Fail(_ context.Context, id string, err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[id].Status = JobStatusFailed
+	j := m.jobs[id]
+	if j == nil {
+		return nil
+	}
+	j.Status = JobStatusFailed
 	if err != nil {
-		m.jobs[id].Error = err.Error()
+		j.Error = err.Error()
 	}
 	return nil
 }
@@ -56,6 +63,9 @@ func (m *memoryStore) Retry(_ context.Context, id string, err error, at time.Tim
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j := m.jobs[id]
+	if j == nil {
+		return nil
+	}
 	j.Status = JobStatusPending
 	j.RetryCount++
 	j.AvailableAt = at
@@ -96,6 +106,10 @@ func TestFailedJobUsesRetryUpdateInsteadOfDuplicateInsert(t *testing.T) {
 func TestDispatchIdempotentUsesStableOperationID(t *testing.T) {
 	store := newMemoryStore()
 	service := New(store, 1)
+	// Dispatch now requires a handler for the job type, so that a caller can
+	// never be told a job was accepted when nothing will run it. Register the
+	// no-op this test needs before exercising ID stability.
+	service.RegisterHandler(JobServerRestart, func(context.Context, *Job) error { return nil })
 	first, err := service.DispatchIdempotent(context.Background(), "request-1", JobServerRestart, "srv", "", nil, 0)
 	if err != nil {
 		t.Fatal(err)
