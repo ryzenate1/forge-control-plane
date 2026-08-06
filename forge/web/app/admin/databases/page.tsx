@@ -28,7 +28,7 @@ export default function AdminDatabasesPage() {
     <AdminPageLayout>
       <SectionHeader
         title="Databases"
-        sub="Provision and operate external hosts, containers, managed databases, and database services."
+        sub="Database inventory: hosts, managed instances and linked services."
         info={adminPageGuides.databases}
         action={<div className="flex flex-wrap items-center gap-2">
           <Btn tone="ghost" onClick={() => setActiveTab("hosts")}><Download size={14} /> Import</Btn>
@@ -38,7 +38,7 @@ export default function AdminDatabasesPage() {
       <OfflineBanner onRetry={() => window.location.reload()} />
       <AdminTabs active={activeTab} onChange={(id) => setActiveTab(id as DatabaseTab)} tabs={tabs} />
       {activeTab === "overview" && <DatabasesOverview onOpenTab={setActiveTab} />}
-      {activeTab === "hosts" && <AdminDatabases embedded />}
+      {activeTab === "hosts" && <AdminDatabases />}
       {activeTab === "containers" && <DBContainerView />}
       {activeTab === "managed" && <ManagedDatabaseView />}
       {activeTab === "services" && <DatabaseServicesView />}

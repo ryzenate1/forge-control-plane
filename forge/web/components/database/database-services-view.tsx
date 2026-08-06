@@ -572,6 +572,8 @@ function ProvisionModal({ onClose, onDone }: { onClose: () => void; onDone: () =
   const [version, setVersion] = useState("");
   const [memoryMb, setMemoryMb] = useState(256);
   const templatesQ = useQuery({ queryKey: ["service-templates"], queryFn: listServiceTemplates });
+  const templates = templatesQ.data ?? [];
+  const templatesReady = isAvailable(templatesQ);
   /**
    * Engines and versions come from the API rather than a list written here,
    * because `POST /admin/database-services` validates the pair against the same
@@ -624,11 +626,11 @@ function ProvisionModal({ onClose, onDone }: { onClose: () => void; onDone: () =
               <input aria-label="Memory in megabytes" className={selectCls} min={64} onChange={(e) => setMemoryMb(Number(e.target.value))} step={64} type="number" value={memoryMb} />
               <span className="mt-1 block text-meta text-text-muted">A negative figure is rejected; a missing one defaults to 256 MB.</span>
             </label>
-            {templatesReady && templatesQ.data.length > 0 && (
+            {templatesReady && templates.length > 0 && (
               <div className="rounded-lg border border-line bg-overlay-subtle p-3">
                 <p className={labelCls}>Templates — pick one to use its type and version</p>
                 <div className="flex flex-wrap gap-2">
-                  {templatesQ.data.map((t) => (
+                  {templates.map((t) => (
                     <button
                       className={cn("rounded-full border px-3 py-1 text-meta transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", activeType === t.type && activeVersion === t.version ? "border-brand-line bg-brand-subtle text-text" : "border-line bg-overlay text-text-subtle hover:border-line-strong hover:text-text")}
                       key={t.id}
