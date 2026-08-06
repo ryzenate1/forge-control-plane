@@ -13,19 +13,21 @@ import {
 } from "@/lib/api/host-files";
 import { NodeSelect } from "./node-select";
 import { AdminToolbar } from "./admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { toast } from "@/components/ui/sonner";
 import { Dialog } from "@/components/ui/primitives";
 
 const btn = cn(
-  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--line)] bg-white/[0.03]",
+  "inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-[var(--line)] bg-overlay",
   "px-3 text-xs font-semibold text-[var(--text)] transition-all",
-  "hover:bg-white/[0.06] hover:border-[var(--line-strong)] disabled:cursor-not-allowed disabled:opacity-40",
+  "hover:bg-overlay-strong hover:border-[var(--line-strong)] disabled:cursor-not-allowed disabled:opacity-40",
 );
 
 const iconBtn = cn(
   "rounded-lg p-2 text-[var(--text-subtle)] transition-all",
-  "hover:bg-white/[0.06] hover:text-white disabled:opacity-40 disabled:cursor-not-allowed",
+  "hover:bg-overlay-strong hover:text-text disabled:opacity-40 disabled:cursor-not-allowed",
 );
 
 function Breadcrumbs({ directory, onOpen }: { directory: string; onOpen: (path: string) => void }) {
@@ -33,7 +35,7 @@ function Breadcrumbs({ directory, onOpen }: { directory: string; onOpen: (path: 
   return (
     <nav aria-label="File path" className="flex min-w-0 items-center gap-1 overflow-x-auto text-sm">
       <button
-        className="shrink-0 font-semibold text-[var(--text)] hover:text-white transition-colors"
+        className="shrink-0 font-semibold text-[var(--text)] hover:text-text transition-colors"
         onClick={() => onOpen("/")}
         type="button"
       >
@@ -45,7 +47,7 @@ function Breadcrumbs({ directory, onOpen }: { directory: string; onOpen: (path: 
           <span className="flex shrink-0 items-center gap-1" key={path}>
             <ChevronRight className="text-[color-mix(in_srgb,var(--text-subtle)_60%,transparent)] shrink-0" size={14} />
             <button
-              className="text-[var(--text-subtle)] hover:text-white transition-colors truncate max-w-[120px] sm:max-w-[200px]"
+              className="text-[var(--text-subtle)] hover:text-text transition-colors truncate max-w-[120px] sm:max-w-[200px]"
               onClick={() => onOpen(path)}
               type="button"
             >
@@ -110,8 +112,11 @@ export function HostFilesView() {
       .filter((entry) => entry.name.toLowerCase().includes(search.trim().toLowerCase()))
       .sort((a, b) => {
         if (a.isDir !== b.isDir) return Number(b.isDir) - Number(a.isDir);
+        // Unknown sizes sort before measured zeros: a missing size is not 0.
+        const aSize = typeof a.size === "number" && Number.isFinite(a.size) ? a.size : -1;
+        const bSize = typeof b.size === "number" && Number.isFinite(b.size) ? b.size : -1;
         const cmp =
-          sortBy === "size" ? (a.size ?? 0) - (b.size ?? 0) :
+          sortBy === "size" ? aSize - bSize :
           sortBy === "date" ? (a.modTime ?? "").localeCompare(b.modTime ?? "") :
           a.name.localeCompare(b.name);
         return sortDir === "desc" ? -cmp : cmp;
@@ -449,7 +454,7 @@ export function HostFilesView() {
           </div>
         </div>
         {error ? (
-          <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
+          <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
             {error}
           </div>
         ) : null}
@@ -527,22 +532,22 @@ export function HostFilesView() {
 
       {/* Error */}
       {(error || files.isError) ? (
-        <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200 flex items-center gap-2" role="alert">
+        <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger flex items-center gap-2" role="alert">
           <span className="flex-1">{error || errorMessage(files.error, "Files could not be loaded.")}</span>
-          <button className="shrink-0 underline font-semibold hover:text-red-100 transition-colors" onClick={() => void files.refetch()} type="button">Retry</button>
+          <button className="shrink-0 underline font-semibold hover:text-danger transition-colors" onClick={() => void files.refetch()} type="button">Retry</button>
         </div>
       ) : null}
 
       <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-[var(--text-subtle)]">
         <label className="flex items-center gap-2 cursor-pointer"><input checked={allVisibleSelected} onChange={(e) => setSelected(e.target.checked ? entries.map((en) => en.path) : [])} type="checkbox" />Select all visible</label>
-        <span role="status">{files.isFetching ? "Loading…" : status}{selected.length ? ` · ${selected.length} selected` : ""}</span>
+        <span className="flex items-center gap-2" role="status">{files.isFetching ? "Loading…" : status}{selected.length ? ` · ${selected.length} selected` : ""} <FreshnessBadge state={sourceState(files, 10_000)} /></span>
       </div>
 
       {/* Loading skeleton */}
       {files.isLoading ? (
         <div className="space-y-2">
           {Array.from({ length: 5 }).map((_, i) => (
-            <div key={i} className="h-12 animate-pulse rounded-lg bg-white/[0.04] border border-[var(--line)]" />
+            <div key={i} className="h-12 animate-pulse rounded-lg bg-overlay border border-[var(--line)]" />
           ))}
         </div>
       ) : entries.length === 0 && !files.isError ? (
@@ -577,17 +582,17 @@ export function HostFilesView() {
               const isArchive = /\.(zip|tar|tar\.gz|tgz|gz)$/i.test(entry.name);
               return (
               <div
-                className="grid gap-2 border-b border-[var(--line)] px-3 py-2.5 last:border-0 hover:bg-white/[0.02] transition-colors sm:grid-cols-[28px_1fr_100px_170px_auto] sm:items-center"
+                className="grid gap-2 border-b border-[var(--line)] px-3 py-2.5 last:border-0 hover:bg-overlay-subtle transition-colors sm:grid-cols-[28px_1fr_100px_170px_auto] sm:items-center"
                 key={entry.path}
               >
                 <input aria-label={`Select ${entry.name}`} checked={checked} onChange={() => setSelected((items) => checked ? items.filter((it) => it !== entry.path) : [...items, entry.path])} type="checkbox" />
                 <button
-                  className="flex min-w-0 items-center gap-3 text-left font-medium text-[var(--text)] hover:text-white transition-colors"
+                  className="flex min-w-0 items-center gap-3 text-left font-medium text-[var(--text)] hover:text-text transition-colors"
                   onClick={() => entry.isDir ? setDirectory(entry.path) : void openFile(entry.path)}
                   type="button"
                 >
                   {entry.isDir
-                    ? <Folder className="shrink-0 text-amber-400/80" size={18} />
+                    ? <Folder className="shrink-0 text-warn" size={18} />
                     : <File className="shrink-0 text-[var(--text-subtle)]" size={18} />
                   }
                   <span className="truncate">{entry.name}</span>
@@ -661,7 +666,7 @@ export function HostFilesView() {
                   ) : null}
                   <button
                     aria-label="Delete"
-                    className={cn(iconBtn, "text-red-400 hover:bg-red-500/10 hover:text-red-300")}
+                    className={cn(iconBtn, "text-danger hover:bg-danger-subtle hover:text-danger")}
                     disabled={busy}
                     onClick={() => handleDelete(entry)}
                     title="Delete"
@@ -683,7 +688,7 @@ export function HostFilesView() {
           <span className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]"><CheckSquare size={17} />{selected.length} selected</span>
           <div className="flex flex-wrap gap-2">
             <button className={btn} disabled={busy} onClick={handleBulkChmod} type="button"><Lock size={14} />Permissions</button>
-            <button className={cn(btn, "text-red-300 border-red-500/30 hover:bg-red-500/10")} disabled={busy} onClick={() => void handleBulkDelete()} type="button"><Trash2 size={14} />Delete</button>
+            <button className={cn(btn, "text-danger border-danger-line hover:bg-danger-subtle")} disabled={busy} onClick={() => void handleBulkDelete()} type="button"><Trash2 size={14} />Delete</button>
             <button className={btn} onClick={() => setSelected([])} type="button">Clear</button>
           </div>
         </div>
@@ -694,7 +699,7 @@ export function HostFilesView() {
       {createKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCreateKind(null)}>
           <div role="dialog" aria-modal="true" aria-label={`Create ${createKind}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white">Create {createKind}</h3>
+            <h3 className="text-sm font-semibold text-text">Create {createKind}</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={createName} onChange={(e) => setCreateName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitCreate(); if (e.key === "Escape") setCreateKind(null); }} placeholder={`${createKind} name`} />
             <div className="mt-4 flex justify-end gap-2">
               <button className="ui-button ui-button-ghost" onClick={() => setCreateKind(null)} type="button">Cancel</button>
@@ -706,7 +711,7 @@ export function HostFilesView() {
       {renameTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setRenameTarget(null)}>
           <div role="dialog" aria-modal="true" aria-label={`Rename ${renameTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white">Rename &quot;{renameTarget.name}&quot;</h3>
+            <h3 className="text-sm font-semibold text-text">Rename &quot;{renameTarget.name}&quot;</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={renameName} onChange={(e) => setRenameName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitRename(); if (e.key === "Escape") setRenameTarget(null); }} placeholder="New name" />
             <div className="mt-4 flex justify-end gap-2">
               <button className="ui-button ui-button-ghost" onClick={() => setRenameTarget(null)} type="button">Cancel</button>
@@ -718,7 +723,7 @@ export function HostFilesView() {
       {copyTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCopyTarget(null)}>
           <div role="dialog" aria-modal="true" aria-label={`Copy ${copyTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white">Copy &quot;{copyTarget.name}&quot;</h3>
+            <h3 className="text-sm font-semibold text-text">Copy &quot;{copyTarget.name}&quot;</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={copyName} onChange={(e) => setCopyName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitCopy(); if (e.key === "Escape") setCopyTarget(null); }} placeholder="Copy name" />
             <div className="mt-4 flex justify-end gap-2">
               <button className="ui-button ui-button-ghost" onClick={() => setCopyTarget(null)} type="button">Cancel</button>
@@ -730,7 +735,7 @@ export function HostFilesView() {
       {chmodTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setChmodTarget(null)}>
           <div role="dialog" aria-modal="true" aria-label={`Permissions for ${chmodTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white">Permissions — {chmodTarget.name}</h3>
+            <h3 className="text-sm font-semibold text-text">Permissions — {chmodTarget.name}</h3>
             <input className="ui-input mt-3 w-full font-mono" autoFocus value={chmodMode} onChange={(e) => setChmodMode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitChmod(); if (e.key === "Escape") setChmodTarget(null); }} placeholder="0644" inputMode="numeric" pattern="[0-7]{3,4}" />
             <p className="mt-2 text-xs text-[var(--text-subtle)]">Three or four octal digits (e.g. 0644, 0755).</p>
             <div className="mt-4 flex justify-end gap-2">
@@ -743,7 +748,7 @@ export function HostFilesView() {
       {bulkChmodOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setBulkChmodOpen(false)}>
           <div role="dialog" aria-modal="true" aria-label="Bulk permissions" className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-sm font-semibold text-white">Permissions — {selected.length} selected</h3>
+            <h3 className="text-sm font-semibold text-text">Permissions — {selected.length} selected</h3>
             <input className="ui-input mt-3 w-full font-mono" autoFocus value={bulkChmodMode} onChange={(e) => setBulkChmodMode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitBulkChmod(); if (e.key === "Escape") setBulkChmodOpen(false); }} placeholder="0644" inputMode="numeric" pattern="[0-7]{3,4}" />
             <p className="mt-2 text-xs text-[var(--text-subtle)]">Applied to every selected item (batch chmod loop – host has no batch endpoint yet).</p>
             <div className="mt-4 flex justify-end gap-2">
@@ -760,9 +765,9 @@ export function HostFilesView() {
               <span className="text-sm font-medium text-[var(--text)]">Public file URL</span>
               <input autoFocus className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-subtle)]" onChange={(ev) => setPullUrl(ev.target.value)} placeholder="https://example.com/file.jar" type="url" value={pullUrl} />
             </label>
-            {error ? <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200" role="alert">{error}</p> : null}
+            {error ? <p className="rounded-lg border border-danger-line bg-danger-subtle px-3 py-2 text-xs text-danger" role="alert">{error}</p> : null}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <button className="inline-flex h-10 items-center justify-center rounded-lg border border-[var(--line)] px-4 text-sm font-semibold text-[var(--text-subtle)] transition hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-40" disabled={busy} onClick={() => { setPullOpen(false); setPullUrl(""); }} type="button">Cancel</button>
+              <button className="inline-flex h-10 items-center justify-center rounded-lg border border-[var(--line)] px-4 text-sm font-semibold text-[var(--text-subtle)] transition hover:bg-overlay-strong disabled:cursor-not-allowed disabled:opacity-40" disabled={busy} onClick={() => { setPullOpen(false); setPullUrl(""); }} type="button">Cancel</button>
               <button className="inline-flex h-10 items-center justify-center rounded-lg bg-[var(--brand)] px-4 text-sm font-bold text-white transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-40" disabled={busy || !pullUrl.trim()} type="submit">Download</button>
             </div>
           </form>
