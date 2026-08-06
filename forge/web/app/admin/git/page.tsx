@@ -110,8 +110,8 @@ function ProviderIcon({ provider }: { provider: string }) {
 }
 
 function ProviderGlyph({ provider, size = 26 }: { provider: string; size?: number }) {
-  if (provider === "github") return <Github size={size} className="text-white" />;
-  if (provider === "gitlab") return <Gitlab size={size} className="text-orange-500" />;
+  if (provider === "github") return <Github size={size} className="text-text" />;
+  if (provider === "gitlab") return <Gitlab size={size} className="text-warn" />;
   return <ProviderIcon provider={provider} />;
 }
 
@@ -158,7 +158,7 @@ const PROVIDER_CARDS = [
   { id: "gitea", name: "Gitea", blurb: "Connect your Gitea instance to access repositories and setup webhooks." },
 ];
 
-import { AdminPageLayout, SectionHeader, AdminTabs } from "@/components/admin/admin-ui";
+import { AdminPageLayout, SectionHeader, AdminTabs, AdminLoadingState, AdminErrorState, EmptyState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 export default function GitPage() {
@@ -193,20 +193,23 @@ export default function GitPage() {
   const [showDocs, setShowDocs] = useState(false);
   const [repoCounts, setRepoCounts] = useState<Record<string, { count: number } | { error: string }>>({});
 
-  const { data: credentialsRaw } = useQuery<GitCredential[]>({
+  const credentialsQuery = useQuery<GitCredential[]>({
     queryKey: ["git-credentials"],
     queryFn: () => listGitCredentials(),
   });
+  const credentialsRaw = credentialsQuery.data;
 
-  const { data: providerTokensRaw } = useQuery<GitProviderToken[]>({
+  const providerTokensQuery = useQuery<GitProviderToken[]>({
     queryKey: ["git-providers"],
     queryFn: () => listGitProviderTokens(),
   });
+  const providerTokensRaw = providerTokensQuery.data;
 
-  const { data: sourcesRaw } = useQuery<GitSource[]>({
+  const sourcesQuery = useQuery<GitSource[]>({
     queryKey: ["git-sources"],
     queryFn: () => listGitSources(),
   });
+  const sourcesRaw = sourcesQuery.data;
 
   const credentials = useMemo(() => credentialsRaw ?? [], [credentialsRaw]);
   const providerTokens = useMemo(() => providerTokensRaw ?? [], [providerTokensRaw]);
@@ -429,17 +432,17 @@ export default function GitPage() {
         title={
           <span className="flex items-center gap-2.5">
             Git Integrations
-            <span className="grid h-5 w-5 place-items-center rounded-md border border-white/10 bg-white/[0.03] text-slate-500">
+            <span className="grid h-5 w-5 place-items-center rounded-md border border-line bg-overlay text-text-muted">
               <Link size={12} />
             </span>
           </span>
         }
-        sub="Connect your Git providers to enable automatic deployments via webhooks and pipelines. Manage credentials, providers, and repository sources in one place."
+        sub="Git providers, credentials and connected sources."
         action={
           <button
             type="button"
             onClick={() => setShowDocs(true)}
-            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-3.5 text-xs font-medium text-slate-300 transition hover:bg-white/[0.06] hover:text-white"
+            className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-overlay-subtle px-3.5 text-xs font-medium text-text transition hover:bg-overlay-strong hover:text-text"
           >
             <BookOpen size={14} /> View Documentation
           </button>
@@ -448,35 +451,35 @@ export default function GitPage() {
 
       {/* How it works */}
       <section className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5">
-        <h2 className="flex items-center gap-2 text-sm font-bold text-slate-100">
-          <span className="grid h-5 w-5 place-items-center rounded-full bg-sky-500/15 text-[11px] font-bold text-sky-300">i</span>
+        <h2 className="flex items-center gap-2 text-sm font-bold text-text">
+          <span className="grid h-5 w-5 place-items-center rounded-full bg-info-subtle text-[11px] font-bold text-info">i</span>
           How it works
         </h2>
         <ol className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-[1fr_auto_1fr_auto_1fr_auto_1fr] sm:items-center">
           <HowStep
-            icon={<Key size={20} className="text-amber-200/90" />}
-            tile="border-amber-500/20 bg-amber-500/[0.07]"
+            icon={<Key size={20} className="text-warn" />}
+            tile="border-warn-line bg-warn-subtle"
             title="Add credentials"
             text="Store access tokens for your Git provider"
           />
           <HowArrow />
           <HowStep
-            icon={<Github size={20} className="text-white" />}
-            tile="border-white/10 bg-white/[0.03]"
+            icon={<Github size={20} className="text-text" />}
+            tile="border-line bg-overlay"
             title="Connect provider"
             text="Link a GitHub, GitLab, Bitbucket or Gitea account"
           />
           <HowArrow />
           <HowStep
-            icon={<GitFork size={20} className="text-indigo-200" />}
-            tile="border-indigo-500/30 bg-indigo-500/[0.12]"
+            icon={<GitFork size={20} className="text-info" />}
+            tile="border-info-line bg-info-subtle"
             title="Add repository sources"
             text="Select repositories to use in deployments or pipelines"
           />
           <HowArrow />
           <HowStep
-            icon={<Rocket size={20} className="text-red-300" />}
-            tile="border-red-500/25 bg-red-500/[0.08]"
+            icon={<Rocket size={20} className="text-danger" />}
+            tile="border-danger-line bg-danger/[0.08]"
             title="Auto-deploy"
             text="Webhooks trigger builds and deployments"
           />
@@ -495,17 +498,17 @@ export default function GitPage() {
           <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]">
             <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
               <div className="flex items-start gap-2.5">
-                <Key size={17} className="mt-0.5 shrink-0 text-slate-300" />
+                <Key size={17} className="mt-0.5 shrink-0 text-text" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">Git Credentials</h2>
-                  <p className="mt-0.5 max-w-3xl text-xs leading-5 text-slate-500">
+                  <h2 className="text-sm font-bold text-text">Git Credentials</h2>
+                  <p className="mt-0.5 max-w-3xl text-xs leading-5 text-text-muted">
                     Securely store tokens and credentials used to access your Git providers. These are encrypted and used for cloning repositories and webhook setup.
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => setShowCreateCredential(true)}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-red-500/60 bg-[var(--brand)] px-3.5 text-xs font-semibold text-white transition hover:bg-[var(--brand-hover)]"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-[var(--brand)] px-3.5 text-xs font-semibold text-white transition hover:bg-[var(--brand-hover)]"
               >
                 <Plus size={14} strokeWidth={2.5} /> Add Credential
               </button>
@@ -513,13 +516,13 @@ export default function GitPage() {
 
             <div className="flex flex-col gap-2 px-4 pb-3 sm:flex-row sm:px-5">
               <div className="relative min-w-0 flex-1">
-                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" />
+                <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
                 <input
                   value={credSearch}
                   onChange={(e) => setCredSearch(e.target.value)}
                   placeholder="Search credentials by name or provider…"
                   aria-label="Search credentials by name or provider"
-                  className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-500 hover:border-[var(--line-strong)] focus:border-[var(--brand)]"
+                  className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-9 pr-3 text-xs text-text outline-none transition placeholder:text-text-muted hover:border-[var(--line-strong)] focus:border-[var(--brand)]"
                 />
               </div>
               <label className="relative block sm:w-44">
@@ -528,7 +531,7 @@ export default function GitPage() {
                   aria-label="Filter by provider"
                   value={credProviderFilter}
                   onChange={(e) => setCredProviderFilter(e.target.value)}
-                  className="h-10 w-full appearance-none rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-3 pr-8 text-xs text-slate-300 outline-none transition hover:border-[var(--line-strong)] focus:border-[var(--brand)]"
+                  className="h-10 w-full appearance-none rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-3 pr-8 text-xs text-text outline-none transition hover:border-[var(--line-strong)] focus:border-[var(--brand)]"
                 >
                   <option value="all">All providers</option>
                   <option value="github">GitHub</option>
@@ -536,14 +539,24 @@ export default function GitPage() {
                   <option value="bitbucket">Bitbucket</option>
                   <option value="gitea">Gitea</option>
                 </select>
-                <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-500" />
+                <ChevronDown size={14} className="pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
               </label>
             </div>
 
             <div className="overflow-x-auto">
+              {credentialsQuery.isLoading ? (
+                <AdminLoadingState label="Loading git credentials…" />
+              ) : credentialsQuery.isError ? (
+                <div className="p-4">
+                  <AdminErrorState
+                    message={credentialsQuery.error instanceof Error ? credentialsQuery.error.message : "Failed to load git credentials"}
+                    retry={() => void credentialsQuery.refetch()}
+                  />
+                </div>
+              ) : (
               <table className="w-full min-w-[900px] text-sm">
                 <thead>
-                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-text-muted">
                     <th className="px-4 py-2.5 font-medium sm:px-5">Name</th>
                     <th className="px-4 py-2.5 font-medium">Provider</th>
                     <th className="px-4 py-2.5 font-medium">Type</th>
@@ -553,7 +566,7 @@ export default function GitPage() {
                     <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.05]">
+                <tbody className="divide-y divide-line">
                   {filteredCredentials.map((cred) => {
                     const meta = CRED_TYPE_META[cred.credentialType];
                     const TypeIcon = meta?.icon ?? Key;
@@ -561,64 +574,64 @@ export default function GitPage() {
                     const provider = stat.providers.length === 1 ? stat.providers[0] : undefined;
                     const active = stat.linked > 0;
                     return (
-                      <tr key={cred.id} className="transition hover:bg-white/[0.02]">
+                      <tr key={cred.id} className="transition hover:bg-overlay-subtle">
                         <td className="px-4 py-3 sm:pl-5">
                           <div className="flex items-center gap-3">
-                            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-300">
+                            <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-line bg-overlay text-text">
                               {provider ? <ProviderGlyph provider={provider} size={18} /> : <TypeIcon size={16} />}
                             </span>
                             <span className="min-w-0">
-                              <span className="block truncate text-[13px] font-semibold text-slate-100">{cred.name}</span>
-                              <span className="block truncate text-[11px] text-slate-500">{cred.description || "—"}</span>
+                              <span className="block truncate text-[13px] font-semibold text-text">{cred.name}</span>
+                              <span className="block truncate text-[11px] text-text-muted">{cred.description || "—"}</span>
                             </span>
                           </div>
                         </td>
                         <td className="px-4 py-3">
                           {provider ? (
-                            <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
+                            <span className="inline-flex items-center gap-1.5 text-xs text-text">
                               <ProviderGlyph provider={provider} size={15} />
                               <span className="capitalize">{provider}</span>
                             </span>
                           ) : (
-                            <span className="text-xs text-slate-600" title="No linked repository source names a provider for this credential">—</span>
+                            <span className="text-xs text-text-muted" title="No linked repository source names a provider for this credential">—</span>
                           )}
                         </td>
                         <td className="px-4 py-3">
-                          <span className="inline-flex items-center rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300">
+                          <span className="inline-flex items-center rounded-md border border-line bg-overlay px-2 py-1 text-[11px] text-text">
                             {credentialTypeLabel(cred.credentialType)}
                           </span>
                         </td>
                         <td className="px-4 py-3">
-                          <span className="block text-xs text-slate-300">{formatDay(cred.createdAt)}</span>
-                          <span className="block text-[11px] text-slate-500">{timeAgo(cred.createdAt)}</span>
+                          <span className="block text-xs text-text">{formatDay(cred.createdAt)}</span>
+                          <span className="block text-[11px] text-text-muted">{timeAgo(cred.createdAt)}</span>
                         </td>
                         <td className="px-4 py-3">
                           {stat.lastUsed ? (
                             <>
-                              <span className="block text-xs text-slate-300">{formatDay(stat.lastUsed)}</span>
-                              <span className="block text-[11px] text-slate-500">{timeAgo(stat.lastUsed)}</span>
+                              <span className="block text-xs text-text">{formatDay(stat.lastUsed)}</span>
+                              <span className="block text-[11px] text-text-muted">{timeAgo(stat.lastUsed)}</span>
                             </>
                           ) : (
                             <>
-                              <span className="block text-xs text-slate-300">Never</span>
-                              <span className="block text-[11px] text-slate-600">—</span>
+                              <span className="block text-xs text-text">Never</span>
+                              <span className="block text-[11px] text-text-muted">—</span>
                             </>
                           )}
                         </td>
                         <td className="px-4 py-3">
                           {active ? (
                             <span
-                              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-ok-line bg-ok-subtle px-2.5 py-1 text-[11px] font-medium text-ok"
                               title={`Linked to ${stat.linked} repository source${stat.linked === 1 ? "" : "s"}`}
                             >
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Active
+                              <span className="h-1.5 w-1.5 rounded-full bg-ok" /> Active
                             </span>
                           ) : (
                             <span
-                              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-slate-400"
+                              className="inline-flex items-center gap-1.5 rounded-full border border-line bg-overlay px-2.5 py-1 text-[11px] font-medium text-text-subtle"
                               title="Not linked to any repository source"
                             >
-                              <span className="h-1.5 w-1.5 rounded-full bg-slate-500" /> Inactive
+                              <span className="h-1.5 w-1.5 rounded-full bg-text-muted" /> Inactive
                             </span>
                           )}
                         </td>
@@ -629,7 +642,7 @@ export default function GitPage() {
                               aria-label={`Actions for ${cred.name}`}
                               aria-expanded={credMenuId === cred.id}
                               onClick={() => setCredMenuId(credMenuId === cred.id ? null : cred.id)}
-                              className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                              className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition hover:bg-overlay-strong hover:text-text"
                             >
                               <MoreHorizontal size={15} />
                             </button>
@@ -641,12 +654,12 @@ export default function GitPage() {
                                   className="fixed inset-0 z-10 cursor-default"
                                   onClick={() => setCredMenuId(null)}
                                 />
-                                <div className="absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-lg border border-white/10 bg-[var(--surface-raised)] py-1 shadow-2xl">
+                                <div className="absolute right-0 z-20 mt-1.5 w-44 overflow-hidden rounded-lg border border-line bg-[var(--surface-raised)] py-1 shadow-2xl">
                                   <button
                                     type="button"
                                     onClick={() => viewCredential.mutate(cred.id)}
                                     disabled={viewCredential.isPending}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/[0.06]"
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-text transition hover:bg-overlay-strong"
                                   >
                                     <Eye size={13} /> View details
                                   </button>
@@ -655,7 +668,7 @@ export default function GitPage() {
                                       type="button"
                                       onClick={() => generateKey.mutate(cred.id)}
                                       disabled={generateKey.isPending}
-                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/[0.06]"
+                                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-text transition hover:bg-overlay-strong"
                                     >
                                       <RefreshCw size={13} /> Generate key
                                     </button>
@@ -663,7 +676,7 @@ export default function GitPage() {
                                   <button
                                     type="button"
                                     onClick={() => { void (async () => { if (await confirm({ title: "Delete this git credential?", description: "The stored credential will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteCredential.mutate(cred.id); })(); }}
-                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-red-300 transition hover:bg-red-500/10"
+                                    className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-danger transition hover:bg-danger-subtle"
                                   >
                                     <Trash2 size={13} /> Delete
                                   </button>
@@ -677,10 +690,13 @@ export default function GitPage() {
                   })}
                 </tbody>
               </table>
-              {filteredCredentials.length === 0 && (
-                <p className="px-5 py-6 text-center text-xs text-slate-500">
-                  {credentials.length === 0 ? "No credentials configured yet — add one to get started." : "No credentials match the current search."}
-                </p>
+              )}
+              {credentialsQuery.isSuccess && filteredCredentials.length === 0 && (
+                <EmptyState
+                  icon={Key}
+                  title={credentials.length === 0 ? "No credentials" : "No matches"}
+                  message={credentials.length === 0 ? "No credentials configured yet — add one to get started." : "No credentials match the current search."}
+                />
               )}
             </div>
 
@@ -699,15 +715,15 @@ export default function GitPage() {
           <section className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-2.5">
-                <Link size={17} className="mt-0.5 shrink-0 text-slate-300" />
+                <Link size={17} className="mt-0.5 shrink-0 text-text" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">Git Providers</h2>
-                  <p className="mt-0.5 text-xs text-slate-500">Connect your Git provider accounts to fetch repositories and configure webhooks.</p>
+                  <h2 className="text-sm font-bold text-text">Git Providers</h2>
+                  <p className="mt-0.5 text-xs text-text-muted">Connect your Git provider accounts to fetch repositories and configure webhooks.</p>
                 </div>
               </div>
               <button
                 onClick={() => openConnect("github")}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3.5 text-xs font-medium text-slate-200 transition hover:bg-white/[0.07]"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-overlay px-3.5 text-xs font-medium text-text transition hover:bg-overlay-strong"
               >
                 <Plus size={14} /> Add Provider
               </button>
@@ -720,29 +736,29 @@ export default function GitPage() {
                 const repoCount = token ? repoCounts[token.id] : undefined;
                 const webhooks = token ? webhooksForProvider(token.id) : 0;
                 return (
-                  <article key={card.id} className="flex flex-col rounded-xl border border-[var(--line)] bg-white/[0.015] p-4 transition hover:border-white/[0.14]">
+                  <article key={card.id} className="flex flex-col rounded-xl border border-[var(--line)] bg-overlay-subtle p-4 transition hover:border-line-strong">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex min-w-0 items-center gap-3">
-                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.02]">
+                        <span className="grid h-11 w-11 shrink-0 place-items-center rounded-xl border border-line bg-overlay-subtle">
                           <ProviderGlyph provider={card.id} />
                         </span>
-                        <h3 className="truncate text-[13px] font-bold text-slate-100">{card.name}</h3>
+                        <h3 className="truncate text-[13px] font-bold text-text">{card.name}</h3>
                       </div>
                       {connected ? (
-                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300">
-                          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Connected
+                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-ok-line bg-ok-subtle px-2.5 py-1 text-[11px] font-medium text-ok">
+                          <span className="h-1.5 w-1.5 rounded-full bg-ok" /> Connected
                         </span>
                       ) : (
-                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-slate-400">
-                          <span className="h-1.5 w-1.5 rounded-full bg-slate-500" /> Not connected
+                        <span className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-line bg-overlay px-2.5 py-1 text-[11px] font-medium text-text-subtle">
+                          <span className="h-1.5 w-1.5 rounded-full bg-text-muted" /> Not connected
                         </span>
                       )}
                     </div>
-                    <p className="mt-2.5 min-h-10 text-xs leading-5 text-slate-400">{card.blurb}</p>
+                    <p className="mt-2.5 min-h-10 text-xs leading-5 text-text-subtle">{card.blurb}</p>
                     <div className="mt-3">
                       {connected && token ? (
                         <div className="flex items-center gap-2">
-                          <div className="flex h-10 flex-1 items-center gap-4 rounded-lg border border-white/[0.07] bg-white/[0.02] px-3 text-[11px] text-slate-400">
+                          <div className="flex h-10 flex-1 items-center gap-4 rounded-lg border border-line bg-overlay-subtle px-3 text-[11px] text-text-subtle">
                             <span className="inline-flex items-center gap-1.5" title="Repositories visible to this provider token">
                               <GitBranch size={13} />
                               {repoCount && "count" in repoCount ? `${repoCount.count} repositor${repoCount.count === 1 ? "y" : "ies"}` : "— repositories"}
@@ -756,7 +772,7 @@ export default function GitPage() {
                             type="button"
                             aria-label={`Manage ${card.name}`}
                             onClick={() => changeTab("providers")}
-                            className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-slate-300 transition hover:bg-white/[0.07] hover:text-white"
+                            className="grid h-10 w-10 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text transition hover:bg-overlay-strong hover:text-text"
                           >
                             <ArrowRight size={15} />
                           </button>
@@ -765,7 +781,7 @@ export default function GitPage() {
                         <button
                           type="button"
                           onClick={() => openConnect(card.id)}
-                          className="h-10 w-full rounded-lg border border-white/10 bg-white/[0.03] text-xs font-medium text-slate-200 transition hover:bg-white/[0.07] hover:text-white"
+                          className="h-10 w-full rounded-lg border border-line bg-overlay text-xs font-medium text-text transition hover:bg-overlay-strong hover:text-text"
                         >
                           Connect
                         </button>
@@ -784,60 +800,69 @@ export default function GitPage() {
           <section className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4 sm:p-5">
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-2.5">
-                <Globe size={17} className="mt-0.5 shrink-0 text-slate-300" />
+                <Globe size={17} className="mt-0.5 shrink-0 text-text" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">Connected Providers</h2>
-                  <p className="mt-0.5 text-xs text-slate-500">Test saved tokens, browse repositories, rename, or disconnect. Tokens stay server-side.</p>
+                  <h2 className="text-sm font-bold text-text">Connected Providers</h2>
+                  <p className="mt-0.5 text-xs text-text-muted">Test saved tokens, browse repositories, rename, or disconnect. Tokens stay server-side.</p>
                 </div>
               </div>
               <button
                 onClick={() => { setConnectPreset("github"); setShowConnectProvider(true); }}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-3.5 text-xs font-medium text-slate-200 transition hover:bg-white/[0.07]"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-line bg-overlay px-3.5 text-xs font-medium text-text transition hover:bg-overlay-strong"
               >
                 <Plus size={14} /> Add Provider
               </button>
             </div>
 
             <div className="mt-4 space-y-3">
-              {providerTokens.length === 0 && (
-                <p className="rounded-lg border border-dashed border-white/10 p-5 text-center text-xs text-slate-500">
-                  No providers connected yet — connect one to deploy from repositories.
-                </p>
-              )}
+              {providerTokensQuery.isLoading ? (
+                <AdminLoadingState label="Loading git providers…" />
+              ) : providerTokensQuery.isError ? (
+                <AdminErrorState
+                  message={providerTokensQuery.error instanceof Error ? providerTokensQuery.error.message : "Failed to load git providers"}
+                  retry={() => void providerTokensQuery.refetch()}
+                />
+              ) : providerTokens.length === 0 ? (
+                <EmptyState
+                  icon={Users}
+                  title="No providers"
+                  message="No providers connected yet — connect one to deploy from repositories."
+                />
+              ) : null}
 
               {providerTokens.map((pt) => (
-                <article key={pt.id} className="rounded-xl border border-[var(--line)] bg-white/[0.015] p-4">
+                <article key={pt.id} className="rounded-xl border border-[var(--line)] bg-overlay-subtle p-4">
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="flex min-w-0 items-start gap-3">
-                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.02]">
+                      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-overlay-subtle">
                         <ProviderGlyph provider={pt.provider} size={22} />
                       </span>
                       <div className="min-w-0">
                         {editingProviderId === pt.id ? (
                           <div className="flex flex-wrap items-center gap-2">
-                            <input value={editProviderName} onChange={(e) => setEditProviderName(e.target.value)} placeholder="Display name" aria-label="Display name" className="h-8 rounded-lg border border-white/10 bg-[var(--surface-input)] px-2.5 text-xs text-slate-100 outline-none focus:border-[var(--brand)]" />
+                            <input value={editProviderName} onChange={(e) => setEditProviderName(e.target.value)} placeholder="Display name" aria-label="Display name" className="h-8 rounded-lg border border-line bg-[var(--surface-input)] px-2.5 text-xs text-text outline-none focus:border-[var(--brand)]" />
                             <button onClick={() => updateProviderMut.mutate({ id: pt.id, body: { providerName: editProviderName } })} className="h-8 rounded-lg bg-[var(--brand)] px-3 text-xs font-semibold text-white hover:opacity-90">Save</button>
-                            <button onClick={() => setEditingProviderId(null)} className="h-8 rounded-lg border border-white/10 px-3 text-xs text-slate-300 hover:bg-white/[0.06]">Cancel</button>
+                            <button onClick={() => setEditingProviderId(null)} className="h-8 rounded-lg border border-line px-3 text-xs text-text hover:bg-overlay-strong">Cancel</button>
                           </div>
                         ) : (
-                          <p className="text-[13px] font-semibold capitalize text-slate-100">
-                            {pt.provider}{pt.providerName ? <span className="font-normal text-slate-400"> — {pt.providerName}</span> : ""}
-                            <button onClick={() => { setEditingProviderId(pt.id); setEditProviderName(pt.providerName); }} className="ml-2 align-middle text-[11px] font-normal text-slate-500 underline hover:text-slate-300">Rename</button>
+                          <p className="text-[13px] font-semibold capitalize text-text">
+                            {pt.provider}{pt.providerName ? <span className="font-normal text-text-subtle"> — {pt.providerName}</span> : ""}
+                            <button onClick={() => { setEditingProviderId(pt.id); setEditProviderName(pt.providerName); }} className="ml-2 align-middle text-[11px] font-normal text-text-muted underline hover:text-text">Rename</button>
                           </p>
                         )}
-                        <p className="mt-0.5 truncate text-xs text-slate-500">
+                        <p className="mt-0.5 truncate text-xs text-text-muted">
                           {pt.username && `@${pt.username} · `}{pt.tokenType} token
                           {pt.baseUrl && <span className="ml-1 font-mono text-[11px]">{pt.baseUrl}</span>}
                         </p>
                         {inlineTestResult[pt.id] && (
-                          <p className={`mt-1 text-xs ${inlineTestResult[pt.id] === "ok" ? "text-emerald-400" : "text-amber-400"}`}>Test: {inlineTestResult[pt.id]}</p>
+                          <p className={`mt-1 text-xs ${inlineTestResult[pt.id] === "ok" ? "text-ok" : "text-warn"}`}>Test: {inlineTestResult[pt.id]}</p>
                         )}
                       </div>
                     </div>
                     <div className="flex shrink-0 flex-wrap gap-1.5">
                       <button
                         onClick={() => testProviderMut.mutate(pt.id)}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 text-xs font-medium text-red-200 transition hover:bg-red-500/20"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-danger-line bg-danger-subtle px-2.5 text-xs font-medium text-danger transition hover:bg-danger-subtle"
                         disabled={testProviderMut.isPending}
                         title="POST /git/providers/:id/test"
                       >
@@ -845,14 +870,14 @@ export default function GitPage() {
                       </button>
                       <button
                         onClick={() => loadProviderRepos(pt.id)}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 text-xs text-slate-300 transition hover:bg-white/[0.06]"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-overlay-subtle px-2.5 text-xs text-text transition hover:bg-overlay-strong"
                         disabled={loadingRepos === pt.id}
                       >
                         <RefreshCw size={13} className={loadingRepos === pt.id ? "animate-spin" : ""} /> Repos
                       </button>
                       <button
                         onClick={() => { void (async () => { if (await confirm({ title: "Disconnect this git provider?", description: "The provider connection will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Disconnect" })) disconnectProvider.mutate(pt.id); })(); }}
-                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 text-xs text-red-300 transition hover:bg-red-500/10"
+                        className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-line bg-overlay-subtle px-2.5 text-xs text-danger transition hover:bg-danger-subtle"
                       >
                         <Trash2 size={13} /> Disconnect
                       </button>
@@ -860,50 +885,50 @@ export default function GitPage() {
                   </div>
 
                   <details className="mt-3 text-xs">
-                    <summary className="flex cursor-pointer items-center gap-1.5 text-slate-500 hover:text-slate-300">
+                    <summary className="flex cursor-pointer items-center gap-1.5 text-text-muted hover:text-text">
                       <Webhook size={13} /> Webhook secrets — {sources.filter((s) => s.providerTokenId === pt.id).length} linked source(s)
                     </summary>
                     <div className="mt-2 space-y-2">
                       {sources.filter((s) => s.providerTokenId === pt.id).length === 0 ? (
-                        <p className="text-xs text-slate-500">No sources linked to this provider. Link a repository in Repository Sources to see webhook secrets.</p>
+                        <p className="text-xs text-text-muted">No sources linked to this provider. Link a repository in Repository Sources to see webhook secrets.</p>
                       ) : sources.filter((s) => s.providerTokenId === pt.id).map((src) => (
-                        <div key={src.id} className="space-y-1 rounded-lg bg-white/[0.03] p-2.5">
-                          <p className="font-mono text-[11px] text-slate-300">{src.repositoryOwner}/{src.repositoryName} — {src.branch}</p>
-                          <p className="text-[11px] text-slate-500">Webhook URL: <code className="break-all text-[10px]">{src.webhookUrl || "—"}</code></p>
+                        <div key={src.id} className="space-y-1 rounded-lg bg-overlay p-2.5">
+                          <p className="font-mono text-[11px] text-text">{src.repositoryOwner}/{src.repositoryName} — {src.branch}</p>
+                          <p className="text-[11px] text-text-muted">Webhook URL: <code className="break-all text-[10px]">{src.webhookUrl || "—"}</code></p>
                           <div className="flex items-center gap-2">
-                            <span className="text-[11px] text-slate-500">Secret:</span>
+                            <span className="text-[11px] text-text-muted">Secret:</span>
                             {src.webhookSecret ? (
                               <>
-                                <code className="rounded bg-black/30 px-1.5 py-0.5 font-mono text-[11px]">
+                                <code className="rounded bg-well px-1.5 py-0.5 font-mono text-[11px]">
                                   {revealSecrets[src.id] ? src.webhookSecret : "•".repeat(16)}
                                 </code>
-                                <button onClick={() => setRevealSecrets((p) => ({ ...p, [src.id]: !p[src.id] }))} className="rounded p-1 hover:bg-white/[0.06]" aria-label="Toggle secret visibility">
+                                <button onClick={() => setRevealSecrets((p) => ({ ...p, [src.id]: !p[src.id] }))} className="rounded p-1 hover:bg-overlay-strong" aria-label="Toggle secret visibility">
                                   {revealSecrets[src.id] ? <EyeOff size={13} /> : <Eye size={13} />}
                                 </button>
-                                <button onClick={() => { navigator.clipboard.writeText(src.webhookSecret!); toast({ tone: "success", title: "Secret copied" }); }} className="text-[11px] text-slate-400 underline">Copy</button>
+                                <button onClick={() => { navigator.clipboard.writeText(src.webhookSecret!); toast({ tone: "success", title: "Secret copied" }); }} className="text-[11px] text-text-subtle underline">Copy</button>
                               </>
                             ) : (
-                              <span className="text-[11px] text-amber-400">No secret — autoDeploy webhook may have failed</span>
+                              <span className="text-[11px] text-warn">No secret — autoDeploy webhook may have failed</span>
                             )}
                           </div>
-                          {src.webhookId && <p className="text-[11px] text-slate-500">Webhook ID: {src.webhookId}</p>}
+                          {src.webhookId && <p className="text-[11px] text-text-muted">Webhook ID: {src.webhookId}</p>}
                         </div>
                       ))}
                     </div>
                   </details>
 
                   {selectedProviderRepos.length > 0 && (
-                    <div className="ml-4 mt-2 space-y-1 border-l-2 border-white/10 pl-3">
-                      <p className="text-xs font-medium text-slate-400">Repositories:</p>
+                    <div className="ml-4 mt-2 space-y-1 border-l-2 border-line pl-3">
+                      <p className="text-xs font-medium text-text-subtle">Repositories:</p>
                       {selectedProviderRepos.map((repo) => (
                         <div key={repo.fullName} className="flex items-center justify-between text-xs">
-                          <span className="text-slate-300">
+                          <span className="text-text">
                             {repo.name}
-                            {repo.private && <span className="ml-1 text-slate-500">(private)</span>}
+                            {repo.private && <span className="ml-1 text-text-muted">(private)</span>}
                           </span>
                           <button
                             onClick={() => loadProviderBranches(pt.id, repo.fullName)}
-                            className="text-xs text-slate-400 underline hover:text-slate-200"
+                            className="text-xs text-text-subtle underline hover:text-text"
                             disabled={loadingBranches === pt.id}
                           >
                             branches
@@ -914,9 +939,9 @@ export default function GitPage() {
                   )}
 
                   {selectedProviderBranches.length > 0 && (
-                    <div className="ml-8 mt-1 space-y-1 text-xs text-slate-400">
+                    <div className="ml-8 mt-1 space-y-1 text-xs text-text-subtle">
                       {selectedProviderBranches.map((b) => (
-                        <span key={b.name} className="mr-2 inline-flex items-center gap-1 rounded bg-white/[0.06] px-1.5 py-0.5">
+                        <span key={b.name} className="mr-2 inline-flex items-center gap-1 rounded bg-overlay-strong px-1.5 py-0.5">
                           <GitBranch size={12} /> {b.name}
                         </span>
                       ))}
@@ -947,24 +972,34 @@ export default function GitPage() {
           <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)]">
             <div className="flex flex-col gap-3 px-4 py-4 sm:flex-row sm:items-start sm:justify-between sm:px-5">
               <div className="flex items-start gap-2.5">
-                <Database size={17} className="mt-0.5 shrink-0 text-slate-300" />
+                <Database size={17} className="mt-0.5 shrink-0 text-text" />
                 <div>
-                  <h2 className="text-sm font-bold text-slate-100">Repository Sources</h2>
-                  <p className="mt-0.5 text-xs text-slate-500">Linked repositories that drive auto-deploy webhooks and pipeline triggers.</p>
+                  <h2 className="text-sm font-bold text-text">Repository Sources</h2>
+                  <p className="mt-0.5 text-xs text-text-muted">Linked repositories that drive auto-deploy webhooks and pipeline triggers.</p>
                 </div>
               </div>
               <button
                 onClick={() => setShowCreateSource(true)}
-                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-red-500/60 bg-[var(--brand)] px-3.5 text-xs font-semibold text-white transition hover:bg-[var(--brand-hover)]"
+                className="inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border border-transparent bg-[var(--brand)] px-3.5 text-xs font-semibold text-white transition hover:bg-[var(--brand-hover)]"
               >
                 <Plus size={14} strokeWidth={2.5} /> Link Repository
               </button>
             </div>
 
             <div className="overflow-x-auto">
+              {sourcesQuery.isLoading ? (
+                <AdminLoadingState label="Loading repository sources…" />
+              ) : sourcesQuery.isError ? (
+                <div className="p-4">
+                  <AdminErrorState
+                    message={sourcesQuery.error instanceof Error ? sourcesQuery.error.message : "Failed to load repository sources"}
+                    retry={() => void sourcesQuery.refetch()}
+                  />
+                </div>
+              ) : (
               <table className="w-full min-w-[760px] text-sm">
                 <thead>
-                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-slate-500">
+                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-text-muted">
                     <th className="px-4 py-2.5 font-medium sm:px-5">Repository</th>
                     <th className="px-4 py-2.5 font-medium">Branch</th>
                     <th className="px-4 py-2.5 font-medium">Auto-deploy</th>
@@ -972,40 +1007,40 @@ export default function GitPage() {
                     <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.05]">
+                <tbody className="divide-y divide-line">
                   {sources.map((src) => (
-                    <tr key={src.id} className="transition hover:bg-white/[0.02]">
+                    <tr key={src.id} className="transition hover:bg-overlay-subtle">
                       <td className="px-4 py-3 sm:pl-5">
-                        <span className="block truncate font-mono text-xs font-medium text-slate-100">
+                        <span className="block truncate font-mono text-xs font-medium text-text">
                           {src.repositoryOwner}/{src.repositoryName}
                         </span>
-                        <span className="mt-0.5 block text-[11px] capitalize text-slate-500">
+                        <span className="mt-0.5 block text-[11px] capitalize text-text-muted">
                           {src.provider || "—"}
                           {src.webhookId ? "" : src.autoDeploy ? " · webhook missing" : ""}
                         </span>
                       </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-300">{src.branch}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text">{src.branch}</td>
                       <td className="px-4 py-3">
                         {src.autoDeploy ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> On
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-ok-line bg-ok-subtle px-2.5 py-0.5 text-[11px] font-medium text-ok">
+                            <span className="h-1.5 w-1.5 rounded-full bg-ok" /> On
                           </span>
                         ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[11px] font-medium text-slate-400">
-                            <span className="h-1.5 w-1.5 rounded-full bg-slate-500" /> Off
+                          <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-overlay px-2.5 py-0.5 text-[11px] font-medium text-text-subtle">
+                            <span className="h-1.5 w-1.5 rounded-full bg-text-muted" /> Off
                           </span>
                         )}
                         {src.autoDeploy && !src.webhookId && (
-                          <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-300" title={(src as GitSource).webhookSetupError || "provider webhook setup failed or token lacks webhook permission"}>
+                          <span className="mt-1 flex items-center gap-1 text-[11px] text-warn" title={(src as GitSource).webhookSetupError || "provider webhook setup failed or token lacks webhook permission"}>
                             <AlertTriangle size={12} /> No webhook
                           </span>
                         )}
                       </td>
-                      <td className="px-4 py-3 text-xs text-slate-400">
+                      <td className="px-4 py-3 text-xs text-text-subtle">
                         {src.lastCommitSha ? (
                           <>
-                            <span className="block font-mono text-[11px] text-slate-300">{src.lastCommitSha.slice(0, 7)}</span>
-                            <span className="block max-w-56 truncate text-[11px] text-slate-500">{src.lastCommitMessage}</span>
+                            <span className="block font-mono text-[11px] text-text">{src.lastCommitSha.slice(0, 7)}</span>
+                            <span className="block max-w-56 truncate text-[11px] text-text-muted">{src.lastCommitMessage}</span>
                           </>
                         ) : "—"}
                       </td>
@@ -1015,7 +1050,7 @@ export default function GitPage() {
                             <button
                               type="button"
                               onClick={() => { navigator.clipboard.writeText(src.webhookUrl); toast({ tone: "success", title: "Webhook URL copied" }); }}
-                              className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                              className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition hover:bg-overlay-strong hover:text-text"
                               title="Copy webhook URL"
                               aria-label="Copy webhook URL"
                             >
@@ -1025,7 +1060,7 @@ export default function GitPage() {
                           <button
                             type="button"
                             onClick={() => { void (async () => { if (await confirm({ title: "Remove this git source?", description: "The source deployment and its history will be removed. This cannot be undone.", danger: true, confirmLabel: "Remove" })) deleteSource.mutate(src.id); })(); }}
-                            className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-red-300 transition hover:bg-red-500/10"
+                            className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-overlay-subtle text-danger transition hover:bg-danger-subtle"
                             title="Remove source"
                             aria-label={`Remove ${src.repositoryOwner}/${src.repositoryName}`}
                           >
@@ -1037,8 +1072,13 @@ export default function GitPage() {
                   ))}
                 </tbody>
               </table>
-              {sources.length === 0 && (
-                <p className="px-5 py-6 text-center text-xs text-slate-500">No repositories linked yet — link one to enable auto-deploy.</p>
+              )}
+              {sourcesQuery.isSuccess && sources.length === 0 && (
+                <EmptyState
+                  icon={Database}
+                  title="No repository sources"
+                  message="No repositories linked yet — link one to enable auto-deploy."
+                />
               )}
             </div>
 
@@ -1075,47 +1115,47 @@ function GitDocsModal({ onClose }: { onClose: () => void }) {
         role="dialog"
         aria-modal="true"
         aria-label="Git Integrations documentation"
-        className="mx-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface)] shadow-2xl"
+        className="mx-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-line bg-[var(--surface)] shadow-2xl"
       >
-        <div className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 pb-4 pt-5 sm:px-6">
+        <div className="flex items-start justify-between gap-4 border-b border-line px-5 pb-4 pt-5 sm:px-6">
           <div className="flex items-start gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300">
+            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-overlay text-text">
               <BookOpen size={18} />
             </span>
             <div>
-              <h2 className="text-base font-bold text-white">Git Integrations</h2>
-              <p className="mt-0.5 text-xs text-slate-400">Credentials, providers, sources, and auto-deploy webhooks.</p>
+              <h2 className="text-base font-bold text-text">Git Integrations</h2>
+              <p className="mt-0.5 text-xs text-text-subtle">Credentials, providers, sources, and auto-deploy webhooks.</p>
             </div>
           </div>
           <button
             type="button"
             onClick={onClose}
             aria-label="Close documentation"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-text-subtle transition hover:bg-overlay-strong hover:text-text"
           >
             <X size={16} />
           </button>
         </div>
-        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5 text-sm leading-6 text-slate-300 sm:px-6">
+        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5 text-sm leading-6 text-text sm:px-6">
           <section>
-            <h3 className="text-[13px] font-bold text-slate-100">Workflow</h3>
-            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs text-slate-400">
-              <li><span className="font-semibold text-slate-200">Add credentials</span> — store deploy keys (SSH) or HTTPS tokens. Secrets stay server-side, encrypted.</li>
-              <li><span className="font-semibold text-slate-200">Connect provider</span> — link a GitHub, GitLab, Bitbucket, or Gitea account with a personal access token. Test it inline before saving.</li>
-              <li><span className="font-semibold text-slate-200">Add repository sources</span> — link repositories, choosing public access, a deploy credential, or a provider token.</li>
-              <li><span className="font-semibold text-slate-200">Auto-deploy</span> — with a provider token linked, Forge installs a webhook so pushes trigger builds and deployments.</li>
+            <h3 className="text-[13px] font-bold text-text">Workflow</h3>
+            <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs text-text-subtle">
+              <li><span className="font-semibold text-text">Add credentials</span> — store deploy keys (SSH) or HTTPS tokens. Secrets stay server-side, encrypted.</li>
+              <li><span className="font-semibold text-text">Connect provider</span> — link a GitHub, GitLab, Bitbucket, or Gitea account with a personal access token. Test it inline before saving.</li>
+              <li><span className="font-semibold text-text">Add repository sources</span> — link repositories, choosing public access, a deploy credential, or a provider token.</li>
+              <li><span className="font-semibold text-text">Auto-deploy</span> — with a provider token linked, Forge installs a webhook so pushes trigger builds and deployments.</li>
             </ol>
           </section>
           <section>
-            <h3 className="text-[13px] font-bold text-slate-100">Rules that matter</h3>
-            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-xs text-slate-400">
-              <li>Auto-deploy webhooks install only when the source is linked via a <span className="font-semibold text-slate-200">provider token</span>. Credential-linked or public sources cannot install webhooks.</li>
-              <li>A credential counts as <span className="font-semibold text-slate-200">active</span> while at least one repository source uses it; unused credentials show as inactive.</li>
+            <h3 className="text-[13px] font-bold text-text">Rules that matter</h3>
+            <ul className="mt-2 list-disc space-y-1.5 pl-5 text-xs text-text-subtle">
+              <li>Auto-deploy webhooks install only when the source is linked via a <span className="font-semibold text-text">provider token</span>. Credential-linked or public sources cannot install webhooks.</li>
+              <li>A credential counts as <span className="font-semibold text-text">active</span> while at least one repository source uses it; unused credentials show as inactive.</li>
               <li>Provider tokens are validated live against the provider API — a failed test means the token is rejected or lacks permission.</li>
             </ul>
           </section>
           <section>
-            <h3 className="text-[13px] font-bold text-slate-100">API reference</h3>
+            <h3 className="text-[13px] font-bold text-text">API reference</h3>
             <div className="mt-2 space-y-1 font-mono text-[11px]">
               {[
                 "GET /git/credentials · POST /git/credentials · DELETE /git/credentials/:id",
@@ -1125,7 +1165,7 @@ function GitDocsModal({ onClose }: { onClose: () => void }) {
                 "GET /git/providers/:id/repos · GET /git/providers/:id/branches?repo=",
                 "GET /git/sources · POST /git/sources · DELETE /git/sources/:id",
               ].map((line) => (
-                <p key={line} className="rounded-md border border-white/[0.07] bg-white/[0.02] px-2.5 py-1.5 text-slate-400">{line}</p>
+                <p key={line} className="rounded-md border border-line bg-overlay-subtle px-2.5 py-1.5 text-text-subtle">{line}</p>
               ))}
             </div>
           </section>
@@ -1142,8 +1182,8 @@ function HowStep({ icon, tile, title, text }: { icon: React.ReactNode; tile: str
         {icon}
       </span>
       <span className="min-w-0">
-        <span className="block text-[13px] font-semibold text-slate-100">{title}</span>
-        <span className="mt-0.5 block text-[11px] leading-4 text-slate-500">{text}</span>
+        <span className="block text-[13px] font-semibold text-text">{title}</span>
+        <span className="mt-0.5 block text-[11px] leading-4 text-text-muted">{text}</span>
       </span>
     </li>
   );
@@ -1152,7 +1192,7 @@ function HowStep({ icon, tile, title, text }: { icon: React.ReactNode; tile: str
 function HowArrow() {
   return (
     <li aria-hidden="true" className="hidden justify-center sm:flex xl:table-cell">
-      <ArrowRight size={16} className="text-slate-600" />
+      <ArrowRight size={16} className="text-text-muted" />
     </li>
   );
 }
@@ -1170,18 +1210,18 @@ function CredentialForm({
   const [description, setDescription] = useState("");
 
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-white/[0.015] p-4 space-y-3">
-      <h3 className="font-semibold text-sm text-slate-100">New Credential</h3>
+    <div className="rounded-xl border border-[var(--line)] bg-overlay-subtle p-4 space-y-3">
+      <h3 className="font-semibold text-sm text-text">New Credential</h3>
       <input
         placeholder="Name (e.g. GitHub Deploy Key)"
         value={name}
         onChange={(e) => setName(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
       />
       <select
         value={credType}
         onChange={(e) => setCredType(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-200 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text outline-none focus:border-[var(--brand)]"
       >
         <option value="ssh_key">SSH Key</option>
         <option value="https_token">HTTPS Token</option>
@@ -1192,31 +1232,31 @@ function CredentialForm({
           placeholder="Paste SSH private key..."
           value={credential}
           onChange={(e) => setCredential(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm font-mono min-h-[100px] bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm font-mono min-h-[100px] bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
       ) : credType === "https_token" ? (
         <input
           placeholder="Access token"
           value={credential}
           onChange={(e) => setCredential(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
       ) : (
         <input
           placeholder="username:password"
           value={credential}
           onChange={(e) => setCredential(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
       )}
       <input
         placeholder="Description (optional)"
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
       />
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-white/10 rounded-lg text-slate-300 hover:bg-white/[0.06]">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-line rounded-lg text-text hover:bg-overlay-strong">Cancel</button>
         <button
           onClick={() => onSubmit({ name, credentialType: credType, credential, description })}
           disabled={loading || !name || !credential}
@@ -1247,12 +1287,12 @@ function ProviderForm({
   const [username, setUsername] = useState("");
 
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-white/[0.015] p-4 space-y-3">
-      <h3 className="font-semibold text-sm text-slate-100">Connect Git Provider</h3>
+    <div className="rounded-xl border border-[var(--line)] bg-overlay-subtle p-4 space-y-3">
+      <h3 className="font-semibold text-sm text-text">Connect Git Provider</h3>
       <select
         value={provider}
         onChange={(e) => setProvider(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-200 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text outline-none focus:border-[var(--brand)]"
       >
         <option value="github">GitHub</option>
         <option value="gitlab">GitLab</option>
@@ -1263,13 +1303,13 @@ function ProviderForm({
         placeholder="Display name (e.g. Personal GitHub)"
         value={providerName}
         onChange={(e) => setProviderName(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
       />
       <input
         placeholder="Access token / Personal access token"
         value={accessToken}
         onChange={(e) => setAccessToken(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         type="password"
         autoComplete="off"
       />
@@ -1278,14 +1318,14 @@ function ProviderForm({
           placeholder="Gitea base URL (e.g. https://git.example.com)"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
       )}
       <input
         placeholder="Refresh token (optional)"
         value={refreshToken}
         onChange={(e) => setRefreshToken(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         type="password"
         autoComplete="off"
       />
@@ -1293,19 +1333,19 @@ function ProviderForm({
         placeholder="Username (optional)"
         value={username}
         onChange={(e) => setUsername(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
       />
-      <p className="text-[11px] text-slate-500">Inline test validates the token without persisting it.</p>
+      <p className="text-[11px] text-text-muted">Inline test validates the token without persisting it.</p>
       <div className="flex gap-2 justify-end">
         <button
           type="button"
           onClick={() => onInlineTest?.({ provider, accessToken, baseUrl: baseUrl || undefined })}
           disabled={!accessToken}
-          className="px-3 py-1.5 text-sm border border-white/10 rounded-lg text-slate-300 hover:bg-white/[0.06] disabled:opacity-40"
+          className="px-3 py-1.5 text-sm border border-line rounded-lg text-text hover:bg-overlay-strong disabled:opacity-40"
         >
           Test (inline)
         </button>
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-white/10 rounded-lg text-slate-300 hover:bg-white/[0.06]">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-line rounded-lg text-text hover:bg-overlay-strong">Cancel</button>
         <button
           onClick={() => onSubmit({ provider, providerName, accessToken, refreshToken, tokenType, baseUrl, username })}
           disabled={loading || !accessToken}
@@ -1343,10 +1383,10 @@ function SourceForm({
   const showAutoDeployWarning = autoDeploy && authMode !== "provider";
 
   return (
-    <div className="rounded-xl border border-[var(--line)] bg-white/[0.015] p-4 space-y-3">
-      <h3 className="font-semibold text-sm text-slate-100">Link Repository</h3>
+    <div className="rounded-xl border border-[var(--line)] bg-overlay-subtle p-4 space-y-3">
+      <h3 className="font-semibold text-sm text-text">Link Repository</h3>
       {showAutoDeployWarning && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-2.5 text-xs text-amber-200 flex items-center gap-2">
+        <div className="rounded-lg border border-warn-line bg-warn-subtle p-2.5 text-xs text-warn flex items-center gap-2">
           <AlertTriangle size={14} /> Auto-deploy requires a Provider Token — generic/credential mode cannot install webhooks
         </div>
       )}
@@ -1357,7 +1397,7 @@ function SourceForm({
             key={mode}
             onClick={() => setAuthMode(mode)}
             className={`px-3 py-1.5 text-xs rounded-lg ${
-              authMode === mode ? "bg-[var(--brand)] text-white" : "border border-white/10 text-slate-300 hover:bg-white/[0.06]"
+              authMode === mode ? "bg-[var(--brand)] text-white" : "border border-line text-text hover:bg-overlay-strong"
             }`}
           >
             {mode === "none" ? "Public" : mode === "credential" ? "Deploy Key/Credential" : "Provider Token"}
@@ -1369,7 +1409,7 @@ function SourceForm({
         <select
           value={credentialId}
           onChange={(e) => setCredentialId(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-200 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text outline-none focus:border-[var(--brand)]"
         >
           <option value="">Select credential...</option>
           {Array.isArray(credentials) && credentials.map((c) => (
@@ -1386,7 +1426,7 @@ function SourceForm({
             const pt = Array.isArray(providerTokens) ? providerTokens.find((t) => t.id === e.target.value) : undefined;
             if (pt) setProvider(pt.provider);
           }}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-200 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text outline-none focus:border-[var(--brand)]"
         >
           <option value="">Select provider...</option>
           {Array.isArray(providerTokens) && providerTokens.map((pt) => (
@@ -1401,20 +1441,20 @@ function SourceForm({
         placeholder="Repository URL (e.g. https://github.com/user/repo.git)"
         value={repoUrl}
         onChange={(e) => setRepoUrl(e.target.value)}
-        className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+        className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
       />
       <div className="grid grid-cols-2 gap-2">
         <input
           placeholder="Repository owner"
           value={repoOwner}
           onChange={(e) => setRepoOwner(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
         <input
           placeholder="Repository name"
           value={repoName}
           onChange={(e) => setRepoName(e.target.value)}
-          className="w-full p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="w-full p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
       </div>
       <div className="flex items-center gap-2">
@@ -1422,9 +1462,9 @@ function SourceForm({
           placeholder="Branch"
           value={branch}
           onChange={(e) => setBranch(e.target.value)}
-          className="flex-1 p-2 border border-white/10 rounded-lg text-sm bg-[var(--surface-input)] text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]"
+          className="flex-1 p-2 border border-line rounded-lg text-sm bg-[var(--surface-input)] text-text placeholder:text-text-muted outline-none focus:border-[var(--brand)]"
         />
-        <label className="flex items-center gap-1.5 text-sm text-slate-300">
+        <label className="flex items-center gap-1.5 text-sm text-text">
           <input
             type="checkbox"
             checked={autoDeploy}
@@ -1434,10 +1474,10 @@ function SourceForm({
         </label>
       </div>
       {autoDeploy && !providerTokenId && (
-        <p className="text-xs text-amber-400">Auto-deploy will be saved but webhook will not be installed without a provider token — you can link provider later and re-enable</p>
+        <p className="text-xs text-warn">Auto-deploy will be saved but webhook will not be installed without a provider token — you can link provider later and re-enable</p>
       )}
       <div className="flex gap-2 justify-end">
-        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-white/10 rounded-lg text-slate-300 hover:bg-white/[0.06]">Cancel</button>
+        <button onClick={onCancel} className="px-3 py-1.5 text-sm border border-line rounded-lg text-text hover:bg-overlay-strong">Cancel</button>
         <button
           onClick={() => onSubmit({
             credentialId: authMode === "credential" && credentialId ? credentialId : undefined,
