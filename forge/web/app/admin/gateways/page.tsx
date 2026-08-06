@@ -159,7 +159,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           {/* Services lane */}
           <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
             <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
-              <Layers size={12} className="text-blue-400" aria-hidden />
+              <Layers size={12} className="text-info" aria-hidden />
               Services
               <Pill tone="blue" className="ml-auto font-mono text-[10px] tracking-wide">
                 {serviceCount}
@@ -176,7 +176,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
                     key={s.id}
                     className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2"
                   >
-                    <Server size={12} className="shrink-0 text-blue-300" aria-hidden />
+                    <Server size={12} className="shrink-0 text-info" aria-hidden />
                     <span className="truncate text-xs font-medium text-[var(--text)]">{s.name}</span>
                     <Pill tone="neutral" className="ml-auto font-mono text-[10px] capitalize tracking-wide">
                       {s.algorithm.replaceAll("_", " ")}
@@ -194,7 +194,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           <div className="hidden place-items-center md:grid">
             <div className="flex flex-col items-center gap-1 text-[var(--text-subtle)]">
               <div className="h-px w-12 bg-[var(--line)]" />
-              <ArrowRight size={14} className="text-emerald-400" aria-hidden />
+              <ArrowRight size={14} className="text-ok" aria-hidden />
               <div className="h-px w-12 bg-[var(--line)]" />
               <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--text-subtle)]">LB</span>
             </div>
@@ -203,30 +203,30 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           {/* Targets lane */}
           <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
             <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
-              <Container size={12} className="text-emerald-400" aria-hidden />
+              <Container size={12} className="text-ok" aria-hidden />
               Targets
               <Pill tone="green" className="ml-auto font-mono text-[10px] tracking-wide">
                 {targetCount}
               </Pill>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-emerald-400">
+              <div className="rounded-lg border border-ok-line bg-ok-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-ok">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "healthy").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-emerald-300/80">healthy</div>
+                <div className="text-[10px] uppercase tracking-widest text-ok">healthy</div>
               </div>
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-amber-400">
+              <div className="rounded-lg border border-warn-line bg-warn-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-warn">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "draining").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-300/80">draining</div>
+                <div className="text-[10px] uppercase tracking-widest text-warn">draining</div>
               </div>
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-red-400">
+              <div className="rounded-lg border border-danger-line bg-danger-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-danger">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "unhealthy").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-red-300/80">unhealthy</div>
+                <div className="text-[10px] uppercase tracking-widest text-danger">unhealthy</div>
               </div>
             </div>
             <p className="mt-3 text-center font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
@@ -305,7 +305,7 @@ export default function AdminGatewaysPage() {
       <OfflineBanner onRetry={() => window.location.reload()} />
       <SectionHeader
         title="Gateways"
-        sub="Unified Traefik-shaped control plane — Routers match host+path, reference Middlewares by ID, and forward to Services (load-balanced Targets). Caddy/Traefik adapters are projections of this single desired state. Legacy pages remain at Traffic / Load Balancer / Domains / Certificates."
+        sub="Edge gateway routers, services and middlewares."
         action={
           <div className="flex gap-2">
             <Btn tone="ghost" onClick={() => window.location.assign("/admin/traffic")}>
