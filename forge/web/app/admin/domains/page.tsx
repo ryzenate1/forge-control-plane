@@ -6,7 +6,7 @@ import { useToast } from "@/components/ui/toast";
 import { Globe, Plus, Trash2, ShieldCheck, ShieldAlert, RotateCw, Network } from "lucide-react";
 import { fetchServers } from "@/lib/api/servers";
 import { fetchServerDomains, addServerDomain, removeServerDomain, verifyDomain, checkDNS as checkDNSApi } from "@/lib/api/domains";
-import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import Link from "next/link";
 
@@ -122,8 +122,8 @@ export default function AdminDomainsPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Domain Management"
-        sub="Custom domains with DNS verification and TLS status. Related settings live in the same section: DNS Providers, Certificates, ACME, and Security Headers."
+        title="Domains"
+        sub="Custom domains with DNS and TLS status."
         action={
           <div className="flex gap-2">
             <Link href="/admin/dns"><Btn tone="ghost" className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"><ShieldCheck size={12} /> DNS Providers</Btn></Link>
@@ -148,14 +148,21 @@ export default function AdminDomainsPage() {
         {!serverFilter ? (
           <EmptyState icon={Globe} message="Select a server to view its domains." />
         ) : domainsQuery.isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading domains...</div>
+          <AdminLoadingState label="Loading domains…" />
+        ) : domainsQuery.isError ? (
+          <div className="p-4">
+            <AdminErrorState
+              message={domainsQuery.error instanceof Error ? domainsQuery.error.message : "Failed to load domains"}
+              retry={() => void domainsQuery.refetch()}
+            />
+          </div>
         ) : filteredDomains.length === 0 ? (
           <EmptyState icon={Globe} message="No domains configured for this server." />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
                   <th className="px-4 py-3">Domain</th>
                   <th className="px-4 py-3">Type</th>
                   <th className="px-4 py-3">Status</th>
@@ -163,10 +170,10 @@ export default function AdminDomainsPage() {
                   <th className="px-4 py-3"></th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {Array.isArray(filteredDomains) && filteredDomains.map((d) => (
-                  <tr key={d.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-mono text-xs font-medium text-slate-200">
+                  <tr key={d.id} className="hover:bg-overlay-subtle">
+                    <td className="px-4 py-3 font-mono text-xs font-medium text-text">
                       {d.domain}
                     </td>
                     <td className="px-4 py-3">
@@ -177,16 +184,16 @@ export default function AdminDomainsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {d.verified ? (
-                          <ShieldCheck size={14} className="text-emerald-400" />
+                          <ShieldCheck size={14} className="text-ok" />
                         ) : (
-                          <ShieldAlert size={14} className="text-amber-400" />
+                          <ShieldAlert size={14} className="text-warn" />
                         )}
                         <Pill tone={d.verified ? "green" : "yellow"}>
                           {d.verified ? "Verified" : "Unverified"}
                         </Pill>
                       </div>
                     </td>
-                    <td className="px-4 py-3 text-xs text-slate-400">
+                    <td className="px-4 py-3 text-xs text-text-subtle">
                       {d.verifiedAt ? new Date(d.verifiedAt).toLocaleString() : "—"}
                     </td>
                     <td className="px-4 py-3">
@@ -226,9 +233,9 @@ export default function AdminDomainsPage() {
         <Modal title="Add Domain" onClose={() => setShowAddModal(false)}>
           <div className="space-y-4">
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Server</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                className="h-9 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={addForm.serverId}
                 onChange={(e) => setAddForm({ ...addForm, serverId: e.target.value })}
               >
@@ -247,7 +254,7 @@ export default function AdminDomainsPage() {
               placeholder="example.com or *.example.com"
             />
             {addForm.domain?.startsWith("*.") && (
-              <p className="text-xs text-slate-400">Wildcard domain detected. DNS verification will use test.{addForm.domain.replace("*.", "")}</p>
+              <p className="text-xs text-text-subtle">Wildcard domain detected. DNS verification will use test.{addForm.domain.replace("*.", "")}</p>
             )}
           </div>
           <ModalFooter
@@ -275,18 +282,18 @@ export default function AdminDomainsPage() {
               placeholder="1.2.3.4"
             />
             {dnsResult && (
-              <div className={`p-4 rounded-lg border ${dnsResult.match ? "border-emerald-500/30 bg-emerald-500/10" : "border-amber-500/30 bg-amber-500/10"}`}>
-                <p className={`text-sm font-medium ${dnsResult.match ? "text-emerald-400" : "text-amber-400"}`}>
+              <div className={`p-4 rounded-lg border ${dnsResult.match ? "border-ok-line bg-ok-subtle" : "border-warn-line bg-warn-subtle"}`}>
+                <p className={`text-sm font-medium ${dnsResult.match ? "text-ok" : "text-warn"}`}>
                   {dnsResult.match ? "DNS matches expected IP" : "DNS mismatch or not verified"}
                 </p>
-                {dnsResult.error && <p className="text-sm text-red-300">{dnsResult.error}</p>}
+                {dnsResult.error && <p className="text-sm text-danger">{dnsResult.error}</p>}
                 {dnsResult.ips && dnsResult.ips.length > 0 && (
-                  <p className="text-xs text-slate-400 mt-1">
+                  <p className="text-xs text-text-subtle mt-1">
                     Resolved IPs: {dnsResult.ips.join(", ")}
                   </p>
                 )}
                 {dnsResult.expectedIp && (
-                  <p className="text-xs text-slate-500 mt-1">Expected: {dnsResult.expectedIp}</p>
+                  <p className="text-xs text-text-muted mt-1">Expected: {dnsResult.expectedIp}</p>
                 )}
               </div>
             )}
@@ -303,3 +310,4 @@ export default function AdminDomainsPage() {
     </AdminPageLayout>
   );
 }
+
