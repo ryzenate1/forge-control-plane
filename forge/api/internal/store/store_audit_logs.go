@@ -90,7 +90,9 @@ func scanAuditLogs(rows pgxRows) ([]models.AuditLog, error) {
 			return nil, err
 		}
 		if len(detailsJSON) > 0 {
-			_ = json.Unmarshal(detailsJSON, &log.Details)
+			if err := json.Unmarshal(detailsJSON, &log.Details); err != nil {
+				log.Details = map[string]any{"raw": string(detailsJSON)}
+			}
 		}
 		logs = append(logs, log)
 	}

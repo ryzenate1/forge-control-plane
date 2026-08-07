@@ -2,48 +2,93 @@ package store
 
 import (
 	"context"
+	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
 
 type BackupPolicy struct {
-	ID            string    `json:"id"`
-	ServerID      string    `json:"serverId"`
-	Interval      string    `json:"interval"`
-	MaxBackups    int       `json:"maxBackups"`
-	RetentionDays int       `json:"retentionDays"`
-	Storage       string    `json:"storage"`
-	Enabled       bool      `json:"enabled"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ID                  string     `json:"id"`
+	ServerID            string     `json:"serverId"`
+	AppID               string     `json:"appId,omitempty"`
+	ServiceID           string     `json:"serviceId,omitempty"`
+	DatabaseID          string     `json:"databaseId,omitempty"`
+	DatabaseType        string     `json:"databaseType,omitempty"`
+	VolumeBackup        bool       `json:"volumeBackup"`
+	Interval            string     `json:"interval"`
+	MaxBackups          int        `json:"maxBackups"`
+	RetentionDays       int        `json:"retentionDays"`
+	Storage             string     `json:"storage"`
+	Compress            bool       `json:"compress"`
+	Encrypted           bool       `json:"encrypted"`
+	EncryptionAlgorithm string     `json:"encryptionAlgorithm,omitempty"`
+	EncryptionKey       string     `json:"-"`
+	Enabled             bool       `json:"enabled"`
+	IsLocked            bool       `json:"isLocked"`
+	NextRunAt           *time.Time `json:"nextRunAt,omitempty"`
+	CreatedAt           time.Time  `json:"createdAt"`
+	UpdatedAt           time.Time  `json:"updatedAt"`
+}
+
+const backupPolicyColumns = `id::text, server_id::text, COALESCE(app_id, ''), COALESCE(service_id, ''), COALESCE(database_id, ''), COALESCE(database_type, ''), volume_backup, interval, max_backups, retention_days, storage, compress, encrypted, encryption_algorithm, encryption_key, enabled, is_locked, next_run_at, created_at, updated_at, COALESCE(encryption_key_encrypted, '')`
+
+// backupPolicyIntervalPattern mirrors the backup_policies_interval_check
+// constraint (migrations/125_backup_policies.sql): "<N> <unit>", "@daily |
+// @weekly | @monthly | @yearly", or a cron expression.
+var backupPolicyIntervalPattern = regexp.MustCompile(`^(\d+\s+(minute|hour|day|week|month)s?|@(daily|weekly|monthly|yearly)|(\d+|\*)(/\d+)?(\s+\d+|\s+\*){4,5})$`)
+
+// ValidateBackupPolicyInterval rejects interval strings the database CHECK
+// constraint would refuse, so callers can answer 400 instead of 500.
+func ValidateBackupPolicyInterval(interval string) error {
+	if !backupPolicyIntervalPattern.MatchString(strings.TrimSpace(interval)) {
+		return errors.New(`invalid interval: use "<N> <minutes|hours|days|weeks|months>", "@daily|@weekly|@monthly|@yearly", or a cron expression`)
+	}
+	return nil
+}
+
+// ValidateBackupPolicyStorage rejects storage backends the database CHECK
+// constraint would refuse, so callers can answer 400 instead of 500.
+func ValidateBackupPolicyStorage(storage string) error {
+	switch strings.TrimSpace(storage) {
+	case "s3", "local", "sftp", "gcs", "azure":
+		return nil
+	default:
+		return errors.New("invalid storage: must be one of s3, local, sftp, gcs, azure")
+	}
 }
 
 func (s *Store) CreateBackupPolicy(ctx context.Context, p *BackupPolicy) error {
 	if p.ID == "" {
 		p.ID = uuid.NewString()
 	}
-	_, err := s.db.Exec(ctx, `
-		INSERT INTO backup_policies (id, server_id, interval, max_backups, retention_days, storage, enabled, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, now(), now())
-	`, p.ID, p.ServerID, p.Interval, p.MaxBackups, p.RetentionDays, p.Storage, p.Enabled)
+	keyEncrypted, err := s.encryptSecret(p.EncryptionKey, secretAAD("backup_policies", p.ID, "encryption_key"))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
+		INSERT INTO backup_policies (id, server_id, app_id, service_id, database_id, database_type, volume_backup, interval, max_backups, retention_days, storage, compress, encrypted, encryption_algorithm, encryption_key, encryption_key_encrypted, enabled, is_locked, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, '', $15, $16, $17, now(), now())
+	`, p.ID, p.ServerID, nullIfEmpty(p.AppID), nullIfEmpty(p.ServiceID), nullIfEmpty(p.DatabaseID), p.DatabaseType, p.VolumeBackup, p.Interval, p.MaxBackups, p.RetentionDays, p.Storage, p.Compress, p.Encrypted, p.EncryptionAlgorithm, keyEncrypted, p.Enabled, p.IsLocked)
 	return err
 }
 
 func (s *Store) GetBackupPolicy(ctx context.Context, id string) (BackupPolicy, error) {
 	row := s.db.QueryRow(ctx, `
-		SELECT id::text, server_id::text, interval, max_backups, retention_days, storage, enabled, created_at, updated_at
+		SELECT ` + backupPolicyColumns + `
 		FROM backup_policies
 		WHERE id = $1
 	`, id)
 	var p BackupPolicy
-	err := row.Scan(&p.ID, &p.ServerID, &p.Interval, &p.MaxBackups, &p.RetentionDays, &p.Storage, &p.Enabled, &p.CreatedAt, &p.UpdatedAt)
+	err := s.scanBackupPolicy(row, &p)
 	return p, err
 }
 
 func (s *Store) ListBackupPolicies(ctx context.Context, serverID string) ([]BackupPolicy, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, server_id::text, interval, max_backups, retention_days, storage, enabled, created_at, updated_at
+		SELECT ` + backupPolicyColumns + `
 		FROM backup_policies
 		WHERE server_id = $1
 		ORDER BY created_at DESC
@@ -55,7 +100,7 @@ func (s *Store) ListBackupPolicies(ctx context.Context, serverID string) ([]Back
 	var policies []BackupPolicy
 	for rows.Next() {
 		var p BackupPolicy
-		if err := rows.Scan(&p.ID, &p.ServerID, &p.Interval, &p.MaxBackups, &p.RetentionDays, &p.Storage, &p.Enabled, &p.CreatedAt, &p.UpdatedAt); err != nil {
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
 			return nil, err
 		}
 		policies = append(policies, p)
@@ -64,11 +109,15 @@ func (s *Store) ListBackupPolicies(ctx context.Context, serverID string) ([]Back
 }
 
 func (s *Store) UpdateBackupPolicy(ctx context.Context, p *BackupPolicy) error {
-	_, err := s.db.Exec(ctx, `
+	keyEncrypted, err := s.encryptSecret(p.EncryptionKey, secretAAD("backup_policies", p.ID, "encryption_key"))
+	if err != nil {
+		return err
+	}
+	_, err = s.db.Exec(ctx, `
 		UPDATE backup_policies
-		SET interval = $2, max_backups = $3, retention_days = $4, storage = $5, enabled = $6, updated_at = now()
+		SET app_id = $2, service_id = $3, database_id = $4, database_type = $5, volume_backup = $6, interval = $7, max_backups = $8, retention_days = $9, storage = $10, compress = $11, encrypted = $12, encryption_algorithm = $13, encryption_key = '', encryption_key_encrypted = $14, enabled = $15, is_locked = $16, updated_at = now()
 		WHERE id = $1
-	`, p.ID, p.Interval, p.MaxBackups, p.RetentionDays, p.Storage, p.Enabled)
+	`, p.ID, nullIfEmpty(p.AppID), nullIfEmpty(p.ServiceID), nullIfEmpty(p.DatabaseID), p.DatabaseType, p.VolumeBackup, p.Interval, p.MaxBackups, p.RetentionDays, p.Storage, p.Compress, p.Encrypted, p.EncryptionAlgorithm, keyEncrypted, p.Enabled, p.IsLocked)
 	return err
 }
 
@@ -79,9 +128,201 @@ func (s *Store) DeleteBackupPolicy(ctx context.Context, id string) error {
 	return err
 }
 
+func (s *Store) ListAllEnabledBackupPolicies(ctx context.Context) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ` + backupPolicyColumns + `
+		FROM backup_policies
+		WHERE enabled = TRUE AND interval != ''
+		ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+func (s *Store) ListAllEnabledPolicies(ctx context.Context) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ` + backupPolicyColumns + `
+		FROM backup_policies
+		WHERE enabled = TRUE
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+func (s *Store) ListBackupPoliciesByApp(ctx context.Context, appID string) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ` + backupPolicyColumns + `
+		FROM backup_policies
+		WHERE app_id = $1
+		ORDER BY created_at DESC
+	`, appID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+func (s *Store) ListBackupPoliciesByDatabase(ctx context.Context, databaseID string) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ` + backupPolicyColumns + `
+		FROM backup_policies
+		WHERE database_id = $1
+		ORDER BY created_at DESC
+	`, databaseID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+func (s *Store) DeleteOrphanedBackupPolicies(ctx context.Context) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		DELETE FROM backup_policies
+		WHERE (app_id IS NOT NULL AND app_id != ''
+		       AND NOT EXISTS (SELECT 1 FROM applications WHERE id = app_id))
+		   OR (database_id IS NOT NULL AND database_id != ''
+		       AND NOT EXISTS (SELECT 1 FROM server_databases WHERE id = database_id))
+	`)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) ListAllBackupPolicies(ctx context.Context) ([]BackupPolicy, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT ` + backupPolicyColumns + `
+		FROM backup_policies
+		ORDER BY created_at DESC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var policies []BackupPolicy
+	for rows.Next() {
+		var p BackupPolicy
+		if err := s.scanBackupPolicy(rows, &p); err != nil {
+			return nil, err
+		}
+		policies = append(policies, p)
+	}
+	return policies, rows.Err()
+}
+
+type backupPolicyScanner interface {
+	Scan(...any) error
+}
+
+func (s *Store) scanBackupPolicy(row backupPolicyScanner, p *BackupPolicy) error {
+	var keyEncrypted string
+	if err := row.Scan(&p.ID, &p.ServerID, &p.AppID, &p.ServiceID, &p.DatabaseID, &p.DatabaseType, &p.VolumeBackup, &p.Interval, &p.MaxBackups, &p.RetentionDays, &p.Storage, &p.Compress, &p.Encrypted, &p.EncryptionAlgorithm, &p.EncryptionKey, &p.Enabled, &p.IsLocked, &p.NextRunAt, &p.CreatedAt, &p.UpdatedAt, &keyEncrypted); err != nil {
+		return err
+	}
+	key, err := s.decryptSecret(keyEncrypted, p.EncryptionKey, secretAAD("backup_policies", p.ID, "encryption_key"))
+	if err != nil {
+		return err
+	}
+	p.EncryptionKey = key
+	return nil
+}
+
+// UpdateBackupPolicyNextRun persists the computed next run time for a backup
+// policy. The worker gates execution on this value so each policy runs at most
+// once per scheduled occurrence, even across restarts.
+func (s *Store) UpdateBackupPolicyNextRun(ctx context.Context, id string, nextRunAt *time.Time) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE backup_policies
+		SET next_run_at = $2, updated_at = now()
+		WHERE id = $1
+	`, id, nextRunAt)
+	return err
+}
+
+func (s *Store) CleanupBackupPoliciesByApp(ctx context.Context, appID string) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		DELETE FROM backup_policies WHERE app_id = $1
+	`, appID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) CleanupBackupPoliciesByDatabase(ctx context.Context, databaseID string) (int64, error) {
+	tag, err := s.db.Exec(ctx, `
+		DELETE FROM backup_policies WHERE database_id = $1
+	`, databaseID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+func (s *Store) LockBackupPolicy(ctx context.Context, id string, actorID *string) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE backup_policies
+		SET is_locked = TRUE, updated_at = now()
+		WHERE id = $1
+	`, id)
+	return err
+}
+
+func (s *Store) UnlockBackupPolicy(ctx context.Context, id string, actorID *string) error {
+	_, err := s.db.Exec(ctx, `
+		UPDATE backup_policies
+		SET is_locked = FALSE, updated_at = now()
+		WHERE id = $1
+	`, id)
+	return err
+}
+
 func (s *Store) ListExpiredBackups(ctx context.Context) ([]Backup, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE status = 'completed'
 		AND is_locked = FALSE
@@ -95,7 +336,7 @@ func (s *Store) ListExpiredBackups(ctx context.Context) ([]Backup, error) {
 	var backups []Backup
 	for rows.Next() {
 		var b Backup
-		if err := rows.Scan(&b.UUID, &b.ServerID, &b.Name, &b.Checksum, &b.Size, &b.Status, &b.UploadID, &b.CompletedAt, &b.CreatedAt, &b.UpdatedAt, &b.IsLocked, &b.StatusMessage, &b.StatusCallback, &b.RetryCount, &b.LastRetryAt); err != nil {
+		if err := rows.Scan(&b.UUID, &b.ServerID, &b.Name, &b.Checksum, &b.Size, &b.Status, &b.UploadID, &b.CompletedAt, &b.CreatedAt, &b.UpdatedAt, &b.IsLocked, &b.StatusMessage, &b.StatusCallback, &b.RetryCount, &b.LastRetryAt, &b.SourceType, &b.SourceID, &b.DatabaseType, &b.VolumeName, &b.Manifest, &b.StorageReceipt, &b.ChecksumVerified, &b.RestoreCount, &b.LastRestoreAt, &b.Compressed, &b.Encrypted, &b.Nonce); err != nil {
 			return nil, err
 		}
 		backups = append(backups, b)

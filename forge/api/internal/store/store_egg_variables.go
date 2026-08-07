@@ -139,12 +139,94 @@ func validateEggVariableRequest(req EggVariableRequest) error {
 	return validateVariableValue(req.DefaultValue, req.Rules)
 }
 
+func splitValidationRules(rules string) []string {
+	var out []string
+	var cur strings.Builder
+	inRegex := false
+	inBracket := false
+	escaped := false
+	for i := 0; i < len(rules); i++ {
+		c := rules[i]
+		if escaped {
+			cur.WriteByte(c)
+			escaped = false
+			continue
+		}
+		if c == '\\' {
+			cur.WriteByte(c)
+			escaped = true
+			continue
+		}
+		// Detect regex start: "regex:" prefix
+		if !inRegex && cur.Len() >= 6 && cur.String()[cur.Len()-6:] == "regex:" {
+			// Check if next char is '/' starting pattern
+			if c == '/' {
+				inRegex = true
+				cur.WriteByte(c)
+				continue
+			}
+		}
+		if inRegex {
+			cur.WriteByte(c)
+			if c == '[' && !inBracket {
+				inBracket = true
+			} else if c == ']' && inBracket {
+				inBracket = false
+			} else if c == '/' && !inBracket {
+				// Potential end of regex pattern, check for flags or pipe
+				// Look ahead: if next char is '|' or end, it's the end
+				// Also handle flags like /i
+				j := i + 1
+				for j < len(rules) && ((rules[j] >= 'a' && rules[j] <= 'z') || (rules[j] >= 'A' && rules[j] <= 'Z')) {
+					cur.WriteByte(rules[j])
+					j++
+				}
+				i = j - 1
+				inRegex = false
+			}
+			continue
+		}
+		if c == '[' {
+			inBracket = true
+			cur.WriteByte(c)
+		} else if c == ']' {
+			inBracket = false
+			cur.WriteByte(c)
+		} else if c == '|' && !inBracket {
+			out = append(out, cur.String())
+			cur.Reset()
+		} else {
+			cur.WriteByte(c)
+		}
+	}
+	out = append(out, cur.String())
+	return out
+}
+
 func validateVariableValue(value, rules string) error {
-	for _, rule := range strings.Split(rules, "|") {
+	isInteger := false
+	isNullable := false
+	for _, r := range splitValidationRules(rules) {
+		if strings.TrimSpace(r) == "integer" {
+			isInteger = true
+		}
+		if strings.TrimSpace(r) == "nullable" {
+			isNullable = true
+		}
+	}
+	if value == "" && isNullable {
+		return nil
+	}
+	for _, rule := range splitValidationRules(rules) {
 		rule = strings.TrimSpace(rule)
+		if rule == "" {
+			continue
+		}
 		name, arg, _ := strings.Cut(rule, ":")
+		name = strings.TrimSpace(name)
+		arg = strings.TrimSpace(arg)
 		switch name {
-		case "", "nullable", "string":
+		case "", "nullable", "string", "integer", "boolean":
 		case "required":
 			if value == "" {
 				return errors.New("value is required")
@@ -154,18 +236,51 @@ func validateVariableValue(value, rules string) error {
 			if err != nil || limit < 0 {
 				return fmt.Errorf("invalid %s validation rule", name)
 			}
-			length := len([]rune(value))
-			if name == "max" && length > limit {
-				return fmt.Errorf("value must be at most %d characters", limit)
+			if isInteger && value != "" {
+				// Numeric comparison for integer rules
+				intVal, err := strconv.Atoi(value)
+				if err != nil {
+					return errors.New("value must be an integer")
+				}
+				if name == "max" && intVal > limit {
+					return fmt.Errorf("value must be at most %d", limit)
+				}
+				if name == "min" && intVal < limit {
+					return fmt.Errorf("value must be at least %d", limit)
+				}
+			} else {
+				length := len([]rune(value))
+				if name == "max" && length > limit {
+					return fmt.Errorf("value must be at most %d characters", limit)
+				}
+				if name == "min" && length < limit {
+					return fmt.Errorf("value must be at least %d characters", limit)
+				}
 			}
-			if name == "min" && length < limit {
-				return fmt.Errorf("value must be at least %d characters", limit)
+		case "between":
+			parts := strings.Split(arg, ",")
+			if len(parts) != 2 {
+				return fmt.Errorf("invalid between rule")
+			}
+			low, err1 := strconv.Atoi(strings.TrimSpace(parts[0]))
+			high, err2 := strconv.Atoi(strings.TrimSpace(parts[1]))
+			if err1 != nil || err2 != nil {
+				return fmt.Errorf("invalid between rule")
+			}
+			if isInteger {
+				intVal, err := strconv.Atoi(value)
+				if err != nil {
+					return errors.New("value must be an integer")
+				}
+				if intVal < low || intVal > high {
+					return fmt.Errorf("value must be between %d and %d", low, high)
+				}
 			}
 		case "in":
 			allowed := strings.Split(arg, ",")
 			found := false
 			for _, candidate := range allowed {
-				if value == candidate {
+				if value == strings.TrimSpace(candidate) {
 					found = true
 					break
 				}
@@ -174,11 +289,64 @@ func validateVariableValue(value, rules string) error {
 				return errors.New("value is not in the allowed set")
 			}
 		case "regex":
-			pattern, err := regexp.Compile(arg)
+			pattern := arg
+			flags := ""
+			// Strip slash delimiters /pattern/flags
+			if len(pattern) >= 2 && pattern[0] == '/' {
+				// Find closing slash
+				end := -1
+				escaped := false
+				inBracket := false
+				for idx := 1; idx < len(pattern); idx++ {
+					c := pattern[idx]
+					if escaped {
+						escaped = false
+						continue
+					}
+					if c == '\\' {
+						escaped = true
+						continue
+					}
+					if c == '[' && !inBracket {
+						inBracket = true
+					} else if c == ']' && inBracket {
+						inBracket = false
+					} else if c == '/' && !inBracket {
+						end = idx
+						break
+					}
+				}
+				if end != -1 {
+					flags = pattern[end+1:]
+					pattern = pattern[1:end]
+					// Validate trailing flags. Only i (case-insensitive), m
+					// (multiline) and s (dotall) map onto Go inline flags. Any
+					// other trailing character (e.g. the JS-only g/x flags) is not
+					// a valid Go regexp flag, so the rule must be rejected rather
+					// than silently compiling a different pattern.
+					flagPrefix := ""
+					seenFlag := map[byte]bool{}
+					for k := 0; k < len(flags); k++ {
+						switch f := flags[k]; f {
+						case 'i', 'm', 's':
+							if !seenFlag[f] {
+								seenFlag[f] = true
+								flagPrefix += string(f)
+							}
+						default:
+							return errors.New("invalid regex validation rule: unsupported flag")
+						}
+					}
+					if flagPrefix != "" {
+						pattern = "(?" + flagPrefix + ")" + pattern
+					}
+				}
+			}
+			compiled, err := regexp.Compile(pattern)
 			if err != nil {
 				return errors.New("invalid regex validation rule")
 			}
-			if !pattern.MatchString(value) {
+			if !compiled.MatchString(value) {
 				return errors.New("value does not match the required pattern")
 			}
 		default:

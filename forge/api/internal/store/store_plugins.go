@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -124,6 +126,15 @@ func (s *Store) UpdatePluginState(ctx context.Context, id string, installed, ena
 	}
 	updates = append(updates, "updated_at = now()")
 	args = append(args, id)
+	var allowedPluginStateColumns = map[string]bool{
+		"installed": true, "enabled": true, "updated_at": true,
+	}
+	for _, u := range updates {
+		col := strings.SplitN(u, " =", 2)[0]
+		if !allowedPluginStateColumns[col] {
+			return Plugin{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	q := "UPDATE plugins SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		q += ", " + updates[i]
@@ -171,6 +182,16 @@ func (s *Store) UpdatePlugin(ctx context.Context, id string, req UpdatePluginReq
 	}
 	updates = append(updates, "updated_at = now()")
 	args = append(args, id)
+	var allowedPluginColumns = map[string]bool{
+		"name": true, "description": true, "kind": true, "version": true,
+		"manifest": true, "install_path": true, "source": true, "updated_at": true,
+	}
+	for _, u := range updates {
+		col := strings.SplitN(u, " =", 2)[0]
+		if !allowedPluginColumns[col] {
+			return Plugin{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	q := "UPDATE plugins SET " + updates[0]
 	for i := 1; i < len(updates); i++ {
 		q += ", " + updates[i]

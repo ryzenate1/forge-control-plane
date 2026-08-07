@@ -153,3 +153,56 @@ func TestScanDollarTag(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitSQLStatements_BlockCommentsAndQuotedSemicolons(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{
+			name:     "block comment stripped",
+			input:    "/* drop this; it has a semicolon */\nSELECT 1;",
+			expected: []string{"SELECT 1"},
+		},
+		{
+			name:     "inline block comment",
+			input:    "SELECT 1 /* inline; comment */;",
+			expected: []string{"SELECT 1"},
+		},
+		{
+			name:     "comment openers inside literals are data",
+			input:    "SELECT '-- not a comment', '/* not a comment; */';",
+			expected: []string{"SELECT '-- not a comment', '/* not a comment; */'"},
+		},
+		{
+			name:     "semicolon inside double-quoted identifier does not split",
+			input:    `COMMENT ON COLUMN t.c IS "ratio;2024"; SELECT 1;`,
+			expected: []string{`COMMENT ON COLUMN t.c IS "ratio;2024"`, "SELECT 1"},
+		},
+		{
+			name:     "comment opener inside double quotes is data",
+			input:    `SELECT "weird--name", "x/*y" FROM t;`,
+			expected: []string{`SELECT "weird--name", "x/*y" FROM t`},
+		},
+		{
+			name:     "multiline block comment keeps statement intact",
+			input:    "/* line one\nline two; still comment\n*/\nSELECT 1;",
+			expected: []string{"SELECT 1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := splitSQLStatements(tt.input)
+			if len(got) != len(tt.expected) {
+				t.Fatalf("expected %d statements, got %d:\n%v", len(tt.expected), len(got), got)
+			}
+			for i := range got {
+				if got[i] != tt.expected[i] {
+					t.Errorf("statement %d mismatch:\nexpected: %q\ngot:      %q", i, tt.expected[i], got[i])
+				}
+			}
+		})
+	}
+}

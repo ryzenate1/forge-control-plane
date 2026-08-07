@@ -10,7 +10,9 @@ import (
 func (s *Store) ListBackups(ctx context.Context, serverID string, page, perPage int) ([]Backup, error) {
 	offset := (page - 1) * perPage
 	rows, err := s.db.Query(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE server_id = $1
 		ORDER BY created_at DESC
@@ -23,7 +25,7 @@ func (s *Store) ListBackups(ctx context.Context, serverID string, page, perPage 
 	backups := []Backup{}
 	for rows.Next() {
 		var backup Backup
-		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt); err != nil {
+		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce); err != nil {
 			return nil, err
 		}
 		backups = append(backups, backup)
@@ -60,8 +62,12 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 		req.Status = "completed"
 	}
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO backups (uuid, server_id, name, checksum, size, status, upload_id, completed_at, updated_at, is_locked, status_message, status_callback, retry_count)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), FALSE, $9, $10, COALESCE($11, 0))
+		INSERT INTO backups (uuid, server_id, name, checksum, size, status, upload_id, completed_at, updated_at, is_locked, status_message, status_callback, retry_count,
+		                     source_type, source_id, database_type, volume_name, manifest, storage_receipt, checksum_verified, restore_count, last_restore_at,
+		                     compressed, encrypted, nonce)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now(), FALSE, $9, $10, COALESCE($11, 0),
+		        $12, $13, $14, $15, $16, $17, $18, $19, $20,
+		        $21, $22, $23)
 		ON CONFLICT (server_id, name) DO UPDATE SET
 			checksum = EXCLUDED.checksum,
 			size = EXCLUDED.size,
@@ -71,8 +77,22 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 			updated_at = now(),
 			status_message = EXCLUDED.status_message,
 			status_callback = EXCLUDED.status_callback,
-			retry_count = EXCLUDED.retry_count
-	`, req.UUID, serverID, req.Name, req.Checksum, req.Size, req.Status, req.UploadID, req.CompletedAt, req.StatusMessage, req.StatusCallback, req.RetryCount)
+			retry_count = EXCLUDED.retry_count,
+			source_type = EXCLUDED.source_type,
+			source_id = EXCLUDED.source_id,
+			database_type = EXCLUDED.database_type,
+			volume_name = EXCLUDED.volume_name,
+			manifest = EXCLUDED.manifest,
+			storage_receipt = EXCLUDED.storage_receipt,
+			checksum_verified = EXCLUDED.checksum_verified,
+			restore_count = EXCLUDED.restore_count,
+			last_restore_at = EXCLUDED.last_restore_at,
+			compressed = EXCLUDED.compressed,
+			encrypted = EXCLUDED.encrypted,
+			nonce = EXCLUDED.nonce
+	`, req.UUID, serverID, req.Name, req.Checksum, req.Size, req.Status, req.UploadID, req.CompletedAt, req.StatusMessage, req.StatusCallback, req.RetryCount,
+		req.SourceType, req.SourceID, req.DatabaseType, req.VolumeName, jsonOrNull(req.Manifest), jsonOrNull(req.StorageReceipt), req.ChecksumVerified, req.RestoreCount, req.LastRestoreAt,
+		req.Compressed, req.Encrypted, req.Nonce)
 	if err != nil {
 		return Backup{}, err
 	}
@@ -83,10 +103,12 @@ func (s *Store) UpsertBackup(ctx context.Context, serverID string, req UpsertBac
 func (s *Store) GetBackupByName(ctx context.Context, serverID, name string) (Backup, error) {
 	var backup Backup
 	err := s.db.QueryRow(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE server_id = $1 AND name = $2
-	`, serverID, name).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt)
+	`, serverID, name).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce)
 	return backup, err
 }
 
@@ -106,10 +128,15 @@ func (s *Store) MarkBackupStatus(ctx context.Context, serverID, name, status str
 }
 
 func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID *string) error {
-	// Check if backup is locked before deletion
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	var isLocked bool
-	err := s.db.QueryRow(ctx, `
-		SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2
+	err = tx.QueryRow(ctx, `
+		SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2 FOR UPDATE
 	`, serverID, name).Scan(&isLocked)
 	if err != nil {
 		return errors.New("backup not found")
@@ -118,7 +145,7 @@ func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID
 		return errors.New("backup is locked and cannot be deleted")
 	}
 
-	commandTag, err := s.db.Exec(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE server_id = $1 AND name = $2
 	`, serverID, name)
@@ -128,7 +155,10 @@ func (s *Store) DeleteBackup(ctx context.Context, serverID, name string, actorID
 	if commandTag.RowsAffected() == 0 {
 		return errors.New("backup not found")
 	}
-	return s.AppendAudit(ctx, actorID, "backup deleted", "server", &serverID, mustAuditJSON(map[string]any{"name": name}))
+	if err := s.AppendAudit(ctx, actorID, "backup deleted", "server", &serverID, mustAuditJSON(map[string]any{"name": name})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) LockBackup(ctx context.Context, serverID, name string, actorID *string) error {
@@ -166,8 +196,14 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 		return errors.New("backup name is required")
 	}
 
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
 	var isLocked bool
-	err := s.db.QueryRow(ctx, `SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2`, serverID, oldName).Scan(&isLocked)
+	err = tx.QueryRow(ctx, `SELECT is_locked FROM backups WHERE server_id = $1 AND name = $2 FOR UPDATE`, serverID, oldName).Scan(&isLocked)
 	if err != nil {
 		return errors.New("backup not found")
 	}
@@ -176,7 +212,7 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 	}
 
 	var exists bool
-	err = s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM backups WHERE server_id = $1 AND name = $2)`, serverID, newName).Scan(&exists)
+	err = tx.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM backups WHERE server_id = $1 AND name = $2)`, serverID, newName).Scan(&exists)
 	if err != nil {
 		return err
 	}
@@ -184,7 +220,7 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 		return errors.New("a backup with the new name already exists")
 	}
 
-	commandTag, err := s.db.Exec(ctx, `
+	commandTag, err := tx.Exec(ctx, `
 		UPDATE backups
 		SET name = $3, updated_at = now()
 		WHERE server_id = $1 AND name = $2
@@ -195,18 +231,49 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 	if commandTag.RowsAffected() == 0 {
 		return errors.New("backup not found")
 	}
-	return s.AppendAudit(ctx, actorID, "backup renamed", "server", &serverID, mustAuditJSON(map[string]any{"from": oldName, "to": newName}))
+	if err := s.AppendAudit(ctx, actorID, "backup renamed", "server", &serverID, mustAuditJSON(map[string]any{"from": oldName, "to": newName})); err != nil {
+		return err
+	}
+	return tx.Commit(ctx)
 }
 
-// CleanupOldBackups removes backups that exceed the retention policy
-// This function respects backup locking and server-specific limits
+// CleanupOldBackups removes backups that exceed the global retention policy and
+// reaps orphaned partial uploads. It respects backup locking (only prunes rows
+// where is_locked = FALSE) and only touches completed backups. The sweep runs in
+// a transaction so the advisory lock is scoped to it and cannot leak across
+// sessions. BK-06 union semantics are applied per row.
 func (s *Store) CleanupOldBackups(ctx context.Context, retentionDays int, autoCleanup bool) (int, error) {
 	if !autoCleanup || retentionDays <= 0 {
 		return 0, nil
 	}
 
-	// Delete old backups that are not locked and exceed retention period
-	commandTag, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize the prune across control-plane replicas with a transaction-scoped
+	// pg_advisory_xact_lock so concurrent mark-sweep passes cannot interleave.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('backup_prune:global', 0))`); err != nil {
+		return 0, err
+	}
+
+	// GC reaper first: drop orphaned .partial uploads older than 24h before the
+	// main retention sweep so interrupted uploads do not consume retention budget.
+	partialTag, err := tx.Exec(ctx, `
+		DELETE FROM backups
+		WHERE name LIKE '%.partial'
+		AND is_locked = FALSE
+		AND status = 'completed'
+		AND created_at < now() - interval '24 hours'
+	`)
+	if err != nil {
+		return 0, err
+	}
+	reaped := int(partialTag.RowsAffected())
+
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE is_locked = FALSE
 		AND created_at < now() - interval '1 day' * $1
@@ -215,34 +282,52 @@ func (s *Store) CleanupOldBackups(ctx context.Context, retentionDays int, autoCl
 	if err != nil {
 		return 0, err
 	}
+	deleted := int(commandTag.RowsAffected())
 
-	return int(commandTag.RowsAffected()), nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return reaped + deleted, nil
 }
 
-// CleanupOldBackupsForServer removes old backups for a specific server
-// This function respects backup locking and server-specific limits
+// CleanupOldBackupsForServer reaps this server's orphaned partial uploads and
+// applies the per-server RetentionEngine OR prune (older than retention OR beyond
+// the backup limit). Only completed, unlocked backups are eligible.
 func (s *Store) CleanupOldBackupsForServer(ctx context.Context, serverID string, retentionDays int, backupLimit int) (int, error) {
-	// First, get count of completed backups
-	count, err := s.CountCompletedBackups(ctx, serverID)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
+	defer tx.Rollback(ctx)
 
-	// If under limit, no cleanup needed
-	if backupLimit > 0 && count <= backupLimit {
-		return 0, nil
+	// Serialize this server's prune across replicas with a transaction-scoped
+	// pg_advisory_xact_lock so concurrent mark-sweep passes cannot interleave.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('backup_prune:'||$1, 0))`, serverID); err != nil {
+		return 0, err
 	}
 
-	// Delete oldest unlocked backups that exceed retention or limit
-	// Prioritize deleting oldest non-locked backups
-	commandTag, err := s.db.Exec(ctx, `
+	// GC reaper first: drop this server's orphaned .partial uploads older than 24h.
+	partialTag, err := tx.Exec(ctx, `
+		DELETE FROM backups
+		WHERE server_id = $1
+		AND name LIKE '%.partial'
+		AND is_locked = FALSE
+		AND status = 'completed'
+		AND created_at < now() - interval '24 hours'
+	`, serverID)
+	if err != nil {
+		return 0, err
+	}
+	reaped := int(partialTag.RowsAffected())
+
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE server_id = $1
 		AND is_locked = FALSE
 		AND status = 'completed'
 		AND (
-			-- Delete if older than retention days
-			created_at < now() - interval '1 day' * $2
+			-- RetentionEngine OR semantics: delete when EITHER branch matches
+			($2 > 0 AND created_at < now() - interval '1 day' * $2)
 			OR
 			-- Or if we're over the limit, delete oldest (except locked ones)
 			uuid IN (
@@ -258,8 +343,12 @@ func (s *Store) CleanupOldBackupsForServer(ctx context.Context, serverID string,
 	if err != nil {
 		return 0, err
 	}
+	deleted := int(commandTag.RowsAffected())
 
-	return int(commandTag.RowsAffected()), nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return reaped + deleted, nil
 }
 
 // UpdateBackupStatusWithCallback updates backup status with callback URL and message
@@ -325,7 +414,9 @@ func (s *Store) FailStaleBackups(ctx context.Context, pruneAgeMinutes int) (int6
 // GetBackupsByStatus retrieves backups with specific status (for callback processing)
 func (s *Store) GetBackupsByStatus(ctx context.Context, status string) ([]Backup, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at,
+		       compressed, encrypted, COALESCE(nonce, '')
 		FROM backups
 		WHERE status = $1 AND status_callback IS NOT NULL
 		ORDER BY created_at ASC
@@ -337,10 +428,18 @@ func (s *Store) GetBackupsByStatus(ctx context.Context, status string) ([]Backup
 	backups := []Backup{}
 	for rows.Next() {
 		var backup Backup
-		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt); err != nil {
+		if err := rows.Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt, &backup.Compressed, &backup.Encrypted, &backup.Nonce); err != nil {
 			return nil, err
 		}
 		backups = append(backups, backup)
 	}
 	return backups, rows.Err()
+}
+
+// jsonOrNull marshals data to JSON bytes, returning nil (SQL NULL) for empty/nil input
+func jsonOrNull(data []byte) any {
+	if len(data) == 0 {
+		return nil
+	}
+	return data
 }

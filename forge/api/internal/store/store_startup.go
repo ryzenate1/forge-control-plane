@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -91,7 +90,7 @@ func (s *Store) UpdateServerStartupVariable(ctx context.Context, serverID, key, 
 	if _, err := tx.Exec(ctx, `UPDATE servers SET config_sync_pending = true, config_sync_error = NULL, updated_at = now() WHERE id = $1`, serverID); err != nil {
 		return StartupDetails{}, err
 	}
-	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (id, actor_id, action, target_type, target_id, metadata) VALUES ($4, $1, 'server startup variable updated', 'server', $2, $3::jsonb)`, actorID, serverID, fmt.Sprintf(`{"variable":"%s"}`, key), uuid.NewString()); err != nil {
+	if _, err := tx.Exec(ctx, `INSERT INTO audit_events (id, actor_id, action, target_type, target_id, metadata) VALUES ($4, $1, 'server startup variable updated', 'server', $2, $3::jsonb)`, actorID, serverID, mustAuditJSON(map[string]any{"variable": key}), uuid.NewString()); err != nil {
 		return StartupDetails{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {

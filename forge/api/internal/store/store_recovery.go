@@ -154,6 +154,41 @@ func (s *Store) ListRecoveryItems(ctx context.Context, planID string) ([]Recover
 	return items, rows.Err()
 }
 
+func (s *Store) ListRecoveryItemsByStatus(ctx context.Context, statuses ...string) ([]RecoveryItem, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, plan_id::text, server_id::text, source_node_id::text,
+		       target_node_id::text, reservation_id::text, migration_id::text,
+		       source_backup_name, source_backup_checksum, source_backup_size, status::text, reason, updated_at
+		FROM recovery_items
+		WHERE status::text = ANY($1)
+		ORDER BY updated_at, id
+	`, statuses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	items := []RecoveryItem{}
+	for rows.Next() {
+		var item RecoveryItem
+		var targetNodeID, reservationID, migrationID sql.NullString
+		if err := rows.Scan(&item.ID, &item.PlanID, &item.ServerID, &item.SourceNodeID, &targetNodeID, &reservationID, &migrationID, &item.SourceBackupName, &item.SourceBackupChecksum, &item.SourceBackupSize, &item.Status, &item.Reason, &item.UpdatedAt); err != nil {
+			return nil, err
+		}
+		if targetNodeID.Valid {
+			item.TargetNodeID = targetNodeID.String
+		}
+		if reservationID.Valid {
+			item.ReservationID = reservationID.String
+		}
+		if migrationID.Valid {
+			item.MigrationID = migrationID.String
+		}
+		items = append(items, item)
+	}
+	return items, rows.Err()
+}
+
 // StartRecoveryPlan atomically claims a planned recovery plan and its planned
 // items for execution. A concurrent caller observes no updated rows and gets a
 // state-specific error instead of starting the same migrations twice.
@@ -241,12 +276,13 @@ func (s *Store) UpdateRecoveryItemsForPlanStatus(ctx context.Context, planID str
 func (s *Store) LatestVerifiedRecoveryBackup(ctx context.Context, serverID string) (Backup, error) {
 	var backup Backup
 	err := s.db.QueryRow(ctx, `
-		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at
+		SELECT uuid::text, server_id::text, name, checksum, size, status, upload_id, completed_at, created_at, updated_at, is_locked, status_message, status_callback, retry_count, last_retry_at,
+		       COALESCE(source_type, ''), COALESCE(source_id, ''), COALESCE(database_type, ''), COALESCE(volume_name, ''), COALESCE(manifest, '{}'), COALESCE(storage_receipt, '{}'), checksum_verified, restore_count, last_restore_at
 		FROM backups
 		WHERE server_id = $1 AND status = 'completed' AND checksum <> '' AND size > 0
 		ORDER BY completed_at DESC NULLS LAST, created_at DESC
 		LIMIT 1
-	`, serverID).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt)
+	`, serverID).Scan(&backup.UUID, &backup.ServerID, &backup.Name, &backup.Checksum, &backup.Size, &backup.Status, &backup.UploadID, &backup.CompletedAt, &backup.CreatedAt, &backup.UpdatedAt, &backup.IsLocked, &backup.StatusMessage, &backup.StatusCallback, &backup.RetryCount, &backup.LastRetryAt, &backup.SourceType, &backup.SourceID, &backup.DatabaseType, &backup.VolumeName, &backup.Manifest, &backup.StorageReceipt, &backup.ChecksumVerified, &backup.RestoreCount, &backup.LastRestoreAt)
 	return backup, err
 }
 

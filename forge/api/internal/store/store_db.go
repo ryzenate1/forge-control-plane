@@ -3,8 +3,14 @@ package store
 import (
 	"context"
 
+	"gamepanel/forge/internal/secrets"
+
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+func NewWithPool(pool *pgxpool.Pool) *Store {
+	return &Store{db: pool, secrets: &secrets.Keyring{}}
+}
 
 // GetDB exposes the underlying pgx connection pool. Use sparingly — most
 // code should go through a dedicated store method. It's intended for the

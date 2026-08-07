@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -70,8 +71,14 @@ func (s *Store) CreateOAuthClient(ctx context.Context, req CreateOAuthClientRequ
 	if err != nil {
 		return CreateOAuthClientResult{}, err
 	}
-	clientID := newRandomToken(16)
-	secret := newRandomToken(32)
+	clientID, err := newRandomToken(16)
+	if err != nil {
+		return CreateOAuthClientResult{}, fmt.Errorf("generate client id: %w", err)
+	}
+	secret, err := newRandomToken(32)
+	if err != nil {
+		return CreateOAuthClientResult{}, fmt.Errorf("generate client secret: %w", err)
+	}
 	hash, err := bcrypt.GenerateFromPassword([]byte(secret), BcryptCost())
 	if err != nil {
 		return CreateOAuthClientResult{}, err
@@ -193,8 +200,10 @@ func (s *Store) RevokeJWT(ctx context.Context, jti string, expiresAt time.Time) 
 	return err
 }
 
-func newRandomToken(n int) string {
+func newRandomToken(n int) (string, error) {
 	b := make([]byte, n)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }

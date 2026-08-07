@@ -1,93 +1,86 @@
 package store
 
 import (
+	"context"
 	"testing"
 )
 
-func TestNodeHeartbeatStateConstants(t *testing.T) {
-	states := []NodeHeartbeatState{
-		NodeHeartbeatStateHealthy,
-		NodeHeartbeatStateSuspected,
-		NodeHeartbeatStateUnreachable,
-		NodeHeartbeatStateOffline,
-		NodeHeartbeatStateRecovering,
+func TestSetNodeHeartbeatClassification_StateTransition(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestStore(t, ctx)
+	nodeID := createTestNode(t, ctx, s, "hb")
+
+	previous, updated, err := s.SetNodeHeartbeatClassification(ctx, nodeID, NodeHeartbeatStateUnreachable, NodeActualStateDegraded, 0, "heartbeat exceeded offline threshold")
+	if err != nil {
+		t.Fatal(err)
 	}
-	expected := []string{"healthy", "suspected", "unreachable", "offline", "recovering"}
-	for i, state := range states {
-		if string(state) != expected[i] {
-			t.Fatalf("NodeHeartbeatState %d = %q, want %q", i, string(state), expected[i])
-		}
+	if updated.HeartbeatState != string(NodeHeartbeatStateUnreachable) {
+		t.Fatalf("heartbeat_state = %q, want %q", updated.HeartbeatState, NodeHeartbeatStateUnreachable)
+	}
+	if updated.ActualState != string(NodeActualStateDegraded) {
+		t.Fatalf("actual_state = %q, want %q", updated.ActualState, NodeActualStateDegraded)
+	}
+	if updated.HeartbeatRecoveryCount != 0 {
+		t.Fatalf("recovery count = %d, want 0", updated.HeartbeatRecoveryCount)
+	}
+	if previous.HeartbeatState == updated.HeartbeatState {
+		t.Fatal("previous and updated heartbeat states must differ for a transition")
+	}
+
+	// Re-classifying with the same state must not record a duplicate transition.
+	if _, _, err := s.SetNodeHeartbeatClassification(ctx, nodeID, NodeHeartbeatStateUnreachable, NodeActualStateDegraded, 1, "same state again"); err != nil {
+		t.Fatal(err)
+	}
+	var transitions int
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM state_transitions WHERE resource_id = $1 AND resource_type = 'node'`, nodeID).Scan(&transitions); err != nil {
+		t.Fatal(err)
+	}
+	if transitions != 2 {
+		t.Fatalf("expected 2 state_transitions rows (heartbeat + actual), got %d", transitions)
+	}
+
+	// Classifying an unknown node must fail.
+	if _, _, err := s.SetNodeHeartbeatClassification(ctx, "no-such-node", NodeHeartbeatStateHealthy, NodeActualStateOnline, 0, "test"); err == nil {
+		t.Fatal("expected error for unknown node")
 	}
 }
 
-func TestNodeActualStateConstants(t *testing.T) {
-	states := []NodeActualState{
-		NodeActualStateOnline,
-		NodeActualStateDegraded,
-		NodeActualStateOffline,
+func TestSetNodeHeartbeatClassification_RecoveryCount(t *testing.T) {
+	ctx := context.Background()
+	s := setupTestStore(t, ctx)
+	nodeID := createTestNode(t, ctx, s, "hb-rec")
+
+	_, updated, err := s.SetNodeHeartbeatClassification(ctx, nodeID, NodeHeartbeatStateRecovering, NodeActualStateReconciling, 3, "recovery in progress")
+	if err != nil {
+		t.Fatal(err)
 	}
-	expected := []string{"online", "degraded", "offline"}
-	for i, state := range states {
-		if string(state) != expected[i] {
-			t.Fatalf("NodeActualState %d = %q, want %q", i, string(state), expected[i])
-		}
+	if updated.HeartbeatRecoveryCount != 3 {
+		t.Fatalf("recovery count = %d, want 3", updated.HeartbeatRecoveryCount)
+	}
+	if updated.HeartbeatState != string(NodeHeartbeatStateRecovering) {
+		t.Fatalf("heartbeat_state = %q, want %q", updated.HeartbeatState, NodeHeartbeatStateRecovering)
+	}
+	if updated.ActualState != string(NodeActualStateReconciling) {
+		t.Fatalf("actual_state = %q, want %q", updated.ActualState, NodeActualStateReconciling)
 	}
 }
 
-func TestNodeHeartbeatStateStringValues(t *testing.T) {
-	if v := NodeHeartbeatState("healthy"); v != NodeHeartbeatStateHealthy {
-		t.Fatalf("expected healthy, got %s", v)
+func TestHeartbeatEnumsSupportReconciling(t *testing.T) {
+	s := migrationTestStore(t, false)
+	var count int
+	err := s.db.QueryRow(context.Background(), `
+		SELECT COUNT(*)
+			FROM pg_enum e
+			JOIN pg_type t ON t.oid = e.enumtypid
+			JOIN pg_namespace n ON n.oid = t.typnamespace
+			WHERE t.typname IN ('node_heartbeat_state', 'node_actual_state')
+			  AND e.enumlabel = 'reconciling'
+			  AND n.nspname = current_schema()
+		`).Scan(&count)
+	if err != nil {
+		t.Fatalf("query heartbeat enums: %v", err)
 	}
-	if v := NodeHeartbeatState("suspected"); v != NodeHeartbeatStateSuspected {
-		t.Fatalf("expected suspected, got %s", v)
-	}
-	if v := NodeHeartbeatState("unreachable"); v != NodeHeartbeatStateUnreachable {
-		t.Fatalf("expected unreachable, got %s", v)
-	}
-	if v := NodeHeartbeatState("offline"); v != NodeHeartbeatStateOffline {
-		t.Fatalf("expected offline, got %s", v)
-	}
-	if v := NodeHeartbeatState("recovering"); v != NodeHeartbeatStateRecovering {
-		t.Fatalf("expected recovering, got %s", v)
-	}
-}
-
-func TestClassificationStateEnums(t *testing.T) {
-	heartbeatCount := 5
-	heartbeatStates := []NodeHeartbeatState{
-		NodeHeartbeatStateHealthy,
-		NodeHeartbeatStateSuspected,
-		NodeHeartbeatStateUnreachable,
-		NodeHeartbeatStateOffline,
-		NodeHeartbeatStateRecovering,
-	}
-	if len(heartbeatStates) != heartbeatCount {
-		t.Fatalf("expected %d heartbeat states, got %d", heartbeatCount, len(heartbeatStates))
-	}
-
-	actualCount := 3
-	actualStates := []NodeActualState{
-		NodeActualStateOnline,
-		NodeActualStateDegraded,
-		NodeActualStateOffline,
-	}
-	if len(actualStates) != actualCount {
-		t.Fatalf("expected %d actual states, got %d", actualCount, len(actualStates))
-	}
-
-	distinctHeartbeat := map[string]bool{}
-	for _, s := range heartbeatStates {
-		if distinctHeartbeat[string(s)] {
-			t.Fatalf("duplicate heartbeat state: %s", s)
-		}
-		distinctHeartbeat[string(s)] = true
-	}
-
-	distinctActual := map[string]bool{}
-	for _, s := range actualStates {
-		if distinctActual[string(s)] {
-			t.Fatalf("duplicate actual state: %s", s)
-		}
-		distinctActual[string(s)] = true
+	if count != 2 {
+		t.Fatalf("expected both heartbeat enums to support reconciling, got %d", count)
 	}
 }

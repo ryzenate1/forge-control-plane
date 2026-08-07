@@ -135,4 +135,30 @@ func (s *Store) UserRoles(ctx context.Context, userID string) ([]string, error) 
 	return out, rows.Err()
 }
 
+// ListRoleRulesByRoleKey returns the allow/deny rules configured for a role,
+// looked up by the role's key. Rules are consumed by requireRole to enforce
+// per-route access for custom (non-admin, non-user) roles.
+func (s *Store) ListRoleRulesByRoleKey(ctx context.Context, roleKey string) ([]RoleRule, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT rr.id::text, rr.role_id::text, rr.rule_key, rr.effect, rr.created_at
+		FROM role_rules rr
+		JOIN roles r ON r.id = rr.role_id
+		WHERE r.key = $1
+		ORDER BY rr.created_at
+	`, roleKey)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []RoleRule{}
+	for rows.Next() {
+		var rr RoleRule
+		if err := rows.Scan(&rr.ID, &rr.RoleID, &rr.RuleKey, &rr.Effect, &rr.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, rr)
+	}
+	return out, rows.Err()
+}
+
 func uuidString() string { return uuid.NewString() }

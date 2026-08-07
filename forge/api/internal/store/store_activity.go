@@ -71,6 +71,50 @@ func (s *Store) ListActivityLogs(ctx context.Context, subjectType *string, subje
 	return logs, rows.Err()
 }
 
+// ---------- Activity Event (activity_events table) ----------
+
+type ActivityEvent struct {
+	ID          string          `json:"id"`
+	Event       string          `json:"event"`
+	Description *string         `json:"description,omitempty"`
+	ActorID     *string         `json:"actorId,omitempty"`
+	ActorEmail  *string         `json:"actorEmail,omitempty"`
+	ActorType   string          `json:"actorType"`
+	IP          *string         `json:"ip,omitempty"`
+	UserAgent   *string         `json:"userAgent,omitempty"`
+	SubjectType *string         `json:"subjectType,omitempty"`
+	SubjectID   *string         `json:"subjectId,omitempty"`
+	SubjectName *string         `json:"subjectName,omitempty"`
+	Properties  json.RawMessage `json:"properties"`
+	Level       string          `json:"level"`
+	Source      string          `json:"source"`
+	Timestamp   time.Time       `json:"timestamp"`
+	ExpiresAt   *time.Time      `json:"expiresAt,omitempty"`
+}
+
+func (s *Store) CreateActivityEvent(ctx context.Context, event ActivityEvent) error {
+	if event.ID == "" {
+		event.ID = uuid.NewString()
+	}
+	if event.Properties == nil {
+		event.Properties = json.RawMessage("{}")
+	}
+	if event.Level == "" {
+		event.Level = "info"
+	}
+	if event.Source == "" {
+		event.Source = "api"
+	}
+	if event.ActorType == "" {
+		event.ActorType = "user"
+	}
+	_, err := s.db.Exec(ctx, `
+		INSERT INTO activity_events (id, event, description, actor_id, actor_email, actor_type, ip, user_agent, subject_type, subject_id, subject_name, properties, level, source, timestamp, expires_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+	`, event.ID, event.Event, event.Description, event.ActorID, event.ActorEmail, event.ActorType, event.IP, event.UserAgent, event.SubjectType, event.SubjectID, event.SubjectName, event.Properties, event.Level, event.Source, event.Timestamp, event.ExpiresAt)
+	return err
+}
+
 func (s *Store) ListUserActivityLogs(ctx context.Context, userID string, limit int) ([]ActivityLog, error) {
 	if limit <= 0 || limit > 100 {
 		limit = 50

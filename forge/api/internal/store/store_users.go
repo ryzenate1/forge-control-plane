@@ -24,11 +24,26 @@ var (
 	bcryptCostOnce sync.Once
 )
 
+// defaultBcryptCost is the fallback hashing cost used when BCRYPT_COST is not
+// set. 12 is a widely-recommended balance of security and per-request latency
+// for 2026-era hardware; higher values (e.g. 14) should only be adopted after
+// load testing since cost increases hashing time exponentially.
+const defaultBcryptCost = 12
+
 // BcryptCost returns the configurable bcrypt hashing cost.
-// The cost can be set via the BCRYPT_COST environment variable (default: 10, min: 4, max: 31).
+// The cost can be set via the BCRYPT_COST environment variable (default: 12, min: 4, max: 31).
+//
+// The resolved cost is cached via sync.Once because it must stay constant for
+// the lifetime of the process: mixing costs across concurrently-generated
+// hashes is harmless for correctness (bcrypt hashes are self-describing), but
+// re-reading the env var on every call would add needless overhead to a
+// function invoked on every login/password-change. The env var is still read
+// on first use, before the Once fires, so a value set at process startup (or
+// via the environment before the first call) is always honored; changing it
+// afterwards requires a restart.
 func BcryptCost() int {
 	bcryptCostOnce.Do(func() {
-		bcryptCost = bcrypt.DefaultCost
+		bcryptCost = defaultBcryptCost
 		if v := os.Getenv("BCRYPT_COST"); v != "" {
 			if n, err := strconv.Atoi(v); err == nil && n >= bcrypt.MinCost && n <= bcrypt.MaxCost {
 				bcryptCost = n
@@ -244,29 +259,63 @@ func (s *Store) UserCanAccessServer(ctx context.Context, serverID, userID, role,
 		return true, nil
 	}
 	var ownerID string
-	if err := s.db.QueryRow(ctx, `SELECT owner_id::text FROM servers WHERE id = $1`, serverID).Scan(&ownerID); err != nil {
+	var orgID *string
+	if err := s.db.QueryRow(ctx, `SELECT owner_id::text, org_id::text FROM servers WHERE id = $1`, serverID).Scan(&ownerID, &orgID); err != nil {
 		return false, err
+	}
+	hasServerGrant := false
+	if ownerID == userID {
+		hasServerGrant = true
+	} else {
+		var raw []byte
+		if err := s.db.QueryRow(ctx, `
+			SELECT permissions
+			FROM subusers
+			WHERE server_id = $1 AND user_id = $2
+		`, serverID, userID).Scan(&raw); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
+		var permissions []string
+		_ = json.Unmarshal(raw, &permissions)
+		if permission == "" {
+			hasServerGrant = true
+		} else {
+			hasServerGrant = HasPermission(permissions, permission)
+		}
+		if !hasServerGrant {
+			return false, nil
+		}
+	}
+	if permission != "" && ownerID == userID {
+		// Owners hold every permission on their own servers; no subuser-row
+		// check is needed. Fall through to the org check below.
+	}
+	// Tenancy: when the server is scoped to an org, the caller must also be
+	// a member of that org (owner, subuser, or otherwise). Both the server
+	// grant above AND org membership are required. Legacy servers with NULL
+	// org_id skip the org check. Admins bypass via the early return. Fail
+	// closed on membership lookup errors.
+	if orgID != nil && strings.TrimSpace(*orgID) != "" {
+		member, err := s.UserIsOrgMember(ctx, *orgID, userID)
+		if err != nil {
+			return false, err
+		}
+		if !member {
+			return false, nil
+		}
 	}
 	if ownerID == userID {
 		return true, nil
 	}
-	var raw []byte
-	if err := s.db.QueryRow(ctx, `
-		SELECT permissions
-		FROM subusers
-		WHERE server_id = $1 AND user_id = $2
-	`, serverID, userID).Scan(&raw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	var permissions []string
-	_ = json.Unmarshal(raw, &permissions)
 	if permission == "" {
-		return true, nil
+		return hasServerGrant, nil
 	}
-	return HasPermission(permissions, permission), nil
+	// Re-check the subuser permission for the non-owner path (already
+	// verified above); reaching here means the grant held.
+	return hasServerGrant, nil
 }
 
 func (s *Store) DeleteServerSubuser(ctx context.Context, serverID, userID string, actorID *string) error {
@@ -497,43 +546,59 @@ func (s *Store) UpdateUser(ctx context.Context, userID string, req UpdateUserReq
 	defer tx.Rollback(ctx)
 
 	// Update password if provided. Also write any resource-limit changes.
-	limitSets := []string{}
-	limitArgs := []any{}
+	// Limit placeholders are numbered after the fixed leading args
+	// (email/hash/role); numbering them from $1 collided with those args
+	// and every limit update failed with "inconsistent types deduced".
+	type limitUpdate struct {
+		column string
+		value  any
+	}
+	allowedUserLimitColumns := map[string]bool{
+		"cpu_limit": true, "memory_mb_limit": true, "disk_mb_limit": true,
+		"backup_limit": true, "database_limit": true, "allocation_limit": true,
+		"subuser_limit": true, "schedule_limit": true, "server_limit": true,
+	}
+	limits := []limitUpdate{}
 	if req.CPULimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("cpu_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.CPULimit)
+		limits = append(limits, limitUpdate{"cpu_limit", *req.CPULimit})
 	}
 	if req.MemoryMBLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("memory_mb_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.MemoryMBLimit)
+		limits = append(limits, limitUpdate{"memory_mb_limit", *req.MemoryMBLimit})
 	}
 	if req.DiskMBLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("disk_mb_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.DiskMBLimit)
+		limits = append(limits, limitUpdate{"disk_mb_limit", *req.DiskMBLimit})
 	}
 	if req.BackupLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("backup_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.BackupLimit)
+		limits = append(limits, limitUpdate{"backup_limit", *req.BackupLimit})
 	}
 	if req.DatabaseLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("database_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.DatabaseLimit)
+		limits = append(limits, limitUpdate{"database_limit", *req.DatabaseLimit})
 	}
 	if req.AllocationLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("allocation_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.AllocationLimit)
+		limits = append(limits, limitUpdate{"allocation_limit", *req.AllocationLimit})
 	}
 	if req.SubuserLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("subuser_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.SubuserLimit)
+		limits = append(limits, limitUpdate{"subuser_limit", *req.SubuserLimit})
 	}
 	if req.ScheduleLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("schedule_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.ScheduleLimit)
+		limits = append(limits, limitUpdate{"schedule_limit", *req.ScheduleLimit})
 	}
 	if req.ServerLimit != nil {
-		limitSets = append(limitSets, fmt.Sprintf("server_limit = $%d", len(limitArgs)+1))
-		limitArgs = append(limitArgs, *req.ServerLimit)
+		limits = append(limits, limitUpdate{"server_limit", *req.ServerLimit})
+	}
+	for _, l := range limits {
+		if !allowedUserLimitColumns[l.column] {
+			return User{}, fmt.Errorf("disallowed column: %s", l.column)
+		}
+	}
+	// limitAssignments renders "col = $N, ..." continuing the numbering
+	// after args already collected, and appends the values in order.
+	limitAssignments := func(sets []string, args []any) ([]string, []any) {
+		for _, l := range limits {
+			sets = append(sets, fmt.Sprintf("%s = $%d", l.column, len(args)+1))
+			args = append(args, l.value)
+		}
+		return sets, args
 	}
 
 	if strings.TrimSpace(req.Password) != "" {
@@ -544,13 +609,15 @@ func (s *Store) UpdateUser(ctx context.Context, userID string, req UpdateUserReq
 		if err != nil {
 			return User{}, err
 		}
-		if len(limitSets) > 0 {
+		if len(limits) > 0 {
+			var sets []string
+			args := []any{email, string(hash), req.Role}
+			sets, args = limitAssignments(sets, args)
+			args = append(args, userID)
 			query := fmt.Sprintf(`
 				UPDATE users SET email = $1, password_hash = $2, role = $3, session_version = session_version + 1, updated_at = now(), %s
 				WHERE id = $%d
-			`, strings.Join(limitSets, ", "), len(limitArgs)+4)
-			args := append([]any{email, string(hash), req.Role}, limitArgs...)
-			args = append(args, userID)
+			`, strings.Join(sets, ", "), len(args))
 			_, err = tx.Exec(ctx, query, args...)
 		} else {
 			_, err = tx.Exec(ctx, `
@@ -561,19 +628,21 @@ func (s *Store) UpdateUser(ctx context.Context, userID string, req UpdateUserReq
 		if err != nil {
 			return User{}, err
 		}
-	} else if len(limitSets) > 0 {
+	} else if len(limits) > 0 {
+		var sets []string
+		args := []any{email, req.Role}
+		sets, args = limitAssignments(sets, args)
+		args = append(args, userID)
 		query := fmt.Sprintf(`
 			UPDATE users SET email = $1, role = $2, updated_at = now(), %s
 			WHERE id = $%d
-		`, strings.Join(limitSets, ", "), len(limitArgs)+3)
-		args := append([]any{email, req.Role}, limitArgs...)
-		args = append(args, userID)
+		`, strings.Join(sets, ", "), len(args))
 		if _, err = tx.Exec(ctx, query, args...); err != nil {
 			return User{}, err
 		}
 	} else {
 		_, err = tx.Exec(ctx, `
-			UPDATE users SET email = $1, role = $2, updated_at = now()
+			UPDATE users SET email = $1, role = $2, session_version = session_version + 1, updated_at = now()
 							WHERE id = $3
 		`, email, req.Role, userID)
 		if err != nil {
@@ -647,7 +716,17 @@ func (s *Store) DeleteUser(ctx context.Context, userID string, actorID *string) 
 // The SELECT mirrors Authenticate: the LEFT JOIN user_roles/roles collapses
 // to the highest-priority role a user holds via ORDER BY r.is_admin DESC NULLS
 // LAST LIMIT 1. Returns pgx.ErrNoRows if no user matches.
+func NormalizeEmail(email string) string {
+	email = strings.TrimSpace(email)
+	parts := strings.SplitN(email, "@", 2)
+	if len(parts) == 2 {
+		return strings.ToLower(parts[0]) + "@" + strings.ToLower(parts[1])
+	}
+	return strings.ToLower(email)
+}
+
 func (s *Store) GetUserByEmail(ctx context.Context, email string) (User, error) {
+	email = NormalizeEmail(email)
 	var user User
 	err := s.db.QueryRow(ctx, `
 		SELECT u.id::text, u.email,
@@ -684,8 +763,30 @@ func (s *Store) ChangePassword(ctx context.Context, userID, currentPassword, new
 }
 
 // UpdateUserPassword bcrypt-hashes newPassword and persists it for the given
-// user. Both inputs must be non-empty. The caller is responsible for any
-// ownership/current-password verification.
+// user. Both inputs must be non-empty.
+//
+// SECURITY: this method performs NO current-password (or any other)
+// verification of the caller's right to change the password - it is a raw,
+// trusted write. It MUST only be invoked after the caller has already
+// established, through some equally strong mechanism, that the request is
+// authorized to set a new password for userID. Acceptable mechanisms are:
+//   - the caller has verified the user's current password (e.g. via
+//     Store.Authenticate or Store.ChangePassword), or
+//   - the caller has consumed a single-use, expiring, out-of-band token that
+//     was already bound to this user (e.g. an email/SMS recovery token),
+//     which is an equivalent proof of ownership to knowing the password.
+//
+// A store-level password parameter was intentionally not added here because
+// the token-based recovery flow (see handlers_account_recovery.go) has no
+// current password to check - the token itself is the proof of ownership.
+//
+// Audited call sites (2026-07-25):
+//   - handlers_auth.go PUT /account/password: verifies via Store.Authenticate.
+//   - handlers_auth.go POST /auth/password/change: verifies via Store.Authenticate.
+//   - handlers_account_recovery.go POST /auth/recovery/verify: verifies by
+//     consuming a single-use recovery token via RecoveryTokenService.
+//   - ChangePassword (below): verifies via Store.Authenticate before calling
+//     this method.
 func (s *Store) UpdateUserPassword(ctx context.Context, userID, newPassword string) error {
 	if userID == "" {
 		return errors.New("user id is required")
@@ -693,7 +794,7 @@ func (s *Store) UpdateUserPassword(ctx context.Context, userID, newPassword stri
 	if err := ValidatePassword(newPassword); err != nil {
 		return err
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), BcryptCost())
 	if err != nil {
 		return err
 	}
@@ -753,7 +854,7 @@ func (s *Store) ListUserSessions(ctx context.Context, userID string) ([]UserSess
 	}
 
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, user_id::text, ip_address, user_agent, last_activity, created_at, expires_at, is_revoked, revoked_at, revoke_reason
+		SELECT id::text, user_id::text, COALESCE(ip_address,''), COALESCE(user_agent,''), last_activity, created_at, expires_at, is_revoked, revoked_at, COALESCE(revoke_reason,'')
 		FROM user_sessions
 		WHERE user_id = $1
 		ORDER BY last_activity DESC
@@ -835,9 +936,27 @@ func (s *Store) RevokeAllUserSessionsExceptCurrent(ctx context.Context, userID, 
 	return err
 }
 
+// IsUserSessionRevoked reports whether a JWT session row exists for the given
+// user and session-token hash (SHA-256 hex of the JWT's jti) and is revoked.
+// Missing rows are not treated as revoked: tokens minted outside the login
+// flow (session refresh, migration, social login) never create a row.
+func (s *Store) IsUserSessionRevoked(ctx context.Context, userID, sessionTokenHash string) (bool, error) {
+	if userID == "" || sessionTokenHash == "" {
+		return false, nil
+	}
+	var revoked bool
+	err := s.db.QueryRow(ctx, `
+		SELECT EXISTS(
+			SELECT 1 FROM user_sessions
+			WHERE user_id = $1 AND session_token_hash = $2 AND is_revoked
+		)
+	`, userID, sessionTokenHash).Scan(&revoked)
+	return revoked, err
+}
+
 // Password complexity errors
 var (
-	ErrPasswordTooShort  = errors.New("password must be at least 8 characters")
+	ErrPasswordTooShort  = errors.New("password must be at least 12 characters")
 	ErrPasswordNoUpper   = errors.New("password must contain at least one uppercase letter")
 	ErrPasswordNoLower   = errors.New("password must contain at least one lowercase letter")
 	ErrPasswordNoDigit   = errors.New("password must contain at least one digit")
@@ -845,9 +964,9 @@ var (
 )
 
 // ValidatePassword checks password complexity requirements.
-// Requires: minimum 8 chars, at least one uppercase, one lowercase, one digit, and one special character.
+// Requires: minimum 12 chars, at least one uppercase, one lowercase, one digit, and one special character.
 func ValidatePassword(password string) error {
-	if len(password) < 8 {
+	if len(password) < 12 {
 		return ErrPasswordTooShort
 	}
 	var hasUpper, hasLower, hasDigit, hasSpecial bool
@@ -916,8 +1035,9 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, newEmail, currentPa
 		return errors.New("user not found")
 	}
 
-	// Check if email is the same
-	if currentEmail == newEmail {
+	// Check if email is the same (case-insensitive, in case any legacy row
+	// predates email normalization on write).
+	if strings.EqualFold(currentEmail, newEmail) {
 		return errors.New("new email must be different from current email")
 	}
 
@@ -939,10 +1059,10 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, newEmail, currentPa
 		return errors.New("email already in use")
 	}
 
-	// Update email (could also trigger email verification here)
+	// Update email and bump session_version to invalidate existing sessions
 	_, err = s.db.Exec(ctx, `
 		UPDATE users
-		SET email = $2, updated_at = NOW()
+		SET email = $2, session_version = session_version + 1, updated_at = NOW()
 		WHERE id = $1 AND NOT disabled
 	`, userID, newEmail)
 
@@ -952,6 +1072,15 @@ func (s *Store) UpdateUserEmail(ctx context.Context, userID, newEmail, currentPa
 // CreatePasswordResetToken stores a single-use password reset token for the
 // given user. tokenHash must be the SHA-256 hex digest of the plaintext token
 // the caller intends to deliver out-of-band. The returned id is the row's UUID.
+//
+// If the user is disabled, no token is created and no error is returned: the
+// returned id is "". Disabled accounts should never receive a usable reset
+// token (it could never be consumed anyway, since login/reset for disabled
+// accounts is blocked elsewhere, and there's no reason to email a disabled
+// account a reset link). Callers MUST still return their normal generic
+// success response in this case - checking only the returned id (rather than
+// branching on user-disabled state themselves) is what prevents this from
+// leaking account-disabled status to an attacker via a different response.
 func (s *Store) CreatePasswordResetToken(ctx context.Context, userID, tokenHash string, ttl time.Duration, ip string) (string, error) {
 	if userID == "" {
 		return "", errors.New("user id is required")
@@ -962,11 +1091,26 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, userID, tokenHash 
 	if ttl <= 0 {
 		return "", errors.New("ttl must be positive")
 	}
+	var disabled bool
+	if err := s.db.QueryRow(ctx, `SELECT disabled FROM users WHERE id = $1`, userID).Scan(&disabled); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Unknown user: no-op, same as disabled, so callers can't
+			// distinguish "unknown" from "disabled" from the response.
+			return "", nil
+		}
+		return "", err
+	}
+	if disabled {
+		return "", nil
+	}
 	id := uuid.NewString()
+	// make_interval(secs => $4) carries the TTL as seconds: Go's
+	// Duration.String ("30m0s") is not a Postgres interval literal and
+	// $4::interval would reject it.
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, requested_ip)
-		VALUES ($1, $2, $3, now() + $4::interval, $5)
-	`, id, userID, tokenHash, ttl.String(), ip)
+		VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5)
+	`, id, userID, tokenHash, ttl.Seconds(), ip)
 	if err != nil {
 		return "", err
 	}
@@ -1032,7 +1176,7 @@ func (s *Store) ResetPasswordWithToken(ctx context.Context, tokenHash, email, ne
 	if tokenHash == "" || strings.TrimSpace(email) == "" || newPassword == "" {
 		return "", errors.New("token, email, and password are required")
 	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(newPassword), BcryptCost())
 	if err != nil {
 		return "", err
 	}

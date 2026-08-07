@@ -3,9 +3,11 @@ package store
 import (
 	"context"
 	"errors"
+	"strings"
 )
 
 type PanelMailSettings struct {
+	Driver          string `json:"driver"`
 	SMTPHost        string `json:"smtpHost"`
 	SMTPPort        int    `json:"smtpPort"`
 	SMTPEncryption  string `json:"smtpEncryption"`
@@ -28,7 +30,8 @@ type PanelAdvancedSettings struct {
 
 func defaultPanelMailSettings() PanelMailSettings {
 	return PanelMailSettings{
-		SMTPPort:       587,
+		Driver:        "log",
+		SMTPPort:      587,
 		SMTPEncryption: "tls",
 	}
 }
@@ -59,6 +62,10 @@ func (s *Store) GetPanelMailSettings(ctx context.Context) (PanelMailSettings, er
 	m.SMTPPassword, err = s.decryptSecret(encrypted, plaintext, secretAAD("panel_mail_settings", "true", "smtp_password"))
 	if err != nil {
 		return defaultPanelMailSettings(), err
+	}
+	m.Driver = "smtp"
+	if strings.TrimSpace(m.SMTPHost) == "" {
+		m.Driver = "log"
 	}
 	return m, nil
 }
