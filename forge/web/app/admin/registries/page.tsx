@@ -6,6 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Boxes, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import {
   AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader,
+  AdminLoadingState, AdminErrorState,
 } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -61,7 +62,7 @@ export default function AdminRegistriesPage() {
       <SectionHeader
         info={adminPageGuides.registries}
         title="Image Registries"
-        sub="Private Docker registry credentials used to pull and push images on nodes."
+        sub="Private Docker registry credentials for image pull and push."
         action={
           <Btn size="sm" tone="primary" onClick={() => setShowCreate(true)}>
             <Plus size={12} /> Add Registry
@@ -73,13 +74,13 @@ export default function AdminRegistriesPage() {
         <CardHeader title={registries.isSuccess ? `${filtered.length} registries` : "Registries"} icon={Boxes} />
         <div className="mb-4 max-w-md"><Input label="Search registries" value={search} onChange={setSearch} placeholder="Search by name or address" /></div>
         {registries.isLoading ? (
-          <div className="p-8 text-center text-sm text-text-muted">Loading registries…</div>
+          <AdminLoadingState label="Loading registries…" />
         ) : registries.isError ? (
-          <div className="space-y-3 p-4"><EmptyState icon={Boxes} title="Registries unavailable" message="Could not load image registries." /><Btn onClick={() => void registries.refetch()}>Retry</Btn></div>
+          <div className="p-4"><AdminErrorState message={registries.error instanceof Error ? registries.error.message : "Could not load image registries."} retry={() => void registries.refetch()} /></div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Boxes} message={search ? "No registries match your search." : "No registries configured. Add one to pull private images."} />
         ) : (
-          <div className="divide-y divide-white/[0.06]">
+          <div className="divide-y divide-line">
             {filtered.map((r) => (
               <div key={r.id} className="flex flex-wrap items-center gap-3 py-4">
                 <div className="min-w-40 flex-1">
