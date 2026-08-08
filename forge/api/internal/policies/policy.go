@@ -3,6 +3,7 @@ package policies
 import (
 	"context"
 	"gamepanel/forge/internal/store"
+	"sync"
 )
 
 type Action string
@@ -21,6 +22,7 @@ type Policy interface {
 
 type PolicyRegistry struct {
 	policies map[string]Policy
+	mu       sync.RWMutex
 }
 
 func NewPolicyRegistry() *PolicyRegistry {
@@ -30,10 +32,17 @@ func NewPolicyRegistry() *PolicyRegistry {
 }
 
 func (r *PolicyRegistry) Register(policy Policy) {
+	if policy == nil {
+		return
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	r.policies[policy.Name()] = policy
 }
 
 func (r *PolicyRegistry) Can(ctx context.Context, user store.User, action Action, resource any, policyName string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	policy, ok := r.policies[policyName]
 	if !ok {
 		return false

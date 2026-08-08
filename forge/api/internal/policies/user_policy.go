@@ -18,7 +18,8 @@ func (p *UserPolicy) Can(ctx context.Context, user store.User, action Action, re
 	case ActionCreate:
 		return user.Role == "admin"
 	case ActionRead:
-		return true
+		targetID, ok := resource.(string)
+		return ok && (user.Role == "admin" || user.ID == targetID)
 	case ActionUpdate:
 		targetID, ok := resource.(string)
 		if !ok {
