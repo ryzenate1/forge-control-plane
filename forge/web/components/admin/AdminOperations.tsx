@@ -73,14 +73,14 @@ function MigrationActions({ migration, onAction, executorAvailable }: { migratio
 }
 
 function RecoveryPlanDetails({ plan }: { plan: ApiRecoveryPlan }) {
-  if (plan.items.length === 0) return <p className="mt-2 text-xs text-slate-500">No workloads were included in this recovery plan.</p>;
+  if (plan.items.length === 0) return <p className="mt-2 text-xs text-text-muted">No workloads were included in this recovery plan.</p>;
 
   return <div className="mt-3 space-y-2">{plan.items.map((item) => (
-    <div className="rounded border border-white/[0.06] p-2.5 text-xs" key={item.id}>
+    <div className="rounded border border-line p-2.5 text-xs" key={item.id}>
       <div className="flex items-center justify-between gap-2"><code>{item.serverId}</code><Pill tone={statusTone(item.status)}>{item.status}</Pill></div>
-      <p className="mt-1 text-slate-500">{item.sourceNodeId} → {item.targetNodeId || "No target assigned"}</p>
-      {item.sourceBackupName && <p className="mt-1 text-slate-500">Backup: {item.sourceBackupName}</p>}
-      {item.reason && <p className="mt-1 text-amber-300">{item.reason}</p>}
+      <p className="mt-1 text-text-muted">{item.sourceNodeId} → {item.targetNodeId || "No target assigned"}</p>
+      {item.sourceBackupName && <p className="mt-1 text-text-muted">Backup: {item.sourceBackupName}</p>}
+      {item.reason && <p className="mt-1 text-warn">{item.reason}</p>}
     </div>
   ))}</div>;
 }
@@ -189,24 +189,24 @@ export function AdminOperations() {
 
   return <div className="space-y-6">
     <AdminPageHeader title="Operations" description="Control-plane operations: preview evacuation capacity, save explicit plans, then start or recover workloads safely." />
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-      <span className="font-semibold text-slate-300">OPERATIONS</span> · <span className="font-semibold text-slate-200">Operations</span> — evacuation & migration execution with capacity preview vs <code className="font-mono text-[11px]">Migrations & Recovery</code> at <code className="font-mono">/admin/migrations</code> and <code className="font-mono">Reconciliation</code> at <code className="font-mono">/admin/reconciliation</code>. Uses <code className="font-mono">POST /evacuations</code> + executor planning; planning-only when runtime unavailable.
+    <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
+      <span className="font-semibold text-text">OPERATIONS</span> · <span className="font-semibold text-text">Operations</span> — evacuation & migration execution with capacity preview vs <code className="font-mono text-[11px]">Migrations & Recovery</code> at <code className="font-mono">/admin/migrations</code> and <code className="font-mono">Reconciliation</code> at <code className="font-mono">/admin/reconciliation</code>. Uses <code className="font-mono">POST /evacuations</code> + executor planning; planning-only when runtime unavailable.
     </div>
-    {feedback && <div className={`mb-4 rounded-lg border p-3 text-sm ${feedback.tone === "error" ? "border-red-700/30 bg-red-900/10 text-red-300" : "border-emerald-700/30 bg-emerald-900/10 text-emerald-300"}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
+    {feedback && <div className={`mb-4 rounded-lg border p-3 text-sm ${feedback.tone === "error" ? "border-danger-line bg-danger-subtle text-danger" : "border-ok-line bg-ok-subtle text-ok"}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
 
     {!executorAvailable && executorStatus.isSuccess && (
-      <div className="mb-4 rounded-lg border border-amber-700/30 bg-amber-900/10 p-3 text-sm text-amber-200">
+      <div className="mb-4 rounded-lg border border-warn-line bg-warn-subtle p-3 text-sm text-warn">
         <strong>Planning-only mode:</strong> Workload transfer runtime is not available. Migration plans can be created but execution is disabled.
       </div>
     )}
 
     <div className="grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Create migration record" icon={ArrowRightLeft} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Server<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
-        <label className="text-sm text-slate-300">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-text">Server<select className="mt-1 h-9 w-full rounded border border-line bg-[var(--surface-input)] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
+        <label className="text-sm text-text">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-line bg-[var(--surface-input)] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Btn disabled={!serverId || migrationMut.isPending} onClick={() => migrationMut.mutate()}>{migrationMut.isPending && <Loader2 size={14} className="animate-spin" />}{migrationMut.isPending ? "Creating migration plan…" : "Create migration plan"}</Btn>
         {migrationMut.error && (
-          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-xs text-red-200">
+          <div className="rounded border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
             <p className="mb-1 font-semibold">Migration creation failed</p>
             <p>{errorMessage(migrationMut.error)}</p>
           </div>
@@ -214,14 +214,14 @@ export function AdminOperations() {
       </div></Card>
 
       <Card><CardHeader title="Evacuation / recovery planning" icon={RotateCcw} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Affected node<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-text">Affected node<select className="mt-1 h-9 w-full rounded border border-line bg-[var(--surface-input)] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Input label="Recovery reason" value={reason} onChange={setReason} placeholder="For example: node is unavailable" />
         <div className="flex flex-wrap gap-2">
           <Btn tone="ghost" disabled={!nodeId || previewMut.isPending} onClick={() => previewMut.mutate()}>{previewMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}{previewMut.isPending ? "Loading preview…" : "Preview evacuation"}</Btn>
           <Btn disabled={!nodeId || evacuationMut.isPending} onClick={() => setEvacuationPlanConfirmOpen(true)}>{evacuationMut.isPending && <Loader2 size={13} className="animate-spin" />}{evacuationMut.isPending ? "Saving plan…" : "Save evacuation plan"}</Btn>
           <Btn tone="warning" disabled={!nodeId || !reason.trim() || recoveryMut.isPending} onClick={() => setRecoveryPlanConfirmOpen(true)}>{recoveryMut.isPending && <Loader2 size={13} className="animate-spin" />}{recoveryMut.isPending ? "Creating recovery plan…" : "Create recovery plan"}</Btn>
         </div>
-        <div className="rounded border border-amber-700/30 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100">
+        <div className="rounded border border-warn-line bg-warn-subtle p-3 text-xs leading-5 text-warn">
           <p className="mb-1 font-semibold">What recovery restores</p>
           <ul className="list-disc space-y-1 pl-4">
             <li>Restores backup data to a destination daemon (independent verification by daemon)</li>
@@ -238,19 +238,19 @@ export function AdminOperations() {
     <InstallerStreamingManager executionEnabled={Boolean(installerQ.data?.executionEnabled)} />
 
     {displayedEvacuation && <div className="mt-5"><Card><CardHeader title={displayedEvacuation.preview ? "Evacuation preview" : "Evacuation plan"} icon={Workflow} /><div className="p-4 text-sm">
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-slate-400">
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-text-subtle">
         <span>{displayedEvacuation.items.length} affected workload(s)</span>
         <Pill tone={statusTone(displayedEvacuation.plan.status)}>{displayedEvacuation.plan.status}</Pill>
         {displayedEvacuation.preview && <span className="text-xs">Preview only — no plan has been saved.</span>}
       </div>
       <div className="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Affected node</span><p className="font-semibold">{displayedEvacuation.plan.nodeId}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Eligible workloads</span><p className="font-semibold text-emerald-300">{eligibleItems.length}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Blocked workloads</span><p className="font-semibold text-red-300">{blockedItems.length}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Destination nodes</span><p className="font-semibold">{eligibleTargets.length > 0 ? eligibleTargets.join(", ") : "None"}</p></div>
+        <div className="rounded border border-line p-2"><span className="text-text-muted">Affected node</span><p className="font-semibold">{displayedEvacuation.plan.nodeId}</p></div>
+        <div className="rounded border border-line p-2"><span className="text-text-muted">Eligible workloads</span><p className="font-semibold text-ok">{eligibleItems.length}</p></div>
+        <div className="rounded border border-line p-2"><span className="text-text-muted">Blocked workloads</span><p className="font-semibold text-danger">{blockedItems.length}</p></div>
+        <div className="rounded border border-line p-2"><span className="text-text-muted">Destination nodes</span><p className="font-semibold">{eligibleTargets.length > 0 ? eligibleTargets.join(", ") : "None"}</p></div>
       </div>
       {blockedItems.length > 0 && (
-        <div className="mb-3 rounded border border-red-700/30 bg-red-950/10 p-2 text-xs text-red-200">
+        <div className="mb-3 rounded border border-danger-line bg-danger-subtle p-2 text-xs text-danger">
           <p className="mb-1 font-semibold">Blocked workloads</p>
           {blockedItems.map((item) => (
             <p key={item.id} className="ml-2">{item.serverId}: {item.reason || "No eligible target"}</p>
@@ -260,18 +260,18 @@ export function AdminOperations() {
       {!displayedEvacuation.preview && <div className="mb-3 flex flex-wrap items-center gap-3">
         {displayedEvacuation.plan.status === "pending" && <Btn tone="warning" disabled={startEvacuationDisabled} onClick={() => setEvacuationStartConfirmOpen(true)} title={executorAvailable ? undefined : "Workload transfer runtime not available"}>{executeEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeEvacuationMut.isPending ? "Starting evacuation…" : "Start evacuation"}</Btn>}
         {displayedEvacuation.plan.status === "running" && <Btn tone="danger" disabled={cancelEvacuationMut.isPending} onClick={() => setEvacuationCancelConfirmOpen(true)}>{cancelEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}{cancelEvacuationMut.isPending ? "Cancelling evacuation…" : "Cancel evacuation"}</Btn>}
-        {displayedEvacuation.plan.status === "running" && <span className="text-xs text-slate-500">{settledItems}/{displayedEvacuation.items.length} workloads settled ({evacuationProgress}%)</span>}
+        {displayedEvacuation.plan.status === "running" && <span className="text-xs text-text-muted">{settledItems}/{displayedEvacuation.items.length} workloads settled ({evacuationProgress}%)</span>}
       </div>}
-      {displayedEvacuation.plan.status === "running" && <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${evacuationProgress}%` }} /></div>}
-      <div className="mt-3 space-y-2">{displayedEvacuation.items.map((item) => <div key={item.id} className="rounded border border-white/[0.06] p-3"><div className="flex items-center justify-between gap-3"><code>{item.serverId}</code><Pill tone={item.eligible ? statusTone(item.status) : "red"}>{item.eligible ? item.status : "Blocked"}</Pill></div><p className="mt-1 text-xs text-slate-500">{item.sourceNodeId} → {item.targetNodeId || "No eligible target"}</p>{item.reason && <p className="mt-1 text-xs text-slate-500">{item.reason}</p>}{item.error && <p className="mt-1 text-xs text-red-300">{item.error}</p>}{item.migrationId && <p className="mt-1 font-mono text-xs text-slate-500">Migration: {item.migrationId}</p>}</div>)}</div>
+      {displayedEvacuation.plan.status === "running" && <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-overlay-strong"><div className="h-full rounded-full bg-ok transition-all" style={{ width: `${evacuationProgress}%` }} /></div>}
+      <div className="mt-3 space-y-2">{displayedEvacuation.items.map((item) => <div key={item.id} className="rounded border border-line p-3"><div className="flex items-center justify-between gap-3"><code>{item.serverId}</code><Pill tone={item.eligible ? statusTone(item.status) : "red"}>{item.eligible ? item.status : "Blocked"}</Pill></div><p className="mt-1 text-xs text-text-muted">{item.sourceNodeId} → {item.targetNodeId || "No eligible target"}</p>{item.reason && <p className="mt-1 text-xs text-text-muted">{item.reason}</p>}{item.error && <p className="mt-1 text-xs text-danger">{item.error}</p>}{item.migrationId && <p className="mt-1 font-mono text-xs text-text-muted">Migration: {item.migrationId}</p>}</div>)}</div>
     </div></Card></div>}
 
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Migration history" icon={ArrowRightLeft} />
-        {migrations.isLoading ? <TableSkeleton rows={3} /> : migrations.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load migrations: {migrations.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void migrations.refetch()}>Retry</Btn></div></div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} message="No migrations." /> : <div className="divide-y divide-white/[0.04]">{(migrations.data ?? []).map((migration) => <div className="flex items-center justify-between gap-3 p-4" key={migration.id}><div><p className="font-mono text-xs">{migration.serverId}</p><p className="text-xs text-slate-500">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</p>{migration.progress != null && <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${migration.progress}%` }} /></div>}</div><div className="flex items-center gap-2">{migration.progress != null && <span className="text-xs text-slate-500">{migration.progress}%</span>}<Pill tone={statusTone(migration.status)}>{migration.status}</Pill><MigrationActions migration={migration} executorAvailable={executorAvailable} onAction={() => void refreshOperations()} /></div></div>)}</div>}
+        {migrations.isLoading ? <TableSkeleton rows={3} /> : migrations.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger"><span>Could not load migrations: {migrations.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void migrations.refetch()}>Retry</Btn></div></div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} message="No migrations." /> : <div className="divide-y divide-line">{(migrations.data ?? []).map((migration) => <div className="flex items-center justify-between gap-3 p-4" key={migration.id}><div><p className="font-mono text-xs">{migration.serverId}</p><p className="text-xs text-text-muted">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</p>{migration.progress != null && <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-overlay-strong"><div className="h-full rounded-full bg-ok transition-all" style={{ width: `${migration.progress}%` }} /></div>}</div><div className="flex items-center gap-2">{migration.progress != null && <span className="text-xs text-text-muted">{migration.progress}%</span>}<Pill tone={statusTone(migration.status)}>{migration.status}</Pill><MigrationActions migration={migration} executorAvailable={executorAvailable} onAction={() => void refreshOperations()} /></div></div>)}</div>}
       </Card>
       <Card><CardHeader title="Recovery plans" icon={AlertTriangle} />
-        {recoveries.isLoading ? <TableSkeleton rows={3} /> : recoveries.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load recovery plans: {recoveries.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void recoveries.refetch()}>Retry</Btn></div></div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} message="No recovery plans." /> : <div className="divide-y divide-white/[0.04]">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-slate-500">{plan.reason}</p><p className="mt-1 text-xs text-slate-500">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={statusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => setRecoveryStartConfirmOpen(plan.id)} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => setRecoveryCancelConfirmOpen(plan.id)} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
+        {recoveries.isLoading ? <TableSkeleton rows={3} /> : recoveries.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger"><span>Could not load recovery plans: {recoveries.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void recoveries.refetch()}>Retry</Btn></div></div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} message="No recovery plans." /> : <div className="divide-y divide-line">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-text-muted">{plan.reason}</p><p className="mt-1 text-xs text-text-muted">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={statusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => setRecoveryStartConfirmOpen(plan.id)} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => setRecoveryCancelConfirmOpen(plan.id)} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
       </Card>
     </div>
 
@@ -279,16 +279,16 @@ export function AdminOperations() {
       <Card>
         <CardHeader title="Recovery plan details" icon={AlertTriangle} />
         <div className="space-y-3 p-4">
-          <label className="block text-sm text-slate-300">Plan
-            <select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
+          <label className="block text-sm text-text">Plan
+            <select className="mt-1 h-9 w-full rounded border border-line bg-[var(--surface-input)] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
               <option value="">Select a recovery plan…</option>
               {(recoveries.data ?? []).map((plan) => <option key={plan.id} value={plan.id}>{plan.nodeId} — {plan.status}</option>)}
             </select>
           </label>
-          {recoveryPlanQuery.isLoading && <p className="text-xs text-slate-500">Loading recovery plan details…</p>}
-          {recoveryPlanQuery.isError && <p className="text-xs text-red-300">Recovery plan details could not be loaded.</p>}
+          {recoveryPlanQuery.isLoading && <p className="text-xs text-text-muted">Loading recovery plan details…</p>}
+          {recoveryPlanQuery.isError && <p className="text-xs text-danger">Recovery plan details could not be loaded.</p>}
           {recoveryPlanQuery.data && <>
-            <div className="rounded border border-white/[0.06] p-3 text-sm">
+            <div className="rounded border border-line p-3 text-sm">
               <div className="flex flex-wrap items-center justify-between gap-2"><span>{recoveryPlanQuery.data.reason}</span><Pill tone={statusTone(recoveryPlanQuery.data.status)}>{recoveryPlanQuery.data.status}</Pill></div>
               <RecoveryPlanDetails plan={recoveryPlanQuery.data} />
             </div>
@@ -301,33 +301,33 @@ export function AdminOperations() {
     <section className="mt-8">
       <div className="flex items-center gap-3">
         <h3 className="text-sm font-semibold">Install workflows</h3>
-        <span className="rounded-full border border-[var(--line)] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-[var(--text-subtle)]">
+        <span className="rounded-full border border-[var(--line)] bg-overlay px-2 py-0.5 text-[11px] font-medium text-[var(--text-subtle)]">
           {installerQ.data?.executionEnabled ? "execution on (INSTALLER_WORKFLOW_ENABLED=1)" : "visibility only — execution deferred"}
         </span>
       </div>
       <p className="mt-1 text-xs text-[var(--text-subtle)]">
-        6-step installer history persisted at <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[11px]">install_workflows</code> (create·setup·download·script·config·start). Now surfaced even when execution is manual.
+        6-step installer history persisted at <code className="rounded bg-overlay-strong px-1 py-0.5 font-mono text-[11px]">install_workflows</code> (create·setup·download·script·config·start). Now surfaced even when execution is manual.
       </p>
       {!installerQ.data?.executionEnabled ? (
-        <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5 text-xs leading-5 text-amber-200">
+        <div className="mt-3 flex gap-2 rounded-lg border border-warn-line bg-warn/[0.08] px-3 py-2.5 text-xs leading-5 text-warn">
           <AlertTriangle size={14} className="shrink-0 mt-0.5" />
           <span>Execution is <b>intentionally deferred</b> (INSTALLER_WORKFLOW_ENABLED=0). Workflows are visible for audit/history; actual installs still run via the canonical Beacon path. When enabled, install streaming uses <code className="font-mono">GET /servers/:id/install/ws</code> (Beacon, admin-scoped) proxied via Forge <code className="font-mono">GET /servers/:id/ws/install</code> + ticket — see <code className="font-mono">install-ws.ts</code>.</span>
         </div>
       ) : null}
       <div className="mt-3 overflow-hidden rounded-xl border border-[var(--line)]">
         <table className="w-full text-sm">
-          <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Workflow</th><th className="px-4 py-2.5">Server</th><th className="px-4 py-2.5">Type</th><th className="px-4 py-2.5">Status</th><th className="px-4 py-2.5">Steps</th><th className="px-4 py-2.5">Created</th><th className="px-4 py-2.5">Action</th></tr></thead>
+          <thead className="bg-overlay-subtle text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Workflow</th><th className="px-4 py-2.5">Server</th><th className="px-4 py-2.5">Type</th><th className="px-4 py-2.5">Status</th><th className="px-4 py-2.5">Steps</th><th className="px-4 py-2.5">Created</th><th className="px-4 py-2.5">Action</th></tr></thead>
           <tbody className="divide-y divide-[var(--line)]">
             {(installerQ.data?.data ?? []).slice(0, 10).map((wf) => (
-              <tr key={wf.id} className="hover:bg-white/[0.02]">
+              <tr key={wf.id} className="hover:bg-overlay-subtle">
                 <td className="px-4 py-3 font-mono text-xs">{wf.id.slice(0, 8)}</td>
                 <td className="px-4 py-3 font-mono text-xs">{wf.serverId.slice(0, 8)}</td>
                 <td className="px-4 py-3 text-xs">{wf.type}</td>
-                <td className="px-4 py-3"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${wf.status === "completed" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : wf.status === "failed" ? "border-red-500/30 bg-red-500/10 text-red-300" : wf.status === "running" ? "border-blue-500/30 bg-blue-500/10 text-blue-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300"}`}>{wf.status}</span></td>
+                <td className="px-4 py-3"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${wf.status === "completed" ? "border-ok-line bg-ok-subtle text-ok" : wf.status === "failed" ? "border-danger-line bg-danger-subtle text-danger" : wf.status === "running" ? "border-info-line bg-info-subtle text-info" : "border-warn-line bg-warn-subtle text-warn"}`}>{wf.status}</span></td>
                 <td className="px-4 py-3">
                   <div className="flex gap-1">
                     {wf.steps?.map((s) => (
-                      <span key={s.id} title={`${s.name}: ${s.status}`} className={`h-2 w-2 rounded-full ${s.status === "completed" ? "bg-emerald-500" : s.status === "running" ? "bg-blue-500 animate-pulse" : s.status === "failed" ? "bg-red-500" : "bg-slate-600"}`}/>
+                      <span key={s.id} title={`${s.name}: ${s.status}`} className={`h-2 w-2 rounded-full ${s.status === "completed" ? "bg-ok" : s.status === "running" ? "bg-info animate-pulse" : s.status === "failed" ? "bg-danger" : "bg-unknown"}`}/>
                     ))}
                   </div>
                 </td>
