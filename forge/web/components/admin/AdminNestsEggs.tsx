@@ -7,7 +7,7 @@ import { Box, ChevronRight, Copy, ExternalLink, Plus, Settings, Tag, Trash2, Dow
 import { type ApiNest, type ApiEgg, createEgg, createNest, deleteEgg, deleteNest, fetchEggs, fetchNests, updateEgg, updateNest } from "@/lib/api";
 import { useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
-import { AdminConfirmDialog, AdminFormSection, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn } from "./admin-ui";
+import { AdminConfirmDialog, AdminFormSection, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, AdminLoadingState, AdminErrorState, AdminPageLayout, cn } from "./admin-ui";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -137,7 +137,7 @@ export function AdminNestsEggs() {
      installContainer: egg.installContainer,
      installEntrypoint: egg.installEntrypoint,
    });
- },
+ }, 
   onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", selectedNest?.id] }); qc.invalidateQueries({ queryKey: ["nests"] }); },
   onError: (err) => toast({ tone: "error", title: "Failed to clone egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
@@ -235,7 +235,7 @@ export function AdminNestsEggs() {
 
 
  return (
- <div className="space-y-5">
+ <AdminPageLayout>
  <SectionHeader
         info={adminPageGuides.nests}
  title="Service Definitions"
@@ -249,37 +249,37 @@ export function AdminNestsEggs() {
  <CardHeader title="Nests" icon={Box} />
  <div className="mb-3"><Input label="Search nests" value={nestSearch} onChange={setNestSearch} placeholder="Search service families" /></div>
   {isLoading ? (
-  <div className="py-8 text-center text-sm text-text-muted">Loading</div>
-  ) : nestsError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load nests: {nestsErrorObj?.message}</span><Btn size="sm" tone="ghost" onClick={() => void nestsRefetch()}>Retry</Btn></div></div>
+  <AdminLoadingState label="Loading nests…" />
+  ) : nestsError ? <div className="p-4"><AdminErrorState message={`Could not load nests: ${nestsErrorObj?.message ?? "unknown error"}`} retry={() => void nestsRefetch()} /></div>
    : visibleNests.length === 0 ? (
  <EmptyState icon={Box} title={nestSearch ? "No matching nests" : "No nests yet"} message={nestSearch ? "Try a different name or description." : "Create a nest to group related game-server definitions."} />
  ) : (
-  <ul className="divide-y divide-white/[0.04]">
+  <ul className="divide-y divide-line">
   {visibleNests.map((nest) => {
- const eggCount = nest.eggCount ?? nest.eggs ?? 0;
+ const eggCount = nest.eggCount ?? nest.eggs ?? null;
  const isSelected = selectedNest?.id === nest.id;
  return (
   <li
     key={nest.id}
     className={cn(
       "group flex items-center transition cursor-pointer",
-      "hover:bg-white/[0.03]",
+      "hover:bg-overlay",
       isSelected && "border-l-2 border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]",
     )}
   >
   <button
   aria-pressed={isSelected}
-  className="min-w-0 flex-1 rounded-md px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-500/40"
+  className="min-w-0 flex-1 rounded-md px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
   onClick={() => { setSelectedNest(nest); setEggSearch(""); }}
   type="button"
   >
   <p className="truncate text-sm font-medium text-text">{nest.name}</p>
-  <p className="text-xs text-text-muted">{eggCount} egg{eggCount !== 1 ? "s" : ""}</p>
+  <p className="text-xs text-text-muted">{eggCount === null ? "Egg count not reported" : `${eggCount} egg${eggCount !== 1 ? "s" : ""}`}</p>
   </button>
    <div aria-label={`${nest.name} actions`} className="flex shrink-0 items-center gap-1 px-4 opacity-100 transition-opacity sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100" role="group">
-   <button aria-label={`Open ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-white/[0.06] hover:text-sky-400" onClick={(e) => { e.stopPropagation(); router.push(`/admin/nests/${nest.id}/eggs`); }} type="button"><ExternalLink size={12} /></button>
-   <button aria-label={`Edit ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-white/[0.06] hover:text-text" onClick={(e) => { e.stopPropagation(); openNestEdit(nest); }} type="button"><Settings size={12} /></button>
-   <button aria-label={`Delete ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-white/[0.06] hover:text-red-400" onClick={(e) => { e.stopPropagation(); setDeleteNestTarget(nest); }} type="button"><Trash2 size={12} /></button>
+   <button aria-label={`Open ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-overlay-strong hover:text-info" onClick={(e) => { e.stopPropagation(); router.push(`/admin/nests/${nest.id}/eggs`); }} type="button"><ExternalLink size={12} /></button>
+   <button aria-label={`Edit ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-overlay-strong hover:text-text" onClick={(e) => { e.stopPropagation(); openNestEdit(nest); }} type="button"><Settings size={12} /></button>
+   <button aria-label={`Delete ${nest.name}`} className="rounded p-1.5 text-text-muted transition-colors hover:bg-overlay-strong hover:text-danger" onClick={(e) => { e.stopPropagation(); setDeleteNestTarget(nest); }} type="button"><Trash2 size={12} /></button>
    </div>
   </li>
  );
@@ -290,25 +290,24 @@ export function AdminNestsEggs() {
 
  {/* Eggs panel */}
  <Card>
- <div className="flex items-center justify-between border-b border-line bg-[var(--surface-input)] px-4 h-11">
- <span className="text-xs font-semibold uppercase tracking-widest text-text-subtle">
- {selectedNest ? `Eggs: ${selectedNest.name}` : "Select a nest"}
- </span>
- {selectedNest ? (
+ <CardHeader
+  title={selectedNest ? `Eggs: ${selectedNest.name}` : "Select a nest"}
+  icon={Tag}
+  action={selectedNest ? (
   <div className="flex items-center gap-2">
     <Btn size="sm" tone="subtle" onClick={() => router.push(`/admin/compatibility-templates?nestId=${selectedNest.id}`)}>Browse Templates →</Btn>
     <Btn size="sm" onClick={() => setImportExportModal(true)}><Upload size={12} /> Import/Export</Btn>
     <Btn size="sm" onClick={openEggCreate}><Plus size={12} /> New Egg</Btn>
  </div>
  ) : null}
- </div>
+ />
  {selectedNest ? <div className="border-b border-line p-4"><Input label="Search eggs" value={eggSearch} onChange={setEggSearch} placeholder={`Search ${selectedNest.name} definitions`} /></div> : null}
  {!selectedNest ? (
  <EmptyState icon={ChevronRight} message="Select a nest on the left to see its eggs." />
   ) : eggsLoading ? (
-  <div className="py-10 text-center text-sm text-text-muted">Loading</div>
+  <AdminLoadingState label="Loading eggs…" />
   ) : eggsError ? (
-  <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load eggs: {eggsErrorObj?.message}</span><Btn size="sm" tone="ghost" onClick={() => void eggsRefetch()}>Retry</Btn></div></div>
+  <div className="p-4"><AdminErrorState message={`Could not load eggs: ${eggsErrorObj?.message ?? "unknown error"}`} retry={() => void eggsRefetch()} /></div>
   ) : visibleEggs.length === 0 ? (
  <EmptyState icon={Tag} title={eggSearch ? "No matching eggs" : "No eggs yet"} message={eggSearch ? "Try a different name or description." : "Create an egg or import one from Compatibility Templates."} />
  ) : (
@@ -322,7 +321,7 @@ export function AdminNestsEggs() {
   <th className="px-4 py-3" />
  </tr>
  </thead>
- <tbody className="divide-y divide-white/[0.04]">
+ <tbody className="divide-y divide-line">
   {visibleEggs.map((egg) => (
  <tr key={egg.id} className="hover:bg-overlay-subtle">
   <td className="px-4 py-3">
@@ -343,9 +342,9 @@ export function AdminNestsEggs() {
   <td className="px-4 py-3">
   <div className="flex items-center justify-end gap-1">
   <Btn size="sm" tone="ghost" onClick={() => openEggEdit(egg)}>Edit</Btn>
-  <Btn size="sm" tone="ghost" onClick={() => cloneEggMut.mutate(egg)}><Copy size={12} /></Btn>
-  <Btn size="sm" tone="ghost" onClick={() => exportEgg(egg)}><Download size={12} /></Btn>
-   <Btn size="sm" tone="danger" onClick={() => setDeleteEggTarget(egg)}><Trash2 size={12} /></Btn>
+  <Btn size="sm" tone="ghost" onClick={() => cloneEggMut.mutate(egg)} ariaLabel={`Clone ${egg.name}`}><Copy size={12} /></Btn>
+  <Btn size="sm" tone="ghost" onClick={() => exportEgg(egg)} ariaLabel={`Export ${egg.name}`}><Download size={12} /></Btn>
+   <Btn size="sm" tone="danger" onClick={() => setDeleteEggTarget(egg)} ariaLabel={`Delete ${egg.name}`}><Trash2 size={12} /></Btn>
   </div>
   </td>
  </tr>
@@ -421,11 +420,11 @@ export function AdminNestsEggs() {
   </div>
   <div className="border-t border-line pt-4">
   <h4 className="text-sm font-semibold text-text mb-2">Import Egg</h4>
-  <Textarea
-  label="Paste egg JSON configuration"
-  value={importJson}
-  onChange={setImportJson}
-  rows={8}
+  <Textarea 
+  label="Paste egg JSON configuration" 
+  value={importJson} 
+  onChange={setImportJson} 
+  rows={8} 
   placeholder='{"name": "Minecraft", "description": "...", "dockerImages": [...], ...}'
   />
   </div>
@@ -460,6 +459,6 @@ export function AdminNestsEggs() {
     open={Boolean(deleteEggTarget)}
   />
 
-  </div>
+  </AdminPageLayout>
   );
 }

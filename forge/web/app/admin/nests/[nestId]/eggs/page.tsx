@@ -40,18 +40,18 @@ function EggCard({
 }) {
   const primaryImage = dockerImageLines(egg.dockerImages)[0] ?? egg.dockerImage;
   return (
-    <div className="group rounded-xl border border-white/[0.06] bg-[var(--surface)] p-4 transition hover:border-white/[0.12] hover:bg-[var(--surface-raised)] sm:p-5">
+    <div className="group rounded-xl border border-line bg-[var(--surface)] p-4 transition hover:border-line-strong hover:bg-[var(--surface-raised)] sm:p-5">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0 flex-1 space-y-1.5">
-          <h3 className="truncate text-base font-semibold text-slate-100">{egg.name}</h3>
+          <h3 className="truncate text-base font-semibold text-text">{egg.name}</h3>
           {egg.description && (
-            <p className="line-clamp-2 text-sm leading-relaxed text-slate-500">{egg.description}</p>
+            <p className="line-clamp-2 text-sm leading-relaxed text-text-muted">{egg.description}</p>
           )}
         </div>
         <button
           aria-label={`Manage variables for ${egg.name}`}
           onClick={onVariables}
-          className="shrink-0 rounded-lg border border-line bg-overlay-subtle p-2 text-text-subtle opacity-100 transition hover:border-sky-400/40 hover:bg-sky-500/10 hover:text-sky-400 sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
+          className="shrink-0 rounded-lg border border-line bg-overlay-subtle p-2 text-text-subtle opacity-100 transition hover:border-info-line hover:bg-info-subtle hover:text-info sm:opacity-0 sm:group-hover:opacity-100 sm:group-focus-within:opacity-100"
           title="Manage variables"
         >
           <Settings size={14} />
@@ -60,18 +60,18 @@ function EggCard({
 
       <div className="mt-3 flex flex-wrap gap-1.5">
         {primaryImage && (
-          <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-slate-500">
+          <span className="inline-flex items-center gap-1 rounded-md bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-muted">
             <Cpu size={10} /> {primaryImage}
           </span>
         )}
         {egg.startup && (
-          <span className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-slate-500">
+          <span className="inline-flex items-center gap-1 rounded-md bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-muted">
             <Terminal size={10} /> {egg.startup.length > 30 ? egg.startup.slice(0, 30) + "\u2026" : egg.startup}
           </span>
         )}
       </div>
 
-      <div className="mt-4 flex items-center gap-1.5 border-t border-white/[0.06] pt-3">
+      <div className="mt-4 flex items-center gap-1.5 border-t border-line pt-3">
         <Btn size="sm" tone="ghost" onClick={onVariables}>
           <FileCode size={12} /> Variables
         </Btn>
@@ -227,10 +227,10 @@ export default function NestEggsPage() {
         <div className="mb-4 max-w-md"><Input label="Search eggs" value={search} onChange={setSearch} placeholder="Search by name or description" /></div>
 
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">{"Loading eggs\u2026"}</div>
+          <div className="p-8 text-center text-sm text-text-muted">{"Loading eggs\u2026"}</div>
         ) : isError ? (
           <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <span>Could not load eggs: {error?.message ?? "Unknown error"}</span>
               <Btn size="sm" tone="ghost" onClick={() => void eggsQuery.refetch()}>Retry</Btn>
             </div>
