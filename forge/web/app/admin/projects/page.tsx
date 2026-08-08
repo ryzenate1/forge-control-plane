@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderKanban, Plus } from "lucide-react";
-import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { fetchOrganizations, fetchProjects, createProject } from "@/lib/api/tenancy";
 import { useToast } from "@/components/ui/toast";
 
@@ -49,26 +49,25 @@ export default function AdminProjectsPage() {
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader title="Projects" description="Manage projects within organizations" />
+      <SectionHeader title="Projects" sub="Projects grouping workloads inside an organization." />
 
       <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-        <select value={selectedOrg} onChange={(e) => setSelectedOrg(e.target.value)} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
+        <select value={selectedOrg} onChange={(e) => setSelectedOrg(e.target.value)} className="rounded-lg border border-line bg-well px-3 py-1.5 text-sm text-text">
           <option value="">Select organization...</option>
           {safeOrgs.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
         </select>
       </div>
 
       {orgsQuery.isError && (
-        <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-          <span>Could not load organizations: {orgsQuery.error instanceof Error ? orgsQuery.error.message : "unknown error"}</span>
-          <Btn size="sm" tone="ghost" onClick={() => void orgsQuery.refetch()}>Retry</Btn>
+        <div className="mb-4">
+          <AdminErrorState message={`Could not load organizations: ${orgsQuery.error instanceof Error ? orgsQuery.error.message : "unknown error"}`} retry={() => void orgsQuery.refetch()} />
         </div>
       )}
 
       {selectedOrg && (
         <form onSubmit={handleCreate} className="mb-4 flex flex-col gap-2 sm:flex-row">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-red-400/70" required />
-          <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description" className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-red-400/70 sm:w-48" />
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" className="flex-1 rounded-lg border border-line bg-well px-3 py-1.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-danger-line" required />
+          <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description" className="w-full rounded-lg border border-line bg-well px-3 py-1.5 text-sm text-text placeholder:text-text-muted focus:outline-none focus:border-danger-line sm:w-48" />
           <Btn type="submit" disabled={createMut.isPending}><Plus size={14} /> {createMut.isPending ? "Creating..." : "Create"}</Btn>
         </form>
       )}
@@ -76,24 +75,21 @@ export default function AdminProjectsPage() {
       <Card>
         <CardHeader title="All Projects" icon={FolderKanban} />
         {!selectedOrg ? <EmptyState message="Select an organization to view projects" /> :
-         projectsQuery.isPending ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+         projectsQuery.isPending ? <AdminLoadingState label="Loading projects\u2026" /> :
          projectsQuery.isError ? (
            <div className="p-4">
-             <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-               <span>Could not load projects: {projectsQuery.error instanceof Error ? projectsQuery.error.message : "unknown error"}</span>
-               <Btn size="sm" tone="ghost" onClick={() => void projectsQuery.refetch()}>Retry</Btn>
-             </div>
+             <AdminErrorState message={`Could not load projects: ${projectsQuery.error instanceof Error ? projectsQuery.error.message : "unknown error"}`} retry={() => void projectsQuery.refetch()} />
            </div>
          ) :
          safeProjects.length === 0 ? <EmptyState message="No projects in this organization" /> :
-         <div className="divide-y divide-white/[0.06]">
+         <div className="divide-y divide-line">
            {safeProjects.map((p) => (
              <div key={p.id} className="flex items-center justify-between px-4 py-3">
                <div>
-                 <span className="text-sm font-medium text-slate-200">{p.name}</span>
-                 {p.description && <span className="ml-2 text-xs text-slate-500">{p.description}</span>}
+                 <span className="text-sm font-medium text-text">{p.name}</span>
+                 {p.description && <span className="ml-2 text-xs text-text-muted">{p.description}</span>}
                </div>
-               <span className="text-xs text-slate-500">{p.slug}</span>
+               <span className="text-xs text-text-muted">{p.slug}</span>
              </div>
            ))}
          </div>}
