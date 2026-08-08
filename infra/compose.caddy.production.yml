@@ -1,0 +1,15 @@
+# Public Caddy option for Forge Control Plane.
+# Use this OR compose.tls.yml, never both at the same time.
+# Requires Docker Compose 2.24.4+ because the base service volumes are replaced.
+services:
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
+    volumes: !override
+      - ./Caddyfile.production:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      CADDY_ADMIN: "127.0.0.1:2019"
+      PANEL_DOMAIN: "${PANEL_DOMAIN:?Set PANEL_DOMAIN in infra/.env}"

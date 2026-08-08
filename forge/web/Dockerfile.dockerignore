@@ -1,0 +1,12 @@
+.git
+**/.env
+**/.env.*
+**/node_modules
+**/.next
+beacon
+docs
+forge/api
+infra
+reference
+scratch
+*.md

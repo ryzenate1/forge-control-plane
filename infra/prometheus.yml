@@ -1,0 +1,49 @@
+global:
+  scrape_interval: 15s
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  - job_name: api
+    # Forge API exposes Prometheus text metrics at /api/v1/metrics,
+    # protected by the shared METRICS_TOKEN bearer credential.
+    metrics_path: /api/v1/metrics
+    authorization:
+      credentials_file: /run/secrets/metrics_token
+    static_configs:
+      - targets: ["api:8080"]
+  - job_name: daemon
+    # Beacon daemon exposes Prometheus text metrics at /metrics on its HTTP
+    # API port (DAEMON_ADDR, default :9090), protected by the same bearer
+    # credential. Per-container workload metrics are included per server_id.
+    metrics_path: /metrics
+    authorization:
+      credentials_file: /run/secrets/metrics_token
+    static_configs:
+      - targets: ["daemon:9090"]
+  - job_name: postgres-exporter
+    static_configs:
+      - targets: ["postgres-exporter:9187"]
+  - job_name: redis-exporter
+    static_configs:
+      - targets: ["redis-exporter:9121"]
+  - job_name: prometheus
+    static_configs:
+      - targets: ["localhost:9090"]
+  - job_name: alertmanager
+    static_configs:
+      - targets: ["alertmanager:9093"]
+  - job_name: grafana
+    static_configs:
+      - targets: ["grafana:3000"]
+  - job_name: caddy
+    # Caddy exposes its admin API metrics on port 2019.
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["caddy:2019"]

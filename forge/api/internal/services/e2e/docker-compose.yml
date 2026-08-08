@@ -1,0 +1,155 @@
+version: '3.8'
+
+services:
+  # PostgreSQL database for testing
+  postgres:
+    image: postgres:15-alpine
+    container_name: forge-e2e-postgres
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - forge-e2e
+
+  # Test runner service
+  test-runner:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-runner
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e ./..."
+    networks:
+      - forge-e2e
+
+  # Optional: Test runner with specific scenario
+  test-replicated:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-replicated
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e -run TestReplicatedApplicationScenario ./..."
+    networks:
+      - forge-e2e
+    profiles:
+      - replicated
+
+  test-health:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-health
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e -run TestHealthGatedDeploymentScenario ./..."
+    networks:
+      - forge-e2e
+    profiles:
+      - health
+
+  test-node:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-node
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e -run TestNodeFailureScenario ./..."
+    networks:
+      - forge-e2e
+    profiles:
+      - node
+
+  test-gitops:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-gitops
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e -run TestGitOpsComposeStackScenario ./..."
+    networks:
+      - forge-e2e
+    profiles:
+      - gitops
+
+  test-build:
+    build:
+      context: ../../../../../..
+      dockerfile: forge/api/Dockerfile
+    container_name: forge-e2e-build
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      TEST_DATABASE_URL: postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable
+      E2E_ENVIRONMENT: docker
+    volumes:
+      - ../../../../../..:/workspace
+      - ./test-reports:/app/test-reports
+    working_dir: /app/forge/api/internal/services/e2e
+    command: sh -c "sleep 10 && go test -v -tags=e2e -run TestRemoteBuildAndRegistryScenario ./..."
+    networks:
+      - forge-e2e
+    profiles:
+      - build
+
+volumes:
+  postgres_data:
+
+networks:
+  forge-e2e:
+    driver: bridge

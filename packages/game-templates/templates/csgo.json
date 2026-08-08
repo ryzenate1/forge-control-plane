@@ -1,0 +1,120 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "csgo",
+  "name": "Counter-Strike: Global Offensive (CS2)",
+  "description": "Counter-Strike 2 dedicated server. The legendary tactical first-person shooter with competitive matchmaking and community servers.",
+  "version": "1.0.0",
+  "game": "Counter-Strike 2",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/730",
+  "image": "ghcr.io/pterodactyl/yolks:steamcmd",
+  "images": {
+    "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
+  },
+  "startup": "./game/cs2/bin/linuxsteamrt64/cs2 -dedicated -ip 0.0.0.0 -port {{SERVER_PORT}} -console -usercon +game_type {{GAME_TYPE}} +game_mode {{GAME_MODE}} +mapgroup {{MAP_GROUP}} +map {{MAP}} +sv_setsteamaccount {{STEAM_ACCOUNT}} +sv_password '{{SERVER_PASSWORD}}' +sv_lan 0 +exec {{SERVER_CFG}}",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Loading game"
+    },
+    "stop": "quit",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 27015,
+      "protocol": "tcp",
+      "public": true,
+      "description": "CS2 game server traffic"
+    },
+    {
+      "port": 27015,
+      "protocol": "udp",
+      "public": true,
+      "description": "CS2 game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Server password for joining.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "Game Type",
+      "env_variable": "GAME_TYPE",
+      "description": "0=classic, 1=armsrace/demolition.",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1"
+    },
+    {
+      "name": "Game Mode",
+      "env_variable": "GAME_MODE",
+      "description": "0=casual, 1=competitive, 2=scrimmage, 3=wingman, 4=armsrace, 5=demolition, 6=deathmatch.",
+      "default_value": "0",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1,2,3,4,5,6"
+    },
+    {
+      "name": "Map Group",
+      "env_variable": "MAP_GROUP",
+      "description": "Map group to use.",
+      "default_value": "mg_active",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Map",
+      "env_variable": "MAP",
+      "description": "Starting map.",
+      "default_value": "de_dust2",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Steam Account Token",
+      "env_variable": "STEAM_ACCOUNT",
+      "description": "Steam game server login token from https://steamcommunity.com/dev/managegameservers.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server Config",
+      "env_variable": "SERVER_CFG",
+      "description": "Server config file to execute on start.",
+      "default_value": "server.cfg",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 16384,
+    "disk_mb": 20480,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:steamcmd",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# CS2 SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install CS2 dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 730 validate +quit\n\necho \"CS2 server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["fps", "multiplayer", "competitive"],
+  "file_denylist": [],
+  "features": ["steamcmd", "pid_limit"]
+}

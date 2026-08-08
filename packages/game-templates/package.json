@@ -1,0 +1,24 @@
+{
+  "name": "@forge/game-templates",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Game server template catalog for Forge — one-click deploy templates for Minecraft, Palworld, Valheim, Terraria, Enshrouded, Satisfactory, and more",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "prebuild": "node scripts/validate-templates.mjs"
+  },
+  "dependencies": {
+    "@forge/shared-types": "*"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2"
+  },
+  "files": [
+    "dist",
+    "templates",
+    "index.json"
+  ]
+}

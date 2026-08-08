@@ -1,0 +1,214 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: beacon
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: beacon
+spec:
+  type: ClusterIP
+  ports:
+    - port: 9090
+      targetPort: 9090
+      name: beacon-api
+    - port: 2022
+      targetPort: 2022
+      name: beacon-sftp
+  selector:
+    app: gamepanel
+    component: beacon
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: beacon
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: beacon
+spec:
+  selector:
+    matchLabels:
+      app: gamepanel
+      component: beacon
+  template:
+    metadata:
+      labels:
+        app: gamepanel
+        component: beacon
+    spec:
+      dnsPolicy: ClusterFirst
+      securityContext:
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      tolerations:
+        - effect: NoSchedule
+          operator: Exists
+      containers:
+        - name: beacon
+          image: ghcr.io/gamepanel/beacon:v0.1.0
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            runAsGroup: 1000
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          ports:
+            - containerPort: 9090
+              name: beacon-api
+            - containerPort: 2022
+              name: beacon-sftp
+          env:
+            - name: APP_ENV
+              value: "production"
+            - name: DAEMON_ADDR
+              value: ":9090"
+            - name: DAEMON_SFTP_ADDR
+              value: ":2022"
+            - name: DAEMON_SFTP_BIND_ADDR
+              value: ":2022"
+            - name: DAEMON_DATA_DIR
+              value: "/srv/game-panel/servers"
+            - name: DAEMON_BACKUP_DIR
+              value: "/srv/game-panel/servers/.beacon/backups"
+            - name: DOCKER_HOST
+              value: "tcp://127.0.0.1:2375"
+            - name: DAEMON_ALLOW_MOCK_RUNTIME
+              value: "false"
+            - name: DAEMON_ALLOW_INSECURE_NO_AUTH
+              value: "false"
+            - name: DAEMON_NODE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_NODE_ID
+            - name: DAEMON_NODE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_NODE_TOKEN
+            - name: DAEMON_SFTP_HOST_KEY_PASSPHRASE
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_SFTP_HOST_KEY_PASSPHRASE
+            - name: DAEMON_UPGRADE_PUBLIC_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: DAEMON_UPGRADE_PUBLIC_KEY
+            - name: METRICS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: METRICS_TOKEN
+            - name: PANEL_API_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: PANEL_API_URL
+            - name: BACKUP_ADAPTER
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: BACKUP_ADAPTER
+            - name: S3_USE_PATH_STYLE
+              valueFrom:
+                configMapKeyRef:
+                  name: gamepanel-config
+                  key: S3_USE_PATH_STYLE
+          volumeMounts:
+            - name: servers
+              mountPath: /srv/game-panel/servers
+            - name: temp
+              mountPath: /tmp
+          livenessProbe:
+            exec:
+              command:
+                - /daemon
+                - --healthcheck
+            initialDelaySeconds: 30
+            periodSeconds: 15
+          readinessProbe:
+            exec:
+              command:
+                - /daemon
+                - --healthcheck
+            initialDelaySeconds: 10
+            periodSeconds: 10
+        - name: docker-proxy
+          image: tecnativa/docker-socket-proxy:v0.4.2
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: CONTAINERS
+              value: "1"
+            - name: IMAGES
+              value: "1"
+            - name: NETWORKS
+              value: "1"
+            - name: VOLUMES
+              value: "1"
+            - name: INFO
+              value: "1"
+            - name: VERSION
+              value: "1"
+            - name: PING
+              value: "1"
+            - name: POST
+              value: "1"
+            - name: BUILD
+              value: "1"
+            - name: EXEC
+              value: "1"
+            - name: AUTH
+              value: "0"
+            - name: SECRETS
+              value: "0"
+            - name: SERVICES
+              value: "0"
+            - name: SWARM
+              value: "0"
+            - name: SYSTEM
+              value: "0"
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+            readOnlyRootFilesystem: true
+          resources:
+            requests:
+              cpu: 50m
+              memory: 32Mi
+            limits:
+              cpu: 500m
+              memory: 128Mi
+          volumeMounts:
+            - name: dockersocket
+              mountPath: /var/run/docker.sock
+              readOnly: true
+      volumes:
+        - name: dockersocket
+          hostPath:
+            path: /var/run/docker.sock
+            type: Socket
+        - name: servers
+          hostPath:
+            path: /srv/game-panel/servers
+            type: DirectoryOrCreate
+        - name: temp
+          emptyDir:
+            sizeLimit: 1Gi

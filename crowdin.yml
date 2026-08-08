@@ -1,0 +1,6 @@
+project_id: "YOUR_CROWDIN_PROJECT_ID"
+# Replace with your Crowdin project ID from https://crwd.in/project-name/settings#api
+preserve_hierarchy: true
+files:
+  - source: /lang/en.json
+    translation: /lang/%two_letters_code%.json

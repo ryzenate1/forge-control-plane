@@ -1,0 +1,87 @@
+# Standalone game-node deployment. Copy this file and a node-specific .env to
+# each game VPS, then run:
+# docker compose -f compose.beacon.yml --env-file .env up -d --pull always
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      VOLUMES: "1"
+      INFO: "1"
+      VERSION: "1"
+      PING: "1"
+      POST: "1"
+      BUILD: "0"
+      EXEC: "0"
+      AUTH: "0"
+      SECRETS: "0"
+      SERVICES: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    networks:
+      - docker-api
+
+  beacon:
+    image: "${DAEMON_IMAGE:?Set DAEMON_IMAGE to a versioned Beacon image}"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "/daemon", "--healthcheck"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    ports:
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:2022:2022"
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
+      APP_ENV: production
+      DAEMON_ADDR: ${DAEMON_ADDR:-0.0.0.0:9090}
+      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-127.0.0.1:2022}
+      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-0.0.0.0:2022}
+      DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      DAEMON_BACKUP_DIR: ${DAEMON_BACKUP_DIR:-/srv/game-panel/servers/.beacon/backups}
+      DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set the panel node UUID}"
+      DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set the panel-issued node credential}"
+      METRICS_TOKEN: "${METRICS_TOKEN:?Set a metrics bearer token}"
+      DAEMON_SFTP_HOST_KEY_PASSPHRASE: "${DAEMON_SFTP_HOST_KEY_PASSPHRASE:?Set a separate SFTP host-key passphrase}"
+      PANEL_API_URL: "${PANEL_API_URL:?Set the reachable panel API URL}"
+      DAEMON_ALLOW_MOCK_RUNTIME: "false"
+      DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
+      BACKUP_ADAPTER: ${BACKUP_ADAPTER:-local}
+      S3_BUCKET: ${S3_BUCKET:-}
+      S3_REGION: ${S3_REGION:-}
+      S3_ACCESS_KEY_ID: ${S3_ACCESS_KEY_ID:-}
+      S3_SECRET_ACCESS_KEY: ${S3_SECRET_ACCESS_KEY:-}
+      S3_ENDPOINT: ${S3_ENDPOINT:-}
+      S3_PREFIX: ${S3_PREFIX:-}
+      S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
+    volumes:
+      - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}:Z
+    depends_on:
+      docker-proxy:
+        condition: service_started
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_ADMIN
+    networks:
+      - docker-api
+
+networks:
+  docker-api:
+    internal: true

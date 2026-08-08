@@ -1,0 +1,236 @@
+# E2E Test Configuration
+# This file contains configuration for the E2E test suite
+
+# Database configuration
+database:
+  # Connection URL for the test database
+  url: "${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable}"
+  
+  # Connection pool settings
+  pool:
+    max_connections: 20
+    min_connections: 5
+    max_connection_lifetime: "30m"
+    max_connection_idle_time: "5m"
+    health_check_interval: "10s"
+
+# Test execution settings
+test:
+  # Timeout for individual tests
+  timeout: "5m"
+  
+  # Timeout for the entire test suite
+  suite_timeout: "30m"
+  
+  # Whether to run tests in parallel
+  parallel: false
+  
+  # Maximum parallel tests (if parallel is true)
+  max_parallel: 4
+  
+  # Whether to stop on first failure
+  fail_fast: false
+  
+  # Whether to generate reports
+  generate_reports: true
+  
+  # Report formats to generate
+  report_formats:
+    - json
+    - markdown
+    - console
+
+# Test scenarios to run
+scenarios:
+  # Replicated Application scenario
+  replicated_application:
+    enabled: true
+    priority: 1
+    timeout: "5m"
+    
+  # Health-Gated Deployment scenario
+  health_gated_deployment:
+    enabled: true
+    priority: 2
+    timeout: "5m"
+    
+  # Node Failure scenario
+  node_failure:
+    enabled: true
+    priority: 3
+    timeout: "5m"
+    
+  # GitOps Compose Stack scenario
+  gitops_compose_stack:
+    enabled: true
+    priority: 4
+    timeout: "5m"
+    
+  # Remote Build and Registry scenario
+  remote_build_registry:
+    enabled: true
+    priority: 5
+    timeout: "5m"
+
+# Mock services configuration
+mock_services:
+  # Git service mock
+  git:
+    enabled: true
+    clone_timeout: "10s"
+    cleanup_on_exit: true
+    
+  # Build service mock
+  build:
+    enabled: true
+    build_timeout: "30s"
+    capabilities:
+      - "docker"
+      - "build"
+      - "nixpacks"
+    
+  # Registry mock
+  registry:
+    enabled: true
+    push_timeout: "10s"
+    pull_timeout: "10s"
+
+# Test data configuration
+test_data:
+  # Default region for tests
+  region:
+    name: "Test Region"
+    slug: "test-region"
+    enabled: true
+    
+  # Default nodes for tests
+  nodes:
+    - name: "test-node-1"
+      cpu: 4096
+      memory: 8192
+      disk: 102400
+      runtime: "docker"
+      capabilities: ["docker", "build"]
+      
+    - name: "test-node-2"
+      cpu: 4096
+      memory: 8192
+      disk: 102400
+      runtime: "docker"
+      capabilities: ["docker"]
+      
+    - name: "test-node-3"
+      cpu: 2048
+      memory: 4096
+      disk: 51200
+      runtime: "docker"
+      capabilities: ["docker"]
+
+  # Default application for tests
+  application:
+    name: "test-app"
+    replicas: 2
+    cpu: 1024
+    memory: 2048
+    disk: 10240
+    runtime: "docker"
+
+# Reporting configuration
+reporting:
+  # Directory for test reports
+  output_dir: "test-reports"
+  
+  # JSON report filename
+  json_report: "e2e-report.json"
+  
+  # Markdown report filename
+  markdown_report: "e2e-report.md"
+  
+  # Console output settings
+  console:
+    verbose: true
+    colors: true
+    
+  # Whether to include detailed test output in reports
+  include_output: false
+  
+  # Whether to include environment information
+  include_environment: true
+
+# Logging configuration
+logging:
+  # Log level (debug, info, warning, error)
+  level: "info"
+  
+  # Log format (text, json)
+  format: "text"
+  
+  # Log file
+  file: "test-reports/e2e-tests.log"
+  
+  # Whether to log to console
+  console: true
+
+# Environment-specific configurations
+environments:
+  # Local development environment
+  local:
+    database:
+      url: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
+    test:
+      parallel: false
+      
+  # CI environment
+  ci:
+    database:
+      url: "${CI_DATABASE_URL}"
+    test:
+      parallel: true
+      max_parallel: 2
+      fail_fast: true
+      
+  # Docker environment
+  docker:
+    database:
+      url: "postgres://postgres:postgres@postgres:5432/postgres?sslmode=disable"
+    test:
+      parallel: false
+
+# Feature flags for experimental tests
+features:
+  # Enable experimental chaos tests
+  chaos_tests: false
+  
+  # Enable performance tests
+  performance_tests: false
+  
+  # Enable security tests
+  security_tests: false
+  
+  # Enable long-running tests
+  long_running_tests: false
+
+# Cleanup configuration
+cleanup:
+  # Whether to clean up test data after tests
+  enabled: true
+  
+  # Cleanup timeout
+  timeout: "1m"
+  
+  # Whether to clean up on test failure
+  on_failure: true
+
+# Retry configuration
+retry:
+  # Whether to retry failed tests
+  enabled: false
+  
+  # Number of retries
+  count: 3
+  
+  # Delay between retries
+  delay: "1s"
+  
+  # Whether to retry only flaky tests
+  flaky_only: true

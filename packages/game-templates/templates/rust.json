@@ -1,0 +1,129 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "rust",
+  "name": "Rust",
+  "description": "Rust dedicated server. The ultimate survival game where you must build, craft, and fight to survive in a harsh open world.",
+  "version": "1.0.0",
+  "game": "Rust",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/258550",
+  "image": "ghcr.io/pterodactyl/yolks:steamcmd",
+  "images": {
+    "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
+  },
+  "startup": "./RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.level '{{SERVER_LEVEL}}' +server.seed {{SERVER_SEED}} +server.name '{{SERVER_NAME}}' +server.description '{{SERVER_DESC}}' +server.maxplayers {{MAX_PLAYERS}} +server.identity '{{SERVER_IDENTITY}}' +rcon.port {{RCON_PORT}} +rcon.password {{RCON_PASSWORD}} +server.ip 0.0.0.0",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Server Startup Complete"
+    },
+    "stop": "^C",
+    "logs": {}
+  },
+  "ports": [
+    {
+      "port": 28015,
+      "protocol": "udp",
+      "public": true,
+      "description": "Rust game server traffic"
+    },
+    {
+      "port": 28016,
+      "protocol": "tcp",
+      "public": true,
+      "description": "RCON remote administration port"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Name of the Rust server.",
+      "default_value": "Rust Public Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server Description",
+      "env_variable": "SERVER_DESC",
+      "description": "Description shown in the server browser.",
+      "default_value": "A Rust server hosted on GamePanel",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:256"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum number of players.",
+      "default_value": "50",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:500"
+    },
+    {
+      "name": "Server Level",
+      "env_variable": "SERVER_LEVEL",
+      "description": "Map type.",
+      "default_value": "Procedural Map",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server Seed",
+      "env_variable": "SERVER_SEED",
+      "description": "Seed value for procedural map generation.",
+      "default_value": "1234",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer"
+    },
+    {
+      "name": "Server Identity",
+      "env_variable": "SERVER_IDENTITY",
+      "description": "Server identity folder name.",
+      "default_value": "server1",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string|max:32"
+    },
+    {
+      "name": "RCON Port",
+      "env_variable": "RCON_PORT",
+      "description": "Port for RCON remote administration.",
+      "default_value": "28016",
+      "user_viewable": true,
+      "user_editable": false,
+      "rules": "required|integer|min:1024|max:65535"
+    },
+    {
+      "name": "RCON Password",
+      "env_variable": "RCON_PASSWORD",
+      "description": "Password for RCON access.",
+      "default_value": "changeme",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "required|string|min:8|max:64"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 16384,
+    "disk_mb": 20480,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:steamcmd",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# Rust SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Rust dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 258550 validate +quit\n\necho \"Rust server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "crafting"],
+  "file_denylist": [],
+  "features": ["steamcmd", "pid_limit"]
+}

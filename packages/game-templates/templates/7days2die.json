@@ -1,0 +1,98 @@
+{
+  "$schema": "../template-schema.json",
+  "id": "7days2die",
+  "name": "7 Days to Die",
+  "description": "7 Days to Die dedicated server. The open-world zombie survival sandbox game with crafting, building, and horde nights.",
+  "version": "1.0.0",
+  "game": "7 Days to Die",
+  "author": "GamePanel",
+  "update_url": "https://api.steamcmd.net/v1/info/294420",
+  "image": "ghcr.io/pterodactyl/yolks:steamcmd",
+  "images": {
+    "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
+  },
+  "startup": "./7DaysToDieServer.x86_64 -configfile=serverconfig.xml -logfile=logs/7DaysToDie.log -quit -batchmode -nographics -dedicated",
+  "config": {
+    "files": {},
+    "startup": {
+      "done": "Server start completed"
+    },
+    "stop": "shutdown",
+    "logs": {
+      "content": "logs/*.log"
+    }
+  },
+  "ports": [
+    {
+      "port": 26900,
+      "protocol": "udp",
+      "public": true,
+      "description": "7 Days to Die game server traffic"
+    }
+  ],
+  "env": [
+    {
+      "name": "Server Name",
+      "env_variable": "SERVER_NAME",
+      "description": "Name of the server.",
+      "default_value": "7 Days to Die Server",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Server World",
+      "env_variable": "SERVER_WORLD",
+      "description": "World name.",
+      "default_value": "Navezgane",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|string|max:64"
+    },
+    {
+      "name": "Max Players",
+      "env_variable": "MAX_PLAYERS",
+      "description": "Maximum players.",
+      "default_value": "8",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|min:1|max:64"
+    },
+    {
+      "name": "Server Password",
+      "env_variable": "SERVER_PASSWORD",
+      "description": "Server password.",
+      "default_value": "",
+      "user_viewable": false,
+      "user_editable": true,
+      "rules": "nullable|string|max:32"
+    },
+    {
+      "name": "Game Difficulty",
+      "env_variable": "GAME_DIFFICULTY",
+      "description": "0-5 difficulty level.",
+      "default_value": "2",
+      "user_viewable": true,
+      "user_editable": true,
+      "rules": "required|integer|in:0,1,2,3,4,5"
+    }
+  ],
+  "resources": {
+    "cpu": 200,
+    "memory_mb": 4096,
+    "memory_max_mb": 12288,
+    "disk_mb": 20480,
+    "cpu_shares": 1024,
+    "io_weight": 750,
+    "swap_mb": 0
+  },
+  "install_script": {
+    "container": "ghcr.io/pterodactyl/installers:steamcmd",
+    "entrypoint": "bash",
+    "script": "#!/bin/bash\n# 7 Days to Die SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install 7 Days to Die dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 294420 validate +quit\n\necho \"7 Days to Die server installation complete\""
+  },
+  "supported_platforms": ["docker", "podman"],
+  "categories": ["survival", "open-world", "zombie"],
+  "file_denylist": [],
+  "features": ["steamcmd", "pid_limit"]
+}

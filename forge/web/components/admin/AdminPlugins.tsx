@@ -1,0 +1,116 @@
+"use client";
+
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Plug, Plus, Trash2, Zap } from "lucide-react";
+import { deleteJSON, fetchJSON, postJSON, type ApiPlugin } from "@/lib/api";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminFormSection } from "./admin-ui";
+
+export function AdminPlugins() {
+  const qc = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
+  const query = useQuery({
+    queryKey: ["plugins"],
+    queryFn: () => fetchJSON<ApiPlugin[]>("/admin/plugins"),
+  });
+  const [open, setOpen] = useState(false);
+  const [url, setUrl] = useState("");
+  const importMut = useMutation({
+    mutationFn: () => postJSON<ApiPlugin>("/admin/plugins/import/url", { url: url.trim() }),
+    onSuccess: () => {
+      setOpen(false);
+      setUrl("");
+      void qc.invalidateQueries({ queryKey: ["plugins"] });
+    },
+  });
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => deleteJSON(`/admin/plugins/${encodeURIComponent(id)}`),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["plugins"] }),
+  });
+  const lifecycleMut = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      postJSON(`/admin/plugins/${encodeURIComponent(id)}/${enabled ? "disable" : "enable"}`, {}),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: ["plugins"] }),
+  });
+  const plugins = useMemo(() => Array.isArray(query.data) ? query.data : [], [query.data]);
+  
+  return <div>
+    <SectionHeader
+      title="Plugins"
+      sub="Plugin manifest registry with install, update, enable, disable, and uninstall lifecycle controls."
+      action={
+        <Btn onClick={() => setOpen(true)}><Plus size={14}/> Import Manifest URL</Btn>
+      }
+    />
+    <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-950/20 p-3 text-sm text-emerald-200">
+      <div className="flex items-start gap-2">
+        <Zap className="h-4 w-4 mt-0.5 flex-shrink-0" />
+        <div>
+          <p className="font-semibold">Plugin lifecycle active</p>
+          <p className="text-xs mt-1">Manifests remain permission-scoped. Enable only reviewed plugins.</p>
+        </div>
+      </div>
+    </div>
+    <Card>
+      <CardHeader title={`${plugins.length} installed manifests`} icon={Plug}/>
+      {query.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load plugin manifests: {query.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void query.refetch()}>Retry</Btn></div></div> : 
+       plugins.length === 0 ? <EmptyState icon={Plug} message="No plugin manifests registered."/> : 
+       <div className="overflow-x-auto">
+         <table className="w-full text-sm">
+           <thead>
+             <tr className="border-b border-white/[0.06] text-left text-xs uppercase text-slate-500">
+               <th className="px-4 py-3">Plugin</th>
+               <th className="px-4 py-3">Kind</th>
+               <th className="px-4 py-3">Version</th>
+               <th className="px-4 py-3">Runtime</th>
+               <th className="px-4 py-3 text-right">Actions</th>
+             </tr>
+           </thead>
+            <tbody className="divide-y divide-white/[0.04]">
+              {Array.isArray(plugins) && plugins.map((plugin) => (
+               <tr key={plugin.id}>
+                 <td className="px-4 py-3">
+                   <p className="font-semibold">{plugin.name}</p>
+                   <p className="text-xs text-slate-500">{plugin.description}</p>
+                 </td>
+                 <td className="px-4 py-3">{plugin.kind}</td>
+                 <td className="px-4 py-3 font-mono text-xs">{plugin.version}</td>
+                 <td className="px-4 py-3"><Pill tone={plugin.enabled ? "green" : "yellow"}>{plugin.enabled ? "Enabled" : "Disabled"}</Pill></td>
+                 <td className="px-4 py-3 text-right">
+                   <Btn size="sm" tone="ghost" onClick={() => lifecycleMut.mutate({ id: plugin.id, enabled: plugin.enabled })}>
+                     {plugin.enabled ? "Disable" : "Enable"}
+                   </Btn>
+                   <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete metadata for ${plugin.name}?`, description: "The plugin record will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(plugin.id); })(); }}>
+                     <Trash2 size={12}/>
+                   </Btn>
+                 </td>
+               </tr>
+             ))}
+           </tbody>
+         </table>
+       </div>
+      }
+    </Card>
+    
+    {/* Import URL Modal */}
+    {open ? (
+      <Modal title="Import Plugin Manifest" onClose={() => setOpen(false)}>
+        <AdminFormSection title="Manifest URL">
+        <Input label="HTTPS manifest URL" value={url} onChange={setUrl} placeholder="https://example.com/plugin.json"/>
+        <p className="text-xs text-slate-400">The backend fetches this URL and stores JSON manifest metadata. Review network and trust implications before importing.</p>
+        </AdminFormSection>
+        {importMut.error ? <p className="mt-3 text-sm text-red-300">{importMut.error.message}</p> : null}
+        <ModalFooter 
+          onCancel={() => setOpen(false)} 
+          onConfirm={() => importMut.mutate()} 
+          disabled={!/^https:\/\//i.test(url.trim()) || importMut.isPending} 
+          confirmLabel="Import Metadata"
+        />
+      </Modal>
+    ) : null}
+    {renderConfirm()}
+    
+
+  </div>;
+}

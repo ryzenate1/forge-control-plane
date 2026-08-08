@@ -1,0 +1,68 @@
+name: Release Beacon
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  linux-amd64:
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: beacon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: beacon/go.mod
+          cache-dependency-path: beacon/go.sum
+
+      - name: Load release signing key
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.BEACON_RELEASE_SIGNING_KEY }}
+        run: |
+          test -n "$RELEASE_SIGNING_KEY"
+          umask 077
+          printf '%s\n' "$RELEASE_SIGNING_KEY" > "$RUNNER_TEMP/beacon-release-key.pem"
+          openssl pkey -in "$RUNNER_TEMP/beacon-release-key.pem" -pubout -outform DER |
+            tail -c 32 |
+            base64 -w0 > "$RUNNER_TEMP/beacon-release-public-key"
+
+      - name: Test
+        run: go test ./...
+
+      - name: Build
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          mkdir -p dist
+          version="${GITHUB_REF_NAME#v}"
+          public_key="$(cat "$RUNNER_TEMP/beacon-release-public-key")"
+          go build -trimpath \
+            -ldflags "-s -w -X main.Version=$version -X main.UpdatePublicKey=$public_key" \
+            -o dist/beacon_linux_amd64 ./cmd/daemon
+
+      - name: Sign release manifest
+        run: |
+          cd dist
+          sha256sum beacon_linux_amd64 > checksums.txt
+          ../../scripts/release/sign-beacon-release.sh \
+            "$RUNNER_TEMP/beacon-release-key.pem" checksums.txt
+          rm -f "$RUNNER_TEMP/beacon-release-key.pem"
+
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 ||
+            gh release create "$GITHUB_REF_NAME" --verify-tag --title "$GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" \
+            dist/beacon_linux_amd64 \
+            dist/checksums.txt \
+            dist/checksums.txt.sig \
+            --clobber

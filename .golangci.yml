@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - misspell
+    - gosec
+    - gocritic
+    - gocyclo
+    - goconst
+    - funlen
+    - whitespace
+  settings:
+    misspell:
+      locale: US
+    gosec:
+      excludes:
+        - G104
+        - G304
+  exclusions:
+    rules:
+      - path: reference/
+        linters: [errcheck, govet, staticcheck, unused]
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0

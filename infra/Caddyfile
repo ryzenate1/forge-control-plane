@@ -1,0 +1,40 @@
+# Forge Game Panel — Caddy Configuration
+# Auto TLS handled externally (local_certs for local dev).
+# Admin API is reachable only on the private Docker networks.
+
+{
+  admin 127.0.0.1:2019
+  local_certs
+}
+
+api.forge.local {
+  reverse_proxy api:8080
+  header {
+    Strict-Transport-Security     "max-age=63072000; includeSubDomains; preload"
+    X-Content-Type-Options        "nosniff"
+    X-Frame-Options               "DENY"
+    X-XSS-Protection              "0"
+    Cross-Origin-Opener-Policy    "same-origin"
+    Cross-Origin-Embedder-Policy  "require-corp"
+    Cross-Origin-Resource-Policy  "same-origin"
+    Referrer-Policy               "strict-origin-when-cross-origin"
+    Permissions-Policy            "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy       "default-src 'self'; frame-ancestors 'none'"
+  }
+}
+
+forge.local {
+  reverse_proxy web:3000
+  header {
+    Strict-Transport-Security     "max-age=63072000; includeSubDomains; preload"
+    X-Content-Type-Options        "nosniff"
+    X-Frame-Options               "DENY"
+    X-XSS-Protection              "0"
+    Cross-Origin-Opener-Policy    "same-origin"
+    Cross-Origin-Embedder-Policy  "require-corp"
+    Cross-Origin-Resource-Policy  "same-origin"
+    Referrer-Policy               "strict-origin-when-cross-origin"
+    Permissions-Policy            "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy       "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'"
+  }
+}

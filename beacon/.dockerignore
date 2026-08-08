@@ -1,0 +1,10 @@
+# beacon build context (docker compose builds from ../beacon)
+daemon
+*.log
+.env
+.env.*
+Dockerfile
+.dockerignore
+*.md
+.git
+.gitignore

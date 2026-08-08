@@ -1,0 +1,25 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root { --ink:#f1f5f9; --surface:#0a0e16; --paper:#111722; --line:rgba(148,163,184,.14); --muted:#94a3b8; --red:#dc2626; --red-dark:#ef4444; --red-wash:rgba(220,38,38,.12); --nav:#0d1320; --nav-line:rgba(148,163,184,.12); --surface-hover:#171f2d; --green:#059669; --green-light:#052e22; --green-border:rgba(5,150,105,.35); --green-dark:#10b981; --amber:#d97706; }
+html { scroll-behavior:smooth; }
+body { margin:0; color:var(--ink); background:var(--surface); font:15px/1.7 var(--font-manrope),Arial,sans-serif; }
+a { color:inherit; text-decoration:underline; text-decoration-color:var(--line); text-underline-offset:2px; }
+a:hover { text-decoration-color:var(--red); }
+button,input { font:inherit; }
+::selection { background:#ffd7d4; }
+:focus-visible { outline:2px solid var(--red); outline-offset:2px; }
+@media (prefers-reduced-motion:reduce) { *,*::before,*::after { animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important; } }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

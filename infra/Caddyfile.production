@@ -1,0 +1,42 @@
+# Public Caddy configuration for Forge Control Plane.
+# Use with compose.caddy.production.yml and set PANEL_DOMAIN in infra/.env.
+# Customize by editing this file; Caddyfile.production.example documents the baseline.
+# Do not run this alongside compose.tls.yml: both claim ports 80 and 443.
+
+{$PANEL_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    X-XSS-Protection "0"
+    Cross-Origin-Opener-Policy "same-origin"
+    Cross-Origin-Embedder-Policy "require-corp"
+    Cross-Origin-Resource-Policy "same-origin"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  }
+
+  request_body {
+    max_size 64MB
+  }
+
+  # Caddy's reverse_proxy supports WebSocket upgrades automatically.
+  handle /api/* {
+    reverse_proxy api:8080 {
+      health_uri /api/v1/health/live
+      health_interval 10s
+      health_timeout 5s
+    }
+  }
+
+  handle {
+    reverse_proxy web:3000 {
+      health_uri /
+      health_interval 10s
+      health_timeout 5s
+    }
+  }
+}

@@ -1,0 +1,30 @@
+# Public Caddy configuration for Forge Control Plane.
+# Use with compose.caddy.production.yml, set PANEL_DOMAIN in infra/.env,
+# then copy this file to Caddyfile.production before starting the override.
+# Do not run this alongside compose.tls.yml: both claim ports 80 and 443.
+
+{$PANEL_DOMAIN} {
+  encode zstd gzip
+
+  header {
+    X-Content-Type-Options "nosniff"
+    X-Frame-Options "DENY"
+    Referrer-Policy "strict-origin-when-cross-origin"
+    Permissions-Policy "geolocation=(), microphone=(), camera=()"
+    Content-Security-Policy "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'"
+    Strict-Transport-Security "max-age=31536000; includeSubDomains"
+  }
+
+  request_body {
+    max_size 64MB
+  }
+
+  # Caddy's reverse_proxy supports WebSocket upgrades automatically.
+  handle /api/* {
+    reverse_proxy api:8080
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
+}

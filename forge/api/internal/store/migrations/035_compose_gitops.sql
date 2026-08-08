@@ -1,0 +1,17 @@
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_source_id TEXT;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_repository_url TEXT;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_repository_path TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_branch TEXT DEFAULT 'main';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_commit_sha TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_desired_commit_sha TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_previous_commit_sha TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_previous_compose_yaml TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_auto_update BOOLEAN DEFAULT false;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_poll_interval_seconds INTEGER DEFAULT 300;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_webhook_secret TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_webhook_id TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_last_webhook_at TIMESTAMPTZ;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_update_status TEXT DEFAULT 'idle';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_update_error TEXT DEFAULT '';
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_next_poll_at TIMESTAMPTZ;
+ALTER TABLE compose_stacks ADD COLUMN IF NOT EXISTS git_credential_id TEXT;

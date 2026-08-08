@@ -1,0 +1,1 @@
+ALTER TABLE deployments ADD COLUMN IF NOT EXISTS health_check_host TEXT NOT NULL DEFAULT '';

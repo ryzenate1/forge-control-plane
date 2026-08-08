@@ -1,0 +1,100 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  forge-api:
+    name: forge/api (Go)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: forge/api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: forge/api/go.mod
+          cache-dependency-path: forge/api/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -timeout 10m -count=1 ./...
+
+  beacon:
+    name: beacon (Go)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: beacon
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: beacon/go.mod
+          cache-dependency-path: beacon/go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test -race -timeout 10m -count=1 ./...
+
+  packages:
+    name: packages (shared-types, sdk, ui)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build packages
+        run: npm run build:packages
+
+  web:
+    name: forge/web (Next.js)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm --workspace @forge/web run typecheck
+
+      - name: Lint
+        run: npm --workspace @forge/web run lint
+
+      - name: Build
+        run: npm --workspace @forge/web run build

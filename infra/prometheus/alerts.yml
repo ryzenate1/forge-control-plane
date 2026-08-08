@@ -1,0 +1,38 @@
+groups:
+  - name: gamepanel.rules
+    rules:
+      - alert: GamePanelAPIDown
+        expr: up{job="api"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Forge API is down"
+          description: "Prometheus cannot scrape the Forge API."
+
+      - alert: GamePanelDaemonDown
+        expr: up{job="daemon"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Beacon daemon is down"
+          description: "Prometheus cannot scrape the beacon daemon."
+
+      - alert: PrometheusSelfScrapeFailed
+        expr: up{job="prometheus"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Prometheus self-scrape failed"
+          description: "Prometheus is unable to scrape its own metrics endpoint."
+
+      - alert: ForgeApiReconciliationFailures
+        expr: increase(game_panel_api_reconciliation_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forge API reconciliation failures"
+          description: "The Forge API reconciler is failing reconciliation runs (game_panel_api_reconciliation_failures_total is increasing)."

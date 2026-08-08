@@ -1,0 +1,42 @@
+# Alertmanager configuration.
+#
+# NOTE: this file must load cleanly with NO environment variables set.
+# prom/alertmanager:v0.27.0 does not support ${VAR} expansion in the config
+# (the --config.expand-env flag from Loki/Cortex does not exist here), and
+# unexpanded/empty SMTP or webhook values fail configuration validation at
+# startup. SMTP and webhook receivers are therefore commented out below; fill
+# in real values (and uncomment) when notification channels are configured.
+
+global:
+  resolve_timeout: 5m
+
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  receiver: "default"
+
+receivers:
+  # Without any integrations this receiver acknowledges alerts and drops
+  # them (with a log line) so the routing tree stays valid by default.
+  - name: "default"
+
+  # Example SMTP receiver — uncomment and fill in:
+  # - name: "admin-email"
+  #   email_configs:
+  #     - to: "ops@example.com"
+  #       from: "alertmanager@example.com"
+  #       smarthost: "smtp.example.com:587"
+  #       auth_username: "alertmanager"
+  #       auth_password: "change-me"
+  #       send_resolved: true
+
+  # Example webhook receiver — uncomment and fill in:
+  # - name: "webhook"
+  #   webhook_configs:
+  #     - url: "http://example.com/hooks/alertmanager"
+  #       send_resolved: true
