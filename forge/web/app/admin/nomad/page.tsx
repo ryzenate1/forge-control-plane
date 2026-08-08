@@ -19,6 +19,7 @@ import {
 import { nomadStatusTone } from "@/lib/api/status";
 import { AdminPageLayout, AdminTabs, Btn, Card, CardHeader, Modal, Pill, SectionHeader, Textarea, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const TABS = [
   { id: "jobs", label: "Jobs", icon: Workflow },
@@ -35,6 +36,7 @@ export default function NomadAdminPage() {
   const [submitOpen, setSubmitOpen] = useState(false);
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
 
   const jobsQ = useQuery({ queryKey: ["nomad-jobs"], queryFn: () => fetchNomadJobs(), enabled: tab === "jobs" });
   const allocsQ = useQuery({ queryKey: ["nomad-allocations"], queryFn: () => fetchNomadAllocations(), enabled: tab === "allocations" });
@@ -68,12 +70,12 @@ export default function NomadAdminPage() {
     <AdminPageLayout>
       <SectionHeader
         title="Nomad"
-        sub="Jobs, allocations, client nodes and deployments on the Nomad control plane — configured via NOMAD_ADDR / NOMAD_TOKEN."
+        sub="Nomad jobs, allocations, nodes and deployments"
         action={
           <div className="flex flex-wrap items-center gap-2">
             <Btn size="sm" tone="ghost" onClick={refresh}><RefreshCw size={14} /> Refresh</Btn>
             <Btn size="sm" tone="primary" onClick={() => setSubmitOpen(true)}><Rocket size={14} /> Submit job</Btn>
-            <span className="text-xs font-mono text-slate-400">{tab}</span>
+            <span className="text-xs font-mono text-text-subtle">{tab}</span>
           </div>
         }
       />
@@ -86,15 +88,15 @@ export default function NomadAdminPage() {
           {jobsQ.isLoading ? <AdminLoadingState label="Loading jobs…" /> : jobsQ.isError ? <div className="p-4"><AdminErrorState message={(jobsQ.error as Error).message} retry={() => void jobsQ.refetch()} /></div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr className="border-b border-white/[0.06]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Type</th><th className="px-4 py-2.5 font-medium">Actions</th></tr></thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {(jobsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-slate-500">No jobs.</td></tr> : (jobsQ.data as NomadJob[]).map((j) => (
-                    <tr key={j.ID} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-200">{j.Name || j.ID}</td>
+                <thead className="text-left text-xs uppercase tracking-wider text-text-muted"><tr className="border-b border-line"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Type</th><th className="px-4 py-2.5 font-medium">Actions</th></tr></thead>
+                <tbody className="divide-y divide-line">
+                  {(jobsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-text-muted">No jobs.</td></tr> : (jobsQ.data as NomadJob[]).map((j) => (
+                    <tr key={j.ID} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{j.Name || j.ID}</td>
                       <td className="px-4 py-3"><Pill tone={nomadStatusTone(j.Status)}>{j.Status || "—"}</Pill></td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{j.Type || "service"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{j.Type || "service"}</td>
                       <td className="px-4 py-3">
-                        <Btn size="sm" tone="danger" disabled={pending || j.Status === "stopped"} loading={stopMut.isPending} onClick={() => stopMut.mutate(j.ID)} title="Stop job"><Square size={12} /> Stop</Btn>
+                        <Btn size="sm" tone="danger" disabled={pending || j.Status === "stopped"} loading={stopMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Stop Nomad job ${j.Name || j.ID}?`, description: "The job will be stopped on the Nomad control plane. This cannot be undone.", danger: true, confirmLabel: "Stop" })) stopMut.mutate(j.ID); })(); }} title="Stop job"><Square size={12} /> Stop</Btn>
                       </td>
                     </tr>
                   ))}
@@ -111,15 +113,15 @@ export default function NomadAdminPage() {
           {allocsQ.isLoading ? <AdminLoadingState label="Loading allocations…" /> : allocsQ.isError ? <div className="p-4"><AdminErrorState message={(allocsQ.error as Error).message} retry={() => void allocsQ.refetch()} /></div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr className="border-b border-white/[0.06]"><th className="px-4 py-2.5 font-medium">ID</th><th className="px-4 py-2.5 font-medium">Job</th><th className="px-4 py-2.5 font-medium">Task Group</th><th className="px-4 py-2.5 font-medium">Client Status</th><th className="px-4 py-2.5 font-medium">Node</th></tr></thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {(allocsQ.data ?? []).length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-500">No allocations.</td></tr> : (allocsQ.data as NomadAllocation[]).map((a) => (
-                    <tr key={a.ID} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-200">{a.ID.slice(0, 8)}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{a.JobID || "—"}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{a.TaskGroup || "—"}</td>
+                <thead className="text-left text-xs uppercase tracking-wider text-text-muted"><tr className="border-b border-line"><th className="px-4 py-2.5 font-medium">ID</th><th className="px-4 py-2.5 font-medium">Job</th><th className="px-4 py-2.5 font-medium">Task Group</th><th className="px-4 py-2.5 font-medium">Client Status</th><th className="px-4 py-2.5 font-medium">Node</th></tr></thead>
+                <tbody className="divide-y divide-line">
+                  {(allocsQ.data ?? []).length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-text-muted">No allocations.</td></tr> : (allocsQ.data as NomadAllocation[]).map((a) => (
+                    <tr key={a.ID} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{a.ID.slice(0, 8)}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{a.JobID || "—"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{a.TaskGroup || "—"}</td>
                       <td className="px-4 py-3"><Pill tone={nomadStatusTone(a.ClientStatus)}>{a.ClientStatus || "—"}</Pill></td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{a.NodeID ? a.NodeID.slice(0, 8) : "—"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{a.NodeID ? a.NodeID.slice(0, 8) : "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -135,14 +137,14 @@ export default function NomadAdminPage() {
           {nodesQ.isLoading ? <AdminLoadingState label="Loading nodes…" /> : nodesQ.isError ? <div className="p-4"><AdminErrorState message={(nodesQ.error as Error).message} retry={() => void nodesQ.refetch()} /></div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr className="border-b border-white/[0.06]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Address</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Version</th><th className="px-4 py-2.5 font-medium">Actions</th></tr></thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {(nodesQ.data ?? []).length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-slate-500">No nodes.</td></tr> : (nodesQ.data as NomadNode[]).map((n) => (
-                    <tr key={n.ID} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-200">{n.Name || n.ID.slice(0, 8)}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{n.HTTPAddr || "—"}</td>
+                <thead className="text-left text-xs uppercase tracking-wider text-text-muted"><tr className="border-b border-line"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Address</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Version</th><th className="px-4 py-2.5 font-medium">Actions</th></tr></thead>
+                <tbody className="divide-y divide-line">
+                  {(nodesQ.data ?? []).length === 0 ? <tr><td colSpan={5} className="py-8 text-center text-sm text-text-muted">No nodes.</td></tr> : (nodesQ.data as NomadNode[]).map((n) => (
+                    <tr key={n.ID} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{n.Name || n.ID.slice(0, 8)}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{n.HTTPAddr || "—"}</td>
                       <td className="px-4 py-3"><Pill tone={nomadStatusTone(n.Status)}>{n.Status || "—"}{n.Drain ? " · draining" : ""}</Pill></td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{n.Version || "—"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{n.Version || "—"}</td>
                       <td className="px-4 py-3">
                         <Btn size="sm" tone={n.Drain ? "success" : "warning"} disabled={pending} loading={drainMut.isPending} onClick={() => drainMut.mutate({ id: n.ID, drain: !n.Drain })} title={n.Drain ? "Mark eligible" : "Start drain"}>{n.Drain ? "Eligible" : "Drain"}</Btn>
                       </td>
@@ -161,14 +163,14 @@ export default function NomadAdminPage() {
           {deploymentsQ.isLoading ? <AdminLoadingState label="Loading deployments…" /> : deploymentsQ.isError ? <div className="p-4"><AdminErrorState message={(deploymentsQ.error as Error).message} retry={() => void deploymentsQ.refetch()} /></div> : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
-                <thead className="text-left text-xs uppercase tracking-wider text-slate-500"><tr className="border-b border-white/[0.06]"><th className="px-4 py-2.5 font-medium">ID</th><th className="px-4 py-2.5 font-medium">Job</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Desired</th></tr></thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {(deploymentsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-slate-500">No deployments.</td></tr> : (deploymentsQ.data as NomadDeployment[]).map((d) => (
-                    <tr key={d.ID} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs text-slate-200">{d.ID.slice(0, 8)}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.JobID || "—"}</td>
+                <thead className="text-left text-xs uppercase tracking-wider text-text-muted"><tr className="border-b border-line"><th className="px-4 py-2.5 font-medium">ID</th><th className="px-4 py-2.5 font-medium">Job</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Desired</th></tr></thead>
+                <tbody className="divide-y divide-line">
+                  {(deploymentsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-text-muted">No deployments.</td></tr> : (deploymentsQ.data as NomadDeployment[]).map((d) => (
+                    <tr key={d.ID} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{d.ID.slice(0, 8)}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{d.JobID || "—"}</td>
                       <td className="px-4 py-3"><Pill tone={nomadStatusTone(d.Status)}>{d.Status || "—"}</Pill></td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{d.DesiredStatus || "—"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{d.DesiredStatus || "—"}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -179,6 +181,7 @@ export default function NomadAdminPage() {
       )}
 
       {submitOpen && <SubmitJobModal onClose={() => setSubmitOpen(false)} onSubmitted={(id) => { toast({ tone: "success", title: "Job submitted", message: id }); void qc.invalidateQueries({ queryKey: ["nomad-jobs"] }); setSubmitOpen(false); }} onError={onError("submit job")} />}
+      {renderConfirm()}
     </AdminPageLayout>
   );
 }
@@ -205,7 +208,7 @@ function SubmitJobModal({ onClose, onSubmitted, onError }: { onClose: () => void
     <Modal title="Submit Nomad job" onClose={onClose} description="Paste a Nomad job document. The control-plane HTTP API consumes JSON; HCL must be rendered to JSON first.">
       <div className="space-y-4">
         <Textarea label="Job specification (JSON)" value={spec} onChange={setSpec} rows={14} placeholder={'{\n  "Job": {\n    "ID": "example",\n    "Type": "service",\n    "Datacenters": ["dc1"],\n    "TaskGroups": []\n  }\n}'} />
-        <p className="text-xs leading-5 text-slate-500">Non-JSON input is forwarded as HCL and the API will reject it with guidance — run <code className="font-mono">nomad job run -output</code> or a JSON converter to render HCL to a job descriptor.</p>
+        <p className="text-xs leading-5 text-text-muted">Non-JSON input is forwarded as HCL and the API will reject it with guidance — run <code className="font-mono">nomad job run -output</code> or a JSON converter to render HCL to a job descriptor.</p>
         <div className="flex justify-end gap-2 pt-2">
           <Btn tone="ghost" onClick={onClose}>Cancel</Btn>
           <Btn tone="primary" loading={submitMut.isPending} disabled={!spec.trim()} onClick={() => submitMut.mutate()}><Rocket size={14} /> Submit</Btn>
