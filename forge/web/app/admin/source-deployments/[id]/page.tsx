@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import type { ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
@@ -19,7 +18,6 @@ import { Play, XCircle, Trash2, RefreshCw } from "lucide-react";
 import {
   AdminErrorState,
   AdminLoadingState,
-  AdminPageHeader,
   AdminPageLayout,
   AdminSection,
   AdminTable,
@@ -27,10 +25,12 @@ import {
   AdminTd,
   AdminTh,
   AdminTHead,
+  AdminTr,
   Btn,
   Card,
   EmptyState,
   Pill,
+  SectionHeader,
 } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { FreshnessBadge } from "@/components/admin/telemetry-ui";
@@ -55,8 +55,8 @@ function Fact({ label, children }: { label: string; children: React.ReactNode })
 }
 
 /**
- * Log stage colour came from a private ladder of `text-red-400` /
- * `text-amber-400` / `text-emerald-400` / `text-slate-400`; it now uses the same
+ * Log stage colour came from a private ladder of `text-danger` /
+ * `text-warn` / `text-ok` / `text-text-subtle`; it now uses the same
  * tone vocabulary the rest of the admin uses.
  */
 function stageClass(stage: string): string {
@@ -112,6 +112,7 @@ export default function SourceDeploymentDetailPage() {
     mutationFn: () => deploySourceDeployment(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sourceDeployment", id] });
+      queryClient.invalidateQueries({ queryKey: ["buildLogs", id] });
       toast({ tone: "success", title: "Build queued", message: "The deployment was queued for a rebuild." });
     },
     onError: (err) => toast({ tone: "error", title: "Build not queued", message: errorMessage(err) }),
@@ -121,6 +122,7 @@ export default function SourceDeploymentDetailPage() {
     mutationFn: () => cancelSourceDeployment(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sourceDeployment", id] });
+      queryClient.invalidateQueries({ queryKey: ["buildLogs", id] });
       toast({ tone: "success", title: "Deployment canceled" });
     },
     onError: (err) => toast({ tone: "error", title: "Cancel failed", message: errorMessage(err) }),
@@ -136,10 +138,10 @@ export default function SourceDeploymentDetailPage() {
   });
 
   const heading = (
-    <AdminPageHeader
+    <SectionHeader
       backAction={() => router.push("/admin/source-deployments")}
       backLabel="Source Deployments"
-      description={
+      sub={
         deployment
           ? `${deployment.repository} · branch ${deployment.branch || "not reported"}`
           : undefined
