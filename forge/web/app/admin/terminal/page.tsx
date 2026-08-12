@@ -5,7 +5,7 @@ import type { Terminal as XTerm } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import { Terminal as TerminalIcon, RefreshCw, Wifi, WifiOff } from "lucide-react";
 import { getApiBaseUrl, buildWebSocketUrl, checkApiReachable } from "@/lib/api/http";
-import { Card, CardHeader, Btn, AdminToolbar, AdminLoadingState, AdminPageLayout, AdminPageHeader } from "@/components/admin/admin-ui";
+import { Card, CardHeader, Btn, AdminToolbar, AdminLoadingState, AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
 import { NodeSelect } from "@/components/admin/node-select";
 import { cn } from "@/lib/utils";
 import { terminalTheme } from "@/lib/design-tokens";
@@ -266,7 +266,7 @@ export default function AdminTerminalPage() {
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader title="Terminal" description="Interactive shell on the host system" />
+      <SectionHeader title="Host Terminal" sub="Secure host shell and console access" />
       <Card>
         <CardHeader
           title="Terminal"
@@ -278,8 +278,8 @@ export default function AdminTerminalPage() {
                 className={cn(
                   "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider border",
                   connected
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                    : "border-red-500/30 bg-red-500/10 text-red-300",
+                    ? "border-ok-line bg-ok-subtle text-ok"
+                    : "border-danger-line bg-danger-subtle text-danger",
                 )}
               >
                 {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
@@ -294,10 +294,10 @@ export default function AdminTerminalPage() {
         />
         <div className="p-0">
           {error ? (
-            <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200" role="alert">
+            <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
               <span className="flex-1">{error}</span>
               <button
-                className="inline-flex h-8 items-center justify-center rounded-lg bg-[var(--brand)] px-3 text-xs font-bold text-white hover:bg-[var(--brand-hover)] disabled:opacity-40 transition-colors"
+                className="inline-flex h-8 items-center justify-center rounded-lg bg-[var(--brand)] px-3 text-xs font-bold text-text hover:bg-[var(--brand-hover)] disabled:opacity-40 transition-colors"
                 onClick={handleRetry}
                 type="button"
               >
@@ -318,11 +318,11 @@ export default function AdminTerminalPage() {
           <div className="mx-4 mb-4 mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3">
             <div className="mb-1 flex items-center justify-between">
               <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-subtle)]">Terminal status</span>
-              <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border", connected ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300")}>
+              <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border", connected ? "border-ok-line bg-ok-subtle text-ok" : "border-warn-line bg-warn-subtle text-warn")}>
                 {connected ? "live" : "idle"} · {reconnectAttempt.current}/{TERMINAL_MAX_RETRIES}
               </span>
             </div>
-            <pre className="overflow-auto rounded bg-black/20 p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{statusJson}</pre>
+            <pre className="overflow-auto rounded bg-well p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{statusJson}</pre>
             <p className="mt-1.5 text-xs text-[var(--text-subtle)]">FitAddon auto-fits on resize · {connected ? "WebSocket live" : "disconnected"} · use Retry to reset backoff.</p>
           </div>
         </div>
