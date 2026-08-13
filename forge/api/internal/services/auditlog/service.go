@@ -2,6 +2,7 @@ package auditlog
 
 import (
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -14,20 +15,21 @@ import (
 
 type AuditEvent struct {
 	ID           string         `json:"id"`
-	UserID       string         `json:"user_id"`
+	UserID       string         `json:"userId"`
 	Action       string         `json:"action"`
-	ResourceType string         `json:"resource_type"`
-	ResourceID   string         `json:"resource_id"`
-	Details      map[string]any `json:"details,omitempty"`
+	ResourceType string         `json:"resource"`
+	ResourceID   string         `json:"resourceId"`
+	Details      map[string]any `json:"metadata,omitempty"`
 	IP           string         `json:"ip"`
-	UserAgent    string         `json:"user_agent"`
-	Timestamp    time.Time      `json:"timestamp"`
+	UserAgent    string         `json:"userAgent"`
+	Timestamp    time.Time      `json:"createdAt"`
 }
 
 type AuditFilter struct {
 	UserID       string
 	Action       string
 	ResourceType string
+	ResourceID   string
 	Since        time.Time
 	Until        time.Time
 	Limit        int
@@ -94,6 +96,9 @@ func (l *InMemoryAuditLogger) Query(_ context.Context, filter AuditFilter) ([]Au
 		if filter.ResourceType != "" && event.ResourceType != filter.ResourceType {
 			continue
 		}
+		if filter.ResourceID != "" && event.ResourceID != filter.ResourceID {
+			continue
+		}
 		if !filter.Since.IsZero() && event.Timestamp.Before(filter.Since) {
 			continue
 		}
@@ -147,33 +152,42 @@ func (l *DBAuditLogger) Query(ctx context.Context, filter AuditFilter) ([]AuditE
 	if limit <= 0 {
 		limit = 100
 	}
-
-	var logs []models.AuditLog
-	var err error
-
-	if filter.UserID != "" {
-		logs, err = l.store.ListAuditLogsByUser(ctx, filter.UserID, limit, 0)
-	} else {
-		logs, err = l.store.ListRecentAuditLogs(ctx, limit)
-	}
+	// The admin audit trail reads the live audit_events table: it is the table
+	// every production writer appends to via Store.AppendAudit. The legacy
+	// audit_logs table has no production writers, so querying it would report
+	// an always-empty trail. audit_events carries no IP or user-agent columns,
+	// so those fields stay empty rather than fabricated.
+	rows, err := l.store.QueryAuditEvents(ctx, store.AuditEventsFilter{
+		UserID:       filter.UserID,
+		Action:       filter.Action,
+		ResourceType: filter.ResourceType,
+		ResourceID:   filter.ResourceID,
+		Since:        filter.Since,
+		Until:        filter.Until,
+		Limit:        limit,
+	})
 	if err != nil {
 		return nil, err
 	}
-
-	events := make([]AuditEvent, 0, len(logs))
-	for _, l := range logs {
+	events := make([]AuditEvent, 0, len(rows))
+	for _, r := range rows {
 		ev := AuditEvent{
-			ID:           l.ID,
-			UserID:       l.UserID,
-			Action:       l.Action,
-			ResourceType: l.ResourceType,
-			ResourceID:   l.ResourceID,
-			IP:           l.IPAddress,
-			UserAgent:    l.UserAgent,
-			Timestamp:    l.CreatedAt,
+			ID:           r.ID,
+			Action:       r.Action,
+			ResourceType: r.TargetType,
+			Timestamp:    r.CreatedAt,
 		}
-		if l.Details != nil {
-			ev.Details = map[string]any(l.Details)
+		if r.ActorID != nil {
+			ev.UserID = *r.ActorID
+		}
+		if r.TargetID != nil {
+			ev.ResourceID = *r.TargetID
+		}
+		if r.Metadata != "" && r.Metadata != "{}" {
+			var details map[string]any
+			if jerr := json.Unmarshal([]byte(r.Metadata), &details); jerr == nil {
+				ev.Details = details
+			}
 		}
 		events = append(events, ev)
 	}
@@ -193,6 +207,7 @@ func (h *AuditLogHandler) HandleQuery(c *fiber.Ctx) error {
 		UserID:       c.Query("user_id"),
 		Action:       c.Query("action"),
 		ResourceType: c.Query("resource_type"),
+		ResourceID:   c.Query("resource_id"),
 	}
 
 	if since := c.Query("since"); since != "" {

@@ -4,18 +4,43 @@ import (
 	"context"
 	"strings"
 	"sync"
+	"time"
 
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/store"
 )
 
 type Service struct {
-	store *store.Store
-	wg    sync.WaitGroup
+	store       *store.Store
+	wg          sync.WaitGroup
+	rateLimiter *rateLimiterStore
 }
 
 func NewService(s *store.Store) *Service {
-	return &Service{store: s}
+	return &Service{
+		store:       s,
+		rateLimiter: newRateLimiterStore(defaultRate, defaultBurst),
+	}
+}
+
+func (s *Service) startRateLimiterCleanup(ctx context.Context) {
+	if s == nil {
+		return
+	}
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ticker := time.NewTicker(cleanupInterval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.rateLimiter.cleanup(cleanupMaxAge)
+			}
+		}
+	}()
 }
 
 func (s *Service) Wait() {
@@ -29,6 +54,9 @@ func (s *Service) Handle(ctx context.Context, ev events.Envelope) error {
 	if s.store == nil {
 		return nil
 	}
+
+	s.wg.Add(1)
+	defer s.wg.Done()
 
 	payload := map[string]any{
 		"id":             ev.ID,

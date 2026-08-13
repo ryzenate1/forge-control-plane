@@ -93,6 +93,9 @@ func (s SMTPSender) Send(ctx context.Context, settings store.PanelMailSettings, 
 }
 
 func ValidateSettings(settings store.PanelMailSettings) error {
+	if strings.TrimSpace(settings.Driver) == "log" {
+		return nil
+	}
 	if strings.TrimSpace(settings.SMTPHost) == "" {
 		return errors.New("SMTP host is required")
 	}

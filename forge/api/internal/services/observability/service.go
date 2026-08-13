@@ -2,6 +2,8 @@ package observability
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -10,16 +12,140 @@ import (
 )
 
 type Service struct {
-	store   *store.Store
-	metrics *MetricsHistory
+	store       *store.Store
+	metrics     *MetricsHistory
+	onNodeMetric func(store.NodeMetric)
 }
 
 func New(store *store.Store) *Service {
 	return &Service{store: store, metrics: NewMetricsHistory(60)}
 }
 
+// SetNodeMetricHook registers a callback invoked after each node metric is
+// persisted. This is how alert evaluation piggybacks on collection without
+// importing the alerting package.
+func (s *Service) SetNodeMetricHook(fn func(store.NodeMetric)) {
+	s.onNodeMetric = fn
+}
+
 func (s *Service) StartMetricsCollection(ctx context.Context, interval time.Duration) {
 	s.metrics.StartCollection(ctx, interval)
+}
+
+func (s *Service) StartNodeMetricsCollection(ctx context.Context, interval time.Duration) {
+	if s == nil || s.store == nil {
+		return
+	}
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("node metrics collector panic", "panic", r)
+			}
+		}()
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.collectNodeMetrics(ctx)
+			}
+		}
+	}()
+}
+
+func (s *Service) collectNodeMetrics(ctx context.Context) {
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		slog.Error("failed to list nodes for metrics collection", "error", err)
+		return
+	}
+	now := time.Now().UTC()
+	for _, node := range nodes {
+		req := store.CreateNodeMetricRequest{
+			NodeID:           node.ID,
+			ContainerRunning: 0,
+			ContainerTotal:   0,
+			ObservedAt:       now,
+		}
+		memTotal := int64(node.MemoryMB)
+		diskTotal := int64(node.DiskMB)
+		if node.NodeMemoryMB != nil && *node.NodeMemoryMB > 0 {
+			memTotal = int64(*node.NodeMemoryMB)
+		}
+		if node.NodeDiskMB != nil && *node.NodeDiskMB > 0 {
+			diskTotal = int64(*node.NodeDiskMB)
+		}
+		req.MemoryTotalMB = memTotal
+		req.DiskTotalMB = diskTotal
+		req.CPULoad1m = 0
+		req.CPULoad5m = 0
+		req.CPULoad15m = 0
+		if node.LoadAverage != nil && *node.LoadAverage > 0 {
+			req.CPULoad1m = *node.LoadAverage
+			req.CPULoad5m = *node.LoadAverage
+			req.CPULoad15m = *node.LoadAverage
+		}
+		req.NetworkRxBytes = 0
+		req.NetworkTxBytes = 0
+
+		cap, capErr := s.store.NodeCapacitySnapshot(ctx, node.ID)
+		if capErr == nil {
+			usedMem := memTotal - int64(cap.AvailableMemory)
+			if usedMem < 0 {
+				usedMem = 0
+			}
+			usedDisk := diskTotal - int64(cap.AvailableDisk)
+			if usedDisk < 0 {
+				usedDisk = 0
+			}
+			req.MemoryUsedMB = usedMem
+			req.DiskUsedMB = usedDisk
+			if memTotal > 0 {
+				req.MemoryPercent = float64(usedMem*100) / float64(memTotal)
+			}
+			if diskTotal > 0 {
+				req.DiskPercent = float64(usedDisk*100) / float64(diskTotal)
+			}
+			totalCPU := cap.TotalCPU + cap.AllocatedCPU
+			if totalCPU > 0 {
+				usedCPU := totalCPU - cap.AvailableCPU
+				if usedCPU < 0 {
+					usedCPU = 0
+				}
+				req.CPUPercent = float64(usedCPU*100) / float64(totalCPU)
+			}
+			req.ContainerRunning = cap.ServerCount
+			req.ContainerTotal = cap.ServerCount
+		}
+		if _, err := s.store.CreateNodeMetric(ctx, req); err != nil {
+			slog.Error("failed to record node metric", "nodeId", node.ID, "error", err)
+		} else if s.onNodeMetric != nil {
+			s.onNodeMetric(store.NodeMetric{
+				NodeID:           req.NodeID,
+				CPUPercent:       req.CPUPercent,
+				MemoryPercent:    req.MemoryPercent,
+				DiskPercent:      req.DiskPercent,
+				MemoryUsedMB:     req.MemoryUsedMB,
+				MemoryTotalMB:    req.MemoryTotalMB,
+				DiskUsedMB:       req.DiskUsedMB,
+				DiskTotalMB:      req.DiskTotalMB,
+				CPULoad1m:        req.CPULoad1m,
+				CPULoad5m:        req.CPULoad5m,
+				CPULoad15m:       req.CPULoad15m,
+				NetworkRxBytes:   req.NetworkRxBytes,
+				NetworkTxBytes:   req.NetworkTxBytes,
+				ContainerRunning: req.ContainerRunning,
+				ContainerTotal:   req.ContainerTotal,
+				ObservedAt:       req.ObservedAt,
+			})
+		}
+	}
+	n := len(nodes)
+	if n > 0 {
+		slog.Info(fmt.Sprintf("collected node metrics for %d nodes", n))
+	}
 }
 
 func (s *Service) Handle(ctx context.Context, event events.Envelope) error {
@@ -105,6 +231,135 @@ func (s *Service) RecordHeartbeatFailure(ctx context.Context, nodeID, reason str
 	})
 }
 
+// Node Metrics
+func (s *Service) RecordNodeMetric(ctx context.Context, req store.CreateNodeMetricRequest) (store.NodeMetric, error) {
+	return s.store.CreateNodeMetric(ctx, req)
+}
+
+func (s *Service) ListNodeMetrics(ctx context.Context, nodeID string, limit int, since *time.Time) ([]store.NodeMetric, error) {
+	return s.store.ListNodeMetrics(ctx, nodeID, limit, since)
+}
+
+func (s *Service) ListAllNodeMetricsLatest(ctx context.Context) ([]store.NodeMetric, error) {
+	return s.store.ListNodeMetricsLatest(ctx)
+}
+
+// Workload Metrics
+func (s *Service) RecordWorkloadMetric(ctx context.Context, req store.CreateWorkloadMetricRequest) (store.WorkloadMetric, error) {
+	return s.store.CreateWorkloadMetric(ctx, req)
+}
+
+func (s *Service) ListWorkloadMetrics(ctx context.Context, serverID string, limit int) ([]store.WorkloadMetric, error) {
+	return s.store.ListWorkloadMetrics(ctx, serverID, limit)
+}
+
+// Build Logs
+func (s *Service) RecordBuildLog(ctx context.Context, req store.CreateBuildLogEntryRequest) (store.BuildLogEntry, error) {
+	return s.store.CreateBuildLog(ctx, req)
+}
+
+func (s *Service) BuildLogs(ctx context.Context, buildID string, limit int) ([]store.BuildLogEntry, error) {
+	return s.store.ListBuildLogs(ctx, buildID, limit)
+}
+
+func (s *Service) BuildLogsByCorrelation(ctx context.Context, correlationID string, limit int) ([]store.BuildLogEntry, error) {
+	return s.store.ListBuildLogsByCorrelation(ctx, correlationID, limit)
+}
+
+// Deployment Logs
+func (s *Service) RecordDeploymentLog(ctx context.Context, req store.CreateDeploymentLogEntryRequest) (store.DeploymentLogEntry, error) {
+	return s.store.CreateDeploymentLog(ctx, req)
+}
+
+func (s *Service) DeploymentLogs(ctx context.Context, deploymentID string, limit int) ([]store.DeploymentLogEntry, error) {
+	return s.store.ListDeploymentLogs(ctx, deploymentID, limit)
+}
+
+// Beacon Command Logs
+func (s *Service) RecordBeaconCommandLog(ctx context.Context, req store.CreateBeaconCommandLogRequest) (store.BeaconCommandLog, error) {
+	return s.store.CreateBeaconCommandLog(ctx, req)
+}
+
+func (s *Service) BeaconCommandLogs(ctx context.Context, filter store.BeaconCommandLogFilter) ([]store.BeaconCommandLog, error) {
+	return s.store.ListBeaconCommandLogs(ctx, filter)
+}
+
+func (s *Service) UpdateBeaconCommandStatus(ctx context.Context, commandID, status string, exitCode int, responsePayload map[string]any) error {
+	return s.store.UpdateBeaconCommandLogStatus(ctx, commandID, status, exitCode, responsePayload)
+}
+
+// Correlation Links
+func (s *Service) CreateCorrelationLink(ctx context.Context, req store.CreateCorrelationLinkRequest) (store.CorrelationLink, error) {
+	return s.store.CreateCorrelationLink(ctx, req)
+}
+
+func (s *Service) CorrelationLinks(ctx context.Context, operationID string) ([]store.CorrelationLink, error) {
+	return s.store.GetCorrelationLinks(ctx, operationID)
+}
+
+// Health History
+func (s *Service) RecordHealthCheck(ctx context.Context, rec store.HealthHistoryRecord) error {
+	return s.store.CreateHealthHistory(ctx, rec)
+}
+
+func (s *Service) HealthHistory(ctx context.Context, checkName string, limit int) ([]store.HealthHistoryRecord, error) {
+	return s.store.ListHealthHistory(ctx, checkName, limit)
+}
+
+func (s *Service) AllHealthHistory(ctx context.Context, limit int) ([]store.HealthHistoryRecord, error) {
+	return s.store.ListAllHealthHistory(ctx, limit)
+}
+
+// Retention
+func (s *Service) EnforceRetention(ctx context.Context) (map[string]int64, error) {
+	var (
+		result  map[string]int64
+		lastErr error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		result, lastErr = s.store.EnforceRetention(ctx)
+		if lastErr == nil {
+			return result, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt+1) * 100 * time.Millisecond):
+		}
+	}
+	return nil, lastErr
+}
+
+func (s *Service) RetentionPolicies(ctx context.Context) ([]store.RetentionPolicy, error) {
+	return s.store.ListRetentionPolicies(ctx)
+}
+
+func (s *Service) UpdateRetentionPolicy(ctx context.Context, metricType string, ttlHours, maxRecords int) error {
+	return s.store.UpdateRetentionPolicy(ctx, metricType, ttlHours, maxRecords)
+}
+
+// Dashboard / Monitoring summary
+func (s *Service) MonitoringSummary(ctx context.Context) (map[string]any, error) {
+	summary := map[string]any{}
+
+	latestMetrics, err := s.store.ListNodeMetricsLatest(ctx)
+	if err == nil {
+		summary["nodes"] = latestMetrics
+	}
+
+	alertCount, err := s.store.CountAlerts(ctx, store.AlertFilter{Acknowledged: boolPtr(false), Limit: 1})
+	if err == nil {
+		summary["unacknowledgedAlerts"] = alertCount
+	}
+
+	healthHistory, err := s.store.ListAllHealthHistory(ctx, 50)
+	if err == nil {
+		summary["recentHealthChecks"] = healthHistory
+	}
+
+	return summary, nil
+}
+
 func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 	capacity, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 	if err != nil {
@@ -115,7 +370,13 @@ func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 	disk := resourceScore(capacity.TotalDisk, capacity.AvailableDisk)
 	heartbeat := heartbeatScore(node.LastSeenAt)
 	status := statusScore(node.ActualState)
-	total := (cpu + memory + disk + heartbeat + status) / 5
+	total := averageKnownScores(cpu, memory, disk, heartbeat, status)
+	if total < 0 {
+		// Nothing reported: do not fabricate a 30/50 "score" for a
+		// never-seen node. Unknown is recorded as -1 so dashboards can show
+		// "unknown" instead of a misleading mid-range health.
+		total = -1
+	}
 	_, _ = s.store.CreateNodeHealthHistory(ctx, store.CreateNodeHealthHistoryRequest{
 		NodeID:          node.ID,
 		ActualState:     node.ActualState,
@@ -138,7 +399,8 @@ func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 
 func resourceScore(total, available int) int {
 	if total <= 0 {
-		return 50
+		// Unknown capacity: excluded from averages, never a middling 50.
+		return -1
 	}
 	used := total - available
 	if used < 0 {
@@ -154,9 +416,27 @@ func resourceScore(total, available int) int {
 	return score
 }
 
+// averageKnownScores averages only reported (>= 0) components; unknown (-1)
+// is excluded, and fully-unknown totals stay -1.
+func averageKnownScores(scores ...int) int {
+	sum, count := 0, 0
+	for _, v := range scores {
+		if v < 0 {
+			continue
+		}
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return -1
+	}
+	return sum / count
+}
+
 func heartbeatScore(lastSeen *time.Time) int {
 	if lastSeen == nil {
-		return 0
+		// Never seen: unknown, not 0.
+		return -1
 	}
 	age := time.Since(*lastSeen)
 	switch {
@@ -177,7 +457,14 @@ func statusScore(status string) int {
 		return 100
 	case "degraded":
 		return 40
-	default:
+	case "offline":
 		return 0
+	default:
+		// Empty/unrecognised state is "not reported" (unknown), not offline.
+		return -1
 	}
+}
+
+func boolPtr(b bool) *bool {
+	return &b
 }
