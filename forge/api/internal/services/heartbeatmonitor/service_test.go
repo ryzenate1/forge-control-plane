@@ -9,12 +9,12 @@ import (
 )
 
 type mockHeartbeatStore struct {
-	listNodesResult           []store.Node
-	listNodesErr              error
-	getNodeResult             store.Node
-	getNodeErr                error
-	listNodeHeartbeatHistory  []store.NodeHeartbeatHistory
-	listNodeHeartbeatHistoryErr error
+	listNodesResult                []store.Node
+	listNodesErr                   error
+	getNodeResult                  store.Node
+	getNodeErr                     error
+	listNodeHeartbeatHistory       []store.NodeHeartbeatHistory
+	listNodeHeartbeatHistoryErr    error
 	setNodeHeartbeatClassification func(ctx context.Context, nodeID string, state store.NodeHeartbeatState, actualState store.NodeActualState, recoveryCount int, reason string) (store.Node, store.Node, error)
 }
 
@@ -116,8 +116,8 @@ func TestClassify_NilLastSeenAt(t *testing.T) {
 	if recoveryCount != 0 {
 		t.Fatalf("expected 0 recovery count, got %d", recoveryCount)
 	}
-	if ageSeconds != 0 {
-		t.Fatalf("expected 0 age seconds, got %d", ageSeconds)
+	if ageSeconds != -1 {
+		t.Fatalf("expected -1 age seconds for never-seen node, got %d", ageSeconds)
 	}
 }
 
@@ -126,29 +126,32 @@ func TestClassify_NegativeAge(t *testing.T) {
 	s := NewWithConfig(nil, nil, DefaultConfig())
 	now := time.Now().UTC()
 
-	state, _, ageSeconds, _, _ := s.classify(
+	state, _, _, ageSeconds, reason := s.classify(
 		store.Node{LastSeenAt: &future, HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 		nil,
 		now,
 	)
 
-	if state != store.NodeHeartbeatStateHealthy {
-		t.Fatalf("expected healthy, got %s", state)
+	if state != store.NodeHeartbeatStateSuspected {
+		t.Fatalf("expected suspected, got %s", state)
 	}
 	if ageSeconds != 0 {
 		t.Fatalf("expected 0 age seconds for future timestamp, got %d", ageSeconds)
 	}
+	if reason == "" {
+		t.Fatal("expected future clock-skew reason")
+	}
 }
 
 type classifyTestCase struct {
-	name           string
-	node           store.Node
-	history        []store.NodeHeartbeatHistory
-	config         Config
-	wantState      store.NodeHeartbeatState
-	wantActual     store.NodeActualState
-	wantRecovery   int
-	wantReasonSub  string
+	name          string
+	node          store.Node
+	history       []store.NodeHeartbeatHistory
+	config        Config
+	wantState     store.NodeHeartbeatState
+	wantActual    store.NodeActualState
+	wantRecovery  int
+	wantReasonSub string
 }
 
 func TestClassify_StateMachineTransitions(t *testing.T) {
@@ -206,28 +209,28 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantReasonSub: "heartbeat remained unreachable",
 		},
 		{
-			name: "Offline stays Offline",
+			name: "Offline stays Offline past unavailable threshold",
 			node: store.Node{
-				LastSeenAt:     ptr(now.Add(-95 * time.Second)),
+				LastSeenAt:     ptr(now.Add(-305 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateOffline),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}},
 			config:        cfg,
 			wantState:     store.NodeHeartbeatStateOffline,
 			wantActual:    store.NodeActualStateOffline,
-			wantReasonSub: "heartbeat remained unreachable",
+			wantReasonSub: "heartbeat expired beyond unavailable threshold",
 		},
 		{
-			name: "Double offline threshold goes directly to Offline",
+			name: "Exceeding UnavailableAfter goes directly to Offline",
 			node: store.Node{
-				LastSeenAt:     ptr(now.Add(-185 * time.Second)),
+				LastSeenAt:     ptr(now.Add(-305 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateHealthy),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}},
 			config:        cfg,
 			wantState:     store.NodeHeartbeatStateOffline,
 			wantActual:    store.NodeActualStateOffline,
-			wantReasonSub: "heartbeat expired beyond offline threshold",
+			wantReasonSub: "heartbeat expired beyond unavailable threshold",
 		},
 		{
 			name: "Offline to Recovering (one heartbeat)",
@@ -243,17 +246,43 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantReasonSub: "recovery threshold not met",
 		},
 		{
-			name: "Recovering to Healthy (threshold met)",
+			name: "Recovering to Reconciling (threshold met)",
 			node: store.Node{
 				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
 				HeartbeatState: string(store.NodeHeartbeatStateRecovering),
 			},
 			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
 			config:        cfg,
+			wantState:     store.NodeHeartbeatStateReconciling,
+			wantActual:    store.NodeActualStateReconciling,
+			wantRecovery:  2,
+			wantReasonSub: "recovery threshold met",
+		},
+		{
+			name: "Reconciling to Healthy",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateReconciling),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
+			config:        cfg,
 			wantState:     store.NodeHeartbeatStateHealthy,
 			wantActual:    store.NodeActualStateOnline,
 			wantRecovery:  2,
-			wantReasonSub: "recovery threshold satisfied",
+			wantReasonSub: "reconciliation complete",
+		},
+		{
+			name: "Offline to Reconciling with sufficient history",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-1 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateOffline),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: true}, {Success: true}},
+			config:        cfg,
+			wantState:     store.NodeHeartbeatStateReconciling,
+			wantActual:    store.NodeActualStateReconciling,
+			wantRecovery:  2,
+			wantReasonSub: "fast recovery; entering reconciliation",
 		},
 		{
 			name: "Suspected to Recovering on recovery path",
@@ -267,6 +296,18 @@ func TestClassify_StateMachineTransitions(t *testing.T) {
 			wantActual:    store.NodeActualStateDegraded,
 			wantRecovery:  1,
 			wantReasonSub: "recovery threshold not met",
+		},
+		{
+			name: "Reconciling with failed heartbeat transitions to Suspected",
+			node: store.Node{
+				LastSeenAt:     ptr(now.Add(-5 * time.Second)),
+				HeartbeatState: string(store.NodeHeartbeatStateReconciling),
+			},
+			history:       []store.NodeHeartbeatHistory{{Success: false}},
+			config:        cfg,
+			wantState:     store.NodeHeartbeatStateSuspected,
+			wantActual:    store.NodeActualStateDegraded,
+			wantReasonSub: "latest heartbeat reported failure",
 		},
 		{
 			name: "Latest heartbeat failure triggers Suspected even if age is low",
@@ -324,8 +365,8 @@ func TestClassify_RecoveryThresholdBoundary(t *testing.T) {
 
 	t.Run("recovery threshold exactly met with 2 successes", func(t *testing.T) {
 		state, _, count, _, _ := NewWithConfig(nil, nil, cfg).classify(node, []store.NodeHeartbeatHistory{{Success: true}, {Success: true}}, now)
-		if state != store.NodeHeartbeatStateHealthy {
-			t.Fatalf("expected healthy, got %s", state)
+		if state != store.NodeHeartbeatStateReconciling {
+			t.Fatalf("expected reconciling, got %s", state)
 		}
 		if count != 2 {
 			t.Fatalf("expected count 2, got %d", count)
@@ -334,8 +375,8 @@ func TestClassify_RecoveryThresholdBoundary(t *testing.T) {
 
 	t.Run("recovery threshold met with more than needed", func(t *testing.T) {
 		state, _, count, _, _ := NewWithConfig(nil, nil, cfg).classify(node, []store.NodeHeartbeatHistory{{Success: true}, {Success: true}, {Success: true}}, now)
-		if state != store.NodeHeartbeatStateHealthy {
-			t.Fatalf("expected healthy, got %s", state)
+		if state != store.NodeHeartbeatStateReconciling {
+			t.Fatalf("expected reconciling, got %s", state)
 		}
 		if count != 3 {
 			t.Fatalf("expected count 3, got %d", count)
@@ -347,38 +388,38 @@ func TestClassify_ConfigBoundaries(t *testing.T) {
 	now := time.Now().UTC()
 
 	tests := []struct {
-		name          string
-		age           time.Duration
-		prevState     string
-		wantState     store.NodeHeartbeatState
-		wantActual    store.NodeActualState
+		name       string
+		age        time.Duration
+		prevState  string
+		wantState  store.NodeHeartbeatState
+		wantActual store.NodeActualState
 	}{
 		{
-			name:      "just under warning threshold",
-			age:       29 * time.Second,
-			prevState: string(store.NodeHeartbeatStateHealthy),
-			wantState: store.NodeHeartbeatStateHealthy,
+			name:       "just under warning threshold",
+			age:        29 * time.Second,
+			prevState:  string(store.NodeHeartbeatStateHealthy),
+			wantState:  store.NodeHeartbeatStateHealthy,
 			wantActual: store.NodeActualStateOnline,
 		},
 		{
-			name:      "at warning threshold",
-			age:       30 * time.Second,
-			prevState: string(store.NodeHeartbeatStateHealthy),
-			wantState: store.NodeHeartbeatStateSuspected,
+			name:       "at warning threshold",
+			age:        30 * time.Second,
+			prevState:  string(store.NodeHeartbeatStateHealthy),
+			wantState:  store.NodeHeartbeatStateSuspected,
 			wantActual: store.NodeActualStateDegraded,
 		},
 		{
-			name:      "just under offline threshold",
-			age:       89 * time.Second,
-			prevState: string(store.NodeHeartbeatStateSuspected),
-			wantState: store.NodeHeartbeatStateSuspected,
+			name:       "just under offline threshold",
+			age:        89 * time.Second,
+			prevState:  string(store.NodeHeartbeatStateSuspected),
+			wantState:  store.NodeHeartbeatStateSuspected,
 			wantActual: store.NodeActualStateDegraded,
 		},
 		{
-			name:      "at offline threshold (previously healthy)",
-			age:       90 * time.Second,
-			prevState: string(store.NodeHeartbeatStateHealthy),
-			wantState: store.NodeHeartbeatStateUnreachable,
+			name:       "at offline threshold (previously healthy)",
+			age:        90 * time.Second,
+			prevState:  string(store.NodeHeartbeatStateHealthy),
+			wantState:  store.NodeHeartbeatStateUnreachable,
 			wantActual: store.NodeActualStateDegraded,
 		},
 	}
@@ -490,16 +531,16 @@ func TestNormalizeConfig(t *testing.T) {
 func TestEvaluateAll_NilReceiver(t *testing.T) {
 	var nilSvc *Service
 	err := nilSvc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil error from nil receiver, got %v", err)
+	if err == nil {
+		t.Fatal("expected error from nil receiver, got nil")
 	}
 }
 
 func TestEvaluateAll_NilStore(t *testing.T) {
 	svc := NewWithConfig(nil, nil, DefaultConfig())
 	err := svc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil error when store is nil, got %v", err)
+	if err == nil {
+		t.Fatal("expected error when store is nil, got nil")
 	}
 }
 
@@ -574,8 +615,8 @@ func TestEvaluateAll_ContinuesOnError(t *testing.T) {
 	}
 	svc := NewWithConfig(store, nil, DefaultConfig())
 	err := svc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil (errors swallowed per node), got %v", err)
+	if err == nil {
+		t.Fatal("expected aggregated error when a node evaluation fails, got nil")
 	}
 	if evaluated != 1 {
 		t.Fatalf("expected exactly 1 successful evaluation, got %d", evaluated)
