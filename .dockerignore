@@ -41,8 +41,12 @@ pkg/mod
 .idea/
 *.swp
 
-# Local scratch files excluded from build context
+# Audit / tooling / agent scratch (never needed in build context)
 /audit
 /batch2
 .github/
+.agents/
+.claude/
+.commandcode/
+.qoder/
 go.work.sum
