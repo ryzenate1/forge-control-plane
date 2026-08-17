@@ -100,12 +100,12 @@ compile_check.*
 # =============================================================================
 # Backup Directories
 # =============================================================================
-/backups/
+backups/
 scratch/
 # `scratch/` does not match `.scratch/` — a dotted variant got tracked and
 # eleven files of migration debris were committed before anyone noticed.
 .scratch/
-/servers/
+servers/
 
 # Redis test artifacts
 # =============================================================================
@@ -115,7 +115,7 @@ dump.rdb
 
 # =============================================================================
 # Read-only study checkouts of third-party projects. Never built, imported or
-# shipped with Forge.
+# shipped with Forge; see AGENTS.md.
 # =============================================================================
 .reference-repos/
 
@@ -128,19 +128,11 @@ dump.rdb
 gamepanel-source.zip
 
 # =============================================================================
+# Graphify
 # =============================================================================
 .venv*/
+graphify-out/
 .dev-tools/
 
 # Captured vitest output logs in forge/web (large, not sources).
 forge/web/vitest-*.txt
-
-# Local analysis, reference checkouts, and test artifacts
-/.uiux-audit/
-/.audit-reports/
-/.mig-audit/
-/.smoke/
-/reference/
-/cookie.txt
-playwright-report/
-test-results/
