@@ -1,0 +1,29 @@
+# Generated and dependency trees
+graphify-out/
+.venv_graphify/
+node_modules/
+.dev-tools/
+.tools/
+.dev-data/
+.dev-logs/
+.dev-pids/
+.git/
+__pycache__/
+.next/
+dist/
+coverage/
+test-results/
+playwright-report/
+
+# Include read-only study sources if present, even when gitignored.
+# Graphify reads these sources; it must never modify or ship them.
+!reference/
+!.reference-repos/
+
+# Never index runtime credentials or private key material.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+infra/secrets/
