@@ -1,6 +1,6 @@
 <div align="center">
 
-# ⚔️ GamePanel
+# ⚔️ Forge Plane
 
 ### Forge Control Plane · Beacon Node Agent
 
@@ -24,9 +24,9 @@ PostgreSQL, Redis, and Docker.
 
 ---
 
-## What is GamePanel?
+## What is Forge Plane?
 
-GamePanel manages game servers across one or more Linux machines. The **Forge**
+Forge Plane manages game servers across one or more Linux machines. The **Forge**
 control plane provides the web dashboard, API, scheduling, placement, recovery,
 and administration features. A **Beacon** agent runs on each game node and
 controls its Docker workloads, files, console, backups, networking, and SFTP.
@@ -93,17 +93,22 @@ flowchart LR
 | Beacon | [`beacon/`](./beacon/) | Per-node Docker, filesystem, console, backup and SFTP agent |
 | Infrastructure | [`infra/`](./infra/) | Compose, Nginx, monitoring, bootstrap and backup configuration |
 | Shared packages | [`packages/`](./packages/) | TypeScript SDK, API types and UI primitives |
-| Documentation | [README](#documentation) | Installation, operations, API and development guidance |
+| Documentation | [`docs/`](./docs/) | Architecture, operations, API, development and historical audits |
 
 ## Choose your installation
 
 | Goal | Recommended method | What you need |
 |---|---|---|
+| Quick production install | `./scripts/install/install.sh` | Ubuntu/Debian server, Docker, domain |
 | Evaluate or contribute locally | Development launcher | Go, Node.js, npm and Docker Desktop/Engine |
 | Host everything on one VPS | Production Compose | Ubuntu, Docker Engine, Compose v2, domain and TLS |
 | Add game capacity | Standalone Beacon | A second Linux VPS, Docker and a panel-issued node credential |
 | Test offline recovery | Two Beacons + shared object storage | S3-compatible bucket accessible from both nodes |
 | Provision AWS nodes | Forge cloud module | AWS credentials/role, VPC settings and a published Beacon image |
+
+See [Installation Guide](#production-deployment-on-ubuntu) for a step-by-step
+walkthrough and [Upgrading](./scripts/cleanup/upgrade.sh) for the upgrade
+procedure with backup and rollback.
 
 ## Requirements and downloads
 
@@ -119,11 +124,28 @@ flowchart LR
 Recommended: 4 CPU cores, 8 GiB RAM, 20 GiB free disk space, `curl`, and
 OpenSSL.
 
+### OS Support Matrix
+
+| OS | Version | Architectures | Docker | Status |
+|----|---------|--------------|--------|--------|
+| Ubuntu | 24.04 LTS (Noble) | amd64, arm64 | 24.0+ | Supported |
+| Ubuntu | 22.04 LTS (Jammy) | amd64, arm64 | 24.0+ | Supported |
+| Debian | 12 (Bookworm) | amd64, arm64 | 24.0+ | Supported |
+| Windows | 10 / 11 / Server 2019+ | amd64 | Docker Desktop | Supported |
+| macOS | 13+ (Ventura) | amd64, arm64 | Docker Desktop | Development |
+| Ubuntu | 20.04 LTS (Focal) | amd64 | 24.0+ | Untested |
+| Debian | 11 (Bullseye) | amd64 | 24.0+ | Untested |
+
+The installer (`scripts/install.sh`) auto-detects OS, architecture, Docker
+version, available ports, and system resources before beginning. Use
+`--skip-checks` to bypass on untested platforms.
+
 ### For an Ubuntu production host
 
-- Ubuntu 24.04 LTS, 64-bit
-- Docker Engine and Docker Compose **2.24.4+**
+- Ubuntu 22.04 LTS or 24.04 LTS, 64-bit
+- Docker Engine 24.0+ and Docker Compose **2.24.4+**
 - Git, curl, ca-certificates, OpenSSL, Nginx and Certbot
+- 2 vCPU, 2 GiB RAM, 20 GiB free disk (minimum)
 - A domain name with an `A`/`AAAA` record pointing to the VPS
 - SMTP credentials if password-reset email is required
 - An S3-compatible bucket for multi-node disaster recovery
@@ -142,8 +164,8 @@ player load, backups, world growth, and container image cache—not only idle us
 ### 1. Download the source and dependencies
 
 ```bash
-git clone <repository-url> gamepanel
-cd gamepanel
+git clone https://github.com/your-org/forge-plane.git
+cd forge-plane
 npm ci
 go work sync
 ```
@@ -169,7 +191,7 @@ npm run dev:stop     # stop managed development processes
 If PostgreSQL and Redis already run locally, use:
 
 ```bash
-./scripts/start-dev.sh native
+./start-dev.sh --native
 ```
 
 ### Local service addresses
@@ -188,36 +210,21 @@ If PostgreSQL and Redis already run locally, use:
 
 ## Production deployment on Ubuntu
 
-Install the host dependencies first:
+The complete copy-and-paste installation, firewall, TLS, second-node, AWS,
+load-balancer, evacuation and recovery instructions are in this section.
+
+The short version is:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y ca-certificates curl git nginx certbot
-sudo install -m 0755 -d /etc/apt/keyrings
-sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
-  -o /etc/apt/keyrings/docker.asc
-sudo chmod a+r /etc/apt/keyrings/docker.asc
-echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
-  | sudo tee /etc/apt/sources.list.d/docker.list >/dev/null
-sudo apt-get update
-sudo apt-get install -y docker-ce docker-ce-cli containerd.io \
-  docker-buildx-plugin docker-compose-plugin
-sudo usermod -aG docker "$USER"
-```
-
-Log out and back in after adding the Docker group. Then deploy the control
-plane:
-
-```bash
-git clone <repository-url> gamepanel
-cd gamepanel/infra
+git clone https://github.com/your-org/forge-plane.git
+cd forge-plane/infra
 
 # Generates API, database, encryption, node and Grafana secrets.
 PANEL_DOMAIN=panel.example.com ./gen-env.sh .env
 
 sudo install -d -o "$USER" -g "$USER" \
-  /srv/game-panel/servers \
-  /var/backups/gamepanel/postgres
+  /srv/forge-plane/servers \
+  /var/backups/forge-plane/postgres
 
 ./bootstrap-control-plane.sh
 ```
@@ -249,33 +256,6 @@ Prometheus, Grafana, and Alertmanager private or loopback-only. Nginx terminates
 public HTTPS. Only explicitly selected SFTP, game, and load-balancer ports
 should be exposed.
 
-Allow SSH, HTTP, HTTPS, SFTP, and only the game/L4 listener range you actually
-use. For example:
-
-```bash
-sudo ufw allow OpenSSH
-sudo ufw allow 80/tcp
-sudo ufw allow 443/tcp
-sudo ufw allow 2022/tcp
-sudo ufw allow 25565/tcp
-sudo ufw allow 30000:30100/tcp
-sudo ufw allow 30000:30100/udp
-sudo ufw enable
-```
-
-After DNS points to the VPS, obtain a certificate and install the supplied
-Nginx configuration:
-
-```bash
-cd gamepanel/infra
-sudo systemctl stop nginx
-sudo certbot certonly --standalone -d panel.example.com
-sed 's/__PANEL_FQDN__/panel.example.com/g' nginx.conf \
-  | sudo tee /etc/nginx/nginx.conf >/dev/null
-sudo nginx -t
-sudo systemctl enable --now nginx
-```
-
 > [!CAUTION]
 > Never deploy `infra/compose.yml` by itself on a public host. Always include
 > `infra/compose.production.yml`, protect `infra/.env`, use TLS, configure a
@@ -302,7 +282,7 @@ Create another node in the panel, copy its UUID and credential into a
 node-specific `infra/.env` on the additional Ubuntu host, then run:
 
 ```bash
-cd gamepanel/infra
+cd forge-plane/infra
 ./bootstrap-beacon.sh
 curl --fail http://127.0.0.1:9090/health
 ```
@@ -334,8 +314,7 @@ Do not handcraft production secrets. Generate the environment file with
 | `LOAD_BALANCER_PORT_MIN/MAX` | Reserved listener range for Forge L4 proxy groups |
 | `AWS_*` | Optional EC2 provisioning and Beacon bootstrap settings |
 
-The generators write every required production key. Review the resulting
-`infra/.env`, keep it outside Git, and store a protected recovery copy.
+The complete template is [`infra/.env.example`](./infra/.env.example).
 
 ### Default production ports
 
@@ -380,13 +359,14 @@ Or use the Makefile:
 | `make web-test` | Run frontend tests only |
 | `make clean` | Remove generated build artifacts |
 
-Production validation should additionally start a fresh PostgreSQL database and
-verify that every API migration is applied before an image is promoted.
+CI definitions are under [`.github/workflows/`](./.github/workflows/). The API
+migration validation workflow starts a fresh PostgreSQL database and verifies
+that every SQL migration is recorded.
 
 ## Repository layout
 
 ```text
-gamepanel/
+forge-plane/
 ├── forge/
 │   ├── api/                 # Go control-plane API and SQL migrations
 │   └── web/                 # Next.js dashboard
@@ -397,8 +377,8 @@ gamepanel/
 │   ├── shared-types/        # Shared contracts
 │   └── ui/                  # Shared UI primitives
 ├── lang/                    # Translation catalogs
+├── docs/                    # Maintainer and operator documentation
 ├── scripts/                 # Development, validation and operations helpers
-├── reference/               # Upstream research; not shipped runtime code
 ├── Makefile
 ├── go.work
 └── package.json
@@ -408,16 +388,23 @@ gamepanel/
 
 | Start here | Description |
 |---|---|
-| [Requirements and downloads](#requirements-and-downloads) | Software and hardware prerequisites |
-| [Development quick start](#quick-start-for-development) | Run the complete stack from source |
-| [Ubuntu production deployment](#production-deployment-on-ubuntu) | Docker, TLS, firewall, games and Beacon nodes |
-| [Configuration](#configuration) | Required environment and port reference |
-| [Testing](#testing-and-quality-checks) | Build, lint, test and validation commands |
-| [Security checklist](#security-checklist) | Minimum production security controls |
-| [Troubleshooting](#troubleshooting) | Common deployment failures |
+| [Documentation index](./docs/README.md) | Map of the documentation tree |
+| [Installation guide](#production-deployment-on-ubuntu) | Step-by-step installation and first game |
+| [Upgrading](./scripts/cleanup/upgrade.sh) | Upgrade procedure with backup and rollback |
+| [Production deployment](./infra/README.md) | Compose, TLS, monitoring and bootstrap configuration |
+| [Security checklist](#security-checklist) | Security controls and operator guidance |
+| [Architecture overview](#architecture) | System components, data flow and deployment architecture |
+| [Domain model](./packages/shared-types/README.md) | Core entities and shared contracts |
+| [Developer setup](./docs/development/contributing.md) | Contribution and source development workflow |
+| [API contracts](./packages/sdk/README.md) | TypeScript SDK for the Forge API |
+| [OpenAPI specification](./forge/api/docs/openapi.json) | Machine-readable API schema |
 | [Server lifecycle](./forge/api/docs/server-lifecycle.md) | Provisioning and runtime lifecycle |
 | [Encryption at rest](./forge/api/docs/encryption-at-rest.md) | Master-key management and rotation |
-| [OpenAPI specification](./forge/api/docs/openapi.json) | Machine-readable API schema |
+| [Docker Compose audit](./docs/audits/docker-compose-audit.md) | Historical infrastructure audit |
+
+Historical audits and research are preserved in `docs/audits/`. For current
+deployment instructions, prefer the
+[Production deployment](#production-deployment-on-ubuntu) section.
 
 ## Security checklist
 
@@ -430,8 +417,8 @@ gamepanel/
 - Store PostgreSQL dumps and verified game backups off-host.
 - Test recovery before relying on it.
 - Review image tags and dependency updates before production rollout.
-- Run [`scripts/production-guard.sh`](./scripts/production-guard.sh) against the
-  loaded production environment before deployment.
+- Run [`scripts/cleanup/production-guard.sh`](./scripts/cleanup/production-guard.sh)
+  against the loaded production environment before deployment.
 
 Report security-sensitive problems privately to the repository owner instead
 of publishing credentials or exploit details in a public issue.
@@ -451,9 +438,9 @@ of publishing credentials or exploit details in a public issue.
 Useful commands:
 
 ```bash
-./scripts/diagnose.sh
-./scripts/status.sh
-./scripts/logs.sh
+./scripts/diagnostics/diagnose.sh
+./scripts/diagnostics/status.sh
+./scripts/diagnostics/logs.sh
 
 cd infra
 docker compose -f compose.yml -f compose.production.yml --env-file .env ps
@@ -462,7 +449,7 @@ docker compose -f compose.yml -f compose.production.yml --env-file .env logs --t
 
 ## Project status
 
-GamePanel is under active development. The Docker Compose production path,
+Forge Plane is under active development. The Docker Compose production path,
 TCP/UDP allocations, integrated L4 proxy, multi-node evacuation, shared-backup
 recovery, and AWS Beacon bootstrap are implemented. Operators should still use
 staged upgrades, off-host backups, monitoring, and recovery drills before
@@ -470,7 +457,7 @@ hosting critical workloads.
 
 ## Contributing
 
-1. Read [`CONTRIBUTING.md`](./CONTRIBUTING.md).
+1. Read [`docs/development/contributing.md`](./docs/development/contributing.md).
 2. Create a focused branch.
 3. Add or update tests with the change.
 4. Run the checks in [Testing and quality checks](#testing-and-quality-checks).
