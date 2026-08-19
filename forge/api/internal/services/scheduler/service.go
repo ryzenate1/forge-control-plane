@@ -3,6 +3,8 @@ package scheduler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -10,6 +12,7 @@ import (
 	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/placement"
+	"gamepanel/forge/internal/services/reservations"
 	"gamepanel/forge/internal/store"
 )
 
@@ -23,19 +26,29 @@ type Service interface {
 	PlaceServer(context.Context, domain.PlacementRequest) (domain.PlacementDecision, error)
 	FilterNodes(context.Context, domain.PlacementRequest, []store.Node) ([]store.Node, error)
 	ScoreNodes(context.Context, domain.PlacementRequest, []store.Node) ([]NodeScore, error)
+	PlaceReplicas(context.Context, domain.PlaceReplicasRequest) ([]domain.PlacementReason, error)
+	ScaleReplicas(context.Context, domain.ScaleRequest) ([]domain.PlacementReason, error)
+	ReplaceFailedInstance(context.Context, domain.ReplaceFailedInstanceRequest) (*domain.PlacementReason, error)
 }
 
 type Scheduler struct {
-	store     *store.Store
-	engine    *placement.Engine
-	publisher events.Publisher
-	mu        sync.Mutex
-	metrics   Metrics
+	store               *store.Store
+	engine              *placement.Engine
+	publisher           events.Publisher
+	predictiveScorer    *PredictiveScorer
+	constraintScheduler *ConstraintScheduler
+	reservations        *reservations.Manager
+	mu                  sync.Mutex
+	metrics             Metrics
 }
 
 type Metrics struct {
 	PlacementRejectionsTotal uint64 `json:"placement_rejections_total"`
 	CapacityExceededTotal    uint64 `json:"capacity_exceeded_total"`
+	ReplicasPlacedTotal      uint64 `json:"replicas_placed_total"`
+	ScaleUpTotal             uint64 `json:"scale_up_total"`
+	ScaleDownTotal           uint64 `json:"scale_down_total"`
+	FailedReplacementsTotal  uint64 `json:"failed_replacements_total"`
 }
 
 func New(store *store.Store, engine *placement.Engine, publishers ...events.Publisher) *Scheduler {
@@ -44,6 +57,21 @@ func New(store *store.Store, engine *placement.Engine, publishers ...events.Publ
 		publisher = publishers[0]
 	}
 	return &Scheduler{store: store, engine: engine, publisher: publisher}
+}
+
+func (s *Scheduler) WithPredictiveScorer(ps *PredictiveScorer) *Scheduler {
+	s.predictiveScorer = ps
+	return s
+}
+
+func (s *Scheduler) WithConstraintScheduler(cs *ConstraintScheduler) *Scheduler {
+	s.constraintScheduler = cs
+	return s
+}
+
+func (s *Scheduler) WithReservations(mgr *reservations.Manager) *Scheduler {
+	s.reservations = mgr
+	return s
 }
 
 func (s *Scheduler) Metrics() Metrics {
@@ -77,6 +105,14 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 	if err != nil {
 		return domain.PlacementDecision{}, err
 	}
+	// Game-server placement honours the requested runtime provider the same way
+	// replica-app placement does (see PlaceReplicas and its RuntimeFilter):
+	// nodes that cannot run the requested runtime are not candidates. An empty
+	// or "docker" provider is treated as unconstrained for backward
+	// compatibility with requests that predate the field.
+	if requiresRuntimeProviderFilter(req.RuntimeProvider) {
+		filtered = filterByRuntimeProvider(filtered, req.RuntimeProvider)
+	}
 	if len(filtered) == 0 {
 		return domain.PlacementDecision{}, errors.New("no nodes satisfy placement constraints")
 	}
@@ -90,32 +126,83 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 	sort.SliceStable(scores, func(i, j int) bool {
 		return scores[i].Score > scores[j].Score
 	})
-	selected := scores[0]
-	regionID := req.RegionID
-	if regionID == "" && selected.Node.RegionID != nil {
-		regionID = *selected.Node.RegionID
+
+	for _, scored := range scores {
+		if err := ctx.Err(); err != nil {
+			return domain.PlacementDecision{}, fmt.Errorf("placement cancelled: %w", err)
+		}
+		var reservation store.PlacementReservation
+		var err error
+		if !req.SkipReservation {
+			if s.reservations != nil {
+				reservation, err = s.reservations.CreateReservation(ctx, store.CreatePlacementReservationRequest{
+					NodeID:          scored.Node.ID,
+					ReservationType: store.PlacementReservationTypePlacement,
+					CPU:             req.CPU,
+					Memory:          int64(req.MemoryMB),
+					Disk:            int64(req.DiskMB),
+				})
+			} else {
+				reservation, err = s.store.CreatePlacementReservation(ctx, store.CreatePlacementReservationRequest{
+					NodeID:          scored.Node.ID,
+					ReservationType: store.PlacementReservationTypePlacement,
+					CPU:             req.CPU,
+					Memory:          int64(req.MemoryMB),
+					Disk:            int64(req.DiskMB),
+				})
+			}
+			if err != nil {
+				// Only a genuine capacity conflict means "ask the next node".
+				// Anything else — the database being unreachable, for example — is
+				// not evidence about capacity, and folding it into "insufficient
+				// capacity on all candidate nodes" would point the operator at the
+				// wrong subsystem entirely.
+				if !reservations.IsConflict(err) {
+					return domain.PlacementDecision{}, fmt.Errorf("reserve capacity on node %s: %w", scored.Node.ID, err)
+				}
+				slog.WarnContext(ctx, "scheduler: reservation conflicted, trying next candidate", "nodeId", scored.Node.ID, "error", err)
+				continue
+			}
+		}
+		regionID := req.RegionID
+		if regionID == "" && scored.Node.RegionID != nil {
+			regionID = *scored.Node.RegionID
+		}
+		return domain.PlacementDecision{
+			RegionID:      regionID,
+			NodeID:        scored.Node.ID,
+			AllocationID:  req.AllocationID,
+			ReservationID: reservation.ID,
+			Manual:        req.RequiredNode != "",
+			Score:         scored.Score,
+			Reasons:       []string{scored.Reason, "reserved capacity on placed node"},
+		}, nil
 	}
-	return domain.PlacementDecision{
-		RegionID:     regionID,
-		RegionIDRaw:  regionID,
-		NodeID:       selected.Node.ID,
-		NodeIDRaw:    selected.Node.ID,
-		AllocationID: req.AllocationID,
-		Manual:       req.RequiredNode != "",
-		Score:        selected.Score,
-		Reasons:      []string{selected.Reason},
-	}, nil
+	return domain.PlacementDecision{}, errors.New("insufficient capacity on all candidate nodes")
 }
 
 func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest, nodes []store.Node) ([]store.Node, error) {
 	req = normalizeRequest(req)
-	// TODO: Wire in ConstraintScheduler.EvaluateConstraints to apply admin-defined scheduling constraints during filtering.
 	regions, err := s.store.ListRegions(ctx)
 	if err != nil {
 		return nil, err
 	}
+	// Request-scoped constraints (region/node keys) are enforced here at
+	// filter time; label and affinity constraints need a label index the
+	// scheduler does not carry, so they are deferred to the engine, which
+	// fails them closed with a recorded FilterReason.
+	requestConstraints := filterablePlacementConstraints(toPlacementConstraints(req.Constraints))
+	checker := placement.NewConstraintChecker()
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
+	}
 	filtered := make([]store.Node, 0, len(nodes))
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("node filtering cancelled: %w", err)
+		}
 		if !nodeRegionEnabled(node, regions) {
 			s.recordPlacementRejection()
 			continue
@@ -133,22 +220,49 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			// Excluding the node is the safe direction, but an unreadable node and
+			// a rejected node must not be indistinguishable in the logs.
 			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
 			continue
 		}
-		if !hasCapacity(snapshot.TotalCPU, snapshot.AvailableCPU, req.CPU) {
+		if !HasCapacity(snapshot.TotalCPU, snapshot.AvailableCPU, req.CPU) {
 			s.recordCapacityExceeded(ctx, node.ID, "cpu", snapshot.AvailableCPU, req.CPU)
 			continue
 		}
-		if !hasCapacity(snapshot.TotalMemory, snapshot.AvailableMemory, req.MemoryMB) {
+		if !HasCapacity(snapshot.TotalMemory, snapshot.AvailableMemory, req.MemoryMB) {
 			s.recordCapacityExceeded(ctx, node.ID, "memory", snapshot.AvailableMemory, req.MemoryMB)
 			continue
 		}
-		if !hasCapacity(snapshot.TotalDisk, snapshot.AvailableDisk, req.DiskMB) {
+		if !HasCapacity(snapshot.TotalDisk, snapshot.AvailableDisk, req.DiskMB) {
 			s.recordCapacityExceeded(ctx, node.ID, "disk", snapshot.AvailableDisk, req.DiskMB)
 			continue
 		}
+		// Storage locality is a hard filter here, identical to the replica
+		// engine's prepareReplicaPlacement: any requested locality must match
+		// the node's canonical locality. Scoring adds the soft preference on
+		// top; both layers share one vocabulary (see
+		// placement.CanonicalStorageLocality) so they cannot disagree about
+		// what matches.
+		if req.StorageLocality != "" && !storageLocalityEqual(req.StorageLocality, storageLocalityForProvider(node.RuntimeProvider)) {
+			s.recordPlacementRejection()
+			continue
+		}
+		if len(requestConstraints) > 0 {
+			candidate := placement.Candidate{NodeID: node.ID, RegionID: regionIDOf(node)}
+			if err := checker.CheckHard(candidate, requestConstraints, constraintCtx); err != nil {
+				s.recordPlacementRejection()
+				slog.WarnContext(ctx, "scheduler: node excluded by request constraint", "nodeId", node.ID, "error", err)
+				continue
+			}
+		}
 		filtered = append(filtered, node)
+	}
+	if s.constraintScheduler != nil {
+		filtered, err = s.constraintScheduler.EvaluateConstraints(ctx, req, filtered)
+		if err != nil {
+			return nil, err
+		}
 	}
 	return filtered, nil
 }
@@ -175,31 +289,39 @@ func (s *Scheduler) recordCapacityExceeded(ctx context.Context, nodeID, resource
 
 func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest, nodes []store.Node) ([]NodeScore, error) {
 	req = normalizeRequest(req)
-	// TODO: Wire in PredictiveScorer to incorporate predictive scores (trend/affinity/anti-affinity) into the scoring pipeline.
 	workload := toWorkloadRequest(req)
 
-	allServers, err := s.store.ListServers(ctx)
-	if err == nil {
-		serverNodeMap := make(map[string]string, len(allServers))
-		for _, sv := range allServers {
-			serverNodeMap[sv.ID] = sv.Node
-		}
-		workload.ConstraintCtx = placement.ConstraintContext{
-			ServerNodeMap: serverNodeMap,
-		}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+	} else {
+		workload.ConstraintCtx = constraintCtx
 	}
 
 	nodeMap := make(map[string]store.Node, len(nodes))
 	candidates := make([]placement.Candidate, 0, len(nodes))
+	var unreadable []string
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("node scoring cancelled: %w", err)
+		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			// Unknown capacity is not empty capacity. The node is excluded, which
+			// is the safe direction, but a caller left with no candidates is told
+			// the real reason rather than being shown a capacity verdict.
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+			unreadable = append(unreadable, fmt.Sprintf("%s: %v", node.ID, err))
 			continue
 		}
 		nodeMap[node.ID] = node
 		candidates = append(candidates, nodeToCandidate(snapshot, node))
 	}
 	if len(candidates) == 0 {
+		if len(unreadable) > 0 {
+			return nil, fmt.Errorf("node capacity is unknown for all %d candidate node(s): %s", len(unreadable), strings.Join(unreadable, "; "))
+		}
 		return nil, nil
 	}
 	results, err := s.engine.PlaceAll(ctx, candidates, workload)
@@ -212,14 +334,533 @@ func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest,
 		if !ok {
 			continue
 		}
+		// The predictive term is a multiplier, so it is applied to the engine
+		// score on its own. Directives are added afterwards: multiplying a running
+		// total that already contained a directive let a forecast amplify or
+		// cancel something the operator had stated explicitly.
+		score := r.Score
 		reason := strings.Join(r.Reasons, "; ")
+		if s.predictiveScorer != nil {
+			ps, predictiveErr := s.predictiveScorer.ScorePredictive(ctx, node.ID, req)
+			if predictiveErr == nil && ps != nil {
+				score = score*(1+ps.TrendScore) + ps.AffinityScore - ps.AntiAffinityScore
+				reason = reason + "; predictive: trend=" + fmt.Sprintf("%.4f", ps.TrendScore) + " affinity=" + fmt.Sprintf("%.4f", ps.AffinityScore) + " anti-affinity=" + fmt.Sprintf("%.4f", ps.AntiAffinityScore)
+			}
+		}
 		if req.PreferredNode != "" && node.ID == req.PreferredNode {
-			r.Score += 1e9
+			score += preferredNodeBonus()
 			reason = "preferred node"
 		}
-		scores = append(scores, NodeScore{Node: node, Score: r.Score, Reason: reason})
+		if req.StorageLocality != "" {
+			if storageLocalityEqual(req.StorageLocality, r.StorageLocality) {
+				score += storageLocalityBonus()
+				reason = reason + "; storage locality match bonus"
+			} else {
+				score -= storageLocalityPenalty()
+				reason = reason + "; storage locality mismatch penalty"
+			}
+		}
+		scores = append(scores, NodeScore{Node: node, Score: score, Reason: reason})
 	}
 	return scores, nil
+}
+
+func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasRequest) ([]domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	req.RegionID = strings.TrimSpace(req.RegionID)
+	req.StorageLocality = canonicalStorageLocality(strings.TrimSpace(req.StorageLocality))
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
+	app, err := s.store.GetReplicaApp(ctx, req.AppID)
+	if err != nil {
+		return nil, fmt.Errorf("app not found: %w", err)
+	}
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{
+		RegionID:        req.RegionID,
+		CPU:             req.CPU,
+		MemoryMB:        req.MemoryMB,
+		DiskMB:          req.DiskMB,
+		RequiredNode:    req.RequiredNode,
+		StorageLocality: req.StorageLocality,
+		Constraints:     req.Constraints,
+	}, nodes)
+	if err != nil {
+		return nil, err
+	}
+	if req.RuntimeFilter != "" {
+		filtered = filterByRuntimeProvider(filtered, req.RuntimeFilter)
+	}
+	existing, err := s.store.ListInstancesByApp(ctx, req.AppID)
+	if err != nil {
+		return nil, err
+	}
+	existingNodeMap := make(map[string]int)
+	existingUsage := make(map[string]placement.ResourceUsage)
+	for _, inst := range existing {
+		if inst.Status != "removing" && inst.Status != "failed" {
+			existingNodeMap[inst.NodeID]++
+			usage := existingUsage[inst.NodeID]
+			usage.CPU += inst.CPU
+			usage.MemoryMB += inst.MemoryMB
+			usage.DiskMB += inst.DiskMB
+			existingUsage[inst.NodeID] = usage
+		}
+	}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
+	}
+
+	candidates := make([]placement.Candidate, 0, len(filtered))
+	for _, node := range filtered {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("replica placement cancelled: %w", err)
+		}
+		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+		if err != nil {
+			// The node is left out of this placement, which is the safe direction,
+			// but a replica that fails to place because capacity could not be read
+			// has to be distinguishable from one that failed for lack of room.
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+			continue
+		}
+		candidates = append(candidates, nodeToCandidate(snapshot, node))
+	}
+
+	replicas := make([]placement.ReplicaSpec, req.ReplicaCount)
+	for i := 0; i < req.ReplicaCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("replica placement cancelled: %w", err)
+		}
+		runtime := app.RuntimeProvider
+		if req.RuntimeFilter != "" {
+			runtime = req.RuntimeFilter
+		}
+		replicas[i] = placement.ReplicaSpec{
+			Index:           i,
+			CPU:             req.CPU,
+			MemoryMB:        req.MemoryMB,
+			DiskMB:          req.DiskMB,
+			RuntimeProvider: runtime,
+		}
+	}
+
+	placementReq := placement.ReplicaPlacementRequest{
+		AppID:           req.AppID,
+		Replicas:        replicas,
+		RegionID:        req.RegionID,
+		RequiredNode:    req.RequiredNode,
+		PreferredNode:   req.PreferredNode,
+		RuntimeFilter:   req.RuntimeFilter,
+		StorageLocality: req.StorageLocality,
+		Constraints:     toPlacementConstraints(req.Constraints),
+		ConstraintCtx:   constraintCtx,
+		ExistingNodeMap: existingNodeMap,
+		ExistingUsage:   existingUsage,
+	}
+
+	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+	if err != nil {
+		return nil, err
+	}
+
+	s.mu.Lock()
+	s.metrics.ReplicasPlacedTotal += uint64(len(result.Placements))
+	s.mu.Unlock()
+
+	reasons := make([]domain.PlacementReason, 0, len(result.Placements))
+	for _, p := range result.Placements {
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: "",
+			NodeID:     p.NodeID,
+			Index:      p.Index,
+			Score:      p.Score,
+			Accepted:   true,
+			Reasons:    p.Reasons,
+		})
+	}
+	for _, f := range result.Failures {
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: "",
+			NodeID:     "",
+			Index:      f.Index,
+			Score:      0,
+			Accepted:   false,
+			Reasons:    []string{f.Reason},
+		})
+	}
+	return reasons, nil
+}
+
+func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) ([]domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	req.RegionID = strings.TrimSpace(req.RegionID)
+	req.StorageLocality = canonicalStorageLocality(strings.TrimSpace(req.StorageLocality))
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
+	app, err := s.store.GetReplicaApp(ctx, req.AppID)
+	if err != nil {
+		return nil, fmt.Errorf("app not found: %w", err)
+	}
+	current, err := s.store.ListInstancesByApp(ctx, req.AppID)
+	if err != nil {
+		return nil, err
+	}
+	activeInstances := 0
+	for _, inst := range current {
+		if inst.Status != "removing" && inst.Status != "failed" {
+			activeInstances++
+		}
+	}
+
+	if req.ReplicaCount == activeInstances {
+		return nil, nil
+	}
+
+	if req.ReplicaCount > activeInstances {
+		// Scale up
+		s.mu.Lock()
+		s.metrics.ScaleUpTotal++
+		s.mu.Unlock()
+
+		extra := req.ReplicaCount - activeInstances
+		allNodes, err := s.store.ListNodes(ctx)
+		if err != nil {
+			return nil, err
+		}
+		filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{
+			RegionID:        req.RegionID,
+			CPU:             app.CPU,
+			MemoryMB:        app.MemoryMB,
+			DiskMB:          app.DiskMB,
+			StorageLocality: req.StorageLocality,
+			Constraints:     req.Constraints,
+		}, allNodes)
+		if err != nil {
+			return nil, err
+		}
+
+		existingNodeMap := make(map[string]int)
+		existingUsage := make(map[string]placement.ResourceUsage)
+		for _, inst := range current {
+			if inst.Status != "removing" && inst.Status != "failed" {
+				existingNodeMap[inst.NodeID]++
+				usage := existingUsage[inst.NodeID]
+				usage.CPU += inst.CPU
+				usage.MemoryMB += inst.MemoryMB
+				usage.DiskMB += inst.DiskMB
+				existingUsage[inst.NodeID] = usage
+			}
+		}
+		constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+			constraintCtx = placement.ConstraintContext{}
+		}
+
+		candidates := make([]placement.Candidate, 0, len(filtered))
+		for _, node := range filtered {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("replica scale-up cancelled: %w", err)
+			}
+			snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+			if err != nil {
+				// Excluded — scale up onto the nodes Forge can actually read — but
+				// said out loud, so a short scale-up is not mistaken for a full one.
+				s.recordPlacementRejection()
+				slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+				continue
+			}
+			candidates = append(candidates, nodeToCandidate(snapshot, node))
+		}
+
+		startIdx := activeInstances
+		replicas := make([]placement.ReplicaSpec, extra)
+		for i := 0; i < extra; i++ {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("replica scale-up cancelled: %w", err)
+			}
+			replicas[i] = placement.ReplicaSpec{
+				Index:           startIdx + i,
+				CPU:             app.CPU,
+				MemoryMB:        app.MemoryMB,
+				DiskMB:          app.DiskMB,
+				RuntimeProvider: app.RuntimeProvider,
+			}
+		}
+
+		placementReq := placement.ReplicaPlacementRequest{
+			AppID:           req.AppID,
+			Replicas:        replicas,
+			RegionID:        req.RegionID,
+			StorageLocality: req.StorageLocality,
+			Constraints:     toPlacementConstraints(req.Constraints),
+			ConstraintCtx:   constraintCtx,
+			ExistingNodeMap: existingNodeMap,
+			ExistingUsage:   existingUsage,
+		}
+		result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+		if err != nil {
+			return nil, err
+		}
+		reasons := make([]domain.PlacementReason, 0, len(result.Placements))
+		for _, p := range result.Placements {
+			reasons = append(reasons, domain.PlacementReason{
+				NodeID:   p.NodeID,
+				Index:    p.Index,
+				Score:    p.Score,
+				Accepted: true,
+				Reasons:  p.Reasons,
+			})
+		}
+		for _, f := range result.Failures {
+			reasons = append(reasons, domain.PlacementReason{
+				Index:    f.Index,
+				Accepted: false,
+				Reasons:  []string{f.Reason},
+			})
+		}
+		if _, err := s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount); err != nil {
+			return nil, fmt.Errorf("record desired replicas for app %s: %w", req.AppID, err)
+		}
+		return reasons, nil
+	}
+
+	// Scale down
+	s.mu.Lock()
+	s.metrics.ScaleDownTotal++
+	s.mu.Unlock()
+
+	remove := activeInstances - req.ReplicaCount
+	toRemove := make([]store.Instance, 0, remove)
+	for i := len(current) - 1; i >= 0 && len(toRemove) < remove; i-- {
+		if current[i].Status != "removing" && current[i].Status != "failed" {
+			toRemove = append(toRemove, current[i])
+		}
+	}
+	reasons := make([]domain.PlacementReason, 0, len(toRemove))
+	var failedRemovals []string
+	for _, inst := range toRemove {
+		if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "removing"); err != nil {
+			// The instance is still live, so it has not been removed and must not
+			// be reported as such. Record the failure and keep going so the
+			// instances that were marked are still visible in the result.
+			failedRemovals = append(failedRemovals, fmt.Sprintf("%s: %v", inst.ID, err))
+			slog.WarnContext(ctx, "scheduler: could not mark instance removing during scale down", "instanceId", inst.ID, "error", err)
+			reasons = append(reasons, domain.PlacementReason{
+				InstanceID: inst.ID,
+				NodeID:     inst.NodeID,
+				Accepted:   false,
+				Reasons:    []string{fmt.Sprintf("mark instance removing: %v", err)},
+			})
+			continue
+		}
+		reasons = append(reasons, domain.PlacementReason{
+			InstanceID: inst.ID,
+			NodeID:     inst.NodeID,
+			Accepted:   true,
+			Reasons:    []string{"scale down - removed instance"},
+		})
+	}
+	if _, err := s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount); err != nil {
+		return reasons, fmt.Errorf("record desired replicas for app %s: %w", req.AppID, err)
+	}
+	if len(failedRemovals) > 0 {
+		return reasons, fmt.Errorf("scale down incomplete: %s", strings.Join(failedRemovals, "; "))
+	}
+	return reasons, nil
+}
+
+func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.ReplaceFailedInstanceRequest) (*domain.PlacementReason, error) {
+	if s.store == nil {
+		return nil, errors.New("scheduler not initialized")
+	}
+	inst, err := s.store.GetInstance(ctx, req.InstanceID)
+	if err != nil {
+		return nil, fmt.Errorf("instance not found: %w", err)
+	}
+	app, err := s.store.GetReplicaApp(ctx, inst.AppID)
+	if err != nil {
+		return nil, err
+	}
+
+	// Mark current as removing. If this write fails the instance is still live
+	// and counted as active, so the replacement has to stop here: continuing
+	// would place a second instance over a workload nothing has retired.
+	if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "removing"); err != nil {
+		return nil, fmt.Errorf("mark instance %s removing: %w", inst.ID, err)
+	}
+
+	// Find replacement node.
+	//
+	// A filtering failure used to fall back to every node, which is the one set
+	// filtering exists to exclude: drained, offline and maintenance machines.
+	// Not knowing which nodes are eligible is not a licence to try all of them.
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("filter replacement candidates: %w", err)
+	}
+
+	existing, err := s.store.ListInstancesByApp(ctx, app.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list instances of app %s for placement: %w", app.ID, err)
+	}
+	existingNodeMap := make(map[string]int)
+	existingUsage := make(map[string]placement.ResourceUsage)
+	for _, e := range existing {
+		if e.Status != "removing" && e.Status != "failed" {
+			existingNodeMap[e.NodeID]++
+			usage := existingUsage[e.NodeID]
+			usage.CPU += e.CPU
+			usage.MemoryMB += e.MemoryMB
+			usage.DiskMB += e.DiskMB
+			existingUsage[e.NodeID] = usage
+		}
+	}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
+	}
+
+	candidates := make([]placement.Candidate, 0, len(filtered))
+	var unreadable []string
+	for _, node := range filtered {
+		if err := ctx.Err(); err != nil {
+			restoreInstance(ctx, s.store, inst.ID)
+			return nil, fmt.Errorf("replacement placement cancelled: %w", err)
+		}
+		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
+		if err != nil {
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+			unreadable = append(unreadable, fmt.Sprintf("%s: %v", node.ID, err))
+			continue
+		}
+		candidates = append(candidates, nodeToCandidate(snapshot, node))
+	}
+	if len(candidates) == 0 && len(unreadable) > 0 {
+		restoreInstance(ctx, s.store, inst.ID)
+		return nil, fmt.Errorf("node capacity is unknown for all %d candidate node(s): %s", len(unreadable), strings.Join(unreadable, "; "))
+	}
+
+	replicas := []placement.ReplicaSpec{{
+		Index:           inst.Idx,
+		CPU:             app.CPU,
+		MemoryMB:        app.MemoryMB,
+		DiskMB:          app.DiskMB,
+		RuntimeProvider: app.RuntimeProvider,
+	}}
+
+	placementReq := placement.ReplicaPlacementRequest{
+		AppID:           app.ID,
+		Replicas:        replicas,
+		ConstraintCtx:   constraintCtx,
+		ExistingNodeMap: existingNodeMap,
+		ExistingUsage:   existingUsage,
+	}
+	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
+	if err != nil {
+		restoreInstance(ctx, s.store, inst.ID)
+		return nil, err
+	}
+
+	if len(result.Placements) == 0 {
+		// Restore instance
+		restoreInstance(ctx, s.store, inst.ID)
+		s.mu.Lock()
+		s.metrics.FailedReplacementsTotal++
+		s.mu.Unlock()
+		return &domain.PlacementReason{
+			InstanceID: inst.ID,
+			Accepted:   false,
+			Reasons:    []string{"no replacement node found"},
+		}, nil
+	}
+
+	p := result.Placements[0]
+	// Update instance to new node. Reporting a replacement the database never
+	// recorded would leave the caller with an instance that does not exist.
+	if _, err := s.store.UpdateInstanceNode(ctx, inst.ID, p.NodeID); err != nil {
+		restoreInstance(ctx, s.store, inst.ID)
+		return nil, fmt.Errorf("assign instance %s to node %s: %w", inst.ID, p.NodeID, err)
+	}
+	if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "pending"); err != nil {
+		return nil, fmt.Errorf("mark instance %s pending on node %s: %w", inst.ID, p.NodeID, err)
+	}
+
+	return &domain.PlacementReason{
+		InstanceID: inst.ID,
+		NodeID:     p.NodeID,
+		Score:      p.Score,
+		Accepted:   true,
+		Reasons:    append(p.Reasons, "replaced failed instance"),
+	}, nil
+}
+
+// restoreInstance puts an instance back to "failed" after a replacement attempt
+// abandoned it, so it is not stranded in "removing" with nothing being removed.
+// Failing to restore is logged rather than returned: the caller is already being
+// told the replacement failed, and overwriting that with a bookkeeping error
+// would hide the actual cause.
+func restoreInstance(ctx context.Context, st instanceStatusWriter, instanceID string) {
+	if st == nil || instanceID == "" {
+		return
+	}
+	if _, err := st.UpdateInstanceStatus(ctx, instanceID, "failed"); err != nil {
+		slog.ErrorContext(ctx, "scheduler: could not restore instance after a failed replacement", "instanceId", instanceID, "error", err)
+	}
+}
+
+type instanceStatusWriter interface {
+	UpdateInstanceStatus(ctx context.Context, id, status string) (store.Instance, error)
+}
+
+// filterByRuntimeProvider keeps only the nodes that can actually run the
+// requested runtime. It is fail-closed: an empty result means no node supports
+// the runtime and the caller must reject the placement, not quietly fall back to
+// the whole node list. Returning every node here would let a firecracker
+// workload be scored onto a docker-only machine, which is the one thing runtime
+// compatibility exists to prevent.
+//
+// A node that reports no provider is inferred to be a docker node — docker is
+// the runtime Forge assumed before the field existed — so an unreported provider
+// satisfies a docker (or unconstrained) request but never an explicit
+// containerd/podman/firecracker requirement. Matching is case-insensitive to
+// agree with the replica engine's own runtime filter.
+func filterByRuntimeProvider(nodes []store.Node, runtime string) []store.Node {
+	runtime = strings.TrimSpace(runtime)
+	if runtime == "" {
+		return nodes
+	}
+	filtered := make([]store.Node, 0, len(nodes))
+	for _, n := range nodes {
+		provider := strings.TrimSpace(n.RuntimeProvider)
+		if strings.EqualFold(provider, runtime) || (provider == "" && strings.EqualFold(runtime, "docker")) {
+			filtered = append(filtered, n)
+		}
+	}
+	return filtered
+}
+
+// requiresRuntimeProviderFilter reports whether a requested runtime provider
+// must constrain game-server placement. Empty and "docker" are treated as
+// unconstrained so existing requests keep matching every node.
+func requiresRuntimeProviderFilter(provider string) bool {
+	provider = strings.TrimSpace(provider)
+	return provider != "" && !strings.EqualFold(provider, "docker")
 }
 
 func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) placement.Candidate {
@@ -233,6 +874,7 @@ func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) place
 	if node.RegionID != nil {
 		regionID = *node.RegionID
 	}
+	storageLocality := storageLocalityForProvider(node.RuntimeProvider)
 	return placement.Candidate{
 		NodeID:          node.ID,
 		RegionID:        regionID,
@@ -249,17 +891,21 @@ func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) place
 		Maintenance:     node.Maintenance,
 		Draining:        node.Draining,
 		Status:          status,
+		StorageLocality: storageLocality,
+		RuntimeProvider: node.RuntimeProvider,
 	}
 }
 
 func toWorkloadRequest(req domain.PlacementRequest) placement.WorkloadRequest {
 	return placement.WorkloadRequest{
-		CPU:           req.CPU,
-		MemoryMB:      req.MemoryMB,
-		DiskMB:        req.DiskMB,
-		PreferredNode: req.PreferredNode,
-		RequiredNode:  req.RequiredNode,
-		RegionID:      req.RegionID,
+		CPU:             req.CPU,
+		MemoryMB:        req.MemoryMB,
+		DiskMB:          req.DiskMB,
+		PreferredNode:   req.PreferredNode,
+		RequiredNode:    req.RequiredNode,
+		RegionID:        req.RegionID,
+		StorageLocality: req.StorageLocality,
+		Constraints:     toPlacementConstraints(req.Constraints),
 	}
 }
 
@@ -268,6 +914,9 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	req.RequiredNode = strings.TrimSpace(firstNonEmpty(req.RequiredNode, req.NodeID))
 	req.PreferredNode = strings.TrimSpace(req.PreferredNode)
 	req.AllocationID = strings.TrimSpace(req.AllocationID)
+	req.RuntimeProvider = strings.TrimSpace(req.RuntimeProvider)
+	req.StorageLocality = canonicalStorageLocality(req.StorageLocality)
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
 	if req.CPU == 0 {
 		req.CPU = req.CPUShares
 	}
@@ -283,9 +932,37 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	return req
 }
 
-func hasCapacity(total, available, requested int) bool {
-	if requested <= 0 || total <= 0 {
+// normalizePlacementConstraints trims constraint fields so equivalent
+// spellings compare equal downstream. Unknown types and operators are kept —
+// they are rejected loudly at evaluation time, not silently dropped here.
+func normalizePlacementConstraints(in []domain.PlacementConstraint) []domain.PlacementConstraint {
+	if in == nil {
+		return nil
+	}
+	out := make([]domain.PlacementConstraint, 0, len(in))
+	for _, c := range in {
+		c.Type = domain.PlacementConstraintType(strings.ToLower(strings.TrimSpace(string(c.Type))))
+		c.Key = strings.ToLower(strings.TrimSpace(c.Key))
+		c.Operator = strings.ToLower(strings.TrimSpace(c.Operator))
+		c.Value = strings.TrimSpace(c.Value)
+		if c.Key == "" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
+func HasCapacity(total, available, requested int) bool {
+	if requested <= 0 {
 		return true
+	}
+	// An unknown or unreported total is not infinite capacity. A node that
+	// reports no total cannot be shown to fit the request, so it is not a
+	// candidate; callers distinguish this from a shortfall via the snapshot
+	// path, which logs the unreadable node separately.
+	if total <= 0 {
+		return false
 	}
 	return available >= requested
 }
@@ -323,4 +1000,121 @@ func nodeRegionEnabled(node store.Node, regions []store.Region) bool {
 		}
 	}
 	return false
+}
+
+func regionIDOf(node store.Node) string {
+	if node.RegionID != nil {
+		return *node.RegionID
+	}
+	return ""
+}
+
+// serverNodeConstraintCtx builds the affinity context the engine needs: which
+// node each server runs on. An unreadable server list is not silently treated
+// as "no affinity anywhere" — the caller logs it and proceeds with an empty
+// map, under which unknown affinity targets fail closed in the checker.
+func (s *Scheduler) serverNodeConstraintCtx(ctx context.Context) (placement.ConstraintContext, error) {
+	allServers, err := s.store.ListServers(ctx)
+	if err != nil {
+		return placement.ConstraintContext{}, err
+	}
+	serverNodeMap := make(map[string]string, len(allServers))
+	for _, sv := range allServers {
+		serverNodeMap[sv.ID] = sv.Node
+	}
+	return placement.ConstraintContext{ServerNodeMap: serverNodeMap}, nil
+}
+
+// toPlacementConstraints translates domain-level request constraints into the
+// engine's constraint vocabulary. Required and preferred map directly;
+// forbidden inverts into a required exclusion (there is no "must not" flag in
+// the engine, but "required not-in" means exactly that).
+func toPlacementConstraints(in []domain.PlacementConstraint) []placement.Constraint {
+	out := make([]placement.Constraint, 0, len(in))
+	for _, c := range in {
+		key := strings.ToLower(strings.TrimSpace(c.Key))
+		op := strings.ToLower(strings.TrimSpace(c.Operator))
+		pc := placement.Constraint{
+			Key:      key,
+			Values:   splitConstraintValues(c.Value),
+			Required: c.Type != domain.PlacementConstraintPreferred,
+		}
+		switch key {
+		case "region":
+			pc.Type = placement.ConstraintRegion
+		case "node_id", "node":
+			pc.Type = placement.ConstraintNode
+		default:
+			pc.Type = placement.ConstraintLabel
+		}
+		if c.Type == domain.PlacementConstraintForbidden {
+			pc.Operator = invertConstraintOperator(op)
+		} else {
+			pc.Operator = normalizeConstraintOperator(op)
+		}
+		out = append(out, pc)
+	}
+	return out
+}
+
+// filterablePlacementConstraints keeps the constraints the scheduler can
+// evaluate from node rows alone (region and node identity). Label and
+// affinity constraints need a label index or server map the filter loop does
+// not carry, so they are left for the engine, which records exclusions as
+// FilterReasons instead of silently dropping them here.
+func filterablePlacementConstraints(in []placement.Constraint) []placement.Constraint {
+	out := make([]placement.Constraint, 0, len(in))
+	for _, c := range in {
+		if c.Type == placement.ConstraintRegion || c.Type == placement.ConstraintNode {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func splitConstraintValues(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// normalizeConstraintOperator maps the scheduler's operator spellings onto the
+// engine's. The engine's region/node/label checks understand "in", "not-in",
+// "exists" and "not-exists"; anything else is rejected by the checker rather
+// than guessed at here.
+func normalizeConstraintOperator(op string) string {
+	switch op {
+	case "eq", "in", "":
+		return "in"
+	case "neq", "notin", "not-in":
+		return "not-in"
+	case "exists":
+		return "exists"
+	case "not-exists", "notexists":
+		return "not-exists"
+	default:
+		return op
+	}
+}
+
+// invertConstraintOperator turns a match operator into the exclusion that a
+// forbidden constraint requires.
+func invertConstraintOperator(op string) string {
+	switch op {
+	case "eq", "in", "":
+		return "not-in"
+	case "neq", "notin", "not-in":
+		return "in"
+	case "exists":
+		return "not-exists"
+	case "not-exists", "notexists":
+		return "exists"
+	default:
+		return op
+	}
 }

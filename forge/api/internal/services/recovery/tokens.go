@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/bcrypt"
 )
 
 type TokenType string
@@ -21,21 +22,22 @@ const (
 )
 
 type RecoveryToken struct {
-	ID        string     `json:"id"`
-	UserID    string     `json:"userId"`
-	Type      TokenType  `json:"type"`
-	TokenHash string     `json:"-"`
-	ExpiresAt time.Time  `json:"expiresAt"`
-	UsedAt    *time.Time `json:"usedAt,omitempty"`
-	CreatedAt time.Time  `json:"createdAt"`
-	Metadata  string     `json:"metadata,omitempty"`
-	IP        string     `json:"ip,omitempty"`
-	UserAgent string     `json:"userAgent,omitempty"`
+	ID          string     `json:"id"`
+	UserID      string     `json:"userId"`
+	Type        TokenType  `json:"type"`
+	TokenHash   string     `json:"-"`
+	TokenLookup string     `json:"-"`
+	ExpiresAt   time.Time  `json:"expiresAt"`
+	UsedAt      *time.Time `json:"usedAt,omitempty"`
+	CreatedAt   time.Time  `json:"createdAt"`
+	Metadata    string     `json:"metadata,omitempty"`
+	IP          string     `json:"ip,omitempty"`
+	UserAgent   string     `json:"userAgent,omitempty"`
 }
 
 type TokenStore interface {
 	CreateToken(ctx context.Context, token *RecoveryToken) error
-	GetTokenByHash(ctx context.Context, hash string) (*RecoveryToken, error)
+	GetTokenByLookup(ctx context.Context, lookup string) (*RecoveryToken, error)
 	MarkTokenUsed(ctx context.Context, id string) error
 	InvalidateUserTokens(ctx context.Context, userID string, tokenType TokenType) error
 	ListUserTokens(ctx context.Context, userID string, tokenType TokenType, limit int) ([]RecoveryToken, error)
@@ -67,7 +69,11 @@ func (s *TokenService) GenerateToken(ctx context.Context, userID string, tokenTy
 
 	plaintext := hex.EncodeToString(raw)
 	sum := sha256.Sum256([]byte(plaintext))
-	tokenHash := hex.EncodeToString(sum[:])
+	tokenLookup := hex.EncodeToString(sum[:])
+	tokenHashBytes, err := bcrypt.GenerateFromPassword([]byte(plaintext), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
 
 	ttl := s.tokenTTL[tokenType]
 	expiresAt := time.Now().UTC().Add(ttl)
@@ -76,15 +82,16 @@ func (s *TokenService) GenerateToken(ctx context.Context, userID string, tokenTy
 	}
 
 	token := &RecoveryToken{
-		ID:        uuid.NewString(),
-		UserID:    userID,
-		Type:      tokenType,
-		TokenHash: tokenHash,
-		ExpiresAt: expiresAt,
-		CreatedAt: time.Now().UTC(),
-		Metadata:  metadata,
-		IP:        ip,
-		UserAgent: userAgent,
+		ID:          uuid.NewString(),
+		UserID:      userID,
+		Type:        tokenType,
+		TokenHash:   string(tokenHashBytes),
+		TokenLookup: tokenLookup,
+		ExpiresAt:   expiresAt,
+		CreatedAt:   time.Now().UTC(),
+		Metadata:    metadata,
+		IP:          ip,
+		UserAgent:   userAgent,
 	}
 
 	if err := s.store.CreateToken(ctx, token); err != nil {
@@ -98,9 +105,12 @@ func (s *TokenService) ValidateToken(ctx context.Context, plaintext string, toke
 	sum := sha256.Sum256([]byte(plaintext))
 	tokenHash := hex.EncodeToString(sum[:])
 
-	token, err := s.store.GetTokenByHash(ctx, tokenHash)
+	token, err := s.store.GetTokenByLookup(ctx, tokenHash)
 	if err != nil {
 		return "", err
+	}
+	if token == nil || bcrypt.CompareHashAndPassword([]byte(token.TokenHash), []byte(plaintext)) != nil {
+		return "", nil
 	}
 
 	if token.Type != tokenType {
@@ -127,9 +137,12 @@ func (s *TokenService) ConsumeToken(ctx context.Context, plaintext string, token
 	sum := sha256.Sum256([]byte(plaintext))
 	tokenHash := hex.EncodeToString(sum[:])
 
-	token, err := s.store.GetTokenByHash(ctx, tokenHash)
+	token, err := s.store.GetTokenByLookup(ctx, tokenHash)
 	if err != nil {
 		return "", err
+	}
+	if token == nil || bcrypt.CompareHashAndPassword([]byte(token.TokenHash), []byte(plaintext)) != nil {
+		return "", nil
 	}
 
 	if err := s.store.MarkTokenUsed(ctx, token.ID); err != nil {
@@ -154,16 +167,21 @@ func (s *TokenService) GenerateRecoveryCodes(ctx context.Context, userID string,
 		codes = append(codes, code)
 
 		sum := sha256.Sum256([]byte(code))
-		tokenHash := hex.EncodeToString(sum[:])
+		tokenLookup := hex.EncodeToString(sum[:])
+		tokenHash, err := bcrypt.GenerateFromPassword([]byte(code), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, err
+		}
 
 		token := &RecoveryToken{
-			ID:        uuid.NewString(),
-			UserID:    userID,
-			Type:      Token2FARecovery,
-			TokenHash: tokenHash,
-			ExpiresAt: time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
-			CreatedAt: time.Now().UTC(),
-			Metadata:  `{"recovery_code": true}`,
+			ID:          uuid.NewString(),
+			UserID:      userID,
+			Type:        Token2FARecovery,
+			TokenHash:   string(tokenHash),
+			TokenLookup: tokenLookup,
+			ExpiresAt:   time.Now().UTC().Add(100 * 365 * 24 * time.Hour),
+			CreatedAt:   time.Now().UTC(),
+			Metadata:    `{"recovery_code": true}`,
 		}
 
 		if err := s.store.CreateToken(ctx, token); err != nil {
