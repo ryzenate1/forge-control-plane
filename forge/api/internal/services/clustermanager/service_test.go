@@ -27,6 +27,8 @@ type mockClusterStore struct {
 	listServersForNodeErr     error
 	markServerConfigSyncedErr error
 	markServerConfigSyncFail  func(ctx context.Context, serverID, errMsg string) error
+	suspendedWrites           []bool
+	suspendedWriteErr         error
 }
 
 func (m *mockClusterStore) FindAvailableAllocation(ctx context.Context, nodeID string) (store.Allocation, error) {
@@ -55,6 +57,14 @@ func (m *mockClusterStore) ServerProvisionTarget(ctx context.Context, serverID s
 }
 
 func (m *mockClusterStore) SetServerProvisioned(ctx context.Context, serverID string) error {
+	return nil
+}
+
+func (m *mockClusterStore) SetServerSuspended(ctx context.Context, serverID string, suspended bool, actorID *string) error {
+	if m.suspendedWriteErr != nil {
+		return m.suspendedWriteErr
+	}
+	m.suspendedWrites = append(m.suspendedWrites, suspended)
 	return nil
 }
 
@@ -115,6 +125,8 @@ func (m *mockClusterStore) ResetNodeServerStates(ctx context.Context, nodeID str
 type mockRuntime struct {
 	deleteServerResponse gpruntime.PowerResponse
 	deleteServerErr      error
+	stopServerErr        error
+	stopServerCalls      int
 }
 
 func (m *mockRuntime) Name() string { return "mock" }
@@ -144,11 +156,15 @@ func (m *mockRuntime) DeleteServer(ctx context.Context, t gpruntime.Target) (gpr
 }
 
 func (m *mockRuntime) StartServer(ctx context.Context, t gpruntime.Target) (gpruntime.PowerResponse, error) {
-	return gpruntime.PowerResponse{}, nil
+	return gpruntime.PowerResponse{Accepted: true}, nil
 }
 
 func (m *mockRuntime) StopServer(ctx context.Context, t gpruntime.Target) (gpruntime.PowerResponse, error) {
-	return gpruntime.PowerResponse{}, nil
+	m.stopServerCalls++
+	if m.stopServerErr != nil {
+		return gpruntime.PowerResponse{}, m.stopServerErr
+	}
+	return gpruntime.PowerResponse{Accepted: true}, nil
 }
 
 func (m *mockRuntime) RestartServer(ctx context.Context, t gpruntime.Target) (gpruntime.PowerResponse, error) {
