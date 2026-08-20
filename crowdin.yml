@@ -1,5 +1,0 @@
-project_id: ""
-preserve_hierarchy: true
-files:
-  - source: /lang/en.json
-    translation: /lang/%two_letters_code%.json
