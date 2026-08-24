@@ -21,6 +21,8 @@ func requestStatus(t *testing.T, app *fiber.App, method, path string, body []byt
 	if err != nil {
 		t.Fatal(err)
 	}
+	// fasthttp >= v1.60 rejects Host-less requests; real clients always send Host.
+	req.Host = "localhost"
 	if len(body) > 0 {
 		req.Header.Set("Content-Type", "application/json")
 	}
