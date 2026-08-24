@@ -1,0 +1,678 @@
+package healthcheckrunner
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net"
+	"net/http"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"gamepanel/forge/internal/store"
+
+	"github.com/google/uuid"
+)
+
+type TargetStatus string
+
+const (
+	TargetStatusHealthy   TargetStatus = "healthy"
+	TargetStatusSuspected TargetStatus = "suspected"
+	TargetStatusUnhealthy TargetStatus = "unhealthy"
+)
+
+type CheckType string
+
+// maxHealthCheckConcurrency bounds how many target checks run at once within a
+// single pass. Each check opens a socket and a DB write, so the ceiling keeps a
+// large fleet of targets from exhausting file descriptors or the pool.
+const maxHealthCheckConcurrency = 64
+
+const (
+	CheckTypeTCP  CheckType = "tcp"
+	CheckTypeHTTP CheckType = "http"
+)
+
+type HealthCheckConfig struct {
+	Path               string `json:"path"`
+	Port               int    `json:"port"`
+	IntervalSeconds    int    `json:"intervalSeconds"`
+	TimeoutSeconds     int    `json:"timeoutSeconds"`
+	HealthyThreshold   int    `json:"healthyThreshold"`
+	UnhealthyThreshold int    `json:"unhealthyThreshold"`
+}
+
+type Target struct {
+	ID       string
+	GroupID  string
+	ServerID string
+	NodeID   string
+	IP       string
+	Port     int
+	Weight   int
+}
+
+type TargetHealthState struct {
+	ID                   string
+	GroupID              string
+	ServerID             string
+	Status               TargetStatus
+	ConsecutiveFailures  int
+	ConsecutiveSuccesses int
+	SuspectedSince       *time.Time
+	LastCheckAt          time.Time
+	LastSuccessAt        *time.Time
+	LastFailureAt        *time.Time
+	HealthyThreshold     int
+	UnhealthyThreshold   int
+	mu                   sync.Mutex
+}
+
+type CheckResult struct {
+	TargetID     string
+	GroupID      string
+	ServerID     string
+	CheckType    CheckType
+	Status       TargetStatus
+	LatencyMs    int
+	StatusCode   int
+	ErrorMessage string
+	CheckedAt    time.Time
+}
+
+type storeAdapter interface {
+	ListTargetGroups(ctx context.Context) ([]store.TargetGroupRow, error)
+	ListTargetsByGroup(ctx context.Context, groupID string) ([]store.TargetRow, error)
+	UpdateTargetStatus(ctx context.Context, id string, status string) error
+	InsertHealthCheckHistory(ctx context.Context, row store.HealthCheckHistoryRow) error
+	PruneHealthCheckHistory(ctx context.Context, before time.Time) (int64, error)
+	GetTargetHealthSummary(ctx context.Context, targetID string) (consecutiveFailures int, consecutiveSuccesses int, err error)
+	ListServers(ctx context.Context) ([]store.Server, error)
+	GetServer(ctx context.Context, serverID string) (store.Server, error)
+}
+
+type OnTargetUnhealthy func(ctx context.Context, serverID string, targetID string, consecutiveFailures int)
+
+type Config struct {
+	Interval         time.Duration
+	HistoryRetention time.Duration
+}
+
+func DefaultConfig() Config {
+	return Config{
+		Interval:         15 * time.Second,
+		HistoryRetention: 7 * 24 * time.Hour,
+	}
+}
+
+type Service struct {
+	store         storeAdapter
+	config        Config
+	states        map[string]*TargetHealthState
+	mu            sync.RWMutex
+	onUnhealthy   OnTargetUnhealthy
+	lastGroupPoll time.Time
+	lastGroups    []store.TargetGroupRow
+	lastPrune     time.Time
+	cancel        context.CancelFunc
+}
+
+func New(store storeAdapter, config Config) *Service {
+	if config.Interval <= 0 {
+		config.Interval = 15 * time.Second
+	}
+	if config.HistoryRetention <= 0 {
+		config.HistoryRetention = 7 * 24 * time.Hour
+	}
+	return &Service{
+		store:     store,
+		config:    config,
+		states:    make(map[string]*TargetHealthState),
+		lastPrune: time.Now(),
+	}
+}
+
+func (s *Service) OnUnhealthy(handler OnTargetUnhealthy) {
+	s.onUnhealthy = handler
+}
+
+func (s *Service) Start(ctx context.Context) {
+	if s == nil || s.store == nil {
+		return
+	}
+	ctx, s.cancel = context.WithCancel(ctx)
+	go func() {
+		// Backstop for the one-off startup load; the recurring passes are guarded
+		// individually by runOnceSafe so a panic in a single tick does not kill the
+		// runner and leave health permanently stale.
+		defer func() {
+			if r := recover(); r != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				slog.Error("health check runner panic recovered", "panic", r, "stack", string(buf[:n]))
+			}
+		}()
+		s.loadExistingStates(ctx)
+		s.runOnceSafe(ctx)
+		ticker := time.NewTicker(s.config.Interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				s.runOnceSafe(ctx)
+			}
+		}
+	}()
+}
+
+// runOnceSafe runs a single health-check pass, recovering from a panic so a
+// failure in one target's check cannot terminate the runner goroutine and
+// silently stop all subsequent checks across every target group.
+func (s *Service) runOnceSafe(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			slog.Error("health check runner panic recovered", "panic", r, "stack", string(buf[:n]))
+		}
+	}()
+	s.runOnce(ctx)
+}
+
+func (s *Service) Stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
+}
+
+func (s *Service) loadExistingStates(ctx context.Context) {
+	groups, err := s.store.ListTargetGroups(ctx)
+	if err != nil {
+		return
+	}
+	for _, g := range groups {
+		targets, err := s.store.ListTargetsByGroup(ctx, g.ID)
+		if err != nil {
+			continue
+		}
+		for _, t := range targets {
+			failures, successes, err := s.store.GetTargetHealthSummary(ctx, t.ID)
+			if err != nil {
+				continue
+			}
+			var status TargetStatus
+			var suspectedSince *time.Time
+			var hc HealthCheckConfig
+			if len(g.HealthCheck) > 0 {
+				if err := json.Unmarshal(g.HealthCheck, &hc); err != nil {
+					continue
+				}
+			}
+			healthyThreshold := hc.HealthyThreshold
+			if healthyThreshold <= 0 {
+				healthyThreshold = 3
+			}
+			unhealthyThreshold := hc.UnhealthyThreshold
+			if unhealthyThreshold <= 0 {
+				unhealthyThreshold = 3
+			}
+			// Fresh state must be earned, not assumed: a target with failures
+			// on record starts suspected, and one with too few successes to
+			// clear the healthy threshold starts suspected as well. Only a
+			// history of enough consecutive successes initializes as healthy.
+			switch {
+			case t.Status == "unhealthy":
+				status = TargetStatusUnhealthy
+			case t.Status == "draining":
+				status = TargetStatusUnhealthy
+				now := time.Now()
+				suspectedSince = &now
+			case failures > 0:
+				status = TargetStatusSuspected
+				now := time.Now().UTC()
+				suspectedSince = &now
+			case successes < healthyThreshold:
+				status = TargetStatusSuspected
+				now := time.Now().UTC()
+				suspectedSince = &now
+			default:
+				status = TargetStatusHealthy
+			}
+			s.mu.Lock()
+			s.states[t.ID] = &TargetHealthState{
+				ID:                   t.ID,
+				GroupID:              g.ID,
+				ServerID:             t.ServerID,
+				Status:               status,
+				ConsecutiveFailures:  failures,
+				ConsecutiveSuccesses: successes,
+				SuspectedSince:       suspectedSince,
+				LastCheckAt:          time.Now(),
+				HealthyThreshold:     healthyThreshold,
+				UnhealthyThreshold:   unhealthyThreshold,
+			}
+			s.mu.Unlock()
+		}
+	}
+}
+
+func (s *Service) runOnce(ctx context.Context) {
+	groups, err := s.store.ListTargetGroups(ctx)
+	if err != nil {
+		return
+	}
+	s.mu.Lock()
+	s.lastGroupPoll = time.Now()
+	s.lastGroups = groups
+	s.mu.Unlock()
+
+	checkTimeout := s.config.Interval - time.Second
+	if checkTimeout <= 0 {
+		checkTimeout = time.Second
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
+	defer cancel()
+
+	// Bound concurrent checks: a pass fans out one goroutine per target across
+	// every group, so without a ceiling thousands of targets would each open a
+	// socket and a DB write at once and exhaust file descriptors and the
+	// connection pool. The semaphore caps in-flight checks; acquiring also
+	// respects cancellation so a shutdown mid-pass stops launching new checks.
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxHealthCheckConcurrency)
+	for _, g := range groups {
+		var cfg HealthCheckConfig
+		if len(g.HealthCheck) == 0 {
+			continue
+		}
+		if err := json.Unmarshal(g.HealthCheck, &cfg); err != nil {
+			continue
+		}
+		if cfg.IntervalSeconds <= 0 {
+			cfg.IntervalSeconds = 15
+		}
+		if cfg.TimeoutSeconds <= 0 {
+			cfg.TimeoutSeconds = 5
+		}
+		if cfg.HealthyThreshold <= 0 {
+			cfg.HealthyThreshold = 3
+		}
+		if cfg.UnhealthyThreshold <= 0 {
+			cfg.UnhealthyThreshold = 3
+		}
+		targets, err := s.store.ListTargetsByGroup(checkCtx, g.ID)
+		if err != nil {
+			continue
+		}
+		for _, t := range targets {
+			select {
+			case sem <- struct{}{}:
+			case <-checkCtx.Done():
+				wg.Wait()
+				return
+			}
+			wg.Add(1)
+			go func(target store.TargetRow, groupID string, hc HealthCheckConfig, protocol string) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				s.checkTarget(checkCtx, target, groupID, hc, protocol)
+			}(t, g.ID, cfg, g.Protocol)
+		}
+	}
+	wg.Wait()
+
+	if time.Since(s.lastPrune) > 1*time.Hour {
+		_, _ = s.store.PruneHealthCheckHistory(ctx, time.Now().UTC().Add(-s.config.HistoryRetention))
+		s.lastPrune = time.Now()
+	}
+}
+
+func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, groupID string, hc HealthCheckConfig, protocol string) {
+	port := target.Port
+	if hc.Port > 0 {
+		port = hc.Port
+	}
+
+	stateKey := target.ID
+	s.mu.RLock()
+	state, exists := s.states[stateKey]
+	s.mu.RUnlock()
+	if !exists {
+		// A target seen for the first time starts suspected, not healthy:
+		// one good check must not certify a workload the runner has never
+		// observed. It becomes healthy only after healthyThreshold
+		// consecutive successes, via the transition below.
+		now := time.Now().UTC()
+		state = &TargetHealthState{
+			ID:                 target.ID,
+			GroupID:            groupID,
+			ServerID:           target.ServerID,
+			Status:             TargetStatusSuspected,
+			SuspectedSince:     &now,
+			HealthyThreshold:   hc.HealthyThreshold,
+			UnhealthyThreshold: hc.UnhealthyThreshold,
+		}
+	}
+
+	state.mu.Lock()
+	healthyThreshold := state.HealthyThreshold
+	unhealthyThreshold := state.UnhealthyThreshold
+	state.mu.Unlock()
+
+	if healthyThreshold <= 0 {
+		healthyThreshold = 3
+	}
+	if unhealthyThreshold <= 0 {
+		unhealthyThreshold = 3
+	}
+
+	var result CheckResult
+	checkType := CheckTypeTCP
+	if protocol == "http" || protocol == "https" || hc.Path != "" {
+		checkType = CheckTypeHTTP
+	}
+
+	switch checkType {
+	case CheckTypeHTTP:
+		result = s.runHTTPCheck(ctx, target, port, hc)
+	default:
+		result = s.runTCPCheck(ctx, target, port, hc)
+	}
+
+	result.CheckedAt = time.Now().UTC()
+
+	if s.store != nil {
+		_ = s.store.InsertHealthCheckHistory(ctx, store.HealthCheckHistoryRow{
+			TargetID:     result.TargetID,
+			GroupID:      result.GroupID,
+			ServerID:     result.ServerID,
+			CheckType:    string(result.CheckType),
+			Status:       string(result.Status),
+			LatencyMs:    result.LatencyMs,
+			StatusCode:   result.StatusCode,
+			ErrorMessage: result.ErrorMessage,
+			CheckedAt:    result.CheckedAt,
+		})
+	}
+
+	state.mu.Lock()
+
+	state.LastCheckAt = result.CheckedAt
+
+	previousStatus := state.Status
+
+	if result.Status == TargetStatusHealthy {
+		state.ConsecutiveFailures = 0
+		state.ConsecutiveSuccesses++
+		state.LastSuccessAt = &result.CheckedAt
+
+		if previousStatus == TargetStatusUnhealthy || previousStatus == TargetStatusSuspected {
+			if state.ConsecutiveSuccesses >= healthyThreshold {
+				state.Status = TargetStatusHealthy
+				state.SuspectedSince = nil
+				s.persistTargetStatus(ctx, target.ID, "healthy")
+			}
+		}
+	} else {
+		state.ConsecutiveSuccesses = 0
+		state.ConsecutiveFailures++
+		state.LastFailureAt = &result.CheckedAt
+
+		if previousStatus == TargetStatusHealthy {
+			if state.ConsecutiveFailures >= unhealthyThreshold/2 && state.ConsecutiveFailures < unhealthyThreshold {
+				state.Status = TargetStatusSuspected
+				now := time.Now().UTC()
+				state.SuspectedSince = &now
+				s.persistTargetStatus(ctx, target.ID, "draining")
+			} else if state.ConsecutiveFailures >= unhealthyThreshold {
+				state.Status = TargetStatusUnhealthy
+				if state.SuspectedSince == nil {
+					now := time.Now().UTC()
+					state.SuspectedSince = &now
+				}
+				s.persistTargetStatus(ctx, target.ID, "unhealthy")
+				if s.onUnhealthy != nil {
+					go func(serverID, targetID string, failures int) {
+						defer func() {
+							if r := recover(); r != nil {
+								slog.Error("health check onUnhealthy callback panic", "panic", r)
+							}
+						}()
+						callbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+						defer cancel()
+						s.onUnhealthy(callbackCtx, serverID, targetID, failures)
+					}(target.ServerID, target.ID, state.ConsecutiveFailures)
+				}
+			}
+		} else if previousStatus == TargetStatusSuspected {
+			if state.ConsecutiveFailures >= unhealthyThreshold {
+				state.Status = TargetStatusUnhealthy
+				s.persistTargetStatus(ctx, target.ID, "unhealthy")
+				if s.onUnhealthy != nil {
+					go func(serverID, targetID string, failures int) {
+						defer func() {
+							if r := recover(); r != nil {
+								slog.Error("health check onUnhealthy callback panic", "panic", r)
+							}
+						}()
+						callbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+						defer cancel()
+						s.onUnhealthy(callbackCtx, serverID, targetID, failures)
+					}(target.ServerID, target.ID, state.ConsecutiveFailures)
+				}
+			}
+		}
+	}
+
+	if !exists {
+		// Publish the new state under s.mu only. The lock order is strictly
+		// s.mu -> state.mu: s.mu must never be acquired while holding
+		// state.mu, so the mutation above is released first.
+		state.mu.Unlock()
+		s.mu.Lock()
+		if _, dup := s.states[stateKey]; !dup {
+			s.states[stateKey] = state
+		}
+		s.mu.Unlock()
+	} else {
+		state.mu.Unlock()
+	}
+}
+
+func (s *Service) runHTTPCheck(ctx context.Context, target store.TargetRow, port int, hc HealthCheckConfig) CheckResult {
+	result := CheckResult{
+		TargetID:  target.ID,
+		GroupID:   s.getGroupID(target.ID),
+		ServerID:  target.ServerID,
+		CheckType: CheckTypeHTTP,
+	}
+
+	timeout := time.Duration(hc.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	targetIP := net.ParseIP(strings.TrimSpace(target.IP))
+	if targetIP == nil || targetIP.IsUnspecified() || targetIP.IsLinkLocalUnicast() || targetIP.IsLinkLocalMulticast() || targetIP.IsMulticast() {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = "health check target must be a routable configured IP address"
+		return result
+	}
+	if port < 1 || port > 65535 {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = "health check port is invalid"
+		return result
+	}
+
+	path := hc.Path
+	if path == "" {
+		path = "/"
+	}
+	if !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || strings.ContainsAny(path, "\r\n") {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = "health check path is invalid"
+		return result
+	}
+
+	targetHost := net.JoinHostPort(targetIP.String(), strconv.Itoa(port))
+	checkURL := "http://" + targetHost + path
+	client := http.Client{Timeout: timeout}
+	client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 || req.URL.Host != targetHost {
+			return errors.New("health check redirect escaped configured target")
+		}
+		return nil
+	}
+
+	start := time.Now()
+	req, err := http.NewRequestWithContext(ctx, "GET", checkURL, nil)
+	if err != nil {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = err.Error()
+		return result
+	}
+	req.Header.Set("User-Agent", "GamePanel-HealthCheck/1.0")
+
+	resp, err := client.Do(req)
+	result.LatencyMs = int(time.Since(start).Milliseconds())
+
+	if err != nil {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = err.Error()
+		return result
+	}
+	defer resp.Body.Close()
+
+	result.StatusCode = resp.StatusCode
+	if resp.StatusCode >= 200 && resp.StatusCode < 400 {
+		result.Status = TargetStatusHealthy
+	} else {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = fmt.Sprintf("HTTP %d", resp.StatusCode)
+	}
+
+	return result
+}
+
+func (s *Service) runTCPCheck(ctx context.Context, target store.TargetRow, port int, hc HealthCheckConfig) CheckResult {
+	result := CheckResult{
+		TargetID:  target.ID,
+		GroupID:   s.getGroupID(target.ID),
+		ServerID:  target.ServerID,
+		CheckType: CheckTypeTCP,
+	}
+
+	timeout := time.Duration(hc.TimeoutSeconds) * time.Second
+	if timeout <= 0 {
+		timeout = 5 * time.Second
+	}
+
+	address := net.JoinHostPort(target.IP, fmt.Sprintf("%d", port))
+	if target.IP == "" {
+		address = net.JoinHostPort("127.0.0.1", fmt.Sprintf("%d", port))
+	}
+
+	start := time.Now()
+	conn, err := (&net.Dialer{Timeout: timeout}).DialContext(ctx, "tcp", address)
+	if err != nil {
+		result.Status = TargetStatusUnhealthy
+		result.ErrorMessage = err.Error()
+		result.LatencyMs = int(time.Since(start).Milliseconds())
+		return result
+	}
+	_ = conn.Close()
+	result.LatencyMs = int(time.Since(start).Milliseconds())
+	result.Status = TargetStatusHealthy
+	return result
+}
+
+func (s *Service) getGroupID(targetID string) string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	for _, state := range s.states {
+		if state.ID == targetID {
+			return state.GroupID
+		}
+	}
+	return ""
+}
+
+func (s *Service) persistTargetStatus(ctx context.Context, targetID string, status string) {
+	if s.store == nil {
+		return
+	}
+	_ = s.store.UpdateTargetStatus(ctx, targetID, status)
+}
+
+func (s *Service) GetTargetState(targetID string) *TargetHealthState {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.states[targetID]
+}
+
+func (s *Service) ListUnhealthyTargets(ctx context.Context) []*TargetHealthState {
+	// Snapshot the state pointers under s.mu, then inspect each target under
+	// its own lock after releasing s.mu. Holding s.mu while taking state.mu
+	// would nest the two locks; the order is s.mu -> state.mu and they are
+	// never held together here.
+	s.mu.RLock()
+	states := make([]*TargetHealthState, 0, len(s.states))
+	for _, state := range s.states {
+		states = append(states, state)
+	}
+	s.mu.RUnlock()
+	results := make([]*TargetHealthState, 0)
+	for _, state := range states {
+		state.mu.Lock()
+		if state.Status != TargetStatusHealthy {
+			results = append(results, state)
+		}
+		state.mu.Unlock()
+	}
+	return results
+}
+
+func (s *Service) CorrelationID() string {
+	return uuid.NewString()
+}
+
+func (s *Service) Metrics() map[string]any {
+	// Same snapshot discipline as ListUnhealthyTargets: copy the pointers
+	// under s.mu, release it, then read each target under its own lock.
+	s.mu.RLock()
+	states := make([]*TargetHealthState, 0, len(s.states))
+	for _, state := range s.states {
+		states = append(states, state)
+	}
+	s.mu.RUnlock()
+	total := len(states)
+	healthy := 0
+	suspected := 0
+	unhealthy := 0
+	for _, state := range states {
+		state.mu.Lock()
+		switch state.Status {
+		case TargetStatusHealthy:
+			healthy++
+		case TargetStatusSuspected:
+			suspected++
+		case TargetStatusUnhealthy:
+			unhealthy++
+		}
+		state.mu.Unlock()
+	}
+	return map[string]any{
+		"total":     total,
+		"healthy":   healthy,
+		"suspected": suspected,
+		"unhealthy": unhealthy,
+	}
+}
