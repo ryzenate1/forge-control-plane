@@ -1076,6 +1076,7 @@ func NewServer(cfg Config) *fiber.App {
 	httpMetrics := NewMetricsCollector()
 	app.Use(MetricsMiddleware(httpMetrics))
 
+	registerSwaggerRoutes(app, cfg.AppEnv)
 
 	registerWellKnownVerifyRoute(app, cfg.DomainService)
 
