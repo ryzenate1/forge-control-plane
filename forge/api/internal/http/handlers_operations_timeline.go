@@ -247,7 +247,7 @@ func transferAlreadyListed(items []OperationsTimelineItem, serverID, status stri
 }
 
 // readTimelineJobs reads the queue ledger. Still raw SQL: job_queue has no
-// store-layer list method for database access.
+// store-layer list method (see AGENTS.md, remaining handler SQL).
 func readTimelineJobs(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
 	if err := timelineSQLReady(cfg); err != nil {
 		return nil, err
