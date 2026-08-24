@@ -240,3 +240,4 @@ func TestValidate_Deprecated(t *testing.T) {
 		t.Fatal("Validate(&Config{}) expected errors")
 	}
 }
+
