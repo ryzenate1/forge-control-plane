@@ -21,6 +21,7 @@ import (
 func TestHealth(t *testing.T) {
 	app := NewServer(Config{ReadTimeout: time.Second})
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,6 +63,7 @@ func TestProductionHealthContracts(t *testing.T) {
 	app := NewServer(Config{ReadTimeout: time.Second, HealthService: critical})
 
 	readyReq, err := http.NewRequest(http.MethodGet, "/api/v1/health/ready", nil)
+	readyReq.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +77,7 @@ func TestProductionHealthContracts(t *testing.T) {
 	}
 
 	liveReq, err := http.NewRequest(http.MethodGet, "/api/v1/health/live", nil)
+	liveReq.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -88,6 +91,7 @@ func TestProductionHealthContracts(t *testing.T) {
 	}
 
 	diagnosticReq, err := http.NewRequest(http.MethodGet, "/api/v1/health", nil)
+	diagnosticReq.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -142,6 +146,7 @@ func TestMetrics(t *testing.T) {
 		EventRegistry: reg,
 	})
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +185,7 @@ func TestPowerRejectsInvalidSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, err := http.NewRequest(http.MethodPost, "/api/v1/servers/demo/power", strings.NewReader(`{"signal":"explode"}`))
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -201,6 +207,7 @@ func TestPowerRejectsInvalidSignal(t *testing.T) {
 func TestProtectedRouteRequiresBearerToken(t *testing.T) {
 	app := NewServer(Config{ReadTimeout: time.Second, AuthSecret: "secret"})
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -233,6 +240,7 @@ func TestRequireAdminScope(t *testing.T) {
 	})
 
 	allowedReq, err := http.NewRequest(http.MethodGet, "/allowed", nil)
+	allowedReq.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -246,6 +254,7 @@ func TestRequireAdminScope(t *testing.T) {
 	}
 
 	deniedReq, err := http.NewRequest(http.MethodGet, "/denied", nil)
+	deniedReq.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -263,6 +272,7 @@ func TestRequireAdminScope(t *testing.T) {
 func TestLoginRequiresStore(t *testing.T) {
 	app := NewServer(Config{ReadTimeout: time.Second, AuthSecret: "secret"})
 	req, err := http.NewRequest(http.MethodPost, "/api/v1/auth/login", strings.NewReader(`{"email":"admin@example.com","password":"admin123"}`))
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -287,6 +297,7 @@ func TestMissingStoreReturns503(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/servers", nil)
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -311,6 +322,7 @@ func TestAuthMeReturnsClaims(t *testing.T) {
 		t.Fatal(err)
 	}
 	req, err := http.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	req.Host = "localhost"
 	if err != nil {
 		t.Fatal(err)
 	}
