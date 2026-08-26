@@ -7,7 +7,10 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerSwaggerRoutes(app *fiber.App) {
+func registerSwaggerRoutes(app *fiber.App, appEnv string) {
+	if appEnv == "production" {
+		return
+	}
 	_, filename, _, _ := runtime.Caller(0)
 	baseDir := filepath.Dir(filepath.Dir(filepath.Dir(filename)))
 
