@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"strconv"
 	"strings"
@@ -15,11 +16,12 @@ import (
 
 // RateLimitConfig defines rate limiting configuration
 type RateLimitConfig struct {
-	Enabled       bool
-	Redis         *redis.Client
-	WindowSeconds int
-	MaxRequests   int
-	KeyPrefix     string
+	Enabled                bool
+	Redis                  *redis.Client
+	WindowSeconds          int
+	MaxRequests            int
+	KeyPrefix              string
+	FailClosedOnRedisError bool
 	// TrustedIPs bypass rate limiting entirely
 	TrustedIPs []string
 }
@@ -36,6 +38,20 @@ type memRateLimiter struct {
 }
 
 var globalMemLimiter = &memRateLimiter{bkt: make(map[string]*memBucket)}
+
+func init() {
+	go func() {
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("rate limiter cleanup panicked", "panic", r)
+			}
+		}()
+		ticker := time.NewTicker(5 * time.Minute)
+		for range ticker.C {
+			globalMemLimiter.cleanup()
+		}
+	}()
+}
 
 func (m *memRateLimiter) allow(key string, maxRequests int, window time.Duration) (bool, int) {
 	m.mu.Lock()
@@ -61,21 +77,86 @@ func (m *memRateLimiter) allow(key string, maxRequests int, window time.Duration
 	return true, remaining
 }
 
-// ExtractClientIP extracts the real client IP from request headers, respecting
-// X-Forwarded-For and X-Real-IP when the app is behind a reverse proxy.
-func ExtractClientIP(c *fiber.Ctx) string {
-	xff := c.Get("X-Forwarded-For")
-	if xff != "" {
-		if idx := strings.IndexByte(xff, ','); idx >= 0 {
-			return strings.TrimSpace(xff[:idx])
+func (m *memRateLimiter) cleanup() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	now := time.Now()
+	for key, b := range m.bkt {
+		if now.After(b.expiresAt) {
+			delete(m.bkt, key)
 		}
-		return strings.TrimSpace(xff)
 	}
-	xri := c.Get("X-Real-IP")
-	if xri != "" {
-		return strings.TrimSpace(xri)
+}
+
+// ExtractClientIP resolves the caller IP with a default-deny trust model: an
+// X-Forwarded-For / X-Real-IP header is honored ONLY when the immediate peer is
+// inside the explicitly configured TRUSTED_PROXIES CIDR / single-IP set. When no
+// trusted proxies are configured the direct peer IP is returned. It takes the
+// right-most forwarded value so a caller-supplied left-most XFF entry cannot
+// rotate rate-limit keys.
+func ExtractClientIP(c *fiber.Ctx) string {
+	// c.IP() is deliberately not used to obtain the peer. When the app configures
+	// a proxy header, c.IP() returns an address parsed out of the request itself,
+	// so the value that decides whether proxy headers are trusted would itself be
+	// caller-controlled - a forged XFF entry could present itself as the trusted
+	// proxy and have the rest of that header believed. The socket peer is the
+	// only thing here the caller cannot choose.
+	return resolveClientIP(socketPeerIP(c), c.Get("X-Forwarded-For"), c.Get("X-Real-IP"))
+}
+
+// socketPeerIP returns the IP the connection actually arrived from, or nil when
+// there is no real peer to speak of (a synthetic test connection, for example).
+func socketPeerIP(c *fiber.Ctx) net.IP {
+	if c == nil {
+		return nil
 	}
-	return c.IP()
+	ctx := c.Context()
+	if ctx == nil {
+		return nil
+	}
+	switch addr := ctx.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		if addr != nil && addr.IP != nil {
+			return addr.IP
+		}
+	case *net.UDPAddr:
+		if addr != nil && addr.IP != nil {
+			return addr.IP
+		}
+	}
+	if ip := ctx.RemoteIP(); ip != nil && !ip.IsUnspecified() {
+		return ip
+	}
+	return nil
+}
+
+// resolveClientIP applies the trust decision to explicit inputs, separated from
+// the transport so the rules can be tested against a named peer instead of a
+// live socket.
+func resolveClientIP(peer net.IP, forwardedFor, realIP string) string {
+	peerStr := ""
+	if peer != nil {
+		peerStr = peer.String()
+	}
+	// Default-deny: private/loopback status alone is never sufficient to trust
+	// proxy headers. isTrustedProxy keeps the "metric" slog.Warn and sync.Once
+	// de-dupe for the unconfigured case.
+	if peer == nil || !isTrustedProxy(peer) {
+		return peerStr
+	}
+	if forwardedFor != "" {
+		parts := strings.Split(forwardedFor, ",")
+		for index := len(parts) - 1; index >= 0; index-- {
+			candidate := strings.TrimSpace(parts[index])
+			if net.ParseIP(candidate) != nil {
+				return candidate
+			}
+		}
+	}
+	if ip := net.ParseIP(strings.TrimSpace(realIP)); ip != nil {
+		return strings.TrimSpace(realIP)
+	}
+	return peerStr
 }
 
 func isTrustedIP(clientIP string, trustedIPs []string) bool {
@@ -96,8 +177,9 @@ func isTrustedIP(clientIP string, trustedIPs []string) bool {
 	return false
 }
 
-// RateLimiter creates a rate limiting middleware using Redis with an in-memory
-// fallback so the limiter never fails open when the backing store is unavailable.
+// RateLimiter creates a rate limiting middleware using Redis. Development can
+// fall back to memory, but production shared-limit deployments fail closed when
+// Redis is unavailable so limits cannot be bypassed per API instance.
 func RateLimiter(cfg RateLimitConfig) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		// Skip if rate limiting is disabled
@@ -112,13 +194,19 @@ func RateLimiter(cfg RateLimitConfig) fiber.Handler {
 			return c.Next()
 		}
 
-		// Build rate limit key based on IP address and path
-		key := fmt.Sprintf("%s:ratelimit:%s:%s", cfg.KeyPrefix, clientIP, c.Path())
+		// Build rate limit key based on IP address and path. The tier is part of
+		// the key via cfg.KeyPrefix (see GetRateLimitForEndpoint): tiers must
+		// NOT share a prefix, otherwise every tier draws from one counter and
+		// read traffic burns the auth budget (5/min) and the mutation budget.
+		key := fmt.Sprintf("%s:ratelimit:%s", cfg.KeyPrefix, clientIP)
 		window := time.Duration(cfg.WindowSeconds) * time.Second
 
 		// Try Redis first, fall back to in-memory on any error
 		count, err := tryRedis(cfg, key, window)
 		if err != nil {
+			if cfg.FailClosedOnRedisError {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "rate limiter unavailable")
+			}
 			allowed, remaining := globalMemLimiter.allow(key, cfg.MaxRequests, window)
 			if !allowed {
 				c.Set("Retry-After", strconv.Itoa(cfg.WindowSeconds))
@@ -167,9 +255,7 @@ func tryRedis(cfg RateLimitConfig, key string, window time.Duration) (int64, err
 	if count == 1 {
 		cfg.Redis.Expire(ctx, key, window)
 	}
-	if count > int64(cfg.MaxRequests) {
-		cfg.Redis.Decr(ctx, key)
-	}
+	// Do NOT decrement on overflow - just reject. The DECR was causing a TOCTOU race.
 	return count, nil
 }
 
@@ -183,41 +269,45 @@ func getTTL(cfg RateLimitConfig, key string) (time.Duration, error) {
 }
 
 // GetRateLimitForEndpoint returns appropriate rate limit configuration for different endpoint types.
-// Rate limiting is always enabled regardless of Redis availability. When Redis is not configured,
-// the in-memory fallback is used instead of disabling rate limiting entirely.
-func GetRateLimitForEndpoint(endpointType string, redis *redis.Client) RateLimitConfig {
+// Rate limiting is always enabled. Development may use an in-memory fallback,
+// while production can require Redis for shared, cross-instance enforcement.
+func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClosedOnRedisError bool) RateLimitConfig {
 	switch endpointType {
 	case "auth":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   5,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            5,
+			KeyPrefix:              "api:auth",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "mutation":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   30,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            30,
+			KeyPrefix:              "api:mutation",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "read":
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   120,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            120,
+			KeyPrefix:              "api:read",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	default:
 		return RateLimitConfig{
-			Enabled:       true,
-			Redis:         redis,
-			WindowSeconds: 60,
-			MaxRequests:   60,
-			KeyPrefix:     "api",
+			Enabled:                true,
+			Redis:                  redis,
+			WindowSeconds:          60,
+			MaxRequests:            60,
+			KeyPrefix:              "api:default",
+			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	}
 }

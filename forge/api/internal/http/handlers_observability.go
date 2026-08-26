@@ -74,7 +74,7 @@ func registerObservabilityRoutes(protected fiber.Router, cfg Config, observabili
 		}
 		history, err := observability.NodeHeartbeatHistory(ctx, c.Params("id"), queryLimit(c))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{
 			"evaluation": evaluation,

@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -27,12 +28,11 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 	}
 
 	headers := map[string]string{
-		"X-Content-Type-Options":  "nosniff",
-		"X-Frame-Options":         "DENY",
-		"X-XSS-Protection":        "1; mode=block",
-		"Referrer-Policy":         "strict-origin-when-cross-origin",
-		"Permissions-Policy":      "geolocation=(), microphone=(), camera=()",
-		"Content-Security-Policy": "default-src 'self'",
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"X-XSS-Protection":       "1; mode=block",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "geolocation=(), microphone=(), camera=()",
 	}
 
 	for header, expected := range headers {
@@ -42,9 +42,22 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 		}
 	}
 
+	// CSP now carries a fresh per-response nonce (SEC-018). Assert the static
+	// base is present and a nonce was injected, with no strict-dynamic/fallback.
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "script-src") {
+		t.Errorf("CSP base missing, got %q", csp)
+	}
+	if !strings.Contains(csp, "'nonce-") {
+		t.Errorf("CSP must contain a per-response nonce, got %q", csp)
+	}
+	if strings.Contains(csp, "strict-dynamic") {
+		t.Errorf("CSP must not emit strict-dynamic, got %q", csp)
+	}
+
 	hsts := resp.Header.Get("Strict-Transport-Security")
-	if hsts != "max-age=31536000; includeSubDomains" {
-		t.Errorf("HSTS: expected max-age=31536000; includeSubDomains, got %q", hsts)
+	if hsts != "max-age=31536000; includeSubDomains; preload" {
+		t.Errorf("HSTS: expected max-age=31536000; includeSubDomains; preload, got %q", hsts)
 	}
 }
 
@@ -65,8 +78,8 @@ func TestSecurityHeadersMiddleware_CustomCSP(t *testing.T) {
 	}
 
 	got := resp.Header.Get("Content-Security-Policy")
-	if got != cfg.CSPValue {
-		t.Errorf("expected CSP %q, got %q", cfg.CSPValue, got)
+	if !strings.Contains(got, cfg.CSPValue[:strings.Index(cfg.CSPValue, "script-src")]) || !strings.Contains(got, "cdn.example.com") || !strings.Contains(got, "'nonce-") {
+		t.Errorf("expected CSP to keep %q base and inject a nonce, got %q", cfg.CSPValue, got)
 	}
 }
 
@@ -149,7 +162,7 @@ func TestSecurityHeadersMiddleware_CustomHSTSMaxAge(t *testing.T) {
 	}
 
 	got := resp.Header.Get("Strict-Transport-Security")
-	if got != "max-age=86400; includeSubDomains" {
-		t.Errorf("expected max-age=86400; includeSubDomains, got %q", got)
+	if got != "max-age=86400; includeSubDomains; preload" {
+		t.Errorf("expected max-age=86400; includeSubDomains; preload, got %q", got)
 	}
 }

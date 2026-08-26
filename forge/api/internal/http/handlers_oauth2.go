@@ -1,6 +1,7 @@
 package http
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -16,6 +17,14 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/crypto/bcrypt"
 )
+
+// oauthSigningKey derives a separate signing key for OAuth2 tokens from
+// the main AuthSecret, so that compromise of one does not compromise the other.
+func oauthSigningKey(authSecret string) []byte {
+	mac := hmac.New(sha256.New, []byte(authSecret))
+	mac.Write([]byte("oauth2-token-signing-v1"))
+	return mac.Sum(nil)
+}
 
 // ---- /oauth2/token ----
 // Implements RFC 6749 client_credentials grant for PufferPanel-style
@@ -49,14 +58,10 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 				"error_description": "only client_credentials is supported",
 			})
 		}
-		// Authenticate client via HTTP Basic. FastHTTP's Request doesn't expose
-		// BasicAuth directly, so we parse the Authorization header ourselves.
+		// Authenticate client via HTTP Basic only. Form-based client credentials
+		// are not accepted to avoid exposing secrets in request bodies and logs.
 		clientID, clientSecret, ok := parseBasicAuth(c.Get("Authorization"))
-		if !ok {
-			clientID = c.FormValue("client_id")
-			clientSecret = c.FormValue("client_secret")
-		}
-		if clientID == "" || clientSecret == "" {
+		if !ok || clientID == "" || clientSecret == "" {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 				"error":             "invalid_client",
 				"error_description": "client_id and client_secret are required",
@@ -87,7 +92,10 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 		if err != nil {
 			return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{"error": "invalid_client"})
 		}
-		allowAdminScopes := client.Scope == store.OAuthClientScopeAccount && owner.Role == "admin"
+		if owner.Disabled {
+			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{"error": "invalid_client", "error_description": "account is disabled"})
+		}
+		allowAdminScopes := client.Scope == store.OAuthClientScopeAccount && owner.Role == RoleAdmin
 		allowedScopes, err := store.ValidateApiKeyScopes(client.AllowedScopes, allowAdminScopes)
 		if err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{
@@ -109,8 +117,8 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 			}
 			grantedScopes = wanted
 		}
-		// Mint the token. TTL 1 hour.
-		ttl := time.Hour
+		// Mint the token. TTL matches the session token TTL.
+		ttl := configuredTokenTTL(cfg)
 		expiresAt := time.Now().Add(ttl)
 		claims := jwt.MapClaims{
 			"iss":       "forge-panel",
@@ -127,7 +135,7 @@ func IssueOAuth2Token(cfg Config) fiber.Handler {
 			claims["server_id"] = *client.ServerID
 		}
 		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-		signed, err := token.SignedString([]byte(cfg.AuthSecret))
+		signed, err := token.SignedString(oauthSigningKey(cfg.AuthSecret))
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to sign token")
 		}
@@ -183,8 +191,24 @@ func CreateMyOAuthClient(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		// Alias tolerance: callers may send id / server_id instead of
+		// serverId. All three bind the same server-scoped client, so all
+		// three must resolve to the same value or the request is rejected
+		// rather than silently picking one.
+		if err := normalizeOAuthServerAliases(c, &req); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
+		// A user must not mint a server-scoped client for a server they
+		// cannot access; otherwise any user could issue tokens for another
+		// user's server and bypass UserCanAccessServer.
+		if req.Scope == "server" && req.ServerID != nil && strings.TrimSpace(*req.ServerID) != "" {
+			allowed, err := cfg.Store.UserCanAccessServer(ctx, strings.TrimSpace(*req.ServerID), claims.Sub, claims.Role, "")
+			if err != nil || !allowed {
+				return fiber.NewError(fiber.StatusForbidden, "cannot create client for a server you cannot access")
+			}
+		}
 		res, err := cfg.Store.CreateOAuthClient(ctx, store.CreateOAuthClientRequest{
 			Name:          strings.TrimSpace(req.Name),
 			OwnerID:       claims.Sub,
@@ -223,7 +247,7 @@ func DeleteMyOAuthClient(cfg Config) fiber.Handler {
 			return fiber.NewError(fiber.StatusForbidden, "you do not own this oauth client")
 		}
 		if err := cfg.Store.DeleteOAuthClient(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	}
@@ -259,6 +283,9 @@ func AdminCreateOAuthClient(cfg Config) fiber.Handler {
 		var req createOAuthClientRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if err := normalizeOAuthServerAliases(c, &req); err != nil {
+			return err
 		}
 		if strings.TrimSpace(req.OwnerID) == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "ownerId is required")
@@ -305,9 +332,9 @@ func AdminDeleteOAuthClient(cfg Config) fiber.Handler {
 // Store access is mandatory: revocation checks fail closed when persistence is
 // unavailable or returns an error.
 func VerifyOAuthToken(cfg Config, tokenString string) (jwt.MapClaims, []string, error) {
-	parser := jwt.NewParser(jwt.WithValidMethods([]string{"HS256"}))
+	parser := jwt.NewParser(jwt.WithValidMethods([]string{"HS256"}), jwt.WithExpirationRequired(), jwt.WithIssuedAt())
 	token, err := parser.Parse(tokenString, func(t *jwt.Token) (interface{}, error) {
-		return []byte(cfg.AuthSecret), nil
+		return oauthSigningKey(cfg.AuthSecret), nil
 	})
 	if err != nil {
 		return nil, nil, err
@@ -319,15 +346,25 @@ func VerifyOAuthToken(cfg Config, tokenString string) (jwt.MapClaims, []string, 
 	if claims["iss"] != "forge-panel" {
 		return nil, nil, errors.New("invalid issuer")
 	}
-	jti, _ := claims["jti"].(string)
-	if jti == "" {
-		return nil, nil, errors.New("missing token id")
-	}
+	// Audience must be either the session audience ("forge-api") or a client
+	// ID that still exists in the database. This binds tokens to their
+	// issuing client and prevents a token minted for one client from being
+	// replayed against the panel as a session.
 	if cfg.Store == nil {
 		return nil, nil, errors.New("token revocation store is unavailable")
 	}
 	ctx, cancel := requestContext()
 	defer cancel()
+	aud := claimAudience(claims["aud"])
+	if aud != "" && aud != "forge-api" {
+		if _, err := cfg.Store.GetOAuthClientByClientID(ctx, aud); err != nil {
+			return nil, nil, errors.New("invalid audience")
+		}
+	}
+	jti, _ := claims["jti"].(string)
+	if jti == "" {
+		return nil, nil, errors.New("missing token id")
+	}
 	revoked, err := cfg.Store.IsJWTRevoked(ctx, jti)
 	if err != nil {
 		return nil, nil, errors.New("token revocation check failed")
@@ -346,9 +383,46 @@ type createOAuthClientRequest struct {
 	Description   string     `json:"description"`
 	Scope         string     `json:"scope"` // "server" or "account"
 	ServerID      *string    `json:"serverId,omitempty"`
+	ServerIDSnake *string    `json:"server_id,omitempty"`
+	IDAlias       *string    `json:"id,omitempty"`
 	AllowedScopes []string   `json:"allowedScopes"`
 	ExpiresAt     *time.Time `json:"expiresAt"`
 	OwnerID       string     `json:"ownerId"` // admin-only; ignored on self-create
+}
+
+// normalizeOAuthServerAliases resolves the server binding from any of the
+// accepted aliases (serverId, server_id, id). When more than one alias is
+// present they must agree; otherwise the request is rejected rather than
+// silently picking one (ambiguous target must not resolve silently).
+func normalizeOAuthServerAliases(c *fiber.Ctx, req *createOAuthClientRequest) error {
+	candidates := []string{}
+	if req.ServerID != nil && strings.TrimSpace(*req.ServerID) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.ServerID))
+	}
+	if req.ServerIDSnake != nil && strings.TrimSpace(*req.ServerIDSnake) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.ServerIDSnake))
+	}
+	if req.IDAlias != nil && strings.TrimSpace(*req.IDAlias) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.IDAlias))
+	}
+	// Query aliases for form-style callers.
+	for _, q := range []string{c.Query("serverId"), c.Query("server_id"), c.Query("id")} {
+		if strings.TrimSpace(q) != "" {
+			candidates = append(candidates, strings.TrimSpace(q))
+		}
+	}
+	if len(candidates) == 0 {
+		req.ServerID = nil
+		return nil
+	}
+	first := candidates[0]
+	for _, cand := range candidates[1:] {
+		if cand != first {
+			return fiber.NewError(fiber.StatusBadRequest, "conflicting server identifiers: id, serverId and server_id must agree")
+		}
+	}
+	req.ServerID = &first
+	return nil
 }
 
 func parseBasicAuth(header string) (string, string, bool) {
@@ -375,6 +449,26 @@ func splitScopes(s string) []string {
 		}
 	}
 	return out
+}
+
+// claimAudience extracts a single string audience from a JWT "aud" claim,
+// which may be encoded as a string or an array.
+func claimAudience(v any) string {
+	switch aud := v.(type) {
+	case string:
+		return aud
+	case []string:
+		if len(aud) > 0 {
+			return aud[0]
+		}
+	case []any:
+		if len(aud) > 0 {
+			if s, ok := aud[0].(string); ok {
+				return s
+			}
+		}
+	}
+	return ""
 }
 
 func contains(haystack []string, needle string) bool {

@@ -34,12 +34,15 @@ func Validate(s interface{}) error {
 	}
 
 	validationErrors := make(map[string]string)
-	for _, err := range err.(validator.ValidationErrors) {
-		field := err.Field()
-		tag := err.Tag()
-		param := err.Param()
+	ve, ok := err.(validator.ValidationErrors)
+	if !ok {
+		return ValidationErrors{Errors: map[string]string{"error": err.Error()}}
+	}
+	for _, e := range ve {
+		field := e.Field()
+		tag := e.Tag()
+		param := e.Param()
 
-		// Generate user-friendly error messages
 		var message string
 		switch tag {
 		case "required":
@@ -47,13 +50,13 @@ func Validate(s interface{}) error {
 		case "email":
 			message = fmt.Sprintf("%s must be a valid email address", field)
 		case "min":
-			if kind := err.Kind(); kind == reflect.String {
+			if kind := e.Kind(); kind == reflect.String {
 				message = fmt.Sprintf("%s must be at least %s characters", field, param)
 			} else {
 				message = fmt.Sprintf("%s must be at least %s", field, param)
 			}
 		case "max":
-			if kind := err.Kind(); kind == reflect.String {
+			if kind := e.Kind(); kind == reflect.String {
 				message = fmt.Sprintf("%s must be at most %s characters", field, param)
 			} else {
 				message = fmt.Sprintf("%s must be at most %s", field, param)
@@ -91,47 +94,51 @@ func ValidateRequest(s interface{}) fiber.Handler {
 		// Validate the struct
 		if err := validate.Struct(s); err != nil {
 			validationErrors := make(map[string]string)
-			for _, err := range err.(validator.ValidationErrors) {
-				field := err.Field()
-				tag := err.Tag()
-				param := err.Param()
+			ve, ok := err.(validator.ValidationErrors)
+			if ok {
+				for _, e := range ve {
+					field := e.Field()
+					tag := e.Tag()
+					param := e.Param()
 
-				// Generate user-friendly error messages
-				var message string
-				switch tag {
-				case "required":
-					message = fmt.Sprintf("%s is required", field)
-				case "email":
-					message = fmt.Sprintf("%s must be a valid email address", field)
-				case "min":
-					if kind := err.Kind(); kind == reflect.String {
-						message = fmt.Sprintf("%s must be at least %s characters", field, param)
-					} else {
-						message = fmt.Sprintf("%s must be at least %s", field, param)
+					var message string
+					switch tag {
+					case "required":
+						message = fmt.Sprintf("%s is required", field)
+					case "email":
+						message = fmt.Sprintf("%s must be a valid email address", field)
+					case "min":
+						if kind := e.Kind(); kind == reflect.String {
+							message = fmt.Sprintf("%s must be at least %s characters", field, param)
+						} else {
+							message = fmt.Sprintf("%s must be at least %s", field, param)
+						}
+					case "max":
+						if kind := e.Kind(); kind == reflect.String {
+							message = fmt.Sprintf("%s must be at most %s characters", field, param)
+						} else {
+							message = fmt.Sprintf("%s must be at most %s", field, param)
+						}
+					case "gte":
+						message = fmt.Sprintf("%s must be greater than or equal to %s", field, param)
+					case "lte":
+						message = fmt.Sprintf("%s must be less than or equal to %s", field, param)
+					case "len":
+						message = fmt.Sprintf("%s must be %s characters", field, param)
+					case "url":
+						message = fmt.Sprintf("%s must be a valid URL", field)
+					case "uuid":
+						message = fmt.Sprintf("%s must be a valid UUID", field)
+					case "oneof":
+						message = fmt.Sprintf("%s must be one of: %s", field, param)
+					default:
+						message = fmt.Sprintf("%s is invalid", field)
 					}
-				case "max":
-					if kind := err.Kind(); kind == reflect.String {
-						message = fmt.Sprintf("%s must be at most %s characters", field, param)
-					} else {
-						message = fmt.Sprintf("%s must be at most %s", field, param)
-					}
-				case "gte":
-					message = fmt.Sprintf("%s must be greater than or equal to %s", field, param)
-				case "lte":
-					message = fmt.Sprintf("%s must be less than or equal to %s", field, param)
-				case "len":
-					message = fmt.Sprintf("%s must be %s characters", field, param)
-				case "url":
-					message = fmt.Sprintf("%s must be a valid URL", field)
-				case "uuid":
-					message = fmt.Sprintf("%s must be a valid UUID", field)
-				case "oneof":
-					message = fmt.Sprintf("%s must be one of: %s", field, param)
-				default:
-					message = fmt.Sprintf("%s is invalid", field)
+
+					validationErrors[field] = message
 				}
-
-				validationErrors[field] = message
+			} else {
+				validationErrors["error"] = err.Error()
 			}
 
 			return c.Status(fiber.StatusUnprocessableEntity).JSON(ValidationErrors{Errors: validationErrors})
@@ -150,24 +157,29 @@ func ValidateQuery(s interface{}) fiber.Handler {
 
 		if err := validate.Struct(s); err != nil {
 			validationErrors := make(map[string]string)
-			for _, err := range err.(validator.ValidationErrors) {
-				field := err.Field()
-				tag := err.Tag()
-				param := err.Param()
+			ve, ok := err.(validator.ValidationErrors)
+			if ok {
+				for _, e := range ve {
+					field := e.Field()
+					tag := e.Tag()
+					param := e.Param()
 
-				var message string
-				switch tag {
-				case "required":
-					message = fmt.Sprintf("%s is required", field)
-				case "min":
-					message = fmt.Sprintf("%s must be at least %s", field, param)
-				case "max":
-					message = fmt.Sprintf("%s must be at most %s", field, param)
-				default:
-					message = fmt.Sprintf("%s is invalid", field)
+					var message string
+					switch tag {
+					case "required":
+						message = fmt.Sprintf("%s is required", field)
+					case "min":
+						message = fmt.Sprintf("%s must be at least %s", field, param)
+					case "max":
+						message = fmt.Sprintf("%s must be at most %s", field, param)
+					default:
+						message = fmt.Sprintf("%s is invalid", field)
+					}
+
+					validationErrors[field] = message
 				}
-
-				validationErrors[field] = message
+			} else {
+				validationErrors["error"] = err.Error()
 			}
 
 			return c.Status(fiber.StatusUnprocessableEntity).JSON(ValidationErrors{Errors: validationErrors})
@@ -186,21 +198,26 @@ func ValidateParams(s interface{}) fiber.Handler {
 
 		if err := validate.Struct(s); err != nil {
 			validationErrors := make(map[string]string)
-			for _, err := range err.(validator.ValidationErrors) {
-				field := err.Field()
-				tag := err.Tag()
+			ve, ok := err.(validator.ValidationErrors)
+			if ok {
+				for _, e := range ve {
+					field := e.Field()
+					tag := e.Tag()
 
-				var message string
-				switch tag {
-				case "required":
-					message = fmt.Sprintf("%s is required", field)
-				case "uuid":
-					message = fmt.Sprintf("%s must be a valid UUID", field)
-				default:
-					message = fmt.Sprintf("%s is invalid", field)
+					var message string
+					switch tag {
+					case "required":
+						message = fmt.Sprintf("%s is required", field)
+					case "uuid":
+						message = fmt.Sprintf("%s must be a valid UUID", field)
+					default:
+						message = fmt.Sprintf("%s is invalid", field)
+					}
+
+					validationErrors[field] = message
 				}
-
-				validationErrors[field] = message
+			} else {
+				validationErrors["error"] = err.Error()
 			}
 
 			return c.Status(fiber.StatusUnprocessableEntity).JSON(ValidationErrors{Errors: validationErrors})

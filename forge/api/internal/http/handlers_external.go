@@ -5,7 +5,7 @@ import (
 )
 
 func registerExternalLookupRoutes(protected fiber.Router, cfg Config) {
-	protected.Get("/users/external/:externalId", func(c *fiber.Ctx) error {
+	protected.Get("/users/external/:externalId", requireRole(RoleAdmin), requireAdminScope("users.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -22,7 +22,7 @@ func registerExternalLookupRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(user)
 	})
 
-	protected.Get("/servers/external/:externalId", func(c *fiber.Ctx) error {
+	protected.Get("/servers/external/:externalId", requireRole(RoleAdmin), requireAdminScope("servers.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -36,6 +36,7 @@ func registerExternalLookupRoutes(protected fiber.Router, cfg Config) {
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "server not found")
 		}
-		return c.JSON(server)
+		// Safe DTO: never serialize transferRunToken or other secrets.
+		return c.JSON(server.ToDTO())
 	})
 }

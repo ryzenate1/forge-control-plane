@@ -1,0 +1,244 @@
+package http
+
+import (
+	"strconv"
+	"strings"
+	"time"
+
+	cronjobsvc "gamepanel/forge/internal/services/cronjob"
+	"gamepanel/forge/internal/store"
+
+	"github.com/gofiber/fiber/v2"
+)
+
+func validateCronSchedule(schedule string) error {
+	if schedule == "" {
+		return fiber.ErrBadRequest
+	}
+	parts := strings.Fields(schedule)
+	if len(parts) != 5 {
+		return fiber.NewError(fiber.StatusBadRequest, "cron schedule must have 5 fields")
+	}
+	if parts[1] == "*" && parts[0] == "*" {
+		return fiber.NewError(fiber.StatusBadRequest, "minimum cron interval of 1 minute is required")
+	}
+	return nil
+}
+
+// registerCronJobRoutes is layered as handler -> cronjob.Service -> store.
+// Persistence and schedule sync both live in the service (CreateJob/UpdateJob/
+// DeleteJob/ToggleJob); the handlers validate input and translate errors only.
+//
+// Routes are always mounted: an unconfigured backend answers 503, it never
+// 404s. The composition root builds the service exactly when the store exists
+// (and NewServer additionally skips mounting without one), so a nil store
+// here means "cannot do the job", never "pretend it worked".
+func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *cronjobsvc.Service, mutationLimiter fiber.Handler) {
+	requireCronStore := func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		return nil
+	}
+	protected.Get("/cron-jobs", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		jobs, err := cronJobService.ListJobs(ctx)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		type jobWithNextRun struct {
+			store.CronJob
+			NextRun *time.Time `json:"nextRun,omitempty"`
+		}
+		result := make([]jobWithNextRun, 0, len(jobs))
+		for _, j := range jobs {
+			next := cronJobService.NextRun(j)
+			result = append(result, jobWithNextRun{CronJob: j, NextRun: next})
+		}
+		return c.JSON(result)
+	})
+
+	protected.Post("/cron-jobs", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		var req struct {
+			Name            string `json:"name" validate:"required"`
+			Description     string `json:"description"`
+			Schedule        string `json:"schedule" validate:"required"`
+			Command         string `json:"command" validate:"required"`
+			Type            string `json:"type"`
+			TargetType      string `json:"targetType"`
+			TargetID        string `json:"targetId"`
+			Enabled         bool   `json:"enabled"`
+			RetryCount      int    `json:"retryCount"`
+			TimeoutSeconds  int    `json:"timeoutSeconds"`
+			NotifyOnFailure bool   `json:"notifyOnFailure"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.Name == "" || req.Schedule == "" || req.Command == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "name, schedule, and command are required")
+		}
+		if len(req.Command) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "command too long")
+		}
+		if err := validateCronSchedule(req.Schedule); err != nil {
+			return err
+		}
+		if req.Type == "" {
+			req.Type = "shell"
+		}
+		if req.TimeoutSeconds <= 0 {
+			req.TimeoutSeconds = 300
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		job, err := cronJobService.CreateJob(ctx, store.CreateCronJobRequest{
+			Name:            req.Name,
+			Description:     req.Description,
+			Schedule:        req.Schedule,
+			Command:         req.Command,
+			Type:            req.Type,
+			TargetType:      req.TargetType,
+			TargetID:        req.TargetID,
+			Enabled:         req.Enabled,
+			RetryCount:      req.RetryCount,
+			TimeoutSeconds:  req.TimeoutSeconds,
+			NotifyOnFailure: req.NotifyOnFailure,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.Status(fiber.StatusCreated).JSON(job)
+	})
+
+	protected.Get("/cron-jobs/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		job, err := cronJobService.GetJob(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "cron job not found")
+		}
+		return c.JSON(job)
+	})
+
+	protected.Put("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		var req struct {
+			Name            *string `json:"name"`
+			Description     *string `json:"description"`
+			Schedule        *string `json:"schedule"`
+			Command         *string `json:"command"`
+			Type            *string `json:"type"`
+			TargetType      *string `json:"targetType"`
+			TargetID        *string `json:"targetId"`
+			Enabled         *bool   `json:"enabled"`
+			RetryCount      *int    `json:"retryCount"`
+			TimeoutSeconds  *int    `json:"timeoutSeconds"`
+			NotifyOnFailure *bool   `json:"notifyOnFailure"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.Schedule != nil {
+			if err := validateCronSchedule(*req.Schedule); err != nil {
+				return err
+			}
+		}
+		if req.Command != nil && len(*req.Command) > 4096 {
+			return fiber.NewError(fiber.StatusBadRequest, "command too long")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		job, err := cronJobService.UpdateJob(ctx, c.Params("id"), store.UpdateCronJobRequest{
+			Name:            req.Name,
+			Description:     req.Description,
+			Schedule:        req.Schedule,
+			Command:         req.Command,
+			Type:            req.Type,
+			TargetType:      req.TargetType,
+			TargetID:        req.TargetID,
+			Enabled:         req.Enabled,
+			RetryCount:      req.RetryCount,
+			TimeoutSeconds:  req.TimeoutSeconds,
+			NotifyOnFailure: req.NotifyOnFailure,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(job)
+	})
+
+	protected.Delete("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cronJobService.DeleteJob(ctx, c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.SendStatus(fiber.StatusNoContent)
+	})
+
+	protected.Post("/cron-jobs/:id/execute", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		execution, err := cronJobService.TriggerNow(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(execution)
+	})
+
+	protected.Post("/cron-jobs/:id/toggle", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		job, err := cronJobService.ToggleJob(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(job)
+	})
+
+	protected.Get("/cron-jobs/:id/executions", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		limit := 50
+		if raw := strings.TrimSpace(c.Query("limit", "")); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 {
+				return fiber.NewError(fiber.StatusBadRequest, "limit must be a positive integer")
+			}
+			if n > 500 {
+				n = 500
+			}
+			limit = n
+		}
+		executions, err := cronJobService.ListExecutions(ctx, c.Params("id"), limit)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(executions)
+	})
+}

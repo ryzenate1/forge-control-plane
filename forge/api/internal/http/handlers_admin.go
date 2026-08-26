@@ -1,13 +1,17 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
 	"strings"
+	"time"
 
+	"gamepanel/forge/internal/domain"
 	"gamepanel/forge/internal/services/clustermanager"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	migrationservice "gamepanel/forge/internal/services/migration"
@@ -38,7 +42,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 	}
 	// ---- Permissions ----
 
-	protected.Get("/permissions", func(c *fiber.Ctx) error {
+	protected.Get("/permissions", requireRole("admin"), requireAdminScope("admin.read"), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{
 			"permissions": store.PermissionDescriptions(),
 		})
@@ -63,17 +67,23 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		offset := (page - 1) * perPage
 		ctx, cancel := requestContext()
 		defer cancel()
-		nodes, err := cfg.Store.ListNodesPaginated(ctx, offset, perPage)
+		nodes, total, err := cfg.Store.ListNodesPaginated(ctx, offset, perPage)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		totalPages := (total + perPage - 1) / perPage
+		if totalPages == 0 {
+			totalPages = 1
 		}
 		return c.JSON(fiber.Map{
 			"data": nodes,
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
-					"current":  page,
-					"count":    len(nodes),
-					"per_page": perPage,
+					"current":       page,
+					"total":         totalPages,
+					"count":         len(nodes),
+					"per_page":      perPage,
+					"total_records": total,
 				},
 			},
 		})
@@ -96,33 +106,57 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
+		schedulerType := strings.TrimSpace(req.SchedulerType)
+		if schedulerType == "" {
+			schedulerType = "docker"
+		}
 		storeReq := store.CreateNodeRequest{
-			Name:               req.Name,
-			Region:             req.Region,
-			RegionID:           req.RegionID,
-			Description:        req.Description,
-			LocationID:         req.LocationID,
-			BaseURL:            req.BaseURL,
-			FQDN:               req.FQDN,
-			Scheme:             req.Scheme,
-			BehindProxy:        req.BehindProxy,
-			Public:             req.Public == nil || *req.Public,
-			Maintenance:        req.MaintenanceMode != nil && *req.MaintenanceMode,
-			MemoryMB:           req.MemoryMB,
-			DiskMB:             req.DiskMB,
-			UploadSizeMB:       req.UploadSizeMB,
-			DaemonBase:         req.DaemonBase,
-			DaemonListen:       req.DaemonListen,
-			DaemonSFTP:         req.DaemonSFTP,
-			MemoryOverallocate: derefInt(req.MemoryOverallocate),
-			DiskOverallocate:   derefInt(req.DiskOverallocate),
-			CPUCores:           derefInt(req.CPUCores),
-			DisplayName:        req.DisplayName,
-			PublicHostname:     req.PublicHostname,
-			DaemonSFTPAlias:    req.DaemonSFTPAlias,
-			DaemonConnect:      derefInt(req.DaemonConnect),
-			CPUOverallocate:    derefInt(req.CPUOverallocate),
-			Tags:               req.Tags,
+			Name:                req.Name,
+			Region:              req.Region,
+			RegionID:            req.RegionID,
+			Description:         req.Description,
+			LocationID:          req.LocationID,
+			BaseURL:             req.BaseURL,
+			FQDN:                req.FQDN,
+			Scheme:              req.Scheme,
+			BehindProxy:         req.BehindProxy,
+			Public:              req.Public == nil || *req.Public,
+			Maintenance:         req.MaintenanceMode != nil && *req.MaintenanceMode,
+			MemoryMB:            req.MemoryMB,
+			DiskMB:              req.DiskMB,
+			UploadSizeMB:        req.UploadSizeMB,
+			DaemonBase:          req.DaemonBase,
+			DaemonListen:        req.DaemonListen,
+			DaemonSFTP:          req.DaemonSFTP,
+			MemoryOverallocate:  derefInt(req.MemoryOverallocate),
+			DiskOverallocate:    derefInt(req.DiskOverallocate),
+			CPUCores:            derefInt(req.CPUCores),
+			DisplayName:         req.DisplayName,
+			PublicHostname:      req.PublicHostname,
+			DaemonSFTPAlias:     req.DaemonSFTPAlias,
+			DaemonConnect:       derefInt(req.DaemonConnect),
+			CPUOverallocate:     derefInt(req.CPUOverallocate),
+			Tags:                req.Tags,
+			SchedulerType:       schedulerType,
+			SchedulerConfig:     req.SchedulerConfig,
+			AllowedIPs:          req.AllowedIPs,
+			NetworkInterface:    req.NetworkInterface,
+			ReservedMemoryMB:    derefInt(req.ReservedMemoryMB),
+			ReservedDiskMB:      derefInt(req.ReservedDiskMB),
+			DefaultAllocationIP: req.DefaultAllocationIP,
+			AllocationPortMin:   derefInt(req.AllocationPortMin),
+			AllocationPortMax:   derefInt(req.AllocationPortMax),
+			AutoAllocate:        req.AutoAllocate != nil && *req.AutoAllocate,
+			EnableHealthChecks:  req.EnableHealthChecks == nil || *req.EnableHealthChecks,
+			EnableMetrics:       req.EnableMetrics == nil || *req.EnableMetrics,
+			PrometheusEndpoint:  req.PrometheusEndpoint,
+			AlertThresholdCPU:   derefInt(req.AlertThresholdCPU),
+			AlertThresholdMem:   derefInt(req.AlertThresholdMem),
+			AlertThresholdDisk:  derefInt(req.AlertThresholdDisk),
+			MaintenanceMessage:  req.MaintenanceMessage,
+			DrainBeforeMaint:    req.DrainBeforeMaint != nil && *req.DrainBeforeMaint,
+			TokenRotationPolicy: req.TokenRotationPolicy,
+			TLSSetting:          req.TLSSetting,
 		}
 		node, token, err := nodeRegistry.RegisterNode(ctx, storeReq, actorID)
 		if err != nil {
@@ -132,9 +166,9 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "duplicate") {
 				return fiber.NewError(fiber.StatusConflict, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
-		cfg.Store.DispatchWebhookEvent("node:created", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:created", map[string]any{
 			"subject_type": "node",
 			"subject_id":   node.ID,
 			"name":         node.Name,
@@ -161,7 +195,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(node)
 	})
 
-	protected.Get("/nodes/:id/configuration", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/configuration", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -174,7 +208,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(config)
 	})
 
-	protected.Get("/nodes/:id/deployment", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/deployment", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -225,6 +259,8 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			DaemonConnect:      req.DaemonConnect,
 			CPUOverallocate:    req.CPUOverallocate,
 			Tags:               req.Tags,
+			SchedulerType:      req.SchedulerType,
+			SchedulerConfig:    req.SchedulerConfig,
 		}, actorID)
 		if err != nil {
 			if strings.Contains(err.Error(), "not found") {
@@ -233,9 +269,9 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			if strings.Contains(err.Error(), "conflict") || strings.Contains(err.Error(), "invalid transition") {
 				return fiber.NewError(fiber.StatusConflict, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
-		cfg.Store.DispatchWebhookEvent("node:updated", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:updated", map[string]any{
 			"subject_type": "node",
 			"subject_id":   node.ID,
 			"name":         node.Name,
@@ -262,14 +298,14 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			}
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to delete node")
 		}
-		cfg.Store.DispatchWebhookEvent("node:deleted", map[string]any{
+		_ = cfg.Store.DispatchWebhookEvent(c.Context(), "node:deleted", map[string]any{
 			"subject_type": "node",
 			"subject_id":   c.Params("id"),
 		})
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/nodes/:id/rotate-token", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/:id/rotate-token", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -284,14 +320,14 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			if strings.Contains(err.Error(), "not found") {
 				return fiber.NewError(fiber.StatusNotFound, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"token": token})
 	})
 
 	// ---- Deployable node ----
 
-	protected.Post("/nodes/deployable", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/deployable", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -377,7 +413,8 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		return c.JSON(servers)
+		// Safe DTOs: never leak transferRunToken or secrets.
+		return c.JSON(store.ServersToDTO(servers))
 	})
 
 	protected.Get("/nodes/:id/health", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
@@ -406,7 +443,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(view)
 	})
 
-	protected.Get("/nodes/:id/evacuation-preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/evacuation-preview", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -419,7 +456,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/nodes/:id/evacuation-plan", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/:id/evacuation-plan", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -432,7 +469,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.Status(fiber.StatusCreated).JSON(plan)
 	})
 
-	protected.Get("/nodes/:id/capacity", func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/capacity", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -444,38 +481,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		}
 		snapshot, err := clusterManager.NodeCapacity(ctx, node.ID)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(snapshot)
 	})
 
 	// ---- Regions CRUD (multi-node foundation) ----
-
-	protected.Get("/regions", adminIPAccess, requireRole("admin"), requireAdminScope("regions.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		regions, err := nodeRegistry.ListRegions(ctx)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(regions)
-	})
-
-	protected.Get("/regions/:id", adminIPAccess, requireRole("admin"), requireAdminScope("regions.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		region, err := nodeRegistry.GetRegion(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "region not found")
-		}
-		return c.JSON(region)
-	})
 
 	protected.Get("/regions/:id/capacity", adminIPAccess, requireRole("admin"), requireAdminScope("regions.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -502,7 +513,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		}
 		nodes, err := nodeRegistry.ListNodes(ctx)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		lifecycle := []any{}
 		for _, node := range nodes {
@@ -522,7 +533,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		})
 	})
 
-	protected.Get("/evacuation-plans/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/evacuation-plans/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -535,7 +546,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/admin/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -550,12 +561,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		defer cancel()
 		migration, err := migrationService.CreateMigration(ctx, req)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			return toMigrationError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(migration)
 	})
 
-	protected.Post("/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -570,12 +581,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		defer cancel()
 		migration, err := migrationService.CreateMigration(ctx, req)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			return toMigrationError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(migration)
 	})
 
-	protected.Get("/migrations", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/migrations", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -588,7 +599,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migrations)
 	})
 
-	protected.Get("/admin/migrations", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/admin/migrations", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -601,7 +612,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migrations)
 	})
 
-	protected.Get("/migrations/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/migrations/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -614,7 +625,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migration)
 	})
 
-	protected.Patch("/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -627,7 +638,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migration)
 	})
 
-	protected.Post("/admin/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -729,379 +740,11 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/regions", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("regions.write"), func(c *fiber.Ctx) error {
-		var req CreateRegionRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := Validate(&req); err != nil {
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(err)
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		region, err := nodeRegistry.CreateRegion(ctx, store.CreateRegionRequest{
-			Name:        req.Name,
-			Slug:        req.Slug,
-			Description: req.Description,
-			Enabled:     req.Enabled,
-		}, actorID)
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "duplicate") {
-				return fiber.NewError(fiber.StatusConflict, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.Status(fiber.StatusCreated).JSON(region)
-	})
-
-	protected.Patch("/regions/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("regions.write"), func(c *fiber.Ctx) error {
-		var req UpdateRegionRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		region, err := nodeRegistry.UpdateRegion(ctx, c.Params("id"), store.UpdateRegionRequest{
-			Name:        req.Name,
-			Slug:        req.Slug,
-			Description: req.Description,
-			Enabled:     req.Enabled,
-		}, actorID)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return fiber.NewError(fiber.StatusNotFound, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(region)
-	})
-
-	protected.Delete("/regions/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("regions.delete"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		if err := nodeRegistry.DeleteRegion(ctx, c.Params("id"), actorID); err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return fiber.NewError(fiber.StatusNotFound, err.Error())
-			}
-			if strings.Contains(err.Error(), "servers") || strings.Contains(err.Error(), "nodes") {
-				return fiber.NewError(fiber.StatusConflict, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(fiber.Map{"ok": true})
-	})
-
 	// ---- Locations CRUD ----
-
-	protected.Get("/locations", requireAdminScope("locations.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		locations, err := cfg.Store.ListLocations(ctx)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(locations)
-	})
-
-	protected.Get("/locations/:id", requireAdminScope("locations.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		loc, err := cfg.Store.GetLocation(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "location not found")
-		}
-		return c.JSON(loc)
-	})
-
-	protected.Post("/locations", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("locations.write"), func(c *fiber.Ctx) error {
-		var req CreateLocationRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := Validate(&req); err != nil {
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(err)
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		loc, err := cfg.Store.CreateLocation(ctx, store.CreateLocationRequest{
-			Short: req.Short,
-			Long:  req.Long,
-		}, actorID)
-		if err != nil {
-			if strings.Contains(err.Error(), "already exists") || strings.Contains(err.Error(), "duplicate") {
-				return fiber.NewError(fiber.StatusConflict, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.Status(fiber.StatusCreated).JSON(loc)
-	})
-
-	protected.Patch("/locations/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("locations.write"), func(c *fiber.Ctx) error {
-		var req UpdateLocationRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		loc, err := cfg.Store.UpdateLocation(ctx, c.Params("id"), store.UpdateLocationRequest{
-			Short: req.Short,
-			Long:  req.Long,
-		}, actorID)
-		if err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return fiber.NewError(fiber.StatusNotFound, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(loc)
-	})
-
-	protected.Delete("/locations/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("locations.delete"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		if err := cfg.Store.DeleteLocation(ctx, c.Params("id"), actorID); err != nil {
-			if strings.Contains(err.Error(), "not found") {
-				return fiber.NewError(fiber.StatusNotFound, err.Error())
-			}
-			if strings.Contains(err.Error(), "nodes") {
-				return fiber.NewError(fiber.StatusConflict, err.Error())
-			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(fiber.Map{"ok": true})
-	})
 
 	// ---- Nests CRUD ----
 
-	protected.Get("/nests", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		nests, err := cfg.Store.ListNests(ctx)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(nests)
-	})
-
-	protected.Get("/nests/:id", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		nest, err := cfg.Store.GetNest(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "nest not found")
-		}
-		return c.JSON(nest)
-	})
-
-	protected.Post("/nests", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
-		var req CreateNestRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := Validate(&req); err != nil {
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(err)
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		nest, err := cfg.Store.CreateNest(ctx, store.CreateNestRequest{
-			Name:        req.Name,
-			Description: req.Description,
-		}, actorID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.Status(fiber.StatusCreated).JSON(nest)
-	})
-
-	protected.Patch("/nests/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
-		var req UpdateNestRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		nest, err := cfg.Store.UpdateNest(ctx, c.Params("id"), store.UpdateNestRequest{
-			Name:        req.Name,
-			Description: req.Description,
-		}, actorID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.JSON(nest)
-	})
-
-	protected.Delete("/nests/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.delete"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		if err := cfg.Store.DeleteNest(ctx, c.Params("id"), actorID); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.JSON(fiber.Map{"ok": true})
-	})
-
 	// ---- Eggs CRUD ----
-
-	protected.Get("/nests/:nestId/eggs", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		eggs, err := cfg.Store.ListEggs(ctx, c.Params("nestId"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(eggs)
-	})
-
-	protected.Get("/eggs/:id", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		egg, err := cfg.Store.GetEgg(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "egg not found")
-		}
-		return c.JSON(egg)
-	})
-
-	protected.Post("/eggs", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
-		var req CreateEggRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := Validate(&req); err != nil {
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(err)
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		egg, err := cfg.Store.CreateEgg(ctx, store.CreateEggRequest{
-			NestID: req.NestID, Name: req.Name, Description: req.Description,
-			DockerImages: req.DockerImages, Startup: req.Startup, Config: req.Config,
-			DefaultMemoryMB: req.DefaultMemoryMB, InstallScript: req.InstallScript,
-			InstallContainer: req.InstallContainer, InstallEntrypoint: req.InstallEntrypoint,
-			FileDenylist: req.FileDenylist, ConfigFrom: req.ConfigFrom,
-			CopyScriptFrom: req.CopyScriptFrom, UpdateURL: req.UpdateURL, Author: req.Author,
-			Features: req.Features, StartupCommands: req.StartupCommands,
-		}, actorID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.Status(fiber.StatusCreated).JSON(egg)
-	})
-
-	protected.Patch("/eggs/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
-		var req UpdateEggRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		egg, err := cfg.Store.UpdateEgg(ctx, c.Params("id"), store.UpdateEggRequest{
-			Name: req.Name, Description: req.Description, DockerImages: req.DockerImages,
-			Startup: req.Startup, Config: req.Config, DefaultMemoryMB: req.DefaultMemoryMB,
-			InstallScript: req.InstallScript, InstallContainer: req.InstallContainer,
-			InstallEntrypoint: req.InstallEntrypoint, FileDenylist: req.FileDenylist,
-			ConfigFrom: req.ConfigFrom, CopyScriptFrom: req.CopyScriptFrom,
-			UpdateURL: req.UpdateURL, Author: req.Author,
-			Features: req.Features, StartupCommands: req.StartupCommands,
-		}, actorID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.JSON(egg)
-	})
 
 	protected.Get("/eggs/:id/variables", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -1188,22 +831,6 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Delete("/eggs/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nests.delete"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		if err := cfg.Store.DeleteEgg(ctx, c.Params("id"), actorID); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.JSON(fiber.Map{"ok": true})
-	})
-
 	// ---- Egg Export/Import ----
 
 	protected.Get("/eggs/:id/export", requireAdminScope("nests.read"), func(c *fiber.Ctx) error {
@@ -1218,7 +845,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		}
 		variables, err := cfg.Store.ListEggVariables(ctx, c.Params("id"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{
 			"egg":       egg,
@@ -1277,7 +904,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 				DefaultValue: v.DefaultValue, UserViewable: v.UserViewable,
 				UserEditable: v.UserEditable, Rules: v.Rules, Sort: v.Sort,
 			}, actorID); err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to import variable %s: %v", v.EnvVariable, err))
+				// The store error may carry SQL/driver internals; log it
+				// server-side and return a generic 500 so implementation
+				// details never leak to the client.
+				slog.Error("egg import: failed to create egg variable",
+					"eggId", egg.ID, "envVariable", v.EnvVariable, "error", err)
+				return respondInternalError(c, err)
 			}
 		}
 		return c.Status(fiber.StatusCreated).JSON(egg)
@@ -1545,7 +1177,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			TemplateIDs:   req.TemplateIDs,
 		}, actorID)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			msg := err.Error()
+			// Surface the allowlist knob so admins can fix rejected sources.
+			if strings.Contains(strings.ToLower(msg), "mount") && !strings.Contains(msg, "MOUNTS_ALLOWED_PREFIX") {
+				msg = fmt.Sprintf("%s (allowed host prefix: set MOUNTS_ALLOWED_PREFIX on the panel to permit mount sources)", msg)
+			}
+			return fiber.NewError(fiber.StatusBadRequest, msg)
 		}
 		return c.Status(fiber.StatusCreated).JSON(mount)
 	})
@@ -1560,8 +1197,41 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		if err := cfg.Store.DeleteMount(ctx, c.Params("id"), actorID); err != nil {
+		mountID := c.Params("id")
+		mount, err := cfg.Store.GetMount(ctx, mountID)
+		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		serverCount, err := cfg.Store.CountServersUsingMount(ctx, mountID)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		if serverCount > 0 {
+			return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("cannot delete mount: %d server(s) are still attached; detach them first", serverCount))
+		}
+		nodes, err := cfg.Store.ListNodesForMount(ctx, mountID)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		if err := cfg.Store.DeleteMount(ctx, mountID, actorID); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if cfg.Daemon != nil {
+			for _, node := range nodes {
+				nodeToken, tokenErr := cfg.Store.GetNodeDaemonToken(ctx, node.ID)
+				if tokenErr != nil {
+					slog.Warn("mount cleanup failed to get node token", "node", node.Name, "error", tokenErr)
+					continue
+				}
+				cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 30*time.Second)
+				resp, cleanupErr := cfg.Daemon.CleanupMount(cleanupCtx, node.BaseURL, nodeToken, mount.Source)
+				cleanupCancel()
+				if cleanupErr != nil {
+					slog.Warn("mount cleanup failed for node", "node", node.Name, "source", mount.Source, "error", cleanupErr)
+				} else if resp.OK && !resp.Removed {
+					slog.Info("mount cleanup skipped", "node", node.Name, "source", mount.Source, "reason", resp.Reason)
+				}
+			}
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -1916,62 +1586,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Get("/templates", func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		templates, err := cfg.Store.ListTemplates(ctx)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(templates)
-	})
-
-	protected.Get("/templates/:id", func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		template, err := cfg.Store.GetTemplate(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "template not found")
-		}
-		return c.JSON(template)
-	})
-
-	protected.Post("/templates", requireRole("admin"), func(c *fiber.Ctx) error {
-		var req CreateTemplateRequest
-		if err := c.BodyParser(&req); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
-		}
-		if err := Validate(&req); err != nil {
-			return c.Status(fiber.StatusUnprocessableEntity).JSON(err)
-		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
-		}
-		template, err := cfg.Store.CreateTemplate(ctx, store.CreateTemplateRequest{
-			Name:            req.Name,
-			Image:           req.Image,
-			StartupCommand:  req.StartupCommand,
-			DefaultMemoryMB: req.DefaultMemoryMB,
-		}, actorID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
-		}
-		return c.Status(fiber.StatusCreated).JSON(template)
-	})
-
-	protected.Patch("/templates/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/templates/:id", requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
 		var req CreateTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -1996,35 +1611,35 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 	})
 
 	// ---- Plugins ----
-	protected.Get("/admin/plugins", requireRole("admin"), ListPlugins(cfg))
-	protected.Get("/admin/plugins/:id", requireRole("admin"), GetPlugin(cfg))
-	protected.Post("/admin/plugins/import/file", requireRole("admin"), ImportPluginFromFile(cfg))
-	protected.Post("/admin/plugins/import/url", requireRole("admin"), ImportPluginFromURL(cfg))
-	protected.Post("/admin/plugins/:id/install", requireRole("admin"), InstallPlugin(cfg, cfg.PluginsDir))
-	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), UninstallPlugin(cfg, cfg.PluginsDir))
-	protected.Post("/admin/plugins/:id/enable", requireRole("admin"), EnablePlugin(cfg))
-	protected.Post("/admin/plugins/:id/disable", requireRole("admin"), DisablePlugin(cfg))
-	protected.Patch("/admin/plugins/:id", requireRole("admin"), UpdatePlugin(cfg))
-	protected.Delete("/admin/plugins/:id", requireRole("admin"), DeletePlugin(cfg))
+	protected.Get("/admin/plugins", requireRole("admin"), requireAdminScope("plugins.read"), ListPlugins(cfg))
+	protected.Get("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.read"), GetPlugin(cfg))
+	protected.Post("/admin/plugins/import/file", requireRole("admin"), requireAdminScope("plugins.write"), ImportPluginFromFile(cfg))
+	protected.Post("/admin/plugins/import/url", requireRole("admin"), requireAdminScope("plugins.write"), ImportPluginFromURL(cfg))
+	protected.Post("/admin/plugins/install", requireRole("admin"), requireAdminScope("plugins.write"), InstallPlugin(cfg))
+	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), requireAdminScope("plugins.delete"), UninstallPlugin(cfg))
+	protected.Post("/admin/plugins/:id/enable", requireRole("admin"), requireAdminScope("plugins.write"), EnablePlugin(cfg))
+	protected.Post("/admin/plugins/:id/disable", requireRole("admin"), requireAdminScope("plugins.write"), DisablePlugin(cfg))
+	protected.Patch("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.write"), UpdatePlugin(cfg))
+	protected.Delete("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.delete"), DeletePlugin(cfg))
 
 	// ---- Roles ----
-	protected.Get("/admin/roles", requireRole("admin"), ListRoles(cfg))
-	protected.Get("/admin/roles/:id", requireRole("admin"), GetRole(cfg))
-	protected.Post("/admin/roles", requireRole("admin"), CreateRole(cfg))
-	protected.Patch("/admin/roles/:id", requireRole("admin"), UpdateRole(cfg))
-	protected.Delete("/admin/roles/:id", requireRole("admin"), DeleteRole(cfg))
-	protected.Get("/admin/users/:id/roles", requireRole("admin"), ListUserRoles(cfg))
-	protected.Patch("/admin/users/:id/roles/assign", requireRole("admin"), AssignRolesToUser(cfg))
-	protected.Patch("/admin/users/:id/roles/remove", requireRole("admin"), RemoveRolesFromUser(cfg))
+	protected.Get("/admin/roles", requireRole("admin"), requireAdminScope("roles.read"), ListRoles(cfg))
+	protected.Get("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.read"), GetRole(cfg))
+	protected.Post("/admin/roles", requireRole("admin"), requireAdminScope("roles.write"), CreateRole(cfg))
+	protected.Patch("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.write"), UpdateRole(cfg))
+	protected.Delete("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.delete"), DeleteRole(cfg))
+	protected.Get("/admin/users/:id/roles", requireRole("admin"), requireAdminScope("users.read"), ListUserRoles(cfg))
+	protected.Patch("/admin/users/:id/roles/assign", requireRole("admin"), requireAdminScope("users.write"), AssignRolesToUser(cfg))
+	protected.Patch("/admin/users/:id/roles/remove", requireRole("admin"), requireAdminScope("users.write"), RemoveRolesFromUser(cfg))
 
 	// ---- OAuth2 admin routes ----
-	protected.Get("/admin/oauth-clients", requireRole("admin"), AdminListOAuthClients(cfg))
-	protected.Post("/admin/oauth-clients", requireRole("admin"), AdminCreateOAuthClient(cfg))
-	protected.Delete("/admin/oauth-clients/:id", requireRole("admin"), AdminDeleteOAuthClient(cfg))
+	protected.Get("/admin/oauth-clients", requireRole("admin"), requireAdminScope("users.read"), AdminListOAuthClients(cfg))
+	protected.Post("/admin/oauth-clients", requireRole("admin"), requireAdminScope("users.write"), AdminCreateOAuthClient(cfg))
+	protected.Delete("/admin/oauth-clients/:id", requireRole("admin"), requireAdminScope("users.delete"), AdminDeleteOAuthClient(cfg))
 
 	// ---- Webhooks ----
 
-	protected.Get("/webhooks", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/webhooks", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2042,7 +1657,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(webhooks)
 	})
 
-	protected.Post("/webhooks", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/webhooks", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2062,7 +1677,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.Status(fiber.StatusCreated).JSON(wh)
 	})
 
-	protected.Patch("/webhooks/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2085,33 +1700,107 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(wh)
 	})
 
-	protected.Get("/webhooks/:id/deliveries", requireRole("admin"), func(c *fiber.Ctx) error {
+	// GET /webhooks/:id — fetch a single webhook definition.
+	protected.Get("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c))
+		wh, err := cfg.Store.GetWebhook(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "webhook not found")
+		}
+		if wh.Secret != "" {
+			wh.Secret = maskedSecret
+		}
+		return c.JSON(wh)
+	})
+
+	protected.Get("/webhooks/:id/deliveries", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		offset := 0
+		if o := c.Query("offset"); o != "" {
+			if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+				offset = parsed
+			}
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c), offset)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		return c.JSON(deliveries)
 	})
 
-	protected.Get("/admin/webhooks/:id/deliveries", requireRole("admin"), func(c *fiber.Ctx) error {
+	// GET /webhooks/:id/dead-letter — deliveries that exhausted all retries.
+	protected.Get("/webhooks/:id/dead-letter", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		offset := 0
+		if o := c.Query("offset"); o != "" {
+			if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+				offset = parsed
+			}
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		deliveries, err := cfg.Store.ListWebhookDeliveries(ctx, c.Params("id"), queryLimit(c))
+		deliveries, err := cfg.Store.ListDeadLetterDeliveries(ctx, c.Params("id"), queryLimit(c), offset)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		return c.JSON(deliveries)
 	})
 
-	protected.Delete("/webhooks/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/webhooks/:id/deliveries/:deliveryId/retry", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.Store.RetryWebhookDelivery(ctx, c.Params("deliveryId")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"ok": true})
+	})
+
+	// POST /webhooks/:id/test — fire a test delivery so the admin can verify the
+	// endpoint receives and ACKs events before enabling production traffic.
+	protected.Post("/webhooks/:id/test", requireRole("admin"), requireAdminScope("webhooks.write"), mutationLimiter, func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		wh, err := cfg.Store.GetWebhookWithSecret(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "webhook not found")
+		}
+		payload := []byte(`{"event":"test","message":"Forge webhook test delivery"}`)
+		delivery, err := cfg.Store.CreateTestDelivery(ctx, wh, "test", payload, payload)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(delivery)
+	})
+
+	protected.Delete("/webhooks/deliveries/:deliveryId", requireRole("admin"), requireAdminScope("webhooks.delete"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := cfg.Store.DeleteWebhookDelivery(ctx, c.Params("deliveryId")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"ok": true})
+	})
+
+	protected.Delete("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.delete"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -2125,14 +1814,14 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Reconciler Orchestration ----
 
-	protected.Get("/reconciler/metrics", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/reconciler/metrics", requireRole("admin"), requireAdminScope("reconcile.read"), func(c *fiber.Ctx) error {
 		if cfg.Reconciler == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "reconciler service is not available")
 		}
 		return c.JSON(cfg.Reconciler.Metrics())
 	})
 
-	protected.Post("/reconciler/run", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/reconciler/run", requireRole("admin"), requireAdminScope("reconcile.write"), func(c *fiber.Ctx) error {
 		if cfg.Reconciler == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "reconciler service is not available")
 		}
@@ -2146,10 +1835,15 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Migration lifecycle ----
 
-	protected.Post("/migrations/:id/prepare", requireRole("admin"), prepareMigrationRoute(migrationService))
-	protected.Post("/migrations/:id/execute", requireRole("admin"), executeMigrationRoute(migrationService))
+	protected.Get("/migrations/executor", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
+		available := migrationService != nil && migrationService.ExecutorAvailable()
+		return c.JSON(fiber.Map{"available": available})
+	})
 
-	protected.Post("/migrations/:id/cancel", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/migrations/:id/prepare", requireRole("admin"), requireAdminScope("nodes.write"), prepareMigrationRoute(migrationService))
+	protected.Post("/migrations/:id/execute", requireRole("admin"), requireAdminScope("nodes.write"), executeMigrationRoute(migrationService))
+
+	protected.Post("/migrations/:id/cancel", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if migrationService == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
 		}
@@ -2164,7 +1858,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Evacuation Orchestration ----
 
-	protected.Get("/evacuations/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/evacuations/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if evacuationPlanner == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "evacuation planner service is not available")
 		}
@@ -2191,7 +1885,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/evacuations/preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/evacuations/preview", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if evacuationPlanner == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "evacuation planner service is not available")
 		}
@@ -2317,18 +2011,10 @@ func executeRecoveryRoute(coordinator *recoverysvc.Coordinator) fiber.Handler {
 	}
 }
 
-// workloadExecutionNotImplemented remains available for routes whose runtime
-// has no executor. Recovery and evacuation no longer use this handler.
-func workloadExecutionNotImplemented(operation string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		return fiber.NewError(fiber.StatusNotImplemented, operation+" is not implemented; no workload executor is available")
-	}
-}
-
 func migrationRouteError(err error) error {
-	var notImplemented *migrationservice.NotImplementedError
-	if errors.As(err, &notImplemented) {
-		return fiber.NewError(fiber.StatusNotImplemented, err.Error())
+	var unavailable *migrationservice.ExecutorUnavailableError
+	if errors.As(err, &unavailable) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
 	}
 	return fiber.NewError(fiber.StatusBadRequest, err.Error())
 }
@@ -2382,6 +2068,14 @@ func executeMigrationRoute(service *migrationservice.Service) fiber.Handler {
 		}
 		return c.JSON(migration)
 	}
+}
+
+func toMigrationError(c *fiber.Ctx, err error) error {
+	var targetErr *domain.TargetValidationError
+	if errors.As(err, &targetErr) {
+		return c.Status(fiber.StatusUnprocessableEntity).JSON(targetErr)
+	}
+	return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"message": err.Error()})
 }
 
 func derefInt(v *int) int {

@@ -6,7 +6,7 @@ import (
 )
 
 func TestFileDownloadTicketIsSingleUseAndBoundToPath(t *testing.T) {
-	store := newFileDownloadTicketStore()
+	store := newFileDownloadTicketStore(Config{})
 	token, err := store.issue(fileDownloadTicket{serverID: "server-a", filePath: "mods/game.bin", expires: time.Now().Add(time.Minute)})
 	if err != nil {
 		t.Fatal(err)
@@ -21,7 +21,7 @@ func TestFileDownloadTicketIsSingleUseAndBoundToPath(t *testing.T) {
 }
 
 func TestExpiredFileDownloadTicketIsRejected(t *testing.T) {
-	store := newFileDownloadTicketStore()
+	store := newFileDownloadTicketStore(Config{})
 	token, err := store.issue(fileDownloadTicket{serverID: "server-a", filePath: "game.bin", expires: time.Now().Add(-time.Second)})
 	if err != nil {
 		t.Fatal(err)
