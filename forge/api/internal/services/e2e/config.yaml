@@ -5,7 +5,7 @@
 database:
   # Connection URL for the test database
   url: "${TEST_DATABASE_URL:-postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable}"
-
+  
   # Connection pool settings
   pool:
     max_connections: 20
@@ -18,22 +18,22 @@ database:
 test:
   # Timeout for individual tests
   timeout: "5m"
-
+  
   # Timeout for the entire test suite
   suite_timeout: "30m"
-
+  
   # Whether to run tests in parallel
   parallel: false
-
+  
   # Maximum parallel tests (if parallel is true)
   max_parallel: 4
-
+  
   # Whether to stop on first failure
   fail_fast: false
-
+  
   # Whether to generate reports
   generate_reports: true
-
+  
   # Report formats to generate
   report_formats:
     - json
@@ -47,25 +47,25 @@ scenarios:
     enabled: true
     priority: 1
     timeout: "5m"
-
+    
   # Health-Gated Deployment scenario
   health_gated_deployment:
     enabled: true
     priority: 2
     timeout: "5m"
-
+    
   # Node Failure scenario
   node_failure:
     enabled: true
     priority: 3
     timeout: "5m"
-
+    
   # GitOps Compose Stack scenario
   gitops_compose_stack:
     enabled: true
     priority: 4
     timeout: "5m"
-
+    
   # Remote Build and Registry scenario
   remote_build_registry:
     enabled: true
@@ -79,7 +79,7 @@ mock_services:
     enabled: true
     clone_timeout: "10s"
     cleanup_on_exit: true
-
+    
   # Build service mock
   build:
     enabled: true
@@ -88,7 +88,7 @@ mock_services:
       - "docker"
       - "build"
       - "nixpacks"
-
+    
   # Registry mock
   registry:
     enabled: true
@@ -102,7 +102,7 @@ test_data:
     name: "Test Region"
     slug: "test-region"
     enabled: true
-
+    
   # Default nodes for tests
   nodes:
     - name: "test-node-1"
@@ -111,14 +111,14 @@ test_data:
       disk: 102400
       runtime: "docker"
       capabilities: ["docker", "build"]
-
+      
     - name: "test-node-2"
       cpu: 4096
       memory: 8192
       disk: 102400
       runtime: "docker"
       capabilities: ["docker"]
-
+      
     - name: "test-node-3"
       cpu: 2048
       memory: 4096
@@ -139,21 +139,21 @@ test_data:
 reporting:
   # Directory for test reports
   output_dir: "test-reports"
-
+  
   # JSON report filename
   json_report: "e2e-report.json"
-
+  
   # Markdown report filename
   markdown_report: "e2e-report.md"
-
+  
   # Console output settings
   console:
     verbose: true
     colors: true
-
+    
   # Whether to include detailed test output in reports
   include_output: false
-
+  
   # Whether to include environment information
   include_environment: true
 
@@ -161,13 +161,13 @@ reporting:
 logging:
   # Log level (debug, info, warning, error)
   level: "info"
-
+  
   # Log format (text, json)
   format: "text"
-
+  
   # Log file
   file: "test-reports/e2e-tests.log"
-
+  
   # Whether to log to console
   console: true
 
@@ -179,7 +179,7 @@ environments:
       url: "postgres://postgres:postgres@localhost:5432/postgres?sslmode=disable"
     test:
       parallel: false
-
+      
   # CI environment
   ci:
     database:
@@ -188,7 +188,7 @@ environments:
       parallel: true
       max_parallel: 2
       fail_fast: true
-
+      
   # Docker environment
   docker:
     database:
@@ -200,13 +200,13 @@ environments:
 features:
   # Enable experimental chaos tests
   chaos_tests: false
-
+  
   # Enable performance tests
   performance_tests: false
-
+  
   # Enable security tests
   security_tests: false
-
+  
   # Enable long-running tests
   long_running_tests: false
 
@@ -214,10 +214,10 @@ features:
 cleanup:
   # Whether to clean up test data after tests
   enabled: true
-
+  
   # Cleanup timeout
   timeout: "1m"
-
+  
   # Whether to clean up on test failure
   on_failure: true
 
@@ -225,12 +225,12 @@ cleanup:
 retry:
   # Whether to retry failed tests
   enabled: false
-
+  
   # Number of retries
   count: 3
-
+  
   # Delay between retries
   delay: "1s"
-
+  
   # Whether to retry only flaky tests
   flaky_only: true
