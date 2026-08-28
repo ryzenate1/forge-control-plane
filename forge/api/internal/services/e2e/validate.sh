@@ -51,9 +51,9 @@ command_exists() {
 run_test() {
     local test_name="$1"
     local test_command="$2"
-
+    
     log_info "Running test: $test_name"
-
+    
     if eval "$test_command" >/dev/null 2>&1; then
         log_success "$test_name passed"
         return 0
@@ -218,7 +218,7 @@ import (
     "fmt"
     "os"
     "time"
-
+    
     "github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -228,22 +228,22 @@ func main() {
         fmt.Println("TEST_DATABASE_URL not set")
         os.Exit(1)
     }
-
+    
     ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
     defer cancel()
-
+    
     pool, err := pgxpool.New(ctx, databaseURL)
     if err != nil {
         fmt.Printf("Failed to connect: %v\n", err)
         os.Exit(1)
     }
     defer pool.Close()
-
+    
     if err := pool.Ping(ctx); err != nil {
         fmt.Printf("Ping failed: %v\n", err)
         os.Exit(1)
     }
-
+    
     fmt.Println("Database connection test passed")
 }
 EOF
