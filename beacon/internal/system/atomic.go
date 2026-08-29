@@ -30,36 +30,37 @@ func (a *AtomicString) Store(val string) {
 
 // AtomicBool provides atomic boolean operations
 type AtomicBool struct {
-	v atomic.Value
+	v int32
 }
 
 // NewAtomicBool creates a new atomic bool
 func NewAtomicBool(initial bool) *AtomicBool {
 	a := &AtomicBool{}
-	a.Store(initial)
+	if initial {
+		a.v = 1
+	}
 	return a
 }
 
 // Load returns the current value
 func (a *AtomicBool) Load() bool {
-	v := a.v.Load()
-	if v == nil {
-		return false
-	}
-	return v.(bool)
+	return atomic.LoadInt32(&a.v) != 0
 }
 
 // Store sets the value
 func (a *AtomicBool) Store(val bool) {
-	a.v.Store(val)
+	if val {
+		atomic.StoreInt32(&a.v, 1)
+	} else {
+		atomic.StoreInt32(&a.v, 0)
+	}
 }
 
-// SwapIf swaps to true if currently false, returns success
+// SwapIf swaps to the given value if currently the opposite, returns success
 func (a *AtomicBool) SwapIf(val bool) bool {
-	current := a.Load()
-	if current == !val {
-		a.Store(val)
-		return true
+	var wanted int32
+	if val {
+		wanted = 1
 	}
-	return false
+	return atomic.CompareAndSwapInt32(&a.v, 1-wanted, wanted)
 }

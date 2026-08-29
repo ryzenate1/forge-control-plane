@@ -46,11 +46,11 @@ func NewRotatingWriter(path string, config Config) (*RotatingWriter, error) {
 		config.MaxAge = 7 * 24 * time.Hour
 	}
 
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
 		return nil, fmt.Errorf("create log directory: %w", err)
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := openLogFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open log file: %w", err)
 	}
@@ -92,33 +92,42 @@ func (w *RotatingWriter) rotate() error {
 	for i := w.config.MaxBackups - 1; i >= 1; i-- {
 		src := fmt.Sprintf("%s.%d", w.path, i)
 		dst := fmt.Sprintf("%s.%d", w.path, i+1)
-		os.Rename(src, dst)
+		if err := renameIfExists(src, dst); err != nil {
+			return err
+		}
 
 		if w.config.Compress {
-			os.Rename(src+".gz", dst+".gz")
+			if err := renameIfExists(src+".gz", dst+".gz"); err != nil {
+				return err
+			}
 		}
 	}
 
 	if w.config.Compress {
 		gzDst := w.path + ".1.gz"
-		os.Remove(gzDst)
-		if err := compressFile(w.path, gzDst); err == nil {
-			os.Remove(w.path)
+		if err := os.Remove(gzDst); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := compressFile(w.path, gzDst); err != nil {
+			return err
+		}
+		if err := os.Remove(w.path); err != nil && !os.IsNotExist(err) {
+			return err
 		}
 	} else {
-		os.Rename(w.path, w.path+".1")
+		if err := renameIfExists(w.path, w.path+".1"); err != nil {
+			return err
+		}
 	}
 
-	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	f, err := openLogFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
 	if err != nil {
 		return fmt.Errorf("reopen log file: %w", err)
 	}
 	w.file = f
 	w.size = 0
 
-	go w.cleanup()
-
-	return nil
+	return w.cleanup()
 }
 
 func (w *RotatingWriter) Close() error {
@@ -133,7 +142,7 @@ func (w *RotatingWriter) Close() error {
 	return nil
 }
 
-func (w *RotatingWriter) cleanup() {
+func (w *RotatingWriter) cleanup() error {
 	now := time.Now()
 
 	pattern := w.path + ".*"
@@ -143,14 +152,16 @@ func (w *RotatingWriter) cleanup() {
 
 	matches, err := filepath.Glob(pattern)
 	if err != nil {
-		return
+		return err
 	}
 
 	sort.Strings(matches)
 
 	if len(matches) > w.config.MaxBackups {
 		for _, m := range matches[:len(matches)-w.config.MaxBackups] {
-			os.Remove(m)
+			if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 		matches = matches[len(matches)-w.config.MaxBackups:]
 	}
@@ -161,9 +172,12 @@ func (w *RotatingWriter) cleanup() {
 			continue
 		}
 		if now.Sub(info.ModTime()) > w.config.MaxAge {
-			os.Remove(m)
+			if err := os.Remove(m); err != nil && !os.IsNotExist(err) {
+				return err
+			}
 		}
 	}
+	return nil
 }
 
 func compressFile(src, dst string) error {
@@ -173,19 +187,27 @@ func compressFile(src, dst string) error {
 	}
 	defer in.Close()
 
-	out, err := os.Create(dst)
+	out, err := openLogFile(dst, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return err
 	}
 	defer out.Close()
 
 	gz := gzip.NewWriter(out)
-	defer gz.Close()
 
 	if _, err := io.Copy(gz, in); err != nil {
 		return err
 	}
+	if err := gz.Close(); err != nil {
+		return err
+	}
+	return out.Sync()
+}
 
+func renameIfExists(source, destination string) error {
+	if err := os.Rename(source, destination); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("rename %s: %w", source, err)
+	}
 	return nil
 }
 
@@ -202,10 +224,10 @@ func WriteSystemConfig(logDir, serviceName string) error {
     delaycompress
     missingok
     notifempty
-    create 0644 root root
+    create 0600
 }
 `, logDir)
 
 	path := filepath.Join(dir, serviceName)
-	return os.WriteFile(path, []byte(content), 0o644)
+	return os.WriteFile(path, []byte(content), 0o600)
 }

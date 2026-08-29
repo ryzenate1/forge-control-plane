@@ -2,11 +2,16 @@ package paperdl
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
+	"regexp"
+	"strconv"
+	"strings"
 	"time"
 
 	"gamepanel/beacon/internal/installer/operations"
@@ -21,7 +26,11 @@ type PaperDl struct {
 	MinecraftVersion string `json:"minecraftVersion"`
 	Build            string `json:"build"`
 	Filename         string `json:"filename"`
+	ExpectedSHA256   string `json:"expectedSha256"`
 }
+
+var projectPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9_-]{0,63}$`)
+var versionPattern = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._+-]{0,63}$`)
 
 func init() {
 	operations.Register("paperDl", factory)
@@ -38,6 +47,15 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 	if op.Filename == "" {
 		op.Filename = "server.jar"
 	}
+	if !projectPattern.MatchString(op.Project) {
+		return nil, fmt.Errorf("paperDl: invalid project")
+	}
+	if op.MinecraftVersion != "" && op.MinecraftVersion != "latest" && !versionPattern.MatchString(op.MinecraftVersion) {
+		return nil, fmt.Errorf("paperDl: invalid minecraftVersion")
+	}
+	if decoded, err := hex.DecodeString(op.ExpectedSHA256); err != nil || len(decoded) != sha256.Size {
+		return nil, fmt.Errorf("paperDl: expectedSha256 is required")
+	}
 	return &op, nil
 }
 
@@ -50,8 +68,8 @@ type paperBuildsResponse struct {
 }
 
 type paperBuildInfo struct {
-	Build    int               `json:"build"`
-	Downloads paperDownloads   `json:"downloads"`
+	Build     int            `json:"build"`
+	Downloads paperDownloads `json:"downloads"`
 }
 
 type paperDownloads struct {
@@ -79,19 +97,19 @@ func (op *PaperDl) Execute(ctx context.Context, serverDir string) error {
 	}
 
 	dlURL := fmt.Sprintf(paperDownloadURL, op.Project, mcVersion, build, downloadName)
-	dest := operations.ResolvePath(serverDir, op.Filename)
+	dest, err := operations.ResolvePath(serverDir, op.Filename)
+	if err != nil {
+		return err
+	}
 	if err := operations.EnsureParentDir(dest); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	if err := op.downloadFile(ctx, dlURL, dest); err != nil {
+	if err := operations.DownloadVerified(ctx, dlURL, dest, op.ExpectedSHA256, 2<<30, 10*time.Minute); err != nil {
 		return fmt.Errorf("download: %w", err)
 	}
-
-	if sha != "" {
-		if err := op.verifyChecksum(dest, sha); err != nil {
-			return fmt.Errorf("checksum: %w", err)
-		}
+	if sha == "" || !strings.EqualFold(sha, op.ExpectedSHA256) {
+		return errors.New("publisher API checksum does not match the independently supplied checksum")
 	}
 
 	return nil
@@ -120,18 +138,31 @@ func (op *PaperDl) resolveBuild(ctx context.Context, mcVersion string) (int, str
 	}
 
 	buildInfo := resp.Builds[len(resp.Builds)-1]
+	if op.Build != "" && op.Build != "latest" {
+		requested, err := strconv.Atoi(op.Build)
+		if err != nil || requested <= 0 {
+			return 0, "", "", errors.New("build must be a positive integer or latest")
+		}
+		found := false
+		for _, candidate := range resp.Builds {
+			if candidate.Build == requested {
+				buildInfo = candidate
+				found = true
+				break
+			}
+		}
+		if !found {
+			return 0, "", "", fmt.Errorf("build %d is unavailable", requested)
+		}
+	}
 	return buildInfo.Build, buildInfo.Downloads.Application.Name, buildInfo.Downloads.Application.SHA256, nil
 }
 
 func (op *PaperDl) getJSON(ctx context.Context, url string, target interface{}) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "GamePanel-Beacon/1.0")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	client := operations.SecureHTTPClient(30 * time.Second)
+	resp, err := operations.DoWithRetry(ctx, client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	})
 	if err != nil {
 		return err
 	}
@@ -140,37 +171,5 @@ func (op *PaperDl) getJSON(ctx context.Context, url string, target interface{}) 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("GET %q: status %d", url, resp.StatusCode)
 	}
-	return json.NewDecoder(resp.Body).Decode(target)
-}
-
-func (op *PaperDl) downloadFile(ctx context.Context, url, dest string) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "GamePanel-Beacon/1.0")
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %q: status %d", url, resp.StatusCode)
-	}
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return err
-}
-
-func (op *PaperDl) verifyChecksum(path, expectedSha string) error {
-	return nil
+	return json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(target)
 }

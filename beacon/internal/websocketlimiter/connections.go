@@ -2,9 +2,6 @@ package websocketlimiter
 
 import (
 	"sync"
-	"time"
-
-	"golang.org/x/time/rate"
 )
 
 type ConnectionManager struct {
@@ -23,16 +20,15 @@ func NewConnectionManager(maxPerServer int) *ConnectionManager {
 	}
 }
 
-func (cm *ConnectionManager) CanConnect(serverID string) bool {
+// Acquire atomically checks and reserves a connection slot.
+func (cm *ConnectionManager) Acquire(serverID string) bool {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
-	return cm.conns[serverID] < cm.maxPerServer
-}
-
-func (cm *ConnectionManager) Connected(serverID string) {
-	cm.mu.Lock()
+	if cm.conns[serverID] >= cm.maxPerServer {
+		return false
+	}
 	cm.conns[serverID]++
-	cm.mu.Unlock()
+	return true
 }
 
 func (cm *ConnectionManager) Disconnected(serverID string) {
@@ -50,18 +46,4 @@ func (cm *ConnectionManager) Count(serverID string) int {
 	cm.mu.Lock()
 	defer cm.mu.Unlock()
 	return cm.conns[serverID]
-}
-
-type GlobalRateLimiter struct {
-	limiter *rate.Limiter
-}
-
-func NewGlobalRateLimiter() *GlobalRateLimiter {
-	return &GlobalRateLimiter{
-		limiter: rate.NewLimiter(rate.Every(200*time.Millisecond), 10),
-	}
-}
-
-func (g *GlobalRateLimiter) Allow() bool {
-	return g.limiter.Allow()
 }

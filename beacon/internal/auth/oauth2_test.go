@@ -4,31 +4,43 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 )
 
 func TestOAuth2Provider_AuthCodeURL(t *testing.T) {
 	provider := &OAuth2Provider{
 		ClientID:     "test-client-id",
-		ClientSecret: "test-client-secret",
+		ClientSecret: []byte("test-client-secret"),
 		AuthURL:      "https://example.com/auth",
 		TokenURL:     "https://example.com/token",
 		RedirectURL:  "https://example.com/callback",
 		Scopes:       []string{"scope1", "scope2"},
 	}
 
-	state := "test-state"
-	authURL := provider.AuthCodeURL(state)
-
-	expectedURL := "https://example.com/auth?client_id=test-client-id&redirect_uri=https%3A%2F%2Fexample.com%2Fcallback&response_type=code&scope=scope1+scope2&state=test-state"
-	if authURL != expectedURL {
-		t.Errorf("AuthCodeURL() = %v, want %v", authURL, expectedURL)
+	authURL, state, err := provider.AuthCodeURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(authURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if state == "" || parsed.Query().Get("state") != state {
+		t.Fatal("generated OAuth state is missing")
+	}
+	if parsed.Query().Get("code_challenge_method") != "S256" || parsed.Query().Get("code_challenge") == "" {
+		t.Fatal("PKCE S256 challenge is missing")
 	}
 }
 
 func TestOAuth2Provider_Exchange(t *testing.T) {
 	// Mock OAuth2 server
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil || r.Form.Get("code_verifier") == "" {
+			http.Error(w, "missing verifier", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		w.Write([]byte(`{
             "access_token": "test-access-token",
@@ -40,7 +52,7 @@ func TestOAuth2Provider_Exchange(t *testing.T) {
 
 	provider := &OAuth2Provider{
 		ClientID:     "test-client-id",
-		ClientSecret: "test-client-secret",
+		ClientSecret: []byte("test-client-secret"),
 		AuthURL:      "https://example.com/auth",
 		TokenURL:     ts.URL,
 		RedirectURL:  "https://example.com/callback",
@@ -48,12 +60,19 @@ func TestOAuth2Provider_Exchange(t *testing.T) {
 	}
 
 	code := "test-code"
-	token, err := provider.Exchange(context.Background(), code)
+	_, state, err := provider.AuthCodeURL()
+	if err != nil {
+		t.Fatal(err)
+	}
+	token, err := provider.Exchange(context.Background(), code, state)
 	if err != nil {
 		t.Fatalf("Exchange() error = %v", err)
 	}
 
 	if token.AccessToken != "test-access-token" {
 		t.Errorf("Exchange() AccessToken = %v, want %v", token.AccessToken, "test-access-token")
+	}
+	if _, err := provider.Exchange(context.Background(), code, state); err == nil {
+		t.Fatal("OAuth state replay was accepted")
 	}
 }

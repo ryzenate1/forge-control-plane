@@ -1,12 +1,12 @@
 package runcommand
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"gamepanel/beacon/internal/installer/operations"
@@ -15,7 +15,6 @@ import (
 type RunCommand struct {
 	Command string   `json:"command"`
 	Args    []string `json:"args,omitempty"`
-	Shell   bool     `json:"shell,omitempty"`
 }
 
 func init() {
@@ -33,19 +32,25 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 	return &op, nil
 }
 
-func (op *RunCommand) Execute(ctx context.Context, serverDir string) error {
-	var cmd *exec.Cmd
+var allowedCommands = map[string]bool{
+	"java":  true,
+	"unzip": true, "tar": true, "chmod": true,
+	"cp": true, "mv": true, "rm": true, "ln": true, "mkdir": true,
+	"touch": true, "echo": true, "ls": true,
+}
 
-	if op.Shell || len(op.Args) == 0 {
-		fullCmd := op.Command
-		if len(op.Args) > 0 {
-			fullCmd = fullCmd + " " + strings.Join(op.Args, " ")
+func (op *RunCommand) Execute(ctx context.Context, serverDir string) error {
+	command := filepath.Base(strings.TrimSpace(op.Command))
+	if command != op.Command || !allowedCommands[command] {
+		return fmt.Errorf("runCommand: command %q is not in the allowed list", op.Command)
+	}
+	for _, arg := range op.Args {
+		if strings.ContainsRune(arg, '\x00') || strings.ContainsAny(arg, "\n\r") {
+			return fmt.Errorf("runCommand: argument contains invalid control characters")
 		}
-		cmd = exec.CommandContext(ctx, "/bin/sh", "-c", fullCmd)
-	} else {
-		cmd = exec.CommandContext(ctx, op.Command, op.Args...)
 	}
 
+	cmd := exec.CommandContext(ctx, command, op.Args...)
 	cmd.Dir = serverDir
 	cmd.Env = append(os.Environ(),
 		"SERVER_DIR="+serverDir,
@@ -53,12 +58,10 @@ func (op *RunCommand) Execute(ctx context.Context, serverDir string) error {
 		"HOME="+serverDir,
 	)
 
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("run %q: %w\nstdout: %s\nstderr: %s", op.Command, err, stdout.String(), stderr.String())
+		// Installer output can contain credentials supplied by an egg. Never
+		// echo child output into API-visible errors.
+		return fmt.Errorf("run %q: %w", command, err)
 	}
 	return nil
 }

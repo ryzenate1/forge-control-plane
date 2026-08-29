@@ -2,7 +2,6 @@ package system
 
 import (
 	"sync"
-	"time"
 )
 
 // SinkName represents one of the registered sinks for a server.
@@ -97,31 +96,20 @@ func (p *SinkPool) Push(data []byte) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 
-	var wg sync.WaitGroup
-	wg.Add(len(p.sinks))
 	for _, c := range p.sinks {
-		go func(c chan []byte) {
-			defer wg.Done()
+		select {
+		case c <- data:
+		default:
+			// Drop the oldest buffered item and offer the newest without
+			// allocating a goroutine per subscriber.
 			select {
-			case c <- data:
-			case <-time.After(10 * time.Millisecond):
-				// If we cannot send the message to the channel within 10ms,
-				// then try to drop the oldest message from the channel, then
-				// send our message.
+			case <-c:
 				select {
-				case <-c:
-					// Only attempt to send the message if we were able to make
-					// space for it on the channel.
-					select {
-					case c <- data:
-					default:
-					}
+				case c <- data:
 				default:
-					// Do nothing, this is a fallthrough if there is nothing to
-					// read from c.
 				}
+			default:
 			}
-		}(c)
+		}
 	}
-	wg.Wait()
 }

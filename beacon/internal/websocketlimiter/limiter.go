@@ -18,8 +18,10 @@ const (
 )
 
 type LimiterBucket struct {
-	mu     sync.RWMutex
-	limits map[Event]*rate.Limiter
+	mu             sync.RWMutex
+	limits         map[Event]*rate.Limiter
+	defaultOnce    sync.Once
+	defaultLimiter *rate.Limiter
 }
 
 func NewLimiterBucket() *LimiterBucket {
@@ -27,8 +29,10 @@ func NewLimiterBucket() *LimiterBucket {
 		limits: make(map[Event]*rate.Limiter),
 	}
 	lb.limits[AuthenticationEvent] = rate.NewLimiter(rate.Every(5*time.Second), 2)
+	lb.limits[SetStateEvent] = rate.NewLimiter(rate.Every(time.Second), 4)
 	lb.limits[SendLogsEvent] = rate.NewLimiter(rate.Every(5*time.Second), 2)
 	lb.limits[SendCommandEvent] = rate.NewLimiter(rate.Limit(1), 10)
+	lb.limits[SendStatsEvent] = rate.NewLimiter(rate.Every(time.Second), 4)
 	return lb
 }
 
@@ -42,20 +46,16 @@ func (lb *LimiterBucket) Allow(event Event) bool {
 	return limiter.Allow()
 }
 
+// allowDefault lazily initializes the shared default limiter exactly once.
+// This uses sync.Once instead of a naive double-checked-locking pattern
+// (an unsynchronized `if defaultLimiter == nil` read followed by a
+// lock-protected re-check) because Go's memory model does not guarantee
+// that the unsynchronized read observes a fully-initialized value written
+// by another goroutine, which is a data race even though it "usually
+// works" in practice.
 func (lb *LimiterBucket) allowDefault() bool {
-	lb.mu.RLock()
-	limiter, ok := lb.limits["__default__"]
-	lb.mu.RUnlock()
-	if ok {
-		return limiter.Allow()
-	}
-	limiter = rate.NewLimiter(rate.Limit(1), 4)
-	lb.mu.Lock()
-	if existing, ok2 := lb.limits["__default__"]; ok2 {
-		limiter = existing
-	} else {
-		lb.limits["__default__"] = limiter
-	}
-	lb.mu.Unlock()
-	return limiter.Allow()
+	lb.defaultOnce.Do(func() {
+		lb.defaultLimiter = rate.NewLimiter(rate.Limit(1), 4)
+	})
+	return lb.defaultLimiter.Allow()
 }

@@ -1,11 +1,18 @@
 package tls
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestDefaultTLSConfig(t *testing.T) {
@@ -111,8 +118,33 @@ func TestConfigApply_Manual(t *testing.T) {
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "cert.pem")
 	keyFile := filepath.Join(dir, "key.pem")
-	os.WriteFile(certFile, []byte("cert"), 0644)
-	os.WriteFile(keyFile, []byte("key"), 0644)
+	privateKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{"localhost"},
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &privateKey.PublicKey, privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(certFile, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(keyFile, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
 	c := &Config{Mode: ModeManual, CertFile: certFile, KeyFile: keyFile}
 	srv := &http.Server{}
@@ -124,5 +156,8 @@ func TestConfigApply_Manual(t *testing.T) {
 	}
 	if srv.TLSConfig.MinVersion != tls.VersionTLS12 {
 		t.Error("expected TLS 1.2 minimum")
+	}
+	if len(srv.TLSConfig.Certificates) != 1 {
+		t.Fatal("expected the manual certificate to be loaded")
 	}
 }

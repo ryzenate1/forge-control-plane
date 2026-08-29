@@ -74,7 +74,7 @@ func matchParts(pattern, path []string) bool {
 		if p == "*" {
 			continue
 		}
-		if !strings.EqualFold(p, path[i]) {
+		if p != path[i] {
 			return false
 		}
 	}

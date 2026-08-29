@@ -105,7 +105,7 @@ func TestMatchParts(t *testing.T) {
 		{[]string{"servers", "*", "ws", "*"}, []string{"servers", "abc", "ws", "console"}, true},
 		{[]string{"servers", "*", "power"}, []string{"servers", "abc"}, false},
 		{[]string{"api", "servers"}, []string{"api", "servers"}, true},
-		{[]string{"api", "Servers"}, []string{"api", "servers"}, true},
+		{[]string{"api", "Servers"}, []string{"api", "servers"}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.pattern[0], func(t *testing.T) {
