@@ -58,9 +58,20 @@ type BackupRequest struct {
 }
 
 // BackupStatusRequest is sent to the panel when a backup completes.
+//
+// The panel's POST /api/remote/servers/:id/backups/status decodes
+// {name, uuid, status, checksum, size} and files the backup by name under the
+// server, so SendBackupStatus maps this report onto those keys rather than
+// marshalling it verbatim: Beacon names the backup BackupUUID and expresses the
+// outcome as a bool, and a body carrying Beacon's own field names would decode as
+// an empty status — the panel would then mark a backup it cannot identify and
+// the completed work would be lost. Name is the panel's lookup key; a caller that
+// knows the backup's name must set it, and one that knows only the UUID gets a
+// report the panel can still file by uuid.
 type BackupStatusRequest struct {
 	BackupUUID string `json:"backup_uuid"`
 	ServerUUID string `json:"server_uuid"`
+	Name       string `json:"name,omitempty"`
 	Checksum   string `json:"checksum"`
 	Size       int64  `json:"size"`
 	Successful bool   `json:"successful"`
@@ -74,7 +85,14 @@ type RestoreStatusRequest struct {
 	Error      string `json:"error,omitempty"`
 }
 
-// Activity represents an activity log
+// Activity represents an activity log.
+//
+// Event is the wire field "action": the panel's /api/remote/activity ingest
+// decodes "action" only, and an entry whose action is empty is skipped without a
+// word, so the event name has to travel under that key. Metadata stays a map for
+// Beacon's producers but is serialised as a JSON *string* on the wire by
+// SendActivityLogs, because the panel stores it as an opaque audit payload;
+// sending an object makes the panel reject the entire batch with 400.
 type Activity struct {
 	ID        int                    `json:"id"`
 	Event     string                 `json:"action"`
@@ -85,7 +103,13 @@ type Activity struct {
 	Metadata  map[string]interface{} `json:"metadata"`
 }
 
-// ServerStats represents server resource usage
+// ServerStats represents server resource usage.
+//
+// Every field is a plain value, so a reading that could not be taken is
+// indistinguishable from a real zero once it is on the wire. Do not add a
+// reporter to this struct thinking an absent value is safe: until each field is
+// either a pointer or carries a reported flag, a caller that cannot measure
+// memory, disk or uptime must not send this report at all.
 type ServerStats struct {
 	State       string  `json:"state"`
 	Memory      uint64  `json:"memory_bytes"`
@@ -98,13 +122,20 @@ type ServerStats struct {
 }
 
 // NodeHeartbeat represents node health report
+//
+// MemoryMB and DiskMB report total physical capacity, so they are pointers:
+// capacity that could not be read is unknown and is omitted from the payload
+// (nil + omitempty) rather than sent as a fabricated number. The panel treats a
+// missing/zero reading as "unreported" and falls back to the capacity an
+// administrator configured for the node, while a sentinel such as -1 would be
+// stored as a real total and make the node look either exhausted or unlimited.
 type NodeHeartbeat struct {
 	Version         string  `json:"version"`
 	OS              string  `json:"os"`
 	Architecture    string  `json:"architecture"`
 	CPUThreads      int     `json:"cpuThreads"`
-	MemoryMB        int64   `json:"memoryMb"`
-	DiskMB          int64   `json:"diskMb"`
+	MemoryMB        *int64  `json:"memoryMb,omitempty"`
+	DiskMB          *int64  `json:"diskMb,omitempty"`
 	DockerStatus    string  `json:"dockerStatus,omitempty"`
 	RuntimeStatus   string  `json:"runtimeStatus"`
 	RuntimeProvider string  `json:"runtimeProvider"`

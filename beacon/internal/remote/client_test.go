@@ -2,6 +2,9 @@ package remote
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -98,6 +101,13 @@ func TestClientSuccess(t *testing.T) {
 		}
 		if r.Header.Get("Authorization") != "Bearer token" {
 			t.Fatalf("unexpected authorization header %q", r.Header.Get("Authorization"))
+		}
+		timestamp := r.Header.Get("X-Panel-Timestamp")
+		nonce := r.Header.Get("X-Panel-Nonce")
+		mac := hmac.New(sha256.New, []byte("token"))
+		_, _ = mac.Write([]byte(r.Method + "\n" + r.URL.RequestURI() + "\n" + timestamp + "\n" + nonce + "\n"))
+		if timestamp == "" || len(nonce) != 32 || !hmac.Equal([]byte(r.Header.Get("X-Panel-Signature")), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+			t.Fatal("request did not include a valid callback signature")
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"data": []map[string]any{{"uuid": "123e4567-e89b-12d3-a456-426614174000"}},
