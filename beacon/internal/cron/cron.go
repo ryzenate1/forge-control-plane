@@ -2,6 +2,9 @@ package cron
 
 import (
 	"context"
+	"fmt"
+	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -20,6 +23,7 @@ type Scheduler struct {
 	mu        sync.Mutex
 	running   bool
 	cancel    context.CancelFunc
+	jobWG     sync.WaitGroup
 }
 
 func NewScheduler(timezone string) (*Scheduler, error) {
@@ -52,8 +56,21 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	s.cancel = cancel
 	for _, j := range s.jobs {
 		job := j
-		_, err := s.scheduler.Every(job.Interval).Do(func() {
-			_ = job.RunFunc(ctx)
+		if job.Interval <= 0 || job.RunFunc == nil {
+			cancel()
+			return fmt.Errorf("cron job %q has an invalid interval or callback", job.Name)
+		}
+		_, err := s.scheduler.Every(job.Interval).SingletonMode().Do(func() {
+			s.jobWG.Add(1)
+			defer s.jobWG.Done()
+			defer func() {
+				if recovered := recover(); recovered != nil {
+					slog.Error("cron job panicked", "job", job.Name, "panic", recovered, "stack", string(debug.Stack()))
+				}
+			}()
+			if err := job.RunFunc(ctx); err != nil && ctx.Err() == nil {
+				slog.Warn("cron job failed", "job", job.Name, "error", err)
+			}
 		})
 		if err != nil {
 			cancel()
@@ -67,15 +84,35 @@ func (s *Scheduler) Start(ctx context.Context) error {
 
 func (s *Scheduler) Stop() {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if !s.running {
+		s.mu.Unlock()
 		return
 	}
 	s.scheduler.Stop()
-	if s.cancel != nil {
-		s.cancel()
-	}
+	cancel := s.cancel
 	s.running = false
+	s.mu.Unlock()
+
+	finished := make(chan struct{})
+	go func() {
+		s.jobWG.Wait()
+		close(finished)
+	}()
+	select {
+	case <-finished:
+	case <-time.After(30 * time.Second):
+		if cancel != nil {
+			cancel()
+		}
+		select {
+		case <-finished:
+		case <-time.After(5 * time.Second):
+			slog.Error("cron jobs did not stop after cancellation")
+		}
+	}
+	if cancel != nil {
+		cancel()
+	}
 }
 
 func (s *Scheduler) IsRunning() bool {
