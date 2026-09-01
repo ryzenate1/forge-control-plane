@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # GamePanel Forge Installation Script
-#
+# 
 # This script provides comprehensive installation and setup for
 # the GamePanel Forge control plane on Linux systems.
 #
@@ -193,7 +193,7 @@ check_root() {
 
 check_os() {
     log_step "Checking operating system"
-
+    
     if [ -f /etc/os-release ]; then
         . /etc/os-release
         OS_NAME="$NAME"
@@ -231,7 +231,7 @@ check_os() {
 
 check_docker() {
     log_step "Checking Docker installation"
-
+    
     if ! command -v docker &> /dev/null; then
         log_error "Docker is not installed"
         exit 1
@@ -239,7 +239,7 @@ check_docker() {
 
     local docker_version
     docker_version=$(docker --version | awk '{print $3}' | cut -d'.' -f1)
-
+    
     if [[ $docker_version -lt $MIN_DOCKER_VERSION ]]; then
         log_error "Docker version ${docker_version} is too old. Minimum required: ${MIN_DOCKER_VERSION}"
         exit 1
@@ -272,12 +272,12 @@ check_docker_compose() {
 
 check_resources() {
     log_step "Checking system resources"
-
+    
     # Check RAM
     local total_ram_kb
     total_ram_kb=$(grep MemTotal /proc/meminfo | awk '{print $2}')
     local total_ram_mb=$((total_ram_kb / 1024))
-
+    
     if [[ $total_ram_mb -lt $MIN_RAM_MB ]]; then
         log_error "Insufficient RAM: ${total_ram_mb}MB (minimum: ${MIN_RAM_MB}MB)"
         exit 1
@@ -287,7 +287,7 @@ check_resources() {
     # Check disk space (integer GB — df reports KiB; float output would break -lt)
     local disk_space_gb
     disk_space_gb=$(df / --output=size | tail -1 | awk '{printf "%d", $1 / 1024 / 1024}')
-
+    
     if [[ $disk_space_gb -lt $MIN_DISK_GB ]]; then
         log_error "Insufficient disk space: ${disk_space_gb}GB (minimum: ${MIN_DISK_GB}GB)"
         exit 1
@@ -297,7 +297,7 @@ check_resources() {
     # Check CPUs
     local cpu_count
     cpu_count=$(nproc --all)
-
+    
     if [[ $cpu_count -lt $MIN_CPUS ]]; then
         log_error "Insufficient CPUs: ${cpu_count} (minimum: ${MIN_CPUS})"
         exit 1
@@ -356,7 +356,7 @@ check_ports() {
 
 check_existing_installation() {
     log_step "Checking for existing installation"
-
+    
     if [ -d "$INSTALL_DIR" ] || [ -d "$DATA_DIR" ] || [ -d "$CONFIG_DIR" ]; then
         if [ "$FORCE_REINSTALL" = false ]; then
             log_warn "Existing installation detected"
@@ -420,12 +420,12 @@ gather_input() {
             log_error "FQDN is required for unattended installation (use --fqdn)"
             exit 1
         fi
-
+        
         if [ -z "$DEFAULT_ADMIN_EMAIL" ]; then
             log_error "Admin email is required for unattended installation (use --email)"
             exit 1
         fi
-
+        
         # No credential may arrive as a command-line argument. Take it from the
         # environment; if that is empty, fall back to a hidden prompt when a TTY
         # is attached, and fail closed when it is not.
@@ -439,7 +439,7 @@ gather_input() {
                 exit 1
             fi
         fi
-
+        
         if [ -z "$DEFAULT_DB_PASSWORD" ]; then
             if [ -t 0 ]; then
                 log_warn "GAMEPANEL_DB_PASSWORD is not set — prompting (input hidden)"
@@ -450,18 +450,18 @@ gather_input() {
                 exit 1
             fi
         fi
-
+        
         FQDN="$DEFAULT_FQDN"
         ADMIN_EMAIL="$DEFAULT_ADMIN_EMAIL"
         ADMIN_PASSWORD="$DEFAULT_ADMIN_PASSWORD"
         DB_PASSWORD="$DEFAULT_DB_PASSWORD"
-
+        
         return
     fi
 
     # Interactive mode
     echo
-
+    
     # Get FQDN (initialise defensively — these are unset under `set -u` otherwise)
     FQDN="${FQDN:-$DEFAULT_FQDN}"
     while [ -z "$FQDN" ]; do
@@ -499,17 +499,17 @@ gather_input() {
 # --- Installation Functions ---
 create_directories() {
     log_step "Creating directories"
-
+    
     mkdir -p "$INSTALL_DIR"
     mkdir -p "$DATA_DIR"
     mkdir -p "$CONFIG_DIR"
     mkdir -p "$LOG_DIR"
-
+    
     chmod 750 "$INSTALL_DIR"
     chmod 750 "$DATA_DIR"
     chmod 750 "$CONFIG_DIR"
     chmod 755 "$LOG_DIR"
-
+    
     log_info "Directories created"
 }
 
@@ -933,13 +933,13 @@ verify_installation() {
     # Test API connectivity (readiness, not just liveness)
     local api_health
     api_health=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/health/ready || echo "000")
-
+    
     if [[ "$api_health" != "200" ]]; then
         log_warn "API health check failed (HTTP $api_health)"
     else
         log_info "API health check passed"
     fi
-
+    
     # Test web connectivity
     local web_health
     web_health=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
@@ -964,7 +964,7 @@ verify_installation() {
 
 show_summary() {
     log_header "Installation Summary"
-
+    
     echo ""
     echo "GamePanel Forge has been installed successfully!"
     echo ""
@@ -1000,9 +1000,9 @@ show_summary() {
 # --- Main Installation Function ---
 main() {
     parse_arguments "$@"
-
+    
     log_header "GamePanel Forge Installation"
-
+    
     # Run pre-flight checks
     if [ "$SKIP_CHECKS" = false ]; then
         check_root
@@ -1015,10 +1015,10 @@ main() {
     else
         log_warn "Skipping pre-flight checks"
     fi
-
+    
     # Gather input
     gather_input
-
+    
     # Perform installation
     create_directories
     generate_configuration
@@ -1027,10 +1027,10 @@ main() {
     generate_nginx_config
     start_services
     verify_installation
-
+    
     # Show summary
     show_summary
-
+    
     log_header "Installation Complete"
 }
 
