@@ -8,6 +8,29 @@ import (
 	"github.com/docker/docker/api/types/mount"
 )
 
+func TestValidateDockerEndpoint(t *testing.T) {
+	for _, endpoint := range []string{
+		"",
+		"unix:///var/run/docker.sock",
+		"npipe:////./pipe/docker_engine",
+		"tcp://docker-proxy:2375",
+		"tcp://traefik-docker-proxy:2375",
+	} {
+		if err := validateDockerEndpoint(endpoint); err != nil {
+			t.Errorf("validateDockerEndpoint(%q) returned %v", endpoint, err)
+		}
+	}
+	for _, endpoint := range []string{
+		"tcp://127.0.0.1:2375",
+		"tcp://docker-proxy.evil:2375",
+		"https://docker.example",
+	} {
+		if err := validateDockerEndpoint(endpoint); err == nil {
+			t.Errorf("validateDockerEndpoint(%q) unexpectedly succeeded", endpoint)
+		}
+	}
+}
+
 func TestBuildContainerMountsUsesCanonicalRootBind(t *testing.T) {
 	root := t.TempDir()
 	customSource := t.TempDir()
@@ -23,10 +46,18 @@ func TestBuildContainerMountsUsesCanonicalRootBind(t *testing.T) {
 		t.Fatalf("expected two mounts, got %d", len(mounts))
 	}
 	canonical := mounts[0]
-	if canonical.Type != mount.TypeBind || canonical.Source != filepath.Clean(root) || canonical.Target != serverContainerRoot || canonical.ReadOnly {
+	resolvedRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if canonical.Type != mount.TypeBind || canonical.Source != resolvedRoot || canonical.Target != serverContainerRoot || canonical.ReadOnly {
 		t.Fatalf("unexpected canonical mount: %+v", canonical)
 	}
-	if mounts[1].Type != mount.TypeBind || mounts[1].Source != customSource || mounts[1].Target != "/mnt/custom" || !mounts[1].ReadOnly {
+	resolvedCustom, err := filepath.EvalSymlinks(customSource)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if mounts[1].Type != mount.TypeBind || mounts[1].Source != resolvedCustom || mounts[1].Target != "/mnt/custom" || !mounts[1].ReadOnly {
 		t.Fatalf("unexpected custom mount: %+v", mounts[1])
 	}
 }
