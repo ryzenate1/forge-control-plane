@@ -1,4 +1,4 @@
-// Fonts use Manrope (UI) + JetBrains Mono
+// Fonts follow the AGENTS.md convention: Manrope (UI) + JetBrains Mono
 // (technical values). They are wired through next/font so they are self-served
 // by the Next.js runtime (no external Google Fonts requests at page runtime).
 //
@@ -33,3 +33,4 @@ export const mono = JetBrains_Mono({
   display: "swap",
   variable: "--font-mono",
 });
+
