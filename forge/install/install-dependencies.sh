@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # GamePanel Forge Dependencies Installation Script
-#
+# 
 # This script installs all required dependencies for GamePanel Forge
 # on supported Linux distributions.
 # ============================================================
@@ -55,7 +55,7 @@ detect_os() {
         OS_NAME="unknown"
         OS_VERSION="unknown"
     fi
-
+    
     echo "$OS_NAME"
 }
 
@@ -75,9 +75,9 @@ pkg_rhel() {
 install_docker() {
     local os_name
     os_name=$(detect_os)
-
+    
     log_step "Installing Docker"
-
+    
     case "$os_name" in
         ubuntu|debian)
             install_docker_ubuntu_debian
@@ -90,13 +90,13 @@ install_docker() {
             exit 1
             ;;
     esac
-
+    
     # Verify Docker installation
     if ! command -v docker &> /dev/null; then
         log_error "Docker installation failed"
         exit 1
     fi
-
+    
     log_info "Docker installed successfully: $(docker --version)"
 }
 
@@ -137,16 +137,16 @@ install_docker_ubuntu_debian() {
 install_docker_centos_rhel() {
     # Remove old Docker versions
     yum remove -y docker docker-client docker-client-latest docker-common docker-latest docker-latest-logrotate docker-logrotate docker-engine || true
-
+    
     # Install required packages
     yum install -y yum-utils
-
+    
     # Add Docker repository
     yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-
+    
     # Install Docker Engine
     yum install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
-
+    
     # Start Docker
     systemctl start docker
     systemctl enable docker
@@ -155,13 +155,13 @@ install_docker_centos_rhel() {
 # --- Install Docker Compose ---
 install_docker_compose() {
     log_step "Installing Docker Compose"
-
+    
     # Check if Docker Compose is already installed
     if docker compose version &> /dev/null; then
         log_info "Docker Compose is already installed"
         return
     fi
-
+    
     # Install Docker Compose standalone (fallback)
     # Match the host arch: the hard-coded x86_64 asset 404s/fails on arm64.
     local compose_version="v2.24.5" compose_arch machine
@@ -174,23 +174,23 @@ install_docker_compose() {
     esac
     curl -SL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
-
+    
     # Verify installation
     if ! command -v docker-compose &> /dev/null; then
         log_error "Docker Compose installation failed"
         exit 1
     fi
-
+    
     log_info "Docker Compose installed successfully: $(docker-compose --version)"
 }
 
 # --- Install Git ---
 install_git() {
     log_step "Installing Git"
-
+    
     local os_name
     os_name=$(detect_os)
-
+    
     case "$os_name" in
         ubuntu|debian)
             export DEBIAN_FRONTEND=noninteractive
@@ -205,23 +205,23 @@ install_git() {
             exit 1
             ;;
     esac
-
+    
     # Verify Git installation
     if ! command -v git &> /dev/null; then
         log_error "Git installation failed"
         exit 1
     fi
-
+    
     log_info "Git installed successfully: $(git --version)"
 }
 
 # --- Install Other Dependencies ---
 install_dependencies() {
     log_step "Installing additional dependencies"
-
+    
     local os_name
     os_name=$(detect_os)
-
+    
     case "$os_name" in
         ubuntu|debian)
             export DEBIAN_FRONTEND=noninteractive
@@ -236,14 +236,14 @@ install_dependencies() {
             exit 1
             ;;
     esac
-
+    
     log_info "Additional dependencies installed"
 }
 
 # --- Configure Docker to Start on Boot ---
 configure_docker_autostart() {
     log_step "Configuring Docker to start on boot"
-
+    
     if command -v systemctl &> /dev/null; then
         systemctl enable docker
         systemctl start docker
@@ -281,28 +281,28 @@ main() {
     echo ""
     log_step "Starting GamePanel Forge dependencies installation"
     echo ""
-
+    
     # Detect OS
     local os_name
     os_name=$(detect_os)
     log_info "Detected OS: $os_name"
-
+    
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root or with sudo"
         exit 1
     fi
-
+    
     # Install dependencies
     install_dependencies
     install_git
     install_docker
     install_docker_compose
-
+    
     # Configure Docker
     configure_docker_autostart
     configure_docker_group
-
+    
     echo ""
     log_info "All dependencies installed successfully!"
     echo ""
