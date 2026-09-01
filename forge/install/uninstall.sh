@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 # GamePanel Forge Uninstallation Script
-#
+# 
 # This script removes GamePanel Forge and its components from the system.
 # ============================================================
 
@@ -260,14 +260,14 @@ remove_directories() {
 # --- Remove Configuration Files ---
 remove_config_files() {
     log_step "Removing configuration files"
-
+    
     # Remove systemd service files
     if [ -f /etc/systemd/system/gamepanel-api.service ]; then
         rm -f /etc/systemd/system/gamepanel-api.service
         systemctl daemon-reload || true
         log_info "Systemd service files removed"
     fi
-
+    
     # Remove cron jobs
     if crontab -l 2>/dev/null | grep -q gamepanel; then
         crontab -l 2>/dev/null | grep -v gamepanel | crontab - 2>/dev/null || true
@@ -328,16 +328,16 @@ main() {
     echo ""
     log_step "Starting GamePanel Forge uninstallation"
     echo ""
-
+    
     # Check if running as root
     if [[ $EUID -ne 0 ]]; then
         log_error "This script must be run as root or with sudo"
         exit 1
     fi
-
+    
     # Confirm uninstallation
     confirm_uninstall
-
+    
     # Perform uninstallation
     stop_services
     remove_containers
@@ -347,10 +347,10 @@ main() {
     remove_directories
     remove_config_files
     clean_docker_system
-
+    
     # Show summary
     show_summary
-
+    
     log_step "Uninstallation complete"
 }
 
