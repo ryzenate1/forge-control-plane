@@ -2,11 +2,10 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, Container, Globe, Layers, RefreshCw, Scale } from "lucide-react";
+import { Activity, Container, Globe, Layers, RefreshCw, Scale, Boxes, Network } from "lucide-react";
 import { fetchKubernetesNodes, fetchK8sPods, fetchK8sDeployments, fetchK8sServices, fetchK8sEvents, scaleK8sDeployment } from "@/lib/api/kubernetes";
-import { SectionHeader } from "./admin-ui";
+import { AdminPageLayout, AdminTabs, AdminSelect, AdminLoadingState, AdminErrorState, Btn, Card, CardHeader, EmptyState, Pill, SectionHeader } from "./admin-ui";
 import { useToast } from "@/components/ui/toast";
-import { cn } from "@/lib/utils";
 
 const TABS = [
   { id: "pods", label: "Pods", icon: Container },
@@ -36,104 +35,124 @@ export function AdminKubernetes() {
   const noK8s = nodesQ.isSuccess && nodes.length === 0;
 
   return (
-    <div className="mx-auto w-full max-w-[1280px] space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title="Kubernetes"
-        sub="Cluster workloads on nodes with DAEMON_RUNTIME_PROVIDER=kubernetes — pods, deployments, services, and events."
+        sub="Cluster workloads on nodes with the Kubernetes runtime — pods, deployments, services, and events."
+        info={{
+          title: "Kubernetes workloads",
+          triggerLabel: "About Kubernetes",
+          eyebrow: "Architecture & Semantics",
+          description: "Inspect Kubernetes workloads running on Beacon nodes that report the Kubernetes runtime.",
+          sections: [
+            {
+              title: "Node scope",
+              icon: Network,
+              content:
+                "Pick a node to scope pods, deployments, services and events, or leave automatic to use the first Kubernetes node. Nodes without the runtime never appear here.",
+            },
+            {
+              title: "Scaling deployments",
+              icon: Scale,
+              content:
+                "Deployment actions adjust desired replicas through the control plane. Counts refresh from the cluster — a scale that the cluster rejects surfaces as an error toast, not a silent count.",
+            },
+          ],
+        }}
         action={
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={nodeId ?? ""}
-              onChange={(e) => setNodeId(e.target.value || undefined)}
-              className="h-8 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-xs text-slate-200 outline-none focus:border-[var(--focus)]"
-            >
-              <option value="">Auto — first k8s node</option>
-              {nodes.map((n) => <option key={n.id} value={n.id}>{n.name} — {n.runtimeProvider}</option>)}
-            </select>
-            <button
-              type="button"
-              onClick={() => { void qc.invalidateQueries({ queryKey: ["k8s-nodes"] }); void qc.invalidateQueries({ queryKey: ["k8s-pods"] }); }}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-[var(--line)] bg-white/[0.03] px-3 py-1.5 text-xs text-slate-300 hover:text-white transition"
-            >
-              <RefreshCw size={12} /> Refresh
-            </button>
-            <span className="text-xs font-mono text-slate-400">{nodes.length} k8s nodes · {tab}</span>
+            <div className="min-w-48">
+              <AdminSelect
+                value={nodeId ?? ""}
+                onChange={(v) => setNodeId(v || undefined)}
+                options={nodes.map((n) => ({ value: n.id, label: `${n.name} — ${n.runtimeProvider}` }))}
+                placeholder="Auto — first k8s node"
+              />
+            </div>
+            <Btn size="sm" tone="ghost" onClick={() => { void qc.invalidateQueries({ queryKey: ["k8s-nodes"] }); void qc.invalidateQueries({ queryKey: ["k8s-pods"] }); }}>
+              <RefreshCw size={14} /> Refresh
+            </Btn>
+            {nodes.length > 0 ? <Pill tone="neutral">{nodes.length} nodes</Pill> : null}
           </div>
         }
       />
 
-      {nodesQ.isLoading ? <div className="py-12 text-center text-sm text-[var(--text-subtle)]">Loading clusters…</div> : noK8s ? (
-        <div className="mt-8 rounded-xl border border-dashed border-[var(--line)] bg-white/[0.02] p-8 text-center">
-          <div className="mx-auto max-w-md">
-            <div className="text-sm font-medium">No Kubernetes nodes</div>
-            <div className="mt-1 text-xs leading-5 text-[var(--text-subtle)]">Add a node with <code className="font-mono">DAEMON_RUNTIME_PROVIDER=kubernetes</code> and valid <code className="font-mono">KUBECONFIG</code> or in-cluster auth.</div>
-            <div className="mt-4 rounded-lg bg-black/20 p-3 font-mono text-xs text-left">DAEMON_RUNTIME_PROVIDER=kubernetes KUBECONFIG=/path/to/kubeconfig ./daemon</div>
-          </div>
-        </div>
+      {nodesQ.isLoading ? <AdminLoadingState label="Loading clusters…" /> : nodesQ.isError ? <AdminErrorState message={nodesQ.error instanceof Error ? nodesQ.error.message : "Could not load Kubernetes nodes."} retry={() => void nodesQ.refetch()} /> : noK8s ? (
+        <EmptyState icon={Boxes} title="No Kubernetes nodes" message="Add a node with the Kubernetes runtime provider and valid kubeconfig or in-cluster auth." />
       ) : (
         <>
-          <div className="mt-6 flex gap-1 overflow-x-auto border-b border-[var(--line)] pb-px">
-            {TABS.map((t) => (
-              <button key={t.id} onClick={() => setTab(t.id)} className={cn("inline-flex items-center gap-1.5 whitespace-nowrap border-b-2 px-3 py-2.5 text-sm font-medium", tab === t.id ? "border-[var(--text)] text-white" : "border-transparent text-[var(--text-subtle)] hover:text-white")} type="button">
-                <t.icon size={12} /> {t.label}
-              </button>
-            ))}
-          </div>
+          <AdminTabs tabs={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))} active={tab} onChange={(id) => setTab(id as typeof tab)} label="Kubernetes sections" />
 
-          <div className="mt-6">
-            {tab === "pods" && (
-              <div className="overflow-hidden rounded-xl border border-[var(--line)]">
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5">Status</th><th className="px-4 py-2.5">Node</th><th className="px-4 py-2.5">Restarts</th></tr></thead>
-                    <tbody className="divide-y divide-[var(--line)]">
-                      {podsQ.isLoading ? <tr><td colSpan={4} className="py-8 text-center text-sm text-[var(--text-subtle)]">Loading…</td></tr> : (podsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-[var(--text-subtle)]">No pods.</td></tr> : podsQ.data!.map((p) => (
-                        <tr key={p.name} className="hover:bg-white/[0.02]"><td className="px-4 py-3 font-mono text-xs">{p.name}</td><td className="px-4 py-3"><span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wider", p.status === "Running" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-[var(--line)] bg-white/[0.03] text-[var(--text-subtle)]")}>{p.status}</span></td><td className="px-4 py-3 text-xs">{p.nodeName || "—"}</td><td className="px-4 py-3 font-mono text-xs">{p.restartCount}</td></tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-            {tab === "deployments" && (
-              <div className="overflow-hidden rounded-xl border border-[var(--line)]">
+          {tab === "pods" && (
+            <Card>
+              <CardHeader title="Pods" icon={Container} />
+              {podsQ.isLoading ? <AdminLoadingState label="Loading pods…" /> : podsQ.isError ? <div className="p-4"><AdminErrorState message={podsQ.error instanceof Error ? podsQ.error.message : "Could not load pods."} retry={() => void podsQ.refetch()} /></div> : (podsQ.data ?? []).length === 0 ? <EmptyState icon={Container} message="No pods." /> : (
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5">Name</th><th className="px-4 py-2.5">Image</th><th className="px-4 py-2.5">Replicas</th><th className="px-4 py-2.5">Actions</th></tr></thead>
+                  <thead className="text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Status</th><th className="px-4 py-2.5 font-medium">Node</th><th className="px-4 py-2.5 font-medium">Restarts</th></tr></thead>
                   <tbody className="divide-y divide-[var(--line)]">
-                    {(depsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-[var(--text-subtle)]">No deployments.</td></tr> : depsQ.data!.map((d) => (
-                      <tr key={d.name} className="hover:bg-white/[0.02]"><td className="px-4 py-3 font-mono text-xs">{d.name}</td><td className="px-4 py-3 font-mono text-xs truncate max-w-[240px]">{d.image || "—"}</td><td className="px-4 py-3 font-mono text-xs">{d.readyReplicas}/{d.replicas}</td><td className="px-4 py-3"><div className="flex gap-1"><button onClick={() => scaleMut.mutate({ name: d.name, replicas: Math.max(0, d.replicas - 1) })} className="rounded-lg border border-[var(--line)] px-2 py-1 text-xs">-1</button><button onClick={() => scaleMut.mutate({ name: d.name, replicas: d.replicas + 1 })} className="rounded-lg bg-white px-2 py-1 text-xs font-medium text-slate-900"><Scale size={10} className="inline" /> +1</button></div></td></tr>
+                    {podsQ.data!.map((p) => (
+                      <tr key={p.name} className="hover:bg-[var(--surface-hover)]"><td className="px-4 py-3 font-mono text-xs">{p.name}</td><td className="px-4 py-3"><Pill tone={p.status === "Running" ? "green" : "neutral"}>{p.status}</Pill></td><td className="px-4 py-3 text-xs">{p.nodeName || "—"}</td><td className="px-4 py-3 font-mono text-xs">{p.restartCount}</td></tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            )}
-            {tab === "services" && (
-              <div className="overflow-hidden rounded-xl border border-[var(--line)]">
+              )}
+            </Card>
+          )}
+          {tab === "deployments" && (
+            <Card>
+              <CardHeader title="Deployments" icon={Layers} />
+              {depsQ.isLoading ? <AdminLoadingState label="Loading deployments…" /> : depsQ.isError ? <div className="p-4"><AdminErrorState message={depsQ.error instanceof Error ? depsQ.error.message : "Could not load deployments."} retry={() => void depsQ.refetch()} /></div> : (depsQ.data ?? []).length === 0 ? <EmptyState icon={Layers} message="No deployments." /> : (
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5">Name</th><th className="px-4 py-2.5">Type</th><th className="px-4 py-2.5">Cluster IP</th><th className="px-4 py-2.5">Ports</th></tr></thead>
+                  <thead className="text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Image</th><th className="px-4 py-2.5 font-medium">Replicas</th><th className="px-4 py-2.5 font-medium">Actions</th></tr></thead>
                   <tbody className="divide-y divide-[var(--line)]">
-                    {(svcsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-[var(--text-subtle)]">No services.</td></tr> : svcsQ.data!.map((s) => (
-                      <tr key={s.name} className="hover:bg-white/[0.02]"><td className="px-4 py-3 font-mono text-xs">{s.name}</td><td className="px-4 py-3"><span className="rounded-full border border-[var(--line)] bg-white/[0.03] px-2 py-0.5 text-[11px]">{s.type}</span></td><td className="px-4 py-3 font-mono text-xs">{s.clusterIp}</td><td className="px-4 py-3 text-xs">{s.ports.join(", ") || "—"}</td></tr>
+                    {depsQ.data!.map((d) => (
+                      <tr key={d.name} className="hover:bg-[var(--surface-hover)]"><td className="px-4 py-3 font-mono text-xs">{d.name}</td><td className="px-4 py-3 font-mono text-xs truncate max-w-[240px]">{d.image || "—"}</td><td className="px-4 py-3 font-mono text-xs">{d.readyReplicas}/{d.replicas}</td><td className="px-4 py-3"><div className="flex gap-1"><Btn size="sm" tone="ghost" onClick={() => scaleMut.mutate({ name: d.name, replicas: Math.max(0, d.replicas - 1) })}>-1</Btn><Btn size="sm" tone="primary" onClick={() => scaleMut.mutate({ name: d.name, replicas: d.replicas + 1 })}><Scale size={12} /> +1</Btn></div></td></tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            )}
-            {tab === "events" && (
-              <div className="overflow-hidden rounded-xl border border-[var(--line)]">
+              )}
+            </Card>
+          )}
+          {tab === "services" && (
+            <Card>
+              <CardHeader title="Services" icon={Globe} />
+              {svcsQ.isLoading ? <AdminLoadingState label="Loading services…" /> : svcsQ.isError ? <div className="p-4"><AdminErrorState message={svcsQ.error instanceof Error ? svcsQ.error.message : "Could not load services."} retry={() => void svcsQ.refetch()} /></div> : (svcsQ.data ?? []).length === 0 ? <EmptyState icon={Globe} message="No services." /> : (
+              <div className="overflow-x-auto">
                 <table className="w-full text-sm">
-                  <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5">Type</th><th className="px-4 py-2.5">Reason</th><th className="px-4 py-2.5">Message</th></tr></thead>
+                  <thead className="text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Name</th><th className="px-4 py-2.5 font-medium">Type</th><th className="px-4 py-2.5 font-medium">Cluster IP</th><th className="px-4 py-2.5 font-medium">Ports</th></tr></thead>
                   <tbody className="divide-y divide-[var(--line)]">
-                    {(evtsQ.data ?? []).slice(0, 50).length === 0 ? <tr><td colSpan={3} className="py-8 text-center text-sm text-[var(--text-subtle)]">No events.</td></tr> : evtsQ.data!.slice(0, 50).map((e, i) => (
-                      <tr key={i} className="hover:bg-white/[0.02]"><td className="px-4 py-3"><span className={cn("rounded-full border px-2 py-0.5 text-[11px] font-semibold", e.type === "Warning" ? "border-red-500/30 bg-red-500/10 text-red-300" : "border-[var(--line)] bg-white/[0.03]")}>{e.type}</span></td><td className="px-4 py-3 text-xs">{e.reason}</td><td className="px-4 py-3 text-xs line-clamp-2 max-w-[400px]">{e.message}</td></tr>
+                    {svcsQ.data!.map((s) => (
+                      <tr key={s.name} className="hover:bg-[var(--surface-hover)]"><td className="px-4 py-3 font-mono text-xs">{s.name}</td><td className="px-4 py-3"><Pill tone="neutral">{s.type}</Pill></td><td className="px-4 py-3 font-mono text-xs">{s.clusterIp}</td><td className="px-4 py-3 text-xs">{s.ports.join(", ") || "—"}</td></tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            )}
-          </div>
+              )}
+            </Card>
+          )}
+          {tab === "events" && (
+            <Card>
+              <CardHeader title="Events" icon={Activity} />
+              {evtsQ.isLoading ? <AdminLoadingState label="Loading events…" /> : evtsQ.isError ? <div className="p-4"><AdminErrorState message={evtsQ.error instanceof Error ? evtsQ.error.message : "Could not load events."} retry={() => void evtsQ.refetch()} /></div> : (evtsQ.data ?? []).slice(0, 50).length === 0 ? <EmptyState icon={Activity} message="No events." /> : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead className="text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Type</th><th className="px-4 py-2.5 font-medium">Reason</th><th className="px-4 py-2.5 font-medium">Message</th></tr></thead>
+                  <tbody className="divide-y divide-[var(--line)]">
+                    {evtsQ.data!.slice(0, 50).map((e, i) => (
+                      <tr key={i} className="hover:bg-[var(--surface-hover)]"><td className="px-4 py-3"><Pill tone={e.type === "Warning" ? "red" : "neutral"}>{e.type}</Pill></td><td className="px-4 py-3 text-xs">{e.reason}</td><td className="px-4 py-3 text-xs line-clamp-2 max-w-[400px]">{e.message}</td></tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              )}
+            </Card>
+          )}
         </>
       )}
-    </div>
+    </AdminPageLayout>
   );
 }
