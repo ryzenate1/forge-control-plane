@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -90,8 +91,8 @@ func TestS3DownloadRejectsChecksumMismatchAndCleansStaging(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	client := &mockS3{getBody: []byte("archive"), getMetadata: map[string]string{checksumMetadataKey: "wrong"}}
-	adapter := &S3Backup{config: &S3Config{Bucket: "bucket"}, client: client, local: local}
+	client := &mockS3{getBody: []byte("archive"), getMetadata: map[string]string{checksumMetadataKey: strings.Repeat("0", 64)}}
+	adapter := &S3Backup{config: &S3Config{Bucket: "bucket"}, client: client, local: local, diskFreeFn: unlimitedDiskFn}
 	_, err = adapter.Download("server-one", "backup.zip")
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("expected checksum mismatch, got %v", err)
@@ -102,6 +103,30 @@ func TestS3DownloadRejectsChecksumMismatchAndCleansStaging(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("failed download left staging files: %+v", entries)
+	}
+}
+
+func TestS3DownloadAbortsOnInsufficientDiskSpace(t *testing.T) {
+	base := t.TempDir()
+	local, err := NewLocalBackup(filepath.Join(base, "staging"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &mockS3{getBody: []byte("archive"), getMetadata: map[string]string{checksumMetadataKey: strings.Repeat("0", 64)}}
+	adapter := &S3Backup{
+		config: &S3Config{Bucket: "bucket"}, client: client, local: local,
+		diskFreeFn: func(string) (int64, error) { return 0, nil },
+	}
+	_, err = adapter.Download("server-one", "backup.zip")
+	if err == nil || !strings.Contains(err.Error(), "insufficient free disk space") {
+		t.Fatalf("expected insufficient disk space error, got %v", err)
+	}
+	entries, readErr := os.ReadDir(filepath.Join(base, "staging", "server-one"))
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("aborted download left staging files: %+v", entries)
 	}
 }
 
@@ -133,6 +158,8 @@ type mockUploader struct {
 	failures int
 	metadata map[string]string
 }
+
+func unlimitedDiskFn(string) (int64, error) { return int64(1 << 62), nil }
 
 func (m *mockUploader) Upload(_ context.Context, input *s3.PutObjectInput, _ ...func(*manager.Uploader)) (*manager.UploadOutput, error) {
 	m.calls++

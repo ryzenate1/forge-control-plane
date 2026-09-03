@@ -42,16 +42,16 @@ type ProgressFunc func(progress BackupProgress)
 
 // BackupInfo contains metadata about a completed backup.
 type BackupInfo struct {
-	UUID        string      `json:"uuid"`
-	Name        string      `json:"name"`
-	Checksum    string      `json:"checksum"`
-	Size        int64       `json:"size"`
-	Status      string      `json:"status"`
-	Created     time.Time   `json:"created"`
-	CompletedAt time.Time   `json:"completedAt"`
-	Adapter     AdapterType `json:"adapter"`
-	RemotePath  string      `json:"remotePath,omitempty"`
-	IgnoredFiles []string   `json:"ignored_files,omitempty"`
+	UUID         string      `json:"uuid"`
+	Name         string      `json:"name"`
+	Checksum     string      `json:"checksum"`
+	Size         int64       `json:"size"`
+	Status       string      `json:"status"`
+	Created      time.Time   `json:"created"`
+	CompletedAt  time.Time   `json:"completedAt"`
+	Adapter      AdapterType `json:"adapter"`
+	RemotePath   string      `json:"remotePath,omitempty"`
+	IgnoredFiles []string    `json:"ignored_files,omitempty"`
 }
 
 // BackupInterface stores backups by a validated server namespace. The
@@ -62,7 +62,7 @@ type BackupInterface interface {
 	List(backupDir string) ([]BackupInfo, error)
 	Get(backupDir, name string) (*BackupInfo, error)
 	Delete(backupDir, name string) error
-	Restore(ctx context.Context, backupDir, name, serverRoot string, truncate bool) error
+	Restore(ctx context.Context, backupDir, name, serverRoot string, truncate bool, paths []string) error
 	Download(backupDir, name string) (io.ReadCloser, error)
 	Type() AdapterType
 	SetProgressCallback(fn ProgressFunc)

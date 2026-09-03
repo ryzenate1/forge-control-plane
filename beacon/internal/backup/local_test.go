@@ -64,7 +64,7 @@ func TestLocalBackupLifecycleAndRestore(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(serverRoot, "new.txt"), []byte("remove on restore"), 0o640); err != nil {
 		t.Fatal(err)
 	}
-	if err := adapter.Restore(context.Background(), "server-one", "backup-one.zip", serverRoot, true); err != nil {
+	if err := adapter.Restore(context.Background(), "server-one", "backup-one.zip", serverRoot, true, nil); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := os.ReadFile(filepath.Join(serverRoot, "world", "level.dat"))
@@ -118,7 +118,7 @@ func TestLocalRestoreWithoutTruncation(t *testing.T) {
 	}
 
 	// Restore with truncate = false
-	if err := adapter.Restore(context.Background(), "server-one", created.Name, serverRoot, false); err != nil {
+	if err := adapter.Restore(context.Background(), "server-one", created.Name, serverRoot, false, nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -132,6 +132,94 @@ func TestLocalRestoreWithoutTruncation(t *testing.T) {
 	body, err = os.ReadFile(filepath.Join(serverRoot, "survivor.txt"))
 	if err != nil || string(body) != "i will survive" {
 		t.Fatalf("survivor file was lost or corrupted: %q, %v", body, err)
+	}
+}
+
+func TestLocalRestoreWithPathsRestoresOnlyListedPaths(t *testing.T) {
+	base := t.TempDir()
+	serverRoot := filepath.Join(base, "servers", "server-one")
+	backupRoot := filepath.Join(base, "backups")
+	for _, dir := range []string{"dir", "world"} {
+		if err := os.MkdirAll(filepath.Join(serverRoot, dir), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	files := map[string]string{
+		"a.txt":           "a-v1",
+		"dir/b.txt":       "b-v1",
+		"dir/c.txt":       "c-v1",
+		"world/level.dat": "w-v1",
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(serverRoot, name), []byte(body), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	adapter, err := NewLocalBackup(backupRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := adapter.Create(context.Background(), serverRoot, "server-one", "backup-one.zip", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	// Mutate live data after the archive exists; add a file that is not in it.
+	live := map[string]string{
+		"a.txt":           "a-v2",
+		"dir/b.txt":       "b-v2",
+		"dir/c.txt":       "c-v2",
+		"world/level.dat": "w-v2",
+	}
+	for name, body := range live {
+		if err := os.WriteFile(filepath.Join(serverRoot, name), []byte(body), 0o640); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(serverRoot, "world", "other.txt"), []byte("post-archive"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+
+	// Targeted restore of "dir" — even with truncate=true the swap must not run.
+	if err := adapter.Restore(context.Background(), "server-one", "backup-one.zip", serverRoot, true, []string{"dir"}); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(serverRoot, "dir", "b.txt")); err != nil || string(body) != "b-v1" {
+		t.Fatalf("dir/b.txt not restored: %q, %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(serverRoot, "dir", "c.txt")); err != nil || string(body) != "c-v1" {
+		t.Fatalf("dir/c.txt not restored: %q, %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(serverRoot, "a.txt")); err != nil || string(body) != "a-v2" {
+		t.Fatalf("a.txt was touched by targeted restore: %q, %v", body, err)
+	}
+	if body, err := os.ReadFile(filepath.Join(serverRoot, "world", "level.dat")); err != nil || string(body) != "w-v2" {
+		t.Fatalf("world/level.dat was touched by targeted restore: %q, %v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(serverRoot, "world", "other.txt")); err != nil {
+		t.Fatalf("post-archive file was lost by targeted restore: %v", err)
+	}
+
+	// Targeted restore of a file deep in the tree restores its ancestors.
+	if err := adapter.Restore(context.Background(), "server-one", "backup-one.zip", serverRoot, false, []string{"world/level.dat"}); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(filepath.Join(serverRoot, "world", "level.dat")); err != nil || string(body) != "w-v1" {
+		t.Fatalf("world/level.dat not restored: %q, %v", body, err)
+	}
+	if _, err := os.Stat(filepath.Join(serverRoot, "world", "other.txt")); err != nil {
+		t.Fatalf("unlisted file was removed by targeted restore: %v", err)
+	}
+
+	// Malicious or unmatchable paths must be rejected, never extracted.
+	for _, paths := range [][]string{
+		{"../escape"},
+		{"/absolute"},
+		{`dir\evil`},
+		{"nonexistent"},
+	} {
+		if err := adapter.Restore(context.Background(), "server-one", "backup-one.zip", serverRoot, false, paths); err == nil {
+			t.Fatalf("restore with paths %v unexpectedly succeeded", paths)
+		}
 	}
 }
 
@@ -165,7 +253,7 @@ func TestLocalRestoreRejectsMaliciousArchivesAndPreservesLiveData(t *testing.T) 
 			if err := writeTestZip(archivePath, entries); err != nil {
 				t.Fatal(err)
 			}
-			if err := adapter.Restore(context.Background(), "server-one", "malicious.zip", serverRoot, true); err == nil {
+			if err := adapter.Restore(context.Background(), "server-one", "malicious.zip", serverRoot, true, nil); err == nil {
 				t.Fatal("malicious archive restore unexpectedly succeeded")
 			}
 			body, err := os.ReadFile(livePath)
@@ -207,7 +295,7 @@ func TestLocalRestoreChecksumMismatchPreservesLiveData(t *testing.T) {
 	if writeErr != nil || closeErr != nil {
 		t.Fatalf("tamper archive: %v, %v", writeErr, closeErr)
 	}
-	err = adapter.Restore(context.Background(), "server-one", "backup.zip", serverRoot, true)
+	err = adapter.Restore(context.Background(), "server-one", "backup.zip", serverRoot, true, nil)
 	if !errors.Is(err, ErrChecksumMismatch) {
 		t.Fatalf("expected checksum mismatch, got %v", err)
 	}

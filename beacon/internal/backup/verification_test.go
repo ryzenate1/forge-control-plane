@@ -4,9 +4,9 @@ import (
 	"context"
 	"testing"
 
+	"gamepanel/beacon/internal/backup"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gamepanel/beacon/internal/backup"
 )
 
 func TestVerifyBackup(t *testing.T) {

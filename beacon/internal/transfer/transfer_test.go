@@ -87,9 +87,9 @@ func TestStreamToTargetRejectsInvalidResumeOffset(t *testing.T) {
 	}
 }
 
-func TestStartRejectsUnsupportedResume(t *testing.T) {
+func TestLegacyStartDirectsResumeToProtocolV1(t *testing.T) {
 	_, err := NewManager().Start(context.Background(), transferTestServerID, "source", "target", t.TempDir(), "http://example.invalid", "token", 1)
-	if err == nil || !strings.Contains(err.Error(), "not supported") {
+	if err == nil || !strings.Contains(err.Error(), "protocol v1") {
 		t.Fatalf("expected non-zero resume to be rejected, got %v", err)
 	}
 }

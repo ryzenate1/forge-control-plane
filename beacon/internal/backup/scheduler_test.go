@@ -2,12 +2,13 @@ package backup_test
 
 import (
 	"context"
+	"os"
 	"testing"
 	"time"
 
+	"gamepanel/beacon/internal/backup"
 	"github.com/go-co-op/gocron"
 	"github.com/stretchr/testify/assert"
-	"gamepanel/beacon/internal/backup"
 )
 
 func TestScheduler_ScheduleAndCancel(t *testing.T) {
@@ -19,7 +20,7 @@ func TestScheduler_ScheduleAndCancel(t *testing.T) {
 	scheduler.RegisterAdapter("mock", adapter)
 
 	serverID := "test-server"
-	err := scheduler.Schedule(serverID, "0 0 * * *", "mock")
+	err := scheduler.Schedule(serverID, t.TempDir(), "0 0 * * *", "mock")
 	assert.NoError(t, err)
 
 	err = scheduler.Cancel(serverID)
@@ -35,7 +36,7 @@ func TestScheduler_RunBackup(t *testing.T) {
 	scheduler.RegisterAdapter("mock", adapter)
 
 	ctx := context.Background()
-	err := scheduler.RunBackup(ctx, "test-server", "mock")
+	err := scheduler.RunBackup(ctx, "test-server", t.TempDir(), "mock")
 	assert.NoError(t, err)
 }
 
@@ -45,10 +46,10 @@ func TestScheduler_UnknownAdapter(t *testing.T) {
 
 	scheduler := backup.NewScheduler(nil, cron)
 
-	err := scheduler.Schedule("s1", "0 0 * * *", "nonexistent")
+	err := scheduler.Schedule("s1", t.TempDir(), "0 0 * * *", "nonexistent")
 	assert.Error(t, err)
 
-	err = scheduler.RunBackup(context.Background(), "s1", "nonexistent")
+	err = scheduler.RunBackup(context.Background(), "s1", t.TempDir(), "nonexistent")
 	assert.Error(t, err)
 
 	err = scheduler.Cancel("s1")
@@ -63,9 +64,20 @@ func TestScheduler_DuplicateSchedule(t *testing.T) {
 	scheduler := backup.NewScheduler(nil, cron)
 	scheduler.RegisterAdapter("mock", adapter)
 
-	err := scheduler.Schedule("s1", "0 0 * * *", "mock")
+	root := t.TempDir()
+	err := scheduler.Schedule("s1", root, "0 0 * * *", "mock")
 	assert.NoError(t, err)
 
-	err = scheduler.Schedule("s1", "0 30 * * *", "mock")
+	err = scheduler.Schedule("s1", root, "0 30 * * *", "mock")
+	assert.Error(t, err)
+}
+
+func TestSchedulerRejectsMissingServerRoot(t *testing.T) {
+	cron := gocron.NewScheduler(time.UTC)
+	defer cron.Stop()
+	scheduler := backup.NewScheduler(nil, cron)
+	scheduler.RegisterAdapter("mock", backup.NewMockBackup())
+
+	err := scheduler.Schedule("s1", t.TempDir()+string(os.PathSeparator)+"missing", "0 0 * * *", "mock")
 	assert.Error(t, err)
 }

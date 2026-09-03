@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
+	"gamepanel/beacon/internal/backup"
 	_ "github.com/mattn/go-sqlite3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"gamepanel/beacon/internal/backup"
 )
 
 func TestSQLiteStore(t *testing.T) {
