@@ -221,6 +221,7 @@ export function AdminCatalog() {
   const qc = useQueryClient();
   const [search, setSearch] = useState("");
   const [category, setCategory] = useState("all");
+  const [runtime, setRuntime] = useState("all");
   const [sort, setSort] = useState<SortKey>("name-asc");
   const [view, setView] = useState<ViewMode>("cards");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -252,6 +253,7 @@ export function AdminCatalog() {
   const filtered = useMemo(() => {
     const s = search.trim().toLowerCase();
     let out = entries.filter((e) => {
+      if (runtime === "kubernetes") return false;
       if (category !== "all" && groupIdFor(e) !== category) return false;
       if (!s) return true;
       return (
@@ -273,7 +275,7 @@ export function AdminCatalog() {
       }
     });
     return out;
-  }, [entries, search, category, sort]);
+  }, [entries, search, category, runtime, sort]);
 
   const visibleGroups = useMemo(() => {
     const keys = new Set(filtered.map((e) => e.key));
@@ -309,7 +311,7 @@ export function AdminCatalog() {
 
       <SectionHeader
         title="Service Catalog"
-        sub="Provision supported databases, caches, queues, and storage services."
+        sub="Provision managed services (databases, caches, queues) from the catalog"
         info={adminPageGuides.catalog}
         action={<div className="flex flex-wrap items-center gap-2">
             <Btn size="sm" tone="ghost" onClick={() => { void catalogQ.refetch(); void retentionQ.refetch(); }}>
@@ -333,7 +335,7 @@ export function AdminCatalog() {
             className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-9 pr-3 text-xs text-slate-200 outline-none transition placeholder:text-slate-500 hover:border-[var(--line-strong)] focus:border-[var(--brand)]"
           />
         </div>
-        <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:flex xl:items-center">
+        <div className="grid grid-cols-1 gap-2 sm:grid-cols-3 xl:flex xl:items-center">
           <label className="block xl:w-40">
             <span className="mb-1 block text-[10px] leading-none text-slate-500">
               Category <span className="text-slate-600">- All</span>
@@ -344,6 +346,19 @@ export function AdminCatalog() {
                 {groups.map((g) => (
                   <option key={g.meta.id} value={g.meta.id}>{g.meta.title}</option>
                 ))}
+              </select>
+              <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500" />
+            </span>
+          </label>
+          <label className="block xl:w-40">
+            <span className="mb-1 block text-[10px] leading-none text-slate-500">
+              Provider / Runtime <span className="text-slate-600">- All</span>
+            </span>
+            <span className="relative block">
+              <select aria-label="Provider or runtime" className={selectClass} value={runtime} onChange={(e) => setRuntime(e.target.value)}>
+                <option value="all">All</option>
+                <option value="docker">Docker</option>
+                <option value="kubernetes">Kubernetes</option>
               </select>
               <ChevronDown size={14} className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-slate-500" />
             </span>
@@ -402,9 +417,16 @@ export function AdminCatalog() {
       <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
         <p className="pt-0.5 text-xs text-slate-400">
           {filtered.length} service{filtered.length === 1 ? "" : "s"}
-          {search || category !== "all" ? ` · filtered from ${entries.length}` : ""}
+          {search || category !== "all" || runtime !== "all" ? ` · filtered from ${entries.length}` : ""}
         </p>
-        <p className="max-w-xl text-right text-[11px] leading-5 text-text-muted">Versions and providers reflect the current catalog.</p>
+        <div className="flex items-start justify-end gap-2 text-right">
+          <Info size={14} className="mt-0.5 shrink-0 text-slate-500" />
+          <p className="max-w-xl text-[11px] leading-5 text-slate-500">
+            Catalog entries are provisioning templates and capabilities from your Forge backend.
+            <br />
+            Available versions and providers are fetched in real-time from the control plane.
+          </p>
+        </div>
       </div>
 
       {/* Body */}
@@ -415,9 +437,11 @@ export function AdminCatalog() {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={Package}
-          title={search || category !== "all" ? "No matches" : "Catalog empty"}
+          title={runtime === "kubernetes" ? "Kubernetes not yet supported" : search || category !== "all" || runtime !== "all" ? "No matches" : "Catalog empty"}
           message={
-            search || category !== "all"
+            runtime === "kubernetes"
+              ? "The catalog provisions Docker workloads only. Kubernetes scheduling is on the roadmap — switch the runtime filter back to Docker."
+              : search || category !== "all" || runtime !== "all"
                 ? "No services match the current filters."
                 : "No catalog entries — seed the catalog via migrations or the admin seeder."
           }
@@ -624,7 +648,7 @@ function CatalogDetailDrawer({ entryKey, onClose, onProvision }: { entryKey: str
           />
 
           <Card className="border border-[var(--line)] bg-[var(--surface)]">
-            <CardHeader title="Provisioned instances" icon={Database} action={<span className="text-xs text-[var(--text-subtle)]">{instancesQ.data?.length ?? 0}</span>} />
+            <CardHeader title={`Instances — GET /catalog/${entryKey}/instances`} icon={Database} action={<span className="text-xs text-[var(--text-subtle)]">{instancesQ.data?.length ?? 0}</span>} />
             {instancesQ.isLoading ? <AdminLoadingState label="Loading instances…" /> : instancesQ.isError ? <div className="p-3 text-xs text-red-300">{(instancesQ.error as Error).message}</div> : (instancesQ.data?.length ?? 0) === 0 ? <EmptyState icon={Server} title="No instances" message="No provisioned instances for this entry yet." /> : (
               <div className="divide-y divide-[var(--line)]">
                 {(instancesQ.data ?? []).map((inst) => (
@@ -640,6 +664,8 @@ function CatalogDetailDrawer({ entryKey, onClose, onProvision }: { entryKey: str
               </div>
             )}
           </Card>
+
+          <pre className="overflow-auto rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] p-3 text-xs leading-5 text-[var(--text-subtle)]">{JSON.stringify(entryQ.data, null, 2)}</pre>
         </div>
       ) : null}
     </Modal>
@@ -1028,7 +1054,9 @@ function ProvisionModal({ entry, onClose, onDone }: { entry: CatalogEntry; onClo
                   />
                 </label>
                 <WizardNote>
-                  When set, Forge adds the service connection variables to this environment automatically. Leave blank to provision a standalone instance.
+                  When set, the provisioned service attaches its connection variables to this environment automatically (
+                  <code className="font-mono text-[11px] text-slate-300">POST /catalog/:key/instances/:id/attach</code>).
+                  Leave blank to provision a standalone instance.
                 </WizardNote>
               </WizardSection>
 
@@ -1313,7 +1341,7 @@ function RetentionCard({ policies, onRefresh }: { policies: import("@/lib/api/ca
 
   return (
     <Card className="border border-[var(--line)] bg-[var(--surface)]">
-      <CardHeader title="Backup retention" icon={Clock} action={<Btn size="sm" tone="ghost" onClick={onRefresh}><RefreshCw size={12} /> Reload</Btn>} />
+      <CardHeader title="Backup retention — GET /catalog/backups/retention" icon={Clock} action={<Btn size="sm" tone="ghost" onClick={onRefresh}><RefreshCw size={12} /> Reload</Btn>} />
       {policies.length === 0 ? (
         <EmptyState icon={Clock} title="No retention policies" message="No per-kind backup retention yet. Create one per catalog kind (e.g. postgres, redis)." />
       ) : (
