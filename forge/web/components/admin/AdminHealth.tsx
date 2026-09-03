@@ -27,7 +27,6 @@ import {
   SystemHealthOperationalIcon,
   SystemHealthAlertIcon,
 } from "@/components/ui/forge-icons";
-import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import {
   fetchAdminActivity,
   fetchRecoveryPlans,
@@ -36,7 +35,7 @@ import {
   type ApiHealthCheck,
   type ApiNode,
 } from "@/lib/api";
-import { Btn, EmptyState, Pill, cn } from "./admin-ui";
+import { Btn, EmptyState, Pill, SectionHeader, cn } from "./admin-ui";
 import { LiveHealthChecks } from "./LiveHealthChecks";
 import { relativeTime, useHealthQuery, useNodesQuery } from "@/lib/admin/telemetry";
 
@@ -92,10 +91,10 @@ function queryErrorMessage(error: unknown) {
 }
 
 function statusIcon(status?: string, size = 16) {
-  if (status === "ok" || status === "online") return <CheckCircle size={size} className="text-emerald-400" />;
-  if (status === "failed" || status === "offline") return <XCircle size={size} className="text-red-400" />;
-  if (status === "warning" || status === "degraded") return <AlertTriangle size={size} className="text-amber-400" />;
-  return <MinusCircle size={size} className="text-slate-500" />;
+  if (status === "ok" || status === "online") return <CheckCircle size={size} className="text-ok" />;
+  if (status === "failed" || status === "offline") return <XCircle size={size} className="text-danger" />;
+  if (status === "warning" || status === "degraded") return <AlertTriangle size={size} className="text-warn" />;
+  return <MinusCircle size={size} className="text-text-muted" />;
 }
 
 function healthByName(checks: ApiHealthCheck[], name: string) {
@@ -150,16 +149,16 @@ function MetricTile({
     <div
       onClick={onClick}
       className={cn(
-        "rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition",
-        onClick && "cursor-pointer hover:border-white/20 hover:bg-white/[0.02]"
+        "rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm transition",
+        onClick && "cursor-pointer hover:border-line-strong hover:bg-overlay-subtle"
       )}
     >
-      <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">{label}</p>
+      <p className="text-[10px] font-semibold uppercase tracking-wider text-text-subtle">{label}</p>
       <div className="mt-1.5 flex items-center justify-between gap-2">
-        <p className="font-mono text-sm sm:text-base font-bold text-slate-100 tabular-nums truncate">{value}</p>
+        <p className="font-mono text-sm sm:text-base font-bold text-text tabular-nums truncate">{value}</p>
         {status && <span className="shrink-0">{statusIcon(status, 14)}</span>}
       </div>
-      {hint ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{hint}</p> : null}
+      {hint ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-text-muted">{hint}</p> : null}
     </div>
   );
 }
@@ -177,25 +176,25 @@ function HealthSection({
 }) {
   const [open, setOpen] = useState(defaultOpen);
   return (
-    <div className="rounded-2xl border border-white/[0.08] bg-[var(--surface)] shadow-sm overflow-hidden transition-all">
+    <div className="rounded-2xl border border-line bg-[var(--surface)] shadow-sm overflow-hidden transition-all">
       <button
-        className="flex w-full items-center justify-between px-5 py-4 text-left transition hover:bg-white/[0.02] cursor-pointer"
+        className="flex w-full items-center justify-between px-5 py-4 text-left transition hover:bg-overlay-subtle cursor-pointer"
         onClick={() => setOpen(!open)}
         type="button"
         aria-expanded={open}
       >
-        <div className="flex items-center gap-2.5 text-sm font-bold text-slate-100">
-          <div className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
+        <div className="flex items-center gap-2.5 text-sm font-bold text-text">
+          <div className="grid h-7 w-7 place-items-center rounded-lg border border-line bg-overlay text-text-subtle">
             <Icon size={15} />
           </div>
           <span>{title}</span>
         </div>
-        <div className="flex items-center gap-2 text-xs font-semibold text-slate-400">
+        <div className="flex items-center gap-2 text-xs font-semibold text-text-subtle">
           <span>{open ? "Collapse" : "Expand"}</span>
-          {open ? <ChevronDown size={14} className="text-slate-400" /> : <ChevronRight size={14} className="text-slate-400" />}
+          {open ? <ChevronDown size={14} className="text-text-subtle" /> : <ChevronRight size={14} className="text-text-subtle" />}
         </div>
       </button>
-      {open && <div className="border-t border-white/[0.06] p-5 space-y-4 bg-black/10">{children}</div>}
+      {open && <div className="border-t border-line p-5 space-y-4 bg-overlay-subtle">{children}</div>}
     </div>
   );
 }
@@ -429,119 +428,104 @@ export function AdminHealth({
 
   return (
     <div className="space-y-6">
-      {/* ========================================================================= */}
-      {/* ZONE 1: MISSION CONTROL HEADER WITH REPUTATION BADGES & ACTION TOOLS      */}
-      {/* ========================================================================= */}
-      <div className="flex items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center gap-2">
-          <span>Command</span>
-          <span className="text-slate-600">/</span>
-          <span className="font-semibold text-slate-200">Health</span>
-        </div>
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
-          <span className="relative flex h-1.5 w-1.5">
-            {pageFresh.tone === "live" ? (
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            ) : null}
-            <span
-              className={cn(
-                "relative inline-flex h-1.5 w-1.5 rounded-full",
-                pageFresh.tone === "live" && "bg-emerald-400",
-                pageFresh.tone === "stale" && "bg-amber-400",
-                pageFresh.tone === "error" && "bg-red-400",
-                pageFresh.tone === "loading" && "bg-slate-500",
-              )}
-            />
+      <SectionHeader
+        title="Diagnostics"
+        sub="What's wrong — failures, degraded subsystems and remediation steps. For what happens over time see Monitoring; for what to know now see Overview."
+        info={{
+          title: "Health Diagnostics & Verification",
+          eyebrow: "Control Plane Verification",
+          description: "Live evaluation of control-plane dependencies, fleet heartbeats, database availability, and workload health.",
+          sections: [
+            {
+              title: "Active Verification vs. Passive Telemetry",
+              icon: HealthECGIcon,
+              content:
+                "Health performs active connectivity, latency, and heartbeat checks against dependencies. For historical resource telemetry over time, consult Monitoring.",
+            },
+            {
+              title: "Beacon Fleet Heartbeats",
+              icon: NodeHostIcon,
+              content:
+                "Per-host daemons check in periodically. Missing heartbeats transition through suspected and degraded states before being marked unexpectedly offline.",
+            },
+            {
+              title: "Dependency Isolation",
+              icon: DatabaseCylinderIcon,
+              content:
+                "Postgres and Redis are checked independently with millisecond round-trip probes and migration state verification.",
+            },
+            {
+              title: "Remediation & Action Guidance",
+              icon: Wrench,
+              content:
+                "When checks fail, actionable instructions guide credential verification, service restarts, or capacity reallocations.",
+            },
+          ],
+        }}
+        status={
+          <span className="flex items-center gap-1.5 font-mono text-[11px] text-text-muted">
+            <span className="relative flex h-1.5 w-1.5">
+              {pageFresh.tone === "live" ? (
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" />
+              ) : null}
+              <span
+                className={cn(
+                  "relative inline-flex h-1.5 w-1.5 rounded-full",
+                  pageFresh.tone === "live" && "bg-ok",
+                  pageFresh.tone === "stale" && "bg-warn",
+                  pageFresh.tone === "error" && "bg-danger",
+                  pageFresh.tone === "loading" && "bg-text-muted",
+                )}
+              />
+            </span>
+            <span>{pageFresh.label}</span>
           </span>
-          <span>{pageFresh.label}</span>
-        </div>
-      </div>
+        }
+        action={
+          <>
+            {/* Subsystem filter dropdown */}
+            <div className="relative">
+              <select
+                aria-label="Filter subsystem"
+                value={selected}
+                onChange={(e) => selectSection(e.target.value as MonitorSection)}
+                className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-text shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
+              >
+                <option value="infrastructure">Infrastructure</option>
+                <option value="workloads">Workloads</option>
+                {/* "platform", not "api": the Control-Plane Services section
+                    opens on `selected === "platform"`, so the old value picked
+                    a section that nothing renders. */}
+                <option value="platform">API &amp; Queue</option>
+                <option value="database">Database &amp; Cache</option>
+                <option value="resources">Runtime Resources</option>
+                <option value="orchestration">Orchestration</option>
+              </select>
+              <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-text-subtle" />
+            </div>
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
-        <div>
-          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
-            <span>Diagnostics</span>
-            <PageInfoDisclosure
-              title="Health Diagnostics & Verification"
-              eyebrow="Control Plane Verification"
-              description="Live evaluation of control-plane dependencies, fleet heartbeats, database availability, and workload health."
-              sections={[
-                {
-                  title: "Active Verification vs. Passive Telemetry",
-                  icon: HealthECGIcon,
-                  content:
-                    "Health performs active connectivity, latency, and heartbeat checks against dependencies. For historical resource telemetry over time, consult Monitoring.",
-                },
-                {
-                  title: "Beacon Fleet Heartbeats",
-                  icon: NodeHostIcon,
-                  content:
-                    "Per-host daemons check in periodically. Missing heartbeats transition through suspected and degraded states before being marked unexpectedly offline.",
-                },
-                {
-                  title: "Dependency Isolation",
-                  icon: DatabaseCylinderIcon,
-                  content:
-                    "Postgres and Redis are checked independently with millisecond round-trip probes and migration state verification.",
-                },
-                {
-                  title: "Remediation & Action Guidance",
-                  icon: Wrench,
-                  content:
-                    "When checks fail, actionable instructions guide credential verification, service restarts, or capacity reallocations.",
-                },
-              ]}
-            />
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            What&apos;s wrong — failures, degraded subsystems and remediation steps. For what happens over time see Monitoring; for what to know now see Overview.
-          </p>
-        </div>
-
-        {/* Global Toolbar Controls */}
-        <div className="flex items-center gap-2 shrink-0">
-          {/* Subsystem filter dropdown */}
-          <div className="relative">
-            <select
-              aria-label="Filter subsystem"
-              value={selected}
-              onChange={(e) => selectSection(e.target.value as MonitorSection)}
-              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-slate-200 shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
+            {/* Quick refresh button */}
+            <button
+              type="button"
+              aria-label="Refresh health checks"
+              onClick={refresh}
+              className="grid h-8 w-8 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition hover:border-line-strong hover:text-text"
             >
-              <option value="infrastructure">Infrastructure</option>
-              <option value="workloads">Workloads</option>
-              {/* "platform", not "api": the Control-Plane Services section
-                  opens on `selected === "platform"`, so the old value picked
-                  a section that nothing renders. */}
-              <option value="platform">API &amp; Queue</option>
-              <option value="database">Database &amp; Cache</option>
-              <option value="resources">Runtime Resources</option>
-              <option value="orchestration">Orchestration</option>
-            </select>
-            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
-          </div>
+              <RefreshCw size={13} className={isFetching ? "animate-spin text-info" : ""} />
+            </button>
 
-          {/* Quick refresh button */}
-          <button
-            type="button"
-            aria-label="Refresh health checks"
-            onClick={refresh}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.02] text-slate-400 transition hover:border-white/20 hover:text-white"
-          >
-            <RefreshCw size={13} className={isFetching ? "animate-spin text-sky-400" : ""} />
-          </button>
-
-          {/* Primary Action Button */}
-          <button
-            type="button"
-            onClick={refresh}
-            className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand)] px-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[var(--brand-hover)]"
-          >
-            <ActivityWaveIcon className="w-3.5 h-3.5" />
-            <span>Re-check</span>
-          </button>
-        </div>
-      </div>
+            {/* Primary Action Button */}
+            <button
+              type="button"
+              onClick={refresh}
+              className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand)] px-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[var(--brand-hover)]"
+            >
+              <ActivityWaveIcon className="w-3.5 h-3.5" />
+              <span>Re-check</span>
+            </button>
+          </>
+        }
+      />
 
       <LiveHealthChecks />
 
@@ -553,8 +537,8 @@ export function AdminHealth({
               className={cn(
                 "flex items-start justify-between gap-4 rounded-xl border p-3.5 text-sm shadow-sm",
                 e.tone === "red"
-                  ? "border-red-500/25 bg-red-950/20 text-red-200"
-                  : "border-amber-500/25 bg-amber-950/20 text-amber-200"
+                  ? "border-danger-line bg-danger-subtle text-danger"
+                  : "border-warn-line bg-warn-subtle text-warn"
               )}
             >
               <span>
@@ -593,12 +577,12 @@ export function AdminHealth({
         className={cn(
           "rounded-2xl border p-5 shadow-sm transition-all relative overflow-hidden",
           overallStatus === "ok"
-            ? "border-emerald-500/25 bg-emerald-500/[0.03]"
+            ? "border-ok-line bg-ok-subtle"
             : overallStatus === "warning"
-            ? "border-amber-500/25 bg-amber-500/[0.03]"
+            ? "border-warn-line bg-warn-subtle"
             : overallStatus === "unknown"
-            ? "border-white/[0.08] bg-white/[0.02]"
-            : "border-red-500/25 bg-red-500/[0.03]"
+            ? "border-line bg-overlay-subtle"
+            : "border-danger-line bg-danger/[0.03]"
         )}
       >
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -621,7 +605,7 @@ export function AdminHealth({
               )}
             </div>
             <div>
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+              <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                 Control Plane Status
               </div>
               {/* Loading is not a failure and unavailable is not a verdict:
@@ -631,14 +615,14 @@ export function AdminHealth({
                 className={cn(
                   "text-xl font-bold tracking-tight",
                   healthQuery.isLoading
-                    ? "text-slate-300"
+                    ? "text-text"
                     : healthQuery.isError
-                    ? "text-slate-400"
+                    ? "text-text-subtle"
                     : overallStatus === "ok"
-                    ? "text-emerald-300"
+                    ? "text-ok"
                     : overallStatus === "warning"
-                    ? "text-amber-300"
-                    : "text-red-300"
+                    ? "text-warn"
+                    : "text-danger"
                 )}
               >
                 {healthQuery.isLoading
@@ -653,7 +637,7 @@ export function AdminHealth({
               </p>
               {/* Counts only where the list behind them was actually read —
                   an unread node list is not a fleet of zero nodes. */}
-              <p className="mt-0.5 text-xs text-slate-400 font-mono">
+              <p className="mt-0.5 text-xs text-text-subtle font-mono">
                 {nodesQuery.isError
                   ? "nodes unavailable"
                   : nodesQuery.isPending
@@ -708,7 +692,7 @@ export function AdminHealth({
             <button
               type="button"
               onClick={() => router.push("/admin/overview")}
-              className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-white/[0.08] hover:text-white transition cursor-pointer"
+              className="hidden sm:inline-flex items-center gap-1 rounded-lg border border-line bg-overlay px-2.5 py-1 text-xs font-semibold text-text hover:bg-overlay-strong hover:text-text transition cursor-pointer"
             >
               <span>Overview</span>
               <ArrowUpRight size={13} />
@@ -719,7 +703,7 @@ export function AdminHealth({
 
       {/* Refetching indicator */}
       {isFetching && (
-        <div className="flex items-center gap-2 rounded-xl border border-sky-500/20 bg-sky-950/20 p-2.5 text-xs text-sky-300">
+        <div className="flex items-center gap-2 rounded-xl border border-info-line bg-info-subtle p-2.5 text-xs text-info">
           <RefreshCw size={13} className="animate-spin" />
           <span>Refreshing health check diagnostics...</span>
         </div>
@@ -735,14 +719,14 @@ export function AdminHealth({
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "infrastructure"
               ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
-              : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
+              : "border-line bg-[var(--surface)] hover:border-line-strong hover:bg-overlay-subtle"
           )}
           onClick={() => selectSection("infrastructure")}
           type="button"
         >
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-slate-300">
-              <ServerRackIcon size={14} className="text-sky-400" />
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-subtle group-hover:text-text">
+              <ServerRackIcon size={14} className="text-text-subtle" />
               <span>Infrastructure</span>
             </span>
             {/* Degraded nodes are not "ok": the icon only went amber for
@@ -758,12 +742,12 @@ export function AdminHealth({
               14
             )}
           </div>
-          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-slate-100">
+          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-text">
             {nodesQuery.isLoading ? "..." : nodesQuery.isError ? "Unavailable" : `${summary.healthyNodes}/${summary.totalNodes} nodes`}
           </p>
           {/* An unread list is not an empty fleet — "Register a node" used to
               show while the request was still in flight. */}
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-text-subtle">
             {nodesQuery.isError
               ? "API unreachable"
               : nodesQuery.isPending
@@ -786,22 +770,22 @@ export function AdminHealth({
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "workloads"
               ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
-              : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
+              : "border-line bg-[var(--surface)] hover:border-line-strong hover:bg-overlay-subtle"
           )}
           onClick={() => selectSection("workloads")}
           type="button"
         >
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-slate-300">
-              <ApplicationsCubeIcon size={14} className="text-purple-400" />
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-subtle group-hover:text-text">
+              <ApplicationsCubeIcon size={14} className="text-text-subtle" />
               <span>Workloads</span>
             </span>
             {statusIcon(serversAvailable ? (summary.failedDeployments > 0 ? "failed" : "ok") : undefined, 14)}
           </div>
-          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-slate-100">
+          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-text">
             {serversQuery.isLoading ? "..." : serversQuery.isError ? "Unavailable" : `${summary.runningServers} running`}
           </p>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-text-subtle">
             {serversQuery.isError
               ? "Server data unavailable"
               : serversQuery.isPending
@@ -818,22 +802,22 @@ export function AdminHealth({
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "platform"
               ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
-              : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
+              : "border-line bg-[var(--surface)] hover:border-line-strong hover:bg-overlay-subtle"
           )}
           onClick={() => selectSection("platform")}
           type="button"
         >
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-slate-300">
-              <ActivityWaveIcon size={14} className="text-emerald-400" />
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-subtle group-hover:text-text">
+              <ActivityWaveIcon size={14} className="text-ok" />
               <span>API & Queue</span>
             </span>
             {statusIcon(overallStatus, 14)}
           </div>
-          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-slate-100">
+          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-text">
             {checkStatus(healthAvailable, system)}
           </p>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-text-subtle">
             {/* Only count checks once the report is in hand: "0 checks" was
                 being printed while it was still being read. */}
             Queue {checkStatus(healthAvailable, queue)} ·{" "}
@@ -847,14 +831,14 @@ export function AdminHealth({
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "database"
               ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
-              : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
+              : "border-line bg-[var(--surface)] hover:border-line-strong hover:bg-overlay-subtle"
           )}
           onClick={() => selectSection("database")}
           type="button"
         >
           <div className="flex items-center justify-between">
-            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-slate-400 group-hover:text-slate-300">
-              <DatabaseCylinderIcon size={14} className="text-orange-400" />
+            <span className="flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider text-text-subtle group-hover:text-text">
+              <DatabaseCylinderIcon size={14} className="text-text-subtle" />
               <span>Database & Cache</span>
             </span>
             {statusIcon(
@@ -868,10 +852,10 @@ export function AdminHealth({
               14
             )}
           </div>
-          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-slate-100">
+          <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-text">
             {!healthAvailable ? "Unavailable" : `${database?.status ?? "?"}`}
           </p>
-          <p className="mt-1 text-xs text-slate-400">
+          <p className="mt-1 text-xs text-text-subtle">
             Cache {!healthAvailable ? "Unavailable" : cache?.status ?? "?"}{" "}
             {database?.latencyMs != null ? `· ${database.latencyMs}ms` : ""}
           </p>
@@ -882,12 +866,12 @@ export function AdminHealth({
       {/* ZONE 4: ACTIONABLE FAILURES (Incident Remediation Cards)                  */}
       {/* ========================================================================= */}
       {summary.failedChecks.length > 0 && (
-        <div className="rounded-2xl border border-red-500/30 bg-red-500/[0.04] p-5 shadow-sm">
+        <div className="rounded-2xl border border-danger-line bg-danger-subtle p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-4">
-            <h3 className="flex items-center gap-2 text-sm font-bold text-red-300">
-              <XCircle size={17} className="text-red-400 stroke-[2.2]" />
+            <h3 className="flex items-center gap-2 text-sm font-bold text-danger">
+              <XCircle size={17} className="text-danger stroke-[2.2]" />
               <span>Actionable Failures</span>
-              <span className="rounded-full bg-red-500/20 px-2 py-0.5 font-mono text-[10px] font-semibold text-red-300">
+              <span className="rounded-full bg-danger-subtle px-2 py-0.5 font-mono text-[10px] font-semibold text-danger">
                 {summary.failedChecks.length} issue{summary.failedChecks.length === 1 ? "" : "s"}
               </span>
             </h3>
@@ -895,7 +879,7 @@ export function AdminHealth({
               type="button"
               onClick={() => void healthQuery.refetch()}
               disabled={isFetching}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-red-500/30 bg-red-500/10 px-2.5 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/20 transition cursor-pointer"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-danger-line bg-danger-subtle px-2.5 py-1 text-xs font-semibold text-danger hover:bg-danger-subtle transition cursor-pointer"
             >
               <RefreshCw size={12} className={cn(isFetching && "animate-spin")} />
               <span>Retry all</span>
@@ -908,19 +892,19 @@ export function AdminHealth({
               return (
                 <div
                   key={check.name}
-                  className="rounded-xl border border-red-500/20 bg-[var(--surface)] p-4 shadow-sm"
+                  className="rounded-xl border border-danger-line bg-[var(--surface)] p-4 shadow-sm"
                 >
                   <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full bg-red-400 shrink-0" />
-                        <p className="text-sm font-bold text-red-200 truncate">
+                        <span className="h-2 w-2 rounded-full bg-danger shrink-0" />
+                        <p className="text-sm font-bold text-danger truncate">
                           {check.name} — {check.notificationMessage ?? "Failed"}
                         </p>
                       </div>
                       {remediation && (
-                        <div className="mt-2.5 rounded-lg border border-red-500/15 bg-red-950/20 p-3 text-xs text-slate-300 leading-relaxed">
-                          <span className="font-semibold text-red-300 block mb-0.5">Recommended Remediation:</span>
+                        <div className="mt-2.5 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-text leading-relaxed">
+                          <span className="font-semibold text-danger block mb-0.5">Recommended Remediation:</span>
                           {remediation}
                         </div>
                       )}
@@ -962,19 +946,19 @@ export function AdminHealth({
       {/* ZONE 5: WARNINGS                                                          */}
       {/* ========================================================================= */}
       {summary.warningChecks.length > 0 && (
-        <div className="rounded-2xl border border-amber-500/30 bg-amber-500/[0.04] p-5 shadow-sm">
+        <div className="rounded-2xl border border-warn-line bg-warn-subtle p-5 shadow-sm">
           <div className="flex items-center justify-between gap-3 mb-3">
-            <h3 className="flex items-center gap-2 text-sm font-bold text-amber-300">
-              <AlertTriangle size={17} className="text-amber-400 stroke-[2.2]" />
+            <h3 className="flex items-center gap-2 text-sm font-bold text-warn">
+              <AlertTriangle size={17} className="text-warn stroke-[2.2]" />
               <span>Warnings</span>
-              <span className="rounded-full bg-amber-500/20 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
+              <span className="rounded-full bg-warn-subtle px-2 py-0.5 font-mono text-[10px] font-semibold text-warn">
                 {summary.warningChecks.length} warning{summary.warningChecks.length === 1 ? "" : "s"}
               </span>
             </h3>
             <button
               type="button"
               onClick={() => void healthQuery.refetch()}
-              className="inline-flex items-center gap-1 text-xs font-semibold text-amber-300 hover:text-amber-200 transition cursor-pointer"
+              className="inline-flex items-center gap-1 text-xs font-semibold text-warn hover:text-warn transition cursor-pointer"
             >
               <RefreshCw size={12} />
               <span>Re-check</span>
@@ -985,21 +969,21 @@ export function AdminHealth({
             {summary.warningChecks.map((check) => (
               <div
                 key={check.name}
-                className="flex items-start justify-between gap-3 rounded-xl border border-amber-500/20 bg-[var(--surface)] p-3.5 shadow-sm"
+                className="flex items-start justify-between gap-3 rounded-xl border border-warn-line bg-[var(--surface)] p-3.5 shadow-sm"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
-                    <span className="h-2 w-2 rounded-full bg-amber-400 shrink-0" />
-                    <p className="text-sm font-bold text-amber-200">{check.label ?? check.name}</p>
+                    <span className="h-2 w-2 rounded-full bg-warn shrink-0" />
+                    <p className="text-sm font-bold text-warn">{check.label ?? check.name}</p>
                   </div>
                   {check.notificationMessage && (
-                    <p className="mt-1 text-xs text-slate-400 pl-4">{check.notificationMessage}</p>
+                    <p className="mt-1 text-xs text-text-subtle pl-4">{check.notificationMessage}</p>
                   )}
                 </div>
                 <button
                   type="button"
                   onClick={() => void healthQuery.refetch()}
-                  className="inline-flex items-center gap-1 rounded-lg border border-white/[0.08] bg-white/[0.04] px-2.5 py-1 text-xs font-semibold text-slate-300 hover:bg-white/[0.08] hover:text-white transition cursor-pointer shrink-0"
+                  className="inline-flex items-center gap-1 rounded-lg border border-line bg-overlay px-2.5 py-1 text-xs font-semibold text-text hover:bg-overlay-strong hover:text-text transition cursor-pointer shrink-0"
                 >
                   <RefreshCw size={11} />
                   <span>Check</span>
@@ -1065,12 +1049,12 @@ export function AdminHealth({
           />
         </div>
         {nodesAvailable && summary.totalNodes > 0 && <NodeTable nodes={nodes} />}
-        <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-          <span className="text-slate-400">Heartbeats are transmitted by Beacon host agents over HTTP</span>
+        <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+          <span className="text-text-subtle">Heartbeats are transmitted by Beacon host agents over HTTP</span>
           <button
             type="button"
             onClick={() => router.push("/admin/nodes")}
-            className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+            className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
           >
             <span>Manage Beacon Nodes</span>
             <ArrowUpRight size={13} />
@@ -1117,12 +1101,12 @@ export function AdminHealth({
             onClick={() => router.push("/admin/databases")}
           />
         </div>
-        <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-          <span className="text-slate-400">PostgreSQL store and Redis cache instances</span>
+        <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+          <span className="text-text-subtle">PostgreSQL store and Redis cache instances</span>
           <button
             type="button"
             onClick={() => router.push("/admin/databases")}
-            className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+            className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
           >
             <span>Manage Databases & Backups</span>
             <ArrowUpRight size={13} />
@@ -1168,12 +1152,12 @@ export function AdminHealth({
             onClick={() => router.push("/admin/activity")}
           />
         </div>
-        <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-          <span className="text-slate-400">Forge Fiber API server and asynchronous queue workers</span>
+        <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+          <span className="text-text-subtle">Forge Fiber API server and asynchronous queue workers</span>
           <button
             type="button"
             onClick={() => router.push("/admin/operations")}
-            className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+            className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
           >
             <span>Platform Operations & Audit</span>
             <ArrowUpRight size={13} />
@@ -1221,17 +1205,17 @@ export function AdminHealth({
           />
         </div>
         {summary.failedDeployments > 0 && (
-          <div className="rounded-xl border border-red-500/20 bg-red-950/15 p-3.5 text-xs text-red-200">
+          <div className="rounded-xl border border-danger-line bg-danger-subtle p-3.5 text-xs text-danger">
             <span className="font-semibold block mb-0.5">{summary.failedDeployments} workload(s) are in a failed state.</span>
             Check workload logs for deployment errors and verify that the target node is online and healthy.
           </div>
         )}
-        <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-          <span className="text-slate-400">Container apps, game servers, and services across all nodes</span>
+        <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+          <span className="text-text-subtle">Container apps, game servers, and services across all nodes</span>
           <button
             type="button"
             onClick={() => router.push("/admin/servers")}
-            className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+            className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
           >
             <span>Manage All Workloads</span>
             <ArrowUpRight size={13} />
@@ -1285,12 +1269,12 @@ export function AdminHealth({
             }
           />
         </div>
-        <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-          <span className="text-slate-400">Go control-plane runtime heap, goroutines, and OS architecture</span>
+        <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+          <span className="text-text-subtle">Go control-plane runtime heap, goroutines, and OS architecture</span>
           <button
             type="button"
             onClick={() => router.push("/admin/monitoring")}
-            className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+            className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
           >
             <span>Open Real-time Monitoring</span>
             <ArrowUpRight size={13} />
@@ -1325,17 +1309,17 @@ export function AdminHealth({
             />
           </div>
           {(failedReservations > 0 || failedRecoveries > 0) && (
-            <div className="rounded-xl border border-red-500/20 bg-red-950/15 p-3.5 text-xs text-red-200">
+            <div className="rounded-xl border border-danger-line bg-danger-subtle p-3.5 text-xs text-danger">
               {failedReservations > 0 && `Failed reservation jobs indicate resource contention or unavailable nodes. Review node capacity and retry failed reservations.`}
               {failedRecoveries > 0 && ` Failed recovery plans require manual intervention. Check node connectivity and recovery plan configuration.`}
             </div>
           )}
-          <div className="flex items-center justify-between border-t border-white/[0.06] pt-3 text-xs">
-            <span className="text-slate-400">Resource reservations, allocation locks, and failover recovery plans</span>
+          <div className="flex items-center justify-between border-t border-line pt-3 text-xs">
+            <span className="text-text-subtle">Resource reservations, allocation locks, and failover recovery plans</span>
             <button
               type="button"
               onClick={() => router.push("/admin/reconciliation")}
-              className="flex items-center gap-1 font-semibold text-slate-300 hover:text-white transition"
+              className="flex items-center gap-1 font-semibold text-text hover:text-text transition"
             >
               <span>Reconciliation Engine</span>
               <ArrowUpRight size={13} />
@@ -1353,9 +1337,9 @@ function NodeTable({ nodes }: { nodes: ApiNode[] }) {
     return <EmptyState icon={NodeHostIcon} message="No nodes are registered; node monitoring will begin after setup." />;
   }
   return (
-    <div className="overflow-x-auto rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+    <div className="overflow-x-auto rounded-xl border border-line bg-[var(--surface)] shadow-sm">
       <table className="w-full text-left text-xs">
-        <thead className="border-b border-white/[0.06] bg-white/[0.02] text-[10px] font-bold uppercase tracking-wider text-slate-400">
+        <thead className="border-b border-line bg-overlay-subtle text-[10px] font-bold uppercase tracking-wider text-text-subtle">
           <tr>
             <th className="px-4 py-3">Node</th>
             <th className="px-4 py-3">Status</th>
@@ -1364,20 +1348,20 @@ function NodeTable({ nodes }: { nodes: ApiNode[] }) {
             <th className="px-4 py-3 text-right">Actions</th>
           </tr>
         </thead>
-        <tbody className="divide-y divide-white/[0.04]">
+        <tbody className="divide-y divide-line">
           {nodes.map((node) => (
             <tr
               key={node.id}
               onClick={() => router.push(`/admin/nodes/${node.id}`)}
               className={cn(
-                "hover:bg-white/[0.03] cursor-pointer transition",
+                "hover:bg-overlay cursor-pointer transition",
                 node.maintenanceMode && "opacity-60"
               )}
             >
-              <td className="px-4 py-3 font-semibold text-slate-200">
+              <td className="px-4 py-3 font-semibold text-text">
                 <div className="flex items-center gap-2">
-                  {node.maintenanceMode && <Wrench size={13} className="text-amber-400 shrink-0" />}
-                  <span className="font-medium text-slate-100">{node.name}</span>
+                  {node.maintenanceMode && <Wrench size={13} className="text-warn shrink-0" />}
+                  <span className="font-medium text-text">{node.name}</span>
                 </div>
               </td>
               <td className="px-4 py-3">
@@ -1386,25 +1370,25 @@ function NodeTable({ nodes }: { nodes: ApiNode[] }) {
                   <span
                     className={
                       node.actualState === "online"
-                        ? "text-emerald-300 font-semibold"
+                        ? "text-ok font-semibold"
                         : node.actualState === "degraded"
-                        ? "text-amber-300 font-semibold"
+                        ? "text-warn font-semibold"
                         : node.maintenanceMode
-                        ? "text-amber-400 font-semibold"
-                        : "text-slate-400"
+                        ? "text-warn font-semibold"
+                        : "text-text-subtle"
                     }
                   >
                     {node.maintenanceMode ? "maintenance" : node.actualState ?? "unknown"}
                   </span>
                 </span>
               </td>
-              <td className="px-4 py-3 text-slate-400">
+              <td className="px-4 py-3 text-text-subtle">
                 <span className="inline-flex items-center gap-1.5 font-mono text-[11px]">
                   {statusIcon(node.heartbeatState, 12)}
                   <span>{node.heartbeatState ?? "unknown"}</span>
                 </span>
               </td>
-              <td className="px-4 py-3 font-mono text-[11px] text-slate-400">{node.dockerStatus ?? "unknown"}</td>
+              <td className="px-4 py-3 font-mono text-[11px] text-text-subtle">{node.dockerStatus ?? "unknown"}</td>
               <td className="px-4 py-3 text-right">
                 <button
                   type="button"
@@ -1412,7 +1396,7 @@ function NodeTable({ nodes }: { nodes: ApiNode[] }) {
                     e.stopPropagation();
                     router.push(`/admin/nodes/${node.id}`);
                   }}
-                  className="inline-flex items-center gap-1 text-slate-400 hover:text-white transition font-semibold cursor-pointer"
+                  className="inline-flex items-center gap-1 text-text-subtle hover:text-text transition font-semibold cursor-pointer"
                 >
                   <span>View</span>
                   <ExternalLink size={12} />
