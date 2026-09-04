@@ -15,7 +15,7 @@ import {
   type ReconcilePlanRow,
 } from "@/lib/api/reconciliation";
 import { useToast } from "@/components/ui/toast";
-import { AdminConfirmDialog, AdminPageHeader, Btn, Card, CardHeader, EmptyState, Pill } from "./admin-ui";
+import { AdminConfirmDialog, AdminPageHeader, Btn, Card, CardHeader, EmptyState, Pill, AdminSelect } from "./admin-ui";
 import { TableSkeleton } from "@/components/ui/loading-skeleton";
 
 function errorMessage(error: unknown) {
@@ -45,15 +45,15 @@ function driftTone(severity: string): "green" | "red" | "yellow" | "blue" | "neu
 }
 
 function PlanDiffs({ diffs }: { diffs: ReconcileDiff[] }) {
-  if (diffs.length === 0) return <p className="text-xs text-slate-500">No diffs.</p>;
+  if (diffs.length === 0) return <p className="text-xs text-text-muted">No diffs.</p>;
   return (
     <div className="space-y-1.5">
       {diffs.map((diff, i) => (
-        <div key={i} className="flex items-start gap-2 rounded border border-white/[0.06] p-2 text-xs">
+        <div key={i} className="flex items-start gap-2 rounded border border-line p-2 text-xs">
           <Pill tone={diffTone(diff.diffType)} className="shrink-0">{diff.diffType}</Pill>
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-slate-200 break-all">{diff.resourceId}</p>
-            <p className="text-slate-400">{diff.description}</p>
+            <p className="font-mono text-text break-all">{diff.resourceId}</p>
+            <p className="text-text-subtle">{diff.description}</p>
           </div>
         </div>
       ))}
@@ -62,16 +62,16 @@ function PlanDiffs({ diffs }: { diffs: ReconcileDiff[] }) {
 }
 
 function PlanDrifts({ drifts }: { drifts: DriftRecord[] }) {
-  if (drifts.length === 0) return <p className="text-xs text-slate-500">No drifts detected.</p>;
+  if (drifts.length === 0) return <p className="text-xs text-text-muted">No drifts detected.</p>;
   return (
     <div className="space-y-1.5">
       {drifts.map((drift, i) => (
-        <div key={i} className="flex items-start gap-2 rounded border border-amber-700/30 bg-amber-950/10 p-2 text-xs">
+        <div key={i} className="flex items-start gap-2 rounded border border-warn-line bg-warn-subtle p-2 text-xs">
           <Pill tone={driftTone(drift.severity)} className="shrink-0">{drift.severity}</Pill>
           <div className="min-w-0 flex-1">
-            <p className="font-mono text-amber-200 break-all">{drift.resourceId}</p>
-            <p className="text-amber-300/80">{drift.driftKind}</p>
-            <p className="mt-0.5 text-amber-400/60">Desired: {drift.desired} | Observed: {drift.observed}</p>
+            <p className="font-mono text-warn break-all">{drift.resourceId}</p>
+            <p className="text-warn">{drift.driftKind}</p>
+            <p className="mt-0.5 text-text-subtle">Desired: {drift.desired} | Observed: {drift.observed}</p>
           </div>
         </div>
       ))}
@@ -119,11 +119,11 @@ function PlanRow({ plan, onAction }: { plan: ReconcilePlanRow; onAction: () => v
   const isTerminal = ["succeeded", "failed", "cancelled"].includes(plan.state);
 
   return (
-    <div className="border-b border-white/[0.04] last:border-0">
-      <div className="flex items-center gap-3 px-4 py-3 hover:bg-white/[0.02]">
+    <div className="border-b border-line last:border-0">
+      <div className="flex items-center gap-3 px-4 py-3 hover:bg-overlay-subtle">
         <button
           aria-label={expanded ? "Collapse details" : "Expand details"}
-          className="shrink-0 text-slate-500 hover:text-slate-200"
+          className="shrink-0 text-text-muted hover:text-text"
           onClick={() => setExpanded(!expanded)}
           type="button"
         >
@@ -131,13 +131,13 @@ function PlanRow({ plan, onAction }: { plan: ReconcilePlanRow; onAction: () => v
         </button>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="font-mono text-xs text-slate-200">{plan.resourceId}</span>
+            <span className="font-mono text-xs text-text">{plan.resourceId}</span>
             <Pill tone={stateTone(plan.state)}>{plan.state}</Pill>
             {plan.destructive && <Pill tone="red">Destructive</Pill>}
           </div>
-          <p className="mt-0.5 text-xs text-slate-500">
+          <p className="mt-0.5 text-xs text-text-muted">
             {plan.resourceKind} · {plan.diffCount} diff(s) · {plan.driftCount} drift(s)
-            {plan.error ? <span className="ml-2 text-red-300">Error: {plan.error}</span> : null}
+            {plan.error ? <span className="ml-2 text-danger">Error: {plan.error}</span> : null}
           </p>
         </div>
         <div className="flex shrink-0 gap-1.5">
@@ -157,13 +157,13 @@ function PlanRow({ plan, onAction }: { plan: ReconcilePlanRow; onAction: () => v
       </div>
 
       {expanded && (
-        <div className="space-y-3 border-t border-white/[0.04] bg-white/[0.01] px-8 py-3">
+        <div className="space-y-3 border-t border-line bg-overlay-subtle px-8 py-3">
           <div>
-            <h4 className="mb-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Diffs ({plan.diffs.length})</h4>
+            <h4 className="mb-1.5 text-xs font-semibold text-text-subtle uppercase tracking-wider">Diffs ({plan.diffs.length})</h4>
             <PlanDiffs diffs={plan.diffs} />
           </div>
           <div>
-            <h4 className="mb-1.5 text-xs font-semibold text-slate-400 uppercase tracking-wider">Drifts ({plan.drifts.length})</h4>
+            <h4 className="mb-1.5 text-xs font-semibold text-text-subtle uppercase tracking-wider">Drifts ({plan.drifts.length})</h4>
             <PlanDrifts drifts={plan.drifts} />
           </div>
         </div>
@@ -240,16 +240,16 @@ export function AdminReconciliation() {
         description="Detect drift between desired and observed state, review diffs, and reconcile resources across the cluster."
         action={
           <div className="flex flex-wrap items-center gap-2">
-            <select
-              className="h-9 rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-xs text-slate-200"
+            <AdminSelect
               value={triggerKind}
-              onChange={(e) => setTriggerKind(e.target.value)}
-            >
-              <option value="all">All resources</option>
-              <option value="servers">Servers only</option>
-              <option value="nodes">Nodes only</option>
-              <option value="compose_stacks">Compose stacks only</option>
-            </select>
+              onChange={(v) => setTriggerKind(v)}
+              options={[
+                { value: "all", label: "All resources" },
+                { value: "servers", label: "Servers only" },
+                { value: "nodes", label: "Nodes only" },
+                { value: "compose_stacks", label: "Compose stacks only" },
+              ]}
+            />
             <Btn
               tone="warning"
               disabled={triggerMut.isPending}
@@ -258,56 +258,57 @@ export function AdminReconciliation() {
               {triggerMut.isPending ? <Loader2 size={14} className="animate-spin" /> : <FlaskConical size={14} />}
               {triggerMut.isPending ? "Reconciling…" : "Trigger reconciliation"}
             </Btn>
-            <Btn tone="ghost" onClick={refreshAll}>
+            <Btn tone="ghost" onClick={refreshAll} ariaLabel="Refresh reconciliation data">
               <RefreshCw size={14} />
             </Btn>
           </div>
         }
       />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-        <span className="font-semibold text-slate-300">OPERATIONS</span> · <span className="font-semibold text-slate-200">Data & Recovery</span> — <code className="font-mono text-[11px]">Reconciliation</code> (this page) · <code className="font-mono">Migrations</code> · <code className="font-mono">Backups</code> · plus <code className="font-mono">Operations</code> log. Drift: <code className="font-mono">Desired vs Observed vs Diff vs Plan vs Result</code> via <code className="font-mono">store_reconcile.go:13</code>. See also <code className="font-mono">/admin/migrations</code>.
+      <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
+        <span className="font-semibold text-text">OPERATIONS</span> · <span className="font-semibold text-text">Data & Recovery</span> — <code className="font-mono text-[11px]">Reconciliation</code> (this page) · <code className="font-mono">Migrations</code> · <code className="font-mono">Backups</code> · plus <code className="font-mono">Operations</code> log. Drift: <code className="font-mono">Desired vs Observed vs Diff vs Plan vs Result</code> via <code className="font-mono">store_reconcile.go:13</code>. See also <code className="font-mono">/admin/migrations</code>.
       </div>
       {summary.isLoading ? (
         <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
           {Array.from({ length: 5 }, (_, i) => (
-            <div key={i} className="h-24 animate-pulse rounded-xl bg-white/[0.04]" />
+            <div key={i} className="h-24 animate-pulse rounded-xl bg-overlay" />
           ))}
         </div>
       ) : summary.isError ? (
-        <div className="mb-4 rounded-lg border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-200">
-          Could not load summary: {errorMessage(summary.error)}
+        <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+          <span>Could not load summary: {errorMessage(summary.error)}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void summary.refetch()}>Retry</Btn>
         </div>
       ) : summaryData ? (
         <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-5">
-          <div className="rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
               <Clock size={12} /> Total Plans
             </div>
-            <div className="text-2xl font-bold tracking-tight text-slate-100">{summaryData.totalPlans}</div>
+            <div className="text-2xl font-bold tracking-tight text-text">{summaryData.totalPlans}</div>
           </div>
-          <div className="rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
               <Clock size={12} /> Pending
             </div>
-            <div className="text-2xl font-bold tracking-tight text-amber-400">{summaryData.pendingPlans}</div>
+            <div className="text-2xl font-bold tracking-tight text-warn">{summaryData.pendingPlans}</div>
           </div>
-          <div className="rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
               <AlertTriangle size={12} /> Failed
             </div>
-            <div className="text-2xl font-bold tracking-tight text-red-400">{summaryData.failedPlans}</div>
+            <div className="text-2xl font-bold tracking-tight text-danger">{summaryData.failedPlans}</div>
           </div>
-          <div className="rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
               <FileWarning size={12} /> Drifts
             </div>
-            <div className="text-2xl font-bold tracking-tight text-yellow-400">{summaryData.totalDrifts}</div>
+            <div className="text-2xl font-bold tracking-tight text-warn">{summaryData.totalDrifts}</div>
           </div>
-          <div className="rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4">
-            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-4">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-text-muted">
               <ShieldAlert size={12} /> Unresolved
             </div>
-            <div className="text-2xl font-bold tracking-tight text-blue-400">{summaryData.unresolved}</div>
+            <div className="text-2xl font-bold tracking-tight text-info">{summaryData.unresolved}</div>
           </div>
         </div>
       ) : null}
@@ -318,7 +319,7 @@ export function AdminReconciliation() {
           <TableSkeleton rows={3} />
         ) : plans.isError ? (
           <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <span>Could not load plans: {errorMessage(plans.error)}</span>
               <Btn size="sm" tone="ghost" onClick={() => void plans.refetch()}>Retry</Btn>
             </div>
@@ -326,7 +327,7 @@ export function AdminReconciliation() {
         ) : planRows.length === 0 ? (
           <EmptyState icon={FlaskConical} message="No reconciliation plans yet. Trigger one above." />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-line">
             {planRows.map((plan) => (
               <PlanRow key={plan.id} plan={plan} onAction={refreshAll} />
             ))}
@@ -341,24 +342,25 @@ export function AdminReconciliation() {
             <TableSkeleton rows={3} />
           ) : events.isError ? (
             <div className="p-4">
-              <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-                Could not load events: {errorMessage(events.error)}
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+                <span>Could not load events: {errorMessage(events.error)}</span>
+                <Btn size="sm" tone="ghost" onClick={() => void events.refetch()}>Retry</Btn>
               </div>
             </div>
           ) : eventRows.length === 0 ? (
             <EmptyState icon={AlertTriangle} message="No reconciliation events yet." />
           ) : (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-line">
               {eventRows.map((event) => (
                 <div key={event.id} className="flex items-start gap-3 px-4 py-3">
                   <Pill tone={stateTone(event.eventType)} className="shrink-0 mt-0.5">{event.eventType}</Pill>
                   <div className="min-w-0 flex-1">
-                    <p className="text-xs text-slate-200">{event.summary}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
+                    <p className="text-xs text-text">{event.summary}</p>
+                    <p className="mt-0.5 text-xs text-text-muted">
                       {event.resourceKind}/{event.resourceId}
                     </p>
                   </div>
-                  <span className="shrink-0 text-xs text-slate-500">
+                  <span className="shrink-0 text-xs text-text-muted">
                     {new Date(event.createdAt).toLocaleString()}
                   </span>
                 </div>
