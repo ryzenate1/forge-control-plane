@@ -93,7 +93,7 @@ function SimpleBarChart({
   const maxValue = Math.max(0, ...data.map((item) => item.max));
   return (
     <div>
-      <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+      <h4 className="mb-3 text-xs font-semibold uppercase tracking-wider text-text-subtle">
         {title}
       </h4>
       <div className="space-y-2.5">
@@ -108,16 +108,16 @@ function SimpleBarChart({
             <div key={item.id} className="min-w-0 space-y-1">
               <div className="flex items-center justify-between text-xs">
                 <span
-                  className="truncate font-medium text-slate-300"
+                  className="truncate font-medium text-text"
                   title={item.label}
                 >
                   {`host · ${item.label}`}
                 </span>
-                <span className="font-mono text-slate-400 tabular-nums">
+                <span className="font-mono text-text-subtle tabular-nums">
                   {item.value > 0 ? `${item.value.toLocaleString()} MiB` : "Unmetered / Dynamic"}
                 </span>
               </div>
-              <div className="flex h-2 w-full overflow-hidden rounded-full bg-white/[0.05]">
+              <div className="flex h-2 w-full overflow-hidden rounded-full bg-overlay">
                 {item.value > 0 ? (
                   <div
                     className="h-full rounded-full bg-sky-500/80 transition-all"
@@ -155,15 +155,15 @@ function QueryError({
     <div
       className={`flex items-center justify-between gap-3 rounded-lg border p-3.5 text-xs ${
         isPermission
-          ? "border-amber-500/30 bg-amber-950/20 text-amber-300"
-          : "border-red-500/30 bg-red-950/20 text-red-300"
+          ? "border-warn-line bg-warn-subtle text-warn"
+          : "border-danger-line bg-danger-subtle text-danger"
       }`}
     >
       <div className="flex items-center gap-2 min-w-0">
         {isPermission ? (
-          <Shield size={14} className="shrink-0 text-amber-400" />
+          <Shield size={14} className="shrink-0 text-warn" />
         ) : (
-          <AlertTriangle size={14} className="shrink-0 text-red-400" />
+          <AlertTriangle size={14} className="shrink-0 text-danger" />
         )}
         <span className="truncate">
           {isPermission ? "Permission restricted" : message}
@@ -173,7 +173,7 @@ function QueryError({
         <button
           type="button"
           onClick={onRetry}
-          className="shrink-0 font-semibold underline hover:text-red-100"
+          className="shrink-0 font-semibold underline hover:text-danger"
         >
           Retry
         </button>
@@ -319,14 +319,14 @@ function DeltaPill({ delta }: { delta: number | undefined }) {
   if (delta === undefined) return null;
   const rounded = Math.round(delta);
   if (rounded === 0) {
-    return <span className="font-mono text-[11px] font-semibold text-slate-500">no change</span>;
+    return <span className="font-mono text-[11px] font-semibold text-text-muted">no change</span>;
   }
   const rising = rounded > 0;
   return (
     <span
       className={cn(
         "inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold",
-        rising ? "text-amber-400" : "text-emerald-400"
+        rising ? "text-warn" : "text-ok"
       )}
     >
       {rising ? <TrendingUp size={11} /> : <TrendingDown size={11} />} {Math.abs(rounded)}%
@@ -337,7 +337,7 @@ function DeltaPill({ delta }: { delta: number | undefined }) {
 /** Shared placeholder for a KPI number we have no reading for. */
 function NoReading({ className }: { className?: string }) {
   return (
-    <span className={cn("font-mono text-sm font-semibold text-slate-500", className)} title="No reading reported">
+    <span className={cn("font-mono text-sm font-semibold text-text-muted", className)} title="No reading reported">
       Not reported
     </span>
   );
@@ -799,15 +799,15 @@ export function AdminOverview() {
       {/* ========================================================================= */}
       <div className="flex items-center justify-end text-xs text-text-subtle">
 
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-text-muted">
           <span className="relative flex h-1.5 w-1.5">
             {newestUpdate > 0 && !anyStale ? (
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" />
             ) : null}
             <span
               className={cn(
                 "relative inline-flex h-1.5 w-1.5 rounded-full",
-                newestUpdate === 0 ? "bg-slate-500" : anyStale ? "bg-amber-400" : "bg-emerald-400"
+                newestUpdate === 0 ? "bg-text-muted" : anyStale ? "bg-warn" : "bg-ok"
               )}
             />
           </span>
@@ -871,9 +871,9 @@ export function AdminOverview() {
         {/* CPU Card */}
         <div
           onClick={() => router.push("/admin/monitoring")}
-          className="relative overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-sky-500/50 hover:bg-white/[0.02] cursor-pointer"
+          className="relative overflow-hidden rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-sky-500/50 hover:bg-overlay-subtle cursor-pointer"
         >
-          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-text-subtle">
             <span className="flex items-center gap-1.5 text-sky-400">
               <CpuKpiChipIcon size={16} />
               <span className="font-bold">CPU Allocated</span>
@@ -886,13 +886,13 @@ export function AdminOverview() {
               {latestMetricsQuery.isError ? (
                 <NoReading className="text-base" />
               ) : cpuPercent === undefined ? (
-                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                <span className="font-mono text-3xl font-bold tracking-tight text-text-muted">
                   {metricsAvailable ? "—" : "…"}
                 </span>
               ) : (
                 <span className="font-mono text-3xl font-bold tracking-tight text-sky-400">{cpuPercent}%</span>
               )}
-              <p className="mt-1 font-mono text-xs text-slate-400">
+              <p className="mt-1 font-mono text-xs text-text-subtle">
                 {latestMetricsQuery.isError
                   ? "Allocation series unavailable"
                   : cpuPercent === undefined
@@ -918,9 +918,9 @@ export function AdminOverview() {
         {/* Memory Card */}
         <div
           onClick={() => router.push("/admin/monitoring")}
-          className="relative overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-purple-500/50 hover:bg-white/[0.02] cursor-pointer"
+          className="relative overflow-hidden rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-purple-500/50 hover:bg-overlay-subtle cursor-pointer"
         >
-          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-text-subtle">
             <span className="flex items-center gap-1.5 text-purple-400">
               <MemoryRamStickIcon size={16} />
               <span className="font-bold">Memory Allocated</span>
@@ -933,13 +933,13 @@ export function AdminOverview() {
               {latestMetricsQuery.isError ? (
                 <NoReading className="text-base" />
               ) : memoryPercent === undefined ? (
-                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                <span className="font-mono text-3xl font-bold tracking-tight text-text-muted">
                   {metricsAvailable ? "—" : "…"}
                 </span>
               ) : (
                 <span className="font-mono text-3xl font-bold tracking-tight text-purple-400">{memoryPercent}%</span>
               )}
-              <p className="mt-1 font-mono text-xs text-slate-400">
+              <p className="mt-1 font-mono text-xs text-text-subtle">
                 {latestMetricsQuery.isError
                   ? "Allocation series unavailable"
                   : memoryTotal.reported > 0
@@ -959,9 +959,9 @@ export function AdminOverview() {
         {/* Storage Card */}
         <div
           onClick={() => router.push("/admin/nodes")}
-          className="relative overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-orange-500/50 hover:bg-white/[0.02] cursor-pointer"
+          className="relative overflow-hidden rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm transition-all hover:border-orange-500/50 hover:bg-overlay-subtle cursor-pointer"
         >
-          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
+          <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-text-subtle">
             <span className="flex items-center gap-1.5 text-orange-400">
               <StoragePlattersIcon size={16} />
               <span className="font-bold">Storage Allocated</span>
@@ -974,13 +974,13 @@ export function AdminOverview() {
               {latestMetricsQuery.isError ? (
                 <NoReading className="text-base" />
               ) : storagePercent === undefined ? (
-                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                <span className="font-mono text-3xl font-bold tracking-tight text-text-muted">
                   {metricsAvailable ? "—" : "…"}
                 </span>
               ) : (
                 <span className="font-mono text-3xl font-bold tracking-tight text-orange-400">{storagePercent}%</span>
               )}
-              <p className="mt-1 font-mono text-xs text-slate-400">
+              <p className="mt-1 font-mono text-xs text-text-subtle">
                 {latestMetricsQuery.isError
                   ? "Allocation series unavailable"
                   : diskTotal.reported > 0
@@ -1007,7 +1007,7 @@ export function AdminOverview() {
           {/* Sub-grid: System Health & Capacity Trend */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* System Health Card */}
-            <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
+            <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
               <div>
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
@@ -1025,7 +1025,7 @@ export function AdminOverview() {
                       )}
                     </div>
                     <div>
-                      <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">
                         System Health
                       </div>
                       {/*
@@ -1039,12 +1039,12 @@ export function AdminOverview() {
                         className={cn(
                           "text-base font-bold tracking-tight",
                           overallTone === "unknown"
-                            ? "text-slate-300"
+                            ? "text-text"
                             : overallTone === "green"
-                            ? "text-emerald-300"
+                            ? "text-ok"
                             : overallTone === "yellow"
-                            ? "text-amber-300"
-                            : "text-red-300"
+                            ? "text-warn"
+                            : "text-danger"
                         )}
                       >
                         {overallTitle}
@@ -1055,14 +1055,14 @@ export function AdminOverview() {
                   <button
                     type="button"
                     onClick={() => router.push("/admin/health")}
-                    className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                    className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
                   >
                     <span>View details</span>
                     <ArrowUpRight size={13} />
                   </button>
                 </div>
 
-                <p className="mt-2 text-xs text-slate-400">
+                <p className="mt-2 text-xs text-text-subtle">
                   {healthQuery.isLoading
                     ? "Checking health, nodes and workloads…"
                     : healthQuery.isError
@@ -1071,7 +1071,7 @@ export function AdminOverview() {
                 </p>
 
                 {/* Subsystem Health Progress Meters */}
-                <div className="mt-5 space-y-2.5 pt-3 border-t border-white/[0.06]">
+                <div className="mt-5 space-y-2.5 pt-3 border-t border-line">
                   {/* An empty or unreachable inventory is not a full meter:
                       with no beacons there is no ratio to report. */}
                   <SubsystemHealthMeter
@@ -1158,19 +1158,19 @@ export function AdminOverview() {
             </div>
 
             {/* Capacity Trend Card */}
-            <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
+            <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <TrendingUp size={16} className="text-sky-400" />
+                    <TrendingUp size={16} className="text-text-subtle" />
                     <div>
-                      <h3 className="text-sm font-bold text-slate-100">Allocation Trend</h3>
-                      <p className="text-[11px] text-slate-400">
+                      <h3 className="text-sm font-bold text-text">Allocation Trend</h3>
+                      <p className="text-[11px] text-text-subtle">
                         Allocated share of node capacity, averaged across nodes — not measured host load
                       </p>
                     </div>
                   </div>
-                  <span className="rounded border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-400">
+                  <span className="rounded border border-line bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-subtle">
                     {timeRangeLabel}
                   </span>
                 </div>
@@ -1178,24 +1178,24 @@ export function AdminOverview() {
                 {/* Multi-line Recharts curve over real metric history */}
                 <div className="mt-4 h-44 w-full">
                   {trendQuery.isError ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 text-center">
-                      <p className="text-xs font-semibold text-red-300">Metric history unavailable</p>
-                      <p className="text-[11px] text-slate-400">
+                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-danger-line bg-danger/[0.04] px-4 text-center">
+                      <p className="text-xs font-semibold text-danger">Metric history unavailable</p>
+                      <p className="text-[11px] text-text-subtle">
                         {trendQuery.error instanceof Error ? trendQuery.error.message : "The series could not be read."}
                       </p>
                     </div>
                   ) : nodes.length === 0 ? (
-                    <div className="flex h-full items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center text-[11px] text-slate-500">
+                    <div className="flex h-full items-center justify-center rounded-lg border border-line bg-overlay-subtle px-4 text-center text-[11px] text-text-muted">
                       No nodes are registered, so there is no allocation history to plot.
                     </div>
                   ) : trendQuery.isPending ? (
-                    <div className="flex h-full items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center text-[11px] text-slate-500">
+                    <div className="flex h-full items-center justify-center rounded-lg border border-line bg-overlay-subtle px-4 text-center text-[11px] text-text-muted">
                       Reading metric history…
                     </div>
                   ) : !trendHasData ? (
-                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center">
-                      <p className="text-xs font-semibold text-slate-300">No readings in this window</p>
-                      <p className="text-[11px] text-slate-500">
+                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-line bg-overlay-subtle px-4 text-center">
+                      <p className="text-xs font-semibold text-text">No readings in this window</p>
+                      <p className="text-[11px] text-text-muted">
                         The control plane recorded no allocation samples for {timeRangeLabel.toLowerCase()}. This is
                         missing history, not idle hosts.
                       </p>
@@ -1237,18 +1237,18 @@ export function AdminOverview() {
 
                 {/* Legend carries the latest recorded allocation, or a dash when
                     no node reported that metric. */}
-                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5 text-[11px] font-mono">
-                  <span className="flex items-center gap-1.5 text-slate-300">
+                <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-line pt-2.5 text-[11px] font-mono">
+                  <span className="flex items-center gap-1.5 text-text">
                     <span className="h-2 w-2 rounded-full bg-sky-400" /> CPU{" "}
-                    {cpuPercent === undefined ? <span className="text-slate-500">—</span> : `${cpuPercent}%`}
+                    {cpuPercent === undefined ? <span className="text-text-muted">—</span> : `${cpuPercent}%`}
                   </span>
-                  <span className="flex items-center gap-1.5 text-slate-300">
+                  <span className="flex items-center gap-1.5 text-text">
                     <span className="h-2 w-2 rounded-full bg-purple-400" /> Memory{" "}
-                    {memoryPercent === undefined ? <span className="text-slate-500">—</span> : `${memoryPercent}%`}
+                    {memoryPercent === undefined ? <span className="text-text-muted">—</span> : `${memoryPercent}%`}
                   </span>
-                  <span className="flex items-center gap-1.5 text-slate-300">
+                  <span className="flex items-center gap-1.5 text-text">
                     <span className="h-2 w-2 rounded-full bg-orange-400" /> Storage{" "}
-                    {storagePercent === undefined ? <span className="text-slate-500">—</span> : `${storagePercent}%`}
+                    {storagePercent === undefined ? <span className="text-text-muted">—</span> : `${storagePercent}%`}
                   </span>
                 </div>
 
@@ -1256,7 +1256,7 @@ export function AdminOverview() {
                     stated rather than silently averaged away. */}
                 {trendQuery.data &&
                 (trendQuery.data.failedNodeIds.length > 0 || trendQuery.data.skippedNodeIds.length > 0) ? (
-                  <p className="mt-2 text-[11px] leading-5 text-amber-300/80">
+                  <p className="mt-2 text-[11px] leading-5 text-warn">
                     Partial series:{" "}
                     {trendQuery.data.failedNodeIds.length > 0
                       ? `${trendQuery.data.failedNodeIds.length} node${
@@ -1281,14 +1281,14 @@ export function AdminOverview() {
           {/* Sub-grid: Workloads & Nodes Floor */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
             {/* Workloads Card */}
-            <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
+            <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <ApplicationsCubeIcon size={16} className="text-slate-400" />
+                    <ApplicationsCubeIcon size={16} className="text-text-subtle" />
                     <div>
-                      <h3 className="text-sm font-bold text-slate-100">Workloads</h3>
-                      <p className="text-[11px] text-slate-400">
+                      <h3 className="text-sm font-bold text-text">Workloads</h3>
+                      <p className="text-[11px] text-text-subtle">
                         {serversQuery.isError
                           ? "Inventory unavailable"
                           : `${servers.length} total · ${
@@ -1300,7 +1300,7 @@ export function AdminOverview() {
                   <button
                     type="button"
                     onClick={() => router.push("/admin/servers")}
-                    className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                    className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
                   >
                     <span>View workloads</span>
                     <ArrowUpRight size={13} />
@@ -1310,11 +1310,11 @@ export function AdminOverview() {
                 {/* Workloads Content */}
                 {servers.length === 0 ? (
                   <div className="mt-8 mb-4 flex flex-col items-center justify-center text-center">
-                    <div className="grid h-12 w-12 place-items-center rounded-2xl border border-white/[0.08] bg-white/[0.03] text-slate-400 shadow-inner mb-3">
+                    <div className="grid h-12 w-12 place-items-center rounded-2xl border border-line bg-overlay text-text-subtle shadow-inner mb-3">
                       <ApplicationsCubeIcon size={24} />
                     </div>
-                    <h4 className="text-sm font-semibold text-slate-200">No workloads yet</h4>
-                    <p className="mt-1 max-w-xs text-xs text-slate-400">
+                    <h4 className="text-sm font-semibold text-text">No workloads yet</h4>
+                    <p className="mt-1 max-w-xs text-xs text-text-subtle">
                       Deploy applications, game servers, databases and more.
                     </p>
                     <button
@@ -1327,16 +1327,16 @@ export function AdminOverview() {
                     </button>
                   </div>
                 ) : (
-                  <div className="mt-4 divide-y divide-white/[0.04]">
+                  <div className="mt-4 divide-y divide-line">
                     {servers.slice(0, 3).map((server) => (
                       <div
                         key={server.id}
                         onClick={() => router.push(`/server/${server.id}`)}
-                        className="flex items-center justify-between py-2.5 hover:bg-white/[0.02] cursor-pointer rounded px-2 -mx-2 transition"
+                        className="flex items-center justify-between py-2.5 hover:bg-overlay-subtle cursor-pointer rounded px-2 -mx-2 transition"
                       >
                         <div className="min-w-0 flex-1">
-                          <p className="truncate text-xs font-semibold text-slate-200">{server.name}</p>
-                          <p className="truncate text-[10px] font-mono text-slate-500">
+                          <p className="truncate text-xs font-semibold text-text">{server.name}</p>
+                          <p className="truncate text-[10px] font-mono text-text-muted">
                             {server.node || "node not reported"} ·{" "}
                             {typeof server.memoryMb === "number" && Number.isFinite(server.memoryMb)
                               ? `${server.memoryMb} MiB`
@@ -1362,17 +1362,17 @@ export function AdminOverview() {
             </div>
 
             {/* Nodes Card */}
-            <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
+            <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm flex flex-col justify-between">
               <div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
-                    <ServerRackIcon size={16} className="text-slate-400" />
+                    <ServerRackIcon size={16} className="text-text-subtle" />
                     <div>
                       <div className="flex items-center gap-1.5">
-                        <h3 className="text-sm font-bold text-slate-100">Nodes</h3>
-                        <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Infrastructure</span>
+                        <h3 className="text-sm font-bold text-text">Nodes</h3>
+                        <span className="text-[10px] font-mono text-text-muted uppercase tracking-wider">Infrastructure</span>
                       </div>
-                      <p className="text-[11px] text-slate-400">
+                      <p className="text-[11px] text-text-subtle">
                         {nodesQuery.isError
                           ? "Inventory unavailable"
                           : !isAvailable(nodesQuery)
@@ -1384,7 +1384,7 @@ export function AdminOverview() {
                   <button
                     type="button"
                     onClick={() => router.push("/admin/nodes")}
-                    className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                    className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
                   >
                     <span>View nodes</span>
                     <ArrowUpRight size={13} />
@@ -1394,39 +1394,39 @@ export function AdminOverview() {
                 {/* Nodes Content */}
                 <div className="mt-4 space-y-3">
                   {nodesQuery.isError ? (
-                    <p className="text-xs text-red-300">
+                    <p className="text-xs text-danger">
                       Beacon inventory unavailable — node state cannot be shown.
                     </p>
                   ) : !isAvailable(nodesQuery) ? (
-                    <p className="text-xs text-slate-500">Reading beacon inventory…</p>
+                    <p className="text-xs text-text-muted">Reading beacon inventory…</p>
                   ) : nodes.length === 0 ? (
-                    <p className="text-xs text-slate-500">No beacons are enrolled yet.</p>
+                    <p className="text-xs text-text-muted">No beacons are enrolled yet.</p>
                   ) : null}
                   {nodes.slice(0, 1).map((node) => (
                     <div
                       key={node.id}
                       onClick={() => router.push("/admin/nodes")}
-                      className="rounded-xl border border-white/[0.08] bg-black/25 p-3.5 hover:border-white/20 cursor-pointer transition"
+                      className="rounded-xl border border-line bg-well p-3.5 hover:border-line-strong cursor-pointer transition"
                     >
                       <div className="flex items-center justify-between gap-2">
                         <div className="flex items-center gap-2 min-w-0">
                           <span
                             className={cn(
                               "h-2 w-2 rounded-full shrink-0",
-                              hasHealthyPersistedHeartbeat(node) ? "bg-emerald-400" : "bg-amber-400"
+                              hasHealthyPersistedHeartbeat(node) ? "bg-ok" : "bg-warn"
                             )}
                           />
-                          <span className="truncate text-xs font-bold text-slate-200">{node.name}</span>
+                          <span className="truncate text-xs font-bold text-text">{node.name}</span>
                           {node.fqdn ? (
-                            <span className="truncate font-mono text-[10px] text-slate-400">{node.fqdn}</span>
+                            <span className="truncate font-mono text-[10px] text-text-subtle">{node.fqdn}</span>
                           ) : null}
                         </div>
                         <span
                           className={cn(
                             "rounded border px-2 py-0.5 font-mono text-[10px] font-semibold",
                             hasHealthyPersistedHeartbeat(node)
-                              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
-                              : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                              ? "border-ok-line bg-ok-subtle text-ok"
+                              : "border-warn-line bg-warn-subtle text-warn"
                           )}
                         >
                           {hasHealthyPersistedHeartbeat(node) ? "Online" : node.heartbeatState || "Unknown"}
@@ -1446,17 +1446,17 @@ export function AdminOverview() {
                         ];
                         return (
                           <>
-                            <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                            <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-text-muted">
                               Allocated
                             </p>
                             <div className="mt-1.5 grid grid-cols-3 gap-2 text-center font-mono text-[10px]">
                               {gauges.map((gauge) => (
                                 <div
-                                  className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5"
+                                  className="rounded border border-line bg-overlay-subtle p-1.5"
                                   key={gauge.label}
                                 >
-                                  <span className="block text-slate-500">{gauge.label}</span>
-                                  <span className={cn("font-bold", gauge.value === undefined ? "text-slate-500" : gauge.tint)}>
+                                  <span className="block text-text-muted">{gauge.label}</span>
+                                  <span className={cn("font-bold", gauge.value === undefined ? "text-text-muted" : gauge.tint)}>
                                     {gauge.value === undefined ? "—" : `${gauge.value}%`}
                                   </span>
                                 </div>
@@ -1465,12 +1465,12 @@ export function AdminOverview() {
 
                             {/* Footer carries only what the control plane
                                 reports for this node. */}
-                            <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-white/[0.04] pt-2 text-[10px] font-mono text-slate-400">
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-line pt-2 text-[10px] font-mono text-text-subtle">
                               <span>
                                 Workloads: {servers.filter((server) => server.nodeId === node.id).length}
                               </span>
                               <span>Region: {node.region || "not set"}</span>
-                              <span className="text-slate-500">
+                              <span className="text-text-muted">
                                 {row
                                   ? `Metrics ${relativeTime(row.observedAt)}`
                                   : latestMetricsQuery.isError
@@ -1496,31 +1496,31 @@ export function AdminOverview() {
             className={cn(
               "rounded-xl border p-5 shadow-sm transition-all",
               pendingAttention > 0
-                ? "border-amber-500/25 bg-amber-500/[0.04]"
-                : "border-white/[0.08] bg-[var(--surface)]"
+                ? "border-warn-line bg-warn/[0.04]"
+                : "border-line bg-[var(--surface)]"
             )}
           >
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
                 onClick={() => setAttentionCollapsed((v) => !v)}
-                className="flex items-center gap-2 text-left text-sm font-semibold text-slate-200 hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/50 rounded"
+                className="flex items-center gap-2 text-left text-sm font-semibold text-text hover:text-text transition-colors focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-brand/50 rounded"
                 aria-label="Needs attention"
                 aria-expanded={!attentionCollapsed}
               >
                 <AlertTriangle
                   size={15}
-                  className={pendingAttention > 0 ? "text-amber-400" : "text-emerald-400"}
+                  className={pendingAttention > 0 ? "text-warn" : "text-ok"}
                 />
                 <span>Needs attention</span>
-                <span className="text-xs font-normal text-slate-400">
+                <span className="text-xs font-normal text-text-subtle">
                   ({attentionCollapsed ? "Show" : "Hide"})
                 </span>
               </button>
               <button
                 type="button"
                 onClick={() => router.push("/admin/health")}
-                className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
               >
                 <span>View all</span>
                 <ArrowUpRight size={13} />
@@ -1536,13 +1536,13 @@ export function AdminOverview() {
                       being read, so both cases stay out of the green panel —
                       with copy that distinguishes "not yet" from "could not". */}
                   {overallStatus === "unknown" ? (
-                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-xs leading-5 text-slate-300">
-                      <p className="mb-0.5 font-semibold text-slate-200">Nothing to report yet</p>
+                    <div className="rounded-xl border border-line bg-overlay-subtle p-3 text-xs leading-5 text-text">
+                      <p className="mb-0.5 font-semibold text-text">Nothing to report yet</p>
                       <p>Still reading nodes, servers and health checks. This list is not complete until they answer.</p>
                     </div>
                   ) : overallStatus === "unavailable" ? (
-                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3 text-xs leading-5 text-amber-100/90">
-                      <p className="mb-0.5 font-semibold text-amber-300">Nothing to report — and nothing verified</p>
+                    <div className="rounded-xl border border-warn-line bg-warn-subtle p-3 text-xs leading-5 text-warn">
+                      <p className="mb-0.5 font-semibold text-warn">Nothing to report — and nothing verified</p>
                       <p>
                         These sources could not be read, so this list is not evidence of a healthy fleet:
                       </p>
@@ -1558,7 +1558,7 @@ export function AdminOverview() {
                       <p className="mt-1">
                         See{" "}
                         <button
-                          className="font-semibold underline hover:text-amber-100"
+                          className="font-semibold underline hover:text-warn"
                           onClick={() => router.push("/admin/health")}
                           type="button"
                         >
@@ -1568,12 +1568,12 @@ export function AdminOverview() {
                       </p>
                     </div>
                   ) : (
-                    <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/[0.03] p-3 text-xs leading-5 text-emerald-200/90">
-                      <p className="mb-0.5 font-semibold text-emerald-300">No open issues</p>
+                    <div className="rounded-xl border border-ok-line bg-ok-subtle p-3 text-xs leading-5 text-ok">
+                      <p className="mb-0.5 font-semibold text-ok">No open issues</p>
                       <p>
                         Fleet heartbeat, workloads and the control-plane checks that reported are all passing. See{" "}
                         <button
-                          className="font-semibold underline hover:text-emerald-100"
+                          className="font-semibold underline hover:text-ok"
                           onClick={() => router.push("/admin/health")}
                           type="button"
                         >
@@ -1587,42 +1587,42 @@ export function AdminOverview() {
                   {/* Warnings are not failures, but they are real and belong
                       here. Nothing is listed when nothing is reported. */}
                   {warningChecks.length > 0 ? (
-                    <div className="space-y-2 border-t border-white/[0.04] pt-2">
+                    <div className="space-y-2 border-t border-line pt-2">
                       {warningChecks.slice(0, 4).map((check) => (
                         <div
-                          className="-mx-1.5 flex items-start justify-between gap-2 rounded p-1.5 text-xs transition hover:bg-white/[0.04] cursor-pointer"
+                          className="-mx-1.5 flex items-start justify-between gap-2 rounded p-1.5 text-xs transition hover:bg-overlay cursor-pointer"
                           key={check.name}
                           onClick={() => router.push("/admin/health")}
                         >
                           <div className="flex min-w-0 items-start gap-2">
-                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-warn" />
                             <div className="min-w-0">
-                              <p className="truncate text-[11px] font-semibold text-slate-200 capitalize">
+                              <p className="truncate text-[11px] font-semibold text-text capitalize">
                                 {check.name.replace(/_/g, " ")}
                               </p>
-                              <p className="truncate text-[10px] text-slate-400">
+                              <p className="truncate text-[10px] text-text-subtle">
                                 {check.notificationMessage || check.label || "Reported a warning without a message."}
                               </p>
                             </div>
                           </div>
-                          <span className="shrink-0 font-mono text-[10px] text-amber-300/80">warning</span>
+                          <span className="shrink-0 font-mono text-[10px] text-warn">warning</span>
                         </div>
                       ))}
                     </div>
                   ) : null}
                 </div>
               ) : (
-                <ul className="mt-4 max-h-[220px] divide-y divide-white/[0.06] overflow-auto rounded-xl border border-white/[0.08] bg-black/30">
+                <ul className="mt-4 max-h-[220px] divide-y divide-line overflow-auto rounded-xl border border-line bg-well">
                   {failures.slice(0, 5).map((f) => (
                     <li
                       key={f.id}
                       onClick={() => f.href && router.push(f.href)}
                       className={`p-3 transition ${
-                        f.href ? "cursor-pointer hover:bg-white/[0.04]" : ""
+                        f.href ? "cursor-pointer hover:bg-overlay" : ""
                       }`}
                     >
-                      <p className="truncate text-xs font-semibold text-amber-200">{f.label}</p>
-                      <p className="truncate text-xs text-slate-400">{f.detail}</p>
+                      <p className="truncate text-xs font-semibold text-warn">{f.label}</p>
+                      <p className="truncate text-xs text-text-subtle">{f.detail}</p>
                     </li>
                   ))}
                 </ul>
@@ -1633,7 +1633,7 @@ export function AdminOverview() {
               <button
                 type="button"
                 onClick={() => router.push("/admin/health")}
-                className="mt-3 text-xs font-medium text-amber-300 hover:text-amber-200 transition"
+                className="mt-3 text-xs font-medium text-warn hover:text-warn transition"
               >
                 View all {pendingAttention} issues →
               </button>
@@ -1641,16 +1641,16 @@ export function AdminOverview() {
           </div>
 
           {/* Recent Activity Card */}
-          <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-2">
-                <Clock size={15} className="text-slate-400" />
-                <h3 className="text-sm font-bold text-slate-100">Recent Activity</h3>
+                <Clock size={15} className="text-text-subtle" />
+                <h3 className="text-sm font-bold text-text">Recent Activity</h3>
               </div>
               <button
                 type="button"
                 onClick={() => router.push("/admin/operations")}
-                className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+                className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
               >
                 <span>View all</span>
                 <ArrowUpRight size={13} />
@@ -1658,33 +1658,33 @@ export function AdminOverview() {
             </div>
 
             {activityQuery.isError ? (
-              <p className="mt-4 text-xs text-amber-300/80">
+              <p className="mt-4 text-xs text-warn">
                 The audit feed could not be read, so recent changes are unknown.
               </p>
             ) : activityQuery.isPending ? (
-              <p className="mt-4 text-xs text-slate-500">Reading audit feed…</p>
+              <p className="mt-4 text-xs text-text-muted">Reading audit feed…</p>
             ) : auditEvents.length === 0 ? (
-              <p className="mt-4 text-xs text-slate-500">No audit events recorded.</p>
+              <p className="mt-4 text-xs text-text-muted">No audit events recorded.</p>
             ) : (
-              <div className="mt-4 divide-y divide-white/[0.04]">
+              <div className="mt-4 divide-y divide-line">
                 {auditEvents.slice(0, 4).map((event) => (
                   <div
                     key={event.id}
                     onClick={() => router.push("/admin/operations")}
-                    className="flex items-start justify-between gap-2 py-2.5 px-2 -mx-2 rounded hover:bg-white/[0.03] cursor-pointer transition"
+                    className="flex items-start justify-between gap-2 py-2.5 px-2 -mx-2 rounded hover:bg-overlay cursor-pointer transition"
                   >
                     <div className="flex items-start gap-2.5 min-w-0">
-                      <div className="grid h-6 w-6 place-items-center rounded-full bg-white/[0.04] text-slate-400 shrink-0 mt-0.5">
+                      <div className="grid h-6 w-6 place-items-center rounded-full bg-overlay text-text-subtle shrink-0 mt-0.5">
                         <User size={12} />
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold text-slate-200">{event.action.replace(/_/g, " ")}</p>
-                        <p className="truncate text-[10px] font-mono text-slate-500">
+                        <p className="truncate text-xs font-semibold text-text">{event.action.replace(/_/g, " ")}</p>
+                        <p className="truncate text-[10px] font-mono text-text-muted">
                           {event.actorEmail || "system"}
                         </p>
                       </div>
                     </div>
-                    <span className="font-mono text-[10px] text-slate-500 shrink-0">
+                    <span className="font-mono text-[10px] text-text-muted shrink-0">
                       {event.createdAt
                         ? new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                         : "—"}
@@ -1707,10 +1707,10 @@ export function AdminOverview() {
         <div className="grid gap-6 md:grid-cols-2">
           <Card className="min-h-[160px]">
             <CardHeader title="Memory Allocation" icon={MemoryRamStickIcon} />
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
               Configured server memory — sum of Workload resources.memory
             </p>
-            <p className="mt-1 font-mono text-2xl font-bold text-slate-100 tabular-nums">
+            <p className="mt-1 font-mono text-2xl font-bold text-text tabular-nums">
               {serversQuery.isError
                 ? "Unavailable"
                 : serversQuery.isLoading
@@ -1719,15 +1719,15 @@ export function AdminOverview() {
                 ? `${serverMemoryConfiguration.value.toLocaleString()} MiB`
                 : "Not reported"}
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-text-subtle">
               {serversQuery.isError
                 ? "Workload inventory is unavailable."
                 : serversQuery.isLoading
                 ? "Waiting for workload inventory."
                 : `Allocated across ${serverMemoryConfiguration.reported} of ${serverMemoryConfiguration.total} workloads.`}
             </p>
-            <div className="mt-3 border-t border-white/[0.06] pt-2.5 text-xs text-slate-400">
-              <span className="text-slate-500">Beacon host allocatable pool:</span>{" "}
+            <div className="mt-3 border-t border-line pt-2.5 text-xs text-text-subtle">
+              <span className="text-text-muted">Beacon host allocatable pool:</span>{" "}
               {nodesQuery.isError
                 ? "unavailable"
                 : nodesQuery.isLoading
@@ -1736,17 +1736,17 @@ export function AdminOverview() {
                 ? `${nodeMemoryCapacity.value.toLocaleString()} MiB across ${nodeMemoryCapacity.reported}/${nodeMemoryCapacity.total} beacons`
                 : "not reported"}
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
               Capacity is configured quota allocation, not live memory utilization. See Monitoring for real-time telemetry over time.
             </p>
           </Card>
 
           <Card className="min-h-[160px]">
             <CardHeader title="Storage Allocation" icon={StoragePlattersIcon} />
-            <p className="text-xs font-medium uppercase tracking-wider text-slate-500">
+            <p className="text-xs font-medium uppercase tracking-wider text-text-muted">
               Configured server disk — sum of Workload resources.disk
             </p>
-            <p className="mt-1 font-mono text-2xl font-bold text-slate-100 tabular-nums">
+            <p className="mt-1 font-mono text-2xl font-bold text-text tabular-nums">
               {serversQuery.isError
                 ? "Unavailable"
                 : serversQuery.isLoading
@@ -1755,15 +1755,15 @@ export function AdminOverview() {
                 ? `${serverDiskConfiguration.value.toLocaleString()} MiB`
                 : "Not reported"}
             </p>
-            <p className="mt-1 text-xs text-slate-400">
+            <p className="mt-1 text-xs text-text-subtle">
               {serversQuery.isError
                 ? "Workload inventory is unavailable."
                 : serversQuery.isLoading
                 ? "Waiting for workload inventory."
                 : `Allocated across ${serverDiskConfiguration.reported} of ${serverDiskConfiguration.total} workloads.`}
             </p>
-            <div className="mt-3 border-t border-white/[0.06] pt-2.5 text-xs text-slate-400">
-              <span className="text-slate-500">Beacon storage pool:</span>{" "}
+            <div className="mt-3 border-t border-line pt-2.5 text-xs text-text-subtle">
+              <span className="text-text-muted">Beacon storage pool:</span>{" "}
               {nodesQuery.isError
                 ? "unavailable"
                 : nodesQuery.isLoading
@@ -1772,7 +1772,7 @@ export function AdminOverview() {
                 ? `${nodeDiskCapacity.value.toLocaleString()} MiB across ${nodeDiskCapacity.reported}/${nodeDiskCapacity.total} beacons`
                 : "not reported"}
             </div>
-            <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+            <p className="mt-2 text-[11px] leading-relaxed text-text-muted">
               Disk capacity represents maximum allocation bounds. Live disk usage is monitored per container via Beacon.
             </p>
           </Card>
@@ -1780,7 +1780,7 @@ export function AdminOverview() {
 
         {/* Per-Node Memory Capacity Bar Chart */}
         {nodeResourceData.length > 0 && (
-          <div className="mt-4 rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5">
+          <div className="mt-4 rounded-xl border border-line bg-[var(--surface)] p-5">
             <SimpleBarChart
               data={nodeResourceData}
               title="Configured memory capacity per beacon (MiB)"
@@ -1792,21 +1792,21 @@ export function AdminOverview() {
       {/* ========================================================================= */}
       {/* ZONE 5: BOTTOM INFRASTRUCTURE EVENTS TABLE                                */}
       {/* ========================================================================= */}
-      <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm">
+      <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm">
         <div className="flex items-center justify-between gap-3 mb-4">
           <div>
-            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-              <Zap size={14} className="text-amber-400" />
+            <h3 className="text-sm font-bold text-text flex items-center gap-2">
+              <Zap size={14} className="text-warn" />
               <span>Infrastructure Events</span>
             </h3>
-            <p className="text-xs text-slate-400 mt-0.5">
+            <p className="text-xs text-text-subtle mt-0.5">
               Recent operational events across your Forge installation.
             </p>
           </div>
           <button
             type="button"
             onClick={() => router.push("/admin/operations")}
-            className="flex items-center gap-1 text-xs font-semibold text-slate-400 hover:text-white transition-colors"
+            className="flex items-center gap-1 text-xs font-semibold text-text-subtle hover:text-text transition-colors"
           >
             <span>View all</span>
             <ArrowUpRight size={13} />
@@ -1816,7 +1816,7 @@ export function AdminOverview() {
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead>
-              <tr className="border-b border-white/[0.06] text-[10px] font-bold uppercase tracking-wider text-slate-500">
+              <tr className="border-b border-line text-[10px] font-bold uppercase tracking-wider text-text-muted">
                 <th className="pb-2.5 font-semibold">Time</th>
                 <th className="pb-2.5 font-semibold">Type</th>
                 <th className="pb-2.5 font-semibold">Resource</th>
@@ -1824,34 +1824,34 @@ export function AdminOverview() {
                 <th className="pb-2.5 font-semibold text-right">Age</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-white/[0.04]">
+            <tbody className="divide-y divide-line">
               {auditEvents.length > 0 ? (
                 auditEvents.slice(0, 6).map((evt, idx) => (
                   <tr
                     key={evt.id || idx}
                     onClick={() => router.push("/admin/operations")}
-                    className="hover:bg-white/[0.04] cursor-pointer transition"
+                    className="hover:bg-overlay cursor-pointer transition"
                   >
-                    <td className="py-2.5 font-mono text-slate-400">
+                    <td className="py-2.5 font-mono text-text-subtle">
                       {evt.createdAt
                         ? new Date(evt.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
                         : "—"}
                     </td>
                     <td className="py-2.5">
                       {/* Category comes from the action, not from a fixed label. */}
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-line bg-overlay px-2 py-0.5 font-mono text-[10px] font-semibold text-text">
+                        <span className="h-1.5 w-1.5 rounded-full bg-text-muted" />
                         <span>{evt.action.split(/[._]/)[0] || "audit"}</span>
                       </span>
                     </td>
-                    <td className="py-2.5 font-semibold text-slate-300 capitalize">
+                    <td className="py-2.5 font-semibold text-text capitalize">
                       {evt.targetType || evt.resource || "—"}
                     </td>
-                    <td className="py-2.5 text-slate-400">
-                      <span className="text-slate-200 font-medium">{evt.action.replace(/_/g, " ")}</span>
+                    <td className="py-2.5 text-text-subtle">
+                      <span className="text-text font-medium">{evt.action.replace(/_/g, " ")}</span>
                       {evt.actorEmail ? ` by ${evt.actorEmail}` : ""}
                     </td>
-                    <td className="py-2.5 text-right font-mono text-slate-500">
+                    <td className="py-2.5 text-right font-mono text-text-muted">
                       {relativeTime(evt.createdAt) ?? "—"}
                     </td>
                   </tr>
@@ -1859,7 +1859,7 @@ export function AdminOverview() {
               ) : (
                 /* One row, stating which of the three it is. Never sample events. */
                 <tr>
-                  <td className="py-4 text-xs text-slate-500" colSpan={5}>
+                  <td className="py-4 text-xs text-text-muted" colSpan={5}>
                     {activityQuery.isError
                       ? "The audit feed could not be read. Recent infrastructure events are unknown — this is not an idle fleet."
                       : activityQuery.isPending
@@ -1876,9 +1876,9 @@ export function AdminOverview() {
       {/* ========================================================================= */}
       {/* ZONE 6: TELEMETRY FRESHNESS RIBBON ("SOURCES")                            */}
       {/* ========================================================================= */}
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-overlay-subtle px-3.5 py-2">
         <div className="flex flex-wrap items-center gap-2 text-xs">
-          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-500">
+          <span className="font-mono text-[10px] font-bold uppercase tracking-wider text-text-muted">
             Sources:
           </span>
           {anyStale ? (
@@ -1914,7 +1914,7 @@ export function AdminOverview() {
                 ? "loading"
                 : "available"}
               {query.isSuccess && query.dataUpdatedAt > 0 ? (
-                <span className="ml-1 font-mono text-[10px] text-slate-500 tabular-nums">
+                <span className="ml-1 font-mono text-[10px] text-text-muted tabular-nums">
                   {new Date(query.dataUpdatedAt).toLocaleTimeString([], {
                     hour: "2-digit",
                     minute: "2-digit",
@@ -1926,8 +1926,8 @@ export function AdminOverview() {
           ))}
         </div>
 
-        <div className="flex items-center gap-2 text-[10px] text-slate-500 font-mono">
-          <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
+        <div className="flex items-center gap-2 text-[10px] text-text-muted font-mono">
+          <span className="h-1.5 w-1.5 rounded-full bg-ok animate-pulse" />
           <span>Live Telemetry Polling 30s</span>
         </div>
       </div>
@@ -1989,3 +1989,4 @@ export function AdminOverview() {
     </AdminPageLayout>
   );
 }
+
