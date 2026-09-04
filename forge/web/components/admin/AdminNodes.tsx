@@ -82,19 +82,19 @@ export function AdminNodes() {
           </Btn>
         }
       />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-        <span className="font-semibold text-slate-300">Beacons</span> is the product term for <span className="font-mono text-[11px]">store.go:129 Node</span> — API alias <code className="font-mono">GET /beacons</code> → <code className="font-mono">GET /nodes</code> compat kept. Click a row for the 8-tab workspace (Overview/Metrics/Workloads/Networking/Storage/Capabilities/Placement/Config).
-        <span className="ml-2 font-mono text-[11px] text-slate-600">{nodes.length} total · {healthy} healthy · 8-tab detail → /admin/nodes/[id]</span>
+      <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
+        <span className="font-semibold text-text">Beacons</span> is the product term for <span className="font-mono text-[11px]">store.go:129 Node</span> — API alias <code className="font-mono">GET /beacons</code> → <code className="font-mono">GET /nodes</code> compat kept. Click a row for the 8-tab workspace (Overview/Metrics/Workloads/Networking/Storage/Capabilities/Placement/Config).
+        <span className="ml-2 font-mono text-[11px] text-text-muted">{nodes.length} total · {healthy} healthy · 8-tab detail → /admin/nodes/[id]</span>
       </div>
 
       {locationsQuery.isError ? (
-        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
           <span>Could not load locations: {locationsQuery.error.message}</span>
           <Btn size="sm" tone="ghost" onClick={() => void locationsQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
       {serversQuery.isError ? (
-        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
           <span>Could not load server counts: {serversQuery.error.message}</span>
           <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
         </div>
@@ -102,14 +102,14 @@ export function AdminNodes() {
 
       <Card>
         <div className="flex items-center gap-3 p-4">
-          <Search size={14} className="text-slate-500" />
+          <Search size={14} className="text-text-muted" />
           <Input placeholder="Search beacons — name or FQDN (alias: Nodes)" value={search} onChange={setSearch} />
-          <span className="hidden sm:inline text-xs text-slate-600">{filtered.length} / {nodes.length}</span>
+          <span className="hidden sm:inline text-xs text-text-muted">{filtered.length} / {nodes.length}</span>
         </div>
         {nodesQuery.isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading nodes…</div>
+          <div className="p-8 text-center text-sm text-text-muted">Loading nodes…</div>
         ) : nodesQuery.isError ? (
-          <div className="p-8 text-center text-sm text-red-300">
+          <div className="p-8 text-center text-sm text-danger">
             <AlertCircle className="mx-auto mb-2" size={20} />
             <p>Nodes could not be loaded from the API.</p>
             <div className="mt-3"><Btn size="sm" onClick={() => void nodesQuery.refetch()}>Retry</Btn></div>
@@ -118,9 +118,9 @@ export function AdminNodes() {
           <EmptyState icon={Network} message={search ? "No nodes match your search." : "Setup required — create a node before hosting workloads."} />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm text-slate-200">
+            <table className="w-full text-sm text-text">
               <thead>
-                <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
                   <th className="px-4 py-3"></th>
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">State</th>
@@ -189,39 +189,39 @@ function NodeRow({ node, locations, regions, onClick, onQuick, serverCount }: {
   const region = regions.find((candidate) => candidate.id === node.regionId);
   const ssl = (node.scheme ?? "https") === "https";
   return (
-    <tr className="border-b border-white/[0.04] transition hover:bg-white/[0.02]">
+    <tr className="border-b border-line transition hover:bg-overlay-subtle">
       <td className="px-4 py-3">
         <span
           className={cn(
             "inline-block h-2.5 w-2.5 rounded-full",
-            isOnline ? "bg-emerald-500" : isDegraded ? "bg-amber-400" : actualState === "offline" ? "bg-red-500" : "bg-slate-500"
+            isOnline ? "bg-ok" : isDegraded ? "bg-warn" : actualState === "offline" ? "bg-danger" : "bg-text-muted"
           )}
           title={`Actual state: ${actualState}; heartbeat: ${heartbeatState}`}
         />
       </td>
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          {node.maintenanceMode && <Wrench size={12} className="text-amber-400" />}
-          <button type="button" className="font-semibold text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={onClick}>{node.name}</button>
+          {node.maintenanceMode && <Wrench size={12} className="text-warn" />}
+          <button type="button" className="font-semibold text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={onClick}>{node.name}</button>
         </div>
       </td>
       <td className="px-4 py-3 font-mono text-xs capitalize">{actualState}</td>
-      <td className="px-4 py-3 font-mono text-xs capitalize text-slate-400">{heartbeatState}</td>
-      <td className="px-4 py-3 text-slate-400">
-        {location ? <><div>{location.short}</div><div className="text-xs text-slate-500">{location.long}</div></> : "—"}
+      <td className="px-4 py-3 font-mono text-xs capitalize text-text-subtle">{heartbeatState}</td>
+      <td className="px-4 py-3 text-text-subtle">
+        {location ? <><div>{location.short}</div><div className="text-xs text-text-muted">{location.long}</div></> : "—"}
       </td>
-      <td className="px-4 py-3 text-slate-400">
-        {region ? <><div>{region.name}</div><div className="text-xs text-slate-500">{region.slug}</div></> : node.region || "—"}
+      <td className="px-4 py-3 text-text-subtle">
+        {region ? <><div>{region.name}</div><div className="text-xs text-text-muted">{region.slug}</div></> : node.region || "—"}
       </td>
       <td className="px-4 py-3 font-mono text-xs">{node.memoryMb} MiB</td>
       <td className="px-4 py-3 font-mono text-xs">{node.diskMb} MiB</td>
-      <td className="px-4 py-3 text-slate-400">{serverCount}</td>
-      <td className="px-4 py-3">{ssl ? <Lock size={14} className="text-emerald-500" /> : <Unlock size={14} className="text-red-400" />}</td>
-      <td className="px-4 py-3">{node.public ?? node.isPublic ? <Eye size={14} className="text-sky-500" /> : <EyeOff size={14} className="text-slate-500" />}</td>
+      <td className="px-4 py-3 text-text-subtle">{serverCount}</td>
+      <td className="px-4 py-3">{ssl ? <Lock size={14} className="text-ok" /> : <Unlock size={14} className="text-danger" />}</td>
+      <td className="px-4 py-3">{node.public ?? node.isPublic ? <Eye size={14} className="text-info" /> : <EyeOff size={14} className="text-text-muted" />}</td>
       <td className="px-4 py-3 text-right">
         <div className="flex items-center justify-end gap-1">
-          {onQuick ? <button type="button" onClick={(e) => { e.stopPropagation(); onQuick(); }} className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-white/[0.06] hover:text-slate-200">Quick</button> : null}
-          <ChevronRight size={14} className="text-slate-500" />
+          {onQuick ? <button type="button" onClick={(e) => { e.stopPropagation(); onQuick(); }} className="rounded px-2 py-1 text-xs text-text-muted hover:bg-overlay-strong hover:text-text">Quick</button> : null}
+          <ChevronRight size={14} className="text-text-muted" />
         </div>
       </td>
     </tr>
@@ -253,13 +253,13 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
   };
 
   if (isLoading) {
-    return <Modal title="Node" onClose={onClose}><div className="p-8 text-center text-sm text-slate-500">Loading…</div></Modal>;
+    return <Modal title="Node" onClose={onClose}><div className="p-8 text-center text-sm text-text-muted">Loading…</div></Modal>;
   }
 
   if (nodeQuery.isError || !node) {
     return (
       <Modal title="Node" onClose={onClose}>
-        <div className="space-y-3 p-8 text-center text-sm text-red-300">
+        <div className="space-y-3 p-8 text-center text-sm text-danger">
           <AlertCircle className="mx-auto" size={20} />
           <p>{nodeQuery.isError ? `Could not load this node: ${nodeQuery.error.message}` : "This node is no longer available."}</p>
           <div><Btn size="sm" onClick={() => void nodeQuery.refetch()}>Retry</Btn></div>
@@ -343,7 +343,7 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
       value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
       sub: cap ? `${cap.allocated_disk} / ${diskTotal} MiB` : isLifecycleLoading ? "…" : "Unavailable",
       live: Boolean(cap), bar: diskPct },
-    { key: "readiness", title: "Readiness", icon: Activity, color: chart.lightEmerald, iconClass: "text-emerald-400", valueClass: "text-emerald-300",
+    { key: "readiness", title: "Readiness", icon: Activity, color: chart.lightEmerald, iconClass: "text-ok", valueClass: "text-ok",
       value: typeof score === "number" ? `${score}/100` : null,
       sub: lifecycle ? (lifecycle.placementEligible ? "Eligible" : lifecycle.placementBlockedReason ?? "Not eligible") : isLifecycleLoading ? "…" : "Unavailable",
       live: Boolean(lifecycle), bar: typeof score === "number" ? score : null },
@@ -359,7 +359,7 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
   return (
     <div className="space-y-4">
       {serversQuery.isError ? (
-        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
           <span>Could not load servers on this node: {serversQuery.error.message}</span>
           <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
         </div>
@@ -368,37 +368,37 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
 
       <div className="grid gap-4 xl:grid-cols-5">
         <InfoCard wide icon={Activity} title="Information" rows={[
-          ["Daemon Version", <span key="v" className="font-mono text-slate-200">{sys?.version ?? (isError ? "Offline" : "Probing…")}</span>],
-          ["System", <span key="sys" className="font-mono text-slate-200">{sys ? `${sys.os ?? "?"} (${sys.architecture ?? "?"})` : "—"}</span>],
-          ["CPU Threads", <span key="cpu" className="font-mono text-slate-200">{sys?.cpuThreads ?? "—"}</span>],
-          ["Docker", <span key="docker" className={cn("font-mono", sys?.dockerAvailable ? "text-emerald-400" : "text-red-400")}>{sys?.dockerStatus ?? "unknown"}</span>],
-          ["FQDN", <span key="fqdn" className="font-mono text-slate-200">{node?.fqdn ?? "—"}</span>],
-          ["Runtime / scheduler", <span key="rt" className="font-mono text-slate-200">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>],
-          ["Beacon version", <span key="bv" className="font-mono text-slate-200">{sys?.version ?? node?.version ?? "Not reported"}</span>],
-          ["Last seen", <span key="seen" className="font-mono text-slate-200">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>],
-          ["Labels", <span key="labels" className="font-mono text-xs text-slate-200">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>],
-          ["Desired state", <span key="ds" className="font-mono capitalize text-slate-200">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>],
-          ["Daemon ports", <span key="ports" className="font-mono text-slate-200">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>],
-          ["Behind proxy", <span key="proxy" className="font-mono text-slate-200">{node?.behindProxy ? "Yes" : "No"}</span>],
-          ["Public", <span key="pub" className="font-mono text-slate-200">{node?.public ?? node?.isPublic ? "Yes" : "No"}</span>],
-          ["Public hostname", <span key="ph" className="font-mono text-slate-200">{node?.publicHostname || "—"}</span>],
-          ["Display name", <span key="dn" className="font-mono text-slate-200">{node?.displayName || "—"}</span>],
-          ["Scheduler", <span key="sched" className="font-mono capitalize text-slate-200">{node?.schedulerType ?? "docker"}</span>],
-          ["Upload limit", <span key="ul" className="font-mono text-slate-200">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : "Default"}</span>],
-          ["Memory overallocation", <span key="mo" className="font-mono text-slate-200">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : "0%"}</span>],
-          ["Disk overallocation", <span key="do" className="font-mono text-slate-200">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : "0%"}</span>],
-          ["CPU overallocation", <span key="co" className="font-mono text-slate-200">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : "0%"}</span>],
-          ["Tags", <span key="tags" className="font-mono text-xs text-slate-200">{node?.tags?.length ? node.tags.join(", ") : "None"}</span>],
+          ["Daemon Version", <span key="v" className="font-mono text-text">{sys?.version ?? (isError ? "Offline" : "Probing…")}</span>],
+          ["System", <span key="sys" className="font-mono text-text">{sys ? `${sys.os ?? "?"} (${sys.architecture ?? "?"})` : "—"}</span>],
+          ["CPU Threads", <span key="cpu" className="font-mono text-text">{sys?.cpuThreads ?? "—"}</span>],
+          ["Docker", <span key="docker" className={cn("font-mono", sys?.dockerAvailable ? "text-ok" : "text-danger")}>{sys?.dockerStatus ?? "unknown"}</span>],
+          ["FQDN", <span key="fqdn" className="font-mono text-text">{node?.fqdn ?? "—"}</span>],
+          ["Runtime / scheduler", <span key="rt" className="font-mono text-text">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>],
+          ["Beacon version", <span key="bv" className="font-mono text-text">{sys?.version ?? node?.version ?? "Not reported"}</span>],
+          ["Last seen", <span key="seen" className="font-mono text-text">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>],
+          ["Labels", <span key="labels" className="font-mono text-xs text-text">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>],
+          ["Desired state", <span key="ds" className="font-mono capitalize text-text">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>],
+          ["Daemon ports", <span key="ports" className="font-mono text-text">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>],
+          ["Behind proxy", <span key="proxy" className="font-mono text-text">{node?.behindProxy ? "Yes" : "No"}</span>],
+          ["Public", <span key="pub" className="font-mono text-text">{node?.public ?? node?.isPublic ? "Yes" : "No"}</span>],
+          ["Public hostname", <span key="ph" className="font-mono text-text">{node?.publicHostname || "—"}</span>],
+          ["Display name", <span key="dn" className="font-mono text-text">{node?.displayName || "—"}</span>],
+          ["Scheduler", <span key="sched" className="font-mono capitalize text-text">{node?.schedulerType ?? "docker"}</span>],
+          ["Upload limit", <span key="ul" className="font-mono text-text">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : "Default"}</span>],
+          ["Memory overallocation", <span key="mo" className="font-mono text-text">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : "0%"}</span>],
+          ["Disk overallocation", <span key="do" className="font-mono text-text">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : "0%"}</span>],
+          ["CPU overallocation", <span key="co" className="font-mono text-text">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : "0%"}</span>],
+          ["Tags", <span key="tags" className="font-mono text-xs text-text">{node?.tags?.length ? node.tags.join(", ") : "None"}</span>],
         ]} />
 
-        <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
-          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100"><Activity size={15} className="text-slate-400" /> Lifecycle</h3>
-          <div className={cn("mt-3 rounded-lg border p-3", lifecycle?.placementEligible ? "border-emerald-500/20 bg-emerald-500/[0.05]" : "border-white/[0.06] bg-black/20")}>
-            <p className={cn("flex items-center gap-1.5 text-sm font-bold", lifecycle?.placementEligible ? "text-emerald-300" : "text-slate-200")}>
-              <span className={cn("h-2 w-2 rounded-full", lifecycle ? (lifecycle.placementEligible ? "bg-emerald-400" : "bg-amber-400") : "bg-slate-500")} />
+        <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-text"><Activity size={15} className="text-text-subtle" /> Lifecycle</h3>
+          <div className={cn("mt-3 rounded-lg border p-3", lifecycle?.placementEligible ? "border-ok-line bg-ok-subtle" : "border-line bg-well")}>
+            <p className={cn("flex items-center gap-1.5 text-sm font-bold", lifecycle?.placementEligible ? "text-ok" : "text-text")}>
+              <span className={cn("h-2 w-2 rounded-full", lifecycle ? (lifecycle.placementEligible ? "bg-ok" : "bg-warn") : "bg-text-muted")} />
               {lifecycle ? (lifecycle.placementEligible ? "Eligible for placement" : "Not eligible") : isLifecycleError ? "Lifecycle unavailable" : "Loading…"}
             </p>
-            <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+            <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
               {lifecycle
                 ? (!lifecycle.placementEligible && lifecycle.placementBlockedReason
                     ? lifecycle.placementBlockedReason
@@ -406,26 +406,26 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
                 : ""}
             </p>
           </div>
-          <dl className="mt-2 divide-y divide-white/[0.05] text-xs">
+          <dl className="mt-2 divide-y divide-line text-xs">
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-slate-500">Actual state / heartbeat</dt>
-              <dd className="font-mono capitalize text-slate-200">{lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : "—"}</dd>
+              <dt className="text-text-muted">Actual state / heartbeat</dt>
+              <dd className="font-mono capitalize text-text">{lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-slate-500">Placement</dt>
-              <dd className={cn("font-mono", lifecycle?.placementEligible ? "text-emerald-400" : "text-amber-400")}>{lifecycle?.placementEligible ? "Eligible" : lifecycle?.placementBlockedReason ?? "Not eligible"}</dd>
+              <dt className="text-text-muted">Placement</dt>
+              <dd className={cn("font-mono", lifecycle?.placementEligible ? "text-ok" : "text-warn")}>{lifecycle?.placementEligible ? "Eligible" : lifecycle?.placementBlockedReason ?? "Not eligible"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-slate-500">Memory</dt>
-              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_memory} / ${lifecycle.capacity.available_memory} MiB` : "—"}</dd>
+              <dt className="text-text-muted">Memory</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_memory} / ${lifecycle.capacity.available_memory} MiB` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-slate-500">Disk</dt>
-              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_disk} / ${lifecycle.capacity.available_disk} MiB` : "—"}</dd>
+              <dt className="text-text-muted">Disk</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_disk} / ${lifecycle.capacity.available_disk} MiB` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-slate-500">CPU / servers</dt>
-              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} · ${lifecycle.capacity.server_count} servers` : "—"}</dd>
+              <dt className="text-text-muted">CPU / servers</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} · ${lifecycle.capacity.server_count} servers` : "—"}</dd>
             </div>
           </dl>
         </div>
@@ -434,7 +434,7 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
       {node?.description && (
         <Card>
           <CardHeader title="Description" icon={Mail} />
-          <pre className="whitespace-pre-wrap px-4 py-3 text-xs text-slate-300">{node.description}</pre>
+          <pre className="whitespace-pre-wrap px-4 py-3 text-xs text-text">{node.description}</pre>
         </Card>
       )}
 
@@ -526,13 +526,13 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           <Input label="Name" value={name} onChange={setName} />
           <Textarea label="Description" value={description} onChange={setDescription} rows={3} />
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Location</span>
-            <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-slate-100" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locationsQuery.isPending || locationsQuery.isError}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Location</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locationsQuery.isPending || locationsQuery.isError}>
               <option value="">Select…</option>
               {locations.map((location) => <option key={location.id} value={location.id}>{location.short} — {location.long}</option>)}
             </select>
             {locationsQuery.isError ? (
-              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <span>Could not load locations: {locationsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" type="button" onClick={() => void locationsQuery.refetch()}>Retry</Btn>
               </div>
@@ -540,8 +540,8 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           </label>
           <Input label="FQDN" value={fqdn} onChange={setFqdn} />
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">SSL</span>
-            <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-slate-100" value={scheme} onChange={(e) => setScheme(e.target.value)}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">SSL</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={scheme} onChange={(e) => setScheme(e.target.value)}>
               <option value="https">https (SSL)</option>
               <option value="http">http (no SSL)</option>
             </select>
@@ -551,16 +551,16 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
             <span>Behind Proxy</span>
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Lifecycle state</span>
-            <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-slate-100" value={desiredState} onChange={(e) => setDesiredState(e.target.value as "active" | "draining" | "maintenance")}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Lifecycle state</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={desiredState} onChange={(e) => setDesiredState(e.target.value as "active" | "draining" | "maintenance")}>
               <option value="active">Active — eligible when healthy</option>
               <option value="draining">Draining — exclude from placement</option>
               <option value="maintenance">Maintenance — exclude from placement</option>
             </select>
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-slate-400">Scheduler Backend</span>
-            <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-slate-100" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Scheduler Backend</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
               <option value="docker">Docker (default)</option>
               <option value="k3s">K3s (Kubernetes)</option>
               <option value="nomad">Nomad (HashiCorp)</option>
@@ -593,7 +593,7 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           </Btn>
         </div>
       </div>
-      {rotatedToken ? <div className="md:col-span-2 rounded-lg border border-amber-500/30 bg-amber-950/20 p-4"><p className="text-sm font-semibold text-amber-200">New complete credential — shown once</p><pre className="mt-2 overflow-auto rounded bg-black/30 p-3 text-xs text-emerald-300">{credentialMasked ? "••••••••••••••••••••••••" : rotatedToken}</pre><div className="mt-3 flex gap-2"><Btn size="sm" tone="ghost" type="button" onClick={() => setCredentialMasked((masked) => !masked)}>{credentialMasked ? <><Eye size={14} /> Reveal credential</> : <><EyeOff size={14} /> Hide credential</>}</Btn><Btn size="sm" tone="ghost" type="button" onClick={async () => { if (await copySecret(rotatedToken)) { setCredentialCopied(true); setTimeout(() => setCredentialCopied(false), 2000); } }}>{credentialCopied ? "Credential copied" : "Copy credential"}</Btn><Btn size="sm" tone="ghost" type="button" onClick={() => setRotatedToken(null)}>I stored it</Btn></div><p className="mt-2 text-xs text-amber-200/70">Copied credentials are wiped from the clipboard 15s after copying and when this window loses focus.</p></div> : null}
+      {rotatedToken ? <div className="md:col-span-2 rounded-lg border border-warn-line bg-warn-subtle p-4"><p className="text-sm font-semibold text-warn">New complete credential — shown once</p><pre className="mt-2 overflow-auto rounded bg-well p-3 text-xs text-ok">{credentialMasked ? "••••••••••••••••••••••••" : rotatedToken}</pre><div className="mt-3 flex gap-2"><Btn size="sm" tone="ghost" type="button" onClick={() => setCredentialMasked((masked) => !masked)}>{credentialMasked ? <><Eye size={14} /> Reveal credential</> : <><EyeOff size={14} /> Hide credential</>}</Btn><Btn size="sm" tone="ghost" type="button" onClick={async () => { if (await copySecret(rotatedToken)) { setCredentialCopied(true); setTimeout(() => setCredentialCopied(false), 2000); } }}>{credentialCopied ? "Credential copied" : "Copy credential"}</Btn><Btn size="sm" tone="ghost" type="button" onClick={() => setRotatedToken(null)}>I stored it</Btn></div><p className="mt-2 text-xs text-warn">Copied credentials are wiped from the clipboard 15s after copying and when this window loses focus.</p></div> : null}
       {renderConfirm()}
     </form>
   );
@@ -605,10 +605,10 @@ function NodeConfigurationTab({ node }: { node: ApiNode }) {
     <div className="space-y-4">
       <Card>
         <CardHeader title="Beacon environment" icon={Globe} />
-        <div className="space-y-3 p-4 text-sm text-slate-300">
+        <div className="space-y-3 p-4 text-sm text-text">
           <p>Beacon reads its panel connection from environment variables. It does not load the legacy YAML file or support <code>beacon configure</code>.</p>
           <p>Use the full credential shown when this node was created or when its token was rotated. If it was not retained, rotate the token in Settings.</p>
-          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-[11px] leading-relaxed text-slate-300">{`# /etc/forge/beacon.env (mode 0600)
+          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-[11px] leading-relaxed text-text">{`# /etc/forge/beacon.env (mode 0600)
 APP_ENV=production
 DAEMON_NODE_ID=${node.id}
 DAEMON_NODE_TOKEN=<token-id>.<secret>
@@ -689,7 +689,7 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
       <Card>
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
+            <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
               <th className="px-4 py-2">
                 <input type="checkbox" checked={allFiltered} onChange={toggleAll} disabled={deletable.length === 0 || deleteBulkMut.isPending} className="accent-[var(--brand)]" />
               </th>
@@ -701,14 +701,14 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
           </thead>
           <tbody>
             {filtered.map((a) => (
-              <tr key={a.id} className="border-b border-white/[0.04]">
+              <tr key={a.id} className="border-b border-line">
                 <td className="px-4 py-2">
                   <input type="checkbox" disabled={!!a.server || deleteBulkMut.isPending} checked={selected.has(a.id)} onChange={() => toggle(a.id)} className="accent-[var(--brand)]" />
                 </td>
                 <td className="px-4 py-2 font-mono text-xs">{a.ip}</td>
                 <td className="px-4 py-2">
                   <input
-                    className="h-8 w-32 rounded border border-white/10 bg-[var(--surface)] px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-8 w-32 rounded border border-line bg-[var(--surface)] px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                     value={aliases[a.id] ?? a.alias ?? ""}
                     disabled={setAliasMut.isPending}
                     onChange={(e) => setAliases((current) => ({ ...current, [a.id]: e.target.value }))}
@@ -719,7 +719,7 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
                   />
                 </td>
                 <td className="px-4 py-2 font-mono text-xs">{a.port}</td>
-                <td className="px-4 py-2 text-slate-400">{a.server ?? "—"}</td>
+                <td className="px-4 py-2 text-text-subtle">{a.server ?? "—"}</td>
               </tr>
             ))}
           </tbody>
@@ -741,7 +741,7 @@ function NodeServersTab({ nodeId }: { nodeId: string }) {
       <CardHeader title={`Servers (${filtered.length})`} icon={Database} />
       {serversQuery.isError ? (
         <div className="p-4">
-          <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
             <span>Could not load servers on this node: {serversQuery.error.message}</span>
             <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
           </div>
@@ -751,7 +751,7 @@ function NodeServersTab({ nodeId }: { nodeId: string }) {
       ) : (
         <table className="w-full text-sm">
           <thead>
-            <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
+            <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
               <th className="px-4 py-2">Name</th>
               <th className="px-4 py-2">UUID</th>
               <th className="px-4 py-2">Status</th>
@@ -759,9 +759,9 @@ function NodeServersTab({ nodeId }: { nodeId: string }) {
           </thead>
           <tbody>
             {filtered.map((s) => (
-              <tr key={s.id} className="border-b border-white/[0.04]">
+              <tr key={s.id} className="border-b border-line">
                 <td className="px-4 py-2 font-semibold">{s.name}</td>
-                <td className="px-4 py-2 font-mono text-xs text-slate-400">{s.id.slice(0, 8)}…</td>
+                <td className="px-4 py-2 font-mono text-xs text-text-subtle">{s.id.slice(0, 8)}…</td>
                 <td className="px-4 py-2">{s.status}</td>
               </tr>
             ))}
@@ -812,8 +812,8 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
     <div className="space-y-4">
       {/* Amber drift banner — visible when delta shows drift */}
       {hasDrift ? (
-        <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200" role="alert">
-          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-400" />
+        <div className="flex items-start gap-2 rounded-lg border border-warn-line bg-warn-subtle p-3 text-sm text-warn" role="alert">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warn" />
           <span>Capability drift detected — {d!.added.length} added · {d!.removed.length} removed · {d!.changed.length} changed since last snapshot. Use Probe to refresh or compare the two newest history rows.</span>
         </div>
       ) : null}
@@ -837,7 +837,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Beacon</span><span className="font-mono text-[var(--text)]">{capQ.data.beaconVersion || "—"}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">OS / Arch</span><span className="font-mono text-[var(--text)]">{capQ.data.os} / {capQ.data.architecture}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">CPU / Memory</span><span className="font-mono text-[var(--text)]">{capQ.data.cpuThreads} threads · {capQ.data.memoryMb} MiB</span></div>
-                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Runtime</span><span className={capQ.data.runtimeAvailable ? "font-mono text-emerald-300" : "font-mono text-red-300"}>{capQ.data.runtimeAvailable ? capQ.data.runtimeStatus || "available" : "unavailable"}</span></div>
+                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Runtime</span><span className={capQ.data.runtimeAvailable ? "font-mono text-ok" : "font-mono text-danger"}>{capQ.data.runtimeAvailable ? capQ.data.runtimeStatus || "available" : "unavailable"}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Fetched</span><span className="font-mono text-[var(--text)]">{capQ.data.fetchedAt ? new Date(capQ.data.fetchedAt).toLocaleString() : "—"}</span></div>
               </div>
               <div className="flex flex-wrap gap-1">
@@ -852,7 +852,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <Pill tone={capQ.data.consoleEnabled ? "blue" : "neutral"}>console</Pill>
                 <Pill tone={capQ.data.databaseProvisioningEnabled ? "green" : "neutral"}>dbProvisioning</Pill>
               </div>
-              <pre className="max-h-40 overflow-auto rounded bg-black/20 p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(capQ.data.rawReport ?? capQ.data, null, 2)}</pre>
+              <pre className="max-h-40 overflow-auto rounded bg-well p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(capQ.data.rawReport ?? capQ.data, null, 2)}</pre>
             </div>
           ) : (
             <div className="p-4 text-sm text-[var(--text-subtle)]">No capability snapshot yet — probe the node or wait for heartbeat.</div>
@@ -874,7 +874,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <Pill tone="neutral">= {d.unchanged.length} unchanged</Pill>
                 <span className="ml-auto font-mono text-[11px] text-[var(--text-subtle)]">fetchedAt {d.fetchedAt ? new Date(d.fetchedAt).toLocaleString() : "—"}</span>
               </div>
-              {!hasDrift ? <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 p-3 text-sm text-emerald-200">No drift — capability snapshot is stable.</div> : null}
+              {!hasDrift ? <div className="rounded-lg border border-ok-line bg-ok-subtle p-3 text-sm text-ok">No drift — capability snapshot is stable.</div> : null}
               <div className="grid gap-2">
                 <DeltaSection title="Added" items={d.added} tone="green" />
                 <DeltaSection title="Removed" items={d.removed} tone="red" />
@@ -918,14 +918,14 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
 }
 
 function DeltaSection({ title, items, tone }: { title: string; items: unknown[]; tone: "green" | "red" | "yellow" | "neutral" }) {
-  const map: Record<string, string> = { green: "border-emerald-500/20 bg-emerald-500/10", red: "border-red-500/20 bg-red-500/10", yellow: "border-amber-500/20 bg-amber-500/10", neutral: "border-[var(--line)] bg-[var(--surface-raised)]" };
+  const map: Record<string, string> = { green: "border-ok-line bg-ok-subtle", red: "border-danger-line bg-danger-subtle", yellow: "border-warn-line bg-warn-subtle", neutral: "border-[var(--line)] bg-[var(--surface-raised)]" };
   return (
     <div className={`rounded-xl border p-3 ${map[tone]}`}>
       <div className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-subtle)]">{title} · {items.length}</div>
       {items.length === 0 ? <div className="mt-2 text-xs text-[var(--text-subtle)]">—</div> : (
         <ul className="mt-2 space-y-1">
           {items.map((it, i) => (
-            <li key={i} className="rounded border border-white/[0.06] bg-black/20 px-2 py-1 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
+            <li key={i} className="rounded border border-line bg-well px-2 py-1 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
               {JSON.stringify(it, null, 2).slice(0, 400)}
             </li>
           ))}
@@ -1083,8 +1083,8 @@ function CreateNodeModal({ open, onClose, locations, locationsError, onRetryLoca
     <Modal title="New Node" onClose={onClose} className="max-w-6xl">
       {onboarding ? (
         <div className="space-y-4">
-          <div className="rounded-lg border border-amber-500/30 bg-amber-950/20 p-4 text-sm text-amber-100">Save this credential now. Forge will not show it again; rotate the token if it is lost. Revealed values are hidden automatically when this window loses focus.</div>
-          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-xs leading-relaxed text-emerald-300">{`# /etc/forge/beacon.env (mode 0600)
+          <div className="rounded-lg border border-warn-line bg-warn-subtle p-4 text-sm text-warn">Save this credential now. Forge will not show it again; rotate the token if it is lost. Revealed values are hidden automatically when this window loses focus.</div>
+          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-xs leading-relaxed text-ok">{`# /etc/forge/beacon.env (mode 0600)
 APP_ENV=production
 DAEMON_NODE_ID=${onboarding.id}
 DAEMON_NODE_TOKEN=${credentialMasked ? "••••••••••••••••" : onboarding.token}
@@ -1113,19 +1113,19 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
               <Input label="Display Name" value={displayName} onChange={setDisplayName} placeholder="NYC Dallas Node 1" />
               <Textarea label="Description" value={description} onChange={setDescription} rows={2} placeholder="Optional description for this node" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Location</span>
-                <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locations.length === 0 || locationsError !== null}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Location</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locations.length === 0 || locationsError !== null}>
                   <option value="">Select…</option>
                   {locations.map((location) => <option key={location.id} value={location.id}>{location.short} — {location.long}</option>)}
                 </select>
                 {locationsError ? (
-                  <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
+                  <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
                     <span>Could not load locations: {locationsError.message}</span>
                     <Btn size="sm" tone="ghost" type="button" onClick={onRetryLocations}>Retry</Btn>
                   </div>
-                ) : locations.length === 0 ? <p className="mt-1 text-xs text-amber-300">Create a location first before adding a node.</p> : null}
+                ) : locations.length === 0 ? <p className="mt-1 text-xs text-warn">Create a location first before adding a node.</p> : null}
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={publicNode} onChange={(e) => setPublicNode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Public node</span>
               </label>
@@ -1138,13 +1138,13 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
               <Input label="FQDN" value={fqdn} onChange={setFqdn} placeholder="node1.example.com" required />
               <Input label="Public Hostname" value={publicHostname} onChange={setPublicHostname} placeholder="Optional public-facing hostname" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">SSL</span>
-                <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={scheme} onChange={(e) => setScheme(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">SSL</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={scheme} onChange={(e) => setScheme(e.target.value)}>
                   <option value="https">https</option>
                   <option value="http">http</option>
                 </select>
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Behind Proxy</span>
               </label>
@@ -1200,7 +1200,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 <Input label="Port Min" value={allocationPortMin} onChange={setAllocationPortMin} type="number" />
                 <Input label="Port Max" value={allocationPortMax} onChange={setAllocationPortMax} type="number" />
               </div>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={autoAllocate} onChange={(e) => setAutoAllocate(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Auto-allocate ports</span>
               </label>
@@ -1211,8 +1211,8 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Scheduler" icon={SettingsIcon} />
             <div className="space-y-4 p-5">
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Backend</span>
-                <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Backend</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
                   <option value="docker">Docker</option>
                   <option value="k3s">K3s (Kubernetes)</option>
                   <option value="nomad">Nomad (HashiCorp)</option>
@@ -1225,7 +1225,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Tags" icon={Activity} />
             <div className="space-y-4 p-5">
               <Input label="Tags" value={tags} onChange={setTags} placeholder="ssd, gpu, low-latency" />
-              <p className="text-xs text-slate-400">Tags let you filter and group nodes for scheduling constraints.</p>
+              <p className="text-xs text-text-subtle">Tags let you filter and group nodes for scheduling constraints.</p>
             </div>
           </Card>
         </div>
@@ -1234,17 +1234,17 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           <Card>
             <CardHeader title="Monitoring & Alerts" icon={Activity} />
             <div className="space-y-4 p-5">
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={enableHealthChecks} onChange={(e) => setEnableHealthChecks(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable health checks</span>
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={enableMetrics} onChange={(e) => setEnableMetrics(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable metrics collection</span>
               </label>
               <Input label="Prometheus Endpoint" value={prometheusEndpoint} onChange={setPrometheusEndpoint} placeholder="Optional Prometheus scrape URL" />
               <div>
-                <p className="mb-3 text-xs font-medium text-slate-400">Alert thresholds (0–100%)</p>
+                <p className="mb-3 text-xs font-medium text-text-subtle">Alert thresholds (0–100%)</p>
                 <div className="grid grid-cols-3 gap-4">
                   <Input label="CPU %" value={alertThresholdCpu} onChange={setAlertThresholdCpu} type="number" />
                   <Input label="Memory %" value={alertThresholdMemory} onChange={setAlertThresholdMemory} type="number" />
@@ -1257,13 +1257,13 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           <Card>
             <CardHeader title="Maintenance & Security" icon={Lock} />
             <div className="space-y-4 p-5">
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Maintenance mode</span>
               </label>
               {maintenanceMode && (
-                <div className="space-y-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
-                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
+                <div className="space-y-4 rounded-lg border border-line bg-overlay-subtle p-4">
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                     <input type="checkbox" checked={drainBeforeMaintenance} onChange={(e) => setDrainBeforeMaintenance(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                     <span>Drain before maintenance</span>
                   </label>
@@ -1271,15 +1271,15 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 </div>
               )}
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Token Rotation</span>
-                <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={tokenRotationPolicy} onChange={(e) => setTokenRotationPolicy(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Token Rotation</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={tokenRotationPolicy} onChange={(e) => setTokenRotationPolicy(e.target.value)}>
                   <option value="manual">Manual</option>
                   <option value="auto">Auto</option>
                 </select>
               </label>
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">TLS Setting</span>
-                <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={tlsSetting} onChange={(e) => setTlsSetting(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">TLS Setting</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={tlsSetting} onChange={(e) => setTlsSetting(e.target.value)}>
                   <option value="auto">Auto</option>
                   <option value="manual">Manual</option>
                   <option value="disabled">Disabled</option>
@@ -1289,7 +1289,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           </Card>
         </div>
 
-        {createError ? <div className="inline-flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}
+        {createError ? <div className="inline-flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}
         <ModalFooter onCancel={onClose} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create Node"} disabled={createMut.isPending || !locationId || locationsError !== null} />
       </form>}
     </Modal>
