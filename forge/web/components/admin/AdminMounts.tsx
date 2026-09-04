@@ -6,8 +6,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, EggOff, Link2Off, Plus, Save, Trash2, Server, Search } from "lucide-react";
-import { StoragePlattersIcon } from "@/components/ui/forge-icons";
+import { AlertCircle, CheckCircle2, EggOff, HardDrive, Link2Off, Plus, Save, Trash2, Server, Search } from "lucide-react";
 import {
   attachEggsToMount, attachNodesToMount, createMount, deleteMount, detachEggFromMount, detachNodeFromMount,
   fetchEggs, fetchMounts, fetchNests, fetchMountServers, assignServerToMount, unassignServerFromMount,
@@ -17,7 +16,7 @@ import { REFRESH, sourceState } from "@/lib/admin/telemetry";
 import { FreshnessBadge, NotReported } from "@/components/admin/telemetry-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { AdminBackButton, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminTabs, Pill, AdminLoadingState, AdminErrorState, AdminPageLayout, cn } from "./admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminTabs, Pill, AdminLoadingState, AdminErrorState, AdminPageLayout, cn } from "./admin-ui";
 import { toneStyles } from "@/components/ui/forge/status";
 
 type FieldErrors = {
@@ -222,6 +221,7 @@ export function AdminMounts() {
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const mountsQuery = useQuery({ queryKey: ["mounts"], queryFn: fetchMounts, refetchInterval: REFRESH.inventory, retry: false });
   const mounts = useMemo(() => Array.isArray(mountsQuery.data) ? mountsQuery.data : [], [mountsQuery.data]);
   const mountsSource = sourceState(mountsQuery, REFRESH.inventory);
@@ -426,7 +426,6 @@ export function AdminMounts() {
         <SectionHeader
           backAction={() => setSelectedMountId(null)}
           backLabel="Storage Mounts"
-          icon={null}
           status={<FreshnessBadge state={mountsSource} />}
           sub={selected.description || undefined}
           title={selected.name}
@@ -440,41 +439,41 @@ export function AdminMounts() {
           <Card>
             <CardHeader title="Mount Details" icon={HardDrive} />
             <div className="p-6 grid gap-4">
-              <div className="rounded-lg border border-white/[0.06] bg-[var(--surface)] px-4 py-2.5 text-sm text-slate-400">
-                <span className="text-xs uppercase tracking-wider text-slate-500">Unique ID</span>
-                <p className="mt-0.5 font-mono text-slate-200">{selected.uuid ?? selected.id}</p>
+              <div className="rounded-lg border border-line bg-[var(--surface)] px-4 py-2.5 text-sm text-text-subtle">
+                <span className="text-xs uppercase tracking-wider text-text-muted">Unique ID</span>
+                <p className="mt-0.5 font-mono text-text">{selected.uuid ?? selected.id}</p>
               </div>
               <div>
                 <Input label="Name" value={eName} onChange={setEName} />
-                {eErrors.name ? <p className="mt-1 text-xs text-red-400">{eErrors.name}</p> : null}
+                {eErrors.name ? <p className="mt-1 text-xs text-danger">{eErrors.name}</p> : null}
               </div>
               <Input label="Description" value={eDesc} onChange={setEDesc} />
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <Input label="Source Path" value={eSource} onChange={setESource} mono />
-                  {eErrors.source ? <p className="mt-1 text-xs text-red-400">{eErrors.source}</p> : null}
+                  {eErrors.source ? <p className="mt-1 text-xs text-danger">{eErrors.source}</p> : null}
                 </div>
                 <div>
                   <Input label="Target Path" value={eTarget} onChange={setETarget} mono />
-                  {eErrors.target ? <p className="mt-1 text-xs text-red-400">{eErrors.target}</p> : null}
+                  {eErrors.target ? <p className="mt-1 text-xs text-danger">{eErrors.target}</p> : null}
                 </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-3 text-sm text-slate-300 cursor-pointer">
+                <label className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-3 text-sm text-text cursor-pointer">
                   <input type="radio" name="mount-ro" checked={!eReadOnly} onChange={() => setEReadOnly(false)} className="accent-[var(--brand)]" />
                   Read-Write
                 </label>
-                <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-3 text-sm text-slate-300 cursor-pointer">
+                <label className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-3 text-sm text-text cursor-pointer">
                   <input type="radio" name="mount-ro" checked={eReadOnly} onChange={() => setEReadOnly(true)} className="accent-[var(--brand)]" />
                   Read-Only
                 </label>
               </div>
               <div className="grid grid-cols-2 gap-4">
-                <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-3 text-sm text-slate-300 cursor-pointer">
+                <label className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-3 text-sm text-text cursor-pointer">
                   <input type="radio" name="mount-um" checked={!eUserMount} onChange={() => setEUserMount(false)} className="accent-[var(--brand)]" />
                   User Not Mountable
                 </label>
-                <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-3 text-sm text-slate-300 cursor-pointer">
+                <label className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-3 text-sm text-text cursor-pointer">
                   <input type="radio" name="mount-um" checked={eUserMount} onChange={() => setEUserMount(true)} className="accent-[var(--brand)]" />
                   User Mountable
                 </label>
@@ -488,21 +487,34 @@ export function AdminMounts() {
                 onTemplateIdsChange={setETemplateIds}
                 nodesError={nodesQuery.isError}
                 eggsError={eggsQuery.isError}
+                nodesLoading={nodesQuery.isPending}
+                eggsLoading={eggsQuery.isPending}
               />
             </div>
             {updateMut.isError ? (
-              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{updateMut.error?.message || "An unexpected error occurred."}</span>
               </div>
             ) : null}
             {updateMut.isSuccess ? (
-              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3 text-xs text-emerald-200">
+              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-ok-line bg-ok-subtle p-3 text-xs text-ok">
                 <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
                 <span>Mount updated successfully.</span>
               </div>
             ) : null}
-            <div className="flex justify-between border-t border-white/[0.06] px-6 py-4">
+            {saveFailures.length > 0 ? (
+              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-semibold">Some link operations were not applied:</p>
+                  <ul className="mt-1 list-disc pl-4">
+                    {saveFailures.map((failure) => <li key={failure}>{failure}</li>)}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
+            <div className="flex justify-between border-t border-line px-6 py-4">
               <Btn tone="danger" size="sm" onClick={() => { void (async () => { if (await confirm({ title: `Delete mount ${selected.name}?`, description: "The mount definition will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(selected.id); })(); }} disabled={deleteMut.isPending}>
                 <Trash2 size={12} /> Delete
               </Btn>
@@ -517,12 +529,12 @@ export function AdminMounts() {
               <AdminTabs tabs={[{ id: "eggs", label: "Eggs" }, { id: "nodes", label: "Nodes" }, { id: "servers", label: "Attached Servers" }]} active={detailTab} onChange={(v) => setDetailTab(v as typeof detailTab)} />
               {detailTab === "eggs" && (
                 <>
-                  <div className="flex items-center justify-between border-b border-white/[0.06] px-6 py-4">
-                    <h3 className="text-sm font-semibold text-slate-200">Eggs</h3>
+                  <div className="flex items-center justify-between border-b border-line px-6 py-4">
+                    <h3 className="text-sm font-semibold text-text">Eggs</h3>
                     <Btn size="sm" tone="ghost" onClick={() => setShowAddEggs(true)}><Plus size={12} /> Add Eggs</Btn>
                   </div>
                   {!Array.isArray(selected.templateIds) || selected.templateIds.length === 0 ? (
-                    <div className="px-6 py-4 text-sm text-slate-500">No eggs attached.</div>
+                    <div className="px-6 py-4 text-sm text-text-muted">No eggs attached.</div>
                   ) : null}
                   <AdminTable label="Eggs">
                     <AdminTHead><AdminTh>ID</AdminTh><AdminTh>Name</AdminTh><AdminTh></AdminTh></AdminTHead>
@@ -531,8 +543,8 @@ export function AdminMounts() {
                         const egg = Array.isArray(eggs) ? eggs.find((egg) => egg.id === eggId) : undefined;
                         return (
                           <AdminTr key={eggId}>
-                            <AdminTd className="font-mono text-xs text-slate-500"><code>{eggId.slice(0, 8)}</code></AdminTd>
-                            <AdminTd className="text-slate-200">{egg?.name ?? `Egg ${eggId.slice(0, 8)}`}</AdminTd>
+                            <AdminTd className="font-mono text-xs text-text-muted"><code>{eggId.slice(0, 8)}</code></AdminTd>
+                            <AdminTd className="text-text">{egg?.name ?? `Egg ${eggId.slice(0, 8)}`}</AdminTd>
                             <AdminTd><Btn size="sm" tone="danger" onClick={() => detachEggMut.mutate(eggId)} disabled={detachEggMut.isPending}><EggOff size={12} /> Detach</Btn></AdminTd>
                           </AdminTr>
                         );
@@ -543,12 +555,12 @@ export function AdminMounts() {
               )}
               {detailTab === "nodes" && (
                 <>
-                  <div className="flex items-center justify-between border-b border-white/[0.06] px-6 py-4">
-                    <h3 className="text-sm font-semibold text-slate-200">Nodes</h3>
+                  <div className="flex items-center justify-between border-b border-line px-6 py-4">
+                    <h3 className="text-sm font-semibold text-text">Nodes</h3>
                     <Btn size="sm" tone="ghost" onClick={() => setShowAddNodes(true)}><Plus size={12} /> Add Nodes</Btn>
                   </div>
                   {!Array.isArray(selected.nodeIds) || selected.nodeIds.length === 0 ? (
-                    <div className="px-6 py-4 text-sm text-slate-500">No nodes attached.</div>
+                    <div className="px-6 py-4 text-sm text-text-muted">No nodes attached.</div>
                   ) : null}
                   <AdminTable label="Nodes">
                     <AdminTHead><AdminTh>ID</AdminTh><AdminTh>Name</AdminTh><AdminTh>FQDN</AdminTh><AdminTh></AdminTh></AdminTHead>
@@ -557,9 +569,9 @@ export function AdminMounts() {
                         const node = Array.isArray(nodes) ? nodes.find(n => n.id === nodeId) : undefined;
                         return (
                           <AdminTr key={nodeId}>
-                            <AdminTd className="font-mono text-xs text-slate-500"><code>{nodeId.slice(0, 8)}</code></AdminTd>
-                            <AdminTd className="text-slate-200">{node?.name ?? `Node ${nodeId.slice(0, 8)}`}</AdminTd>
-                            <AdminTd><code className="text-xs text-slate-400">{node?.fqdn}</code></AdminTd>
+                            <AdminTd className="font-mono text-xs text-text-muted"><code>{nodeId.slice(0, 8)}</code></AdminTd>
+                            <AdminTd className="text-text">{node?.name ?? `Node ${nodeId.slice(0, 8)}`}</AdminTd>
+                            <AdminTd><code className="text-xs text-text-subtle">{node?.fqdn}</code></AdminTd>
                             <AdminTd><Btn size="sm" tone="danger" onClick={() => detachNodeMut.mutate(nodeId)} disabled={detachNodeMut.isPending}><Link2Off size={12} /> Detach</Btn></AdminTd>
                           </AdminTr>
                         );
@@ -568,7 +580,7 @@ export function AdminMounts() {
                   </AdminTable>
                 </>
               )}
-              {detailTab === "servers" && <AttachedServersTab mountId={selected.id} />}
+              {detailTab === "servers" && <AttachedServersTab mountId={selected.id} mountName={selected.name} />}
             </Card>
           </div>
         </div>
@@ -578,27 +590,27 @@ export function AdminMounts() {
           <Modal title="Add Eggs" onClose={() => { setShowAddEggs(false); setSelectedEggIds([]); }}>
             <div className="space-y-4">
             {eggsQuery.isError ? (
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
                 <span>Could not load eggs: {eggsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void eggsQuery.refetch()}>Retry</Btn>
               </div>
             ) : nestsQuery.isError ? (
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
                 <span>Could not load nests: {nestsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void nestsQuery.refetch()}>Retry</Btn>
               </div>
             ) : null}
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {eggsQuery.isError ? null : Array.isArray(eggs) ? eggs.filter((egg) => !(Array.isArray(selected.templateIds) ? selected.templateIds : []).includes(egg.id)).map((egg) => (
-                <label key={egg.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2.5 text-sm cursor-pointer hover:bg-white/[0.03]">
+                <label key={egg.id} className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-2.5 text-sm cursor-pointer hover:bg-overlay">
                   <input type="checkbox" checked={selectedEggIds.includes(egg.id)} onChange={(e) => setSelectedEggIds(e.target.checked ? [...selectedEggIds, egg.id] : selectedEggIds.filter(id => id !== egg.id))} className="accent-[var(--brand)]" />
-                  <span className="text-slate-200">{egg.name}</span>
-                  <span className="ml-auto text-xs text-slate-500">{egg.id.slice(0, 8)}</span>
+                  <span className="text-text">{egg.name}</span>
+                  <span className="ml-auto text-xs text-text-muted">{egg.id.slice(0, 8)}</span>
                 </label>
               )) : null}
             </div>
             {attachEggsMut.isError ? (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{attachEggsMut.error?.message || "An unexpected error occurred."}</span>
               </div>
@@ -618,22 +630,22 @@ export function AdminMounts() {
           <Modal title="Add Nodes" onClose={() => { setShowAddNodes(false); setSelectedNodeIds([]); }}>
             <div className="space-y-4">
             {nodesQuery.isError ? (
-              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
                 <span>Could not load nodes: {nodesQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void nodesQuery.refetch()}>Retry</Btn>
               </div>
             ) : null}
             <div className="space-y-2 max-h-80 overflow-y-auto">
               {nodesQuery.isError ? null : Array.isArray(nodes) ? nodes.filter(n => !(Array.isArray(selected.nodeIds) ? selected.nodeIds : []).includes(n.id)).map((node) => (
-                <label key={node.id} className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2.5 text-sm cursor-pointer hover:bg-white/[0.03]">
+                <label key={node.id} className="flex items-center gap-3 rounded-lg border border-line bg-[var(--surface)] px-4 py-2.5 text-sm cursor-pointer hover:bg-overlay">
                   <input type="checkbox" checked={selectedNodeIds.includes(node.id)} onChange={(e) => setSelectedNodeIds(e.target.checked ? [...selectedNodeIds, node.id] : selectedNodeIds.filter(id => id !== node.id))} className="accent-[var(--brand)]" />
-                  <span className="text-slate-200">{node.name}</span>
-                  <span className="ml-auto text-xs text-slate-400">{node.fqdn}</span>
+                  <span className="text-text">{node.name}</span>
+                  <span className="ml-auto text-xs text-text-subtle">{node.fqdn}</span>
                 </label>
               )) : null}
             </div>
             {attachNodesMut.isError ? (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{attachNodesMut.error?.message || "An unexpected error occurred."}</span>
               </div>
@@ -658,17 +670,17 @@ export function AdminMounts() {
         sub="Shared host volumes mounted into workloads. Mounts attach to beacons and templates with automatic inheritance for eligible servers."
         action={<Btn tone="primary" onClick={() => { setShowCreate(true); setCNodeIds([]); setCTemplateIds([]); setCErrors({}); }}><Plus size={14} /> New Mount</Btn>}
       />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-        <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Storage</span> — <code className="font-mono text-[11px]">Mounts</code> (this page) · <code className="font-mono">Volumes</code> · <code className="font-mono">Database Hosts</code> · <code className="font-mono">Backups</code> + providers. Mounts are <code className="font-mono">source → target</code> host paths with <code className="font-mono">nodeIds/templateIds</code> eligibility. See <code className="font-mono">/admin/databases</code> for DB hosts and <code className="font-mono">/admin/backups</code> for retention.
+      <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
+        <span className="font-semibold text-text">INFRA</span> · <span className="font-semibold text-text">Storage</span> — <code className="font-mono text-[11px]">Mounts</code> (this page) · <code className="font-mono">Volumes</code> · <code className="font-mono">Database Hosts</code> · <code className="font-mono">Backups</code> + providers. Mounts are <code className="font-mono">source → target</code> host paths with <code className="font-mono">nodeIds/templateIds</code> eligibility. See <code className="font-mono">/admin/databases</code> for DB hosts and <code className="font-mono">/admin/backups</code> for retention.
       </div>
 
       <Card>
         <CardHeader title="Mount List" icon={HardDrive} />
         {mountsQuery.isLoading ? (
-          <div className="py-10 text-center text-sm text-slate-500">Loading</div>
+          <div className="py-10 text-center text-sm text-text-muted">Loading</div>
         ) : mountsQuery.isError ? (
           <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <span>Could not load mounts: {mountsQuery.error.message}</span>
               <Btn size="sm" tone="ghost" onClick={() => void mountsQuery.refetch()}>Retry</Btn>
             </div>
@@ -689,13 +701,13 @@ export function AdminMounts() {
             <AdminTBody>
               {Array.isArray(mounts) ? mounts.map((mount) => (
                 <AdminTr key={mount.id} onClick={() => openMount(mount)}>
-                  <AdminTd className="font-mono text-xs text-slate-500"><code>{mount.id.slice(0, 8)}</code></AdminTd>
-                  <AdminTd className="font-medium text-slate-200">{mount.name}</AdminTd>
-                  <AdminTd className="font-mono text-xs text-slate-400">{mount.source}</AdminTd>
-                  <AdminTd className="font-mono text-xs text-slate-400">{mount.target}</AdminTd>
-                  <AdminTd className="text-center text-slate-400">{Array.isArray(mount.templateIds) ? mount.templateIds.length : 0}</AdminTd>
-                  <AdminTd className="text-center text-slate-400">{Array.isArray(mount.nodeIds) ? mount.nodeIds.length : 0}</AdminTd>
-                  <AdminTd className="text-center text-slate-400">{Array.isArray(mount.serverIds) ? mount.serverIds.length : 0}</AdminTd>
+                  <AdminTd className="font-mono text-xs text-text-muted"><code>{mount.id.slice(0, 8)}</code></AdminTd>
+                  <AdminTd className="font-medium text-text">{mount.name}</AdminTd>
+                  <AdminTd className="font-mono text-xs text-text-subtle">{mount.source}</AdminTd>
+                  <AdminTd className="font-mono text-xs text-text-subtle">{mount.target}</AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.templateIds} /></AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.nodeIds} /></AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.serverIds} /></AdminTd>
                 </AdminTr>
               )) : null}
             </AdminTBody>
@@ -709,40 +721,40 @@ export function AdminMounts() {
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <Input label="Name" value={cName} onChange={setCName} placeholder="Shared Plugins" />
-              {cErrors.name ? <p className="mt-1 text-sm text-red-300">{cErrors.name}</p> : null}
-              <p className="mt-1 text-xs text-slate-400">Unique name used to separate this mount from another.</p>
+              {cErrors.name ? <p className="mt-1 text-sm text-danger">{cErrors.name}</p> : null}
+              <p className="mt-1 text-xs text-text-subtle">Unique name used to separate this mount from another.</p>
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Description</label>
-              <textarea className="h-20 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 py-2 text-sm text-slate-100" value={cDesc} onChange={(e) => setCDesc(e.target.value)} />
-              <p className="mt-1 text-xs text-slate-400">A longer description for this mount.</p>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Description</label>
+              <textarea className="h-20 w-full rounded-lg border border-line bg-[var(--surface)] px-3 py-2 text-sm text-text" value={cDesc} onChange={(e) => setCDesc(e.target.value)} />
+              <p className="mt-1 text-xs text-text-subtle">A longer description for this mount.</p>
             </div>
             <div>
               <Input label="Source Path" value={cSource} onChange={setCSource} placeholder="/mnt/shared/plugins" mono />
-              {cErrors.source ? <p className="mt-1 text-sm text-red-300">{cErrors.source}</p> : null}
+              {cErrors.source ? <p className="mt-1 text-sm text-danger">{cErrors.source}</p> : null}
             </div>
             <div>
               <Input label="Target Path" value={cTarget} onChange={setCTarget} placeholder="/plugins" mono />
-              {cErrors.target ? <p className="mt-1 text-sm text-red-300">{cErrors.target}</p> : null}
+              {cErrors.target ? <p className="mt-1 text-sm text-danger">{cErrors.target}</p> : null}
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Read Only</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Read Only</label>
               <div className="flex gap-4">
-                <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
+                <label className="flex items-center gap-2 rounded-lg border border-line bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-readonly" checked={!cReadOnly} onChange={() => setCReadOnly(false)} className="accent-[var(--brand)]" /> False
                 </label>
-                <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
+                <label className="flex items-center gap-2 rounded-lg border border-line bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-readonly" checked={cReadOnly} onChange={() => setCReadOnly(true)} className="accent-[var(--brand)]" /> True
                 </label>
               </div>
             </div>
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">User Mountable</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">User Mountable</label>
               <div className="flex gap-4">
-                <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
+                <label className="flex items-center gap-2 rounded-lg border border-line bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-usermount" checked={!cUserMount} onChange={() => setCUserMount(false)} className="accent-[var(--brand)]" /> False
                 </label>
-                <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
+                <label className="flex items-center gap-2 rounded-lg border border-line bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-usermount" checked={cUserMount} onChange={() => setCUserMount(true)} className="accent-[var(--brand)]" /> True
                 </label>
               </div>
@@ -756,16 +768,18 @@ export function AdminMounts() {
               onTemplateIdsChange={setCTemplateIds}
               nodesError={nodesQuery.isError}
               eggsError={eggsQuery.isError}
+              nodesLoading={nodesQuery.isPending}
+              eggsLoading={eggsQuery.isPending}
             />
           </div>
           {createMut.isError ? (
-            <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+            <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{createMut.error?.message || "An unexpected error occurred."}</span>
             </div>
           ) : null}
           {createMut.isSuccess ? (
-            <div className="flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3 text-xs text-emerald-200">
+            <div className="flex items-start gap-2 rounded-lg border border-ok-line bg-ok-subtle p-3 text-xs text-ok">
               <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
               <span>Mount created successfully.</span>
             </div>
