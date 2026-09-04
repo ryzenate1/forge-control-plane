@@ -2,8 +2,8 @@ package installer
 
 import (
 	_ "gamepanel/beacon/internal/installer/operations/copyfile"
-	_ "gamepanel/beacon/internal/installer/operations/downloadfile"
 	_ "gamepanel/beacon/internal/installer/operations/downloadextract"
+	_ "gamepanel/beacon/internal/installer/operations/downloadfile"
 	_ "gamepanel/beacon/internal/installer/operations/fabricdl"
 	_ "gamepanel/beacon/internal/installer/operations/forgedl"
 	_ "gamepanel/beacon/internal/installer/operations/movefile"
