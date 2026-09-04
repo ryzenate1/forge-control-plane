@@ -12,7 +12,6 @@ import {
   revokeOnboardingToken,
   type OnboardingToken,
 } from "@/lib/api/onboarding";
-import {  } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { OfflineBanner } from "@/components/shared/states-offline";
@@ -28,6 +27,7 @@ import {
   EmptyState,
   Modal,
   ModalFooter,
+  AdminSelect,
 } from "./admin-ui";
 
 function ttlLabel(hours: number): string {
@@ -38,7 +38,7 @@ function ttlLabel(hours: number): string {
 export function AdminOnboardingTokens() {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const [, renderConfirm] = useConfirm();
+  const [confirm, renderConfirm] = useConfirm();
   const [selectedNodeId, setSelectedNodeId] = useState<string>("");
   const [ttlHours, setTtlHours] = useState<number>(24);
   const [created, setCreated] = useState<{ token: string; tokenId: string; expiresAt: string } | null>(null);
@@ -112,22 +112,14 @@ export function AdminOnboardingTokens() {
         <Card className="border border-[var(--line)] bg-[var(--surface)] lg:col-span-1">
           <CardHeader title="Issue token — POST /onboarding-tokens" icon={Ticket} />
           <div className="space-y-4 p-4">
-            <label className="block text-sm">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Node</span>
-              <select
-                className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm text-[var(--text)]"
-                value={selectedNodeId}
-                onChange={(e) => setSelectedNodeId(e.target.value)}
-              >
-                <option value="">Select node…</option>
-                {nodes.map((n) => (
-                  <option key={n.id} value={n.id}>
-                    {n.name} · {n.id.slice(0, 8)}
-                  </option>
-                ))}
-              </select>
-              {nodesQ.isError && <div className="mt-2 text-xs text-red-300">{(nodesQ.error as Error).message}</div>}
-            </label>
+            <AdminSelect
+              label="Node"
+              value={selectedNodeId}
+              onChange={(v) => setSelectedNodeId(v)}
+              options={nodes.map((n) => ({ value: n.id, label: `${n.name} · ${n.id.slice(0, 8)}` }))}
+              placeholder="Select node…"
+            />
+            {nodesQ.isError && <div className="mt-2 text-xs text-danger">{(nodesQ.error as Error).message}</div>}
 
             <div>
               <label htmlFor="onboarding-ttl" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">
@@ -158,7 +150,7 @@ export function AdminOnboardingTokens() {
               <Ticket size={14} /> Create token
             </Btn>
 
-            {ttlHours > 72 && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-2 text-xs text-red-200">TTL must not exceed 72h (handler returns 400).</div>}
+            {ttlHours > 72 && <div className="rounded-lg border border-danger-line bg-danger-subtle p-2 text-xs text-danger">TTL must not exceed 72h (handler returns 400).</div>}
 
             <div className="rounded-lg border border-[var(--line)] bg-[var(--canvas)] p-3 text-xs leading-5 text-[var(--text-subtle)]">
               Tokens are <span className="font-medium text-[var(--text)]">bcrypt-hashed</span> at rest; the plaintext (<code className="font-mono text-[11px]">id.secret</code>) is returned once on create. The beacon presents it once at <code className="font-mono">POST /nodes/:id/beacon</code> and it is consumed.
@@ -202,9 +194,9 @@ export function AdminOnboardingTokens() {
                       revokeReason={revokeReason[tok.id] ?? ""}
                       onRejectReason={(v) => setRejectReason((s) => ({ ...s, [tok.id]: v }))}
                       onRevokeReason={(v) => setRevokeReason((s) => ({ ...s, [tok.id]: v }))}
-                      onApprove={() => approveMut.mutate(tok.id)}
-                      onReject={() => rejectMut.mutate({ tokenId: tok.id, reason: rejectReason[tok.id] ?? "" })}
-                      onRevoke={() => revokeMut.mutate({ tokenId: tok.id, reason: revokeReason[tok.id] ?? "" })}
+                      onApprove={() => { void (async () => { if (await confirm({ title: `Approve token ${tok.id.slice(0, 12)}…?`, description: "The beacon presenting this token will be allowed to join as a node. Only approve tokens you issued for a known host.", confirmLabel: "Approve" })) approveMut.mutate(tok.id); })(); }}
+                      onReject={() => { void (async () => { if (await confirm({ title: `Reject token ${tok.id.slice(0, 12)}…?`, description: "The token stops being usable. The beacon must request a new one to join.", danger: true, confirmLabel: "Reject" })) rejectMut.mutate({ tokenId: tok.id, reason: rejectReason[tok.id] ?? "" }); })(); }}
+                      onRevoke={() => { void (async () => { if (await confirm({ title: `Revoke token ${tok.id.slice(0, 12)}…?`, description: "The token stops being usable immediately, even if it was already approved.", danger: true, confirmLabel: "Revoke" })) revokeMut.mutate({ tokenId: tok.id, reason: revokeReason[tok.id] ?? "" }); })(); }}
                       approving={approveMut.isPending && approveMut.variables === tok.id}
                       rejecting={rejectMut.isPending}
                       revoking={revokeMut.isPending}
@@ -215,7 +207,7 @@ export function AdminOnboardingTokens() {
             </div>
           )}
           <div className="border-t border-[var(--line)] p-3 text-xs leading-5 text-[var(--text-subtle)]">
-            Endpoints: <code className="rounded bg-white/[0.06] px-1 font-mono text-[11px]">POST /onboarding-tokens</code> ·{" "}
+            Endpoints: <code className="rounded bg-overlay-strong px-1 font-mono text-[11px]">POST /onboarding-tokens</code> ·{" "}
             <code className="font-mono text-[11px]">GET /onboarding-tokens/:id</code> ·{" "}
             <code className="font-mono text-[11px]">POST /:id/approve</code> ·{" "}
             <code className="font-mono text-[11px]">POST /:id/reject</code> ·{" "}
@@ -227,13 +219,13 @@ export function AdminOnboardingTokens() {
       {created && (
         <Modal title="Token created" description="Copy once — store it securely" onClose={() => setCreated(null)} wide>
           <div className="space-y-4">
-            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
+            <div className="rounded-lg border border-warn-line bg-warn-subtle p-3 text-sm text-warn">
               This plaintext token is shown <span className="font-semibold">once</span>. Store it securely — the backend only keeps the bcrypt hash. It expires {new Date(created.expiresAt).toLocaleString()}.
             </div>
             <div className="space-y-2">
-              <div className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Plaintext (id.secret)</div>
+              <div className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Plaintext (id.secret)</div>
               <div className="flex gap-2">
-                <pre className="flex-1 overflow-auto rounded-lg border border-[var(--line)] bg-black/30 p-3 font-mono text-xs leading-5 text-emerald-300">{created.token}</pre>
+                <pre className="flex-1 overflow-auto rounded-lg border border-[var(--line)] bg-well p-3 font-mono text-xs leading-5 text-ok">{created.token}</pre>
                 <Btn
                   size="sm"
                   tone="ghost"
@@ -251,7 +243,7 @@ export function AdminOnboardingTokens() {
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
                 </Btn>
               </div>
-              <div className="text-xs text-slate-400">tokenId: <code className="font-mono">{created.tokenId}</code></div>
+              <div className="text-xs text-text-subtle">tokenId: <code className="font-mono">{created.tokenId}</code></div>
             </div>
           </div>
           <ModalFooter onCancel={() => setCreated(null)} onConfirm={() => { void navigator.clipboard.writeText(created.token); setCreated(null); }} confirmLabel="Copy & close" />
@@ -312,7 +304,7 @@ function TokenRow({
         {tok.revokedReason && <div className="mt-1 max-w-[14rem] truncate text-[11px] text-[var(--text-subtle)]" title={tok.revokedReason}>{tok.revokedReason}</div>}
       </td>
       <td className="px-4 py-3 font-mono text-xs text-[var(--text-subtle)]">
-        <span className={expired ? "text-red-300" : ""}>{new Date(tok.expiresAt).toLocaleString()}</span>
+        <span className={expired ? "text-danger" : ""}>{new Date(tok.expiresAt).toLocaleString()}</span>
       </td>
       <td className="px-4 py-3 font-mono text-xs text-[var(--text-subtle)]">{new Date(tok.createdAt).toLocaleString()}</td>
       <td className="px-4 py-3 text-xs text-[var(--text-subtle)]">
@@ -329,6 +321,7 @@ function TokenRow({
           {canReject && (
             <span className="inline-flex items-center gap-1">
               <input
+                aria-label={`Reject reason for token ${tok.id.slice(0, 8)}`}
                 placeholder="reason"
                 value={rejectReason}
                 onChange={(e) => onRejectReason(e.target.value)}
@@ -342,6 +335,7 @@ function TokenRow({
           {canRevoke && (
             <span className="inline-flex items-center gap-1">
               <input
+                aria-label={`Revoke reason for token ${tok.id.slice(0, 8)}`}
                 placeholder="reason"
                 value={revokeReason}
                 onChange={(e) => onRevokeReason(e.target.value)}
