@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,23 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// journalTimeout bounds every command-journal statement. The journal is opened
+// with a single connection, and most writes happen while the queue mutex is
+// held, so an unbounded statement is not just a slow call: it parks every other
+// queue operation behind the mutex, including Shutdown, and a stalled disk or a
+// second process holding the file turns it into a daemon-wide hang. Failing
+// fast with an error is survivable; hanging forever is not.
+const journalTimeout = 15 * time.Second
+
+// shutdownGrace is how long Shutdown waits for running workers to notice
+// cancellation before journaling state anyway. A handler stuck in a runtime
+// call with no deadline must not prevent the daemon from exiting.
+const shutdownGrace = 30 * time.Second
+
+func journalContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), journalTimeout)
+}
 
 type OperationType string
 
@@ -36,15 +54,20 @@ const (
 )
 
 type Operation struct {
-	ID          string          `json:"id"`
-	CommandID   string          `json:"commandId,omitempty"`
-	ServerID    string          `json:"serverId"`
-	Type        OperationType   `json:"type"`
-	Status      OperationStatus `json:"status"`
-	Error       string          `json:"error,omitempty"`
-	CreatedAt   time.Time       `json:"createdAt"`
-	StartedAt   time.Time       `json:"startedAt,omitempty"`
-	CompletedAt time.Time       `json:"completedAt,omitempty"`
+	ID           string          `json:"id"`
+	CommandID    string          `json:"commandId,omitempty"`
+	ServerID     string          `json:"serverId"`
+	Type         OperationType   `json:"type"`
+	Status       OperationStatus `json:"status"`
+	Error        string          `json:"error,omitempty"`
+	CreatedAt    time.Time       `json:"createdAt"`
+	StartedAt    time.Time       `json:"startedAt,omitempty"`
+	CompletedAt  time.Time       `json:"completedAt,omitempty"`
+	TTL          time.Duration   `json:"ttl,omitempty"`
+	Progress     string          `json:"progress,omitempty"`
+	ProgressPct  int             `json:"progressPct,omitempty"`
+	ResultData   string          `json:"resultData,omitempty"`
+	Acknowledged bool            `json:"acknowledged"`
 }
 
 type OperationHandler func(context.Context, *Operation) error
@@ -86,12 +109,19 @@ func NewPersistentOperationQueue(path string, concurrency int, handler Operation
 	if _, err = db.Exec(`CREATE TABLE IF NOT EXISTS beacon_operations (
 		id TEXT PRIMARY KEY, command_id TEXT UNIQUE, server_id TEXT NOT NULL, type TEXT NOT NULL,
 		status TEXT NOT NULL, error TEXT NOT NULL DEFAULT '', created_at TIMESTAMP NOT NULL,
-		started_at TIMESTAMP, completed_at TIMESTAMP);
+		started_at TIMESTAMP, completed_at TIMESTAMP, ttl INTEGER DEFAULT 0,
+		progress TEXT NOT NULL DEFAULT '', progress_pct INTEGER DEFAULT 0, result_data TEXT NOT NULL DEFAULT '');
 		CREATE INDEX IF NOT EXISTS idx_beacon_operations_status ON beacon_operations(status, created_at);
 		CREATE INDEX IF NOT EXISTS idx_beacon_operations_server ON beacon_operations(server_id, created_at);`); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate command journal: %w", err)
 	}
+	// Migrate existing tables - add columns if missing (errors are non-fatal)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN ttl INTEGER DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN progress TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN progress_pct INTEGER DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN result_data TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE beacon_operations ADD COLUMN acknowledged INTEGER DEFAULT 0`)
 	q := newOperationQueue(concurrency, handler, db)
 	if err := q.loadJournal(); err != nil {
 		db.Close()
@@ -112,17 +142,24 @@ func newOperationQueue(concurrency int, handler OperationHandler, db *sql.DB) *O
 }
 
 func (q *OperationQueue) loadJournal() error {
-	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at
+	ctx, cancel := journalContext()
+	defer cancel()
+	rows, err := q.db.QueryContext(ctx, `SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at,
+		COALESCE(ttl,0),COALESCE(progress,''),COALESCE(progress_pct,0),COALESCE(result_data,''),COALESCE(acknowledged,0)
 		FROM beacon_operations ORDER BY created_at`)
 	if err != nil {
 		return fmt.Errorf("load command journal: %w", err)
 	}
 	defer rows.Close()
+	var resumed []*Operation
 	for rows.Next() {
 		var op Operation
 		var typ, status string
 		var started, completed sql.NullTime
-		if err := rows.Scan(&op.ID, &op.CommandID, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed); err != nil {
+		var ttlNanos sql.NullInt64
+		var ack sql.NullBool
+		if err := rows.Scan(&op.ID, &op.CommandID, &op.ServerID, &typ, &status, &op.Error, &op.CreatedAt, &started, &completed,
+			&ttlNanos, &op.Progress, &op.ProgressPct, &op.ResultData, &ack); err != nil {
 			return err
 		}
 		op.Type, op.Status = OperationType(typ), OperationStatus(status)
@@ -132,17 +169,44 @@ func (q *OperationQueue) loadJournal() error {
 		if completed.Valid {
 			op.CompletedAt = completed.Time
 		}
-		if op.Status == StatusRunning {
+		if ttlNanos.Valid {
+			op.TTL = time.Duration(ttlNanos.Int64)
+		}
+		if ack.Valid {
+			op.Acknowledged = ack.Bool
+		}
+		wasRunning := op.Status == StatusRunning
+		if wasRunning {
 			op.Status = StatusPending
 			op.StartedAt = time.Time{}
 			op.Error = ""
-			_ = q.persist(&op)
+			// Preserve progress and result data for resumption after restart
+			// op.Progress, op.ProgressPct, and op.ResultData remain unchanged
 		}
 		copyOp := op
 		q.operations[op.ID] = &copyOp
 		q.serverOps[op.ServerID] = append(q.serverOps[op.ServerID], op.ID)
+		if wasRunning {
+			resumed = append(resumed, &copyOp)
+		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Release the read cursor/connection BEFORE writing the reset rows back.
+	// Calling q.persist while `rows` is open deadlocks the single-connection
+	// SQLite pool used by the beacon journal (the write waits for a connection
+	// the unfinished read still holds). Close is idempotent; the deferred call
+	// above is a no-op afterward.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, op := range resumed {
+		if err := q.persist(op); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (q *OperationQueue) Start(ctx context.Context) {
@@ -197,34 +261,158 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 		q.mu.Unlock()
 		return
 	}
+	if op.TTL > 0 && time.Since(op.CreatedAt) > op.TTL {
+		op.Status = StatusFailed
+		op.Error = "command expired"
+		op.CompletedAt = time.Now().UTC()
+		journalWarning("expiry", op.ID, q.persist(op))
+		q.mu.Unlock()
+		return
+	}
 	op.Status = StatusRunning
 	op.StartedAt = time.Now().UTC()
-	_ = q.persist(op)
+	journalWarning("running status", op.ID, q.persist(op))
+	handlerOp := *op
 	q.mu.Unlock()
 	var opErr string
 	if q.handler != nil {
-		if err := q.handler(ctx, op); err != nil {
+		if err := q.handler(ctx, &handlerOp); err != nil {
 			opErr = err.Error()
 		}
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.db != nil && ctx.Err() != nil {
-		op.Status = StatusPending
-		op.Error = ""
-		op.StartedAt = time.Time{}
-		op.CompletedAt = time.Time{}
-		_ = q.persist(op)
+	if ctx.Err() != nil {
+		// Cancellation cut this operation short, so it has no verdict. It must
+		// never be recorded as completed: a journaled queue resets it to pending
+		// so it replays after restart, and a memory-only queue - where nothing
+		// can replay it - records it as cancelled, the same way Shutdown reports
+		// work that was queued but never ran.
+		if q.db != nil {
+			op.Status = StatusPending
+			op.Error = ""
+			op.StartedAt = time.Time{}
+			op.CompletedAt = time.Time{}
+			journalWarning("reset status", op.ID, q.persist(op))
+			return
+		}
+		op.Status = StatusCancelled
+		if opErr == "" {
+			opErr = ctx.Err().Error()
+		}
+		op.Error = opErr
+		op.CompletedAt = time.Now().UTC()
+		journalWarning("cancelled status", op.ID, q.persist(op))
 		return
 	}
 	op.CompletedAt = time.Now().UTC()
-	op.Error = opErr
-	if opErr != "" {
+	switch {
+	case opErr != "":
 		op.Status = StatusFailed
-	} else {
+		op.Error = opErr
+	case op.Status == StatusFailed:
+		// The panel recorded a failure through POST /api/commands/{id}/result
+		// while the handler was still running. The handler returning cleanly
+		// afterwards is not evidence that the reported failure did not happen,
+		// so the recorded failure stands instead of being retired to completed.
+	default:
 		op.Status = StatusCompleted
+		op.Error = ""
 	}
-	_ = q.persist(op)
+	journalWarning("final status", op.ID, q.persist(op))
+}
+
+// journalWarning reports a command-journal write that failed. The in-memory
+// status has already moved by then, so the row a restart replays can disagree
+// with what this process actually did; that gap is surfaced rather than
+// discarded, because the queue cannot answer the client any more at this point.
+func journalWarning(what, id string, err error) {
+	if err != nil {
+		log.Printf("beacon: could not journal %s for operation %s: %v", what, id, err)
+	}
+}
+
+func (q *OperationQueue) SetProgress(id string, progress string, pct int) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.Progress = progress
+	op.ProgressPct = pct
+	return q.persist(op)
+}
+
+func (q *OperationQueue) SetError(id string, errMsg string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.Error = errMsg
+	op.Status = StatusFailed
+	op.CompletedAt = time.Now().UTC()
+	return q.persist(op)
+}
+
+func (q *OperationQueue) ServersWithPending() []string {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	seen := make(map[string]struct{})
+	for _, op := range q.operations {
+		if op.Status == StatusPending {
+			seen[op.ServerID] = struct{}{}
+		}
+	}
+	out := make([]string, 0, len(seen))
+	for s := range seen {
+		out = append(out, s)
+	}
+	return out
+}
+
+func (q *OperationQueue) AckCommand(id string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	if op.Status != StatusPending && op.Status != StatusRunning {
+		return fmt.Errorf("cannot ack operation in state %s", op.Status)
+	}
+	op.Acknowledged = true
+	return q.persist(op)
+}
+
+func (q *OperationQueue) SetResult(id string, resultData string) error {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	op, ok := q.operations[id]
+	if !ok {
+		return ErrOperationNotFound
+	}
+	op.ResultData = resultData
+	return q.persist(op)
+}
+
+func (q *OperationQueue) ExpireExpired() int {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	now := time.Now().UTC()
+	expired := 0
+	for _, op := range q.operations {
+		if op.Status == StatusPending && op.TTL > 0 && now.Sub(op.CreatedAt) > op.TTL {
+			op.Status = StatusFailed
+			op.Error = "command expired"
+			op.CompletedAt = now
+			journalWarning("expiry", op.ID, q.persist(op))
+			expired++
+		}
+	}
+	return expired
 }
 
 func (q *OperationQueue) Enqueue(ctx context.Context, serverID string, typ OperationType) (*Operation, error) {
@@ -232,6 +420,10 @@ func (q *OperationQueue) Enqueue(ctx context.Context, serverID string, typ Opera
 }
 
 func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID string, typ OperationType) (*Operation, error) {
+	return q.EnqueueCommandWithTTL(ctx, commandID, serverID, typ, 0)
+}
+
+func (q *OperationQueue) EnqueueCommandWithTTL(ctx context.Context, commandID, serverID string, typ OperationType, ttl time.Duration) (*Operation, error) {
 	q.mu.Lock()
 	if q.closed {
 		q.mu.Unlock()
@@ -239,11 +431,20 @@ func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID
 	}
 	if commandID != "" {
 		for _, existing := range q.operations {
-			if existing.CommandID == commandID {
-				cp := *existing
-				q.mu.Unlock()
-				return &cp, nil
+			if existing.CommandID != commandID {
+				continue
 			}
+			if existing.ServerID != serverID {
+				// One command id naming two different servers is an ambiguous
+				// target, not a duplicate. Returning the other server's
+				// operation (or running this one) would silently pick a
+				// workload the caller did not name, so it is refused.
+				q.mu.Unlock()
+				return nil, fmt.Errorf("command %s already refers to server %s, not %s", commandID, existing.ServerID, serverID)
+			}
+			cp := *existing
+			q.mu.Unlock()
+			return &cp, nil
 		}
 	}
 	q.nextID++
@@ -251,7 +452,7 @@ func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID
 	if q.db == nil {
 		id = fmt.Sprintf("op-%d", q.nextID)
 	}
-	op := &Operation{ID: id, CommandID: commandID, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC()}
+	op := &Operation{ID: id, CommandID: commandID, ServerID: serverID, Type: typ, Status: StatusPending, CreatedAt: time.Now().UTC(), TTL: ttl}
 	q.operations[id] = op
 	q.serverOps[serverID] = append(q.serverOps[serverID], id)
 	if err := q.persist(op); err != nil {
@@ -260,15 +461,47 @@ func (q *OperationQueue) EnqueueCommand(ctx context.Context, commandID, serverID
 		q.mu.Unlock()
 		return nil, err
 	}
+	result := *op
 	q.mu.Unlock()
 	select {
 	case <-ctx.Done():
-		return op, ctx.Err()
+		q.removeUnqueued(op)
+		return nil, ctx.Err()
 	case q.ch <- op:
-		cp := *op
-		return &cp, nil
+		return &result, nil
 	default:
-		return op, ErrQueueFull
+		q.removeUnqueued(op)
+		return nil, ErrQueueFull
+	}
+}
+
+func (q *OperationQueue) removeUnqueued(op *Operation) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	current := q.operations[op.ID]
+	if current != op || current.Status != StatusPending {
+		return
+	}
+	delete(q.operations, op.ID)
+	ids := q.serverOps[op.ServerID]
+	for index, id := range ids {
+		if id == op.ID {
+			q.serverOps[op.ServerID] = append(ids[:index], ids[index+1:]...)
+			break
+		}
+	}
+	if len(q.serverOps[op.ServerID]) == 0 {
+		delete(q.serverOps, op.ServerID)
+	}
+	if q.db != nil {
+		ctx, cancel := journalContext()
+		defer cancel()
+		// The in-memory entry is already gone, so a failed delete leaves a row the
+		// next start would treat as an unexecuted pending command and run. Say so
+		// rather than let a rejected command come back after a restart.
+		if _, err := q.db.ExecContext(ctx, `DELETE FROM beacon_operations WHERE id = ? AND status = ?`, op.ID, string(StatusPending)); err != nil {
+			log.Printf("beacon: could not withdraw queued operation %s from the journal: %v", op.ID, err)
+		}
 	}
 }
 
@@ -276,10 +509,19 @@ func (q *OperationQueue) persist(op *Operation) error {
 	if q.db == nil {
 		return nil
 	}
-	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at)
-		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
-		started_at=excluded.started_at,completed_at=excluded.completed_at`, op.ID, op.CommandID, op.ServerID, string(op.Type), string(op.Status), op.Error,
-		op.CreatedAt, nullTime(op.StartedAt), nullTime(op.CompletedAt))
+	ackVal := 0
+	if op.Acknowledged {
+		ackVal = 1
+	}
+	ctx, cancel := journalContext()
+	defer cancel()
+	_, err := q.db.ExecContext(ctx, `INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at,ttl,progress,progress_pct,result_data,acknowledged)
+		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
+		started_at=excluded.started_at,completed_at=excluded.completed_at,
+		progress=excluded.progress,progress_pct=excluded.progress_pct,result_data=excluded.result_data,acknowledged=excluded.acknowledged`,
+		op.ID, op.CommandID, op.ServerID, string(op.Type), string(op.Status), op.Error,
+		op.CreatedAt, nullTime(op.StartedAt), nullTime(op.CompletedAt),
+		ttlNanos(op.TTL), op.Progress, op.ProgressPct, op.ResultData, ackVal)
 	return err
 }
 
@@ -288,6 +530,13 @@ func nullTime(v time.Time) any {
 		return nil
 	}
 	return v
+}
+
+func ttlNanos(d time.Duration) any {
+	if d <= 0 {
+		return nil
+	}
+	return d.Nanoseconds()
 }
 
 func (q *OperationQueue) GetStatus(id string) (*Operation, error) {
@@ -300,6 +549,18 @@ func (q *OperationQueue) GetStatus(id string) (*Operation, error) {
 	cp := *op
 	return &cp, nil
 }
+func (q *OperationQueue) ListPendingByServer(id string) []Operation {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	out := make([]Operation, 0, len(q.serverOps[id]))
+	for _, opID := range q.serverOps[id] {
+		if op := q.operations[opID]; op != nil && op.Status == StatusPending {
+			out = append(out, *op)
+		}
+	}
+	return out
+}
+
 func (q *OperationQueue) ListByServer(id string) []Operation {
 	q.mu.Lock()
 	defer q.mu.Unlock()
@@ -334,7 +595,16 @@ func (q *OperationQueue) Shutdown() {
 		cancel()
 	}
 	if started {
-		<-q.done
+		// Bounded, because a handler blocked in a runtime call that never notices
+		// cancellation would otherwise stop the daemon from ever shutting down. On
+		// timeout the state below is still journaled - an operation left running is
+		// recorded as pending and re-runs after restart, which is the same
+		// guarantee a crash gives.
+		select {
+		case <-q.done:
+		case <-time.After(shutdownGrace):
+			log.Printf("beacon: operation queue workers still running after %s; journaling state and closing", shutdownGrace)
+		}
 	}
 	q.mu.Lock()
 	for _, op := range q.operations {
@@ -347,11 +617,16 @@ func (q *OperationQueue) Shutdown() {
 				op.Status = StatusCancelled
 				op.CompletedAt = time.Now().UTC()
 			}
-			_ = q.persist(op)
+			journalWarning("shutdown status", op.ID, q.persist(op))
 		}
 	}
 	q.mu.Unlock()
 	if q.db != nil {
-		_ = q.db.Close()
+		// A journal that will not close cleanly can lose the statuses written
+		// above, which is the difference between a command replaying after the
+		// restart and vanishing from the node.
+		if err := q.db.Close(); err != nil {
+			log.Printf("beacon: command journal did not close cleanly: %v", err)
+		}
 	}
 }

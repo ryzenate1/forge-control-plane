@@ -9,14 +9,24 @@ import (
 func TestStatsCollectorCollectNilRuntime(t *testing.T) {
 	sc := NewStatsCollector(nil, 10)
 	stats, err := sc.Collect(context.Background(), "srv-1")
-	if err != nil {
-		t.Fatal(err)
+	// A nil runtime measures nothing: Collect must fail rather than return a
+	// healthy-looking zero frame, and history must record the failure so the
+	// newest entry is not a stale success.
+	if err == nil {
+		t.Fatal("expected error with nil runtime")
 	}
-	if stats.CPU != 0 || stats.MemoryMB != 0 {
-		t.Fatalf("expected zero stats with nil runtime, got %+v", stats)
+	if stats != nil {
+		t.Fatalf("expected nil stats with nil runtime, got %+v", stats)
 	}
-	if stats.Timestamp.IsZero() {
-		t.Fatal("expected non-zero timestamp")
+	history := sc.GetHistory("srv-1")
+	if len(history) != 1 {
+		t.Fatalf("expected 1 recorded failure frame, got %d", len(history))
+	}
+	if history[0].Measured {
+		t.Fatal("failure frame must not be marked measured")
+	}
+	if history[0].Reason == "" {
+		t.Fatal("failure frame must carry a reason")
 	}
 }
 

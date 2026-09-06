@@ -24,6 +24,8 @@ type blockingRuntime struct {
 	inspectState map[string]runtime.ContainerState
 }
 
+func (*blockingRuntime) Close() error { return nil }
+
 func newBlockingRuntime() *blockingRuntime {
 	return &blockingRuntime{started: make(chan struct{}, 8), release: make(chan struct{})}
 }
