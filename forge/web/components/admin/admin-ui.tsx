@@ -140,7 +140,15 @@ export function SubsystemHealthMeter({
 
 export interface SectionHeaderProps {
   info?: PageInfoDisclosureProps;
-  title: React.ReactNode;
+  /**
+   * Overrides the registry label. Optional so registered list pages can rely
+   * on `admin-registry.ts` as the single source of the heading — the same
+   * fallback the header always had. Pass an explicit title only where the
+   * route cannot know its own name (a detail page titled by the resource,
+   * or a wizard step).
+   */
+  title?: React.ReactNode;
+  /** Overrides the registry description. */
   sub?: string;
   action?: React.ReactNode;
   breadcrumb?: React.ReactNode;
@@ -187,6 +195,11 @@ export function SectionHeader({
     description: pageMatch.description,
     sections: [{ title: "This section", content: pageMatch.description }],
   } satisfies PageInfoDisclosureProps : undefined);
+  // Page language comes from the route, not the call site, so the sidebar row,
+  // the breadcrumb tail and this heading cannot disagree unless the call site
+  // passes an explicit override.
+  const resolvedTitle = title ?? pageMatch?.label ?? groupMatch?.pageLabel ?? "Admin";
+  const resolvedSub = sub ?? pageMatch?.description;
 
   // Determine breadcrumb content
   let breadcrumbContent: React.ReactNode = null;
@@ -261,12 +274,12 @@ export function SectionHeader({
       <div className="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="t-page flex min-w-0 items-center gap-2.5 break-words">
-            {title}
+            {resolvedTitle}
             {resolvedInfo ? <PageInfoDisclosure {...resolvedInfo} /> : null}
           </h1>
-          {sub ? (
+          {resolvedSub ? (
             <p className="mt-1 max-w-prose text-xs leading-5 text-text-subtle">
-              {sub}
+              {resolvedSub}
             </p>
           ) : null}
         </div>
@@ -305,7 +318,7 @@ export function AdminPageHeader({
   className,
 }: {
   info?: PageInfoDisclosureProps;
-  title: string;
+  title?: React.ReactNode;
   description?: string;
   action?: React.ReactNode;
   backAction?: () => void;
@@ -647,7 +660,7 @@ export function PermissionDeniedState({ message }: { message?: string }) {
   );
 }
 
-export function StatsRow({ items }: { items: Array<{ label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone }> }) {
+export function StatsRow({ items }: { items: Array<{ label: string; value: string | number | null | undefined; icon?: LucideIcon; tone?: AdminTone }> }) {
   if (!items || items.length === 0) return null;
   return (
     <ForgeGrid className="mb-5" cols={4}>
@@ -663,7 +676,7 @@ export function StatsRow({ items }: { items: Array<{ label: string; value: strin
  * renders as `—` in the unknown tone rather than as `0`.
  */
 export function AdminStatCard({ label, value, icon: Icon, tone = "neutral", className }: {
-  label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone; className?: string;
+  label: string; value: string | number | null | undefined; icon?: LucideIcon; tone?: AdminTone; className?: string;
 }) {
   return (
     <ForgeMetric
