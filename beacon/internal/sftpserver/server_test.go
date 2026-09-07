@@ -3,7 +3,10 @@ package sftpserver
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -31,17 +34,29 @@ func TestAuthenticateCallsPanelRemoteSFTPAuth(t *testing.T) {
 			t.Fatalf("unexpected path %s", r.URL.Path)
 		}
 		sawAuth = r.Header.Get("Authorization")
-		var body struct {
+		body, _ := io.ReadAll(r.Body)
+		var payload struct {
 			Username string `json:"username"`
 			Password string `json:"password"`
 			IP       string `json:"ip"`
 		}
-		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		if err := json.Unmarshal(body, &payload); err != nil {
 			t.Fatal(err)
 		}
-		sawUsername = body.Username
-		if body.Password != "secret" || body.IP == "" {
-			t.Fatalf("unexpected auth payload: %+v", body)
+		sawUsername = payload.Username
+		if payload.Password != "secret" || payload.IP == "" {
+			t.Fatalf("unexpected auth payload: %+v", payload)
+		}
+		timestamp := r.Header.Get("X-Panel-Timestamp")
+		nonce := r.Header.Get("X-Panel-Nonce")
+		if timestamp == "" || len(nonce) != 32 {
+			t.Fatalf("sftp auth request is missing signed headers ts=%q nonce=%q", timestamp, nonce)
+		}
+		mac := hmac.New(sha256.New, []byte("node-token"))
+		_, _ = mac.Write([]byte(r.Method + "\n" + r.URL.RequestURI() + "\n" + timestamp + "\n" + nonce + "\n"))
+		_, _ = mac.Write(body)
+		if !hmac.Equal([]byte(r.Header.Get("X-Panel-Signature")), []byte(hex.EncodeToString(mac.Sum(nil)))) {
+			t.Fatal("sftp auth request was not signed with the node credential")
 		}
 		_ = json.NewEncoder(w).Encode(AuthResult{
 			UserID:      "user-1",
@@ -224,11 +239,12 @@ func TestHandlerSetstatIsExplicitlyUnsupported(t *testing.T) {
 
 func TestLoadOrCreateHostKeyPersistsKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".sftp", "id_ed25519")
-	first, err := loadOrCreateHostKey(path)
+	passphrase := []byte("test-passphrase-with-enough-entropy")
+	first, err := loadOrCreateHostKey(path, passphrase)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := loadOrCreateHostKey(path)
+	second, err := loadOrCreateHostKey(path, passphrase)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -274,7 +290,11 @@ func startTestSFTP(t *testing.T, suspended *atomic.Bool, publicKey string, regis
 	}))
 	t.Cleanup(panel.Close)
 	ctx, cancel := context.WithCancel(context.Background())
-	server := &Server{Addr: "127.0.0.1:0", DataDir: t.TempDir(), PanelAPIURL: panel.URL, NodeToken: "token", HTTPClient: panel.Client(), IdleTimeout: idle, Sessions: registry, Activity: activity}
+	server := &Server{
+		Addr: "127.0.0.1:0", DataDir: t.TempDir(), PanelAPIURL: panel.URL, NodeToken: "token",
+		HTTPClient: panel.Client(), IdleTimeout: idle, Sessions: registry, Activity: activity,
+		HostKeyPassphrase: "test-passphrase-with-enough-entropy",
+	}
 	done := make(chan error, 1)
 	go func() { done <- server.Run(ctx) }()
 	deadline := time.Now().Add(3 * time.Second)
