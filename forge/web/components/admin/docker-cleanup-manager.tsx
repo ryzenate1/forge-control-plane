@@ -1,11 +1,11 @@
 "use client";
-import { useNodesQuery } from "@/lib/admin/telemetry";
+import { useNodesQuery, sourceState } from "@/lib/admin/telemetry";
+import { FreshnessBadge } from "./telemetry-ui";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Container, HardDrive, Layers, PlayCircle, Plus, RefreshCw, Trash2, Archive } from "lucide-react";
 
-import {  } from "@/lib/api";
 import {
   createPolicy,
   deletePolicy,
@@ -146,10 +146,16 @@ export function DockerCleanupManager() {
   };
 
   const afterPrune = (label: string) => (res: { reclaimedBytes: number; removedCount: number }) => {
+    // Beacon answers `reclaimedBytesKnown: false` with `reclaimedBytes: 0`
+    // when it could not size the removals; the control-plane type drops that
+    // flag, so 0-with-removals is "not measured", never "0 B reclaimed".
+    const reclaimed = res.removedCount > 0 && !(res.reclaimedBytes > 0)
+      ? "reclaimed amount not measured"
+      : `${formatBytes(res.reclaimedBytes)} reclaimed`;
     toast({
       tone: "success",
       title: label,
-      message: `${res.removedCount} removed · ${formatBytes(res.reclaimedBytes)} reclaimed`,
+      message: `${res.removedCount} removed · ${reclaimed}`,
     });
     setSelected(new Set());
     refreshAll();
@@ -256,6 +262,7 @@ export function DockerCleanupManager() {
       <SectionHeader
         title="Docker Cleanup"
         sub="Per-node disk usage and automated, retention-aware cleanup of unused images, build cache and dangling volumes."
+        status={<FreshnessBadge state={sourceState(usageQuery, 30_000)} />}
         action={
           <Btn tone="ghost" size="sm" onClick={refreshAll} loading={usageQuery.isFetching}>
             <RefreshCw size={14} className="mr-1.5" /> Refresh
@@ -264,7 +271,7 @@ export function DockerCleanupManager() {
       />
 
       <Card>
-        <CardHeader title="Node" />
+        <CardHeader title="Node" icon={Layers} />
         <div className="grid gap-3 p-4 sm:max-w-md">
           <AdminSelect
             label="Report on node"
@@ -278,7 +285,7 @@ export function DockerCleanupManager() {
             disabled={nodesQuery.isLoading || nodeOptions.length === 0}
           />
           {nodeOptions.length === 0 && !nodesQuery.isLoading ? (
-            <p className="text-xs text-slate-500">No nodes are registered yet.</p>
+            <p className="text-xs text-text-muted">No nodes are registered yet.</p>
           ) : null}
         </div>
       </Card>
@@ -291,7 +298,7 @@ export function DockerCleanupManager() {
 
       {usage ? (
         <Card>
-          <CardHeader title={`Disk usage — ${usage.nodeName || nodeName}`} />
+          <CardHeader title={`Disk usage — ${usage.nodeName || nodeName}`} icon={HardDrive} />
           <div className="p-4">
             <StatsRow
               items={[
@@ -306,8 +313,8 @@ export function DockerCleanupManager() {
               segments={[
                 { label: "Images", bytes: usage.imagesBytes, color: "bg-sky-500" },
                 { label: "Containers", bytes: usage.containersBytes, color: "bg-violet-500" },
-                { label: "Volumes", bytes: usage.volumesBytes, color: "bg-emerald-500" },
-                { label: "Build cache", bytes: usage.buildCacheBytes, color: "bg-amber-500" },
+                { label: "Volumes", bytes: usage.volumesBytes, color: "bg-ok" },
+                { label: "Build cache", bytes: usage.buildCacheBytes, color: "bg-warn" },
               ]}
             />
           </div>
@@ -318,13 +325,14 @@ export function DockerCleanupManager() {
         <Card>
           <CardHeader
             title="Unused images"
-            action={<Badge className="bg-sky-500/15 text-sky-300">{formatBytes(reclaimable)} reclaimable</Badge>}
+            icon={Container}
+            action={<Badge className="bg-info-subtle text-info">{formatBytes(reclaimable)} reclaimable</Badge>}
           />
           <div className="flex flex-wrap items-end gap-3 border-b border-[var(--line)] p-4">
             <div className="sm:w-40">
               <Input label="Keep newest N" value={String(limit)} onChange={(v) => setLimit(Math.max(0, Number(v) || 0))} type="number" />
             </div>
-            <p className="flex-1 text-xs text-slate-500">Retention floor: the {limit === 1 ? "1 most recent" : `${limit} most recent`} unused image(s) by creation date are always preserved so the deployed version is never stranded.</p>
+            <p className="flex-1 text-xs text-text-muted">Retention floor: the {limit === 1 ? "1 most recent" : `${limit} most recent`} unused image(s) by creation date are always preserved so the deployed version is never stranded.</p>
             <Btn
               tone="danger"
               size="sm"
@@ -368,11 +376,11 @@ export function DockerCleanupManager() {
                       />
                     </AdminTd>
                     <AdminTd>
-                      <div className="font-medium text-slate-100">{imageLabel(img)}</div>
-                      <div className="font-mono text-xs text-slate-500">{shortId(img.id)}</div>
+                      <div className="font-medium text-text">{imageLabel(img)}</div>
+                      <div className="font-mono text-xs text-text-muted">{shortId(img.id)}</div>
                     </AdminTd>
                     <AdminTd className="whitespace-nowrap font-mono">{formatBytes(img.size)}</AdminTd>
-                    <AdminTd className="whitespace-nowrap text-slate-400">{formatDate(img.createdAt)} <span className="text-slate-600">({formatAge(img.createdAt)})</span></AdminTd>
+                    <AdminTd className="whitespace-nowrap text-text-subtle">{formatDate(img.createdAt)} <span className="text-text-muted">({formatAge(img.createdAt)})</span></AdminTd>
                   </AdminTr>
                 ))}
               </AdminTBody>
@@ -384,6 +392,7 @@ export function DockerCleanupManager() {
       <Card>
         <CardHeader
           title="Cleanup policies"
+          icon={PlayCircle}
           action={
             <Btn size="sm" onClick={() => setPolicyModal({ mode: "create" })} disabled={!activeNodeId}>
               <Plus size={14} className="mr-1.5" /> New policy
@@ -412,18 +421,18 @@ export function DockerCleanupManager() {
                 return (
                   <AdminTr key={p.id}>
                     <AdminTd>
-                      <div className="font-medium text-slate-100">{scope}</div>
+                      <div className="font-medium text-text">{scope}</div>
                       <div className="flex gap-1.5 pt-1">
-                        {p.pruneBuildCache ? <Badge className="bg-amber-500/15 text-amber-300">cache</Badge> : null}
-                        {p.pruneVolumes ? <Badge className="bg-emerald-500/15 text-emerald-300">volumes</Badge> : null}
+                        {p.pruneBuildCache ? <Badge className="bg-warn-subtle text-warn">cache</Badge> : null}
+                        {p.pruneVolumes ? <Badge className="bg-ok-subtle text-ok">volumes</Badge> : null}
                       </div>
                     </AdminTd>
-                    <AdminTd><span className="font-mono text-xs text-slate-300">{p.schedule}</span></AdminTd>
+                    <AdminTd><span className="font-mono text-xs text-text">{p.schedule}</span></AdminTd>
                     <AdminTd>keep {p.mostRecentLimit}</AdminTd>
-                    <AdminTd className="whitespace-nowrap text-slate-400">{p.enabled ? formatDate(p.nextRunAt) : <span className="text-slate-600">disabled</span>}</AdminTd>
+                    <AdminTd className="whitespace-nowrap text-text-subtle">{p.enabled ? formatDate(p.nextRunAt) : <span className="text-text-muted">disabled</span>}</AdminTd>
                     <AdminTd>
                       <Pill tone={STATUS_TONE[p.lastStatus ?? ""] ?? "neutral"}>{p.lastStatus ?? "never"}</Pill>
-                      <div className="pt-1 text-xs text-slate-500">{formatDate(p.lastRunAt)}</div>
+                      <div className="pt-1 text-xs text-text-muted">{formatDate(p.lastRunAt)}</div>
                     </AdminTd>
                     <AdminTd>
                       <div className="flex items-center justify-end gap-1.5">
@@ -470,7 +479,7 @@ function UsageBar({ total, segments }: { total: number; segments: Array<{ label:
   const safeTotal = total > 0 ? total : segments.reduce((sum, s) => sum + s.bytes, 0) || 1;
   return (
     <div className="space-y-3">
-      <div className="flex h-3 w-full overflow-hidden rounded-full bg-white/[0.04]">
+      <div className="flex h-3 w-full overflow-hidden rounded-full bg-overlay">
         {segments.map((s) => {
           const pct = Math.max(0, Math.min(100, (s.bytes / safeTotal) * 100));
           if (pct <= 0) return null;
@@ -483,9 +492,9 @@ function UsageBar({ total, segments }: { total: number; segments: Array<{ label:
           return (
             <div key={s.label} className="flex items-center gap-2 text-xs">
               <span className={cn("h-2.5 w-2.5 rounded-full", s.color)} aria-hidden="true" />
-              <span className="text-slate-400">{s.label}</span>
-              <span className="ml-auto font-mono text-slate-300">{formatBytes(s.bytes)}</span>
-              <span className="w-9 text-right text-slate-500">{pct}%</span>
+              <span className="text-text-subtle">{s.label}</span>
+              <span className="ml-auto font-mono text-text">{formatBytes(s.bytes)}</span>
+              <span className="w-9 text-right text-text-muted">{pct}%</span>
             </div>
           );
         })}
@@ -563,7 +572,7 @@ function PolicyModal({
           placeholder="All nodes (global)"
         />
         <Input label="Cron schedule" value={form.schedule} onChange={(v) => set("schedule", v)} mono placeholder="0 3 * * *" required />
-        {!scheduleValid ? <p className="text-xs text-red-300">A schedule is required (5-field cron, e.g. <span className="font-mono">0 3 * * *</span>).</p> : null}
+        {!scheduleValid ? <p className="text-xs text-danger">A schedule is required (5-field cron, e.g. <span className="font-mono">0 3 * * *</span>).</p> : null}
         <Input label="Most recent to keep" value={String(form.mostRecentLimit)} onChange={(v) => set("mostRecentLimit", Math.max(0, Number(v) || 0))} type="number" />
         <div className="space-y-2 rounded-lg border border-[var(--line)] p-3">
           <ToggleRow label="Enabled" checked={form.enabled} onChange={(v) => set("enabled", v)} />
@@ -578,7 +587,7 @@ function PolicyModal({
 
 function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex items-center justify-between gap-3 text-sm text-slate-300">
+    <label className="flex items-center justify-between gap-3 text-sm text-text">
       <span>{label}</span>
       <input type="checkbox" className="h-4 w-4 accent-[var(--brand)]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
     </label>
