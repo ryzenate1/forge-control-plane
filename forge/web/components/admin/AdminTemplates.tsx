@@ -6,7 +6,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Ban, Box, Cpu, FileCode, Gamepad2, HardDrive, Layers, Pencil, Plus, Terminal, Trash2 } from "lucide-react";
 import { createTemplate, deleteEgg, fetchTemplates, updateEgg, fetchNests, createEgg } from "@/lib/api";
 import type { ApiEgg, ApiNest, UpdateEggInput } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, Textarea, AdminPageHeader, AdminPageLayout } from "./admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, Textarea, AdminPageHeader, AdminPageLayout, AdminErrorState, AdminSelect } from "./admin-ui";
 import { EGG_TEMPLATES, type EggTemplateItem } from "@/lib/egg-templates";
 import { useSearchParams } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
@@ -100,7 +100,7 @@ export function AdminTemplates() {
       dockerImages: images.join("\n"),
       startupCommand: tpl.startup ?? tpl.startupCommand ?? "",
       stopCommand: (tpl.config?.stop as string) ?? "",
-      defaultMemory: String(tpl.defaultMemoryMb ?? 1024),
+      defaultMemory: tpl.defaultMemoryMb === undefined || tpl.defaultMemoryMb === null ? "" : String(tpl.defaultMemoryMb),
       installContainer: tpl.installContainer ?? "",
       installEntrypoint: tpl.installEntrypoint ?? "",
       installScript: tpl.installScript ?? "",
@@ -210,7 +210,7 @@ export function AdminTemplates() {
         {isLoading ? (
           <TableSkeleton rows={4} />
         ) : templatesQuery.isError ? (
-          <div className="space-y-3"><EmptyState icon={Box} title="Templates unavailable" message="Could not load compatibility templates." /><Btn tone="ghost" onClick={() => void templatesQuery.refetch()}>Retry</Btn></div>
+          <div className="p-4"><AdminErrorState message={(templatesQuery.error as Error).message} retry={() => void templatesQuery.refetch()} /></div>
         ) : visibleTemplates.length === 0 ? (
           <EmptyState icon={Box} message={search ? "No matching templates. Try a different search." : "No compatibility templates yet. Create one for an imported installation."} />
         ) : (
@@ -227,7 +227,7 @@ export function AdminTemplates() {
               return (
                 <div key={tpl.id} className="rounded-xl border border-line bg-[var(--surface-input)] p-4 space-y-3 hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] transition">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-100">{tpl.name}</h3>
+                    <h3 className="text-sm font-semibold text-text">{tpl.name}</h3>
                     <Pill tone="neutral">template</Pill>
                   </div>
 
@@ -267,7 +267,7 @@ export function AdminTemplates() {
                     ) : null}
                   </div>
 
-                  <div className="flex items-center gap-4 pt-2 border-t border-white/[0.04] text-xs text-text-muted">
+                  <div className="flex items-center gap-4 pt-2 border-t border-line text-xs text-text-muted">
                     {tpl.defaultMemoryMb ? (
                       <span className="flex items-center gap-1"><Cpu size={11} /> {tpl.defaultMemoryMb} MB</span>
                     ) : null}
@@ -346,10 +346,10 @@ export function AdminTemplates() {
         <CardHeader title={`${EGG_TEMPLATES.length} game template${EGG_TEMPLATES.length !== 1 ? "s" : ""}`} icon={Gamepad2} />
         <div className="grid gap-4 p-4 md:grid-cols-2 lg:grid-cols-3">
           {EGG_TEMPLATES.map((t) => (
-            <div key={t.id} className="rounded-xl border border-line bg-[var(--surface-input)] p-4 space-y-3 hover:border-white/20 transition">
+            <div key={t.id} className="rounded-xl border border-line bg-[var(--surface-input)] p-4 space-y-3 hover:border-line-strong transition">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold text-slate-100">{t.name}</h3>
+                  <h3 className="text-sm font-semibold text-text">{t.name}</h3>
                   <p className="mt-0.5 line-clamp-2 text-xs text-text-muted">{t.description}</p>
                 </div>
                 <Pill tone="neutral">{t.game}</Pill>
@@ -358,7 +358,7 @@ export function AdminTemplates() {
               <div className="space-y-2">
                 <div className="flex flex-wrap gap-1.5">
                   {Object.entries(t.images).map(([label, img]) => (
-                    <span key={label} className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-text-muted" title={img}>
+                    <span key={label} className="inline-flex items-center gap-1 rounded-md bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-muted" title={img}>
                       <HardDrive size={10} /> {label}
                     </span>
                   ))}
@@ -371,7 +371,7 @@ export function AdminTemplates() {
                 )}
               </div>
 
-              <div className="flex items-center gap-3 pt-2 border-t border-white/[0.04] text-xs text-text-muted">
+              <div className="flex items-center gap-3 pt-2 border-t border-line text-xs text-text-muted">
                 <span className="flex items-center gap-1"><Layers size={11} /> {t.env.length} var{t.env.length !== 1 ? "s" : ""}</span>
                 <span className="flex items-center gap-1"><FileCode size={11} /> {t.features.length} feature{t.features.length !== 1 ? "s" : ""}</span>
               </div>
@@ -434,7 +434,7 @@ function ImportTemplateModal({
             <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Images</h4>
             <div className="space-y-1">
               {Object.entries(template.images).map(([label, img]) => (
-                <code key={label} className="block truncate rounded bg-white/[0.04] px-2 py-1 font-mono text-[11px] text-text-subtle">{label}: {img}</code>
+                <code key={label} className="block truncate rounded bg-overlay px-2 py-1 font-mono text-[11px] text-text-subtle">{label}: {img}</code>
               ))}
             </div>
           </div>
@@ -443,7 +443,7 @@ function ImportTemplateModal({
             <div className="space-y-1">
               {template.env.slice(0, 5).map((v) => (
                 <div key={v.envVariable} className="flex items-center gap-2 text-[11px]">
-                  <code className="rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-300">{v.envVariable}</code>
+                  <code className="rounded bg-warn-subtle px-1.5 py-0.5 font-mono text-warn">{v.envVariable}</code>
                   <span className="truncate text-text-muted">{v.name}</span>
                 </div>
               ))}
@@ -459,15 +459,12 @@ function ImportTemplateModal({
           {nests.length === 0 ? (
             <p className="text-xs text-text-subtle">No nests available. Create a nest first.</p>
           ) : (
-            <select
+            <AdminSelect
+              label="Target Nest"
               value={selectedNest}
-              onChange={(e) => setSelectedNest(e.target.value)}
-              className="w-full rounded-lg border border-line bg-[var(--surface)] px-3 py-2 text-sm text-text focus:border-red-400/70 focus:outline-none"
-            >
-              {nests.map((n) => (
-                <option key={n.id} value={n.id}>{n.name}</option>
-              ))}
-            </select>
+              onChange={(v) => setSelectedNest(v)}
+              options={nests.map((n) => ({ value: n.id, label: n.name }))}
+            />
           )}
         </div>
       </div>
