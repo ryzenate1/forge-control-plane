@@ -16,15 +16,14 @@ import {
   listManagedDatabaseRestores,
   updateManagedDatabase,
 } from "@/lib/api/database-containers";
-import { Btn, EmptyState, Input, Modal, ModalFooter, AdminErrorState, AdminLoadingState, Pill, cn } from "@/components/admin/admin-ui";
+import { Btn, EmptyState, Input, Modal, ModalFooter, AdminErrorState, AdminLoadingState, Pill, cn, AdminTable, AdminTHead, AdminTh, AdminTBody } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { statusTone } from "@/lib/api/status";
 import { StatusDot, Pagination } from "@/components/ui/primitives";
 import { DbStatCards, resourcesLabel, type DbStat } from "./databases-overview";
 import { isAvailable, isPartial, reportedTotal } from "@/lib/admin/telemetry";
-import { resolveTone } from "@/components/ui/forge/status";
-import { formatDate } from "@/lib/utils";
+import { formatBytes, formatDate } from "@/lib/utils";
 
 const selectStyle = "ui-input w-full";
 
@@ -79,6 +78,7 @@ const filterSelectCls = "ui-input w-full cursor-pointer sm:w-44";
 export function ManagedDatabaseView() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
   const [selected, setSelected] = useState<string | null>(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [forceDelete, setForceDelete] = useState(false);
@@ -406,7 +406,7 @@ export function ManagedDatabaseView() {
                   isSelected={selected === db.id}
                   onSelect={() => setSelected(selected === db.id ? null : db.id)}
                   onBackup={(id) => backupMut.mutate(id)}
-                  onRestore={(id, backupId) => restoreMut.mutate({ dbId: id, backupId })}
+                  onRestore={(id, backupId) => void requestRestore(id, backupId)}
                   onRotate={(id) => rotateMut.mutate(id)}
                   onEdit={(item) => setEditingDb(item)}
                   onDelete={(id) => setConfirmDeleteId(id)}
@@ -432,38 +432,34 @@ export function ManagedDatabaseView() {
           </div>
         ) : (
           <div className="overflow-hidden rounded-xl border border-line bg-overlay-subtle shadow-sm">
-            <div className="overflow-x-auto">
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-line text-left text-meta uppercase tracking-wider text-text-muted">
-                    <th className="px-4 py-3 font-medium">Name</th>
-                    <th className="px-2 py-3 font-medium">Engine / Version</th>
-                    <th className="px-2 py-3 font-medium">Status</th>
-                    <th className="px-2 py-3 font-medium">Host : Port</th>
-                    <th className="px-2 py-3 font-medium">Resources</th>
-                    <th className="px-2 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-line">
-                  {visible.map((db) => (
-                    <ManagedDBRow
-                      key={db.id}
-                      db={db}
-                      isSelected={selected === db.id}
-                      onSelect={() => setSelected(selected === db.id ? null : db.id)}
-                      onBackup={(id) => backupMut.mutate(id)}
-                      onRestore={(id, backupId) => restoreMut.mutate({ dbId: id, backupId })}
-                      onRotate={(id) => rotateMut.mutate(id)}
-                      onEdit={(item) => setEditingDb(item)}
-                      onDelete={(id) => setConfirmDeleteId(id)}
-                      backups={selected === db.id ? backups : []}
-                      restores={selected === db.id ? restores : []}
-                      isPending={backupMut.isPending || restoreMut.isPending || updateMut.isPending}
-                    />
-                  ))}
-                </tbody>
-              </table>
-            </div>
+            <AdminTable label="Managed databases">
+              <AdminTHead>
+                <AdminTh>Name</AdminTh>
+                <AdminTh>Engine / Version</AdminTh>
+                <AdminTh>Status</AdminTh>
+                <AdminTh>Host : Port</AdminTh>
+                <AdminTh>Resources</AdminTh>
+                <AdminTh className="text-right">Actions</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
+                {visible.map((db) => (
+                  <ManagedDBRow
+                    key={db.id}
+                    db={db}
+                    isSelected={selected === db.id}
+                    onSelect={() => setSelected(selected === db.id ? null : db.id)}
+                    onBackup={(id) => backupMut.mutate(id)}
+                    onRestore={(id, backupId) => void requestRestore(id, backupId)}
+                    onRotate={(id) => rotateMut.mutate(id)}
+                    onEdit={(item) => setEditingDb(item)}
+                    onDelete={(id) => setConfirmDeleteId(id)}
+                    backups={selected === db.id ? backups : []}
+                    restores={selected === db.id ? restores : []}
+                    isPending={backupMut.isPending || restoreMut.isPending || updateMut.isPending}
+                  />
+                ))}
+              </AdminTBody>
+            </AdminTable>
             <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-xs text-text-subtle">
               <span>{managedRangeLabel}</span>
               <div className="flex items-center gap-2">
@@ -481,6 +477,7 @@ export function ManagedDatabaseView() {
         )}
       </div>
 
+      {renderConfirm()}
       {showCreate && (
         <ManagedDBCreateModal
           onClose={() => setShowCreate(false)}
@@ -678,7 +675,7 @@ function ManagedDBCard({
   restores: import("@/lib/api/database-containers").ManagedDatabaseRestore[];
   isPending: boolean;
 }) {
-  const hostPort = db.host ? `${db.host}:${db.port}` : db.port > 0 ? String(db.port) : "—";
+  const hostPort = endpointLabel(db);
   return (
     <div className="rounded-xl border border-line bg-overlay-subtle p-4 shadow-sm transition hover:border-line-strong">
       <div className="flex cursor-pointer items-start gap-3" onClick={onSelect}>
@@ -715,7 +712,7 @@ function ManagedDBCard({
           <Archive size={14} />
         </button>
         <button
-          className="grid h-9 flex-1 place-items-center rounded-lg border border-line text-text-subtle transition-colors hover:border-line-strong hover:text-blue-200 disabled:opacity-40"
+          className="grid h-9 flex-1 place-items-center rounded-lg border border-line text-text-subtle transition-colors hover:border-line-strong hover:text-info disabled:opacity-40"
           disabled={isPending}
           onClick={() => onRotate(db.id)}
           title="Rotate Password"
@@ -746,10 +743,10 @@ function ManagedDBCard({
                       <span className="text-text-subtle">{b.name}</span>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className="text-text-subtle">{b.size > 0 ? `${(b.size / 1024 / 1024).toFixed(2)} MB` : "-"}</span>
+                      <span className="text-text-subtle">{backupSizeLabel(b.size, b.status === "completed")}</span>
                       {b.status === "completed" && (
                         <button
-                          className="text-text-subtle transition-colors hover:text-blue-200"
+                          className="text-text-subtle transition-colors hover:text-info"
                           onClick={() => onRestore(db.id, b.id)}
                           title="Restore"
                           type="button"
@@ -775,7 +772,7 @@ function ManagedDBCard({
                       {r.backupId && <span className="text-text-subtle">backup:{r.backupId.slice(0,8)}</span>}
                     </div>
                     <div className="flex items-center gap-2">
-                      {r.errorMessage && <span className="text-red-400 truncate max-w-[200px]">{r.errorMessage}</span>}
+                      {r.errorMessage && <span className="text-danger truncate max-w-[200px]">{r.errorMessage}</span>}
                       <span className="text-text-muted">{new Date(r.createdAt).toLocaleDateString()}</span>
                     </div>
                   </div>
