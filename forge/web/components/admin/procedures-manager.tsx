@@ -1,18 +1,53 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { History, Play, Plus, Trash2, Workflow } from "lucide-react";
 import { OfflineBanner } from "@/components/shared/states-offline";
-import { AdminCard, AdminPageLayout } from "@/components/admin/admin-layout";
 import * as api from "@/lib/api/procedures";
 import { sanitizeError } from "@/lib/sanitize";
+import { sourceState } from "@/lib/admin/telemetry";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "./telemetry-ui";
+import {
+  AdminErrorState,
+  AdminLoadingState,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminTr,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Pill,
+  SectionHeader,
+  Textarea,
+} from "./admin-ui";
+
+// Procedures (multi-step runbooks) panel. Server state (procedure list,
+// executions) lives in react-query; request-driven reads (execution detail,
+// step logs) and writes (create/delete/execute/cancel/approve/reject) are
+// mutations. Nothing is announced until the corresponding call resolves, and
+// destructive actions are confirmed first.
+
+function executionTone(status: string): "green" | "red" | "yellow" | "neutral" {
+  const s = (status ?? "").toLowerCase();
+  if (s === "succeeded" || s === "completed" || s === "success") return "green";
+  if (s === "failed" || s === "error") return "red";
+  if (s === "running" || s === "waiting_approval" || s === "pending") return "yellow";
+  return "neutral";
+}
 
 export function ProceduresManager() {
-  const [procedures, setProcedures] = useState<api.Procedure[]>([]);
+  const queryClient = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
   const [selected, setSelected] = useState<api.Procedure | null>(null);
-  const [executions, setExecutions] = useState<api.ProcedureExecution[]>([]);
   const [selectedExec, setSelectedExec] = useState<api.ProcedureExecution | null>(null);
   const [logs, setLogs] = useState<Record<string, api.ProcedureStepLog[]>>({});
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [page, setPage] = useState(0);
@@ -30,297 +65,356 @@ export function ProceduresManager() {
   });
   const [cron, setCron] = useState("");
 
-  async function load() {
-    setLoading(true);
-    setError(null);
-    try {
-      const list = await api.listProcedures();
-      setProcedures(list);
-      if (list.length > 0 && !selected) {
-        const first = list[0];
-        if (first) setSelected(first);
+  const proceduresQuery = useQuery({
+    queryKey: ["procedures"],
+    queryFn: () => api.listProcedures(),
+  });
+  const procedures = useMemo(() => proceduresQuery.data ?? [], [proceduresQuery.data]);
+
+  const executionsQuery = useQuery({
+    queryKey: ["procedure-executions", selected?.id],
+    queryFn: () => api.listExecutions(selected!.id, 20),
+    enabled: Boolean(selected?.id),
+  });
+  const executions = useMemo(() => executionsQuery.data ?? [], [executionsQuery.data]);
+
+  useEffect(() => {
+    if (!selected && procedures.length > 0) {
+      const first = procedures[0];
+      if (first) setSelected(first);
+    }
+  }, [procedures, selected]);
+
+  const invalidate = () => {
+    void queryClient.invalidateQueries({ queryKey: ["procedures"] });
+    if (selected) void queryClient.invalidateQueries({ queryKey: ["procedure-executions", selected.id] });
+  };
+
+  const createMut = useMutation({
+    mutationFn: (payload: api.CreateProcedureRequest) => api.createProcedure(payload),
+    onSuccess: (created) => {
+      setSuccess(`Created ${created.name}`);
+      setForm((prev) => ({ ...prev, name: "", description: "" }));
+      setCron("");
+      invalidate();
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Create failed")),
+  });
+
+  const deleteMut = useMutation({
+    mutationFn: (id: string) => api.deleteProcedure(id),
+    onSuccess: () => {
+      setSuccess("Deleted");
+      setSelected(null);
+      setSelectedExec(null);
+      invalidate();
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Delete failed")),
+  });
+
+  const executeMut = useMutation({
+    mutationFn: (id: string) => api.executeProcedure(id),
+    onSuccess: (exec) => {
+      setSuccess(`Execution ${exec.id.slice(0, 8)} queued`);
+      invalidate();
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Execute failed")),
+  });
+
+  const cancelMut = useMutation({
+    mutationFn: (execId: string) => api.cancelExecution(execId),
+    onSuccess: () => {
+      setSuccess("Cancelled");
+      invalidate();
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Cancel failed")),
+  });
+
+  const detailMut = useMutation({
+    mutationFn: (execId: string) => api.getExecution(execId),
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Load execution failed")),
+  });
+
+  const stepLogsMut = useMutation({
+    mutationFn: (stepId: string) => api.listStepLogs(stepId),
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Load logs failed")),
+  });
+
+  const approveMut = useMutation({
+    mutationFn: (stepExecId: string) => api.approveStep(stepExecId),
+    onSuccess: async () => {
+      setSuccess("Approved");
+      if (selectedExec) {
+        try {
+          const fresh = await api.getExecution(selectedExec.id);
+          setSelectedExec(fresh);
+        } catch (e) {
+          setError(sanitizeError(e instanceof Error ? e.message : "Reload failed"));
+        }
       }
-    } catch (e) {
-      setError(sanitizeError(e instanceof Error ? e.message : "Failed to load procedures"));
-    } finally {
-      setLoading(false);
-    }
-  }
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Approve failed")),
+  });
 
-  async function loadExecutions(procId: string) {
-    try {
-      const execs = await api.listExecutions(procId, 20);
-      setExecutions(execs);
-    } catch (e) {
-      setError(sanitizeError(e instanceof Error ? e.message : "Failed to load executions"));
-    }
-  }
+  const rejectMut = useMutation({
+    mutationFn: (stepExecId: string) => api.rejectStep(stepExecId),
+    onSuccess: async () => {
+      setSuccess("Rejected");
+      if (selectedExec) {
+        try {
+          const fresh = await api.getExecution(selectedExec.id);
+          setSelectedExec(fresh);
+        } catch (e) {
+          setError(sanitizeError(e instanceof Error ? e.message : "Reload failed"));
+        }
+      }
+    },
+    onError: (err) => setError(sanitizeError(err instanceof Error ? err.message : "Reject failed")),
+  });
 
-  useEffect(() => {
-    void load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    if (selected) void loadExecutions(selected.id);
-  }, [selected]);
-
-  async function handleCreate(e: React.FormEvent) {
+  function handleCreate(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
     const payload: api.CreateProcedureRequest = {
       ...form,
       schedule: cron.trim() ? { cronExpression: cron.trim(), timezone: "UTC", enabled: true } : null,
     };
-    try {
-      const created = await api.createProcedure(payload);
-      setSuccess(`Created ${created.name}`);
-      setForm({ ...form, name: "", description: "" });
-      setCron("");
-      await load();
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Create failed"));
-    }
+    createMut.mutate(payload);
   }
 
-  async function handleDelete(id: string) {
-    if (!confirm("Delete procedure?")) return;
-    try {
-      await api.deleteProcedure(id);
-      setSuccess("Deleted");
-      setSelected(null);
-      await load();
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Delete failed"));
-    }
+  async function handleDelete(id: string, name: string) {
+    const ok = await confirm({
+      title: `Delete procedure “${name}”?`,
+      description: "The procedure, its steps and schedule are removed. Past executions are kept as audit history.",
+      danger: true,
+      confirmLabel: "Delete",
+    });
+    if (ok) deleteMut.mutate(id);
   }
 
-  async function handleExecute() {
+  function handleExecute() {
     if (!selected) return;
-    try {
-      const exec = await api.executeProcedure(selected.id);
-      setSuccess(`Execution ${exec.id.slice(0, 8)} queued`);
-      await loadExecutions(selected.id);
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Execute failed"));
-    }
-  }
-
-  async function handleCancel(execId: string) {
-    try {
-      await api.cancelExecution(execId);
-      setSuccess("Cancelled");
-      if (selected) await loadExecutions(selected.id);
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Cancel failed"));
-    }
-  }
-
-  async function handleApprove(stepExecId: string) {
-    try {
-      await api.approveStep(stepExecId);
-      setSuccess("Approved");
-      if (selectedExec) {
-        const fresh = await api.getExecution(selectedExec.id);
-        setSelectedExec(fresh);
-      }
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Approve failed"));
-    }
-  }
-
-  async function handleReject(stepExecId: string) {
-    try {
-      await api.rejectStep(stepExecId);
-      setSuccess("Rejected");
-      if (selectedExec) {
-        const fresh = await api.getExecution(selectedExec.id);
-        setSelectedExec(fresh);
-      }
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Reject failed"));
-    }
+    executeMut.mutate(selected.id);
   }
 
   async function handleViewExec(execId: string) {
+    setError(null);
     try {
-      const exec = await api.getExecution(execId);
+      const exec = await detailMut.mutateAsync(execId);
       setSelectedExec(exec);
-      // load logs for each step
       for (const step of exec.steps) {
         try {
-          const stepLogs = await api.listStepLogs(step.id);
+          const stepLogs = await stepLogsMut.mutateAsync(step.id);
           setLogs((prev) => ({ ...prev, [step.id]: stepLogs }));
         } catch {
-          // ignore
+          // Per-step log failures must not hide the execution detail.
         }
       }
-    } catch (err) {
-      setError(sanitizeError(err instanceof Error ? err.message : "Load execution failed"));
+    } catch {
+      // detailMut.onError already surfaced the failure.
     }
   }
 
+  const paged = procedures.slice(page * pageSize, (page + 1) * pageSize);
+
   return (
-    <AdminPageLayout
-      title="Procedures"
-      description="2384L procedure service: multi-step runbooks with approval gates, cron scheduling, retry/rollback, and audit logging. Routes under /procedures (+ /procedures/executions/*)."
-    >
-      <OfflineBanner onRetry={() => void load()} />
+    <div className="space-y-6">
+      <SectionHeader
+        title="Procedures"
+        sub="Multi-step runbooks with approval gates, cron scheduling, retry/rollback, and audit logging."
+        status={<FreshnessBadge state={sourceState(proceduresQuery, 30_000)} />}
+      />
+      <OfflineBanner onRetry={() => void proceduresQuery.refetch()} />
       {error && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
-          <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-danger-line bg-danger-subtle p-4 text-sm text-danger">
+          <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-overlay-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
         </div>
       )}
       {success && (
-        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.09] p-4 text-sm text-emerald-200">
-          <span>{success}</span> <button onClick={() => setSuccess(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
+        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-ok-line bg-ok-subtle p-4 text-sm text-ok">
+          <span>{success}</span> <button onClick={() => setSuccess(null)} className="rounded px-2 py-1 text-xs underline hover:bg-overlay-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-3">
-        <AdminCard title="Procedures" description={`${procedures.length} total`}>
-          {loading ? (
-            <div className="grid place-items-center rounded-xl border border-dashed border-[var(--line)] bg-black/10 p-6 text-sm text-[var(--text-subtle)]">Loading…</div>
+        <Card>
+          <CardHeader title={proceduresQuery.isSuccess ? `${procedures.length} procedures` : "Procedures"} icon={Workflow} />
+          {proceduresQuery.isLoading ? (
+            <AdminLoadingState label="Loading procedures…" />
+          ) : proceduresQuery.isError ? (
+            <AdminErrorState message={sanitizeError(proceduresQuery.error instanceof Error ? proceduresQuery.error.message : "Failed to load procedures")} retry={() => void proceduresQuery.refetch()} />
           ) : procedures.length === 0 ? (
-            <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--line)] bg-black/10 px-5 py-10 text-center">
-              <p className="text-sm font-semibold text-[var(--text)]">No procedures</p>
-              <p className="mt-1 text-sm text-[var(--text-subtle)]">Create one with steps (run_command, sleep, run_procedure, etc.).</p>
-            </div>
+            <EmptyState icon={Workflow} title="No procedures" sub="Create one with steps (run_command, sleep, run_procedure, etc.)." />
           ) : (
             <>
               <div className="space-y-2 max-h-[520px] overflow-auto">
-                {procedures.slice(page * pageSize, (page + 1) * pageSize).map((p) => (
+                {paged.map((p) => (
                   <button
                     key={p.id}
                     onClick={() => setSelected(p)}
                     aria-label={`Select procedure ${p.name}`}
-                    className={`w-full text-left rounded-lg border p-3 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] ${selected?.id === p.id ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]" : "border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface-hover)]"}`}
+                    className={`w-full text-left rounded-lg border p-3 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] ${selected?.id === p.id ? "border-brand bg-brand-subtle" : "border-line bg-surface hover:bg-surface-hover"}`}
                   >
-                    <p className="text-sm font-bold text-[var(--text)]">{p.name} {p.enabled ? "" : "(disabled)"}</p>
-                    <p className="text-xs text-[var(--text-subtle)] truncate">{p.description || "—"} · {p.steps?.length ?? 0} steps {p.schedule ? `· cron ${p.schedule.cronExpression}` : ""}</p>
+                    <p className="text-sm font-bold text-text">{p.name} {p.enabled ? "" : "(disabled)"}</p>
+                    <p className="text-xs text-text-subtle truncate">{p.description || "—"} · {p.steps?.length ?? 0} steps {p.schedule ? `· cron ${p.schedule.cronExpression}` : ""}</p>
                   </button>
                 ))}
               </div>
               {procedures.length > pageSize && (
-                <div className="mt-3 flex items-center justify-between border-t border-[var(--line)] pt-3">
-                  <span className="font-mono text-xs text-[var(--text-subtle)]">Page {page + 1} of {Math.ceil(procedures.length / pageSize)} · {procedures.length} total</span>
+                <div className="mt-3 flex items-center justify-between border-t border-line pt-3">
+                  <span className="font-mono text-xs text-text-subtle">Page {page + 1} of {Math.ceil(procedures.length / pageSize)} · {procedures.length} total</span>
                   <div className="flex gap-2">
-                    <button disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))} className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:opacity-40 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Prev</button>
-                    <button disabled={(page + 1) * pageSize >= procedures.length} onClick={() => setPage((p) => p + 1)} className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] disabled:opacity-40 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Next</button>
+                    <Btn size="sm" tone="ghost" disabled={page === 0} onClick={() => setPage((prev) => Math.max(0, prev - 1))}>Prev</Btn>
+                    <Btn size="sm" tone="ghost" disabled={(page + 1) * pageSize >= procedures.length} onClick={() => setPage((prev) => prev + 1)}>Next</Btn>
                   </div>
                 </div>
               )}
             </>
           )}
-          <button onClick={() => void load()} aria-label="Refresh procedures" className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Refresh</button>
-        </AdminCard>
+          <div className="mt-3">
+            <Btn size="sm" tone="ghost" onClick={() => void proceduresQuery.refetch()} loading={proceduresQuery.isFetching} ariaLabel="Refresh procedures">Refresh</Btn>
+          </div>
+        </Card>
 
-        <AdminCard title={selected ? `Detail: ${selected.name}` : "Detail"} description={selected ? `Enabled: ${String(selected.enabled)} · ${selected.schedule ? `Schedule ${selected.schedule.cronExpression} (${selected.schedule.timezone})` : "No schedule"}` : "Select a procedure"}>
+        <Card>
+          <CardHeader title={selected ? selected.name : "Detail"} icon={History} />
           {!selected ? (
-            <p className="text-sm text-[var(--text-subtle)]">Select a procedure to inspect steps and schedule.</p>
+            <p className="text-sm text-text-subtle">Select a procedure to inspect steps and schedule.</p>
           ) : (
             <div className="space-y-3">
+              <p className="text-xs text-text-subtle">Enabled: {String(selected.enabled)} · {selected.schedule ? `Schedule ${selected.schedule.cronExpression} (${selected.schedule.timezone})` : "No schedule"}</p>
               <div className="space-y-2">
                 {selected.steps.map((s, idx) => (
-                  <div key={s.id || idx} className="rounded-lg border border-[var(--line)] bg-surface p-3 text-xs">
-                    <p className="font-bold text-[var(--text)]">{idx + 1}. {s.name} <span className="font-normal text-[var(--text-subtle)]">· {s.action}</span></p>
-                    <p className="font-mono text-[11px] text-[var(--text-subtle)] break-all">{JSON.stringify(s.config)}</p>
-                    <p className="text-[var(--text-subtle)]">retries {s.maxRetries} · timeout {s.timeoutSeconds}s {s.requiresApproval ? "· requires approval" : ""} {s.rollbackEnabled ? "· rollback" : ""} {s.continueOnFailure ? "· continue on failure" : ""}</p>
+                  <div key={s.id || idx} className="rounded-lg border border-line bg-surface p-3 text-xs">
+                    <p className="font-bold text-text">{idx + 1}. {s.name} <span className="font-normal text-text-subtle">· {s.action}</span></p>
+                    <p className="font-mono text-[11px] text-text-subtle break-all">{JSON.stringify(s.config)}</p>
+                    <p className="text-text-subtle">retries {s.maxRetries} · timeout {s.timeoutSeconds}s {s.requiresApproval ? "· requires approval" : ""} {s.rollbackEnabled ? "· rollback" : ""} {s.continueOnFailure ? "· continue on failure" : ""}</p>
                   </div>
                 ))}
               </div>
               <div className="flex gap-2">
-                <button onClick={() => void handleExecute()} className="rounded bg-[var(--brand)] px-4 py-2 text-xs font-bold text-white">Execute</button>
-                <button onClick={() => void handleDelete(selected.id)} className="rounded border border-red-300 px-4 py-2 text-xs text-[var(--brand)]">Delete</button>
+                <Btn size="sm" onClick={handleExecute} loading={executeMut.isPending}><Play size={13} /> Execute</Btn>
+                <Btn size="sm" tone="danger" onClick={() => void handleDelete(selected.id, selected.name)} loading={deleteMut.isPending}><Trash2 size={13} /> Delete</Btn>
               </div>
               <div>
-                <p className="text-xs font-bold uppercase text-[var(--text-subtle)]">Executions (last 20)</p>
-                {executions.length === 0 ? (
-                  <p className="text-xs text-[var(--text-subtle)]">No executions.</p>
+                <p className="text-xs font-bold uppercase text-text-subtle">Executions (last 20)</p>
+                {executionsQuery.isLoading ? (
+                  <div className="mt-2"><AdminLoadingState label="Loading executions…" /></div>
+                ) : executionsQuery.isError ? (
+                  <div className="mt-2"><AdminErrorState message={sanitizeError(executionsQuery.error instanceof Error ? executionsQuery.error.message : "Failed to load executions")} retry={() => void executionsQuery.refetch()} /></div>
+                ) : executions.length === 0 ? (
+                  <p className="mt-1 text-xs text-text-subtle">No executions.</p>
                 ) : (
-                  <div className="mt-2 space-y-1 max-h-[260px] overflow-auto">
-                    {executions.map((e) => (
-                      <div key={e.id} className="flex items-center justify-between rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-xs">
-                        <div>
-                          <p className="font-bold">{e.id.slice(0, 8)} · {e.status} <span className="font-normal text-[var(--text-subtle)]">· {e.trigger}</span></p>
-                          <p className="text-[var(--text-subtle)]">{new Date(e.createdAt).toLocaleString()}</p>
-                        </div>
-                        <div className="flex gap-1">
-                          <button onClick={() => void handleViewExec(e.id)} className="rounded border border-[var(--line)] px-2 py-1">View</button>
-                          <button onClick={() => void handleCancel(e.id)} className="rounded border border-[var(--line)] px-2 py-1">Cancel</button>
-                        </div>
-                      </div>
-                    ))}
+                  <div className="mt-2">
+                    <AdminTable label="Procedure executions">
+                      <AdminTHead>
+                        <AdminTh>Execution</AdminTh>
+                        <AdminTh>Status</AdminTh>
+                        <AdminTh className="text-right">Actions</AdminTh>
+                      </AdminTHead>
+                      <AdminTBody>
+                        {executions.map((e) => (
+                          <AdminTr key={e.id}>
+                            <AdminTd>
+                              <span className="font-mono font-bold">{e.id.slice(0, 8)}</span>
+                              <span className="block text-text-subtle">{new Date(e.createdAt).toLocaleString()} · {e.trigger}</span>
+                            </AdminTd>
+                            <AdminTd><Pill tone={executionTone(e.status)}>{e.status}</Pill></AdminTd>
+                            <AdminTd>
+                              <div className="flex justify-end gap-1.5">
+                                <Btn size="sm" tone="ghost" onClick={() => void handleViewExec(e.id)} loading={detailMut.isPending && detailMut.variables === e.id}>View</Btn>
+                                <Btn size="sm" tone="ghost" onClick={() => cancelMut.mutate(e.id)} loading={cancelMut.isPending && cancelMut.variables === e.id}>Cancel</Btn>
+                              </div>
+                            </AdminTd>
+                          </AdminTr>
+                        ))}
+                      </AdminTBody>
+                    </AdminTable>
                   </div>
                 )}
               </div>
             </div>
           )}
-        </AdminCard>
+        </Card>
 
-        <AdminCard title="Create Procedure" description="POST /procedures · name required, schedule cron validated (422) via robfig/cron.">
+        <Card>
+          <CardHeader title="Create Procedure" icon={Plus} />
           <form onSubmit={handleCreate} className="space-y-3">
-            <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="Name" className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm" required />
-            <input value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} placeholder="Description" className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm" />
-            <input value={cron} onChange={(e) => setCron(e.target.value)} placeholder="Cron (e.g. 0 2 * * *) — leave empty for none" className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 font-mono text-sm" />
-            <p className="text-xs text-[var(--text-subtle)]">Cron is standard 5-field (minute hour dom month dow). Validated at admission (422).</p>
+            <Input label="Name" value={form.name} onChange={(v) => setForm({ ...form, name: v })} placeholder="Name" required />
+            <Input label="Description" value={form.description} onChange={(v) => setForm({ ...form, description: v })} placeholder="Description" />
+            <Input label="Cron schedule" value={cron} onChange={setCron} placeholder="Cron (e.g. 0 2 * * *) — leave empty for none" mono />
+            <p className="text-xs text-text-subtle">Cron is standard 5-field (minute hour dom month dow). Validated at admission (422).</p>
             <div className="space-y-2">
-              <p className="text-xs font-bold uppercase text-[var(--text-subtle)]">Steps JSON</p>
-              <textarea
+              <p className="text-xs font-bold uppercase text-text-subtle">Steps JSON</p>
+              <Textarea
                 value={JSON.stringify(form.steps, null, 2)}
-                onChange={(e) => {
+                onChange={(v) => {
                   try {
-                    const parsed = JSON.parse(e.target.value) as typeof form.steps;
+                    const parsed = JSON.parse(v) as typeof form.steps;
                     setForm({ ...form, steps: parsed });
                   } catch {
                     // keep raw invalid for user to fix; don't update
                   }
                 }}
                 rows={10}
-                className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 font-mono text-xs"
+                placeholder="Steps JSON"
               />
-              <p className="text-xs text-[var(--text-subtle)]">Actions: run_command (allowlist), sleep, run_procedure, deploy_stack, send_webhook, run_build. Config for run_command: {`{command:"echo hi"}`}. Approval gates pause execution until POST /procedures/executions/steps/:stepId/approve.</p>
+              <p className="text-xs text-text-subtle">Actions: run_command (allowlist), sleep, run_procedure, deploy_stack, send_webhook, run_build. Approval gates pause execution until the step is approved.</p>
             </div>
             <label className="flex gap-2 items-center text-xs"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /> Enabled</label>
-            <button type="submit" className="rounded bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white">Create</button>
+            <Btn type="submit" loading={createMut.isPending}>Create</Btn>
           </form>
-        </AdminCard>
+        </Card>
       </div>
 
       {selectedExec && (
-        <AdminCard title={`Execution ${selectedExec.id.slice(0, 8)}`} description={`Status ${selectedExec.status} · trigger ${selectedExec.trigger} · created ${new Date(selectedExec.createdAt).toLocaleString()}`}>
+        <Card>
+          <CardHeader title={`Execution ${selectedExec.id.slice(0, 8)}`} icon={History} />
+          <p className="mb-3 text-xs text-text-subtle">Status {selectedExec.status} · trigger {selectedExec.trigger} · created {new Date(selectedExec.createdAt).toLocaleString()}</p>
           <div className="space-y-2">
             {selectedExec.steps.map((step) => (
-              <div key={step.id} className="rounded-lg border border-[var(--line)] bg-surface p-3">
+              <div key={step.id} className="rounded-lg border border-line bg-surface p-3">
                 <div className="flex items-center justify-between">
-                  <p className="text-sm font-bold text-[var(--text)]">#{step.position + 1} {step.id.slice(0, 8)} · {step.status} <span className="text-xs font-normal text-[var(--text-subtle)]">attempt {step.attempt}/{step.maxAttempts}</span></p>
+                  <p className="text-sm font-bold text-text">#{step.position + 1} {step.id.slice(0, 8)} · {step.status} <span className="text-xs font-normal text-text-subtle">attempt {step.attempt}/{step.maxAttempts}</span></p>
                   <div className="flex gap-1">
-                    <button onClick={() => void handleApprove(step.id)} disabled={step.status !== "waiting_approval"} className="rounded bg-green-600 px-2 py-1 text-xs font-bold text-white disabled:opacity-40">Approve</button>
-                    <button onClick={() => void handleReject(step.id)} disabled={step.status !== "waiting_approval"} className="rounded bg-[var(--brand)] px-2 py-1 text-xs font-bold text-white disabled:opacity-40">Reject</button>
+                    <Btn size="sm" tone="success" disabled={step.status !== "waiting_approval"} onClick={() => approveMut.mutate(step.id)} loading={approveMut.isPending}>Approve</Btn>
+                    <Btn size="sm" tone="danger" disabled={step.status !== "waiting_approval"} onClick={() => rejectMut.mutate(step.id)} loading={rejectMut.isPending}>Reject</Btn>
                   </div>
                 </div>
                 {step.output && <p className="mt-2 text-xs">Output: {step.output}</p>}
-                {step.error && <p className="mt-1 text-xs text-[var(--brand)]">Error: {step.error}</p>}
+                {step.error && <p className="mt-1 text-xs text-danger">Error: {step.error}</p>}
                 <div className="mt-2">
-                  <p className="text-xs font-bold uppercase text-[var(--text-subtle)]">Logs</p>
-                  <div className="mt-1 max-h-32 overflow-auto rounded border border-[var(--line)] bg-[var(--surface-input)] p-2 font-mono text-[11px]">
-                    {(logs[step.id] ?? []).length === 0 ? <span className="text-[var(--text-subtle)]">No logs.</span> : (logs[step.id] ?? []).map((l) => <div key={l.id} className="flex gap-2"><span className="text-[var(--text-subtle)]">{l.level}</span><span>{l.message}</span><span className="ml-auto text-[var(--text-subtle)]">{new Date(l.createdAt).toLocaleTimeString()}</span></div>)}
+                  <p className="text-xs font-bold uppercase text-text-subtle">Logs</p>
+                  <div className="mt-1 max-h-32 overflow-auto rounded border border-line bg-surface-input p-2 font-mono text-[11px]">
+                    {(logs[step.id] ?? []).length === 0 ? <span className="text-text-subtle">No logs.</span> : (logs[step.id] ?? []).map((l) => <div key={l.id} className="flex gap-2"><span className="text-text-subtle">{l.level}</span><span>{l.message}</span><span className="ml-auto text-text-subtle">{new Date(l.createdAt).toLocaleTimeString()}</span></div>)}
                   </div>
-                  <button onClick={async () => {
-                    try {
-                      const fetched = await api.listStepLogs(step.id);
-                      setLogs((prev) => ({ ...prev, [step.id]: fetched }));
-                    } catch (e) {
-                      setError(sanitizeError(e instanceof Error ? e.message : "Load logs failed"));
-                    }
-                  }} className="mt-2 rounded border border-[var(--line)] px-2 py-1 text-xs">Reload logs</button>
+                  <div className="mt-2">
+                    <Btn
+                      size="sm"
+                      tone="ghost"
+                      loading={stepLogsMut.isPending && stepLogsMut.variables === step.id}
+                      onClick={() => {
+                        void (async () => {
+                          try {
+                            const fetched = await stepLogsMut.mutateAsync(step.id);
+                            setLogs((prev) => ({ ...prev, [step.id]: fetched }));
+                          } catch {
+                            // stepLogsMut.onError already surfaced the failure.
+                          }
+                        })();
+                      }}
+                    >
+                      Reload logs
+                    </Btn>
+                  </div>
                 </div>
               </div>
             ))}
-            <button onClick={() => setSelectedExec(null)} className="rounded border border-[var(--line)] px-3 py-1.5 text-xs">Close</button>
+            <Btn size="sm" tone="ghost" onClick={() => setSelectedExec(null)}>Close</Btn>
           </div>
-        </AdminCard>
+        </Card>
       )}
-    </AdminPageLayout>
+      {renderConfirm()}
+    </div>
   );
 }
