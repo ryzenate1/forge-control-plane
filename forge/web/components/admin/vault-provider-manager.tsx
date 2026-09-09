@@ -17,6 +17,8 @@ import {
 import { errorMessage, formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import {
   AdminErrorState,
   AdminLoadingState,
@@ -135,6 +137,7 @@ export function VaultProviderManager() {
       <SectionHeader
         title="Vault"
         sub="Register HashiCorp Vault connections so environment variables can reference secrets fetched live at deploy time, instead of duplicating them into Forge's own encrypted store."
+        status={<FreshnessBadge state={sourceState(connectionsQuery)} />}
         action={
           <div className="flex items-center gap-2">
             <Btn tone="ghost" size="sm" onClick={() => void refresh()} loading={connectionsQuery.isFetching}>
@@ -171,22 +174,22 @@ export function VaultProviderManager() {
                 return (
                   <AdminTr key={c.id}>
                     <AdminTd>
-                      <div className="font-medium text-slate-100">{c.name}</div>
-                      <div className="font-mono text-xs text-slate-500">
-                        mount <span className="text-slate-400">{c.mountPath}</span>
-                        {c.namespace ? <> · ns <span className="text-slate-400">{c.namespace}</span></> : null}
+                      <div className="font-medium text-text">{c.name}</div>
+                      <div className="font-mono text-xs text-text-muted">
+                        mount <span className="text-text-subtle">{c.mountPath}</span>
+                        {c.namespace ? <> · ns <span className="text-text-subtle">{c.namespace}</span></> : null}
                         {" "}· KV v{c.engineVersion}
                       </div>
                     </AdminTd>
-                    <AdminTd className="max-w-xs truncate font-mono text-xs text-slate-300" title={c.baseUrl}>{c.baseUrl}</AdminTd>
-                    <AdminTd><Badge className="bg-blue-500/15 text-blue-300">{c.authMethod}</Badge></AdminTd>
-                    <AdminTd className="font-mono text-xs text-slate-400">
+                    <AdminTd className="max-w-xs truncate font-mono text-xs text-text" title={c.baseUrl}>{c.baseUrl}</AdminTd>
+                    <AdminTd><Badge className="bg-info-subtle text-info">{c.authMethod}</Badge></AdminTd>
+                    <AdminTd className="font-mono text-xs text-text-subtle">
                       {hint}
-                      {c.authMethod === "approle" && c.roleId ? <div className="text-[11px] text-slate-500">role {c.roleId.slice(0, 8)}</div> : null}
+                      {c.authMethod === "approle" && c.roleId ? <div className="text-[11px] text-text-muted">role {c.roleId.slice(0, 8)}</div> : null}
                     </AdminTd>
                     <AdminTd>
                       <Pill tone={c.enabled ? "green" : "neutral"}>{c.enabled ? "enabled" : "disabled"}</Pill>
-                      <div className="pt-1 text-xs text-slate-500">{formatDate(c.updatedAt)}</div>
+                      <div className="pt-1 text-xs text-text-muted">{formatDate(c.updatedAt)}</div>
                     </AdminTd>
                     <AdminTd>
                       <div className="flex items-center justify-end gap-1.5">
@@ -334,7 +337,7 @@ function ConnectionModal({
               mono
               required={needsCredential}
             />
-            {mode === "edit" ? <p className="text-xs text-slate-500">Stored token hint: <span className="font-mono">{initial?.tokenHint || "—"}</span></p> : null}
+            {mode === "edit" ? <p className="text-xs text-text-muted">Stored token hint: <span className="font-mono">{initial?.tokenHint || "—"}</span></p> : null}
           </div>
         ) : (
           <div className="space-y-4">
@@ -350,7 +353,7 @@ function ConnectionModal({
                 mono
                 required={needsCredential}
               />
-              {mode === "edit" ? <p className="text-xs text-slate-500">Stored secret hint: <span className="font-mono">{initial?.secretIdHint || "—"}</span></p> : null}
+              {mode === "edit" ? <p className="text-xs text-text-muted">Stored secret hint: <span className="font-mono">{initial?.secretIdHint || "—"}</span></p> : null}
             </div>
           </div>
         )}
@@ -359,7 +362,7 @@ function ConnectionModal({
           <ToggleRow label="Enabled" checked={form.enabled} onChange={(v) => set("enabled", v)} />
         </div>
         {!valid ? (
-          <p className="text-xs text-amber-300">
+          <p className="text-xs text-warn">
             {mode === "create" && form.authMethod === "token" && tokenMissing
               ? "A token is required for a new token-auth connection."
               : mode === "create" && form.authMethod === "approle" && approleMissing
@@ -380,7 +383,7 @@ function ConnectionModal({
 
 function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
-    <label className="flex items-center justify-between gap-3 text-sm text-slate-300">
+    <label className="flex items-center justify-between gap-3 text-sm text-text">
       <span>{label}</span>
       <input type="checkbox" className="h-4 w-4 accent-[var(--brand)]" checked={checked} onChange={(e) => onChange(e.target.checked)} />
     </label>
