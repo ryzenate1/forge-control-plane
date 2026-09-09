@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { AdminCard } from "@/components/admin/admin-layout";
 import { AdminPageLayout, Btn, SectionHeader } from "@/components/admin/admin-ui";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { adminPageGuides } from "@/components/admin/admin-page-guides";
 import * as api from "@/lib/api/forgefile";
 import { sanitizeError } from "@/lib/sanitize";
@@ -112,20 +114,20 @@ export function ForgefileManager() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader title="Forgefile" sub="Validate and apply project configuration from a forge.yaml manifest." info={adminPageGuides.forgefile} />
+      <SectionHeader title="Forgefile" sub="Validate and apply project configuration from a forge.yaml manifest." info={adminPageGuides.forgefile} status={<FreshnessBadge state={sourceState(manifestsQuery)} />} />
       <OfflineBanner onRetry={() => void manifestsQuery.refetch()} />
       {error && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-danger-line bg-danger/[0.09] p-4 text-sm text-danger">
           <span>{error}</span>
           <div className="flex items-center gap-2">
-            {manifestsQuery.isError && <button onClick={() => void manifestsQuery.refetch()} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Retry</button>}
-            <button onClick={dismissStatus} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
+            {manifestsQuery.isError && <button onClick={() => void manifestsQuery.refetch()} className="rounded px-2 py-1 text-xs underline hover:bg-overlay-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Retry</button>}
+            <button onClick={dismissStatus} className="rounded px-2 py-1 text-xs underline hover:bg-overlay-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
           </div>
         </div>
       )}
       {success && (
-        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.09] p-4 text-sm text-emerald-200">
-          <span>{success}</span> <button onClick={dismissStatus} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
+        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-ok-line bg-ok/[0.09] p-4 text-sm text-ok">
+          <span>{success}</span> <button onClick={dismissStatus} className="rounded px-2 py-1 text-xs underline hover:bg-overlay-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
         </div>
       )}
 
@@ -138,7 +140,7 @@ export function ForgefileManager() {
             <Btn tone="subtle" onClick={() => editContent(SAMPLE)} disabled={actionPending}>Reset sample</Btn>
           </div>
           {validateRes && (
-            <div className={`mt-3 rounded-lg border p-3 text-xs ${validateRes.valid ? "border-emerald-500/25 bg-emerald-500/[0.09]" : "border-red-500/25 bg-red-500/[0.09]"}`}>
+            <div className={`mt-3 rounded-lg border p-3 text-xs ${validateRes.valid ? "border-ok-line bg-ok/[0.09]" : "border-danger-line bg-danger/[0.09]"}`}>
               <p className="font-bold">{validateRes.valid ? "Valid" : "Invalid"} {validateRes.error ? `· ${validateRes.error}` : ""}</p>
               {validateRes.warnings.length > 0 && (
                 <ul className="mt-2 list-disc pl-5 text-[var(--text-subtle)]">
@@ -150,12 +152,12 @@ export function ForgefileManager() {
             </div>
           )}
           {applyRes && (
-            <div className="mt-3 rounded-lg border border-emerald-500/25 bg-emerald-500/[0.09] p-3 text-xs">
+            <div className="mt-3 rounded-lg border border-ok-line bg-ok/[0.09] p-3 text-xs">
               <p className="font-bold">Applied {applyRes.projectSlug} v{applyRes.version}</p>
               <p className="text-[var(--text-subtle)]">Links: {Object.entries(applyRes.links).map(([k, v]) => `${k}=${v}`).join(", ") || "—"}</p>
               <p className="text-[var(--text-subtle)]">Apps: {applyRes.apps.map((a) => `${a.appName} (${a.domain})`).join(", ") || "—"}</p>
               {applyRes.warnings.length > 0 && (
-                <ul className="mt-1 list-disc pl-5 text-amber-700">
+                <ul className="mt-1 list-disc pl-5 text-warn">
                   {applyRes.warnings.map((w, i) => (
                     <li key={i}>{w}</li>
                   ))}
@@ -171,7 +173,7 @@ export function ForgefileManager() {
             <Btn tone="ghost" size="sm" onClick={() => void manifestsQuery.refetch()} disabled={manifestsQuery.isFetching}>Refresh</Btn>
           </div>
           {manifestsQuery.isError ? (
-            <p role="alert" className="mt-3 text-sm text-red-200">Could not load saved manifests. Try refreshing the list.</p>
+            <p role="alert" className="mt-3 text-sm text-danger">Could not load saved manifests. Try refreshing the list.</p>
           ) : manifestsQuery.isLoading ? (
             <p role="status" className="mt-3 text-sm text-text-subtle">Loading manifests…</p>
           ) : manifests.length === 0 ? (
