@@ -33,6 +33,8 @@ import {
 } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { previewStatusTone } from "@/lib/api/status";
 import { fetchOrganizations, fetchProjects } from "@/lib/api/tenancy";
 import {
@@ -159,16 +161,16 @@ function CreatePreviewDialog({
     <Modal description="Creates an ephemeral environment on its own subdomain. The deployment runs in the background; the row reports progress." onClose={onClose} title="New preview environment">
       <div className="grid gap-4">
         <Input label="Branch" value={branch} onChange={setBranch} placeholder="feature/checkout-flow" mono required />
-        {attempted && branchError ? <p className="-mt-2 text-sm text-red-300">{branchError}</p> : null}
+        {attempted && branchError ? <p className="-mt-2 text-sm text-danger">{branchError}</p> : null}
         <div className="grid gap-4 sm:grid-cols-2">
           <Input label="Pull request number" value={prNumber} onChange={setPrNumber} type="number" placeholder="42" />
           <Input label="Commit SHA" value={commitSha} onChange={setCommitSha} placeholder="Optional — deploy the branch head" mono />
         </div>
-        {attempted && prNumberError ? <p className="-mt-2 text-sm text-red-300">{prNumberError}</p> : null}
+        {attempted && prNumberError ? <p className="-mt-2 text-sm text-danger">{prNumberError}</p> : null}
         <Input label="Title" value={title} onChange={setTitle} placeholder="Optional label shown in the list" />
         <Input label="Pull request URL" value={prUrl} onChange={setPrUrl} placeholder="https://github.com/…" mono />
         <Input label="Lifetime (hours)" value={ttlHours} onChange={setTtlHours} type="number" placeholder="Blank uses the platform default" />
-        {attempted && ttlError ? <p className="-mt-2 text-sm text-red-300">{ttlError}</p> : null}
+        {attempted && ttlError ? <p className="-mt-2 text-sm text-danger">{ttlError}</p> : null}
         <Btn tone="subtle" size="sm" onClick={() => setShowAdvanced((prev) => !prev)}>{showAdvanced ? "Hide advanced" : "Show advanced"}</Btn>
         {showAdvanced ? (
           <>
@@ -176,7 +178,7 @@ function CreatePreviewDialog({
             <Textarea label="Compose override" value={composeContent} onChange={setComposeContent} rows={6} placeholder="Optional YAML. Leave blank to clone the base stack." />
           </>
         ) : null}
-        <p className="text-xs leading-5 text-slate-400">
+        <p className="text-xs leading-5 text-text-subtle">
           Without an override, Forge deploys a copy of the project&apos;s compose stack. Tearing the preview down removes the copy, never the base stack.
         </p>
       </div>
@@ -233,38 +235,38 @@ function PreviewConfigCard({
       } />
       <dl className="grid gap-4 sm:grid-cols-2">
         <div>
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">Preview domain</dt>
-          <dd className="mt-1 break-all font-mono text-sm text-slate-200">
-            {baseDomain ? <>{"<slug>."}<span className="text-slate-400">{baseDomain}</span></> : "not configured on this control plane"}
+          <dt className="text-xs font-semibold uppercase tracking-wider text-text-muted">Preview domain</dt>
+          <dd className="mt-1 break-all font-mono text-sm text-text">
+            {baseDomain ? <>{"<slug>."}<span className="text-text-subtle">{baseDomain}</span></> : "not configured on this control plane"}
           </dd>
         </div>
         <div>
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">Lifetime / cap</dt>
-          <dd className="mt-1 text-sm text-slate-200">
+          <dt className="text-xs font-semibold uppercase tracking-wider text-text-muted">Lifetime / cap</dt>
+          <dd className="mt-1 text-sm text-text">
             {formatTtl(ttlSeconds)} · {maxPerProject > 0 ? `${maxPerProject} live per project` : "no live cap"}
           </dd>
         </div>
         <div className="sm:col-span-2">
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">Webhook endpoint</dt>
+          <dt className="text-xs font-semibold uppercase tracking-wider text-text-muted">Webhook endpoint</dt>
           <dd className="mt-1 flex flex-wrap items-center gap-2">
-            <code className="break-all rounded-lg border border-white/[0.08] bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-slate-200">{webhookUrl || "not configured"}</code>
+            <code className="break-all rounded-lg border border-line bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-text">{webhookUrl || "not configured"}</code>
             {webhookUrl ? <Btn size="sm" tone="subtle" onClick={() => void copy(webhookUrl, "Webhook URL")}>Copy</Btn> : null}
           </dd>
         </div>
         <div className="sm:col-span-2">
-          <dt className="text-xs font-semibold uppercase tracking-wider text-slate-500">Signing secret</dt>
+          <dt className="text-xs font-semibold uppercase tracking-wider text-text-muted">Signing secret</dt>
           <dd className="mt-1 flex flex-wrap items-center gap-2">
             {revealed ? (
               secretQuery.isLoading
-                ? <span className="text-sm text-slate-400">Loading…</span>
-                : <code className="break-all rounded-lg border border-white/[0.08] bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-slate-200">{secret || "not generated yet"}</code>
+                ? <span className="text-sm text-text-subtle">Loading…</span>
+                : <code className="break-all rounded-lg border border-line bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-text">{secret || "not generated yet"}</code>
             ) : (
-              <code className="rounded-lg border border-white/[0.08] bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-slate-500">••••••••••••••••</code>
+              <code className="rounded-lg border border-line bg-[var(--surface-input)] px-2 py-1 font-mono text-xs text-text-muted">••••••••••••••••</code>
             )}
             {revealed && secret ? <Btn size="sm" tone="subtle" onClick={() => void copy(secret, "Signing secret")}>Copy</Btn> : null}
             <Btn size="sm" tone="ghost" onClick={() => setRevealed((prev) => !prev)}>{revealed ? "Hide" : "Reveal"}</Btn>
           </dd>
-          <p className="mt-2 text-xs leading-5 text-slate-400">
+          <p className="mt-2 text-xs leading-5 text-text-subtle">
             GitHub: send <code className="font-mono">pull_request</code> events with an <code className="font-mono">X-Hub-Signature-256</code> HMAC of this secret.
             GitLab: send <code className="font-mono">Merge Request Events</code> with the secret as <code className="font-mono">X-Gitlab-Token</code>.
             Closing or merging a pull request, or deleting its branch, tears the preview down.
@@ -389,6 +391,7 @@ export function PreviewDeploymentsView({ projectId: fixedProjectId, className }:
       <SectionHeader
         title="Preview Environments"
         sub="Ephemeral preview deployments with their own subdomain, scoped to a project. Created by a pull-request webhook or by hand, destroyed when the branch lands, closes, or expires."
+        status={projectId ? <FreshnessBadge state={sourceState(previewsQuery, 10_000)} /> : undefined}
         action={projectId ? <Btn onClick={() => setShowCreate(true)}><GitBranch size={14} /> New preview</Btn> : undefined}
       />
 
@@ -483,35 +486,35 @@ export function PreviewDeploymentsView({ projectId: fixedProjectId, className }:
                       <AdminTr key={preview.id}>
                         <AdminTd>
                           <div className="flex flex-wrap items-center gap-2">
-                            <span className="font-medium text-slate-100">{preview.branch}</span>
+                            <span className="font-medium text-text">{preview.branch}</span>
                             {preview.prNumber ? <Pill tone="neutral">PR #{preview.prNumber}</Pill> : null}
                             {preview.source ? <Pill tone="neutral">{preview.source}</Pill> : null}
                           </div>
-                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-slate-400">
+                          <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-subtle">
                             <span className="font-mono">{preview.slug}</span>
                             {preview.commitSha ? <span className="font-mono">{preview.commitSha.slice(0, 8)}</span> : null}
                             {preview.title ? <span>{preview.title}</span> : null}
                             {preview.prUrl ? (
-                              <a className="inline-flex items-center gap-1 text-slate-300 underline decoration-white/20 hover:text-slate-100" href={preview.prUrl} rel="noreferrer noopener" target="_blank">
+                              <a className="inline-flex items-center gap-1 text-text underline decoration-white/20 hover:text-text" href={preview.prUrl} rel="noreferrer noopener" target="_blank">
                                 pull request <ExternalLink size={11} />
                               </a>
                             ) : null}
                           </div>
-                          {preview.error ? <p className="mt-1 text-xs text-red-300">{preview.error}</p> : null}
-                          {preview.closeReason ? <p className="mt-1 text-xs text-slate-500">Closed: {preview.closeReason}</p> : null}
+                          {preview.error ? <p className="mt-1 text-xs text-danger">{preview.error}</p> : null}
+                          {preview.closeReason ? <p className="mt-1 text-xs text-text-muted">Closed: {preview.closeReason}</p> : null}
                         </AdminTd>
                         <AdminTd><PreviewStatusPill status={preview.status} /></AdminTd>
                         <AdminTd>
                           {preview.url ? (
-                            <a className="inline-flex items-center gap-1 break-all font-mono text-xs text-slate-200 underline decoration-white/20 hover:text-white" href={preview.url} rel="noreferrer noopener" target="_blank">
+                            <a className="inline-flex items-center gap-1 break-all font-mono text-xs text-text underline decoration-white/20 hover:text-text" href={preview.url} rel="noreferrer noopener" target="_blank">
                               {preview.url.replace(/^https?:\/\//, "")} <ExternalLink size={11} />
                             </a>
-                          ) : <span className="text-slate-500">—</span>}
-                          <p className="mt-1 text-xs text-slate-500">Updated {formatDate(preview.updatedAt)}</p>
+                          ) : <span className="text-text-muted">—</span>}
+                          <p className="mt-1 text-xs text-text-muted">Updated {formatDate(preview.updatedAt)}</p>
                         </AdminTd>
                         <AdminTd>
                           <Pill tone={countdown.tone}>{countdown.text}</Pill>
-                          {preview.expiresAt ? <p className="mt-1 text-xs text-slate-500">{formatDate(preview.expiresAt)}</p> : null}
+                          {preview.expiresAt ? <p className="mt-1 text-xs text-text-muted">{formatDate(preview.expiresAt)}</p> : null}
                         </AdminTd>
                         <AdminTd className="text-right">
                           <div className="flex flex-wrap justify-end gap-2">
