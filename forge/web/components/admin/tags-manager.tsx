@@ -16,6 +16,8 @@ import {
 import { TagBadge, sanitizeTagColor } from "@/components/ui/tag-badge";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import {
   AdminTable,
   AdminTBody,
@@ -127,6 +129,7 @@ export function TagsManager() {
         info={adminPageGuides.tags}
         title="Tags"
         sub="Create reusable labels to organize and find your resources."
+        status={<FreshnessBadge state={sourceState(tagsQuery)} />}
         action={
           <Btn tone="primary" onClick={openCreate}>
             <Plus size={14} /> New Tag
@@ -141,7 +144,7 @@ export function TagsManager() {
           <div className="py-10 text-center text-sm text-text-muted">Loading…</div>
         ) : tagsQuery.isError ? (
           <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
               <span>Could not load tags: {(tagsQuery.error as Error).message}</span>
               <Btn size="sm" tone="ghost" onClick={() => void tagsQuery.refetch()}>
                 Retry
@@ -224,7 +227,7 @@ export function TagsManager() {
                 onChange={(v) => setForm((f) => ({ ...f, name: v }))}
                 placeholder="production"
               />
-              {errors.name ? <p className="mt-1 text-xs text-red-400">{errors.name}</p> : null}
+              {errors.name ? <p className="mt-1 text-xs text-danger">{errors.name}</p> : null}
               <p className="mt-1 text-xs text-text-subtle">Shown on the pill; matched case-insensitively.</p>
             </div>
 
@@ -256,12 +259,12 @@ export function TagsManager() {
                     style={{
                       backgroundColor: hex,
                       borderColor:
-                        sanitizeTagColor(form.color) === hex ? "var(--brand)" : "rgba(255,255,255,0.15)",
+                        sanitizeTagColor(form.color) === hex ? "var(--brand)" : "var(--line)",
                     }}
                   />
                 ))}
               </div>
-              {errors.color ? <p className="mt-1 text-xs text-red-400">{errors.color}</p> : null}
+              {errors.color ? <p className="mt-1 text-xs text-danger">{errors.color}</p> : null}
             </div>
 
             <div>
@@ -275,13 +278,13 @@ export function TagsManager() {
             </div>
 
             {saveMut.isError ? (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{(saveMut.error as Error).message || "An unexpected error occurred."}</span>
               </div>
             ) : null}
             {saveMut.isSuccess ? (
-              <div className="flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3 text-xs text-emerald-200">
+              <div className="flex items-start gap-2 rounded-lg border border-ok-line bg-ok-subtle p-3 text-xs text-ok">
                 <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
                 <span>Saved.</span>
               </div>
