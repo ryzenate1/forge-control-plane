@@ -83,3 +83,30 @@ export { createBackup } from './servers';
 export function cleanupServerBackups(serverId: string): Promise<{ ok: boolean; deleted: number }> {
   return postJSON<{ ok: boolean; deleted: number }>(`/servers/${encodeURIComponent(serverId)}/backups/cleanup`);
 }
+
+export type BackupVerifyResult = {
+  ok: boolean;
+  name: string;
+  verified: boolean;
+  checksumMatch: boolean;
+  dbChecksum: string;
+  daemonChecksum: string;
+  daemonSize: number;
+  dbSize: number;
+  daemonStatus: string;
+};
+
+/** Verifies a completed backup against the copy on the node (handlers_servers.go). */
+export function verifyServerBackup(serverId: string, name: string): Promise<BackupVerifyResult> {
+  return fetchJSON<BackupVerifyResult>(
+    `/servers/${encodeURIComponent(serverId)}/backups/verify?name=${encodeURIComponent(name)}`,
+  );
+}
+
+/** Renames a backup; locked backups are rejected with 403 (handlers_servers.go). */
+export function renameServerBackup(serverId: string, name: string, newName: string): Promise<{ ok: boolean; name: string; previousName: string }> {
+  return postJSON<{ ok: boolean; name: string; previousName: string }>(
+    `/servers/${encodeURIComponent(serverId)}/backups/${encodeURIComponent(name)}/rename`,
+    { name: newName },
+  );
+}
