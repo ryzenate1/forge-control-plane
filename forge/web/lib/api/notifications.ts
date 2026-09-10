@@ -380,3 +380,4 @@ export async function subscribeToEvent(
 export async function unsubscribeFromEvent(subscriptionId: string): Promise<void> {
   return deleteJSON(`/notifications/subscriptions/${encodeURIComponent(subscriptionId)}`);
 }
+
