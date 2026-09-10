@@ -521,6 +521,64 @@ export async function upsertServerUser(
   );
 }
 
+export type ServerInvitation = {
+  id: string;
+  serverId: string;
+  email: string;
+  permissions: string[];
+  token: string;
+  createdBy?: string | null;
+  createdAt: string;
+  expiresAt: string;
+  acceptedAt?: string | null;
+  revokedAt?: string | null;
+};
+
+// Subuser invitations (handlers_servers.go: /servers/:id/invitations).
+export async function fetchServerInvitations(serverId: string): Promise<ServerInvitation[]> {
+  return fetchJSON<ServerInvitation[]>(`/servers/${encodeURIComponent(serverId)}/invitations`);
+}
+
+export async function inviteServerUser(
+  serverId: string,
+  data: { email: string; permissions: string[] },
+): Promise<ServerInvitation> {
+  return postJSON<ServerInvitation>(
+    `/servers/${encodeURIComponent(serverId)}/invitations`,
+    data,
+  );
+}
+
+export async function deleteServerInvitation(serverId: string, invitationId: string): Promise<{ ok: boolean }> {
+  return deleteJSON<{ ok: boolean }>(
+    `/servers/${encodeURIComponent(serverId)}/invitations/${encodeURIComponent(invitationId)}`,
+  );
+}
+
+export async function revokeServerInvitation(serverId: string, invitationId: string): Promise<{ ok: boolean }> {
+  return postJSON<{ ok: boolean }>(
+    `/servers/${encodeURIComponent(serverId)}/invitations/${encodeURIComponent(invitationId)}/revoke`,
+    {},
+  );
+}
+
+export type ServerFlags = {
+  autoStart: boolean;
+  autoRestart: boolean;
+};
+
+// Server lifecycle flags (store_server_flags.go: /servers/:id/flags).
+export async function fetchServerFlags(serverId: string): Promise<ServerFlags> {
+  return fetchJSON<ServerFlags>(`/servers/${encodeURIComponent(serverId)}/flags`);
+}
+
+export async function updateServerFlags(
+  serverId: string,
+  data: { autoStart?: boolean; autoRestart?: boolean },
+): Promise<ServerFlags> {
+  return postJSON<ServerFlags>(`/servers/${encodeURIComponent(serverId)}/flags`, data);
+}
+
 // Crash detection
 export async function fetchServerCrashHistory(serverId: string): Promise<CrashEvent[]> {
   const res = await fetchJSON<{ events: CrashEvent[] }>(`/admin/crash-detection/servers/${encodeURIComponent(serverId)}`);
