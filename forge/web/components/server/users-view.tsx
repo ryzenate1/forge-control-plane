@@ -1,9 +1,9 @@
 "use client";
 
 import { useState } from "react";
-import { User, Users } from "lucide-react";
+import { Mail, User, Users } from "lucide-react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { type ApiServer, type ApiServerSubuser, deleteServerUser, fetchPermissions, fetchServerUsers, updateServerUser, upsertServerUser } from "@/lib/api";
+import { type ApiServer, type ApiServerSubuser, deleteServerInvitation, deleteServerUser, fetchPermissions, fetchServerInvitations, fetchServerUsers, inviteServerUser, revokeServerInvitation, updateServerUser, upsertServerUser, type ServerInvitation } from "@/lib/api";
 import { PanelCard } from "@/components/ui/panel-card";
 import { ConfirmDialog, EmptyState } from "@/components/ui/primitives";
 import { Skeleton } from "@/components/ui/loading-skeleton";
@@ -27,6 +27,8 @@ export function ServerUsersView({ server }: { server?: ApiServer }) {
   const [removeTarget, setRemoveTarget] = useState<ApiServerSubuser | null>(null);
   const usersQuery = useQuery({ queryKey: ["server-users", server?.id], queryFn: () => fetchServerUsers(server?.id ?? ""), enabled: Boolean(server?.id) });
   const permissionsQuery = useQuery({ queryKey: ["permissions"], queryFn: fetchPermissions });
+  const invitationsQuery = useQuery({ queryKey: ["server-invitations", server?.id], queryFn: () => fetchServerInvitations(server?.id ?? ""), enabled: Boolean(server?.id) && hasServerPermission(access, "user.read") });
+  const [inviteEmail, setInviteEmail] = useState("");
   const permissionGroups = Object.entries(permissionsQuery.data ?? {}).map(([group, permissions]) => ({
     title: group,
     permissions: Object.entries(permissions).map(([permission, description]) => ({ key: `${group}.${permission}`, description })),
@@ -42,8 +44,23 @@ export function ServerUsersView({ server }: { server?: ApiServer }) {
     onSuccess: () => { setRemoveTarget(null); void queryClient.invalidateQueries({ queryKey: ["server-users", server?.id] }); },
     onError: (error) => toast({ tone: "error", title: "Could not remove user", message: error instanceof Error ? error.message : "The user was not removed. Try again." })
   });
+  const inviteMutation = useMutation({
+    mutationFn: () => inviteServerUser(server?.id ?? "", { email: inviteEmail.trim().toLowerCase(), permissions: Array.from(new Set(["websocket.connect", ...selectedPermissions])) }),
+    onSuccess: () => { setInviteEmail(""); void queryClient.invalidateQueries({ queryKey: ["server-invitations", server?.id] }); toast({ tone: "success", title: "Invitation sent", message: "The invite expires in 7 days." }); },
+    onError: (error) => toast({ tone: "error", title: "Could not send invitation", message: error instanceof Error ? error.message : "Check the email address and your permissions, then try again." })
+  });
+  const revokeMutation = useMutation({
+    mutationFn: (invitationId: string) => revokeServerInvitation(server?.id ?? "", invitationId),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["server-invitations", server?.id] }); },
+    onError: (error) => toast({ tone: "error", title: "Could not revoke invitation", message: error instanceof Error ? error.message : "The invitation was not revoked. Try again." })
+  });
+  const deleteInviteMutation = useMutation({
+    mutationFn: (invitationId: string) => deleteServerInvitation(server?.id ?? "", invitationId),
+    onSuccess: () => { void queryClient.invalidateQueries({ queryKey: ["server-invitations", server?.id] }); },
+    onError: (error) => toast({ tone: "error", title: "Could not delete invitation", message: error instanceof Error ? error.message : "The invitation was not deleted. Try again." })
+  });
   const rows = (usersQuery.data ?? []).filter((subuser) => subuser.email.toLowerCase().includes(search.trim().toLowerCase()));
-  const actionError = usersQuery.error ?? permissionsQuery.error ?? saveMutation.error ?? deleteMutation.error;
+  const actionError = usersQuery.error ?? permissionsQuery.error ?? saveMutation.error ?? deleteMutation.error ?? inviteMutation.error ?? revokeMutation.error ?? deleteInviteMutation.error;
   const togglePermission = (p: string) => setSelectedPermissions((c) => c.includes(p) ? c.filter((i) => i !== p) : [...c, p]);
   const editRow = (subuser: ApiServerSubuser) => { setEditing(subuser); setEmail(subuser.email); setSelectedPermissions(subuser.permissions); };
 
@@ -118,6 +135,99 @@ export function ServerUsersView({ server }: { server?: ApiServer }) {
         open={Boolean(removeTarget)}
         title={removeTarget ? `Remove ${removeTarget.email}?` : ""}
       />
+      <div className="lg:col-span-2">
+        <ServerInvitationsCard
+          invitations={invitationsQuery.data ?? []}
+          isLoading={invitationsQuery.isLoading}
+          isError={invitationsQuery.isError}
+          inviteEmail={inviteEmail}
+          onInviteEmailChange={setInviteEmail}
+          onInvite={() => inviteMutation.mutate()}
+          invitePending={inviteMutation.isPending}
+          canInvite={canCreate}
+          canRevoke={canDelete}
+          revokePending={revokeMutation.isPending || deleteInviteMutation.isPending}
+          onRevoke={(invitation) => revokeMutation.mutate(invitation.id)}
+          onDelete={(invitation) => deleteInviteMutation.mutate(invitation.id)}
+        />
+      </div>
     </div>
+  );
+}
+
+function invitationStatus(invitation: ServerInvitation): { label: string; tone: string } {
+  if (invitation.acceptedAt) return { label: "Accepted", tone: "ui-status-pill-success" };
+  if (invitation.revokedAt) return { label: "Revoked", tone: "ui-status-pill-danger" };
+  if (invitation.expiresAt && new Date(invitation.expiresAt).getTime() < Date.now()) return { label: "Expired", tone: "ui-status-pill-warning" };
+  return { label: "Pending", tone: "ui-status-pill-neutral" };
+}
+
+function ServerInvitationsCard({ invitations, isLoading, isError, inviteEmail, onInviteEmailChange, onInvite, invitePending, canInvite, canRevoke, revokePending, onRevoke, onDelete }: {
+  invitations: ServerInvitation[];
+  isLoading: boolean;
+  isError: boolean;
+  inviteEmail: string;
+  onInviteEmailChange: (value: string) => void;
+  onInvite: () => void;
+  invitePending: boolean;
+  canInvite: boolean;
+  canRevoke: boolean;
+  revokePending: boolean;
+  onRevoke: (invitation: ServerInvitation) => void;
+  onDelete: (invitation: ServerInvitation) => void;
+}) {
+  return (
+    <PanelCard title="Pending Invitations" icon={Mail}>
+      <div className="space-y-4">
+        <div className="flex flex-col gap-2 sm:flex-row">
+          <input
+            aria-label="Invite email"
+            className="ui-input flex-1"
+            disabled={!canInvite || invitePending}
+            onChange={(event) => onInviteEmailChange(event.target.value)}
+            placeholder="user@example.com"
+            type="email"
+            value={inviteEmail}
+          />
+          <button
+            className="ui-button ui-button-primary"
+            disabled={!canInvite || invitePending || inviteEmail.trim() === ""}
+            onClick={onInvite}
+            type="button"
+          >
+            {invitePending ? "Sending…" : "Send invite"}
+          </button>
+        </div>
+        <p className="ui-hint">Invites carry the permissions currently selected in the Add User form and expire after 7 days.</p>
+        {isLoading ? <div className="space-y-3">{Array.from({ length: 2 }).map((_, index) => <Skeleton className="h-14 w-full" key={index} />)}</div> : null}
+        {isError ? <p className="text-sm text-red-300">Invitations could not be loaded. Check your permissions and try again.</p> : null}
+        {!isLoading && !isError && invitations.length === 0 ? <EmptyState icon={<Mail size={20} />} title="No invitations" description="No outstanding invites for this server." /> : null}
+        <div className="space-y-3">
+          {invitations.map((invitation) => {
+            const status = invitationStatus(invitation);
+            const actionable = !invitation.acceptedAt && !invitation.revokedAt;
+            return (
+              <div className="grid gap-3 rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 md:grid-cols-[1fr_auto]" key={invitation.id}>
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="font-semibold text-slate-100">{invitation.email}</span>
+                    <span className={`ui-status-pill ${status.tone}`}>{status.label}</span>
+                  </div>
+                  <p className="mt-1 font-mono text-xs text-slate-500">
+                    {invitation.permissions.length} permissions · expires {invitation.expiresAt ? new Date(invitation.expiresAt).toLocaleString() : "unknown"}
+                  </p>
+                </div>
+                <div className="flex items-start gap-2">
+                  {actionable ? (
+                    <button className="ui-button ui-button-secondary" disabled={!canRevoke || revokePending} onClick={() => onRevoke(invitation)} type="button">Revoke</button>
+                  ) : null}
+                  <button className="ui-button ui-button-danger" disabled={!canRevoke || revokePending} onClick={() => onDelete(invitation)} type="button">Delete</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </PanelCard>
   );
 }
