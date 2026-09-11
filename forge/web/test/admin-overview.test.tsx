@@ -460,7 +460,7 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     // Should render monitoring heading and window controls
     expect(await screen.findByRole("heading", { name: "Monitoring", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/Allocation trends across your nodes and workloads/i)).toBeInTheDocument();
+    expect(screen.getByText("Platform, node and workload health dashboards.")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Last 1 hour" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Last 6 hours" })).toBeInTheDocument();
     // Section titles say what the data is: these series are allocated shares of
@@ -534,7 +534,12 @@ describe("AdminHost page", () => {
     installHostFetch();
     renderWithQuery(<AdminHost />);
 
-    expect(await screen.findByText(/Host Management/)).toBeInTheDocument();
+    // Host readings are per-node and the page names no default: nothing is
+    // fetched until the operator picks a target node.
+    expect(await screen.findByText("No node selected")).toBeInTheDocument();
+    await screen.findByRole("option", { name: /alpha/ });
+    await userEvent.selectOptions(screen.getByLabelText("Target node"), "n1");
+
     // default tab is System
     expect(await screen.findByText("Hostname")).toBeInTheDocument();
     expect(screen.getByText("host-1")).toBeInTheDocument();
@@ -544,10 +549,14 @@ describe("AdminHost page", () => {
     installHostFetch();
     renderWithQuery(<AdminHost />);
 
+    await screen.findByRole("option", { name: /alpha/ });
+    await userEvent.selectOptions(screen.getByLabelText("Target node"), "n1");
     await screen.findByText("Hostname");
 
     await userEvent.click(screen.getByRole("tab", { name: "Disk" }));
-    expect(await screen.findByText("/")).toBeInTheDocument();
+    // The device line shares its <p> with fstype and usage ("… · ext4 · …"),
+    // so match by regex: string matching is full-text exact in this suite.
+    expect(await screen.findByText(/\/dev\/sda1/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("tab", { name: "Memory" }));
     // Memory tab formats via fmtMB -> 8192 MiB becomes "8.0 GB"
@@ -564,7 +573,7 @@ describe("AdminHost page", () => {
   it("shows no-nodes empty state", async () => {
     installHostFetch({ nodes: [] });
     renderWithQuery(<AdminHost />);
-    expect(await screen.findByText(/No nodes/)).toBeInTheDocument();
+    expect(await screen.findByText("No nodes available")).toBeInTheDocument();
   });
 });
 
@@ -594,7 +603,9 @@ describe("AdminServers page", () => {
 
     expect(await screen.findByText("alpha-mc")).toBeInTheDocument();
     expect(screen.getByText("beta-mc")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Servers", level: 1 })).toBeInTheDocument();
+    // The header carries no hand-passed title (it resolves from the registry
+    // description), so assert the KPI tile the list renders instead of an h1.
+    expect(screen.getByText("Total Servers")).toBeInTheDocument();
   });
 
   it("filters servers by search query", async () => {
