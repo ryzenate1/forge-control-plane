@@ -85,6 +85,7 @@ function route(repositories: unknown[]) {
     "/admin/backup-engines/restore?repoId=r1": jsonResponse({ data: [] }),
     "/admin/backup-engines/restore?repoId=r2": jsonResponse({ data: [] }),
     "/nodes?page=1&per_page=100": jsonResponse({ data: [], meta: { pagination: { total: 1 } } }),
+    "/servers?page=1&per_page=100": jsonResponse({ data: [], meta: { pagination: { total: 1 } } }),
   });
 }
 
@@ -102,10 +103,12 @@ describe("admin backup engines", () => {
     expect(await screen.findByText("staging-scratch")).toBeInTheDocument();
     expect(screen.getByText("nightly-offsite")).toBeInTheDocument();
 
-    // Switch to the snapshots tab: the CLI must still not be invoked because
-    // the selected repository was never initialised.
-    await userEvent.click(screen.getByRole("tab", { name: "Snapshots" }));
-    expect(await screen.findByText("No snapshots yet")).toBeInTheDocument();
+    // Switch to the engine-snapshots tab: the CLI must still not be invoked
+    // because the selected repository was never initialised. The tab reads
+    // "Engine snapshots" (it sits beside "Engine restores"), and the panel
+    // names the missing initialisation instead of an empty list.
+    await userEvent.click(screen.getByRole("tab", { name: "Engine snapshots" }));
+    expect(await screen.findByText("Repository needs initialisation")).toBeInTheDocument();
 
     expect(snapshotCalls(calls)).toHaveLength(0);
   });
@@ -115,7 +118,7 @@ describe("admin backup engines", () => {
     renderWithQuery(<BackupEnginesPage />);
 
     expect(await screen.findByText("nightly-offsite")).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: "Snapshots" }));
+    await userEvent.click(screen.getByRole("tab", { name: "Engine snapshots" }));
     // The snapshot listing resolves, so the row for it renders.
     expect(await screen.findByText(/abc123def456/)).toBeInTheDocument();
 
