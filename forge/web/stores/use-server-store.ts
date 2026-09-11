@@ -66,10 +66,13 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
     consoleLines: [],
     consoleStatus: "Connecting",
     activeTab: "console" as ServerTab,
+    liveStats: null,
+    cpuHistory: Array(24).fill(0) as number[],
+    memoryHistory: Array(24).fill(0) as number[],
   }),
 
   addConsoleLine: (line: string) => set((state) => ({
-    consoleLines: [...state.consoleLines.slice(-300), line],
+    consoleLines: [...state.consoleLines.slice(-299), line],
   })),
   addConsoleLines: (lines: string[]) => set((state) => ({
     consoleLines: [...state.consoleLines, ...lines].slice(-300),
@@ -78,10 +81,12 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
   setConsoleStatus: (consoleStatus: string) => set({ consoleStatus }),
 
   updateStats: (stats: ServerStats) => set((state) => {
-    const memPct = stats.memoryLimit > 0
-      ? Math.min(100, Math.round((stats.memoryBytes / stats.memoryLimit) * 100))
-      : 0;
-    const cpuPct = Math.min(300, stats.cpuPercent);
+    if (!stats) return state;
+    const memoryLimit = Number.isFinite(stats.memoryLimit) ? Math.max(0, stats.memoryLimit) : 0;
+    const memoryBytes = Number.isFinite(stats.memoryBytes) ? Math.max(0, stats.memoryBytes) : 0;
+    const cpuPercent = Number.isFinite(stats.cpuPercent) ? Math.max(0, stats.cpuPercent) : 0;
+    const memPct = memoryLimit > 0 ? Math.min(100, Math.max(0, Math.round((memoryBytes / memoryLimit) * 100))) : 0;
+    const cpuPct = Math.min(300, Math.max(0, cpuPercent));
     return {
       liveStats: stats,
       cpuHistory: [...state.cpuHistory.slice(-23), cpuPct],
@@ -93,6 +98,7 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
     currentUser: null,
     mode: "server" as const,
     activeTab: "console" as ServerTab,
+    adminTab: "overview",
     selectedServerId: null,
     consoleLines: [],
     consoleStatus: "Disconnected",

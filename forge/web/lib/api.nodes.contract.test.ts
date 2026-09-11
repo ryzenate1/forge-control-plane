@@ -59,7 +59,7 @@ describe("node API contract", () => {
 
   it("fetches and returns the node lifecycle resource without reshaping it", async () => {
     const lifecycle: ApiNodeLifecycle = {
-      node: { id: "node/1", name: "Amsterdam", region: "ams", status: "online" },
+      node: { id: "node/1", name: "Amsterdam", region: "ams", status: "online", lastHeartbeatAt: "2026-01-01T00:00:00Z" },
       health: { cpu: "healthy", memory: "healthy", disk: "healthy", network: "healthy", runtime: "healthy" },
       healthScore: { cpu: 100, memory: 100, disk: 100, heartbeat: 100, status: 100, total: 100 },
       capacity: {
