@@ -67,7 +67,11 @@ export type ProvidersOptions = {
 export function renderWithProviders(ui: ReactElement, options: ProvidersOptions = {}) {
   const client = options.client ?? createTestQueryClient();
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        <ToastProvider>{children}</ToastProvider>
+      </QueryClientProvider>
+    );
   }
   return { ...render(ui, { wrapper: Wrapper }), client };
 }
