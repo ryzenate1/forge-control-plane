@@ -42,3 +42,4 @@ route:
 receivers:
   # Always present so the routing tree is valid with zero configuration.
   - name: "default"
+
