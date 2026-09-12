@@ -3,6 +3,14 @@ go = "1.26"
 node = "22"
 python = "3.14"
 
+[tasks.graphify]
+description = "Build local Graphify code graph"
+run = "python -m graphify extract . --code-only --no-cluster --out ."
+
+[tasks.graphify-update]
+description = "Update local Graphify graph after code changes"
+run = "python -m graphify update ."
+
 [tasks.test-web]
 description = "Run Forge web tests"
 dir = "forge/web"
