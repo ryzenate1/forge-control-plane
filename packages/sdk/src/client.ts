@@ -403,8 +403,11 @@ export type UpgradeResult = {
 };
 
 function normalizeBaseUrl(baseUrl: string): string {
-  let url = baseUrl.replace(/\/+$/, '');
-  if (!/\/api\/v1$/.test(url)) {
+  let url = baseUrl;
+  while (url.endsWith('/')) {
+    url = url.slice(0, -1);
+  }
+  if (!url.endsWith('/api/v1')) {
     url += '/api/v1';
   }
   return url;
