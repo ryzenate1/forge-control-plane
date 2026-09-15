@@ -7,7 +7,7 @@ if command -v goimports >/dev/null 2>&1; then
     cd "$ROOT/forge/api" && gofmt -w -s . && goimports -w .
     cd "$ROOT/beacon" && gofmt -w -s . && goimports -w .
 else
-    cd "$ROOT/forge/api" && gofmt -w -s .
+    cd "$ROOT/forge/api" && gofmt -w -s . 
     cd "$ROOT/beacon" && gofmt -w -s .
 fi
 
