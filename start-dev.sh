@@ -108,7 +108,7 @@ test_port() {
     local port=$1
     local max_retries=${2:-20}
     local i=0
-
+    
     while [ $i -lt $max_retries ]; do
         if nc -z 127.0.0.1 $port >/dev/null 2>&1; then
             return 0
@@ -123,7 +123,7 @@ test_port() {
 stop_process_by_port() {
     local port=$1
     local pids=$(lsof -ti :$port 2>/dev/null || echo "")
-
+    
     if [ -n "$pids" ]; then
         for pid in $pids; do
             kill "$pid" 2>/dev/null || true
@@ -134,21 +134,21 @@ stop_process_by_port() {
 # Stop mode
 if [ "$STOP" = true ]; then
     write_header "Stopping Forge Dev Environment"
-
+    
     stop_process_by_port $API_PORT
     write_status "[x]" "API stopped" "$YELLOW"
-
+    
     stop_process_by_port $FRONTEND_PORT
     write_status "[x]" "Frontend stopped" "$YELLOW"
-
+    
     stop_process_by_port $BEACON_PORT
     write_status "[x]" "Beacon daemon stopped" "$YELLOW"
-
+    
     if [ "$NATIVE" = false ]; then
         (cd "$ROOT/infra" && docker compose down) >/dev/null 2>&1 || true
         write_status "[x]" "Docker services stopped" "$YELLOW"
     fi
-
+    
     echo -e "\n  All services stopped.\n"
     exit 0
 fi
@@ -212,7 +212,7 @@ GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
 DATABASE_URL=postgres://gamepanel:gamepanel@postgres:5432/gamepanel?sslmode=disable
 EOF
         fi
-
+        
         docker compose up -d postgres redis >/dev/null 2>&1)
 
     echo -n "  Waiting for PostgreSQL..."
@@ -243,7 +243,7 @@ API_BUILD_LOG=$(mktemp)
         echo -e "  ${RED}API go.mod not found!${NC}"
         exit 1
     fi
-
+    
     go build -o "$ROOT/forge/api/api" ./cmd/api > /dev/null 2>"$API_BUILD_LOG")
 
 if [ $? -ne 0 ]; then
@@ -301,7 +301,7 @@ BEACON_BUILD_LOG=$(mktemp)
         echo -e "  ${RED}Beacon go.mod not found!${NC}"
         exit 1
     fi
-
+    
     go build -o "$ROOT/beacon/daemon" ./cmd/daemon > /dev/null 2>"$BEACON_BUILD_LOG")
 
 if [ $? -ne 0 ]; then
