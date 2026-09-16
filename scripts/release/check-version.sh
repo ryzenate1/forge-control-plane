@@ -97,6 +97,15 @@ else
   ok "env example APP_VERSION mirrors TAG"
 fi
 
+# CHANGELOG exists and has Unreleased
+if [ ! -f CHANGELOG.md ]; then
+  err "CHANGELOG.md missing"
+elif ! grep -q "## \[Unreleased\]" CHANGELOG.md; then
+  err "CHANGELOG.md missing Unreleased section"
+else
+  ok "CHANGELOG.md present"
+fi
+
 # Version file used in workflows
 if ! grep -q "publish-images.yml" .github/workflows/publish-images.yml 2>/dev/null; then
   :
