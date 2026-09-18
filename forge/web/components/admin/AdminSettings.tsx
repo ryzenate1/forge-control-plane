@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Archive, Bell, Globe, Mail, Settings as SettingsIcon, Shield, Workflow, Wrench } from "lucide-react";
 import {
@@ -15,9 +15,25 @@ import {
   type ApiPanelMailSettings,
   type ApiPanelSettings,
 } from "@/lib/api";
-import { Btn, Card, CardHeader, Input, SectionHeader, cn } from "./admin-ui";
+import {
+  AdminErrorState,
+  AdminLoadingState,
+  AdminSelect,
+  AdminTabs,
+  Btn,
+  Card,
+  CardHeader,
+  Input,
+  SectionHeader,
+  cn,
+} from "./admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { errorMessage } from "@/lib/utils";
 
 type Tab = "general" | "security" | "mail" | "monitoring" | "orchestration" | "backups" | "advanced";
+
 const TABS: Array<{ id: Tab; label: string; icon: typeof SettingsIcon }> = [
   { id: "general", label: "General", icon: SettingsIcon },
   { id: "security", label: "Security", icon: Shield },
@@ -28,161 +44,334 @@ const TABS: Array<{ id: Tab; label: string; icon: typeof SettingsIcon }> = [
   { id: "advanced", label: "Advanced", icon: Wrench },
 ];
 
-const DEFAULT_GENERAL: ApiPanelSettings = {
-  companyName: "Forge Control Plane",
-  shortName: "Forge",
-  productName: "GamePanel",
-  browserTitle: "GamePanel",
-  footerText: "",
-  logoUrl: "",
-  faviconUrl: "",
-  loginBackgroundUrl: "",
-  themePreset: "default",
-  require2FA: "none",
-  defaultLocale: "en",
-  defaultTimezone: "UTC",
-  dateFormat: "yyyy-MM-dd",
-  numberFormat: "en-US",
-  currencyFormat: "USD",
-  defaultDashboard: "overview",
-  landingPage: "servers",
-  sidebarLayout: "expanded",
-  compactMode: false,
-  advancedMode: false,
-  requireEmailVerification: false,
-  passwordComplexity: "standard",
-  passwordExpirationDays: 0,
-  sessionDurationMinutes: 1440,
-  loginRateLimitEnabled: true,
-  loginAttemptThreshold: 5,
-  accountLockoutMinutes: 15,
-  geoRestrictions: "",
-  apiTokenTtlDays: 0,
-  apiRotationDays: 0,
-  allowedOrigins: "",
-  trustedNetworks: "",
-  metricsRetentionDays: 30,
-  logsRetentionDays: 30,
-  auditRetentionDays: 365,
-  metricsSamplingRate: 100,
-  monitoringPollIntervalSeconds: 30,
-  emailAlertsEnabled: false,
-  webhookAlertsEnabled: false,
-  discordWebhookUrl: "",
-  slackWebhookUrl: "",
-  telegramBotToken: "",
-  placementStrategy: "balanced",
-  antiAffinityRules: "",
-  resourceReservationsEnabled: true,
-  nodePrioritization: "capacity",
-  recoveryStrategy: "manual",
-  failoverThresholdSeconds: 300,
-  heartbeatThresholdSeconds: 60,
-  reservationDurationMinutes: 30,
-  reservationCleanupMinutes: 60,
-  capacityBufferPercent: 10,
-  backupProvider: "local",
-  backupRetentionDays: 7,
-  backupLimit: 0,
-  backupAutoCleanup: true,
-  backupEncryptionEnabled: false,
-  backupKeyRotationDays: 90,
-};
+/**
+ * The value of one form field while it is being edited.
+ *
+ * `null` means "the box is empty". It is deliberately not `""` collapsed into
+ * `0`, and it is not defaulted: `PUT /admin/settings`, `PATCH …/mail` and
+ * `PATCH …/advanced` each parse the whole body into one Go struct
+ * (`internal/http/handlers_settings.go:44`, `handlers_settings_extras.go:41`),
+ * so every field the panel omits arrives as that field's zero value. A blank
+ * therefore has to be *rejected*, not silently converted — `0` minutes of
+ * session, `0` retention days and `false` 2FA are real configuration, and this
+ * page used to write them whenever an operator cleared a box (`Number("")`).
+ */
+type FieldValue = string | boolean | null;
 
-export function AdminSettings() {
-  const [tab, setTab] = useState<Tab>("general");
+function hydrate(document: Record<string, unknown> | undefined): Record<string, FieldValue> {
+  const out: Record<string, FieldValue> = {};
+  if (!document) return out;
+  for (const [key, value] of Object.entries(document)) {
+    if (value === null || value === undefined) out[key] = null;
+    else if (typeof value === "boolean") out[key] = value;
+    else out[key] = String(value);
+  }
+  return out;
+}
+
+function isDirty(baseline: Record<string, FieldValue>, values: Record<string, FieldValue>): boolean {
+  const keys = new Set([...Object.keys(baseline), ...Object.keys(values)]);
+  for (const key of keys) if (baseline[key] !== values[key]) return true;
+  return false;
+}
+
+function fieldLabel(key: string): string {
+  return key.replace(/([A-Z])/g, " $1").replace(/^./, (c) => c.toUpperCase());
+}
+
+type Validation = { ok: true; payload: Record<string, unknown> } | { ok: false; errors: string[] };
+
+/**
+ * Merge the draft over the document that was actually read.
+ *
+ * Every field the read returned is sent back, including the ones this form does
+ * not render, because the handler parses one whole struct and zero-fills what it
+ * does not receive. A field the read left absent stays absent; a field the
+ * operator *cleared* is an error rather than a silent `0`/`""`.
+ */
+function buildPayload(baseline: Record<string, FieldValue>, values: Record<string, FieldValue>, numericKeys: string[]): Validation {
+  const errors: string[] = [];
+  const payload: Record<string, unknown> = {};
+  const all = new Set([...Object.keys(baseline), ...Object.keys(values)]);
+  const numeric = new Set(numericKeys);
+  for (const key of all) {
+    const value = values[key] === undefined ? baseline[key] : values[key];
+    if (value === null || value === undefined) {
+      if (baseline[key] === null || baseline[key] === undefined) continue;
+      errors.push(`${fieldLabel(key)} was cleared. Restore its value or enter a replacement — a blank field is not a zero.`);
+      continue;
+    }
+    if (numeric.has(key)) {
+      const trimmed = String(value).trim();
+      const parsed = Number(trimmed);
+      if (trimmed === "" || !Number.isFinite(parsed) || parsed < 0) {
+        errors.push(`${fieldLabel(key)} must be a number of 0 or more.`);
+        continue;
+      }
+      payload[key] = parsed;
+      continue;
+    }
+    payload[key] = value;
+  }
+  return errors.length > 0 ? { ok: false, errors } : { ok: true, payload };
+}
+
+function Notice({ tone, children }: { tone: "ok" | "danger" | "warn"; children: React.ReactNode }) {
   return (
-    <div className="space-y-6">
-      <SectionHeader title="Settings Center" sub="Global controls for branding, security, monitoring, orchestration, and platform behavior." />
-      <nav className="flex flex-wrap gap-1 border-b border-white/[0.06]">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className={cn(
-              "flex items-center gap-1.5 px-3 py-2 text-sm font-medium transition",
-              tab === t.id ? "border-b-2 border-[#dc2626] text-[#dc2626]" : "text-slate-400 hover:text-slate-200",
-            )}
-            onClick={() => setTab(t.id)}
-            type="button"
-          >
-            <t.icon size={14} /> {t.label}
-          </button>
-        ))}
-      </nav>
-      {tab === "general" && <PanelSettingsTab mode="general" />}
-      {tab === "security" && <PanelSettingsTab mode="security" />}
-      {tab === "mail" && <MailTab />}
-      {tab === "monitoring" && <PanelSettingsTab mode="monitoring" />}
-      {tab === "orchestration" && <PanelSettingsTab mode="orchestration" />}
-      {tab === "backups" && <PanelSettingsTab mode="backups" />}
-      {tab === "advanced" && <AdvancedTab />}
+    <div
+      className={cn(
+        "ui-alert mt-3",
+        tone === "danger" && "ui-alert-danger",
+        tone === "ok" && "ui-alert-success",
+        tone === "warn" && "ui-alert-warn",
+      )}
+      role={tone === "danger" ? "alert" : "status"}
+    >
+      {children}
     </div>
   );
 }
 
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
+/**
+ * Every settings tab ends with the same three facts: when the document was read,
+ * whether the draft differs from it, and the save control. A save result and a
+ * save failure no longer look identical, and "Loading" here is never a claim
+ * that the panel holds defaults.
+ */
+function SaveFooter({
+  state, dirty, pending, label, pendingLabel, disabled, extra,
+}: {
+  state: ReturnType<typeof sourceState>;
+  dirty: boolean;
+  pending: boolean;
+  label: string;
+  pendingLabel: string;
+  disabled?: boolean;
+  extra?: React.ReactNode;
+}) {
   return (
-    <label className="flex items-center gap-2 text-sm text-slate-300">
-      <input className="accent-[#dc2626]" checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
-      <span>{label}</span>
+    <div className="flex flex-wrap items-center justify-end gap-3">
+      <FreshnessBadge state={state} />
+      <span className="text-[11px] text-text-muted">{dirty ? "Unsaved changes" : "No changes"}</span>
+      {extra}
+      <Btn disabled={disabled || pending || !dirty} tone="primary" type="submit">
+        {pending ? pendingLabel : label}
+      </Btn>
+    </div>
+  );
+}
+
+export function AdminSettings() {
+  const [tab, setTab] = useState<Tab>("general");
+  const [dirtyTab, setDirtyTab] = useState<Tab | null>(null);
+  const [confirm, renderConfirm] = useConfirm();
+
+  // Stable so the children's dirty effect does not re-fire on every parent render.
+  const reportDirty = useCallback((target: Tab) => (dirty: boolean) => {
+    setDirtyTab((previous) => {
+      if (dirty) return target;
+      return previous === target ? null : previous;
+    });
+  }, []);
+
+  const changeTab = async (next: Tab) => {
+    if (next === tab) return;
+    if (dirtyTab === tab) {
+      const discard = await confirm({
+        title: "Discard unsaved changes?",
+        description: `${tab.charAt(0).toUpperCase() + tab.slice(1)} has edits that have not been saved. Switching tabs discards them.`,
+        confirmLabel: "Discard",
+        danger: true,
+      });
+      if (!discard) return;
+      setDirtyTab(null);
+    }
+    setTab(next);
+  };
+
+  return (
+    <div className="space-y-6">
+      <SectionHeader
+        sub="Panel-wide configuration. Each tab saves only its own document; nothing here writes until the current values have been read successfully."
+        info={{
+          title: "Platform Settings",
+          triggerLabel: "About platform settings",
+          description: "How this page reads and writes panel configuration.",
+          sections: [
+            {
+              title: "Save is a full-document write",
+              content: "The control plane parses each settings body into one complete record, so a field the form does not send would be stored as its zero value. This page only enables Save after a successful read, and it refuses a blank numeric box instead of turning it into 0.",
+            },
+            {
+              title: "Scope",
+              content: "This is global panel configuration. Per-domain TLS and headers live under Security and mTLS; identities, roles and API keys live under Users, Roles and API Keys; outbound SMTP has its own Mail page, which writes a different record than the Mail tab here.",
+            },
+            {
+              title: "Masked secrets",
+              content: "Values the API masks (SMTP password, webhook tokens, reCAPTCHA secret) come back as ********. Leaving them untouched keeps the stored value; typing over them replaces it.",
+            },
+          ],
+        }}
+      />
+      <AdminTabs
+        tabs={TABS.map((t) => ({ id: t.id, label: t.label, icon: t.icon }))}
+        active={tab}
+        onChange={(id) => void changeTab(id as Tab)}
+        label="Settings sections"
+      />
+      {tab === "general" && <PanelSettingsTab mode="general" onDirtyChange={reportDirty("general")} />}
+      {tab === "security" && <PanelSettingsTab mode="security" onDirtyChange={reportDirty("security")} />}
+      {tab === "mail" && <MailTab onDirtyChange={reportDirty("mail")} />}
+      {tab === "monitoring" && <PanelSettingsTab mode="monitoring" onDirtyChange={reportDirty("monitoring")} />}
+      {tab === "orchestration" && <PanelSettingsTab mode="orchestration" onDirtyChange={reportDirty("orchestration")} />}
+      {tab === "backups" && <PanelSettingsTab mode="backups" onDirtyChange={reportDirty("backups")} />}
+      {tab === "advanced" && <AdvancedTab onDirtyChange={reportDirty("advanced")} />}
+      {renderConfirm()}
+    </div>
+  );
+}
+
+const NUMBER_FIELDS = [
+  "passwordExpirationDays", "sessionDurationMinutes", "loginAttemptThreshold", "accountLockoutMinutes",
+  "apiTokenTtlDays", "apiRotationDays", "metricsRetentionDays", "logsRetentionDays", "auditRetentionDays",
+  "metricsSamplingRate", "monitoringPollIntervalSeconds", "failoverThresholdSeconds", "heartbeatThresholdSeconds",
+  "reservationDurationMinutes", "reservationCleanupMinutes", "capacityBufferPercent", "backupRetentionDays",
+  "backupLimit", "backupKeyRotationDays",
+];
+
+function Field({
+  field, values, onChange, label, hint, type = "text", mono,
+}: {
+  field: string;
+  values: Record<string, FieldValue>;
+  onChange: (field: string, value: FieldValue) => void;
+  label: string;
+  hint?: string;
+  type?: string;
+  mono?: boolean;
+}) {
+  const value = values[field];
+  return (
+    <div>
+      <Input
+        label={label}
+        mono={mono}
+        onChange={(next) => onChange(field, next === "" ? null : next)}
+        type={type}
+        value={typeof value === "string" ? value : ""}
+      />
+      {value === null ? <p className="mt-1 text-[11px] text-warn">No value — a blank field blocks Save.</p> : null}
+      {hint ? <p className="mt-1 text-[11px] leading-5 text-text-muted">{hint}</p> : null}
+    </div>
+  );
+}
+
+function Switch({ field, values, onChange, label, hint }: {
+  field: string;
+  values: Record<string, FieldValue>;
+  onChange: (field: string, value: FieldValue) => void;
+  label: string;
+  hint?: string;
+}) {
+  return (
+    <label className="flex items-start gap-2 text-sm text-text">
+      <input
+        checked={values[field] === true}
+        className="mt-1 accent-[var(--brand)]"
+        onChange={(event) => onChange(field, event.target.checked)}
+        type="checkbox"
+      />
+      <span>
+        {label}
+        {values[field] === null ? <span className="mt-0.5 block text-[11px] text-warn">No value — this blocks Save.</span> : null}
+        {hint ? <span className="mt-0.5 block text-[11px] leading-5 text-text-muted">{hint}</span> : null}
+      </span>
     </label>
   );
 }
 
-function SelectField({ label, value, options, onChange }: { label: string; value: string; options: string[]; onChange: (value: string) => void }) {
+function Choice({ field, values, onChange, label, options, hint }: {
+  field: string;
+  values: Record<string, FieldValue>;
+  onChange: (field: string, value: FieldValue) => void;
+  label: string;
+  options: Array<{ value: string; label: string }>;
+  hint?: string;
+}) {
+  const current = values[field];
+  const text = typeof current === "string" ? current : "";
+  const known = text === "" || options.some((option) => option.value === text);
   return (
-    <label className="block text-sm">
-      <span className="mb-1.5 block font-medium text-slate-300">{label}</span>
-      <select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-slate-100" onChange={(event) => onChange(event.target.value)} value={value}>
-        {options.map((option) => <option key={option} value={option}>{option}</option>)}
-      </select>
-    </label>
+    <div>
+      <AdminSelect
+        label={label}
+        onChange={(next) => onChange(field, next === "" ? null : next)}
+        options={known ? options : [{ label: `${text} — stored value, not a listed option`, value: text }, ...options]}
+        value={text}
+      />
+      {current === null ? <p className="mt-1 text-[11px] text-warn">No value — the field is empty, so Save will ask for one.</p> : null}
+      {hint ? <p className="mt-1 text-[11px] leading-5 text-text-muted">{hint}</p> : null}
+    </div>
   );
 }
 
-function PanelSettingsTab({ mode }: { mode: Exclude<Tab, "mail" | "advanced"> }) {
+function PanelSettingsTab({ mode, onDirtyChange }: { mode: Exclude<Tab, "mail" | "advanced">; onDirtyChange: (dirty: boolean) => void }) {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({ queryKey: ["panel-settings"], queryFn: fetchPanelSettings });
-  type RequiredSettings = Required<ApiPanelSettings>;
-  const [form, setForm] = useState<RequiredSettings>(DEFAULT_GENERAL as RequiredSettings);
-  const [notice, setNotice] = useState("");
+  const query = useQuery({ queryKey: ["panel-settings"], queryFn: fetchPanelSettings });
+  const [baseline, setBaseline] = useState<Record<string, FieldValue>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [notice, setNotice] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
 
   useEffect(() => {
-    if (settings) setForm((previous) => ({ ...previous, ...settings } as RequiredSettings));
-  }, [settings]);
+    if (!query.data) return;
+    const next = hydrate(query.data as unknown as Record<string, unknown>);
+    setBaseline(next);
+    setValues(next);
+  }, [query.data]);
 
-  const set = <K extends keyof RequiredSettings>(key: K, value: RequiredSettings[K]) => {
-    setForm((previous) => ({ ...previous, [key]: value }));
-  };
+  const dirty = useMemo(() => isDirty(baseline, values), [baseline, values]);
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
 
-  const numberSet = (key: keyof RequiredSettings, value: string) => {
-    setForm((previous) => ({ ...previous, [key]: Number(value) as RequiredSettings[typeof key] }));
-  };
+  const validation = useMemo(
+    () => (dirty ? buildPayload(baseline, values, NUMBER_FIELDS) : null),
+    [baseline, values, dirty],
+  );
+
+  const set = (field: string, value: FieldValue) => setValues((previous) => ({ ...previous, [field]: value }));
 
   const saveMut = useMutation({
-    mutationFn: () => savePanelSettings(form),
+    mutationFn: () => {
+      if (!validation || !validation.ok) throw new Error(validation && !validation.ok ? validation.errors.join(" ") : "Nothing to save.");
+      return savePanelSettings(validation.payload as unknown as ApiPanelSettings);
+    },
     onSuccess: async (saved) => {
-      setNotice("Settings saved.");
+      const next = hydrate(saved as unknown as Record<string, unknown>);
+      setBaseline(next);
+      setValues(next);
+      setNotice({ tone: "ok", text: "Settings saved and re-read from the control plane." });
       qc.setQueryData(["panel-settings"], saved);
-      qc.setQueryData(["public-panel-settings"], {
-        companyName: saved.companyName,
-        shortName: saved.shortName,
-        productName: saved.productName,
-        browserTitle: saved.browserTitle,
-        footerText: saved.footerText,
-        logoUrl: saved.logoUrl,
-        faviconUrl: saved.faviconUrl,
-        loginBackgroundUrl: saved.loginBackgroundUrl,
-        themePreset: saved.themePreset,
-        defaultLocale: saved.defaultLocale,
-      });
       await qc.invalidateQueries({ queryKey: ["public-panel-settings"] });
       await qc.invalidateQueries({ queryKey: ["panel-settings"] });
     },
-    onError: (error) => setNotice(error instanceof Error ? error.message : "Settings could not be saved."),
+    onError: (error) => setNotice({ tone: "danger", text: errorMessage(error, "Settings could not be saved.") }),
   });
 
-  if (isLoading) return <div className="p-8 text-center text-sm text-slate-500">Loading...</div>;
+  const state = sourceState(query);
+
+  if (query.isPending) return <div className="space-y-3"><AdminLoadingState label="Reading panel settings…" /></div>;
+
+  if (query.isError) {
+    return (
+      <div className="space-y-3">
+        <AdminErrorState
+          message={`Panel settings could not be read (${errorMessage(query.error, "the control plane did not respond")}). Saving is disabled: with nothing loaded, a save would write defaults over your live configuration.`}
+          retry={() => void query.refetch()}
+        />
+      </div>
+    );
+  }
+
+  const errors = validation && !validation.ok ? validation.errors : [];
 
   return (
     <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); saveMut.mutate(); }}>
@@ -191,30 +380,30 @@ function PanelSettingsTab({ mode }: { mode: Exclude<Tab, "mail" | "advanced"> })
           <Card>
             <CardHeader title="Branding" icon={Globe} />
             <div className="grid gap-3 p-4 md:grid-cols-2">
-              <Input label="Company Name" value={form.companyName} onChange={(value) => set("companyName", value)} />
-              <Input label="Short Name" value={form.shortName} onChange={(value) => set("shortName", value)} />
-              <Input label="Product Name" value={form.productName} onChange={(value) => set("productName", value)} />
-              <Input label="Browser Title" value={form.browserTitle} onChange={(value) => set("browserTitle", value)} />
-              <Input label="Footer Text" value={form.footerText} onChange={(value) => set("footerText", value)} />
-              <Input label="Theme Preset" value={form.themePreset} onChange={(value) => set("themePreset", value)} />
-              <Input label="Logo URL" value={form.logoUrl} onChange={(value) => set("logoUrl", value)} />
-              <Input label="Favicon URL" value={form.faviconUrl} onChange={(value) => set("faviconUrl", value)} />
-              <Input label="Login Background URL" value={form.loginBackgroundUrl} onChange={(value) => set("loginBackgroundUrl", value)} />
+              <Field field="companyName" values={values} onChange={set} label="Company name" />
+              <Field field="shortName" values={values} onChange={set} label="Short name" />
+              <Field field="productName" values={values} onChange={set} label="Product name" />
+              <Field field="browserTitle" values={values} onChange={set} label="Browser title" />
+              <Field field="footerText" values={values} onChange={set} label="Footer text" />
+              <Field field="themePreset" values={values} onChange={set} label="Theme preset" mono hint="Stored as text; the theme system reads the preset name." />
+              <Field field="logoUrl" values={values} onChange={set} label="Logo URL" mono />
+              <Field field="faviconUrl" values={values} onChange={set} label="Favicon URL" mono />
+              <Field field="loginBackgroundUrl" values={values} onChange={set} label="Login background URL" mono />
             </div>
           </Card>
           <Card>
-            <CardHeader title="Localization & Experience" icon={SettingsIcon} />
+            <CardHeader title="Localization & experience" icon={SettingsIcon} />
             <div className="grid gap-3 p-4 md:grid-cols-2">
-              <Input label="Default Language" value={form.defaultLocale} onChange={(value) => set("defaultLocale", value)} />
-              <Input label="Default Timezone" value={form.defaultTimezone} onChange={(value) => set("defaultTimezone", value)} />
-              <Input label="Date Format" value={form.dateFormat} onChange={(value) => set("dateFormat", value)} />
-              <Input label="Number Format" value={form.numberFormat} onChange={(value) => set("numberFormat", value)} />
-              <Input label="Currency Format" value={form.currencyFormat} onChange={(value) => set("currencyFormat", value)} />
-              <SelectField label="Default Dashboard" value={form.defaultDashboard} options={["overview", "monitoring", "servers"]} onChange={(value) => set("defaultDashboard", value)} />
-              <SelectField label="Landing Page" value={form.landingPage} options={["servers", "admin/overview", "admin/monitoring"]} onChange={(value) => set("landingPage", value)} />
-              <SelectField label="Sidebar Layout" value={form.sidebarLayout} options={["expanded", "compact"]} onChange={(value) => set("sidebarLayout", value)} />
-              <Toggle label="Compact Mode" checked={form.compactMode} onChange={(value) => set("compactMode", value)} />
-              <Toggle label="Advanced Mode" checked={form.advancedMode} onChange={(value) => set("advancedMode", value)} />
+              <Field field="defaultLocale" values={values} onChange={set} label="Default language" mono hint="Locale code, e.g. en, fr, ja." />
+              <Field field="defaultTimezone" values={values} onChange={set} label="Default timezone" mono />
+              <Field field="dateFormat" values={values} onChange={set} label="Date format" mono />
+              <Field field="numberFormat" values={values} onChange={set} label="Number format" mono />
+              <Field field="currencyFormat" values={values} onChange={set} label="Currency format" mono hint="Billing prices are shown in their own fixed format and do not read this value." />
+              <Choice field="defaultDashboard" values={values} onChange={set} label="Default dashboard" options={[{ value: "overview", label: "Overview" }, { value: "monitoring", label: "Monitoring" }, { value: "servers", label: "Servers" }]} />
+              <Choice field="landingPage" values={values} onChange={set} label="Landing page" options={[{ value: "servers", label: "Servers" }, { value: "admin/overview", label: "Admin overview" }, { value: "admin/monitoring", label: "Admin monitoring" }]} />
+              <Choice field="sidebarLayout" values={values} onChange={set} label="Sidebar layout" options={[{ value: "expanded", label: "Expanded" }, { value: "compact", label: "Compact" }]} />
+              <Switch field="compactMode" values={values} onChange={set} label="Compact mode" />
+              <Switch field="advancedMode" values={values} onChange={set} label="Advanced mode" />
             </div>
           </Card>
         </>
@@ -222,181 +411,273 @@ function PanelSettingsTab({ mode }: { mode: Exclude<Tab, "mail" | "advanced"> })
 
       {mode === "security" ? (
         <Card>
-          <CardHeader title="Security Settings" icon={Shield} />
+          <CardHeader title="Security" icon={Shield} />
           <div className="grid gap-3 p-4 md:grid-cols-2">
-            <SelectField label="Require 2FA" value={form.require2FA} options={["none", "admin", "all"]} onChange={(value) => set("require2FA", value as RequiredSettings["require2FA"])} />
-            <Toggle label="Require Email Verification" checked={form.requireEmailVerification} onChange={(value) => set("requireEmailVerification", value)} />
-            <SelectField label="Password Complexity" value={form.passwordComplexity} options={["standard", "strong", "strict"]} onChange={(value) => set("passwordComplexity", value)} />
-            <Input label="Password Expiration Days" type="number" value={String(form.passwordExpirationDays)} onChange={(value) => numberSet("passwordExpirationDays", value)} />
-            <Input label="Session Duration Minutes" type="number" value={String(form.sessionDurationMinutes)} onChange={(value) => numberSet("sessionDurationMinutes", value)} />
-            <Toggle label="Login Rate Limiting" checked={form.loginRateLimitEnabled} onChange={(value) => set("loginRateLimitEnabled", value)} />
-            <Input label="Login Attempt Threshold" type="number" value={String(form.loginAttemptThreshold)} onChange={(value) => numberSet("loginAttemptThreshold", value)} />
-            <Input label="Account Lockout Minutes" type="number" value={String(form.accountLockoutMinutes)} onChange={(value) => numberSet("accountLockoutMinutes", value)} />
-            <Input label="Geo Restrictions" value={form.geoRestrictions} onChange={(value) => set("geoRestrictions", value)} />
-            <Input label="API Token TTL Days" type="number" value={String(form.apiTokenTtlDays)} onChange={(value) => numberSet("apiTokenTtlDays", value)} />
-            <Input label="API Rotation Days" type="number" value={String(form.apiRotationDays)} onChange={(value) => numberSet("apiRotationDays", value)} />
-            <Input label="Allowed Origins" value={form.allowedOrigins} onChange={(value) => set("allowedOrigins", value)} />
-            <Input label="Trusted Networks" value={form.trustedNetworks} onChange={(value) => set("trustedNetworks", value)} />
+            <Choice field="require2FA" values={values} onChange={set} label="Require 2FA" options={[{ value: "none", label: "Not required" }, { value: "admin", label: "Administrators only" }, { value: "all", label: "All users" }]} />
+            <Switch field="requireEmailVerification" values={values} onChange={set} label="Require email verification" />
+            <Choice field="passwordComplexity" values={values} onChange={set} label="Password complexity" options={[{ value: "standard", label: "Standard" }, { value: "strong", label: "Strong" }, { value: "strict", label: "Strict" }]} />
+            <Field field="passwordExpirationDays" type="number" values={values} onChange={set} label="Password expiration (days)" hint="0 means passwords never expire." />
+            <Field field="sessionDurationMinutes" type="number" values={values} onChange={set} label="Session duration (minutes)" />
+            <Switch field="loginRateLimitEnabled" values={values} onChange={set} label="Login rate limiting" />
+            <Field field="loginAttemptThreshold" type="number" values={values} onChange={set} label="Login attempt threshold" />
+            <Field field="accountLockoutMinutes" type="number" values={values} onChange={set} label="Account lockout (minutes)" />
+            <Field field="geoRestrictions" values={values} onChange={set} label="Geo restrictions" mono />
+            <Field field="apiTokenTtlDays" type="number" values={values} onChange={set} label="API token TTL (days)" hint="0 means tokens do not expire." />
+            <Field field="apiRotationDays" type="number" values={values} onChange={set} label="API rotation (days)" hint="0 disables scheduled rotation." />
+            <Field field="allowedOrigins" values={values} onChange={set} label="Allowed origins" mono />
+            <Field field="trustedNetworks" values={values} onChange={set} label="Trusted networks" mono />
           </div>
         </Card>
       ) : null}
 
       {mode === "monitoring" ? (
         <Card>
-          <CardHeader title="Monitoring Settings" icon={Bell} />
+          <CardHeader title="Monitoring" icon={Bell} />
           <div className="grid gap-3 p-4 md:grid-cols-2">
-            <Input label="Metrics Retention Days" type="number" value={String(form.metricsRetentionDays)} onChange={(value) => numberSet("metricsRetentionDays", value)} />
-            <Input label="Logs Retention Days" type="number" value={String(form.logsRetentionDays)} onChange={(value) => numberSet("logsRetentionDays", value)} />
-            <Input label="Audit Retention Days" type="number" value={String(form.auditRetentionDays)} onChange={(value) => numberSet("auditRetentionDays", value)} />
-            <Input label="Sampling Rate Percent" type="number" value={String(form.metricsSamplingRate)} onChange={(value) => numberSet("metricsSamplingRate", value)} />
-            <Input label="Polling Interval Seconds" type="number" value={String(form.monitoringPollIntervalSeconds)} onChange={(value) => numberSet("monitoringPollIntervalSeconds", value)} />
-            <Toggle label="Email Alerts" checked={form.emailAlertsEnabled} onChange={(value) => set("emailAlertsEnabled", value)} />
-            <Toggle label="Webhook Alerts" checked={form.webhookAlertsEnabled} onChange={(value) => set("webhookAlertsEnabled", value)} />
-            <Input label="Discord Webhook URL" value={form.discordWebhookUrl} onChange={(value) => set("discordWebhookUrl", value)} />
-            <Input label="Slack Webhook URL" value={form.slackWebhookUrl} onChange={(value) => set("slackWebhookUrl", value)} />
-            <Input label="Telegram Bot Token" value={form.telegramBotToken} onChange={(value) => set("telegramBotToken", value)} />
+            <Field field="metricsRetentionDays" type="number" values={values} onChange={set} label="Metrics retention (days)" />
+            <Field field="logsRetentionDays" type="number" values={values} onChange={set} label="Logs retention (days)" />
+            <Field field="auditRetentionDays" type="number" values={values} onChange={set} label="Audit retention (days)" />
+            <Field field="metricsSamplingRate" type="number" values={values} onChange={set} label="Sampling rate (%)" />
+            <Field field="monitoringPollIntervalSeconds" type="number" values={values} onChange={set} label="Polling interval (seconds)" />
+            <Switch field="emailAlertsEnabled" values={values} onChange={set} label="Email alerts" />
+            <Switch field="webhookAlertsEnabled" values={values} onChange={set} label="Webhook alerts" />
+            <Field field="discordWebhookUrl" values={values} onChange={set} label="Discord webhook URL" mono hint="Masked by the API when set; leave unchanged to keep it." />
+            <Field field="slackWebhookUrl" values={values} onChange={set} label="Slack webhook URL" mono hint="Masked by the API when set; leave unchanged to keep it." />
+            <Field field="telegramBotToken" values={values} onChange={set} label="Telegram bot token" mono hint="Masked by the API when set; leave unchanged to keep it." />
           </div>
         </Card>
       ) : null}
 
       {mode === "orchestration" ? (
         <Card>
-          <CardHeader title="Orchestration Settings" icon={Workflow} />
+          <CardHeader title="Orchestration" icon={Workflow} />
           <div className="grid gap-3 p-4 md:grid-cols-2">
-            <SelectField label="Placement Strategy" value={form.placementStrategy} options={["balanced", "least-loaded", "spread", "binpack"]} onChange={(value) => set("placementStrategy", value)} />
-            <Input label="Anti-Affinity Rules" value={form.antiAffinityRules} onChange={(value) => set("antiAffinityRules", value)} />
-            <Toggle label="Resource Reservations" checked={form.resourceReservationsEnabled} onChange={(value) => set("resourceReservationsEnabled", value)} />
-            <SelectField label="Node Prioritization" value={form.nodePrioritization} options={["capacity", "latency", "region", "manual"]} onChange={(value) => set("nodePrioritization", value)} />
-            <SelectField label="Recovery Strategy" value={form.recoveryStrategy} options={["manual", "assisted", "automatic"]} onChange={(value) => set("recoveryStrategy", value)} />
-            <Input label="Failover Threshold Seconds" type="number" value={String(form.failoverThresholdSeconds)} onChange={(value) => numberSet("failoverThresholdSeconds", value)} />
-            <Input label="Heartbeat Threshold Seconds" type="number" value={String(form.heartbeatThresholdSeconds)} onChange={(value) => numberSet("heartbeatThresholdSeconds", value)} />
-            <Input label="Reservation Duration Minutes" type="number" value={String(form.reservationDurationMinutes)} onChange={(value) => numberSet("reservationDurationMinutes", value)} />
-            <Input label="Reservation Cleanup Minutes" type="number" value={String(form.reservationCleanupMinutes)} onChange={(value) => numberSet("reservationCleanupMinutes", value)} />
-            <Input label="Capacity Buffer Percent" type="number" value={String(form.capacityBufferPercent)} onChange={(value) => numberSet("capacityBufferPercent", value)} />
+            <Choice field="placementStrategy" values={values} onChange={set} label="Placement strategy" options={[{ value: "balanced", label: "Balanced" }, { value: "least-loaded", label: "Least loaded" }, { value: "spread", label: "Spread" }, { value: "binpack", label: "Bin pack" }]} />
+            <Field field="antiAffinityRules" values={values} onChange={set} label="Anti-affinity rules" mono />
+            <Switch field="resourceReservationsEnabled" values={values} onChange={set} label="Resource reservations" />
+            <Choice field="nodePrioritization" values={values} onChange={set} label="Node prioritization" options={[{ value: "capacity", label: "Capacity" }, { value: "latency", label: "Latency" }, { value: "region", label: "Region" }, { value: "manual", label: "Manual" }]} />
+            <Choice field="recoveryStrategy" values={values} onChange={set} label="Recovery strategy" options={[{ value: "manual", label: "Manual" }, { value: "assisted", label: "Assisted" }, { value: "automatic", label: "Automatic" }]} />
+            <Field field="failoverThresholdSeconds" type="number" values={values} onChange={set} label="Failover threshold (seconds)" />
+            <Field field="heartbeatThresholdSeconds" type="number" values={values} onChange={set} label="Heartbeat threshold (seconds)" />
+            <Field field="reservationDurationMinutes" type="number" values={values} onChange={set} label="Reservation duration (minutes)" />
+            <Field field="reservationCleanupMinutes" type="number" values={values} onChange={set} label="Reservation cleanup (minutes)" />
+            <Field field="capacityBufferPercent" type="number" values={values} onChange={set} label="Capacity buffer (%)" hint="Headroom the scheduler keeps free on every node. 0 means no buffer." />
           </div>
         </Card>
       ) : null}
 
       {mode === "backups" ? (
         <Card>
-          <CardHeader title="Backup Settings" icon={Archive} />
+          <CardHeader title="Backups" icon={Archive} />
           <div className="grid gap-3 p-4 md:grid-cols-2">
-            <SelectField label="Storage Provider" value={form.backupProvider} options={["local", "s3", "cloudflare-r2", "backblaze-b2", "azure-blob", "google-cloud-storage"]} onChange={(value) => set("backupProvider", value)} />
-            <Input label="Backup Retention Days" type="number" value={String(form.backupRetentionDays)} onChange={(value) => numberSet("backupRetentionDays", value)} />
-            <Input label="Backup Limit" type="number" value={String(form.backupLimit)} onChange={(value) => numberSet("backupLimit", value)} />
-            <Toggle label="Automatic Cleanup" checked={form.backupAutoCleanup} onChange={(value) => set("backupAutoCleanup", value)} />
-            <Toggle label="Backup Encryption" checked={form.backupEncryptionEnabled} onChange={(value) => set("backupEncryptionEnabled", value)} />
-            <Input label="Key Rotation Days" type="number" value={String(form.backupKeyRotationDays)} onChange={(value) => numberSet("backupKeyRotationDays", value)} />
+            <Choice field="backupProvider" values={values} onChange={set} label="Storage provider" options={[
+              { value: "local", label: "Local disk" },
+              { value: "s3", label: "S3" },
+              { value: "cloudflare-r2", label: "Cloudflare R2" },
+              { value: "backblaze-b2", label: "Backblaze B2" },
+              { value: "azure-blob", label: "Azure Blob" },
+              { value: "google-cloud-storage", label: "Google Cloud Storage" },
+            ]} />
+            <Field field="backupRetentionDays" type="number" values={values} onChange={set} label="Retention (days)" />
+            <Field field="backupLimit" type="number" values={values} onChange={set} label="Backup limit" hint="0 means no limit." />
+            <Switch field="backupAutoCleanup" values={values} onChange={set} label="Automatic cleanup" />
+            <Switch field="backupEncryptionEnabled" values={values} onChange={set} label="Backup encryption" />
+            <Field field="backupKeyRotationDays" type="number" values={values} onChange={set} label="Key rotation (days)" />
           </div>
         </Card>
       ) : null}
 
-      {notice ? <p className="text-sm text-slate-300">{notice}</p> : null}
-      <div className="flex justify-end">
-        <Btn tone="primary" type="submit" disabled={saveMut.isPending}>
-          {saveMut.isPending ? "Saving..." : "Save"}
-        </Btn>
-      </div>
+      {errors.length > 0 ? <Notice tone="danger">{errors.join(" ")}</Notice> : null}
+      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
+      <SaveFooter
+        disabled={Boolean(errors.length)}
+        dirty={dirty}
+        label="Save"
+        pending={saveMut.isPending}
+        pendingLabel="Saving…"
+        state={state}
+      />
     </form>
   );
 }
 
-function MailTab() {
+function MailTab({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({ queryKey: ["panel-mail-settings"], queryFn: fetchMailSettings });
-  const [form, setForm] = useState<ApiPanelMailSettings>({
-    smtpHost: "", smtpPort: 587, smtpEncryption: "tls", smtpUsername: "", smtpPassword: "",
-    mailFromAddress: "", mailFromName: "",
-  });
-  const [notice, setNotice] = useState("");
+  // This tab writes `/admin/settings/mail`; `/admin/mail` writes
+  // `/admin/mail/settings`. Different records, different handlers — so the two
+  // surfaces must not share one cache key, which is what made one page's data
+  // fill the other's form. See `components/admin/mail-manager.tsx`.
+  const query = useQuery({ queryKey: ["panel-settings-mail"], queryFn: fetchMailSettings });
+  const [baseline, setBaseline] = useState<Record<string, FieldValue>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [notice, setNotice] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
   const [testRecipient, setTestRecipient] = useState("");
-  useEffect(() => { if (settings) setForm(settings); }, [settings]);
+
+  useEffect(() => {
+    if (!query.data) return;
+    const next = hydrate(query.data as unknown as Record<string, unknown>);
+    setBaseline(next);
+    setValues(next);
+  }, [query.data]);
+
+  const dirty = useMemo(() => isDirty(baseline, values), [baseline, values]);
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  const validation = useMemo(
+    () => (dirty ? buildPayload(baseline, values, ["smtpPort"]) : null),
+    [baseline, values, dirty],
+  );
+  const set = (field: string, value: FieldValue) => setValues((previous) => ({ ...previous, [field]: value }));
+
   const saveMut = useMutation({
-    mutationFn: () => saveMailSettings(form),
-    onSuccess: async () => {
-      setNotice("Mail settings saved.");
-      await qc.invalidateQueries({ queryKey: ["panel-mail-settings"] });
+    mutationFn: () => {
+      if (!validation || !validation.ok) throw new Error(validation && !validation.ok ? validation.errors.join(" ") : "Nothing to save.");
+      return saveMailSettings(validation.payload as unknown as ApiPanelMailSettings);
     },
-    onError: (error) => setNotice(error instanceof Error ? error.message : "Mail settings could not be saved."),
+    onSuccess: async () => {
+      setNotice({ tone: "ok", text: "Mail settings saved." });
+      await qc.invalidateQueries({ queryKey: ["panel-settings-mail"] });
+    },
+    onError: (error) => setNotice({ tone: "danger", text: errorMessage(error, "Mail settings could not be saved.") }),
   });
+
   const testMut = useMutation({
     mutationFn: () => testMailSettings(testRecipient.trim()),
-    onError: (error) => setNotice(error instanceof Error ? error.message : "Test email could not be sent."),
+    onError: (error) => setNotice({ tone: "danger", text: errorMessage(error, "The test email could not be sent.") }),
   });
-  if (isLoading) return <div className="p-8 text-center text-sm text-slate-500">Loading...</div>;
+
+  const state = sourceState(query);
+
+  if (query.isPending) return <AdminLoadingState label="Reading mail settings…" />;
+  if (query.isError) {
+    return (
+      <AdminErrorState
+        message={`Mail settings could not be read (${errorMessage(query.error, "the control plane did not respond")}). Saving is disabled rather than writing defaults over the stored SMTP configuration.`}
+        retry={() => void query.refetch()}
+      />
+    );
+  }
+
+  const errors = validation && !validation.ok ? validation.errors : [];
+  const result = testMut.data;
+
   return (
     <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveMut.mutate(); }}>
       <Card>
         <CardHeader title="SMTP" icon={Mail} />
         <div className="grid gap-3 p-4 md:grid-cols-2">
-              <Input label="SMTP Host" value={form.smtpHost ?? ""} onChange={(v) => setForm((p) => ({ ...p, smtpHost: v }))} required />
-              <Input label="SMTP Port" value={String(form.smtpPort ?? 587)} onChange={(v) => setForm((p) => ({ ...p, smtpPort: Number(v) }))} type="number" required />
-              <SelectField label="Encryption" value={form.smtpEncryption ?? ""} options={["", "tls", "ssl"]} onChange={(value) => setForm((p) => ({ ...p, smtpEncryption: value }))} />
-          <Input label="SMTP Username" value={form.smtpUsername ?? ""} onChange={(v) => setForm((p) => ({ ...p, smtpUsername: v }))} />
-          <Input label="SMTP Password" type="password" value={form.smtpPassword ?? ""} onChange={(v) => setForm((p) => ({ ...p, smtpPassword: v }))} placeholder="Leave blank to keep" />
-          <Input label="From Address" type="email" value={form.mailFromAddress ?? ""} onChange={(v) => setForm((p) => ({ ...p, mailFromAddress: v }))} required />
-          <Input label="From Name" value={form.mailFromName ?? ""} onChange={(v) => setForm((p) => ({ ...p, mailFromName: v }))} />
-          <Input label="Test Recipient" type="email" value={testRecipient} onChange={setTestRecipient} placeholder="operator@example.com" />
+          <Field field="smtpHost" values={values} onChange={set} label="SMTP host" />
+          <Field field="smtpPort" type="number" values={values} onChange={set} label="SMTP port" />
+          <Choice field="smtpEncryption" values={values} onChange={set} label="Encryption" options={[
+            { value: "tls", label: "STARTTLS" },
+            { value: "ssl", label: "Implicit TLS" },
+            { value: "none", label: "None (local relay only)" },
+          ]} hint="Sending the stored empty value unchanged keeps the server default." />
+          <Field field="smtpUsername" values={values} onChange={set} label="Username" />
+          <Field field="smtpPassword" type="password" values={values} onChange={set} label="Password" hint="Masked by the API when set; leave unchanged to keep it." />
+          <Field field="mailFromAddress" values={values} onChange={set} label="From address" type="email" />
+          <Field field="mailFromName" values={values} onChange={set} label="From name" />
+          <div>
+            <Input label="Test recipient" onChange={setTestRecipient} placeholder="operator@example.com" type="email" value={testRecipient} />
+            <p className="mt-1 text-[11px] leading-5 text-text-muted">Sends immediately over the stored configuration; this endpoint does not queue.</p>
+          </div>
         </div>
       </Card>
-      {testMut.data ? (
-        <div className={cn("rounded-lg border p-3 text-sm", testMut.data.sent ? "border-emerald-500/30 bg-emerald-900/10 text-emerald-300" : "border-amber-500/30 bg-amber-900/10 text-amber-300")}>
-          {testMut.data.message ?? (testMut.data.sent ? "Test email sent." : "Test email could not be sent.")}
-        </div>
+      {result ? (
+        <Notice tone={result.sent ? "ok" : "danger"}>
+          {result.message ?? (result.sent ? "Test email delivered." : "Test email failed.")}
+        </Notice>
       ) : null}
-      {notice ? <p className="text-sm text-slate-300">{notice}</p> : null}
-      <div className="flex justify-end gap-2">
-        <Btn tone="success" type="button" onClick={() => testMut.mutate()} disabled={testMut.isPending || !testRecipient.trim()}>
-          {testMut.isPending ? "Sending..." : "Test"}
-        </Btn>
-        <Btn tone="primary" type="submit" disabled={saveMut.isPending}>
-          {saveMut.isPending ? "Saving..." : "Save"}
-        </Btn>
-      </div>
+      {errors.length > 0 ? <Notice tone="danger">{errors.join(" ")}</Notice> : null}
+      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
+      <SaveFooter
+        disabled={Boolean(errors.length)}
+        dirty={dirty}
+        extra={
+          <Btn disabled={testMut.isPending || !testRecipient.trim()} onClick={() => testMut.mutate()} tone="ghost">
+            {testMut.isPending ? "Sending…" : "Send test"}
+          </Btn>
+        }
+        label="Save"
+        pending={saveMut.isPending}
+        pendingLabel="Saving…"
+        state={state}
+      />
     </form>
   );
 }
 
-function AdvancedTab() {
+function AdvancedTab({ onDirtyChange }: { onDirtyChange: (dirty: boolean) => void }) {
   const qc = useQueryClient();
-  const { data: settings, isLoading } = useQuery({ queryKey: ["panel-advanced-settings"], queryFn: fetchAdvancedSettings });
-  const [form, setForm] = useState<ApiPanelAdvancedSettings>({
-    recaptchaEnabled: false, recaptchaWebsiteKey: "", recaptchaSecretKey: "",
-    guzzleConnectTimeout: 30, guzzleRequestTimeout: 30,
-    autoAllocEnabled: false, autoAllocStartPort: 25565, autoAllocEndPort: 25600,
-  });
-  const [notice, setNotice] = useState("");
-  useEffect(() => { if (settings) setForm(settings); }, [settings]);
+  const query = useQuery({ queryKey: ["panel-advanced-settings"], queryFn: fetchAdvancedSettings });
+  const [baseline, setBaseline] = useState<Record<string, FieldValue>>({});
+  const [values, setValues] = useState<Record<string, FieldValue>>({});
+  const [notice, setNotice] = useState<{ tone: "ok" | "danger"; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!query.data) return;
+    const next = hydrate(query.data as unknown as Record<string, unknown>);
+    setBaseline(next);
+    setValues(next);
+  }, [query.data]);
+
+  const dirty = useMemo(() => isDirty(baseline, values), [baseline, values]);
+  useEffect(() => { onDirtyChange(dirty); }, [dirty, onDirtyChange]);
+  const validation = useMemo(
+    () => (dirty ? buildPayload(baseline, values, ["guzzleConnectTimeout", "guzzleRequestTimeout", "autoAllocStartPort", "autoAllocEndPort"]) : null),
+    [baseline, values, dirty],
+  );
+  const set = (field: string, value: FieldValue) => setValues((previous) => ({ ...previous, [field]: value }));
+
   const saveMut = useMutation({
-    mutationFn: () => saveAdvancedSettings(form),
+    mutationFn: () => {
+      if (!validation || !validation.ok) throw new Error(validation && !validation.ok ? validation.errors.join(" ") : "Nothing to save.");
+      return saveAdvancedSettings(validation.payload as unknown as ApiPanelAdvancedSettings);
+    },
     onSuccess: async () => {
-      setNotice("Advanced settings saved.");
+      setNotice({ tone: "ok", text: "Advanced settings saved." });
       await qc.invalidateQueries({ queryKey: ["panel-advanced-settings"] });
     },
-    onError: (error) => setNotice(error instanceof Error ? error.message : "Advanced settings could not be saved."),
+    onError: (error) => setNotice({ tone: "danger", text: errorMessage(error, "Advanced settings could not be saved.") }),
   });
-  if (isLoading) return <div className="p-8 text-center text-sm text-slate-500">Loading...</div>;
+
+  if (query.isPending) return <AdminLoadingState label="Reading advanced settings…" />;
+  if (query.isError) {
+    return (
+      <AdminErrorState
+        message={`Advanced settings could not be read (${errorMessage(query.error, "the control plane did not respond")}). Saving is disabled rather than writing defaults over the stored runtime configuration.`}
+        retry={() => void query.refetch()}
+      />
+    );
+  }
+
+  const state = sourceState(query);
+  const errors = validation && !validation.ok ? validation.errors : [];
+
   return (
     <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); saveMut.mutate(); }}>
       <Card>
-        <CardHeader title="Runtime Behavior" icon={Wrench} />
+        <CardHeader title="Runtime behaviour" icon={Wrench} />
         <div className="grid gap-3 p-4 md:grid-cols-2">
-          <Toggle label="reCAPTCHA Enabled" checked={form.recaptchaEnabled ?? false} onChange={(value) => setForm((p) => ({ ...p, recaptchaEnabled: value }))} />
-          <Input label="Site Key" value={form.recaptchaWebsiteKey ?? ""} onChange={(value) => setForm((p) => ({ ...p, recaptchaWebsiteKey: value }))} />
-          <Input label="Secret Key" value={form.recaptchaSecretKey ?? ""} onChange={(value) => setForm((p) => ({ ...p, recaptchaSecretKey: value }))} />
-          <Input label="Connect Timeout Seconds" value={String(form.guzzleConnectTimeout)} onChange={(value) => setForm((p) => ({ ...p, guzzleConnectTimeout: Number(value) }))} type="number" />
-          <Input label="Request Timeout Seconds" value={String(form.guzzleRequestTimeout)} onChange={(value) => setForm((p) => ({ ...p, guzzleRequestTimeout: Number(value) }))} type="number" />
-          <Toggle label="Automatic Allocations" checked={form.autoAllocEnabled ?? false} onChange={(value) => setForm((p) => ({ ...p, autoAllocEnabled: value }))} />
-          <Input label="Start Port" value={String(form.autoAllocStartPort)} onChange={(value) => setForm((p) => ({ ...p, autoAllocStartPort: Number(value) }))} type="number" />
-          <Input label="End Port" value={String(form.autoAllocEndPort)} onChange={(value) => setForm((p) => ({ ...p, autoAllocEndPort: Number(value) }))} type="number" />
+          <Switch field="recaptchaEnabled" values={values} onChange={set} label="reCAPTCHA enabled" />
+          <Field field="recaptchaWebsiteKey" values={values} onChange={set} label="Site key" mono />
+          <Field field="recaptchaSecretKey" type="password" values={values} onChange={set} label="Secret key" mono hint="Masked by the API when set; leave unchanged to keep it." />
+          <Field field="guzzleConnectTimeout" type="number" values={values} onChange={set} label="Connect timeout (seconds)" />
+          <Field field="guzzleRequestTimeout" type="number" values={values} onChange={set} label="Request timeout (seconds)" />
+          <Switch field="autoAllocEnabled" values={values} onChange={set} label="Automatic allocations" />
+          <Field field="autoAllocStartPort" type="number" values={values} onChange={set} label="Start port" />
+          <Field field="autoAllocEndPort" type="number" values={values} onChange={set} label="End port" />
         </div>
       </Card>
-      {notice ? <p className="text-sm text-slate-300">{notice}</p> : null}
-      <div className="flex justify-end">
-        <Btn tone="primary" type="submit" disabled={saveMut.isPending}>
-          {saveMut.isPending ? "Saving..." : "Save"}
-        </Btn>
-      </div>
+      {errors.length > 0 ? <Notice tone="danger">{errors.join(" ")}</Notice> : null}
+      {notice ? <Notice tone={notice.tone}>{notice.text}</Notice> : null}
+      <SaveFooter
+        disabled={Boolean(errors.length)}
+        dirty={dirty}
+        label="Save"
+        pending={saveMut.isPending}
+        pendingLabel="Saving…"
+        state={state}
+      />
     </form>
   );
 }

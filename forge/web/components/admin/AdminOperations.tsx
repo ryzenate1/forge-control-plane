@@ -1,6 +1,7 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, ArrowRightLeft, Eye, Loader2, RotateCcw, Workflow, Ban, CheckCircle2, Play } from "lucide-react";
 import {
@@ -14,8 +15,8 @@ import {
   executeMigration,
   executeRecoveryPlan,
   fetchEvacuationPlan,
+  fetchMigrationExecutorStatus,
   fetchMigrations,
-  fetchNodes,
   fetchRecoveryPlan,
   fetchRecoveryPlans,
   fetchServers,
@@ -27,7 +28,10 @@ import {
   type ApiRecoveryPlan,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
-import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader } from "./admin-ui";
+import { AdminConfirmDialog, AdminPageHeader, Btn, Card, CardHeader, EmptyState, Input, Pill } from "./admin-ui";
+import { TableSkeleton } from "@/components/ui/loading-skeleton";
+import { listRecentInstallWorkflows, executeInstallWorkflow } from "@/lib/api/installer";
+import { createInstallWSManager } from "@/lib/api/install-ws";
 
 const operationQueryKeys = [["migrations"], ["recovery"], ["nodes"], ["servers"]] as const;
 const terminalStatuses = ["completed", "restored", "cancelled", "failed"];
@@ -45,7 +49,7 @@ function statusTone(status: string): "green" | "red" | "yellow" | "blue" {
   return "blue";
 }
 
-function MigrationActions({ migration, onAction }: { migration: ApiMigration; onAction: () => void }) {
+function MigrationActions({ migration, onAction, executorAvailable }: { migration: ApiMigration; onAction: () => void; executorAvailable?: boolean }) {
   const { toast } = useToast();
   const executeMut = useMutation({
     mutationFn: () => executeMigration(migration.id),
@@ -58,9 +62,11 @@ function MigrationActions({ migration, onAction }: { migration: ApiMigration; on
     onError: (error) => toast({ tone: "error", title: "Cancel failed", message: errorMessage(error) }),
   });
 
+  const executeDisabled = !executorAvailable || executeMut.isPending;
+
   return (
     <div className="flex gap-1.5">
-      {migration.status === "planned" && <Btn size="sm" tone="success" onClick={() => executeMut.mutate()} disabled={executeMut.isPending}>{executeMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Execute</Btn>}
+      {migration.status === "planned" && <Btn size="sm" tone="success" onClick={() => executeMut.mutate()} disabled={executeDisabled} title={executorAvailable ? undefined : "Workload transfer runtime not available"}>{executeMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <CheckCircle2 size={12} />} Execute</Btn>}
       {!terminalStatuses.includes(migration.status) && <Btn size="sm" tone="danger" onClick={() => cancelMut.mutate()} disabled={cancelMut.isPending}>{cancelMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}
     </div>
   );
@@ -84,8 +90,12 @@ export function AdminOperations() {
   const qc = useQueryClient();
   const migrations = useQuery({ queryKey: ["migrations"], queryFn: fetchMigrations, refetchInterval: 10_000 });
   const recoveries = useQuery({ queryKey: ["recovery"], queryFn: fetchRecoveryPlans, refetchInterval: 10_000 });
-  const nodes = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodes = useNodesQuery();
   const servers = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
+  const executorStatus = useQuery({ queryKey: ["migrations-executor"], queryFn: fetchMigrationExecutorStatus, staleTime: 30_000 });
+  const executorAvailable = executorStatus.data?.available === true;
+  const installerQ = useQuery({ queryKey: ["installer-workflows"], queryFn: () => listRecentInstallWorkflows(20), refetchInterval: 10_000 });
+
   const [serverId, setServerId] = useState("");
   const [targetNodeId, setTargetNodeId] = useState("");
   const [nodeId, setNodeId] = useState("");
@@ -105,6 +115,14 @@ export function AdminOperations() {
     refetchInterval: (query) => query.state.data?.status === "running" ? 2_000 : false,
   });
   const [feedback, setFeedback] = useState<OperationFeedback>(null);
+
+  const [evacuationPlanConfirmOpen, setEvacuationPlanConfirmOpen] = useState(false);
+  const [recoveryPlanConfirmOpen, setRecoveryPlanConfirmOpen] = useState(false);
+  const [evacuationStartConfirmOpen, setEvacuationStartConfirmOpen] = useState(false);
+  const [evacuationCancelConfirmOpen, setEvacuationCancelConfirmOpen] = useState(false);
+  const [recoveryStartConfirmOpen, setRecoveryStartConfirmOpen] = useState<string | null>(null);
+  const [recoveryCancelConfirmOpen, setRecoveryCancelConfirmOpen] = useState<string | null>(null);
+  const [recoveryPlanDetailsStartConfirmOpen, setRecoveryPlanDetailsStartConfirmOpen] = useState(false);
 
   const refreshOperations = () => Promise.all(operationQueryKeys.map((queryKey) => qc.invalidateQueries({ queryKey })));
   const reportSuccess = (message: string) => { setFeedback({ tone: "success", message }); toast({ tone: "success", title: message }); };
@@ -163,47 +181,97 @@ export function AdminOperations() {
   const displayedEvacuation = evacuationPlanQuery.data ? { plan: evacuationPlanQuery.data, items: evacuationPlanQuery.data.items, preview: false } : evacuation;
   const settledItems = displayedEvacuation?.items.filter((item) => ["completed", "failed", "cancelled"].includes(item.status)).length ?? 0;
   const evacuationProgress = displayedEvacuation?.items.length ? Math.round((settledItems / displayedEvacuation.items.length) * 100) : 0;
+  const blockedItems = displayedEvacuation?.items.filter((i) => !i.eligible) ?? [];
+  const eligibleItems = displayedEvacuation?.items.filter((i) => i.eligible) ?? [];
+  const eligibleTargets = [...new Set(eligibleItems.map((i) => i.targetNodeId).filter(Boolean))];
 
-  return <div>
-    <SectionHeader title="Migrations & Recovery" sub="Preview evacuation capacity, save an explicit plan, then start or recover workloads safely." />
+  const startEvacuationDisabled = !executorAvailable || executeEvacuationMut.isPending;
+
+  return <div className="space-y-6">
+    <AdminPageHeader title="Operations" description="Control-plane operations: preview evacuation capacity, save explicit plans, then start or recover workloads safely." />
+    <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
+      <span className="font-semibold text-slate-300">OPERATIONS</span> · <span className="font-semibold text-slate-200">Operations</span> — evacuation & migration execution with capacity preview vs <code className="font-mono text-[11px]">Migrations & Recovery</code> at <code className="font-mono">/admin/migrations</code> and <code className="font-mono">Reconciliation</code> at <code className="font-mono">/admin/reconciliation</code>. Uses <code className="font-mono">POST /evacuations</code> + executor planning; planning-only when runtime unavailable.
+    </div>
     {feedback && <div className={`mb-4 rounded-lg border p-3 text-sm ${feedback.tone === "error" ? "border-red-700/30 bg-red-900/10 text-red-300" : "border-emerald-700/30 bg-emerald-900/10 text-emerald-300"}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
+
+    {!executorAvailable && executorStatus.isSuccess && (
+      <div className="mb-4 rounded-lg border border-amber-700/30 bg-amber-900/10 p-3 text-sm text-amber-200">
+        <strong>Planning-only mode:</strong> Workload transfer runtime is not available. Migration plans can be created but execution is disabled.
+      </div>
+    )}
 
     <div className="grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Create migration record" icon={ArrowRightLeft} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Server<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[#161b28] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
-        <label className="text-sm text-slate-300">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[#161b28] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-slate-300">Server<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
+        <label className="text-sm text-slate-300">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Btn disabled={!serverId || migrationMut.isPending} onClick={() => migrationMut.mutate()}>{migrationMut.isPending && <Loader2 size={14} className="animate-spin" />}{migrationMut.isPending ? "Creating migration plan…" : "Create migration plan"}</Btn>
+        {migrationMut.error && (
+          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-xs text-red-200">
+            <p className="mb-1 font-semibold">Migration creation failed</p>
+            <p>{errorMessage(migrationMut.error)}</p>
+          </div>
+        )}
       </div></Card>
 
       <Card><CardHeader title="Evacuation / recovery planning" icon={RotateCcw} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Affected node<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[#161b28] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-slate-300">Affected node<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Input label="Recovery reason" value={reason} onChange={setReason} placeholder="For example: node is unavailable" />
         <div className="flex flex-wrap gap-2">
           <Btn tone="ghost" disabled={!nodeId || previewMut.isPending} onClick={() => previewMut.mutate()}>{previewMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}{previewMut.isPending ? "Loading preview…" : "Preview evacuation"}</Btn>
-          <Btn disabled={!nodeId || evacuationMut.isPending} onClick={() => { if (confirm("Save this evacuation plan? It will not begin moving workloads until you start it.")) evacuationMut.mutate(); }}>{evacuationMut.isPending && <Loader2 size={13} className="animate-spin" />}{evacuationMut.isPending ? "Saving plan…" : "Save evacuation plan"}</Btn>
-          <Btn tone="warning" disabled={!nodeId || !reason.trim() || recoveryMut.isPending} onClick={() => { if (confirm("Create this backup-only recovery plan? A restored backup does not move server ownership.")) recoveryMut.mutate(); }}>{recoveryMut.isPending && <Loader2 size={13} className="animate-spin" />}{recoveryMut.isPending ? "Creating recovery plan…" : "Create recovery plan"}</Btn>
+          <Btn disabled={!nodeId || evacuationMut.isPending} onClick={() => setEvacuationPlanConfirmOpen(true)}>{evacuationMut.isPending && <Loader2 size={13} className="animate-spin" />}{evacuationMut.isPending ? "Saving plan…" : "Save evacuation plan"}</Btn>
+          <Btn tone="warning" disabled={!nodeId || !reason.trim() || recoveryMut.isPending} onClick={() => setRecoveryPlanConfirmOpen(true)}>{recoveryMut.isPending && <Loader2 size={13} className="animate-spin" />}{recoveryMut.isPending ? "Creating recovery plan…" : "Create recovery plan"}</Btn>
         </div>
-        <div className="rounded border border-amber-700/30 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100">Recovery only restores a backup independently verified by the destination daemon. <strong>Restored</strong> confirms backup data recovery; it does not move server ownership or allocations.</div>
+        <div className="rounded border border-amber-700/30 bg-amber-950/20 p-3 text-xs leading-5 text-amber-100">
+          <p className="mb-1 font-semibold">What recovery restores</p>
+          <ul className="list-disc space-y-1 pl-4">
+            <li>Restores backup data to a destination daemon (independent verification by daemon)</li>
+            <li><strong>Does not</strong> migrate server ownership or move allocations</li>
+            <li>A verified backup must exist before recovery can proceed</li>
+            <li>The destination node must be independently confirmed as reachable</li>
+            <li>Allocation and ownership remain on the source node after restore</li>
+            <li>Expected state after recovery: backup data present on destination, server record unchanged on source</li>
+          </ul>
+        </div>
       </div></Card>
     </div>
 
+    <InstallerStreamingManager executionEnabled={Boolean(installerQ.data?.executionEnabled)} />
+
     {displayedEvacuation && <div className="mt-5"><Card><CardHeader title={displayedEvacuation.preview ? "Evacuation preview" : "Evacuation plan"} icon={Workflow} /><div className="p-4 text-sm">
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-slate-400"><span>{displayedEvacuation.items.length} affected workload(s)</span><Pill tone={statusTone(displayedEvacuation.plan.status)}>{displayedEvacuation.plan.status}</Pill>{displayedEvacuation.preview && <span className="text-xs">Preview only — no plan has been saved.</span>}</div>
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-slate-400">
+        <span>{displayedEvacuation.items.length} affected workload(s)</span>
+        <Pill tone={statusTone(displayedEvacuation.plan.status)}>{displayedEvacuation.plan.status}</Pill>
+        {displayedEvacuation.preview && <span className="text-xs">Preview only — no plan has been saved.</span>}
+      </div>
+      <div className="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
+        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Affected node</span><p className="font-semibold">{displayedEvacuation.plan.nodeId}</p></div>
+        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Eligible workloads</span><p className="font-semibold text-emerald-300">{eligibleItems.length}</p></div>
+        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Blocked workloads</span><p className="font-semibold text-red-300">{blockedItems.length}</p></div>
+        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Destination nodes</span><p className="font-semibold">{eligibleTargets.length > 0 ? eligibleTargets.join(", ") : "None"}</p></div>
+      </div>
+      {blockedItems.length > 0 && (
+        <div className="mb-3 rounded border border-red-700/30 bg-red-950/10 p-2 text-xs text-red-200">
+          <p className="mb-1 font-semibold">Blocked workloads</p>
+          {blockedItems.map((item) => (
+            <p key={item.id} className="ml-2">{item.serverId}: {item.reason || "No eligible target"}</p>
+          ))}
+        </div>
+      )}
       {!displayedEvacuation.preview && <div className="mb-3 flex flex-wrap items-center gap-3">
-        {displayedEvacuation.plan.status === "pending" && <Btn tone="warning" disabled={executeEvacuationMut.isPending} onClick={() => { if (confirm("Start workload evacuation for this plan?")) executeEvacuationMut.mutate(displayedEvacuation.plan.id); }}>{executeEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeEvacuationMut.isPending ? "Starting evacuation…" : "Start evacuation"}</Btn>}
-        {displayedEvacuation.plan.status === "running" && <Btn tone="danger" disabled={cancelEvacuationMut.isPending} onClick={() => { if (confirm("Cancel this evacuation? Active migrations will be cancelled and no further workloads will start.")) cancelEvacuationMut.mutate(displayedEvacuation.plan.id); }}>{cancelEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}{cancelEvacuationMut.isPending ? "Cancelling evacuation…" : "Cancel evacuation"}</Btn>}
+        {displayedEvacuation.plan.status === "pending" && <Btn tone="warning" disabled={startEvacuationDisabled} onClick={() => setEvacuationStartConfirmOpen(true)} title={executorAvailable ? undefined : "Workload transfer runtime not available"}>{executeEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeEvacuationMut.isPending ? "Starting evacuation…" : "Start evacuation"}</Btn>}
+        {displayedEvacuation.plan.status === "running" && <Btn tone="danger" disabled={cancelEvacuationMut.isPending} onClick={() => setEvacuationCancelConfirmOpen(true)}>{cancelEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}{cancelEvacuationMut.isPending ? "Cancelling evacuation…" : "Cancel evacuation"}</Btn>}
         {displayedEvacuation.plan.status === "running" && <span className="text-xs text-slate-500">{settledItems}/{displayedEvacuation.items.length} workloads settled ({evacuationProgress}%)</span>}
       </div>}
-      {displayedEvacuation.plan.status === "running" && <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${evacuationProgress}%` }} /></div>}
+      {displayedEvacuation.plan.status === "running" && <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${evacuationProgress}%` }} /></div>}
       <div className="mt-3 space-y-2">{displayedEvacuation.items.map((item) => <div key={item.id} className="rounded border border-white/[0.06] p-3"><div className="flex items-center justify-between gap-3"><code>{item.serverId}</code><Pill tone={item.eligible ? statusTone(item.status) : "red"}>{item.eligible ? item.status : "Blocked"}</Pill></div><p className="mt-1 text-xs text-slate-500">{item.sourceNodeId} → {item.targetNodeId || "No eligible target"}</p>{item.reason && <p className="mt-1 text-xs text-slate-500">{item.reason}</p>}{item.error && <p className="mt-1 text-xs text-red-300">{item.error}</p>}{item.migrationId && <p className="mt-1 font-mono text-xs text-slate-500">Migration: {item.migrationId}</p>}</div>)}</div>
     </div></Card></div>}
 
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Migration history" icon={ArrowRightLeft} />
-        {migrations.isLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading migrations...</div> : migrations.isError ? <div className="py-10 text-center text-sm text-red-300">Failed to load migrations. Check API connectivity.</div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} message="No migrations." /> : <div className="divide-y divide-white/[0.04]">{(migrations.data ?? []).map((migration) => <div className="flex items-center justify-between gap-3 p-4" key={migration.id}><div><p className="font-mono text-xs">{migration.serverId}</p><p className="text-xs text-slate-500">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</p>{migration.progress != null && <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-blue-500 transition-all" style={{ width: `${migration.progress}%` }} /></div>}</div><div className="flex items-center gap-2">{migration.progress != null && <span className="text-xs text-slate-500">{migration.progress}%</span>}<Pill tone={statusTone(migration.status)}>{migration.status}</Pill><MigrationActions migration={migration} onAction={() => void refreshOperations()} /></div></div>)}</div>}
+        {migrations.isLoading ? <TableSkeleton rows={3} /> : migrations.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load migrations: {migrations.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void migrations.refetch()}>Retry</Btn></div></div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} message="No migrations." /> : <div className="divide-y divide-white/[0.04]">{(migrations.data ?? []).map((migration) => <div className="flex items-center justify-between gap-3 p-4" key={migration.id}><div><p className="font-mono text-xs">{migration.serverId}</p><p className="text-xs text-slate-500">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</p>{migration.progress != null && <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${migration.progress}%` }} /></div>}</div><div className="flex items-center gap-2">{migration.progress != null && <span className="text-xs text-slate-500">{migration.progress}%</span>}<Pill tone={statusTone(migration.status)}>{migration.status}</Pill><MigrationActions migration={migration} executorAvailable={executorAvailable} onAction={() => void refreshOperations()} /></div></div>)}</div>}
       </Card>
       <Card><CardHeader title="Recovery plans" icon={AlertTriangle} />
-        {recoveries.isLoading ? <div className="py-10 text-center text-sm text-slate-500">Loading recovery plans...</div> : recoveries.isError ? <div className="py-10 text-center text-sm text-red-300">Failed to load recovery plans. Check API connectivity.</div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} message="No recovery plans." /> : <div className="divide-y divide-white/[0.04]">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-slate-500">{plan.reason}</p><p className="mt-1 text-xs text-slate-500">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={statusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => { if (confirm("Start workload recovery for this plan?")) startRecoveryMut.mutate(plan.id); }} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => { if (confirm("Cancel this recovery plan?")) cancelRecoveryMut.mutate(plan.id); }} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
+        {recoveries.isLoading ? <TableSkeleton rows={3} /> : recoveries.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load recovery plans: {recoveries.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void recoveries.refetch()}>Retry</Btn></div></div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} message="No recovery plans." /> : <div className="divide-y divide-white/[0.04]">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-slate-500">{plan.reason}</p><p className="mt-1 text-xs text-slate-500">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={statusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => setRecoveryStartConfirmOpen(plan.id)} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => setRecoveryCancelConfirmOpen(plan.id)} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
       </Card>
     </div>
 
@@ -212,7 +280,7 @@ export function AdminOperations() {
         <CardHeader title="Recovery plan details" icon={AlertTriangle} />
         <div className="space-y-3 p-4">
           <label className="block text-sm text-slate-300">Plan
-            <select className="mt-1 h-9 w-full rounded border border-white/10 bg-[#161b28] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
+            <select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
               <option value="">Select a recovery plan…</option>
               {(recoveries.data ?? []).map((plan) => <option key={plan.id} value={plan.id}>{plan.nodeId} — {plan.status}</option>)}
             </select>
@@ -224,10 +292,191 @@ export function AdminOperations() {
               <div className="flex flex-wrap items-center justify-between gap-2"><span>{recoveryPlanQuery.data.reason}</span><Pill tone={statusTone(recoveryPlanQuery.data.status)}>{recoveryPlanQuery.data.status}</Pill></div>
               <RecoveryPlanDetails plan={recoveryPlanQuery.data} />
             </div>
-            {recoveryPlanQuery.data.status === "planned" && <Btn tone="warning" disabled={executeRecoveryMut.isPending} onClick={() => { if (confirm("Start this backup-only recovery plan? Restored does not mean ownership was moved.")) executeRecoveryMut.mutate(recoveryPlanQuery.data!.id); }}>{executeRecoveryMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeRecoveryMut.isPending ? "Starting recovery…" : "Start from plan details"}</Btn>}
+            {recoveryPlanQuery.data.status === "planned" && <Btn tone="warning" disabled={executeRecoveryMut.isPending} onClick={() => setRecoveryPlanDetailsStartConfirmOpen(true)}>{executeRecoveryMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeRecoveryMut.isPending ? "Starting recovery…" : "Start from plan details"}</Btn>}
           </>}
         </div>
       </Card>
     </div>
+
+    <section className="mt-8">
+      <div className="flex items-center gap-3">
+        <h3 className="text-sm font-semibold">Install workflows</h3>
+        <span className="rounded-full border border-[var(--line)] bg-white/[0.03] px-2 py-0.5 text-[11px] font-medium text-[var(--text-subtle)]">
+          {installerQ.data?.executionEnabled ? "execution on (INSTALLER_WORKFLOW_ENABLED=1)" : "visibility only — execution deferred"}
+        </span>
+      </div>
+      <p className="mt-1 text-xs text-[var(--text-subtle)]">
+        6-step installer history persisted at <code className="rounded bg-white/10 px-1 py-0.5 font-mono text-[11px]">install_workflows</code> (create·setup·download·script·config·start). Now surfaced even when execution is manual.
+      </p>
+      {!installerQ.data?.executionEnabled ? (
+        <div className="mt-3 flex gap-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.08] px-3 py-2.5 text-xs leading-5 text-amber-200">
+          <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+          <span>Execution is <b>intentionally deferred</b> (INSTALLER_WORKFLOW_ENABLED=0). Workflows are visible for audit/history; actual installs still run via the canonical Beacon path. When enabled, install streaming uses <code className="font-mono">GET /servers/:id/install/ws</code> (Beacon, admin-scoped) proxied via Forge <code className="font-mono">GET /servers/:id/ws/install</code> + ticket — see <code className="font-mono">install-ws.ts</code>.</span>
+        </div>
+      ) : null}
+      <div className="mt-3 overflow-hidden rounded-xl border border-[var(--line)]">
+        <table className="w-full text-sm">
+          <thead className="bg-white/[0.02] text-left text-xs uppercase tracking-wider text-[var(--text-subtle)]"><tr className="border-b border-[var(--line)]"><th className="px-4 py-2.5 font-medium">Workflow</th><th className="px-4 py-2.5">Server</th><th className="px-4 py-2.5">Type</th><th className="px-4 py-2.5">Status</th><th className="px-4 py-2.5">Steps</th><th className="px-4 py-2.5">Created</th><th className="px-4 py-2.5">Action</th></tr></thead>
+          <tbody className="divide-y divide-[var(--line)]">
+            {(installerQ.data?.data ?? []).slice(0, 10).map((wf) => (
+              <tr key={wf.id} className="hover:bg-white/[0.02]">
+                <td className="px-4 py-3 font-mono text-xs">{wf.id.slice(0, 8)}</td>
+                <td className="px-4 py-3 font-mono text-xs">{wf.serverId.slice(0, 8)}</td>
+                <td className="px-4 py-3 text-xs">{wf.type}</td>
+                <td className="px-4 py-3"><span className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold ${wf.status === "completed" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : wf.status === "failed" ? "border-red-500/30 bg-red-500/10 text-red-300" : wf.status === "running" ? "border-blue-500/30 bg-blue-500/10 text-blue-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300"}`}>{wf.status}</span></td>
+                <td className="px-4 py-3">
+                  <div className="flex gap-1">
+                    {wf.steps?.map((s) => (
+                      <span key={s.id} title={`${s.name}: ${s.status}`} className={`h-2 w-2 rounded-full ${s.status === "completed" ? "bg-emerald-500" : s.status === "running" ? "bg-blue-500 animate-pulse" : s.status === "failed" ? "bg-red-500" : "bg-slate-600"}`}/>
+                    ))}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-xs text-[var(--text-subtle)]">{new Date(wf.createdAt).toLocaleString()}</td>
+                <td className="px-4 py-3">
+                  {installerQ.data?.executionEnabled ? (
+                    <button onClick={() => executeInstallWorkflow(wf.id).then(() => qc.invalidateQueries({ queryKey: ["installer-workflows"] }))} className="text-xs underline">Execute</button>
+                  ) : (
+                    <span className="text-xs text-[var(--text-subtle)]">manual</span>
+                  )}
+                </td>
+              </tr>
+            ))}
+            {(installerQ.data?.data?.length ?? 0) === 0 ? <tr><td colSpan={7} className="py-8 text-center text-sm text-[var(--text-subtle)]">No workflows yet — create one from a server&apos;s install action.</td></tr> : null}
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <AdminConfirmDialog
+      open={evacuationPlanConfirmOpen}
+      title="Save evacuation plan?"
+      description="Save this evacuation plan? It will not begin moving workloads until you start it."
+      confirmLabel="Save plan"
+      onCancel={() => setEvacuationPlanConfirmOpen(false)}
+      onConfirm={() => { setEvacuationPlanConfirmOpen(false); evacuationMut.mutate(); }}
+      loading={evacuationMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={recoveryPlanConfirmOpen}
+      title="Create recovery plan?"
+      description="Create this backup-only recovery plan? A restored backup does not move server ownership."
+      confirmLabel="Create plan"
+      onCancel={() => setRecoveryPlanConfirmOpen(false)}
+      onConfirm={() => { setRecoveryPlanConfirmOpen(false); recoveryMut.mutate(); }}
+      loading={recoveryMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={evacuationStartConfirmOpen}
+      title="Start evacuation?"
+      description="Start workload evacuation for this plan?"
+      confirmLabel="Start evacuation"
+      onCancel={() => setEvacuationStartConfirmOpen(false)}
+      onConfirm={() => { setEvacuationStartConfirmOpen(false); executeEvacuationMut.mutate(displayedEvacuation!.plan.id); }}
+      loading={executeEvacuationMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={evacuationCancelConfirmOpen}
+      title="Cancel evacuation?"
+      description="Cancel this evacuation? Active migrations will be cancelled and no further workloads will start."
+      confirmLabel="Cancel evacuation"
+      destructive
+      onCancel={() => setEvacuationCancelConfirmOpen(false)}
+      onConfirm={() => { setEvacuationCancelConfirmOpen(false); cancelEvacuationMut.mutate(displayedEvacuation!.plan.id); }}
+      loading={cancelEvacuationMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={recoveryStartConfirmOpen !== null}
+      title="Start recovery?"
+      description="Start workload recovery for this plan?"
+      confirmLabel="Start recovery"
+      onCancel={() => setRecoveryStartConfirmOpen(null)}
+      onConfirm={() => { const id = recoveryStartConfirmOpen; setRecoveryStartConfirmOpen(null); if (id) startRecoveryMut.mutate(id); }}
+      loading={startRecoveryMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={recoveryCancelConfirmOpen !== null}
+      title="Cancel recovery plan?"
+      description="Cancel this recovery plan?"
+      confirmLabel="Cancel plan"
+      destructive
+      onCancel={() => setRecoveryCancelConfirmOpen(null)}
+      onConfirm={() => { const id = recoveryCancelConfirmOpen; setRecoveryCancelConfirmOpen(null); if (id) cancelRecoveryMut.mutate(id); }}
+      loading={cancelRecoveryMut.isPending}
+    />
+
+    <AdminConfirmDialog
+      open={recoveryPlanDetailsStartConfirmOpen}
+      title="Start backup-only recovery plan?"
+      description="Start this backup-only recovery plan? Restored does not mean ownership was moved."
+      confirmLabel="Start recovery"
+      onCancel={() => setRecoveryPlanDetailsStartConfirmOpen(false)}
+      onConfirm={() => { const id = selectedRecoveryPlanId; setRecoveryPlanDetailsStartConfirmOpen(false); if (id) executeRecoveryMut.mutate(id); }}
+      loading={executeRecoveryMut.isPending}
+    />
   </div>;
+}
+
+function InstallerStreamingManager({ executionEnabled }: { executionEnabled: boolean }) {
+  const [serverId, setServerId] = useState("");
+  const [status, setStatus] = useState("");
+  const [logs, setLogs] = useState<string[]>([]);
+  const [connected, setConnected] = useState(false);
+  const mgrRef = useRef<ReturnType<typeof createInstallWSManager> | null>(null);
+  const serversQ = useQuery({ queryKey: ["servers", "install-ws"], queryFn: fetchServers, enabled: executionEnabled });
+  const start = () => {
+    if (!serverId) return;
+    setLogs([]);
+    setStatus("Connecting to install stream…");
+    const mgr = createInstallWSManager(serverId, {
+      onLog: (line) => setLogs((p) => [...p.slice(-200), line]),
+      onStatus: setStatus,
+      onComplete: (success, code) => { setStatus(success ? `Complete (exit ${code ?? 0})` : `Failed (exit ${code ?? 1})`); setConnected(false); },
+      onError: (e) => setStatus(`Error: ${e}`),
+    });
+    const origOnStatus = (mgr as unknown as { config: { onStatusChange?: (s: string) => void } }).config.onStatusChange;
+    (mgr as unknown as { config: Record<string, unknown> }).config = {
+      ...((mgr as unknown as { config: Record<string, unknown> }).config),
+      onStatusChange: (s: string) => { setConnected(s === "connected"); origOnStatus?.(s as never); },
+    };
+    mgrRef.current?.disconnect();
+    mgrRef.current = mgr;
+    void mgr.connect();
+    setConnected(true);
+  };
+  const stop = () => {
+    mgrRef.current?.disconnect();
+    mgrRef.current = null;
+    setConnected(false);
+    setStatus("Disconnected");
+  };
+  if (!executionEnabled) {
+    return (
+      <section className="mt-6 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+        <h3 className="text-sm font-semibold">Install streaming — ticket + WS manager</h3>
+        <p className="mt-1 text-xs leading-5 text-[var(--text-subtle)]">
+          Beacon exposes <code className="font-mono">GET /servers/:id/install/ws</code> (server.go:1600, admin-scoped token). Forge proxies via <code className="font-mono">GET /servers/:id/ws/install</code> + <code className="font-mono">GET /servers/:id/install/ws</code> alias (server.go realtimeProxy, daemon MintAdminToken). Frontend manager: <code className="font-mono">forge/web/lib/api/install-ws.ts</code> — <code className="font-mono">connectInstallWebSocket</code>/<code className="font-mono">createInstallWSManager</code> (log/status/complete frames). Visible even when <code className="font-mono">INSTALLER_WORKFLOW_ENABLED=0</code> (docs-only), live once enabled.
+        </p>
+      </section>
+    );
+  }
+  return (
+    <section className="mt-6 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
+      <h3 className="text-sm font-semibold">Install streaming — live</h3>
+      <p className="mt-1 text-xs text-[var(--text-subtle)]">Admin-only: streams installer logs via <code className="font-mono">GET /servers/:id/install/ws</code> ticket + <code className="font-mono">createInstallWSManager</code>. Requires <code className="font-mono">INSTALLER_WORKFLOW_ENABLED=1</code> and admin role (beacon ScopeAdmin).</p>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <select value={serverId} onChange={(e) => setServerId(e.target.value)} className="h-9 min-w-[200px] rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm">
+          <option value="">Select server…</option>
+          {(serversQ.data ?? []).map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
+        </select>
+        {!connected ? <button onClick={start} disabled={!serverId} className="rounded-lg bg-[var(--brand)] px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">Stream install</button> : <button onClick={stop} className="rounded-lg border border-[var(--line)] px-3 py-1.5 text-xs">Disconnect</button>}
+        <span className="text-xs text-[var(--text-subtle)]">{status || (connected ? "Connected" : "Idle")}</span>
+      </div>
+      {logs.length ? <pre className="mt-3 max-h-40 overflow-auto rounded-lg bg-[var(--surface-input)] p-3 font-mono text-xs leading-5 text-[var(--text-subtle)]">{logs.slice(-30).join("\n")}</pre> : null}
+    </section>
+  );
 }
