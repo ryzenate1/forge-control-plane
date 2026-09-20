@@ -1,161 +1,271 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
+import { History, Plus } from "lucide-react";
+import { fetchJSON, unwrapList } from "@/lib/api";
+import type { Deployment } from "@/lib/api/deployments";
+import { deploymentStatusTone } from "@/lib/api/status";
+import { sourceState } from "@/lib/admin/telemetry";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
 import {
-  CheckCircle, Clock, Layers, Plus, RefreshCw,
-  RotateCcw, XCircle,
-} from "lucide-react";
-import { fetchJSON } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+  AdminErrorState,
+  AdminLoadingRows,
+  AdminPageHeader,
+  AdminPageLayout,
+  AdminSection,
+  AdminSelect,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminToolbar,
+  AdminTr,
+  Btn,
+  Card,
+  EmptyState,
+  Input,
+  Pill,
+} from "@/components/admin/admin-ui";
+import { errorMessage, formatDate } from "@/lib/utils";
 
-type Deployment = {
-  id: string;
-  serverId: string;
-  image: string;
-  strategy: "blue_green" | "rolling" | "recreate";
-  status: "pending" | "in_progress" | "completed" | "failed" | "rolled_back";
-  targetGroup?: string;
-  healthCheckPath?: string;
-  healthCheckPort?: number;
-  createdAt: string;
-  completedAt?: string;
-  error?: string;
-};
+/**
+ * One list, one endpoint.
+ *
+ * `GET /admin/deployments` is the deployment-service projection (see
+ * `forge/api/internal/services/deployment/service.go`: `Deployment{}`). This
+ * page used to fetch the same route twice, type it as two different shapes and
+ * render two tables — "Server Deployments" and "App Deployments" — so an
+ * operator reading "12 / 12" was reading the same 12 records twice, and the
+ * App half rendered fields the route never sends (`revision`, `trigger`,
+ * `commit`, `duration`) as `#undefined`, empty chips and a fake "—" duration.
+ * Status colour now comes from `deploymentStatusTone` alone; the page-local
+ * colour maps are gone.
+ */
 
-const statusConfig: Record<string, { tone: "green" | "yellow" | "red" | "blue" | "neutral"; icon: typeof Clock }> = {
-  pending: { tone: "yellow", icon: Clock },
-  in_progress: { tone: "blue", icon: RefreshCw },
-  completed: { tone: "green", icon: CheckCircle },
-  failed: { tone: "red", icon: XCircle },
-  rolled_back: { tone: "neutral", icon: RotateCcw },
-};
+const POLL_MS = 15_000;
+
+/** `_` is on the wire (`in_progress`); spaces are what an operator reads. */
+function humanToken(value: string): string {
+  return value.replace(/_/g, " ");
+}
+
+/** Strategies are hyphenated on the wire (`blue-green`); older rows used `_`. */
+function strategyLabel(value: string): string {
+  return value.replace(/_/g, "-");
+}
+
+/**
+ * An absent timestamp is "not reported", not "Never": `completedAt` is omitted
+ * for every deployment still in flight, so the shared formatter's default
+ * fallback would read as a claim about a release that has not finished.
+ */
+function timeOrDash(value?: string | null): string {
+  return value ? formatDate(value) : "—";
+}
+
+function readFilter(value: string | null): string {
+  return value ?? "";
+}
 
 export default function AdminDeploymentsPage() {
   const router = useRouter();
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<string>("");
-  const [strategyFilter, setStrategyFilter] = useState<string>("");
+  const searchParams = useSearchParams();
+
+  // Filters live in the URL so a filtered view survives refresh and can be shared.
+  const search = readFilter(searchParams.get("q"));
+  const statusFilter = readFilter(searchParams.get("status"));
+  const strategyFilter = readFilter(searchParams.get("strategy"));
+
+  const setFilter = (key: "q" | "status" | "strategy", value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set(key, value);
+    else params.delete(key);
+    const query = params.toString();
+    router.replace(query ? `/admin/deployments?${query}` : "/admin/deployments", { scroll: false });
+  };
 
   const deploymentsQuery = useQuery({
     queryKey: ["admin", "deployments"],
-    queryFn: () => fetchJSON<Deployment[]>("/admin/deployments"),
+    queryFn: async () =>
+      unwrapList<Deployment>(await fetchJSON<{ data: Deployment[] } | Deployment[]>("/admin/deployments")),
+    refetchInterval: POLL_MS,
   });
 
   const deployments = useMemo(() => deploymentsQuery.data ?? [], [deploymentsQuery.data]);
+  const hasData = deploymentsQuery.data !== undefined;
+
+  // Filter options are derived from what the platform actually reports rather
+  // than a hard-coded vocabulary — the status set in the deployment service is
+  // wider than any list typed into this page, and an invented option is a
+  // filter that can never match.
+  const statusOptions = useMemo(
+    () => Array.from(new Set(deployments.map((d) => d.status).filter(Boolean))).sort(),
+    [deployments],
+  );
+  const strategyOptions = useMemo(
+    () => Array.from(new Set(deployments.map((d) => d.strategy).filter(Boolean))).sort(),
+    [deployments],
+  );
 
   const filtered = useMemo(() => {
+    const needle = search.toLowerCase();
     return deployments.filter((d) => {
-      if (search && !d.serverId.toLowerCase().includes(search.toLowerCase()) && !d.image.toLowerCase().includes(search.toLowerCase())) return false;
+      if (needle) {
+        const haystack = `${d.serverId ?? ""} ${d.image ?? ""}`.toLowerCase();
+        if (!haystack.includes(needle)) return false;
+      }
       if (statusFilter && d.status !== statusFilter) return false;
       if (strategyFilter && d.strategy !== strategyFilter) return false;
       return true;
     });
   }, [deployments, search, statusFilter, strategyFilter]);
 
-  const statuses = ["pending", "in_progress", "completed", "failed", "rolled_back"];
-  const strategies = ["blue_green", "rolling", "recreate"];
+  const filtersActive = Boolean(search || statusFilter || strategyFilter);
+  const freshness = sourceState(deploymentsQuery, POLL_MS);
+
+  const statusCounts = useMemo(() => {
+    if (!hasData) return [];
+    const counts = new Map<string, number>();
+    for (const d of deployments) {
+      if (!d.status) continue;
+      counts.set(d.status, (counts.get(d.status) ?? 0) + 1);
+    }
+    return [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  }, [deployments, hasData]);
 
   return (
-    <div className="space-y-6">
-      <SectionHeader
-        title="Deployments"
-        sub="Blue-green, rolling, and re-create deployments for game servers."
+    <AdminPageLayout>
+      <AdminPageHeader
+        status={<FreshnessBadge state={freshness} />}
         action={
-          <Btn tone="primary" onClick={() => router.push("/admin/deployments/new")}>
-            <Plus size={14} /> New Blue-Green Deployment
-          </Btn>
+          <div className="flex items-center gap-2">
+            <Btn tone="ghost" onClick={() => router.push("/admin/deployments/history")}>
+              <History aria-hidden="true" size={14} /> History
+            </Btn>
+            <Btn tone="primary" onClick={() => router.push("/admin/deployments/new")}>
+              <Plus aria-hidden="true" size={14} /> New Deployment
+            </Btn>
+          </div>
         }
       />
 
-      <Card>
-        <CardHeader title="All Deployments" icon={Layers} />
-        <div className="flex flex-wrap items-center gap-3 p-4">
-          <Input placeholder="Search by server or image" value={search} onChange={setSearch} />
-          <select
-            className="h-9 rounded-lg border border-white/10 bg-[#161b28] px-3 text-xs text-slate-300 outline-none"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="">All Statuses</option>
-            {statuses.map((s) => (
-              <option key={s} value={s}>{s.replace("_", " ")}</option>
-            ))}
-          </select>
-          <select
-            className="h-9 rounded-lg border border-white/10 bg-[#161b28] px-3 text-xs text-slate-300 outline-none"
-            value={strategyFilter}
-            onChange={(e) => setStrategyFilter(e.target.value)}
-          >
-            <option value="">All Strategies</option>
-            {strategies.map((s) => (
-              <option key={s} value={s}>{s.replace("_", " ")}</option>
-            ))}
-          </select>
-        </div>
-        {deploymentsQuery.isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading deployments...</div>
-        ) : filtered.length === 0 ? (
-          <EmptyState icon={Layers} message="No deployments found." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                  <th className="px-4 py-3">Server ID</th>
-                  <th className="px-4 py-3">Image</th>
-                  <th className="px-4 py-3">Strategy</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Target</th>
-                  <th className="px-4 py-3">Created</th>
-                  <th className="px-4 py-3"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                {filtered.map((dep) => {
-                  const cfg = statusConfig[dep.status] ?? statusConfig.pending;
-                  const StatusIcon = cfg.icon;
-                  return (
-                    <tr
-                      key={dep.id}
-                      className="hover:bg-white/[0.02] cursor-pointer"
-                      onClick={() => router.push(`/admin/deployments/${dep.id}`)}
-                    >
-                      <td className="px-4 py-3 font-mono text-xs font-medium text-slate-200">{dep.serverId}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{dep.image}</td>
-                      <td className="px-4 py-3">
-                        <Pill tone={dep.strategy === "blue_green" ? "blue" : dep.strategy === "rolling" ? "yellow" : "neutral"}>
-                          {dep.strategy.replace("_", "-")}
-                        </Pill>
-                      </td>
-                      <td className="px-4 py-3">
-                        <div className="flex items-center gap-1.5">
-                          <StatusIcon size={12} className={cn(
-                            dep.status === "completed" && "text-emerald-400",
-                            dep.status === "failed" && "text-red-400",
-                            dep.status === "in_progress" && "text-blue-400",
-                            dep.status === "pending" && "text-amber-400",
-                            dep.status === "rolled_back" && "text-slate-400",
-                          )} />
-                          <Pill tone={cfg.tone}>{dep.status.replace("_", " ")}</Pill>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{dep.targetGroup ?? "—"}</td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{new Date(dep.createdAt).toLocaleDateString()}</td>
-                      <td className="px-4 py-3">
-                        <Btn size="sm" tone="ghost" onClick={() => router.push(`/admin/deployments/${dep.id}`)}>
-                          Details
-                        </Btn>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
-    </div>
+      <AdminSection
+        title="Deployments"
+        description="Releases the deployment service has run across your servers. Select a row to open its steps, revisions and rollback controls."
+        action={
+          hasData ? (
+            <Pill tone="neutral">{`${deployments.length.toLocaleString()} recorded`}</Pill>
+          ) : (
+            <Pill tone="unknown">Count not loaded</Pill>
+          )
+        }
+      >
+        <Card>
+          <AdminToolbar className="p-4">
+            <Input
+              label="Search"
+              placeholder="Server ID or image"
+              value={search}
+              onChange={(v) => setFilter("q", v)}
+            />
+            <AdminSelect
+              label="Status"
+              value={statusFilter}
+              onChange={(v) => setFilter("status", v)}
+              placeholder="All statuses"
+              options={statusOptions.map((s) => ({ value: s, label: humanToken(s) }))}
+            />
+            <AdminSelect
+              label="Strategy"
+              value={strategyFilter}
+              onChange={(v) => setFilter("strategy", v)}
+              placeholder="All strategies"
+              options={strategyOptions.map((s) => ({ value: s, label: strategyLabel(s) }))}
+            />
+          </AdminToolbar>
+
+          {statusCounts.length > 0 && !filtersActive ? (
+            <div className="flex flex-wrap gap-1.5 border-y border-line bg-overlay-subtle px-4 py-2">
+              {statusCounts.map(([status, count]) => (
+                <Pill key={status} tone={deploymentStatusTone(status)}>
+                  {`${humanToken(status)}: ${count.toLocaleString()}`}
+                </Pill>
+              ))}
+            </div>
+          ) : null}
+
+          {deploymentsQuery.isPending ? (
+            <AdminLoadingRows cols={6} rows={5} label="Loading deployments…" />
+          ) : deploymentsQuery.isError ? (
+            <div className="p-4">
+              <AdminErrorState
+                message={`Deployments could not be loaded: ${errorMessage(deploymentsQuery.error)}`}
+                retry={() => void deploymentsQuery.refetch()}
+              />
+            </div>
+          ) : deployments.length === 0 ? (
+            <EmptyState
+              icon={History}
+              title="No deployments recorded"
+              message="No deployment has been started for any server yet. Create one with New Deployment."
+            />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={History}
+              title="No deployments match"
+              message="No deployment matches the current search, status or strategy filter. Clear the filters above to see all records."
+            />
+          ) : (
+            <AdminTable label="Deployments">
+              <AdminTHead>
+                <AdminTh>Server</AdminTh>
+                <AdminTh>Image</AdminTh>
+                <AdminTh>Strategy</AdminTh>
+                <AdminTh>Status</AdminTh>
+                <AdminTh>Active target</AdminTh>
+                <AdminTh>Progress</AdminTh>
+                <AdminTh>Created</AdminTh>
+                <AdminTh>Completed</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
+                {filtered.map((dep) => (
+                  <AdminTr
+                    key={dep.id}
+                    onClick={() => router.push(`/admin/deployments/${encodeURIComponent(dep.id)}`)}
+                  >
+                    <AdminTd className="font-mono text-meta">{dep.serverId || "—"}</AdminTd>
+                    <AdminTd className="max-w-64 truncate font-mono text-meta" title={dep.image}>
+                      {dep.image || "—"}
+                    </AdminTd>
+                    <AdminTd>
+                      <Pill tone="neutral">{strategyLabel(dep.strategy) || "—"}</Pill>
+                    </AdminTd>
+                    <AdminTd>
+                      <Pill tone={deploymentStatusTone(dep.status)}>
+                        {humanToken(dep.status) || "unknown"}
+                      </Pill>
+                    </AdminTd>
+                    <AdminTd className="text-meta">
+                      {/* `activeTarget` is omitted when the service never recorded one. */}
+                      {dep.activeTarget ? strategyLabel(dep.activeTarget) : "Not reported"}
+                    </AdminTd>
+                    <AdminTd className="font-mono text-meta">
+                      {typeof dep.progressPct === "number" && Number.isFinite(dep.progressPct)
+                        ? `${dep.progressPct}%`
+                        : "—"}
+                    </AdminTd>
+                    <AdminTd className="text-meta">{timeOrDash(dep.createdAt)}</AdminTd>
+                    <AdminTd className="text-meta">{timeOrDash(dep.completedAt)}</AdminTd>
+                  </AdminTr>
+                ))}
+              </AdminTBody>
+            </AdminTable>
+          )}
+        </Card>
+      </AdminSection>
+    </AdminPageLayout>
   );
 }
