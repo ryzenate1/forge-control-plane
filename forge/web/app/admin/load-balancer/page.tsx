@@ -3,8 +3,9 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GanttChart, HeartPulse, Network, Plus, Target, Trash2, Zap, type LucideIcon } from "lucide-react";
-import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON, unwrapList } from "@/lib/api";
+import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type Algorithm = "round_robin" | "least_connections" | "ip_hash" | "weighted_round_robin";
 type TargetStatus = "healthy" | "unhealthy" | "draining";
@@ -60,6 +61,7 @@ function formatAlgorithm(algorithm: Algorithm): string {
 
 export default function AdminLoadBalancerPage() {
   const queryClient = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
   const [search, setSearch] = useState("");
   const [showCreateGroup, setShowCreateGroup] = useState(false);
   const [editingGroup, setEditingGroup] = useState<TargetGroup | null>(null);
@@ -71,7 +73,7 @@ export default function AdminLoadBalancerPage() {
 
   const groupsQuery = useQuery({
     queryKey: ["admin", "load-balancer", "groups"],
-    queryFn: () => fetchJSON<TargetGroup[]>("/admin/load-balancer/groups"),
+    queryFn: async () => unwrapList(await fetchJSON<TargetGroup[]>("/admin/load-balancer/groups")),
   });
 
   const groups = useMemo(() => groupsQuery.data ?? [], [groupsQuery.data]);
@@ -136,6 +138,16 @@ export default function AdminLoadBalancerPage() {
     onSuccess: refreshGroups,
   });
 
+  const groupDetailQuery = useQuery({
+    queryKey: ["admin", "load-balancer", "group", selectedGroupId],
+    queryFn: () => fetchJSON<ApiResponse<TargetGroup>>(`/admin/load-balancer/groups/${encodeURIComponent(selectedGroupId!)}`).then(r => r.data),
+    enabled: !!selectedGroupId,
+  });
+  const metricsQuery = useQuery({
+    queryKey: ["admin", "load-balancer", "metrics"],
+    queryFn: () => fetchJSON<ApiResponse<{ groups: number; totalTargets: number; healthyTargets: number }>>("/admin/load-balancer/metrics").then(r => r.data),
+  });
+
   const testSelectionMutation = useMutation({
     mutationFn: (groupId: string) =>
       fetchJSON<ApiResponse<Target>>(`/admin/load-balancer/groups/${encodeURIComponent(groupId)}/next`),
@@ -147,7 +159,7 @@ export default function AdminLoadBalancerPage() {
     .find((mutation) => mutation.isError)?.error;
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title="Load Balancer"
         sub="Manage target groups and traffic routing for game servers."
@@ -162,10 +174,11 @@ export default function AdminLoadBalancerPage() {
       )}
 
       <div className="grid gap-4 md:grid-cols-3">
-        <MetricCard icon={GanttChart} label="Target Groups" value={groups.length} />
-        <MetricCard icon={Target} label="Targets" value={allTargets.length} />
-        <MetricCard icon={HeartPulse} label="Healthy" value={`${allTargets.filter((target) => target.status === "healthy").length} / ${allTargets.length}`} tone="text-emerald-400" />
+        <MetricCard icon={GanttChart} label="Target Groups" value={metricsQuery.data?.groups ?? groups.length} />
+        <MetricCard icon={Target} label="Targets" value={metricsQuery.data?.totalTargets ?? allTargets.length} />
+        <MetricCard icon={HeartPulse} label="Healthy" value={`${metricsQuery.data?.healthyTargets ?? allTargets.filter((target) => target.status === "healthy").length} / ${metricsQuery.data?.totalTargets ?? allTargets.length}`} tone="text-emerald-400" />
       </div>
+      <p className="text-xs text-slate-500">GET /admin/load-balancer/metrics — {metricsQuery.isLoading ? "loading..." : metricsQuery.isError ? "failed to load metrics (backend may be down)" : `groups: ${metricsQuery.data?.groups ?? 0}, total: ${metricsQuery.data?.totalTargets ?? 0}, healthy: ${metricsQuery.data?.healthyTargets ?? 0}`}</p>
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card>
@@ -182,7 +195,7 @@ export default function AdminLoadBalancerPage() {
                   <div className="flex items-center gap-2">
                     <Pill tone={group.algorithm === "round_robin" ? "blue" : group.algorithm === "least_connections" ? "green" : group.algorithm === "ip_hash" ? "yellow" : "neutral"}>{formatAlgorithm(group.algorithm)}</Pill>
                     <div onClick={(event) => event.stopPropagation()}><Btn size="sm" tone="ghost" onClick={() => { setEditingGroup(group); setGroupForm({ name: group.name, algorithm: group.algorithm, port: group.port, protocol: group.protocol }); }}>Edit</Btn></div>
-                    <div onClick={(event) => event.stopPropagation()}><Btn size="sm" tone="danger" disabled={deleteGroupMutation.isPending} onClick={() => { if (confirm(`Delete target group ${group.name}?`)) deleteGroupMutation.mutate(group.id); }}><Trash2 size={12} /></Btn></div>
+                    <div onClick={(event) => event.stopPropagation()}><Btn size="sm" tone="danger" disabled={deleteGroupMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Delete target group ${group.name}?`, description: "Traffic will stop being routed through this group. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteGroupMutation.mutate(group.id); })(); }}><Trash2 size={12} /></Btn></div>
                   </div>
                 </div>
               ))}
@@ -197,14 +210,30 @@ export default function AdminLoadBalancerPage() {
               {selectedGroup.targets.map((target) => <TargetRow key={target.id} target={target} onStatus={(status) => targetStatusMutation.mutate({ groupId: selectedGroup.id, targetId: target.id, status })} onRemove={() => removeTargetMutation.mutate({ groupId: selectedGroup.id, targetId: target.id })} removing={removeTargetMutation.isPending || targetStatusMutation.isPending} />)}
             </div>
           )}
-          {testResult && <div className="border-t border-white/[0.06] px-4 py-3"><p className="text-xs text-slate-400">Next target selected: <span className="font-mono text-emerald-400">{testResult.ip}:{testResult.port}</span><button className="ml-2 text-slate-500 hover:text-slate-200" onClick={() => setTestResult(null)}>✕</button></p></div>}
+          {testResult && <div className="border-t border-white/[0.06] px-4 py-3"><p className="text-xs text-slate-400">GET /admin/load-balancer/groups/:id/next → Next target: <span className="font-mono text-emerald-400">{testResult.ip}:{testResult.port}</span><button className="ml-2 text-slate-500 hover:text-slate-200" onClick={() => setTestResult(null)}>✕</button></p></div>}
+          {selectedGroup && (
+            <div className="border-t border-white/[0.06] p-4 space-y-2">
+              <p className="text-xs font-semibold uppercase tracking-widest text-slate-400">Group Detail — GET /admin/load-balancer/groups/:id</p>
+              {groupDetailQuery.isLoading ? <p className="text-xs text-slate-400">Loading detail...</p> : groupDetailQuery.isError ? <p className="text-xs text-red-400">{errorMessage(groupDetailQuery.error)}</p> : groupDetailQuery.data ? (
+                <div className="rounded-lg border border-white/10 bg-white/[0.03] p-3 text-xs font-mono text-slate-300 space-y-1">
+                  <div>id: {groupDetailQuery.data.id}</div>
+                  <div>name: {groupDetailQuery.data.name}</div>
+                  <div>algorithm: {groupDetailQuery.data.algorithm}</div>
+                  <div>protocol: {groupDetailQuery.data.protocol} :{groupDetailQuery.data.port}</div>
+                  <div>targets: {groupDetailQuery.data.targets?.length ?? 0}</div>
+                  <div>createdAt: {groupDetailQuery.data.createdAt}</div>
+                </div>
+              ) : null}
+            </div>
+          )}
         </Card>
       </div>
 
       {showCreateGroup && <TargetGroupFormModal title="Create Target Group" form={groupForm} onChange={setGroupForm} onSave={() => createGroupMutation.mutate(groupForm)} onClose={() => setShowCreateGroup(false)} saving={createGroupMutation.isPending} />}
       {editingGroup && <TargetGroupFormModal title="Edit Target Group" form={groupForm} onChange={setGroupForm} onSave={() => updateGroupMutation.mutate({ id: editingGroup.id, data: groupForm })} onClose={() => setEditingGroup(null)} saving={updateGroupMutation.isPending} />}
       {showAddTarget && selectedGroup && <TargetFormModal form={targetForm} onChange={setTargetForm} onSave={() => addTargetMutation.mutate({ groupId: selectedGroup.id, data: targetForm })} onClose={() => setShowAddTarget(false)} saving={addTargetMutation.isPending} />}
-    </div>
+      {renderConfirm()}
+    </AdminPageLayout>
   );
 }
 
@@ -216,13 +245,18 @@ function Loading({ message }: { message: string }) { return <div className="p-8 
 
 function TargetRow({ target, onStatus, onRemove, removing }: { target: Target; onStatus: (status: TargetStatus) => void; onRemove: () => void; removing: boolean }) {
   const color = target.status === "healthy" ? "bg-emerald-400" : target.status === "draining" ? "bg-amber-400" : "bg-red-400";
-  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><div className="flex items-center gap-2"><select aria-label="Target status" className="h-8 rounded-md border border-white/10 bg-[#161b28] px-2 text-xs text-slate-200" disabled={removing} value={target.status} onChange={(event) => onStatus(event.target.value as TargetStatus)}><option value="healthy">Healthy</option><option value="draining">Draining</option><option value="unhealthy">Unhealthy</option></select><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div></div>;
+  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><div className="flex items-center gap-2"><select aria-label="Target status" className="h-8 rounded-md border border-white/10 bg-[var(--surface-input)] px-2 text-xs text-slate-200 focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]" disabled={removing} value={target.status} onChange={(event) => onStatus(event.target.value as TargetStatus)}><option value="healthy">Healthy</option><option value="draining">Draining</option><option value="unhealthy">Unhealthy</option></select><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div></div>;
 }
 
 function TargetGroupFormModal({ title, form, onChange, onSave, onClose, saving }: { title: string; form: GroupForm; onChange: (form: GroupForm) => void; onSave: () => void; onClose: () => void; saving: boolean }) {
-  return <Modal title={title} onClose={onClose}><div className="grid gap-4"><Input label="Name" value={form.name} onChange={(name) => onChange({ ...form, name })} placeholder="prod-game-servers" /><div><label className="block text-sm font-medium text-slate-300 mb-1.5">Algorithm</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30" value={form.algorithm} onChange={(event) => onChange({ ...form, algorithm: event.target.value as Algorithm })}><option value="round_robin">Round Robin</option><option value="least_connections">Least Connections</option><option value="ip_hash">IP Hash</option><option value="weighted_round_robin">Weighted Round Robin</option></select></div><Input label="Listening Port" type="number" value={String(form.port)} onChange={(port) => onChange({ ...form, port: Number(port) })} /><Input label="Protocol" value={form.protocol} onChange={(protocol) => onChange({ ...form, protocol })} placeholder="tcp" /></div><ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Saving..." : "Save"} disabled={saving || !form.name.trim() || !form.protocol.trim() || form.port < 1 || form.port > 65535} /></Modal>;
+  return <Modal title={title} onClose={onClose}><div className="space-y-4"><Input label="Name" value={form.name} onChange={(name) => onChange({ ...form, name })} placeholder="prod-game-servers" /><AdminSelect label="Algorithm" value={form.algorithm} onChange={(v) => onChange({ ...form, algorithm: v as Algorithm })} options={[
+    { value: "round_robin", label: "Round Robin" },
+    { value: "least_connections", label: "Least Connections" },
+    { value: "ip_hash", label: "IP Hash" },
+    { value: "weighted_round_robin", label: "Weighted Round Robin" },
+  ]} /><Input label="Listening Port" type="number" value={String(form.port)} onChange={(port) => onChange({ ...form, port: Number(port) })} /><Input label="Protocol" value={form.protocol} onChange={(protocol) => onChange({ ...form, protocol })} placeholder="tcp" /></div><ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Saving..." : "Save"} disabled={saving || !form.name.trim() || !form.protocol.trim() || form.port < 1 || form.port > 65535} /></Modal>;
 }
 
 function TargetFormModal({ form, onChange, onSave, onClose, saving }: { form: TargetForm; onChange: (form: TargetForm) => void; onSave: () => void; onClose: () => void; saving: boolean }) {
-  return <Modal title="Add Target" onClose={onClose}><div className="grid gap-4"><Input label="Server ID" value={form.serverId} onChange={(serverId) => onChange({ ...form, serverId })} placeholder="server UUID" /><Input label="Node ID" value={form.nodeId} onChange={(nodeId) => onChange({ ...form, nodeId })} placeholder="node UUID (optional)" /><Input label="IP Address" value={form.ip} onChange={(ip) => onChange({ ...form, ip })} placeholder="192.168.1.10" /><Input label="Port" type="number" value={String(form.port)} onChange={(port) => onChange({ ...form, port: Number(port) })} /><Input label="Weight" type="number" value={String(form.weight)} onChange={(weight) => onChange({ ...form, weight: Number(weight) })} /></div><ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Adding..." : "Add"} disabled={saving || !form.serverId.trim() || !form.ip.trim() || form.port < 1 || form.port > 65535 || form.weight < 1} /></Modal>;
+  return <Modal title="Add Target" onClose={onClose}><div className="space-y-4"><Input label="Server ID" value={form.serverId} onChange={(serverId) => onChange({ ...form, serverId })} placeholder="server UUID" /><Input label="Node ID" value={form.nodeId} onChange={(nodeId) => onChange({ ...form, nodeId })} placeholder="node UUID (optional)" /><Input label="IP Address" value={form.ip} onChange={(ip) => onChange({ ...form, ip })} placeholder="192.168.1.10" /><Input label="Port" type="number" value={String(form.port)} onChange={(port) => onChange({ ...form, port: Number(port) })} /><Input label="Weight" type="number" value={String(form.weight)} onChange={(weight) => onChange({ ...form, weight: Number(weight) })} /></div><ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Adding..." : "Add"} disabled={saving || !form.serverId.trim() || !form.ip.trim() || form.port < 1 || form.port > 65535 || form.weight < 1} /></Modal>;
 }

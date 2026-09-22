@@ -2,9 +2,12 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/components/ui/toast';
 import { Activity, AlertTriangle, BarChart3, Plus, Play, Trash2, Zap } from 'lucide-react';
-import { fetchJSON, postJSON, putJSON, deleteJSON } from '@/lib/api';
+import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapList, unwrapData } from '@/lib/api';
 import {
+  AdminPageHeader,
+  AdminPageLayout,
   Btn,
   Card,
   CardHeader,
@@ -13,8 +16,8 @@ import {
   Modal,
   ModalFooter,
   Pill,
-  SectionHeader,
 } from '@/components/admin/admin-ui';
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type ScalingPolicy = {
   id: string;
@@ -51,7 +54,9 @@ const defaultForm = {
 };
 
 export default function AdminAutoscalerPage() {
+  const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<ScalingPolicy | null>(null);
@@ -59,13 +64,11 @@ export default function AdminAutoscalerPage() {
 
   const policiesQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'policies'],
-    queryFn: () =>
-      fetchJSON<ScalingPolicy[]>('/admin/autoscaler/policies'),
+    queryFn: async () => unwrapList(await fetchJSON<ScalingPolicy[]>('/admin/autoscaler/policies')),
   });
   const metricsQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'metrics'],
-    queryFn: () =>
-      fetchJSON<AutoscalerMetrics>('/admin/autoscaler/metrics'),
+    queryFn: async () => unwrapData(await fetchJSON<AutoscalerMetrics>('/admin/autoscaler/metrics')),
   });
 
   const policies = useMemo(() => policiesQuery.data ?? [], [policiesQuery.data]);
@@ -78,27 +81,31 @@ export default function AdminAutoscalerPage() {
       setShowCreate(false);
       setForm(defaultForm);
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to create policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const updateMutation = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<ScalingPolicy> }) =>
-      putJSON(`/admin/autoscaler/policies/${id}`, data),
+      putJSON(`/admin/autoscaler/policies/${encodeURIComponent(id)}`, data),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policies'] });
       setEditingPolicy(null);
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to update policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteJSON(`/admin/autoscaler/policies/${id}`),
+    mutationFn: (id: string) => deleteJSON(`/admin/autoscaler/policies/${encodeURIComponent(id)}`),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policies'] }),
+    onError: (err) => toast({ tone: 'error', title: 'Failed to delete policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const evaluateMutation = useMutation({
-    mutationFn: (serverId: string) => postJSON(`/admin/autoscaler/evaluate/${serverId}`),
+    mutationFn: (serverId: string) => postJSON(`/admin/autoscaler/evaluate/${encodeURIComponent(serverId)}`),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'metrics'] }),
+    onError: (err) => toast({ tone: 'error', title: 'Failed to evaluate autoscaler', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const filtered = policies.filter(
@@ -106,10 +113,10 @@ export default function AdminAutoscalerPage() {
   );
 
   return (
-    <div className="space-y-6">
-      <SectionHeader
-        title="Auto-Scaler"
-        sub="Scaling policies that automatically adjust resources based on load thresholds."
+    <AdminPageLayout>
+      <AdminPageHeader
+        title="Workload Autoscaling"
+        description="Policies that automatically adjust workload resources against load thresholds."
         action={
           <Btn tone="primary" onClick={() => setShowCreate(true)}>
             <Plus size={14} /> Create Policy
@@ -208,7 +215,7 @@ export default function AdminAutoscalerPage() {
                           size="sm"
                           tone="danger"
                           onClick={() => {
-                            if (confirm('Delete this policy?')) deleteMutation.mutate(policy.id);
+                            void (async () => { if (await confirm({ title: "Delete this autoscale policy?", description: "Automatic scaling for this server will stop. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(policy.id); })();
                           }}
                         >
                           <Trash2 size={12} />
@@ -247,7 +254,8 @@ export default function AdminAutoscalerPage() {
           saving={updateMutation.isPending}
         />
       )}
-    </div>
+      {renderConfirm()}
+    </AdminPageLayout>
   );
 }
 
@@ -283,7 +291,7 @@ function PolicyFormModal({
             type="checkbox"
             checked={form.enabled}
             onChange={(e) => onChange({ ...form, enabled: e.target.checked })}
-            className="rounded border-white/10 bg-[#161b28]"
+            className="rounded border-white/10 bg-[var(--surface-input)]"
           />
           Enabled
         </label>

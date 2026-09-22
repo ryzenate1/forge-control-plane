@@ -23,7 +23,7 @@ export default function AdminError({ error, reset }: { error: Error & { digest?:
         ) : null}
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
           <button
-            className="inline-flex items-center gap-2 rounded-lg bg-[#dc2626] px-4 py-2 text-sm font-bold text-white hover:bg-[#b91c1c] disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] disabled:opacity-60"
             onClick={reset}
             type="button"
           >
