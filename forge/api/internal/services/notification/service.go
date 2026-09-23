@@ -32,6 +32,10 @@ type Store interface {
 	ListNotificationLogs(ctx context.Context, channelID string, limit, offset int) ([]store.NotificationLog, error)
 
 	UpdateNotificationSubscriptionDelivery(ctx context.Context, channelID, eventType, status string) error
+
+	// EnqueueMail routes through the durable mail outbox/worker (real SMTP send
+	// with retry), instead of pretending an email was delivered.
+	EnqueueMail(ctx context.Context, recipient, subject, textBody, htmlBody string) (string, error)
 }
 
 var EventTypeMapping = map[string]string{
@@ -331,7 +335,23 @@ func (svc *Service) sendEmail(ctx context.Context, config map[string]any, eventN
 	if len(recipients) == 0 {
 		return fmt.Errorf("email recipients not configured")
 	}
-	_ = recipients
+	text := fmt.Sprintf("%s\n%s\n\nResource: %s (%s)", eventName, formatEventMessage(eventName, ev), ev.ResourceID, ev.ResourceType)
+	html := "<pre>" + text + "</pre>"
+	subject := fmt.Sprintf("[Forge] %s", eventName)
+	sent := 0
+	for _, raw := range recipients {
+		to, ok := raw.(string)
+		if !ok || to == "" {
+			continue
+		}
+		if _, err := svc.store.EnqueueMail(ctx, to, subject, text, html); err != nil {
+			return err
+		}
+		sent++
+	}
+	if sent == 0 {
+		return fmt.Errorf("no valid email recipients configured")
+	}
 	return nil
 }
 

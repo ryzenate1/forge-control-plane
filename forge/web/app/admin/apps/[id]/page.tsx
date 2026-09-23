@@ -104,7 +104,7 @@ function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) 
             className={cn(
               "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition -mb-px",
               tab === tId
-                ? "border-[#dc2626] text-[#dc2626]"
+                ? "border-[var(--brand)] text-[var(--brand)]"
                 : "border-transparent text-slate-500 hover:text-slate-300",
             )}
             onClick={() => setTab(tId)}
@@ -639,7 +639,7 @@ function DomainsTab({ appId }: { appId: string }) {
               type="checkbox"
               checked={enableTls}
               onChange={(e) => setEnableTls(e.target.checked)}
-              className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[#dc2626]"
+              className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[var(--brand)]"
             />
             Enable TLS
           </label>

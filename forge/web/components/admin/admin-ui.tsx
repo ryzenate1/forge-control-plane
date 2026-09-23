@@ -9,33 +9,137 @@ import { useRef } from "react";
 import { Button, Dialog, EmptyState as SharedEmptyState, Input as SharedInput, Select as SharedSelect, Textarea as SharedTextarea } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 
+export * from "@/components/ui/forge-primitives";
 export { cn };
 
 export function Pill({ children, tone = "neutral", className }: { children: React.ReactNode; tone?: "neutral" | "green" | "red" | "yellow" | "blue"; className?: string }) {
- const tones: Record<string, string> = {
-  neutral: "border border-white/10 bg-white/[0.03] text-slate-300",
-  green: "border border-emerald-500/30 bg-emerald-900/30 text-emerald-300",
-  red: "border border-red-500/30 bg-red-900/30 text-red-300",
-  yellow: "border border-amber-500/30 bg-amber-900/30 text-amber-300",
-  blue: "border border-blue-500/30 bg-blue-900/30 text-blue-300",
-};
- return (
- <span className={cn("inline-flex items-center rounded-full px-2.5 py-1 text-[11px] font-semibold tracking-wide", tones[tone], className)}>
- {children}
- </span>
- );
+  const tones: Record<string, string> = {
+    neutral: "border-white/10 bg-white/[0.03] text-slate-300",
+    green: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+    red: "border-red-500/25 bg-red-500/10 text-red-300",
+    yellow: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+    blue: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+  };
+  return (
+    <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium tracking-tight", tones[tone], className)}>
+      {children}
+    </span>
+  );
+}
+
+export function MiniSparkline({
+  data,
+  color = "#0ea5e9",
+  className,
+}: {
+  data: number[];
+  color?: string;
+  className?: string;
+}) {
+  if (!data || data.length < 2) return null;
+  const min = Math.min(...data);
+  const max = Math.max(...data);
+  const range = max - min || 1;
+  const width = 120;
+  const height = 34;
+  const points = data.map((val, idx) => {
+    const x = (idx / (data.length - 1)) * width;
+    const y = height - ((val - min) / range) * (height - 8) - 4;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const pathD = `M ${points.join(" L ")}`;
+  const areaD = `${pathD} L ${width},${height} L 0,${height} Z`;
+  const gradientId = `sparkline-grad-${color.replace(/[^a-zA-Z0-9]/g, "")}`;
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      className={cn("overflow-visible", className)}
+      aria-hidden="true"
+    >
+      <defs>
+        <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.35} />
+          <stop offset="100%" stopColor={color} stopOpacity={0.0} />
+        </linearGradient>
+      </defs>
+      <path d={areaD} fill={`url(#${gradientId})`} />
+      <path d={pathD} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+export function SubsystemHealthMeter({
+  label,
+  valueText,
+  icon: Icon,
+  percentage = 100,
+  tone = "green",
+  onClick,
+}: {
+  label: string;
+  valueText: string;
+  icon?: React.ElementType;
+  percentage?: number;
+  tone?: "green" | "yellow" | "red" | "neutral";
+  onClick?: () => void;
+}) {
+  const barColors = {
+    green: "bg-emerald-400",
+    yellow: "bg-amber-400",
+    red: "bg-red-400",
+    neutral: "bg-slate-600",
+  };
+  const textColors = {
+    green: "text-emerald-300",
+    yellow: "text-amber-300",
+    red: "text-red-300",
+    neutral: "text-slate-400",
+  };
+  const clampedPct = Math.max(0, Math.min(100, percentage));
+
+  return (
+    <div
+      onClick={onClick}
+      onKeyDown={onClick ? (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
+      } : undefined}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      className={cn(
+        "flex items-center gap-3 text-xs",
+        onClick && "cursor-pointer hover:bg-white/[0.03] rounded-md px-1.5 -mx-1.5 py-1 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+      )}
+    >
+      <div className="flex items-center gap-2 w-32 shrink-0 text-slate-300">
+        {Icon ? <Icon size={14} className="text-slate-400 shrink-0" /> : null}
+        <span className="truncate font-medium">{label}</span>
+      </div>
+      <span className={cn("w-28 shrink-0 font-mono font-medium text-[11px]", textColors[tone])}>
+        {valueText}
+      </span>
+      <div className="flex-1 h-2 rounded-full overflow-hidden bg-white/[0.06]">
+        <div
+          className={cn("h-full rounded-full transition-all duration-300", barColors[tone])}
+          style={{ width: `${clampedPct}%` }}
+        />
+      </div>
+    </div>
+  );
 }
 
 export function SectionHeader({ title, sub, action }: { title: React.ReactNode; sub?: string; action?: React.ReactNode }) {
   return (
-  <div className="relative mb-7 flex flex-col gap-4 border-b border-white/[0.08] pb-5 sm:flex-row sm:items-start sm:justify-between">
-  <div>
-  <div className="mb-2 h-1 w-10 rounded-full bg-brand" aria-hidden="true" />
-  <h1 className="text-[clamp(1.4rem,2vw,1.85rem)] font-semibold tracking-[-0.025em] text-slate-100">{title}</h1>
-  {sub ? <p className="mt-1.5 max-w-2xl text-sm leading-6 text-slate-400">{sub}</p> : null}
-  </div>
-  {action ? <div className="flex shrink-0 flex-wrap gap-2">{action}</div> : null}
-  </div>
+    <div className="relative mb-6 flex flex-col gap-4 border-b border-[var(--line)] pb-5 sm:flex-row sm:items-center sm:justify-between">
+      <div className="min-w-0">
+        <h1 className="text-[clamp(1.35rem,2vw,1.75rem)] font-bold tracking-tight text-slate-100">{title}</h1>
+        {sub ? <p className="mt-1 max-w-3xl text-xs sm:text-sm text-slate-400 leading-relaxed">{sub}</p> : null}
+      </div>
+      {action ? <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div> : null}
+    </div>
   );
 }
 
@@ -67,7 +171,7 @@ export function Card({ children, className }: { children: React.ReactNode; class
 
 export const AdminCard = Card;
 
-export function CardHeader({ title, icon: Icon, action }: { title: string; icon?: LucideIcon; action?: React.ReactNode }) {
+export function CardHeader({ title, icon: Icon, action }: { title: string; icon?: React.ElementType; action?: React.ReactNode }) {
  return (
  <div className="flex min-h-12 items-center gap-2 border-b border-white/[0.07] bg-white/[0.018] -mx-4 sm:-mx-5 -mt-4 sm:-mt-5 mb-4 sm:mb-5 px-4 text-xs font-semibold tracking-wide text-slate-300 sm:px-5 rounded-t-2xl">
  {Icon ? <Icon size={14} /> : null}
@@ -192,7 +296,19 @@ export function AdminTHead({ children }: { children?: React.ReactNode }) { retur
 export function AdminTh({ children, className }: { children?: React.ReactNode; className?: string }) { return <th className={cn("px-4 py-3 font-medium", className)}>{children}</th>; }
 export function AdminTBody({ children }: { children?: React.ReactNode }) { return <tbody className="divide-y divide-white/[0.04]">{children}</tbody>; }
 export function AdminTr({ children, onClick, className }: { children?: React.ReactNode; onClick?: () => void; className?: string }) {
-  return <tr className={cn(className, onClick && "cursor-pointer hover:bg-white/[0.02]")} onClick={onClick}>{children}</tr>;
+  if (!onClick) return <tr className={cn(className)}>{children}</tr>;
+  return (
+    <tr
+      className={cn(className, "cursor-pointer hover:bg-white/[0.02] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)]")}
+      onClick={onClick}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") onClick();
+      }}
+      tabIndex={0}
+    >
+      {children}
+    </tr>
+  );
 }
 export function AdminTd({ children, className }: { children?: React.ReactNode; className?: string }) { return <td className={cn("px-4 py-3 text-slate-200", className)}>{children}</td>; }
 
@@ -298,7 +414,7 @@ export function ModalFooter({ onCancel, onConfirm, confirmLabel = "Save", disabl
  );
 }
 
-export function EmptyState({ icon: Icon, message, title, sub }: { icon?: LucideIcon; message?: string; title?: string; sub?: string }) {
+export function EmptyState({ icon: Icon, message, title, sub }: { icon?: React.ElementType; message?: string; title?: string; sub?: string }) {
  return <SharedEmptyState description={message ?? sub ?? ""} icon={Icon ? <Icon size={20} strokeWidth={1.5} /> : undefined} title={title ?? "Nothing to show"} />;
 }
 
@@ -316,27 +432,34 @@ export function PermissionDeniedState({ message }: { message?: string }) {
 
 export function StatsRow({ items }: { items: Array<{ label: string; value: string | number; icon?: LucideIcon; tone?: "green" | "red" | "yellow" | "blue" | "neutral" }> }) {
   const tones: Record<string, string> = {
-  green: "text-emerald-400",
-  red: "text-red-400",
-  yellow: "text-amber-400",
-  blue: "text-blue-400",
-  neutral: "text-slate-300",
+    green: "text-emerald-400",
+    red: "text-red-400",
+    yellow: "text-amber-400",
+    blue: "text-blue-400",
+    neutral: "text-slate-100",
   };
   if (!items || items.length === 0) return null;
   return (
-  <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-4">
-  {items.map((item) => (
-  <Card key={item.label}>
-  <div className="flex items-center gap-2 text-xs text-slate-500 uppercase tracking-wider mb-1">
-  {item.icon ? <item.icon size={12} /> : null}
-  {item.label}
-  </div>
-  <div className={cn("text-2xl font-bold", tones[item.tone ?? "neutral"])}>
-  {item.value}
-  </div>
-  </Card>
-  ))}
-  </div>
+    <div className="mb-6 grid grid-cols-2 gap-3.5 lg:grid-cols-4">
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className="group relative overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition-all duration-200 hover:border-white/[0.16] hover:bg-white/[0.02]"
+        >
+          <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            <span className="truncate">{item.label}</span>
+            {item.icon ? (
+              <div className="grid h-6 w-6 place-items-center rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400 transition-colors group-hover:text-slate-200">
+                <item.icon size={13} />
+              </div>
+            ) : null}
+          </div>
+          <div className={cn("mt-2 font-mono text-2xl font-bold tracking-tight", tones[item.tone ?? "neutral"])}>
+            {item.value}
+          </div>
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -351,12 +474,16 @@ export function AdminStatCard({ label, value, icon: Icon, tone = "neutral", clas
     neutral: "text-slate-100",
   };
   return (
-    <div className={cn("rounded-xl border border-white/[0.09] bg-[var(--surface)] p-4", className)}>
-      <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-0.5">
-        {Icon ? <Icon size={12} /> : null}
-        {label}
+    <div className={cn("group relative overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition-all duration-200 hover:border-white/[0.16]", className)}>
+      <div className="flex items-center justify-between gap-2 text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1">
+        <span className="truncate">{label}</span>
+        {Icon ? (
+          <div className="grid h-6 w-6 place-items-center rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400 transition-colors group-hover:text-slate-200">
+            <Icon size={13} />
+          </div>
+        ) : null}
       </div>
-      <div className={cn("text-2xl font-bold tracking-tight", valueTones[tone])}>
+      <div className={cn("font-mono text-2xl font-bold tracking-tight", valueTones[tone])}>
         {value}
       </div>
     </div>

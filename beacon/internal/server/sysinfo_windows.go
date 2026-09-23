@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -17,7 +18,22 @@ import (
 var (
 	modkernel32              = syscall.NewLazyDLL("kernel32.dll")
 	procGlobalMemoryStatusEx = modkernel32.NewProc("GlobalMemoryStatusEx")
+	procGetTickCount64       = modkernel32.NewProc("GetTickCount64")
 )
+
+// hostUptimeSeconds returns wall-clock uptime since the machine booted via
+// GetTickCount64 (milliseconds since boot). -1 when it cannot be determined:
+// an unknown uptime is never reported as zero.
+func hostUptimeSeconds() int64 {
+	if procGetTickCount64.Find() != nil {
+		return -1
+	}
+	ticks, _, callErr := procGetTickCount64.Call()
+	if callErr != syscall.Errno(0) {
+		return -1
+	}
+	return int64(ticks) / 1000
+}
 
 type memoryStatusEx struct {
 	cbSize                  uint32

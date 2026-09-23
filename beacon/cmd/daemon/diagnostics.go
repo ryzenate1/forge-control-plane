@@ -104,16 +104,23 @@ func diagnosticsCmdRun(_ *cobra.Command, _ []string) error {
 	}
 
 	// 6. Memory
-	totalRAM := readMemoryMB()
+	totalRAM, ramErr := readMemoryMB()
 	status := "PASS"
-	if totalRAM <= 0 {
+	detail := fmt.Sprintf("%d MB", totalRAM)
+	switch {
+	case ramErr != nil:
+		// An unreadable capacity is unknown, not zero — it must never be graded
+		// as a healthy or failing reading.
 		status = "WARN"
-	} else if totalRAM < 512 {
+		detail = fmt.Sprintf("cannot read system memory: %v", ramErr)
+	case totalRAM <= 0:
+		status = "WARN"
+	case totalRAM < 512:
 		status = "FAIL"
-	} else if totalRAM < 1024 {
+	case totalRAM < 1024:
 		status = "WARN"
 	}
-	results = append(results, checkResult{"System memory", status, fmt.Sprintf("%d MB", totalRAM)})
+	results = append(results, checkResult{"System memory", status, detail})
 
 	// 7. Network connectivity
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

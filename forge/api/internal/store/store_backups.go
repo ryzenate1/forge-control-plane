@@ -237,15 +237,43 @@ func (s *Store) RenameBackup(ctx context.Context, serverID, oldName, newName str
 	return tx.Commit(ctx)
 }
 
-// CleanupOldBackups removes backups that exceed the retention policy
-// This function respects backup locking and server-specific limits
+// CleanupOldBackups removes backups that exceed the global retention policy and
+// reaps orphaned partial uploads. It respects backup locking (only prunes rows
+// where is_locked = FALSE) and only touches completed backups. The sweep runs in
+// a transaction so the advisory lock is scoped to it and cannot leak across
+// sessions. BK-06 union semantics are applied per row.
 func (s *Store) CleanupOldBackups(ctx context.Context, retentionDays int, autoCleanup bool) (int, error) {
 	if !autoCleanup || retentionDays <= 0 {
 		return 0, nil
 	}
 
-	// Delete old backups that are not locked and exceed retention period
-	commandTag, err := s.db.Exec(ctx, `
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback(ctx)
+
+	// Serialize the prune across control-plane replicas with a transaction-scoped
+	// pg_advisory_xact_lock so concurrent mark-sweep passes cannot interleave.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('backup_prune:global', 0))`); err != nil {
+		return 0, err
+	}
+
+	// GC reaper first: drop orphaned .partial uploads older than 24h before the
+	// main retention sweep so interrupted uploads do not consume retention budget.
+	partialTag, err := tx.Exec(ctx, `
+		DELETE FROM backups
+		WHERE name LIKE '%.partial'
+		AND is_locked = FALSE
+		AND status = 'completed'
+		AND created_at < now() - interval '24 hours'
+	`)
+	if err != nil {
+		return 0, err
+	}
+	reaped := int(partialTag.RowsAffected())
+
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE is_locked = FALSE
 		AND created_at < now() - interval '1 day' * $1
@@ -254,34 +282,52 @@ func (s *Store) CleanupOldBackups(ctx context.Context, retentionDays int, autoCl
 	if err != nil {
 		return 0, err
 	}
+	deleted := int(commandTag.RowsAffected())
 
-	return int(commandTag.RowsAffected()), nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return reaped + deleted, nil
 }
 
-// CleanupOldBackupsForServer removes old backups for a specific server
-// This function respects backup locking and server-specific limits
+// CleanupOldBackupsForServer reaps this server's orphaned partial uploads and
+// applies the per-server RetentionEngine OR prune (older than retention OR beyond
+// the backup limit). Only completed, unlocked backups are eligible.
 func (s *Store) CleanupOldBackupsForServer(ctx context.Context, serverID string, retentionDays int, backupLimit int) (int, error) {
-	// First, get count of completed backups
-	count, err := s.CountCompletedBackups(ctx, serverID)
+	tx, err := s.db.Begin(ctx)
 	if err != nil {
 		return 0, err
 	}
+	defer tx.Rollback(ctx)
 
-	// If under limit, no cleanup needed
-	if backupLimit > 0 && count <= backupLimit {
-		return 0, nil
+	// Serialize this server's prune across replicas with a transaction-scoped
+	// pg_advisory_xact_lock so concurrent mark-sweep passes cannot interleave.
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('backup_prune:'||$1, 0))`, serverID); err != nil {
+		return 0, err
 	}
 
-	// Delete oldest unlocked backups that exceed retention or limit
-	// Prioritize deleting oldest non-locked backups
-	commandTag, err := s.db.Exec(ctx, `
+	// GC reaper first: drop this server's orphaned .partial uploads older than 24h.
+	partialTag, err := tx.Exec(ctx, `
+		DELETE FROM backups
+		WHERE server_id = $1
+		AND name LIKE '%.partial'
+		AND is_locked = FALSE
+		AND status = 'completed'
+		AND created_at < now() - interval '24 hours'
+	`, serverID)
+	if err != nil {
+		return 0, err
+	}
+	reaped := int(partialTag.RowsAffected())
+
+	commandTag, err := tx.Exec(ctx, `
 		DELETE FROM backups
 		WHERE server_id = $1
 		AND is_locked = FALSE
 		AND status = 'completed'
 		AND (
-			-- Delete if older than retention days
-			created_at < now() - interval '1 day' * $2
+			-- RetentionEngine OR semantics: delete when EITHER branch matches
+			($2 > 0 AND created_at < now() - interval '1 day' * $2)
 			OR
 			-- Or if we're over the limit, delete oldest (except locked ones)
 			uuid IN (
@@ -297,8 +343,12 @@ func (s *Store) CleanupOldBackupsForServer(ctx context.Context, serverID string,
 	if err != nil {
 		return 0, err
 	}
+	deleted := int(commandTag.RowsAffected())
 
-	return int(commandTag.RowsAffected()), nil
+	if err := tx.Commit(ctx); err != nil {
+		return 0, err
+	}
+	return reaped + deleted, nil
 }
 
 // UpdateBackupStatusWithCallback updates backup status with callback URL and message

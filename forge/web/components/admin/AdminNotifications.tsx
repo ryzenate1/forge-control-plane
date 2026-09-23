@@ -176,7 +176,7 @@ export function AdminNotifications() {
           ]} />
           <Input label="Channel Name" value={name} onChange={setName} placeholder="My Slack Channel" required />
           <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="rounded accent-[#dc2626]" />
+            <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="rounded accent-[var(--brand)]" />
             Enabled
           </label>
         </AdminFormSection>

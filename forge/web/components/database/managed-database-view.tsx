@@ -28,7 +28,6 @@ const engineVersions: Record<string, string[]> = {
   mariadb: ["10", "11"],
   redis: ["6", "7"],
   mongodb: ["6", "7"],
-  libsql: ["0.1", "0.2", "latest"],
 };
 
 export function ManagedDatabaseView() {
@@ -364,7 +363,6 @@ function ManagedDBCreateModal({ onClose, onCreated }: { onClose: () => void; onC
               <option value="mariadb">MariaDB</option>
               <option value="redis">Redis</option>
               <option value="mongodb">MongoDB</option>
-              <option value="libsql">LibSQL</option>
             </select>
           </div>
           <div>

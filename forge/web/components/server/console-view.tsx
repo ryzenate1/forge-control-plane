@@ -123,7 +123,7 @@ function SuspendedBanner() {
 function Chart({ label, value, detail, values, limit, icon: Icon }: { label: string; value: string; detail: string; values: number[]; limit?: number; icon: typeof Cpu }) {
   const max = getChartMax(values, limit);
   const points = values.map((point, index) => `${values.length < 2 ? 0 : (index / (values.length - 1)) * 100},${100 - (point / max) * 92}`).join(" ");
-  return <section className="rounded-xl border border-white/[0.07] bg-[var(--surface-raised)] p-4" aria-label={`${label} chart`}><div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400"><Icon size={15} />{label}</div><div className="text-right"><p className="font-mono text-sm font-bold text-slate-100">{value}</p><p className="text-[10px] text-slate-500">{detail}</p></div></div><svg aria-hidden="true" className="mt-4 h-24 w-full" preserveAspectRatio="none" viewBox="0 0 100 100"><line stroke="#334155" strokeWidth=".5" x1="0" x2="100" y1="50" y2="50" /><polygon fill="rgba(220,38,38,.16)" points={`0,100 ${points} 100,100`} /><polyline fill="none" points={points} stroke="#ef4444" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" /></svg></section>;
+    return <section className="rounded-xl border border-[var(--line)] bg-[var(--surface-raised)] p-4 shadow-sm" aria-label={`${label} chart`}><div className="flex items-start justify-between gap-3"><div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--text-subtle)]"><Icon size={14} className="text-[var(--brand)]" />{label}</div><div className="text-right"><p className="font-mono text-sm font-bold text-[var(--text)]">{value}</p><p className="font-mono text-[10px] text-[var(--text-muted)]">{detail}</p></div></div><svg aria-hidden="true" className="mt-4 h-20 w-full" preserveAspectRatio="none" viewBox="0 0 100 100"><line stroke="var(--line-strong)" strokeWidth=".5" x1="0" x2="100" y1="50" y2="50" /><polygon fill="color-mix(in srgb, var(--brand) 15%, transparent)" points={`0,100 ${points} 100,100`} /><polyline fill="none" points={points} stroke="var(--brand)" strokeLinecap="round" strokeLinejoin="round" strokeWidth="1.5" /></svg></section>;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -290,7 +290,31 @@ export function ConsoleView({ server }: { server: ApiServer }) {
     ) : null}
 
     {(power.error || install.error) ? <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200" role="alert">{[power.error, install.error].filter(Boolean).map((err) => err instanceof Error ? err.message : "The server action failed.").join("; ")}</div> : null}
-    <div className="grid gap-4 lg:grid-cols-[1fr_auto] lg:items-center"><div><h2 className="text-xl font-bold text-white">Console</h2><p className="mt-1 text-sm text-slate-400">Live daemon output and telemetry for {server.name}.</p></div><div className="grid grid-cols-4 gap-2">{controls.map((signal) => <button className={cn("rounded-lg px-3 py-2 text-xs font-bold uppercase text-white disabled:cursor-not-allowed disabled:opacity-40", signal === "start" ? "bg-emerald-600" : signal === "stop" || signal === "kill" ? "bg-red-700" : "bg-slate-600")} disabled={!canPower(signal) || blocked || power.isPending || (signal === "start" ? server.status === "running" : server.status !== "running")} key={signal} onClick={async () => { if (signal === "kill" && !(await confirm({ title: "Kill server?", description: "The server process will be terminated immediately. Unsaved data may be lost.", danger: true, confirmLabel: "Kill" }))) return; power.mutate(signal); }} type="button">{power.isPending && power.variables === signal ? "…" : signal}</button>)}</div></div>
+    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div>
+        <h2 className="text-xl font-bold text-[var(--text)] tracking-tight">Console</h2>
+        <p className="mt-1 text-sm text-[var(--text-subtle)]">Live daemon output and runtime telemetry for <span className="font-mono text-xs text-[var(--text)]">{server.name}</span>.</p>
+      </div>
+      <div className="flex items-center gap-2">
+        {controls.map((signal) => (
+          <button
+            className={cn(
+              "rounded-lg px-3 py-1.5 text-xs font-semibold uppercase tracking-wider text-white transition-all disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
+              signal === "start" ? "bg-emerald-600 hover:bg-emerald-500" : signal === "stop" || signal === "kill" ? "bg-[var(--danger)] hover:bg-[var(--danger-hover)]" : "bg-[var(--surface-raised)] border border-[var(--line)] text-[var(--text)] hover:bg-white/[0.06]"
+            )}
+            disabled={!canPower(signal) || blocked || power.isPending || (signal === "start" ? server.status === "running" : server.status !== "running")}
+            key={signal}
+            onClick={async () => {
+              if (signal === "kill" && !(await confirm({ title: "Kill server?", description: "The server process will be terminated immediately. Unsaved data may be lost.", danger: true, confirmLabel: "Kill" }))) return;
+              power.mutate(signal);
+            }}
+            type="button"
+          >
+            {power.isPending && power.variables === signal ? "…" : signal}
+          </button>
+        ))}
+      </div>
+    </div>
 
     {/* Stats row with uptime */}
     <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -298,68 +322,69 @@ export function ConsoleView({ server }: { server: ApiServer }) {
       <Chart detail={stats ? `${formatBytes(stats.memoryBytes)} of ${formatBytes(stats.memoryLimit)}` : "No telemetry received"} icon={MemoryStick} label="Memory" limit={100} value={memoryPercent === null ? "Waiting for telemetry" : `${memoryPercent.toFixed(1)}%`} values={memoryHistory} />
       <Chart detail={stats ? `Since previous sample · RX total ${formatBytes(stats.networkRxBytes)} · TX total ${formatBytes(stats.networkTxBytes)}` : "No telemetry received"} icon={Network} label="Network" value={networkDelta === null ? "Waiting for next sample" : formatBytes(networkDelta)} values={networkHistory} />
       {/* Uptime card */}
-      <section className="rounded-xl border border-white/[0.07] bg-[var(--surface-raised)] p-4" aria-label="Uptime">
+      <section className="rounded-xl border border-[var(--line)] bg-[var(--surface-raised)] p-4 shadow-sm" aria-label="Uptime">
         <div className="flex items-start justify-between gap-3">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-400"><Clock size={15} />Uptime</div>
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-[var(--text-subtle)]"><Clock size={14} className="text-[var(--brand)]" />Uptime</div>
           <div className="text-right">
-            <p className="font-mono text-sm font-bold text-slate-100">{formatUptime(stats?.uptimeMs)}</p>
-            <p className="text-[10px] text-slate-500">{server.status === "running" ? "Server is online" : "Server is offline"}</p>
+            <p className="font-mono text-sm font-bold text-[var(--text)]">{formatUptime(stats?.uptimeMs)}</p>
+            <p className="font-mono text-[10px] text-[var(--text-muted)]">{server.status === "running" ? "Server is online" : "Server is offline"}</p>
           </div>
         </div>
-        <div className="mt-4 flex h-24 items-center justify-center">
-          <div className={cn("h-16 w-16 rounded-full border-4 flex items-center justify-center", server.status === "running" ? "border-emerald-500/50" : "border-slate-600/50")}>
-            <div className={cn("h-8 w-8 rounded-full", server.status === "running" ? "bg-emerald-500/30 animate-pulse" : "bg-slate-700")} />
+        <div className="mt-4 flex h-20 items-center justify-center">
+          <div className={cn("h-14 w-14 rounded-full border-2 flex items-center justify-center transition-all", server.status === "running" ? "border-emerald-500/40 bg-emerald-500/10" : "border-[var(--line)] bg-[var(--surface-input)]")}>
+            <div className={cn("h-6 w-6 rounded-full", server.status === "running" ? "bg-emerald-500/40 animate-pulse" : "bg-[var(--line-strong)]")} />
           </div>
         </div>
       </section>
     </div>
 
-    <section className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--canvas)] shadow-xl" aria-label="Server console">
-      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/[0.07] bg-[var(--surface)] px-4 py-3">
-        <div className="flex items-center gap-2 text-sm font-semibold">
-          <PlugZap size={16} className={connection === "connected" ? "text-emerald-400" : "text-amber-300"} />
-          <span>{stateLabel}</span>
+    {/* Terminal Card */}
+    <section className="overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--canvas)] shadow-xl" aria-label="Server console">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-4 py-2.5">
+        <div className="flex items-center gap-2 text-xs font-medium">
+          <div className={cn("h-2 w-2 rounded-full", connection === "connected" ? "bg-emerald-400" : connection === "error" ? "bg-[var(--danger)]" : "bg-amber-400 animate-pulse")} />
+          <span className="font-semibold text-[var(--text)]">{stateLabel}</span>
           {connection === "connected" && connectedAt.current ? (
-            <span className="text-xs font-normal text-slate-400"> · {messageCount.current} msgs</span>
+            <span className="font-mono text-[11px] text-[var(--text-muted)]"> · {messageCount.current} msgs</span>
           ) : null}
-          {connectionError ? <span className="font-normal text-red-300">· {connectionError}</span> : null}
+          {connectionError ? <span className="font-mono text-[11px] text-[var(--danger)]">· {connectionError}</span> : null}
         </div>
-        <div className="flex gap-1">
-          <button aria-label="Toggle search" className={cn("rounded p-2 hover:bg-white/5 hover:text-white", searchOpen ? "text-red-400" : "text-slate-400")} onClick={() => setSearchOpen((v) => !v)} type="button"><Search size={16} /></button>
-          <button aria-label={autoScroll ? "Freeze scroll" : "Auto-scroll"} className={cn("rounded p-2 hover:bg-white/5 hover:text-white", autoScroll ? "text-emerald-400" : "text-slate-400")} onClick={() => setAutoScroll((v) => !v)} type="button"><ArrowDown size={16} /></button>
-          <button aria-label={showTimestamps ? "Hide timestamps" : "Show timestamps"} className={cn("rounded p-2 hover:bg-white/5 hover:text-white", showTimestamps ? "text-emerald-400" : "text-slate-400")} onClick={() => setShowTimestamps((v) => !v)} type="button"><Clock size={16} /></button>
-          <button aria-label="Reconnect console" className="rounded p-2 text-slate-400 hover:bg-white/5 hover:text-white" onClick={() => setNonce((value) => value + 1)} type="button"><RefreshCw size={16} /></button>
-          <button aria-label="Clear console" className="rounded p-2 text-slate-400 hover:bg-white/5 hover:text-white" onClick={() => setLines([])} type="button"><Trash2 size={16} /></button>
+        <div className="flex items-center gap-1">
+          <button aria-label="Toggle search" className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", searchOpen ? "text-[var(--brand)] bg-[var(--brand)]/10" : "text-[var(--text-subtle)] hover:text-[var(--text)]")} onClick={() => setSearchOpen((v) => !v)} type="button"><Search size={14} /></button>
+          <button aria-label={autoScroll ? "Freeze scroll" : "Auto-scroll"} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", autoScroll ? "text-emerald-400" : "text-[var(--text-muted)] hover:text-[var(--text)]")} onClick={() => setAutoScroll((v) => !v)} type="button"><ArrowDown size={14} /></button>
+          <button aria-label={showTimestamps ? "Hide timestamps" : "Show timestamps"} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", showTimestamps ? "text-emerald-400" : "text-[var(--text-muted)] hover:text-[var(--text)]")} onClick={() => setShowTimestamps((v) => !v)} type="button"><Clock size={14} /></button>
+          <button aria-label="Reconnect console" className="rounded-md p-1.5 text-[var(--text-subtle)] hover:bg-white/5 hover:text-[var(--text)] transition-colors" onClick={() => setNonce((value) => value + 1)} type="button"><RefreshCw size={14} /></button>
+          <button aria-label="Clear console" className="rounded-md p-1.5 text-[var(--text-subtle)] hover:bg-white/5 hover:text-[var(--text)] transition-colors" onClick={() => setLines([])} type="button"><Trash2 size={14} /></button>
         </div>
       </div>
       {searchOpen ? (
-        <div className="border-b border-white/[0.07] bg-[var(--surface)] px-4 py-2">
+        <div className="border-b border-[var(--line)] bg-[var(--surface-input)] px-4 py-2">
           <input
             autoComplete="off"
-            className="w-full bg-transparent font-mono text-sm text-white outline-none placeholder:text-slate-600"
+            className="w-full bg-transparent font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Filter console output…"
             value={searchQuery}
           />
         </div>
       ) : null}
-      <div aria-live="polite" className="h-[50vh] min-h-80 overflow-y-auto p-4 font-mono text-xs leading-5 text-slate-200 sm:text-[13px]" ref={outputRef} role="log" tabIndex={0}>
+      <div aria-live="polite" className="h-[52vh] min-h-80 overflow-y-auto p-4 font-mono text-xs leading-5 text-[var(--text)] scrollbar-thin bg-[var(--canvas)]" ref={outputRef} role="log" tabIndex={0}>
         {filteredLines.length ? filteredLines.map((entry, index) => (
-          <div className="whitespace-pre-wrap break-words" key={`${index}-${entry.ts}-${entry.text}`}>
-            {showTimestamps ? <span className="mr-2 text-slate-500">{entry.serverTs ?? new Date(entry.ts).toLocaleTimeString()}</span> : null}
-            {entry.text}
+          <div className="whitespace-pre-wrap break-words hover:bg-white/[0.02] py-0.5 rounded px-1 transition-colors" key={`${index}-${entry.ts}-${entry.text}`}>
+            {showTimestamps ? <span className="mr-2.5 font-mono text-[11px] text-[var(--text-muted)] select-none">{entry.serverTs ?? new Date(entry.ts).toLocaleTimeString()}</span> : null}
+            <span>{entry.text}</span>
           </div>
         )) : (
-          <p className="text-slate-500">{searchQuery ? "No matching console output." : connectionError || "Waiting for console output…"}</p>
+          <p className="font-mono text-xs text-[var(--text-muted)]">{searchQuery ? "No matching console output." : connectionError || "Waiting for console output…"}</p>
         )}
       </div>
-      <form className="flex items-center gap-2 border-t border-white/[0.07] bg-[var(--surface)] p-3" onSubmit={submit}>
-        <Server className="text-slate-500" size={16} />
+      <form className="flex items-center gap-2 border-t border-[var(--line)] bg-[var(--surface)] p-2.5" onSubmit={submit}>
+        <Server className="text-[var(--text-muted)] shrink-0 ml-1" size={14} />
         <label className="sr-only" htmlFor="console-command">Console command</label>
-        <input autoComplete="off" className="min-w-0 flex-1 bg-transparent font-mono text-sm text-white outline-none placeholder:text-slate-600" disabled={connection !== "connected" || !canConsole} id="console-command" onChange={(event) => setCommand(event.target.value)} onKeyDown={historyKey} placeholder={connection === "connected" ? "Type a command; use ↑ and ↓ for history" : "Console is not connected"} value={command} />
-        <button aria-label="Send command" className="rounded-lg bg-red-600 p-2 text-white disabled:opacity-40" disabled={connection !== "connected" || !command.trim()} type="submit"><Send size={16} /></button>
+        <input autoComplete="off" className="min-w-0 flex-1 bg-transparent font-mono text-xs text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]" disabled={connection !== "connected" || !canConsole} id="console-command" onChange={(event) => setCommand(event.target.value)} onKeyDown={historyKey} placeholder={connection === "connected" ? "Type command; use ↑ and ↓ for history" : "Console is not connected"} value={command} />
+        <button aria-label="Send command" className="rounded-md bg-[var(--brand)] px-2.5 py-1.5 text-white transition-opacity disabled:opacity-40 hover:bg-[var(--brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" disabled={connection !== "connected" || !command.trim()} type="submit"><Send size={13} /></button>
       </form>
     </section>
-    <div className="flex justify-end"><button className="rounded-lg border border-white/10 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/5 disabled:opacity-40" disabled={!canReinstall || install.isPending || server.status === "installing"} onClick={async () => { if (await confirm({ title: "Reinstall this server?", description: "Installation scripts may overwrite server files.", danger: true, confirmLabel: "Reinstall" })) install.mutate(); }} type="button">{install.isPending ? "Reinstall requested…" : "Reinstall server"}</button></div>
+    <div className="flex justify-end"><button className="rounded-lg border border-[var(--line)] bg-[var(--surface)] px-4 py-2 text-xs font-semibold text-[var(--text-subtle)] hover:bg-white/5 hover:text-[var(--text)] transition-colors disabled:opacity-40" disabled={!canReinstall || install.isPending || server.status === "installing"} onClick={async () => { if (await confirm({ title: "Reinstall this server?", description: "Installation scripts may overwrite server files.", danger: true, confirmLabel: "Reinstall" })) install.mutate(); }} type="button">{install.isPending ? "Reinstall requested…" : "Reinstall server"}</button></div>
   </div>;
 }

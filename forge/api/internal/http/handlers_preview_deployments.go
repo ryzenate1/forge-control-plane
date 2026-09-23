@@ -1,12 +1,29 @@
 package http
 
 import (
-	"gamepanel/forge/internal/services/preview"
+	"context"
+
 	"gamepanel/forge/internal/store"
+
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerPreviewDeploymentRoutes(protected fiber.Router, cfg Config, svc *preview.Service, adminIPAccess, mutationLimiter fiber.Handler) {
+// previewDeploymentService is the contract the preview-deployment admin API
+// needs. It is satisfied by the real services/previewenv implementation (which
+// derives per-PR URLs, provisions TLS/routing and reports commit status) so the
+// endpoint is backed by a genuine lifecycle rather than a stub that only flips
+// status and fabricates URLs.
+type previewDeploymentService interface {
+	ListAll(ctx context.Context) ([]store.PreviewDeployment, error)
+	Get(ctx context.Context, id string) (*store.PreviewDeployment, error)
+	Create(ctx context.Context, serverID string, req *store.PreviewDeployment) (*store.PreviewDeployment, error)
+	Deploy(ctx context.Context, id string) error
+	Cleanup(ctx context.Context, id string) error
+	UpdateStatus(ctx context.Context, id string, status string) error
+	List(ctx context.Context, serverID string) ([]store.PreviewDeployment, error)
+}
+
+func registerPreviewDeploymentRoutes(protected fiber.Router, cfg Config, svc previewDeploymentService, adminIPAccess, mutationLimiter fiber.Handler) {
 	if svc == nil {
 		return
 	}

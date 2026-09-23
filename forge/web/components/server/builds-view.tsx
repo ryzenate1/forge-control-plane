@@ -13,6 +13,7 @@ import {
   fetchServerBuildpacks,
   assignBuildpackToServer,
   removeBuildpackFromServer,
+  triggerBuild,
 } from "@/lib/api/builds";
 import { formatDate } from "@/lib/utils";
 import { EmptyState, StatusPill } from "@/components/ui/primitives";
@@ -67,9 +68,8 @@ export function BuildsView({ server }: { server?: ApiServer }) {
     enabled: Boolean(serverId && selectedBuildId),
   });
 
-  // Buildpack builds are not wired to a real build executor yet; the backend
-  // fails them honestly, so the trigger is disabled here rather than offering
-  // an action guaranteed to fail.
+  // Buildpack builds run through the backend build service (remote nixpacks via
+  // Beacon); the trigger below dispatches a real build.
   const assignMutation = useMutation({
     mutationFn: (buildpackId: string) => assignBuildpackToServer(serverId, buildpackId),
     onSuccess: () => {
@@ -84,7 +84,14 @@ export function BuildsView({ server }: { server?: ApiServer }) {
     },
   });
 
-  const actionError = assignMutation.error ?? removeMutation.error;
+  const buildMutation = useMutation({
+    mutationFn: () => triggerBuild(serverId, selectedBuildpackId || undefined),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["server-builds", serverId] });
+    },
+  });
+
+  const actionError = assignMutation.error ?? removeMutation.error ?? buildMutation.error;
   const buildList = builds.data ?? [];
   const bpList = buildpacks.data ?? [];
   const bpAssignments = serverBps.data ?? [];
@@ -109,12 +116,12 @@ export function BuildsView({ server }: { server?: ApiServer }) {
           </select>
           <button
             className="ui-button ui-button-primary"
-            disabled
-            title="Buildpack builds are not implemented yet. Deploy this application from a git source or a compose stack instead."
+            onClick={() => buildMutation.mutate()}
+            disabled={!serverId || buildMutation.isPending}
             type="button"
           >
             <Play size={14} />
-            Build
+            {buildMutation.isPending ? "Building..." : "Build"}
           </button>
           <button
             className="ui-button ui-button-secondary"

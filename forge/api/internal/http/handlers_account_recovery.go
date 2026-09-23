@@ -23,7 +23,13 @@ type accountRecoveryResponse struct {
 	Message string `json:"message,omitempty"`
 }
 
-func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fiber.Handler) {
+// registerAccountRecoveryRoutes mounts the public recovery flow on v1 and the
+// authenticated account routes on the canonical `protected` router (session
+// auth + dual-session guard + 2FA enforcement + CSRF + per-method rate limit).
+// It must NOT re-create a shadow protected group: doing so previously dropped
+// requireTwoFactorAuthentication and the method limiter, letting a session that
+// had not satisfied the panel's 2FA policy mint fresh recovery codes.
+func registerAccountRecoveryRoutes(v1 fiber.Router, protected fiber.Router, cfg Config, authLimiter fiber.Handler) {
 	v1.Post("/auth/recovery/initiate", authLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -81,16 +87,30 @@ func registerAccountRecoveryRoutes(v1 fiber.Router, cfg Config, authLimiter fibe
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to update password")
 		}
 
-		cfg.RecoveryTokenService.InvalidateUserTokens(ctx, userID, recovery.TokenPasswordReset)
+		revokeFailed := false
+		if err := cfg.RecoveryTokenService.InvalidateUserTokens(ctx, userID, recovery.TokenPasswordReset); err != nil {
+			revokeFailed = true
+			if cfg.Logger != nil {
+				cfg.Logger.Error("account recovery: failed to invalidate recovery tokens", "user", userID, "error", err.Error())
+			}
+		}
 
-		cfg.Store.RevokeAllUserSessionsExceptCurrent(ctx, userID, "", "account recovered")
+		if err := cfg.Store.RevokeAllUserSessionsExceptCurrent(ctx, userID, "", "account recovered"); err != nil {
+			revokeFailed = true
+			if cfg.Logger != nil {
+				cfg.Logger.Error("account recovery: failed to revoke active sessions", "user", userID, "error", err.Error())
+			}
+		}
 
 		_ = cfg.Store.AppendAudit(ctx, &userID, "account.recovered", "user", &userID, safeAuditMeta(map[string]string{}))
+
+		if revokeFailed {
+			return fiber.NewError(fiber.StatusInternalServerError, "password was reset but recovery-token/session revocation was incomplete; please retry")
+		}
 
 		return c.JSON(accountRecoveryResponse{Status: "ok", Message: "Account recovered successfully"})
 	})
 
-	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), csrfMiddleware(LoadSessionCookieConfig()))
 	protected.Post("/account/2fa/recovery-codes", func(c *fiber.Ctx) error {
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {

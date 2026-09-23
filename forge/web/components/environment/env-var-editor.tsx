@@ -18,6 +18,7 @@ export function EnvVarEditor({
 }) {
   const [vars, setVars] = useState<EnvVarResponse[]>([]);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [key, setKey] = useState("");
   const [value, setValue] = useState("");
   const [revealed, setRevealed] = useState<Record<string, boolean>>({});
@@ -43,22 +44,25 @@ export function EnvVarEditor({
   const handleAdd = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!key.trim() || !scopeId) return;
+    setError(null);
     try {
       await createEnvVar(scopeType, scopeId, { key: key.trim(), value });
       setKey("");
       setValue("");
       await loadVars();
-    } catch {
-      // Error handled by caller
+    } catch (err: unknown) {
+      // No caller handles this — surface it in the editor itself.
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   const handleDelete = async (varId: string) => {
+    setError(null);
     try {
       await deleteEnvVar(varId);
       await loadVars();
-    } catch {
-      // Error handled by caller
+    } catch (err: unknown) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -101,6 +105,7 @@ export function EnvVarEditor({
           <Plus size={14} />
         </Btn>
       </form>
+      {error && <p className="border-b border-white/[0.06] px-3 py-2 text-sm text-red-400" role="alert">{error}</p>}
       {loading ? (
         <div className="p-6 text-sm text-slate-400">Loading...</div>
       ) : vars.length === 0 ? (

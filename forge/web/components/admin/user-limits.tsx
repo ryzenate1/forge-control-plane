@@ -13,7 +13,7 @@ function LimitField({ label, hint, value, onChange }: { label: string; hint?: st
         min={0}
         value={value}
         onChange={(e) => onChange(Math.max(0, parseInt(e.target.value || "0", 10)))}
-        className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 focus:border-[#dc2626] focus:outline-none"
+        className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 focus:border-[var(--brand)] focus:outline-none"
       />
       {hint && <p className="mt-1 text-[10px] text-slate-500">{hint}</p>}
     </div>

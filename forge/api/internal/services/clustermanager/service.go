@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"sort"
 	"strings"
 	"time"
@@ -27,6 +28,7 @@ type clusterStore interface {
 	UpdateServer(context.Context, string, store.UpdateServerRequest, *string) (store.Server, error)
 	ServerControlTarget(context.Context, string) (store.ServerControlTarget, error)
 	ServerProvisionTarget(context.Context, string) (store.ServerProvisionTarget, error)
+	SetServerSuspended(context.Context, string, bool, *string) error
 	SetServerProvisioned(context.Context, string) error
 	SetServerInstallState(context.Context, string, string, string) error
 	MarkServerConfigSynced(context.Context, string) error
@@ -300,6 +302,74 @@ func (s *Service) compensateCreateFailure(ctx context.Context, serverID string, 
 	return cause
 }
 
+// SuspendServer takes a workload out of operation: the suspension flag is set
+// first so no concurrent path can start the workload while it is being stopped,
+// then the running container is stopped through the runtime. When the stop
+// fails the flag is rolled back and the error returned — a server reported
+// suspended while its process keeps running is a lie the control plane cannot
+// tell later. This is the only suspension entry point; HTTP handlers must call
+// it rather than flipping the flag themselves.
+func (s *Service) SuspendServer(ctx context.Context, serverID string, actorID *string) error {
+	return s.setSuspension(ctx, serverID, actorID, true)
+}
+
+// UnsuspendServer clears the suspension flag. It does not start the workload:
+// un-suspending restores the ability to operate the server, and starting it is
+// an explicit power decision afterwards.
+func (s *Service) UnsuspendServer(ctx context.Context, serverID string, actorID *string) error {
+	return s.setSuspension(ctx, serverID, actorID, false)
+}
+
+func (s *Service) setSuspension(ctx context.Context, serverID string, actorID *string, suspended bool) error {
+	ctx = events.ContextWithCorrelationID(ctx, firstNonEmpty(events.CorrelationIDFromContext(ctx), uuid.NewString()))
+	if s.store == nil {
+		return errors.New("store is required")
+	}
+	server, err := s.store.GetServer(ctx, serverID)
+	if err != nil {
+		return fmt.Errorf("load server: %w", err)
+	}
+	if server.TransferState != "" && server.TransferState != "idle" {
+		return fmt.Errorf("cannot change suspension while a transfer is in state %q", server.TransferState)
+	}
+	if !suspended {
+		if err := s.store.SetServerSuspended(ctx, serverID, false, actorID); err != nil {
+			return err
+		}
+		s.publish(ctx, events.EventDesiredStateChanged, "server", serverID, map[string]any{"suspended": false})
+		return nil
+	}
+	if server.Suspended {
+		// Suspending twice must not run the stop path again — that would fail on
+		// an already-stopped workload and roll back the flag of a server that was
+		// already suspended.
+		return nil
+	}
+	if err := s.store.SetServerSuspended(ctx, serverID, true, actorID); err != nil {
+		return err
+	}
+	rollback := true
+	defer func() {
+		if rollback {
+			restoreCtx := context.WithoutCancel(ctx)
+			var noActor *string
+			if err := s.store.SetServerSuspended(restoreCtx, serverID, false, noActor); err != nil {
+				slog.ErrorContext(ctx, "clustermanager: could not roll back suspension flag after failed stop", "serverId", serverID, "error", err.Error())
+			}
+		}
+	}()
+	// Stopping the workload goes through the same channel as any other power
+	// signal so that actual state, audit and events stay consistent; the plain
+	// StopServer path deliberately has no suspend guard because suspending a
+	// server must be able to stop it.
+	if _, err := s.StopServer(ctx, serverID); err != nil {
+		return fmt.Errorf("stop workload for suspension: %w", err)
+	}
+	rollback = false
+	s.publish(ctx, events.EventDesiredStateChanged, "server", serverID, map[string]any{"suspended": true})
+	return nil
+}
+
 func (s *Service) cancelReservation(ctx context.Context, reservationID string) {
 	if s.reservations != nil && reservationID != "" {
 		_, _ = s.reservations.CancelReservation(ctx, reservationID)
@@ -394,6 +464,10 @@ func (s *Service) RequestServerPower(ctx context.Context, serverID, signal strin
 			return gpruntime.PowerResponse{}, desired, errors.New("cannot start or restart a suspended server")
 		}
 	}
+	// The desired-state write above is unconditional, but the actual-state write
+	// below is conditional on the power command succeeding. A rejected
+	// transition must leave the recorded actual state alone — writing it anyway
+	// would report a change that never happened.
 	if err := s.store.SetServerDesiredState(ctx, serverID, store.ServerDesiredState(desired), "cluster manager request "+signal); err != nil {
 		return gpruntime.PowerResponse{}, desired, err
 	}
@@ -409,6 +483,11 @@ func (s *Service) RequestServerPower(ctx context.Context, serverID, signal strin
 	return response, desired, nil
 }
 
+// RefreshServerActualState reads what the node reports right now and records
+// it. The reading comes from the workload's lifecycle state, not from whether
+// a metrics call happened to succeed: a stopped container has no metrics, so
+// treating a failed stats call as "running somewhere else" or as "unknown"
+// kept servers showing as running in the panel long after they had exited.
 func (s *Service) RefreshServerActualState(ctx context.Context, serverID string) (domain.ServerActualState, error) {
 	server, err := s.store.GetServer(ctx, serverID)
 	if err != nil {
@@ -421,28 +500,44 @@ func (s *Service) RefreshServerActualState(ctx context.Context, serverID string)
 	if err != nil {
 		return domain.ServerActualStateUnknown, err
 	}
-	if _, err := s.runtime.Stats(ctx, runtimeTarget(target)); err != nil {
-		if server.ActualState == store.ServerActualStateRunning {
-			actual := domain.ServerActualStateUnknown
-			if setErr := s.store.SetServerActualState(ctx, serverID, store.ServerActualState(actual), "runtime stats refresh failed"); setErr != nil {
-				return actual, setErr
-			}
-			s.publish(ctx, events.EventActualStateChanged, "server", serverID, map[string]any{
-				"actualState": actual,
-				"reason":      "runtime stats refresh failed",
-			})
-			return actual, nil
-		}
-		return domain.ServerActualState(server.ActualState), nil
+	inspection, err := s.runtime.Inspect(ctx, runtimeTarget(target))
+	if err != nil {
+		// The node could not be asked. That is unknown, not stopped: recording a
+		// stop here would turn a transient node outage into a false state change.
+		return domain.ServerActualStateUnknown, err
 	}
-	if err := s.store.SetServerActualState(ctx, serverID, store.ServerActualStateRunning, "runtime stats refresh"); err != nil {
-		return domain.ServerActualState(store.ServerActualStateRunning), err
+	actual, reason := actualStateFromInspection(inspection, domain.ServerActualState(server.ActualState))
+	if actual == domain.ServerActualState(server.ActualState) {
+		return actual, nil
+	}
+	if err := s.store.SetServerActualState(ctx, serverID, store.ServerActualState(actual), reason); err != nil {
+		return actual, err
 	}
 	s.publish(ctx, events.EventActualStateChanged, "server", serverID, map[string]any{
-		"actualState": store.ServerActualStateRunning,
-		"reason":      "runtime stats refresh",
+		"actualState": actual,
+		"reason":      reason,
 	})
-	return domain.ServerActualState(store.ServerActualStateRunning), nil
+	return actual, nil
+}
+
+// actualStateFromInspection maps a node's lifecycle reading onto the panel's
+// vocabulary. When the node only exposed telemetry (an older Beacon without
+// the state endpoint) the previous recorded state is kept rather than guessed
+// at, because "no metrics" does not say whether the workload is running.
+func actualStateFromInspection(inspection gpruntime.Inspection, previous domain.ServerActualState) (domain.ServerActualState, string) {
+	if !inspection.StateKnown {
+		if previous == domain.ServerActualStateRunning {
+			return domain.ServerActualStateUnknown, "node exposes no lifecycle state"
+		}
+		return previous, "node exposes no lifecycle state"
+	}
+	if inspection.Running {
+		return domain.ServerActualStateRunning, "runtime state reports running"
+	}
+	if !inspection.Exists {
+		return domain.ServerActualStateStopped, "runtime state reports no container"
+	}
+	return domain.ServerActualStateStopped, "runtime state reports " + inspection.Status
 }
 
 func (s *Service) ReconcileNode(ctx context.Context, nodeID string) error {
@@ -530,11 +625,10 @@ func (s *Service) ResizeServer(ctx context.Context, serverID string, memoryMB, c
 
 func (s *Service) sendPower(ctx context.Context, serverID, signal string) (gpruntime.PowerResponse, error) {
 	if s.runtime == nil {
-		if err := s.store.SetServerActualState(ctx, serverID, store.ServerActualState(serverActualFromSignal(signal)), "cluster manager power "+signal); err != nil {
-			return gpruntime.PowerResponse{}, err
-		}
-		s.publishServerPowerEvents(ctx, serverID, signal)
-		return gpruntime.PowerResponse{ServerID: serverID, Signal: signal, Accepted: true}, nil
+		// No runtime is configured, so the power action cannot be performed or
+		// observed. Fail closed like every other entry point instead of fabricating
+		// acceptance and writing an actual-state the node never reached.
+		return gpruntime.PowerResponse{}, gpruntime.ErrRuntimeUnavailable
 	}
 	target, err := s.store.ServerControlTarget(ctx, serverID)
 	if err != nil {

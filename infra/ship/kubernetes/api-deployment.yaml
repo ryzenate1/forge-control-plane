@@ -126,6 +126,14 @@ spec:
                 configMapKeyRef:
                   name: gamepanel-config
                   key: REDIS_ADDR
+            # Redis is started with --requirepass, and the API refuses to boot in
+            # production with Redis enabled but no password, so the credential has
+            # to be projected here.
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gamepanel-secrets
+                  key: REDIS_PASSWORD
             - name: PANEL_URL
               valueFrom:
                 configMapKeyRef:

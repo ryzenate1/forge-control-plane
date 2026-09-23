@@ -74,6 +74,11 @@ func (s *Service) collectNodeMetrics(ctx context.Context) {
 		req.CPULoad1m = 0
 		req.CPULoad5m = 0
 		req.CPULoad15m = 0
+		if node.LoadAverage != nil && *node.LoadAverage > 0 {
+			req.CPULoad1m = *node.LoadAverage
+			req.CPULoad5m = *node.LoadAverage
+			req.CPULoad15m = *node.LoadAverage
+		}
 		req.NetworkRxBytes = 0
 		req.NetworkTxBytes = 0
 

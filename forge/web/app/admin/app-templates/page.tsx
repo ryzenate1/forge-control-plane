@@ -167,7 +167,7 @@ export default function AppTemplatesPage() {
                 "rounded-xl border p-4 text-left",
                 isDefault(tpl.id)
                   ? "border-white/[0.08] bg-white/[0.02]"
-                  : "border-[#dc2626]/20 bg-[var(--brand)]/[0.02]",
+                  : "border-[var(--brand)]/20 bg-[var(--brand)]/[0.02]",
               )}
             >
               <div className="flex items-start justify-between gap-2">

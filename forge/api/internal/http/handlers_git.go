@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
-	"time"
 
 	"gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/store"
@@ -829,13 +828,12 @@ func TriggerGitDeployment(cfg Config) fiber.Handler {
 				return err
 			}
 		}
-		deploy, err := cfg.Store.CreateGitDeployment(ctx, store.CreateGitDeploymentRequest{
-			GitSourceID: source.ID,
-			Branch:      req.Branch,
-			CommitSHA:   req.CommitHash,
-			Status:      "pending",
-			StartedAt:   time.Now().UTC(),
-		})
+		// Perform a real deployment (clone -> build -> run) through the git deploy
+		// engine instead of inserting a pending row that no consumer acts on.
+		if cfg.GitDeployMgmtService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "git deployment engine unavailable")
+		}
+		deploy, err := cfg.GitDeployMgmtService.InitiateDeployment(ctx, req.RepoURL, req.Branch, req.CommitHash)
 		if err != nil {
 			return respondInternalError(c, err)
 		}

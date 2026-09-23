@@ -25,6 +25,10 @@ func (r *UnavailableRuntime) unavailable() error {
 	return errors.Join(errors.New("container runtime is unavailable"), r.err)
 }
 
+// Available reports false: this runtime exists only so mock mode can fail
+// predictably, and no health or readiness endpoint may claim it is healthy.
+func (r *UnavailableRuntime) Available() bool { return false }
+
 func (r *UnavailableRuntime) Close() error { return nil }
 func (r *UnavailableRuntime) Create(context.Context, CreateRequest) error {
 	return r.unavailable()

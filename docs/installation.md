@@ -74,7 +74,7 @@ The installer is the fastest path for a single-host Forge deployment. It mirrors
 - `LOG_DIR=/var/log/gamepanel`
 
 **What it does (`main:746-779`):**
-1. `parse_arguments` → flags `--unattended --skip-checks --force --verbose --fqdn --email --password --db-password`
+1. `parse_arguments` → flags `--unattended --skip-checks --force --verbose --fqdn --email` (passwords are never arguments — see below)
 2. Pre-flight: `check_root` → `check_os` → `check_docker` → `check_docker_compose` → `check_resources` → `check_ports` → `check_existing_installation`
 3. `gather_input` (interactive or unattended validation)
 4. `create_directories` (750 for install/data/config, 755 for logs)
@@ -95,11 +95,14 @@ sudo ./forge/install/install.sh
 **Unattended:**
 
 ```bash
-sudo ./forge/install/install.sh --unattended \
+# Credentials come from the environment (or a hidden prompt when a TTY is
+# attached). Passing them as arguments exposes them via ps(1)/procfs, shell
+# history and CI logs, so --password/--db-password no longer exist.
+sudo GAMEPANEL_ADMIN_PASSWORD='MySecurePass123' \
+  GAMEPANEL_DB_PASSWORD='MyDBPass123' \
+  ./forge/install/install.sh --unattended \
   --fqdn panel.example.com \
-  --email admin@example.com \
-  --password 'MySecurePass123' \
-  --db-password 'MyDBPass123'
+  --email admin@example.com
 # Optional: --skip-checks --force --verbose
 ```
 

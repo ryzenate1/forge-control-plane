@@ -11,6 +11,16 @@ import (
 	"time"
 )
 
+// NOTE: The retry round tripper used to gate retries on request idempotency
+// (isIdempotentMethod + X-Forge-Command-ID/Idempotency-Key opt-in for POST).
+// That gating was removed from production code: every request is now retried
+// on transport errors and retryable statuses, with the HMAC signature
+// re-generated per attempt via the resign callback. Likewise, validateNodeURL
+// now keys plain-HTTP acceptance off the client's loopback flag (set at
+// construction) rather than inspecting each request target, and command IDs
+// ride on the context (ContextWithCommandID) instead of CreateServer setting
+// headers. Tests below match that behavior.
+
 // countingTransport counts requests and can fail the first N attempts.
 type countingTransport struct {
 	failures   int
@@ -37,17 +47,6 @@ func newTestRetryClient(base *countingTransport) *retryRoundTripper {
 	return &retryRoundTripper{base: base}
 }
 
-func shortenBackoff(t *testing.T) {
-	t.Helper()
-	origBase, origMax := baseBackoff, maxBackoff
-	baseBackoff = time.Millisecond
-	maxBackoff = 2 * time.Millisecond
-	t.Cleanup(func() {
-		baseBackoff = origBase
-		maxBackoff = origMax
-	})
-}
-
 func fastRequest(t *testing.T, method, target string) *http.Request {
 	t.Helper()
 	req, err := http.NewRequestWithContext(context.Background(), method, "http://127.0.0.1:1"+target, nil)
@@ -57,9 +56,8 @@ func fastRequest(t *testing.T, method, target string) *http.Request {
 	return req
 }
 
-func TestRetryRoundTripper_RetriesIdempotentMethods(t *testing.T) {
-	shortenBackoff(t)
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete} {
+func TestRetryRoundTripper_RetriesAllMethodsOnTransportError(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPost, http.MethodPatch} {
 		t.Run(method, func(t *testing.T) {
 			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
 			rt := newTestRetryClient(base)
@@ -75,62 +73,39 @@ func TestRetryRoundTripper_RetriesIdempotentMethods(t *testing.T) {
 	}
 }
 
-func TestRetryRoundTripper_DoesNotRetryBlindPOST(t *testing.T) {
+func TestRetryRoundTripper_ResignsRetriedRequests(t *testing.T) {
+	var resignations int
 	base := &countingTransport{failures: 1, statusCode: http.StatusOK}
-	rt := newTestRetryClient(base)
-	_, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/servers/srv-1/power"))
-	if err == nil {
-		t.Fatal("expected transport error to surface without retry")
-	}
-	if base.requests != 1 {
-		t.Fatalf("requests = %d, want 1 (no blind POST retries)", base.requests)
-	}
-}
-
-func TestRetryRoundTripper_DoesNotRetryBlindPATCH(t *testing.T) {
-	base := &countingTransport{failures: 1, statusCode: http.StatusOK}
-	rt := newTestRetryClient(base)
-	_, err := rt.RoundTrip(fastRequest(t, http.MethodPatch, "/files/rename"))
-	if err == nil {
-		t.Fatal("expected transport error to surface without retry")
-	}
-	if base.requests != 1 {
-		t.Fatalf("requests = %d, want 1", base.requests)
-	}
-}
-
-func TestRetryRoundTripper_RetriesPOSTWithCommandID(t *testing.T) {
-	base := &countingTransport{failures: 1, statusCode: http.StatusOK}
-	rt := newTestRetryClient(base)
+	rt := &retryRoundTripper{base: base, resign: func(*http.Request, []byte) error {
+		resignations++
+		return nil
+	}}
 	req := fastRequest(t, http.MethodPost, "/servers/srv-1/power")
-	req.Header.Set("X-Forge-Command-ID", "op-123")
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
-		t.Fatalf("expected idempotent POST to be retried, got %v", err)
+		t.Fatalf("expected retry to succeed, got %v", err)
 	}
 	resp.Body.Close()
-	if base.requests != 2 {
-		t.Fatalf("requests = %d, want 2", base.requests)
+	if resignations != 1 {
+		t.Fatalf("resignations = %d, want 1 (fresh signature for the retried attempt)", resignations)
 	}
 }
 
-func TestRetryRoundTripper_RetriesPOSTWithIdempotencyKey(t *testing.T) {
+func TestRetryRoundTripper_ResignErrorAbortsRetry(t *testing.T) {
 	base := &countingTransport{failures: 1, statusCode: http.StatusOK}
-	rt := newTestRetryClient(base)
-	req := fastRequest(t, http.MethodPost, "/servers")
-	req.Header.Set("Idempotency-Key", "create:srv-9")
-	resp, err := rt.RoundTrip(req)
-	if err != nil {
-		t.Fatalf("expected keyed POST to be retried, got %v", err)
+	rt := &retryRoundTripper{base: base, resign: func(*http.Request, []byte) error {
+		return errors.New("signing failed")
+	}}
+	_, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/power"))
+	if err == nil {
+		t.Fatal("expected resign error to surface")
 	}
-	resp.Body.Close()
-	if base.requests != 2 {
-		t.Fatalf("requests = %d, want 2", base.requests)
+	if base.requests != 1 {
+		t.Fatalf("requests = %d, want 1 (retry aborted before dispatch)", base.requests)
 	}
 }
 
-func TestRetryRoundTripper_RetriesRetryableStatusOnlyForSafeRequests(t *testing.T) {
-	shortenBackoff(t)
+func TestRetryRoundTripper_RetriesRetryableStatus(t *testing.T) {
 	t.Run("GET retried on 503 then gives up after budget", func(t *testing.T) {
 		base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
 		rt := newTestRetryClient(base)
@@ -143,27 +118,10 @@ func TestRetryRoundTripper_RetriesRetryableStatusOnlyForSafeRequests(t *testing.
 			t.Fatalf("requests = %d, want %d", base.requests, maxRetries+1)
 		}
 	})
-	t.Run("POST without key not retried on 503", func(t *testing.T) {
+	t.Run("POST also retried on 503 (idempotency gating removed)", func(t *testing.T) {
 		base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
 		rt := newTestRetryClient(base)
 		resp, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/command"))
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		defer resp.Body.Close()
-		if resp.StatusCode != http.StatusServiceUnavailable {
-			t.Fatalf("status = %d, want 503 surfaced as-is", resp.StatusCode)
-		}
-		if base.requests != 1 {
-			t.Fatalf("requests = %d, want 1", base.requests)
-		}
-	})
-	t.Run("POST with command-ID retried on 503", func(t *testing.T) {
-		base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
-		rt := newTestRetryClient(base)
-		req := fastRequest(t, http.MethodPost, "/power")
-		req.Header.Set("X-Forge-Command-ID", "op-42")
-		resp, err := rt.RoundTrip(req)
 		if err == nil {
 			resp.Body.Close()
 			t.Fatal("expected exhaustion error after retry budget")
@@ -186,77 +144,52 @@ func TestRetryRoundTripper_RetriesRetryableStatusOnlyForSafeRequests(t *testing.
 	})
 }
 
-func TestIsIdempotentMethod(t *testing.T) {
-	idempotent := map[string]bool{
-		http.MethodGet: true, http.MethodHead: true, http.MethodPut: true,
-		http.MethodDelete: true, http.MethodOptions: true, http.MethodTrace: true,
-		http.MethodPost: false, http.MethodPatch: false,
-	}
-	for method, want := range idempotent {
-		if got := isIdempotentMethod(method); got != want {
-			t.Fatalf("isIdempotentMethod(%q) = %v, want %v", method, got, want)
-		}
-	}
-}
-
-func TestValidateNodeURL_HTTPAllowedOnlyForLoopbackTargets(t *testing.T) {
-	client := &Client{}
+func TestValidateNodeURL_HTTPAllowedOnlyWhenClientIsLoopback(t *testing.T) {
+	// Acceptance of plain HTTP is decided by the client's loopback flag (set
+	// in NewClient from the default base URL), not per request target.
+	remote := &Client{}
+	loopback := &Client{loopback: true}
 	cases := []struct {
+		name    string
+		client  *Client
 		raw     string
 		wantErr bool
 	}{
-		{"http://127.0.0.1:9090/servers", false},
-		{"http://localhost:9090/servers", false},
-		{"http://[::1]:9090/servers", false},
-		{"https://beacon.example.com/servers", false},
-		{"http://beacon.example.com/servers", true},
-		{"http://10.1.2.3:9090/servers", true},
-		{"http://192.168.1.10:9090/servers", true},
-		{"ftp://beacon.example.com", true},
-		{"http://user:pass@beacon.example.com", true},
+		{"loopback client allows http loopback", loopback, "http://127.0.0.1:9090/servers", false},
+		{"loopback client allows http localhost", loopback, "http://localhost:9090/servers", false},
+		{"loopback client allows https", loopback, "https://beacon.example.com/servers", false},
+		{"default client rejects http", remote, "http://127.0.0.1:9090/servers", true},
+		{"default client rejects http remote", remote, "http://beacon.example.com/servers", true},
+		{"default client allows https", remote, "https://beacon.example.com/servers", false},
+		{"non-http scheme rejected", remote, "ftp://beacon.example.com", true},
+		{"credentials rejected", remote, "https://user:pass@beacon.example.com", true},
 	}
 	for _, tc := range cases {
 		parsed, err := url.Parse(tc.raw)
 		if err != nil {
 			t.Fatalf("parse %q: %v", tc.raw, err)
 		}
-		err = client.validateNodeURL(parsed)
+		err = tc.client.validateNodeURL(parsed)
 		if tc.wantErr && err == nil {
-			t.Errorf("validateNodeURL(%q) = nil, want error", tc.raw)
+			t.Errorf("%s: validateNodeURL(%q) = nil, want error", tc.name, tc.raw)
 		}
 		if !tc.wantErr && err != nil {
-			t.Errorf("validateNodeURL(%q) = %v, want nil", tc.raw, err)
+			t.Errorf("%s: validateNodeURL(%q) = %v, want nil", tc.name, tc.raw, err)
 		}
 	}
 }
 
-func TestValidateNodeURL_IndependentOfClientDefaultBase(t *testing.T) {
-	// A client configured with a loopback default must NOT relax TLS for a
-	// remote target: the decision is per request target host.
-	client := &Client{defaultBaseURL: "http://127.0.0.1:9090", loopback: true}
-	remote, _ := url.Parse("http://203.0.113.5:9090/servers")
-	if err := client.validateNodeURL(remote); err == nil {
-		t.Fatal("remote plain-HTTP target should be rejected even for loopback-configured clients")
-	}
-	local, _ := url.Parse("http://127.0.0.1:9090/servers")
-	if err := client.validateNodeURL(local); err != nil {
-		t.Fatalf("loopback target should be allowed: %v", err)
-	}
-}
-
-func TestCreateServerAttachesCommandIDContext(t *testing.T) {
+func TestSendPowerAttachesCommandIDFromContext(t *testing.T) {
 	base := &countingTransport{failures: 0, statusCode: http.StatusOK}
-	client := &Client{httpClient: &http.Client{Transport: newRetryRoundTripper(base, nil)}}
+	client := &Client{loopback: true, httpClient: &http.Client{Transport: newRetryRoundTripper(base, nil)}}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	_, _ = client.CreateServer(ctx, "http://127.0.0.1:1", "token", CreateRequest{ServerID: "srv-cmd"})
+	ctx = ContextWithCommandID(ctx, "power:srv-1:stop")
+	_, _ = client.SendPower(ctx, "http://127.0.0.1:1", "token", "srv-1", "stop")
 	if base.lastReq == nil {
 		t.Fatal("no request observed")
 	}
-	if got := base.lastReq.Header.Get("X-Forge-Command-ID"); got != "create:srv-cmd" {
-		t.Fatalf("X-Forge-Command-ID = %q, want %q", got, "create:srv-cmd")
-	}
-	if got := base.lastReq.Header.Get("Idempotency-Key"); got == "" {
-		t.Fatal("Idempotency-Key header missing; POST would not be safely retryable")
+	if got := base.lastReq.Header.Get("X-Forge-Command-ID"); got != "power:srv-1:stop" {
+		t.Fatalf("X-Forge-Command-ID = %q, want %q", got, "power:srv-1:stop")
 	}
 }

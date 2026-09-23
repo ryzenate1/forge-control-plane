@@ -1,6 +1,10 @@
 package http
 
 import (
+	"context"
+	"net"
+	"time"
+
 	"gamepanel/forge/internal/store"
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
@@ -204,10 +208,21 @@ func registerProxyDomainRoutes(protected fiber.Router, cfg Config, adminIPAccess
 		if d == nil {
 			return c.Status(404).JSON(fiber.Map{"error": "domain not found"})
 		}
+		// Real verification: the hostname must actually resolve in DNS. This used to
+		// return verified:true unconditionally — a false completion.
+		verified := false
+		var resolved []string
+		vctx, vcancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer vcancel()
+		if addrs, lookupErr := net.DefaultResolver.LookupHost(vctx, d.Hostname); lookupErr == nil && len(addrs) > 0 {
+			verified = true
+			resolved = addrs
+		}
 		return c.JSON(fiber.Map{"data": fiber.Map{
-			"id":       d.ID,
-			"hostname": d.Hostname,
-			"verified": true,
+			"id":        d.ID,
+			"hostname":  d.Hostname,
+			"verified":  verified,
+			"addresses": resolved,
 		}})
 	})
 }

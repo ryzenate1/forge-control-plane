@@ -48,7 +48,18 @@ type ServerState struct {
 	CrashCooldown         time.Duration
 	LastCrash             time.Time
 	LastStartedAt         time.Time
-	Suspended             bool
+	// CrashCount tracks consecutive crash auto-restarts. The breaker opens once
+	// it reaches maxConsecutiveCrashRestarts: a boot-crash loop must not be
+	// restarted forever. Only a clean/expected stop resets it — a successful
+	// start does not, because boot loops start fine and then die.
+	CrashCount int
+	Suspended  bool
+	// Restoring is the exclusive claim taken while a backup restore rewrites the
+	// server files. Power operations and installs are refused while it is held:
+	// starting a workload from half-restored files, or letting an install run
+	// over a restore, corrupts both.
+	Restoring   bool
+	RestoreState string
 	// DetectCleanExitAsCrash matches Wings' config of the same name: when
 	// false (the recommended default), an exit code of 0 is treated as a
 	// clean shutdown and does NOT trigger crash auto-restart. When true,
@@ -197,6 +208,12 @@ func (m *ServerManager) autoRestartCrashed(ctx context.Context, serverID string,
 // been down longer than this are treated as intentionally stopped.
 const crashAutoRestartWindow = 24 * time.Hour
 
+// maxConsecutiveCrashRestarts is the crash-loop circuit breaker: after this
+// many automatic restarts the server stays offline instead of restarting
+// forever. The panel crash handler still fires on every crash so the operator
+// sees the loop; only the automatic restart stops.
+const maxConsecutiveCrashRestarts = 5
+
 func (m *ServerManager) SetDetectCleanExitAsCrash(value bool) {
 	if m == nil {
 		return
@@ -249,6 +266,125 @@ func (m *ServerManager) MarkInstalling(serverID string, installing bool) {
 		state.RunningAction = ""
 	}
 	state.InstallationState = "installed"
+}
+
+// BeginInstall claims the server's action slot for an installation. Unlike
+// MarkInstalling it reports contention instead of silently overwriting an
+// existing claim: an install must never run alongside a power operation, a
+// restore, or a second install, and "whoever locked last wins" is not an
+// acceptable answer.
+func (m *ServerManager) BeginInstall(serverID string) error {
+	state := m.State(serverID)
+	if !state.mu.TryLock() {
+		return errors.New("another server action is already running")
+	}
+	defer state.mu.Unlock()
+	if state.RunningAction != "" || state.Restoring {
+		return errors.New("another server action is already running")
+	}
+	if state.Suspended {
+		return errors.New("server is suspended")
+	}
+	state.RunningAction = "install"
+	state.InstallationState = "installing"
+	return nil
+}
+
+// applyPreStartConfigPatches re-applies the egg's configuration-file patches
+// from the synced .config/server.json before a start. A restore or an operator
+// edit can leave game config files holding stale values (wrong port, wrong
+// memory); booting on them would run the workload misconfigured while the panel
+// believes it was synced. A missing or unreadable server.json is not an error:
+// there is simply nothing to patch.
+func (m *ServerManager) applyPreStartConfigPatches(serverID string, rootDir string) error {
+	if strings.TrimSpace(rootDir) == "" {
+		return nil
+	}
+	payloadBytes, err := os.ReadFile(filepath.Join(rootDir, ".config", "server.json"))
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		return err
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadBytes, &payload); err != nil {
+		return fmt.Errorf("parse synced server.json: %w", err)
+	}
+	state := m.State(serverID)
+	state.mu.Lock()
+	env := make(map[string]string, len(state.EnvVars))
+	for key, value := range state.EnvVars {
+		env[key] = value
+	}
+	port := state.AllocationPort
+	ip := state.AllocationIP
+	state.mu.Unlock()
+	return patchConfigurationFiles(rootDir, payload, env, port, ip)
+}
+
+// EndInstall releases the claim taken by BeginInstall. The boolean is whether
+// the install itself failed — a non-zero installer exit — not whether it
+// succeeded: success clears the installation state back to "installed", a
+// failure records "failed" so the panel and the operator can see the install
+// did not complete instead of assuming it did.
+func (m *ServerManager) EndInstall(serverID string, failed bool) {
+	state := m.State(serverID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.RunningAction == "install" {
+		state.RunningAction = ""
+	}
+	if failed {
+		state.InstallationState = "failed"
+	} else {
+		state.InstallationState = "installed"
+	}
+}
+
+// BeginRestore claims the server exclusively for a backup restore. It refuses
+// when any other action holds the server, so a restore can never race with a
+// power operation or an install.
+func (m *ServerManager) BeginRestore(serverID string) error {
+	state := m.State(serverID)
+	if !state.mu.TryLock() {
+		return errors.New("another server action is already running")
+	}
+	defer state.mu.Unlock()
+	if state.RunningAction != "" || state.Restoring {
+		return errors.New("another server action is already running")
+	}
+	state.RunningAction = "restore"
+	state.Restoring = true
+	state.RestoreState = "restoring"
+	return nil
+}
+
+// IsRestoring reports whether a restore currently holds the server.
+func (m *ServerManager) IsRestoring(serverID string) bool {
+	state := m.State(serverID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	return state.Restoring
+}
+
+// EndRestore releases the restore claim and records its outcome. The boolean
+// is whether the restore failed — matching BeginInstall/EndInstall, where the
+// flag names the error, not the success. A failed restore is recorded as
+// failed rather than cleared to a healthy-looking empty state.
+func (m *ServerManager) EndRestore(serverID string, failed bool) {
+	state := m.State(serverID)
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	if state.RunningAction == "restore" {
+		state.RunningAction = ""
+	}
+	state.Restoring = false
+	if failed {
+		state.RestoreState = "failed"
+	} else {
+		state.RestoreState = "restored"
+	}
 }
 
 func (m *ServerManager) MarkCreated(serverID, rootDir string, diskLimitMB int64) {
@@ -433,6 +569,10 @@ func (m *ServerManager) HandlePower(ctx context.Context, serverID, signal string
 		state.mu.Unlock()
 		return errors.New("another server action is already running")
 	}
+	if state.Restoring {
+		state.mu.Unlock()
+		return errors.New("server is restoring backup")
+	}
 	if state.InstallationState == "installing" {
 		state.mu.Unlock()
 		return errors.New("server is installing")
@@ -453,6 +593,19 @@ func (m *ServerManager) HandlePower(ctx context.Context, serverID, signal string
 	case "start":
 		if err := m.onBeforeStart(serverID, state); err != nil {
 			return err
+		}
+		// Re-apply egg configuration patches before every start, not only after a
+		// panel sync: allocations change, restores replace files, and the container
+		// must boot against the current values rather than whatever file happened
+		// to exist. A patch failure blocks the start — booting with stale config
+		// would run the workload on the wrong port or memory limit.
+		state.mu.Lock()
+		rootForPatch := state.RootDir
+		state.mu.Unlock()
+		if rootForPatch != "" {
+			if err := m.applyPreStartConfigPatches(serverID, rootForPatch); err != nil {
+				return fmt.Errorf("pre-start configuration patch: %w", err)
+			}
 		}
 		state.mu.Lock()
 		state.PowerState = PowerStateStarting
@@ -477,6 +630,9 @@ func (m *ServerManager) HandlePower(ctx context.Context, serverID, signal string
 		state.mu.Lock()
 		state.PowerState = PowerStateStopping
 		state.ExpectedStop = true
+		// A deliberate stop closes the crash loop: the next non-zero exit is
+		// expected, not a reason to restart forever.
+		state.CrashCount = 0
 		state.mu.Unlock()
 		m.persistPowerState(serverID, state)
 		err = m.stopServer(ctx, state, serverID)
@@ -859,12 +1015,23 @@ func (m *ServerManager) HandleContainerEvent(ctx context.Context, event runtime.
 	state.LastCrash = time.Now()
 	state.PowerState = PowerStateOffline
 	state.RunningAction = ""
+	// Count this crash before deciding whether to restart, so a boot-crash loop
+	// opens the breaker instead of restarting forever. The counter survives a
+	// merely successful start — boot loops do start fine — and is cleared only
+	// by an explicit stop.
+	state.CrashCount++
+	breakerOpen := state.CrashCount > maxConsecutiveCrashRestarts
 	state.mu.Unlock()
 
 	if m.crashHandler != nil {
 		m.crashHandler(ctx, event.ServerID, event.ExitCode, event.OOMKilled)
 	}
 
+	if breakerOpen {
+		log.Printf("beacon: crash-loop breaker open for %s after %d consecutive crashes; leaving it offline", event.ServerID, state.CrashCount)
+		m.persistPowerState(event.ServerID, state)
+		return
+	}
 	_ = m.HandlePower(ctx, event.ServerID, "start")
 }
 

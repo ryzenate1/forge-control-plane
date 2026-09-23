@@ -45,6 +45,7 @@ import (
 	auditlogsvc "gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	billingsvc "gamepanel/forge/internal/services/billing"
 	buildsvc "gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
 	cleanupsvc "gamepanel/forge/internal/services/cleanup"
@@ -70,10 +71,12 @@ import (
 	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
+	installersvc "gamepanel/forge/internal/services/installer"
 	"gamepanel/forge/internal/services/loadbalancer"
 	"gamepanel/forge/internal/services/logger"
 	mailservice "gamepanel/forge/internal/services/mail"
 	"gamepanel/forge/internal/services/migration"
+	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	notification "gamepanel/forge/internal/services/notification"
@@ -295,8 +298,11 @@ func run() error {
 		endpointSvc       *environments.Service
 		alertSvc          *alerting.Service
 		notifSvc          *notification.Service
+		installerSvc      *installersvc.Service
+		billingSvc        *billingsvc.Service
 		fenceSvc          *fencing.Service
 		membershipSvc     *clustermembership.Service
+		nodeAutoSvc       *nodeautoscale.Service
 		cleanupSvc        *cleanupsvc.Service
 		gitSvc            *gitsvc.Service
 		gitDeploySvc      *gitsvc.DeployService
@@ -411,6 +417,7 @@ func run() error {
 		rts = recoverysvc.NewTokenService(recTokenStore)
 		obs = observability.New(db)
 		obs.StartMetricsCollection(appCtx, 30*time.Second)
+		obs.StartNodeMetricsCollection(appCtx, 60*time.Second)
 		nr = noderegistry.New(db)
 		np = nodeprobe.NewService(db, daemonClient)
 		dbProv = dbprovisioner.NewService(db)
@@ -508,6 +515,10 @@ func run() error {
 
 		opStore := operationsvc.NewPostgresStore(db.GetDB())
 		opSvc = operationsvc.New(opStore)
+		// Installer workflow visibility (DB->UI) is always on; execution stays
+		// gated by INSTALLER_WORKFLOW_ENABLED plus an attached executor, so no
+		// executor is set here and the UI honestly reports executionEnabled=false.
+		installerSvc = installersvc.New(installersvc.NewPostgresStore(db.GetDB()))
 		registerPowerOp := func(opType operationsvc.OperationType, signal string) {
 			opSvc.RegisterHandler(opType, func(ctx context.Context, op *operationsvc.Operation) error {
 				commandCtx := daemon.ContextWithCommandID(ctx, op.ID)
@@ -571,6 +582,11 @@ func run() error {
 		// Without this the deployment steps have no way to reach a node, and
 		// every step that claims to change what is running fails closed.
 		deployment.WireBeaconExecutor(deploySvc, db, daemonClient)
+		// Resume any deployments that were in flight when the previous process
+		// exited, so they are not orphaned until a manual /deployments/resume.
+		if err := deploySvc.ResumeDeployments(appCtx); err != nil {
+			slogLogger.Error("resume deployments at boot failed", slog.String("error", err.Error()))
+		}
 		previewDeploySvc = previewsvc.New(db, outboxPub)
 		lbSvc = loadbalancer.New(db, outboxPub)
 
@@ -729,6 +745,11 @@ func run() error {
 		backup.RegisterProvider("azure", backup.NewAzureFactory)
 		backup.RegisterProvider("local", backup.NewLocalFactory)
 		bkWorker = backup.NewWorker(db, bkSvc, daemonClient)
+		// Give the worker a fully-wired job service so its out-of-band pickup of
+		// pending/failed backup jobs actually runs (otherwise it short-circuits).
+		bkAdmin := backup.NewMainService(db, backup.NewSlogLogger(slogLogger))
+		bkAdmin.SetDaemonClient(daemonClient)
+		bkWorker.SetJobService(bkAdmin.JobService())
 		dnsSvc, err = dnssvc.New(db)
 		if err != nil {
 			return fmt.Errorf("create dns service: %w", err)
@@ -771,8 +792,13 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeOnline, notifSvc)
 		membershipSvc = clustermembership.New(db, outboxPub)
 		membershipSvc.SetEvacuationPlanner(ep)
+
+		nodeAutoSvc = nodeautoscale.New(db, slogLogger).WithCloud(cloudMgr).WithMembership(membershipSvc)
+		nodeAutoSvc.Start(appCtx)
 		cleanupSvc = cleanupsvc.New(db, outboxPub)
 		cleanupSvc.Start(appCtx)
+		billingSvc = billingsvc.New(db)
+		billingSvc.StartReaper(appCtx)
 		dbContainerSvc = dbprovisioner.NewDBContainerService(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"))
 		dbSvcProv = services.NewDatabaseServiceProvisioner(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"), masterKeyring)
 		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewNoopStorage())
@@ -1115,6 +1141,7 @@ func run() error {
 		AuditLogService:            auditLogSvc,
 		EventRelay:                 eventRelay,
 		AutoScaler:                 autoSvc,
+		NodeAutoscaler:             nodeAutoSvc,
 		CrashDetector:              crashDetector,
 		DeploymentSvc:              deploySvc,
 		PreviewDeploymentSvc:       previewDeploySvc,
@@ -1144,6 +1171,8 @@ func run() error {
 		EndpointService:            endpointSvc,
 		AlertService:               alertSvc,
 		NotificationService:        notifSvc,
+		InstallerService:           installerSvc,
+		BillingService:             billingSvc,
 		ClusterMembershipService:   membershipSvc,
 		CleanupService:             cleanupSvc,
 		ReplicaManager:             replicaMgr,

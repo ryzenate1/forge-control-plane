@@ -95,6 +95,13 @@ func (s *LeastLoadedScorer) Score(_ context.Context, candidate Candidate, reques
 	score := availableRatio(candidate.AvailableMemory, candidate.TotalMemory) +
 		availableRatio(candidate.AvailableCPU, candidate.TotalCPU) +
 		availableRatio(candidate.AvailableDisk, candidate.TotalDisk)
+	if placementV2() {
+		// The three ratios describe one node, so their mean is the comparable
+		// score. Summing them made the result depend on how many resources a
+		// candidate happened to report and put it on a different scale from the
+		// bounded soft-constraint terms added to it.
+		score /= 3.0
+	}
 	reasons := []string{
 		fmt.Sprintf("available memory: %d MB", candidate.AvailableMemory),
 		fmt.Sprintf("available CPU: %d shares", candidate.AvailableCPU),
@@ -184,7 +191,20 @@ func ensureCapacity(candidate Candidate, request WorkloadRequest) error {
 
 func availableRatio(available, total int) float64 {
 	if total <= 0 {
-		return float64(available)
+		if !placementV2() {
+			return float64(available)
+		}
+		if available <= 0 {
+			return 0
+		}
+		// Capacity is unknown, not infinite. A monotonic bounded proxy keeps the
+		// ordering between a node with 100 MB free and one with 5 GB free while
+		// staying inside the band the soft terms are sized against.
+		return float64(available) / float64(available+1000)
 	}
-	return float64(available) / float64(total)
+	ratio := float64(available) / float64(total)
+	if !placementV2() {
+		return ratio
+	}
+	return clampUnit(ratio)
 }

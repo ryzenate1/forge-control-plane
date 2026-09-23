@@ -80,8 +80,18 @@ services:
     cap_add:
       - NET_ADMIN
     networks:
+      # docker-api reaches docker-proxy; docker-egress is the only path to
+      # PANEL_API_URL (and image registries). `internal: true` on docker-api
+      # blocks all outbound traffic, so without this second attachment the
+      # beacon could never register with or heartbeat to the panel.
       - docker-api
+      - docker-egress
 
 networks:
   docker-api:
     internal: true
+  # Non-internal bridge for control-plane egress. docker-proxy is deliberately
+  # NOT attached here, so the Docker API socket stays unreachable from any
+  # network that has outbound connectivity.
+  docker-egress:
+    internal: false

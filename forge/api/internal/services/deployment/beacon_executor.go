@@ -2,6 +2,7 @@ package deployment
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -51,12 +52,12 @@ func (b *BeaconRuntimeExecutor) ApplyDeployment(ctx context.Context, serverID, i
 	return nil
 }
 
-// VerifyRunning asks the node whether the workload is currently observable.
-// Beacon's stats endpoint errors for missing containers, so success confirms
-// the container exists post-provision; combined with SendPower("start")'s
-// own failure semantics inside ApplyDeployment this catches image failures,
-// node outages, and start failures. It cannot distinguish "running" from
-// "exited moments ago" — beacon exposes no state field today.
+// VerifyRunning asks the node whether the workload is actually running. It
+// reads the container's lifecycle state rather than the success of a metrics
+// call: a container that has already exited still answers stats-shaped
+// requests, so the old reading could certify a deployment as running seconds
+// after the process died. A Beacon that exposes no state endpoint cannot
+// confirm anything, which is reported as an error instead of a silent pass.
 func (b *BeaconRuntimeExecutor) VerifyRunning(ctx context.Context, serverID string) (bool, error) {
 	targetCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -64,8 +65,22 @@ func (b *BeaconRuntimeExecutor) VerifyRunning(ctx context.Context, serverID stri
 	if err != nil {
 		return false, fmt.Errorf("resolve node target: %w", err)
 	}
-	if _, err := b.Daemon.Stats(ctx, target.NodeURL, target.NodeToken, serverID); err != nil {
-		return false, fmt.Errorf("node stats: %w", err)
+	state, err := b.Daemon.ContainerState(ctx, target.NodeURL, target.NodeToken, serverID)
+	if errors.Is(err, daemon.ErrContainerStateUnsupported) {
+		return false, fmt.Errorf("node exposes no container lifecycle state, refusing to report a running workload from telemetry alone")
+	}
+	if err != nil {
+		return false, fmt.Errorf("node container state: %w", err)
+	}
+	if !state.Exists {
+		return false, fmt.Errorf("node reports no container for the workload")
+	}
+	if !state.Running {
+		status := state.Status
+		if status == "" {
+			status = "not running"
+		}
+		return false, fmt.Errorf("node reports container %s", status)
 	}
 	return true, nil
 }

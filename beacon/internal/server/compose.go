@@ -75,6 +75,50 @@ func validStackID(stackID string) bool {
 // "network_mode: host" must be caught regardless of quoting or YAML scalar
 // type, and only real compose keys are validated.
 func validateComposePolicy(yamlContent string) error {
+	return validateComposePolicyWithAllowlist(yamlContent, nil, false)
+}
+
+// composeSensitiveMountPrefixes are host locations a stack may never bind —
+// not even with admin and an allowlist: the kernel interfaces and boot
+// filesystem have no legitimate reason to appear in a game container.
+var composeSensitiveMountPrefixes = []string{"/proc", "/sys", "/boot"}
+
+// composeGuardedMountPrefixes need an explicit operator allowlist plus admin
+// scope. /etc holds the daemon's own identity files, so binding it into a game
+// container hands that container the credentials meant to reach the panel;
+// /dev exposes raw devices. Neither is ever reachable without configuration.
+var composeGuardedMountPrefixes = []string{"/etc", "/dev"}
+
+// isComposeSensitiveMount reports whether a bind source names one of the
+// prefixes above, comparing cleaned path components so "/etc/sub" and
+// "/etc/../etc" cannot slip past a bare prefix check.
+func isComposeSensitiveMount(source string) bool {
+	return matchesMountPrefix(source, composeSensitiveMountPrefixes)
+}
+
+// isComposeGuardedMount reports whether a bind source needs an explicit
+// operator allowlist before it may be used at all.
+func isComposeGuardedMount(source string) bool {
+	return matchesMountPrefix(source, composeGuardedMountPrefixes)
+}
+
+func matchesMountPrefix(source string, prefixes []string) bool {
+	cleaned := pathpkg.Clean(strings.ReplaceAll(source, "\\", "/"))
+	for _, blocked := range prefixes {
+		if cleaned == blocked || strings.HasPrefix(cleaned, blocked+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// validateComposePolicyWithAllowlist enforces the compose schema against an
+// optional operator mount allowlist. When admin is true and allowlist holds
+// roots, short- and long-form host binds inside those roots are permitted —
+// except the sensitive prefixes, which no allowlist can open. With admin false
+// or an empty allowlist the policy is exactly as strict as before this existed:
+// every host bind is rejected.
+func validateComposePolicyWithAllowlist(yamlContent string, allowlist []string, admin bool) error {
 	var doc map[string]any
 	if err := yaml.Unmarshal([]byte(yamlContent), &doc); err != nil {
 		return fmt.Errorf("compose YAML is invalid: %w", err)
@@ -124,7 +168,7 @@ func validateComposePolicy(yamlContent string) error {
 					return err
 				}
 			case "volumes":
-				if err := validateComposeVolumes(name, value); err != nil {
+				if err := validateComposeVolumesWithAllowlist(name, value, admin, allowlist); err != nil {
 					return err
 				}
 			}
@@ -269,29 +313,87 @@ func shortFormHostPort(entry string) string {
 	}
 }
 
+// validateComposeVolumes is the strict default: no host bind mounts at all,
+// anonymous volumes only.
 func validateComposeVolumes(service string, value any) error {
+	return validateComposeVolumesWithAllowlist(service, value, false, nil)
+}
+
+// validateComposeVolumesWithAllowlist checks volume entries against the mount
+// policy. Both the short form ("source:target[:mode]") and the long form
+// ({type: bind, source: ...}) go through the same predicate, so choosing the
+// structured spelling cannot dodge the check. A non-bind entry (a named or
+// anonymous volume) has no host source and always passes.
+//
+// The predicate is shared with the panel's compose validation: an ordinary host
+// path is allowed, while /proc and /sys are hard errors that no allowlist can
+// open. When an allowlist is configured it becomes the gate — a caller without
+// admin scope may not use it, and anything outside it is refused.
+func validateComposeVolumesWithAllowlist(service string, value any, admin bool, allowlist []string) error {
 	entries, ok := value.([]any)
 	if !ok {
 		return nil
 	}
 	for _, entry := range entries {
+		var source string
 		switch v := entry.(type) {
 		case map[string]any:
-			if composeString(v["type"]) == "bind" {
-				return fmt.Errorf("service %q: long-form bind mounts are not allowed in compose deployments", service)
+			if composeString(v["type"]) != "bind" {
+				continue
 			}
+			source = composeString(v["source"])
 		case string:
-			source, _, hasSource := strings.Cut(v, ":")
-			if !hasSource || source == "" {
+			first, _, hasSource := strings.Cut(v, ":")
+			if !hasSource || first == "" {
 				// Anonymous volume ("/data") or a bare container target.
 				continue
 			}
-			if strings.HasPrefix(source, "/") || isPathTraversal(source) {
-				return fmt.Errorf("service %q: host bind mount source %q is not allowed in compose deployments", service, source)
+			source = first
+		default:
+			continue
+		}
+		if !strings.HasPrefix(source, "/") && !isPathTraversal(source) {
+			// Relative sources resolve under the project directory, not the host
+			// root; they were never part of this gate. A traversal source is always
+			// checked, whatever the allowlist says.
+			continue
+		}
+		if isComposeSensitiveMount(source) {
+			return fmt.Errorf("service %q: host bind mount source %q is a protected system path and is never allowed in compose deployments", service, source)
+		}
+		if len(allowlist) > 0 {
+			if !admin {
+				return fmt.Errorf("service %q: host bind mount source %q requires an admin-scoped token", service, source)
 			}
+			if !mountSourceAllowed(source, allowlist) {
+				return fmt.Errorf("service %q: host bind mount source %q is outside the configured mount allowlist", service, source)
+			}
+			continue
+		}
+		// No allowlist configured: guarded paths have then explicitly not been
+		// opened by an operator, whatever scope the caller holds.
+		if isComposeGuardedMount(source) {
+			return fmt.Errorf("service %q: host bind mount source %q requires an operator-configured mount allowlist", service, source)
 		}
 	}
 	return nil
+}
+
+// mountSourceAllowed reports whether source lies within one of the allowlisted
+// roots, compared on cleaned path components so "/etc" listed as a root does not
+// silently admit "/etcshadow" and traversal escapes are caught by Clean.
+func mountSourceAllowed(source string, allowlist []string) bool {
+	cleaned := pathpkg.Clean(strings.ReplaceAll(source, "\\", "/"))
+	for _, root := range allowlist {
+		r := pathpkg.Clean(strings.ReplaceAll(root, "\\", "/"))
+		if r == "" || r == "." {
+			continue
+		}
+		if cleaned == r || strings.HasPrefix(cleaned, r+"/") {
+			return true
+		}
+	}
+	return false
 }
 
 func isPathTraversal(source string) bool {

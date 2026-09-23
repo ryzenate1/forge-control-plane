@@ -425,3 +425,64 @@ func (s *Service) StartReaper(ctx context.Context) context.CancelFunc {
 	go s.UsageReaper(reaperCtx, time.Hour, 7*24*time.Hour)
 	return cancel
 }
+
+// ---- Admin API surface ----
+//
+// These thin wrappers expose the persistence primitives the admin commerce
+// handlers need (plan CRUD, org quota, usage listing, settings) through the
+// service so the HTTP layer depends on the service seam rather than reaching
+// past it into the store.
+
+// ListPlans returns every configured plan ordered by price.
+func (s *Service) ListPlans(ctx context.Context) ([]store.BillingPlan, error) {
+	return s.store.ListBillingPlans(ctx)
+}
+
+// GetPlanByCode resolves a plan by its code, returning
+// store.ErrBillingPlanNotFound when absent.
+func (s *Service) GetPlanByCode(ctx context.Context, code string) (*store.BillingPlan, error) {
+	plan, err := s.store.GetBillingPlanByCode(ctx, code)
+	if err != nil {
+		return nil, err
+	}
+	if plan == nil {
+		return nil, store.ErrBillingPlanNotFound
+	}
+	return plan, nil
+}
+
+// CreatePlan persists a new plan.
+func (s *Service) CreatePlan(ctx context.Context, p store.BillingPlan) (*store.BillingPlan, error) {
+	return s.store.CreateBillingPlan(ctx, p)
+}
+
+// UpdatePlan applies a partial update to a plan.
+func (s *Service) UpdatePlan(ctx context.Context, id, name string, cents *int64, entitlements json.RawMessage, trialDays *int, active *bool) (*store.BillingPlan, error) {
+	return s.store.UpdateBillingPlan(ctx, id, name, cents, entitlements, trialDays, active)
+}
+
+// DeletePlan removes a plan by id.
+func (s *Service) DeletePlan(ctx context.Context, id string) error {
+	return s.store.DeleteBillingPlan(ctx, id)
+}
+
+// EnsureOrgQuota returns the org's quota row, creating a free-plan row on
+// first touch.
+func (s *Service) EnsureOrgQuota(ctx context.Context, orgID string) (*store.OrgQuota, error) {
+	return s.store.EnsureOrgQuota(ctx, orgID)
+}
+
+// ListUsageEvents returns meter events for an org since the given time.
+func (s *Service) ListUsageEvents(ctx context.Context, orgID string, since time.Time, limit int) ([]store.UsageEvent, error) {
+	return s.store.ListUsageEvents(ctx, orgID, since, limit)
+}
+
+// GetSettings returns the current billing settings.
+func (s *Service) GetSettings(ctx context.Context) (store.BillingSettings, error) {
+	return s.store.GetBillingSettings(ctx)
+}
+
+// UpdateSettings sets the webhook secret and external processor name.
+func (s *Service) UpdateSettings(ctx context.Context, secret, processor string) (store.BillingSettings, error) {
+	return s.store.UpdateBillingSettings(ctx, secret, processor)
+}

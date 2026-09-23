@@ -257,6 +257,15 @@ func (s *DBContainerService) Restart(ctx context.Context, containerID string) er
 	if db.ContainerID == "" {
 		return errors.New("container not yet provisioned")
 	}
+	// Restart must reach the runtime; a bare status flip would falsely report a
+	// running container that was never touched (AGENTS: never report success for
+	// work not performed).
+	if s.daemon == nil {
+		return errors.New("daemon client not configured; cannot restart container")
+	}
+	if err := s.daemon.AdminContainerRestart(ctx, s.beaconBaseURL, s.nodeToken, db.ContainerID); err != nil {
+		return err
+	}
 	return s.store.SetDBContainerStatus(ctx, containerID, "", "running", 0, "", "", nil)
 }
 

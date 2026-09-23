@@ -81,7 +81,7 @@ export function AdminLocations() {
  <tbody className="divide-y divide-white/[0.04]">
   {Array.isArray(locations) && locations.map((loc) => (
  <tr key={loc.id} className="hover:bg-white/[0.02] transition-colors">
- <td className="px-4 py-3 font-mono font-semibold text-[#dc2626]">{loc.short}</td>
+ <td className="px-4 py-3 font-mono font-semibold text-[var(--brand)]">{loc.short}</td>
  <td className="px-4 py-3 text-slate-300">{loc.long || <span className="text-slate-600">-</span>}</td>
  <td className="px-4 py-3"><Pill>{loc.nodeCount}</Pill></td>
  <td className="px-4 py-3"><Pill tone={(loc.serverCount ?? 0) > 0 ? "green" : "neutral"}>{loc.serverCount ?? 0}</Pill></td>

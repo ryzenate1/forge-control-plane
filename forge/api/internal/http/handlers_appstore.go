@@ -1,6 +1,10 @@
 package http
 
 import (
+	"net"
+	"net/url"
+	"strings"
+
 	"gamepanel/forge/internal/services/appstore"
 
 	"github.com/gofiber/fiber/v2"
@@ -11,7 +15,10 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 		return
 	}
 
-	store := protected.Group("/app-store", mutationLimiter)
+	// The app-store mutates the catalog and installs stacks, so the entire
+	// surface is admin-only. Without this guard any authenticated user could
+	// poison the catalog (sync) or install/uninstall/upgrade arbitrary apps.
+	store := protected.Group("/app-store", requireRole("admin"), mutationLimiter)
 
 	listAppsHandler := func(c *fiber.Ctx) error {
 		category := c.Query("category")
@@ -46,13 +53,14 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 		if req.AppKey == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "appKey is required"})
 		}
-		if req.UserID == "" {
-			userID := getUserID(c)
-			if userID == "" {
-				userID = "system"
-			}
-			req.UserID = userID
+		// The actor is derived from the verified session/API-token claims and the
+		// body-supplied userId is ignored, so a caller can never attribute an
+		// install to another user or to "system".
+		claims, cerr := currentClaims(c)
+		if cerr != nil {
+			return cerr
 		}
+		req.UserID = claims.Sub
 		if req.MemoryMB <= 0 {
 			req.MemoryMB = 256
 		}
@@ -79,8 +87,6 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 	})
 
 	store.Post("/:id/uninstall", func(c *fiber.Ctx) error {
-		// ?force=true bypasses graceful compose stop errors (composeSvc.Delete handles force via volumes/force opts; here we ensure query is accepted)
-		_ = c.Query("force")
 		if err := svc.UninstallApp(c.Context(), c.Params("id")); err != nil {
 			return respondInternalError(c, err)
 		}
@@ -110,9 +116,64 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		if err := validateRegistryURL(req.RegistryURL); err != nil {
+			return err
+		}
 		if err := svc.SyncFromRemote(c.Context(), req.RegistryURL); err != nil {
 			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": "sync initiated"})
 	})
+}
+
+// validateRegistryURL guards the app-store sync target against SSRF and
+// catalog poisoning. It rejects non-HTTPS URLs and any host that resolves to a
+// loopback, link-local or private address, so a caller cannot point the daemon
+// at internal infrastructure (metadata endpoints, the control plane itself,
+// other tenants' services) and have its response written into the catalog.
+func validateRegistryURL(raw string) error {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "registryUrl is required")
+	}
+	u, err := url.Parse(raw)
+	if err != nil || u.Host == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "invalid registry URL")
+	}
+	if !strings.EqualFold(u.Scheme, "https") {
+		return fiber.NewError(fiber.StatusBadRequest, "registry URL must use https")
+	}
+	if u.User != nil {
+		return fiber.NewError(fiber.StatusBadRequest, "registry URL must not include credentials")
+	}
+	host := u.Hostname()
+	if host == "" {
+		return fiber.NewError(fiber.StatusBadRequest, "registry URL must include a host")
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return rejectDisallowedRegistryIP(ip)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil || len(ips) == 0 {
+		return fiber.NewError(fiber.StatusBadRequest, "registry host could not be resolved")
+	}
+	for _, ip := range ips {
+		if err := rejectDisallowedRegistryIP(ip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// rejectDisallowedRegistryIP reports whether an address falls into a range the
+// registry fetch must never reach.
+func rejectDisallowedRegistryIP(ip net.IP) error {
+	if ip == nil {
+		return fiber.NewError(fiber.StatusBadRequest, "registry host resolves to an invalid address")
+	}
+	if ip.IsLoopback() || ip.IsUnspecified() || ip.IsPrivate() ||
+		ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() {
+		return fiber.NewError(fiber.StatusBadRequest, "registry host resolves to a disallowed address")
+	}
+	return nil
 }

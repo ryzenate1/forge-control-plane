@@ -60,6 +60,12 @@ func NewMainService(store *store.Store, logger Logger) *MainService {
 	return service
 }
 
+// JobService exposes the fully-wired job service so an out-of-band worker can
+// be given it to retry pending/failed backup jobs (Worker.SetJobService).
+func (s *MainService) JobService() *JobService {
+	return s.jobService
+}
+
 // SetBeaconClient sets the beacon client for all services
 func (s *MainService) SetBeaconClient(beaconClient BeaconClient) {
 	s.beaconClient = beaconClient

@@ -364,6 +364,19 @@ type StatsResponse struct {
 	NetworkTxBytes uint64  `json:"networkTxBytes"`
 }
 
+// ContainerStateResponse is Beacon's explicit lifecycle answer for a workload.
+// It exists because stats cannot carry state: a stopped container has no
+// stats to stream, so inferring "running" from a successful stats call can
+// never distinguish missing from stopped. Absent (older) beacons return
+// ErrContainerStateUnsupported rather than a guessed zero value.
+type ContainerStateResponse struct {
+	ServerID  string    `json:"serverId"`
+	Exists    bool      `json:"exists"`
+	Running   bool      `json:"running"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
 type FileDownload struct {
 	Body io.ReadCloser
 	Size int64
@@ -765,6 +778,40 @@ func (c *Client) Stats(ctx context.Context, baseURL, nodeToken, serverID string)
 	var payload StatsResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return StatsResponse{}, err
+	}
+	return payload, nil
+}
+
+// ErrContainerStateUnsupported means the Beacon predates the /state endpoint.
+// Callers must treat that as unknown, never as stopped or missing.
+var ErrContainerStateUnsupported = errors.New("beacon does not expose container state")
+
+// ContainerState asks the node for the lifecycle state of a server's
+// container. A 404 on this route is ambiguous — an old beacon without the
+// endpoint answers 404 just like a missing container would — so it maps to
+// ErrContainerStateUnsupported instead of a fabricated "does not exist".
+func (c *Client) ContainerState(ctx context.Context, baseURL, nodeToken, serverID string) (ContainerStateResponse, error) {
+	url := strings.TrimRight(baseURL, "/") + "/servers/" + serverID + "/state"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, url, nil)
+	if err != nil {
+		return ContainerStateResponse{}, err
+	}
+
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return ContainerStateResponse{}, err
+	}
+	defer res.Body.Close()
+
+	switch {
+	case res.StatusCode == http.StatusNotFound:
+		return ContainerStateResponse{}, ErrContainerStateUnsupported
+	case res.StatusCode < 200 || res.StatusCode >= 300:
+		return ContainerStateResponse{}, fmt.Errorf("daemon container state request failed with status %d", res.StatusCode)
+	}
+	var payload ContainerStateResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ContainerStateResponse{}, err
 	}
 	return payload, nil
 }

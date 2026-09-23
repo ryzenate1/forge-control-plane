@@ -27,6 +27,12 @@ func tenantTestPool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
+// The Envelope.TenantID field, NewEnvelopeWithTenant constructor, and the
+// tenant_id outbox column write were removed from the event store: the events
+// table keeps a nullable tenant_id column (migration 215) purely for external
+// audit partitioning, and Publish no longer populates it. These tests pin the
+// post-refactor shape.
+
 func TestEventStore_TenantColumn_PublishAndRoundTrip(t *testing.T) {
 	pool := tenantTestPool(t)
 	defer pool.Close()
@@ -36,31 +42,30 @@ func TestEventStore_TenantColumn_PublishAndRoundTrip(t *testing.T) {
 	}
 	store := New(pool)
 	ctx := context.Background()
-	tenantID := uuid.NewString()
-	env := events.NewEnvelopeWithTenant(events.EventServerCreated, "test", "server", uuid.NewString(), tenantID, map[string]any{"foo": "bar"})
+	env := events.NewEnvelope(events.EventServerCreated, "test", "server", uuid.NewString(), map[string]any{"foo": "bar"})
 	if err := store.Publish(ctx, env); err != nil {
-		t.Fatalf("publish with tenant: %v", err)
+		t.Fatalf("publish: %v", err)
 	}
-	// query raw tenant_id column to verify persisted
-	var storedTenant string
-	err := pool.QueryRow(ctx, `SELECT COALESCE(tenant_id::text,'') FROM events WHERE id = $1`, env.ID).Scan(&storedTenant)
+	// query raw tenant_id column to verify it stays NULL for store publishes
+	var storedTenant *string
+	err := pool.QueryRow(ctx, `SELECT tenant_id::text FROM events WHERE id = $1`, env.ID).Scan(&storedTenant)
 	if err != nil {
-		// column may not exist if migration 211 not yet run via file migrations (eventstore migration adds it)
+		// column may not exist if migration 215 not yet run via file migrations (eventstore migration adds it)
 		t.Fatalf("query tenant_id column: %v", err)
 	}
-	if storedTenant != tenantID {
-		t.Fatalf("tenant_id persisted mismatch: got %q want %q", storedTenant, tenantID)
+	if storedTenant != nil {
+		t.Fatalf("store.Publish must leave tenant_id NULL after refactor, got %q", *storedTenant)
 	}
-	// Pending should return tenant
-	pending, err := store.Pending(ctx, 10)
+	// Pending should round-trip the envelope fields that do exist
+	pending, err := store.Pending(ctx, 1000)
 	if err != nil {
 		t.Fatalf("pending: %v", err)
 	}
 	found := false
 	for _, e := range pending {
 		if e.ID == env.ID {
-			if e.TenantID != tenantID {
-				t.Fatalf("pending StoredEvent TenantID mismatch: %q vs %q", e.TenantID, tenantID)
+			if e.CorrelationID != env.CorrelationID {
+				t.Fatalf("pending CorrelationID mismatch: %q vs %q", e.CorrelationID, env.CorrelationID)
 			}
 			found = true
 		}
@@ -72,8 +77,8 @@ func TestEventStore_TenantColumn_PublishAndRoundTrip(t *testing.T) {
 			t.Fatalf("claim: %v", err)
 		}
 		for _, e := range claimed {
-			if e.ID == env.ID && e.TenantID != tenantID {
-				t.Fatalf("claimed TenantID mismatch: %q", e.TenantID)
+			if e.ID == env.ID && e.CorrelationID != env.CorrelationID {
+				t.Fatalf("claimed CorrelationID mismatch: %q", e.CorrelationID)
 			}
 		}
 	}
@@ -90,10 +95,7 @@ func TestEventStore_TenantNull_BackwardsCompatible(t *testing.T) {
 	store := New(pool)
 	ctx := context.Background()
 	env := events.NewEnvelope(events.EventServerCreated, "test", "server", uuid.NewString(), map[string]any{})
-	// NewEnvelope without tenant should publish with NULL tenant_id
-	if env.TenantID != "" {
-		t.Fatalf("expected empty tenant for no payload tenant")
-	}
+	// Publish without any tenant hint should leave tenant_id NULL
 	if err := store.Publish(ctx, env); err != nil {
 		t.Fatalf("publish without tenant: %v", err)
 	}

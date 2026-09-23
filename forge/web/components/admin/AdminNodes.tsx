@@ -199,7 +199,7 @@ function NodeRow({ node, locations, regions, onClick, onQuick, serverCount }: {
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
           {node.maintenanceMode && <Wrench size={12} className="text-amber-400" />}
-          <button type="button" className="font-semibold text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dc2626]" onClick={onClick}>{node.name}</button>
+          <button type="button" className="font-semibold text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={onClick}>{node.name}</button>
         </div>
       </td>
       <td className="px-4 py-3 font-mono text-xs capitalize">{actualState}</td>
@@ -564,7 +564,7 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
             </select>
           </label>
           <label className="flex items-center gap-2 text-sm">
-            <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="accent-[#dc2626]" />
+            <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="accent-[var(--brand)]" />
             <span>Behind Proxy</span>
           </label>
           <label className="block text-sm">
@@ -708,7 +708,7 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
           <thead>
             <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
               <th className="px-4 py-2">
-                <input type="checkbox" checked={allFiltered} onChange={toggleAll} disabled={deletable.length === 0 || deleteBulkMut.isPending} className="accent-[#dc2626]" />
+                <input type="checkbox" checked={allFiltered} onChange={toggleAll} disabled={deletable.length === 0 || deleteBulkMut.isPending} className="accent-[var(--brand)]" />
               </th>
               <th className="px-4 py-2">IP</th>
               <th className="px-4 py-2">Alias</th>
@@ -720,7 +720,7 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
             {filtered.map((a) => (
               <tr key={a.id} className="border-b border-white/[0.04]">
                 <td className="px-4 py-2">
-                  <input type="checkbox" disabled={!!a.server || deleteBulkMut.isPending} checked={selected.has(a.id)} onChange={() => toggle(a.id)} className="accent-[#dc2626]" />
+                  <input type="checkbox" disabled={!!a.server || deleteBulkMut.isPending} checked={selected.has(a.id)} onChange={() => toggle(a.id)} className="accent-[var(--brand)]" />
                 </td>
                 <td className="px-4 py-2 font-mono text-xs">{a.ip}</td>
                 <td className="px-4 py-2">
@@ -1143,7 +1143,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 ) : locations.length === 0 ? <p className="mt-1 text-xs text-amber-300">Create a location first before adding a node.</p> : null}
               </label>
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={publicNode} onChange={(e) => setPublicNode(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={publicNode} onChange={(e) => setPublicNode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Public node</span>
               </label>
             </div>
@@ -1162,7 +1162,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 </select>
               </label>
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Behind Proxy</span>
               </label>
               <Input label="Allowed IPs" value={allowedIps} onChange={setAllowedIps} placeholder="Comma-separated, e.g. 10.0.0.0/8, 192.168.1.0/24" />
@@ -1218,7 +1218,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 <Input label="Port Max" value={allocationPortMax} onChange={setAllocationPortMax} type="number" />
               </div>
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={autoAllocate} onChange={(e) => setAutoAllocate(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={autoAllocate} onChange={(e) => setAutoAllocate(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Auto-allocate ports</span>
               </label>
             </div>
@@ -1252,11 +1252,11 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Monitoring & Alerts" icon={Activity} />
             <div className="space-y-5 p-5">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={enableHealthChecks} onChange={(e) => setEnableHealthChecks(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={enableHealthChecks} onChange={(e) => setEnableHealthChecks(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable health checks</span>
               </label>
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={enableMetrics} onChange={(e) => setEnableMetrics(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={enableMetrics} onChange={(e) => setEnableMetrics(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable metrics collection</span>
               </label>
               <Input label="Prometheus Endpoint" value={prometheusEndpoint} onChange={setPrometheusEndpoint} placeholder="Optional Prometheus scrape URL" />
@@ -1275,13 +1275,13 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Maintenance & Security" icon={Lock} />
             <div className="space-y-5 p-5">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                <input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                <input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Maintenance mode</span>
               </label>
               {maintenanceMode && (
                 <div className="space-y-4 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4">
                   <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
-                    <input type="checkbox" checked={drainBeforeMaintenance} onChange={(e) => setDrainBeforeMaintenance(e.target.checked)} className="h-4 w-4 accent-[#dc2626]" />
+                    <input type="checkbox" checked={drainBeforeMaintenance} onChange={(e) => setDrainBeforeMaintenance(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                     <span>Drain before maintenance</span>
                   </label>
                   <Input label="Maintenance Message" value={maintenanceMessage} onChange={setMaintenanceMessage} placeholder="Displayed to users during maintenance" />

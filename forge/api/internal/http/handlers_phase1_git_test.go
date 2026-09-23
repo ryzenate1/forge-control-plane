@@ -61,7 +61,7 @@ func (e *storeNotFoundError) Error() string { return e.msg }
 
 func testPhase1Bridge(t *testing.T) (*phase1git.Bridge, *fakePhase1Storage) {
 	t.Helper()
-	svc := gitprovider.NewGitProviderService(nil, nil)
+	svc := gitprovider.NewService(nil, nil)
 	// Register GitHub OAuth so authorize/callback are considered configured.
 	svc.RegisterProviderConfig(&gitprovider.ProviderConfig{
 		Type: gitprovider.ProviderGitHub,
@@ -214,7 +214,7 @@ func TestPhase1GitOAuthCallback(t *testing.T) {
 // registered with its own OAuth config and the authorize URL is verified to
 // contain the provider-specific host.
 func TestGitProviderHandlesAllTokens(t *testing.T) {
-	svc := gitprovider.NewGitProviderService(nil, nil)
+	svc := gitprovider.NewService(nil, nil)
 	providers := []struct {
 		pt   gitprovider.ProviderType
 		base string

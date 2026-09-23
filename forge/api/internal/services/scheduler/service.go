@@ -141,6 +141,15 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 				})
 			}
 			if err != nil {
+				// Only a genuine capacity conflict means "ask the next node".
+				// Anything else — the database being unreachable, for example — is
+				// not evidence about capacity, and folding it into "insufficient
+				// capacity on all candidate nodes" would point the operator at the
+				// wrong subsystem entirely.
+				if !reservations.IsConflict(err) {
+					return domain.PlacementDecision{}, fmt.Errorf("reserve capacity on node %s: %w", scored.Node.ID, err)
+				}
+				slog.WarnContext(ctx, "scheduler: reservation conflicted, trying next candidate", "nodeId", scored.Node.ID, "error", err)
 				continue
 			}
 		}
@@ -186,7 +195,10 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			// Excluding the node is the safe direction, but an unreadable node and
+			// a rejected node must not be indistinguishable in the logs.
 			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
 			continue
 		}
 		if !HasCapacity(snapshot.TotalCPU, snapshot.AvailableCPU, req.CPU) {
@@ -201,7 +213,7 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 			s.recordCapacityExceeded(ctx, node.ID, "disk", snapshot.AvailableDisk, req.DiskMB)
 			continue
 		}
-		if req.StorageLocality == "local_only" && node.RuntimeProvider != "" && node.RuntimeProvider != "local" {
+		if isLocalStorageLocality(req.StorageLocality) && storageLocalityForProvider(node.RuntimeProvider) != "local" {
 			s.recordPlacementRejection()
 			continue
 		}
@@ -253,15 +265,25 @@ func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest,
 
 	nodeMap := make(map[string]store.Node, len(nodes))
 	candidates := make([]placement.Candidate, 0, len(nodes))
+	var unreadable []string
 	for _, node := range nodes {
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			// Unknown capacity is not empty capacity. The node is excluded, which
+			// is the safe direction, but a caller left with no candidates is told
+			// the real reason rather than being shown a capacity verdict.
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+			unreadable = append(unreadable, fmt.Sprintf("%s: %v", node.ID, err))
 			continue
 		}
 		nodeMap[node.ID] = node
 		candidates = append(candidates, nodeToCandidate(snapshot, node))
 	}
 	if len(candidates) == 0 {
+		if len(unreadable) > 0 {
+			return nil, fmt.Errorf("node capacity is unknown for all %d candidate node(s): %s", len(unreadable), strings.Join(unreadable, "; "))
+		}
 		return nil, nil
 	}
 	results, err := s.engine.PlaceAll(ctx, candidates, workload)
@@ -274,26 +296,33 @@ func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest,
 		if !ok {
 			continue
 		}
+		// The predictive term is a multiplier, so it is applied to the engine
+		// score on its own. Directives are added afterwards: multiplying a running
+		// total that already contained a directive let a forecast amplify or
+		// cancel something the operator had stated explicitly.
+		score := r.Score
 		reason := strings.Join(r.Reasons, "; ")
-		if req.PreferredNode != "" && node.ID == req.PreferredNode {
-			r.Score += 1e9
-			reason = "preferred node"
-		}
 		if s.predictiveScorer != nil {
-			ps, err := s.predictiveScorer.ScorePredictive(ctx, node.ID, req)
-			if err == nil && ps != nil {
-				r.Score = r.Score*(1+ps.TrendScore) + ps.AffinityScore - ps.AntiAffinityScore
+			ps, predictiveErr := s.predictiveScorer.ScorePredictive(ctx, node.ID, req)
+			if predictiveErr == nil && ps != nil {
+				score = score*(1+ps.TrendScore) + ps.AffinityScore - ps.AntiAffinityScore
 				reason = reason + "; predictive: trend=" + fmt.Sprintf("%.4f", ps.TrendScore) + " affinity=" + fmt.Sprintf("%.4f", ps.AffinityScore) + " anti-affinity=" + fmt.Sprintf("%.4f", ps.AntiAffinityScore)
 			}
 		}
-		if req.StorageLocality != "" && r.StorageLocality != req.StorageLocality {
-			r.Score -= 1e10
-			reason = reason + "; storage locality mismatch penalty"
-		} else if req.StorageLocality != "" && r.StorageLocality == req.StorageLocality {
-			r.Score += 1e8
-			reason = reason + "; storage locality match bonus"
+		if req.PreferredNode != "" && node.ID == req.PreferredNode {
+			score += preferredNodeBonus()
+			reason = "preferred node"
 		}
-		scores = append(scores, NodeScore{Node: node, Score: r.Score, Reason: reason})
+		if req.StorageLocality != "" {
+			if storageLocalityEqual(req.StorageLocality, r.StorageLocality) {
+				score += storageLocalityBonus()
+				reason = reason + "; storage locality match bonus"
+			} else {
+				score -= storageLocalityPenalty()
+				reason = reason + "; storage locality mismatch penalty"
+			}
+		}
+		scores = append(scores, NodeScore{Node: node, Score: score, Reason: reason})
 	}
 	return scores, nil
 }
@@ -332,6 +361,11 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 	for _, node := range filtered {
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			// The node is left out of this placement, which is the safe direction,
+			// but a replica that fails to place because capacity could not be read
+			// has to be distinguishable from one that failed for lack of room.
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
 			continue
 		}
 		candidates = append(candidates, nodeToCandidate(snapshot, node))
@@ -445,6 +479,10 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 		for _, node := range filtered {
 			snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 			if err != nil {
+				// Excluded — scale up onto the nodes Forge can actually read — but
+				// said out loud, so a short scale-up is not mistaken for a full one.
+				s.recordPlacementRejection()
+				slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
 				continue
 			}
 			candidates = append(candidates, nodeToCandidate(snapshot, node))
@@ -488,7 +526,9 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 				Reasons:  []string{f.Reason},
 			})
 		}
-		_, _ = s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount)
+		if _, err := s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount); err != nil {
+			return nil, fmt.Errorf("record desired replicas for app %s: %w", req.AppID, err)
+		}
 		return reasons, nil
 	}
 
@@ -505,8 +545,22 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 		}
 	}
 	reasons := make([]domain.PlacementReason, 0, len(toRemove))
+	var failedRemovals []string
 	for _, inst := range toRemove {
-		_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "removing")
+		if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "removing"); err != nil {
+			// The instance is still live, so it has not been removed and must not
+			// be reported as such. Record the failure and keep going so the
+			// instances that were marked are still visible in the result.
+			failedRemovals = append(failedRemovals, fmt.Sprintf("%s: %v", inst.ID, err))
+			slog.WarnContext(ctx, "scheduler: could not mark instance removing during scale down", "instanceId", inst.ID, "error", err)
+			reasons = append(reasons, domain.PlacementReason{
+				InstanceID: inst.ID,
+				NodeID:     inst.NodeID,
+				Accepted:   false,
+				Reasons:    []string{fmt.Sprintf("mark instance removing: %v", err)},
+			})
+			continue
+		}
 		reasons = append(reasons, domain.PlacementReason{
 			InstanceID: inst.ID,
 			NodeID:     inst.NodeID,
@@ -514,7 +568,12 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 			Reasons:    []string{"scale down - removed instance"},
 		})
 	}
-	_, _ = s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount)
+	if _, err := s.store.UpdateReplicaAppReplicas(ctx, req.AppID, req.ReplicaCount); err != nil {
+		return reasons, fmt.Errorf("record desired replicas for app %s: %w", req.AppID, err)
+	}
+	if len(failedRemovals) > 0 {
+		return reasons, fmt.Errorf("scale down incomplete: %s", strings.Join(failedRemovals, "; "))
+	}
 	return reasons, nil
 }
 
@@ -531,23 +590,31 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 		return nil, err
 	}
 
-	// Mark current as removing
-	_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "removing")
+	// Mark current as removing. If this write fails the instance is still live
+	// and counted as active, so the replacement has to stop here: continuing
+	// would place a second instance over a workload nothing has retired.
+	if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "removing"); err != nil {
+		return nil, fmt.Errorf("mark instance %s removing: %w", inst.ID, err)
+	}
 
-	// Find replacement node
+	// Find replacement node.
+	//
+	// A filtering failure used to fall back to every node, which is the one set
+	// filtering exists to exclude: drained, offline and maintenance machines.
+	// Not knowing which nodes are eligible is not a licence to try all of them.
 	nodes, err := s.store.ListNodes(ctx)
 	if err != nil {
 		return nil, err
 	}
-	filtered, filterErr := s.FilterNodes(ctx, domain.PlacementRequest{CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, nodes)
-	if filterErr != nil {
-		slog.WarnContext(ctx, "node filtering failed during replacement, falling back to all nodes", "error", filterErr)
-		filtered = nodes
-	} else if filtered == nil {
-		filtered = nodes
+	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, nodes)
+	if err != nil {
+		return nil, fmt.Errorf("filter replacement candidates: %w", err)
 	}
 
-	existing, _ := s.store.ListInstancesByApp(ctx, app.ID)
+	existing, err := s.store.ListInstancesByApp(ctx, app.ID)
+	if err != nil {
+		return nil, fmt.Errorf("list instances of app %s for placement: %w", app.ID, err)
+	}
 	existingNodeMap := make(map[string]int)
 	for _, e := range existing {
 		if e.Status != "removing" && e.Status != "failed" {
@@ -556,12 +623,20 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 	}
 
 	candidates := make([]placement.Candidate, 0, len(filtered))
+	var unreadable []string
 	for _, node := range filtered {
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
+			s.recordPlacementRejection()
+			slog.WarnContext(ctx, "scheduler: node capacity snapshot failed, node excluded", "nodeId", node.ID, "error", err)
+			unreadable = append(unreadable, fmt.Sprintf("%s: %v", node.ID, err))
 			continue
 		}
 		candidates = append(candidates, nodeToCandidate(snapshot, node))
+	}
+	if len(candidates) == 0 && len(unreadable) > 0 {
+		restoreInstance(ctx, s.store, inst.ID)
+		return nil, fmt.Errorf("node capacity is unknown for all %d candidate node(s): %s", len(unreadable), strings.Join(unreadable, "; "))
 	}
 
 	replicas := []placement.ReplicaSpec{{
@@ -579,12 +654,13 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 	}
 	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
 	if err != nil {
+		restoreInstance(ctx, s.store, inst.ID)
 		return nil, err
 	}
 
 	if len(result.Placements) == 0 {
 		// Restore instance
-		_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "failed")
+		restoreInstance(ctx, s.store, inst.ID)
 		s.mu.Lock()
 		s.metrics.FailedReplacementsTotal++
 		s.mu.Unlock()
@@ -596,9 +672,15 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 	}
 
 	p := result.Placements[0]
-	// Update instance to new node
-	_, _ = s.store.UpdateInstanceNode(ctx, inst.ID, p.NodeID)
-	_, _ = s.store.UpdateInstanceStatus(ctx, inst.ID, "pending")
+	// Update instance to new node. Reporting a replacement the database never
+	// recorded would leave the caller with an instance that does not exist.
+	if _, err := s.store.UpdateInstanceNode(ctx, inst.ID, p.NodeID); err != nil {
+		restoreInstance(ctx, s.store, inst.ID)
+		return nil, fmt.Errorf("assign instance %s to node %s: %w", inst.ID, p.NodeID, err)
+	}
+	if _, err := s.store.UpdateInstanceStatus(ctx, inst.ID, "pending"); err != nil {
+		return nil, fmt.Errorf("mark instance %s pending on node %s: %w", inst.ID, p.NodeID, err)
+	}
 
 	return &domain.PlacementReason{
 		InstanceID: inst.ID,
@@ -607,6 +689,24 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 		Accepted:   true,
 		Reasons:    append(p.Reasons, "replaced failed instance"),
 	}, nil
+}
+
+// restoreInstance puts an instance back to "failed" after a replacement attempt
+// abandoned it, so it is not stranded in "removing" with nothing being removed.
+// Failing to restore is logged rather than returned: the caller is already being
+// told the replacement failed, and overwriting that with a bookkeeping error
+// would hide the actual cause.
+func restoreInstance(ctx context.Context, st instanceStatusWriter, instanceID string) {
+	if st == nil || instanceID == "" {
+		return
+	}
+	if _, err := st.UpdateInstanceStatus(ctx, instanceID, "failed"); err != nil {
+		slog.ErrorContext(ctx, "scheduler: could not restore instance after a failed replacement", "instanceId", instanceID, "error", err)
+	}
+}
+
+type instanceStatusWriter interface {
+	UpdateInstanceStatus(ctx context.Context, id, status string) (store.Instance, error)
 }
 
 func filterByRuntimeProvider(nodes []store.Node, runtime string) []store.Node {
@@ -633,10 +733,7 @@ func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) place
 	if node.RegionID != nil {
 		regionID = *node.RegionID
 	}
-	storageLocality := "local"
-	if node.RuntimeProvider == "nfs" || node.RuntimeProvider == "shared" {
-		storageLocality = "shared"
-	}
+	storageLocality := storageLocalityForProvider(node.RuntimeProvider)
 	return placement.Candidate{
 		NodeID:          node.ID,
 		RegionID:        regionID,
@@ -675,6 +772,7 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	req.RequiredNode = strings.TrimSpace(firstNonEmpty(req.RequiredNode, req.NodeID))
 	req.PreferredNode = strings.TrimSpace(req.PreferredNode)
 	req.AllocationID = strings.TrimSpace(req.AllocationID)
+	req.StorageLocality = canonicalStorageLocality(req.StorageLocality)
 	if req.CPU == 0 {
 		req.CPU = req.CPUShares
 	}

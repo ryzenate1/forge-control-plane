@@ -13,7 +13,10 @@ func TestAccountRecoveryRoutes_NilStore(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	noop := func(c *fiber.Ctx) error { return c.Next() }
 	protected := app.Group("/api/v1")
-	registerAccountRecoveryRoutes(protected, Config{Store: nil}, noop)
+	// Production signature is (v1, protected, cfg, authLimiter); the public
+	// recovery routes mount on v1, so passing the same group for both keeps
+	// every route under /api/v1 for this nil-store 503 check.
+	registerAccountRecoveryRoutes(protected, protected, Config{Store: nil}, noop)
 
 	endpoints := []struct {
 		method string

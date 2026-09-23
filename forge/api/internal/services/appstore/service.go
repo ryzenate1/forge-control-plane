@@ -161,17 +161,26 @@ func (s *Service) UpgradeApp(ctx context.Context, installID string) (*store.AppS
 		EnvVars:     params,
 	}
 
-	if inst.ComposeProjectID != "" {
-		_, updateErr := s.composeSvc.UpdateComposeStack(ctx, inst.ComposeProjectID, updateReq)
-		if updateErr != nil {
-			_ = s.store.UpdateAppStoreInstallStatus(ctx, installID, "error", updateErr.Error())
-			inst.Status = "error"
-			inst.ErrorMessage = updateErr.Error()
-			return inst, updateErr
-		}
+	if inst.ComposeProjectID == "" {
+		// Without a compose project there is nothing to upgrade: the step cannot
+		// do its job, so it must not report "running". Fail honestly instead.
+		msg := "no compose project is attached to this install; cannot upgrade"
+		_ = s.store.UpdateAppStoreInstallStatus(ctx, installID, "error", msg)
+		inst.Status = "error"
+		inst.ErrorMessage = msg
+		return inst, errors.New(msg)
 	}
 
-	_ = s.store.UpdateAppStoreInstallStatus(ctx, installID, "running", "")
+	if _, updateErr := s.composeSvc.UpdateComposeStack(ctx, inst.ComposeProjectID, updateReq); updateErr != nil {
+		_ = s.store.UpdateAppStoreInstallStatus(ctx, installID, "error", updateErr.Error())
+		inst.Status = "error"
+		inst.ErrorMessage = updateErr.Error()
+		return inst, updateErr
+	}
+
+	if err := s.store.UpdateAppStoreInstallStatus(ctx, installID, "running", ""); err != nil {
+		return inst, fmt.Errorf("upgrade applied but status update failed: %w", err)
+	}
 	inst.Status = "running"
 	return inst, nil
 }

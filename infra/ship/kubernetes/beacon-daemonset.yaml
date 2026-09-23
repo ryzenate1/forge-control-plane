@@ -169,10 +169,13 @@ spec:
               value: "1"
             - name: POST
               value: "1"
+            # Match the infra/compose.beacon.yml socket-proxy posture: arbitrary
+            # image builds and container exec are disabled. BUILD/EXEC=1 hands
+            # anyone who reaches this proxy root-on-the-host via the socket.
             - name: BUILD
-              value: "1"
+              value: "0"
             - name: EXEC
-              value: "1"
+              value: "0"
             - name: AUTH
               value: "0"
             - name: SECRETS

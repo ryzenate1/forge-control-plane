@@ -90,6 +90,15 @@ func CreateSourceDeployment(cfg Config) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, "buildType must be one of: dockerfile, nixpacks, heroku, paketo, static")
 		}
 
+		// Validations above are pure request-shape checks and must answer 400
+		// even when no database is reachable. Only once the payload is accepted
+		// do we require a live pool: guarding here turns a nil *pgxpool.Pool
+		// (a zero-value Store) into a 503 instead of a nil-pointer panic deep
+		// inside pgxpool.(*Pool).Acquire.
+		if cfg.Store.DB() == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+
 		ctx, cancel := requestContext()
 		defer cancel()
 		var createdBy *string

@@ -98,13 +98,20 @@ type ServerStats struct {
 }
 
 // NodeHeartbeat represents node health report
+//
+// MemoryMB and DiskMB report total physical capacity, so they are pointers:
+// capacity that could not be read is unknown and is omitted from the payload
+// (nil + omitempty) rather than sent as a fabricated number. The panel treats a
+// missing/zero reading as "unreported" and falls back to the capacity an
+// administrator configured for the node, while a sentinel such as -1 would be
+// stored as a real total and make the node look either exhausted or unlimited.
 type NodeHeartbeat struct {
 	Version         string  `json:"version"`
 	OS              string  `json:"os"`
 	Architecture    string  `json:"architecture"`
 	CPUThreads      int     `json:"cpuThreads"`
-	MemoryMB        int64   `json:"memoryMb"`
-	DiskMB          int64   `json:"diskMb"`
+	MemoryMB        *int64  `json:"memoryMb,omitempty"`
+	DiskMB          *int64  `json:"diskMb,omitempty"`
 	DockerStatus    string  `json:"dockerStatus,omitempty"`
 	RuntimeStatus   string  `json:"runtimeStatus"`
 	RuntimeProvider string  `json:"runtimeProvider"`

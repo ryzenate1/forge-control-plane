@@ -2,6 +2,7 @@ package trafficmanager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -349,6 +350,12 @@ func TestTraefik_Rollback(t *testing.T) {
 
 	proxy := NewTraefikReverseProxy(dir, strings.TrimPrefix(admin.URL, "http://"))
 
+	// With no backup on disk, nothing can be rolled back: Rollback must report
+	// errNoBackup rather than a false success.
+	if err := proxy.Rollback(context.Background()); !errors.Is(err, errNoBackup) {
+		t.Fatalf("expected errNoBackup when no backup exists, got %v", err)
+	}
+
 	err := proxy.UpdateRoutes(context.Background(), []*RoutingRule{
 		{ID: "v1", Domain: "v1.example.com", Path: "/", TargetPort: 8080, TargetHost: "localhost", Enabled: true},
 	}, nil)
@@ -356,9 +363,25 @@ func TestTraefik_Rollback(t *testing.T) {
 		t.Fatalf("initial update failed: %v", err)
 	}
 
+	// A second update backs up the first routes.yml, giving Rollback something real to restore.
+	err = proxy.UpdateRoutes(context.Background(), []*RoutingRule{
+		{ID: "v2", Domain: "v2.example.com", Path: "/", TargetPort: 8081, TargetHost: "localhost", Enabled: true},
+	}, nil)
+	if err != nil {
+		t.Fatalf("second update failed: %v", err)
+	}
+
 	err = proxy.Rollback(context.Background())
 	if err != nil {
 		t.Fatalf("Rollback failed: %v", err)
+	}
+
+	// An empty backup file is just as unusable as a missing one.
+	if err := os.WriteFile(filepath.Join(dir, "routes.backup.yml"), []byte{}, 0600); err != nil {
+		t.Fatalf("truncate backup: %v", err)
+	}
+	if err := proxy.Rollback(context.Background()); !errors.Is(err, errNoBackup) {
+		t.Fatalf("expected errNoBackup for empty backup, got %v", err)
 	}
 }
 

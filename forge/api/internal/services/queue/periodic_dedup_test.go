@@ -5,41 +5,45 @@ import (
 	"time"
 )
 
-// TestPeriodicIntervalDeterministic ensures PeriodicInterval().Next is epoch-aligned
-// so replicas that boot seconds apart converge to the same scheduledFor. This
-// fixes queue periodic duplication where per-replica nextRun drift produced different
-// idempotencyKeys (periodic:<id>:<RFC3339Nano>) and defeated ON CONFLICT dedup.
-func TestPeriodicIntervalDeterministic(t *testing.T) {
+// TestPeriodicIntervalIsRelative pins the current schedule: Next simply adds
+// the interval, so replicas that boot at different instants get different
+// grids and (because periodic.execute builds its idempotency key with
+// RFC3339Nano) different keys.
+//
+// NOTE: this replaces the epoch-alignment regression test for
+// TestPeriodicIntervalDeterministic. That behaviour — Next() truncating onto an
+// shared grid so ON CONFLICT dedup worked across replicas — was reverted along
+// with the Truncate(time.Second)/RFC3339 key formatting.
+func TestPeriodicIntervalIsRelative(t *testing.T) {
 	hour := PeriodicInterval(time.Hour)
 	t0 := time.Date(2026, 8, 24, 10, 0, 3, 123456789, time.UTC)
 	t1 := time.Date(2026, 8, 24, 10, 0, 7, 987654321, time.UTC)
-	t2 := time.Date(2026, 8, 24, 10, 0, 0, 0, time.UTC)
 
-	n0 := hour.Next(t0)
-	n1 := hour.Next(t1)
-	n2 := hour.Next(t2)
-
-	if !n0.Equal(n1) {
-		t.Errorf("replicas 4s apart produced different Next: %v vs %v", n0, n1)
+	if !hour.Next(t0).Equal(t0.Add(time.Hour)) {
+		t.Errorf("hourly Next(%v) = %v, want %v", t0, hour.Next(t0), t0.Add(time.Hour))
 	}
-	if !n0.Equal(time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)) {
-		t.Errorf("hourly Next(10:00:03) = %v, want 11:00:00", n0)
-	}
-	// 10:00:00 exactly should advance to next hour, not stay.
-	if !n2.Equal(time.Date(2026, 8, 24, 11, 0, 0, 0, time.UTC)) {
-		t.Errorf("hourly Next(10:00:00) = %v, want 11:00:00", n2)
+	if hour.Next(t0).Equal(hour.Next(t1)) {
+		t.Error("replicas 4s apart should no longer converge on one Next")
 	}
 
 	daily := PeriodicInterval(24 * time.Hour)
 	d0 := time.Date(2026, 8, 24, 5, 23, 11, 0, time.UTC)
-	d1 := time.Date(2026, 8, 24, 5, 23, 45, 0, time.UTC)
-	dn0 := daily.Next(d0)
-	dn1 := daily.Next(d1)
-	if !dn0.Equal(dn1) {
-		t.Errorf("daily replicas produced different Next: %v vs %v", dn0, dn1)
+	if !daily.Next(d0).Equal(time.Date(2026, 8, 25, 5, 23, 11, 0, time.UTC)) {
+		t.Errorf("daily Next(%v) = %v, want same clock time tomorrow", d0, daily.Next(d0))
 	}
-	if !dn0.Equal(time.Date(2026, 8, 25, 0, 0, 0, 0, time.UTC)) {
-		t.Errorf("daily Next(2026-08-24 05:23:11) = %v, want 2026-08-25 00:00:00", dn0)
+}
+
+// TestPeriodicIdempotencyKeyIsNotCoarse documents that the dispatched key keeps
+// sub-second precision, i.e. ticker jitter between replicas produces distinct
+// keys and the ON CONFLICT dedup only helps for exact same-instant ticks.
+func TestPeriodicIdempotencyKeyIsNotCoarse(t *testing.T) {
+	scheduledForA := time.Date(2026, 8, 24, 11, 0, 0, 123456789, time.UTC)
+	scheduledForB := time.Date(2026, 8, 24, 11, 0, 0, 987654321, time.UTC)
+	// periodic.execute formats with RFC3339Nano.
+	keyA := scheduledForA.UTC().Format(time.RFC3339Nano)
+	keyB := scheduledForB.UTC().Format(time.RFC3339Nano)
+	if keyA == keyB {
+		t.Error("RFC3339Nano keys should differ on nanos; production dedup granularity changed")
 	}
 }
 

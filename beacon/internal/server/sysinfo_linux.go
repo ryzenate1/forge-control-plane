@@ -4,6 +4,7 @@ package server
 
 import (
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -16,6 +17,18 @@ func totalSystemMemoryMB() uint64 {
 		return 0
 	}
 	return uint64(info.Totalram) / (1024 * 1024)
+}
+
+// hostUptimeSeconds returns wall-clock uptime since the machine booted.
+// It is deliberately distinct from the daemon's own uptime: a long-running
+// host that restarted Beacon shows a large host value and a small daemon one,
+// and conflating them hides exactly the gap operators look for.
+func hostUptimeSeconds() int64 {
+	var info unix.Sysinfo_t
+	if err := unix.Sysinfo(&info); err != nil {
+		return -1
+	}
+	return int64(info.Uptime)
 }
 
 func totalDiskMB(path string) uint64 {
@@ -130,6 +143,9 @@ func processListPlatform() ([]ProcessEntry, error) {
 		}
 		processes = append(processes, proc)
 	}
+	// The dashboard lists processes in PID order; an unsorted read of /proc
+	// jitters between refreshes because directory order is not numeric order.
+	sort.Slice(processes, func(i, j int) bool { return processes[i].PID < processes[j].PID })
 	return processes, nil
 }
 

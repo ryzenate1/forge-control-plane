@@ -203,7 +203,9 @@ func TestWSHub_PublishUserNotificationExplicitRecipientOnly(t *testing.T) {
 
 	select {
 	case ev := <-owner.Outbox():
-		got, ok := notificationRowFromEnvelope(ev)
+		// NOTE: notificationRowFromEnvelope was removed; PublishUserNotification
+		// now embeds the persisted row directly under payload["row"].
+		got, ok := ev.Payload["row"].(models.Notification)
 		if !ok || got.ID != "notif-1" {
 			t.Fatalf("owner push missing row: ok=%v id=%q", ok, ev.ID)
 		}
@@ -228,82 +230,45 @@ func TestWSHub_PublishUserNotificationExplicitRecipientOnly(t *testing.T) {
 	}
 }
 
-func TestWSUpgraderOrigins(t *testing.T) {
-	cases := []struct {
-		name    string
-		allowed []string
-		want    []string
-	}{
-		{"wildcard preserved", []string{"*"}, []string{"*"}},
-		{"wildcard among entries", []string{"https://panel.example.com", "*"}, []string{"*"}},
-		{"empty list permits only missing-origin", []string{}, []string{""}},
-		{"entries prefixed with missing-origin", []string{"https://panel.example.com"}, []string{"", "https://panel.example.com"}},
-	}
-	for _, tc := range cases {
-		got := wsUpgraderOrigins(tc.allowed)
-		if len(got) != len(tc.want) {
-			t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
-		}
-		for i := range got {
-			if got[i] != tc.want[i] {
-				t.Fatalf("%s: got %v want %v", tc.name, got, tc.want)
-			}
-		}
-	}
-}
+// NOTE: TestWSUpgraderOrigins was dropped with the wsUpgraderOrigins helper.
+// Origin enforcement now flows through fiberws.Config.Origins built by
+// getWebSocketAllowedOrigins (pinned in ws_origin_test.go).
 
-func TestNotificationWebSocketUpgrade_RejectsDisallowedOrigin(t *testing.T) {
-	t.Setenv("PANEL_URL", "https://panel.example.com")
-	t.Setenv("API_WS_ALLOWED_ORIGINS", "https://panel.example.com")
-	cfg := Config{
-		AppEnv:     "development",
-		AuthSecret: "secret",
-		CORSConfig: CORSConfig{AllowedOrigins: []string{"https://panel.example.com"}},
-	}
+func TestNotificationWebSocket_NonUpgradeRejected(t *testing.T) {
+	// handleNotificationWebSocket now takes only the notification service; the
+	// old (hub-less) Config + handler-level origin rejection was removed along
+	// with the bespoke middleware. The surviving contract: requests that are
+	// not a websocket upgrade must be refused with 426.
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Get("/notifications/ws", handleNotificationWebSocket(nil, cfg))
+	app.Get("/notifications/ws", handleNotificationWebSocket(nil))
 
-	// Disallowed Origin must be rejected before any upgrade happens.
 	req := httptestNewGetRequest("/notifications/ws")
-	req.Header.Set("Origin", "https://evil.example.com")
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
 	res, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != fiber.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for disallowed origin", res.StatusCode)
+	if res.StatusCode != fiber.StatusUpgradeRequired {
+		t.Fatalf("status = %d, want 426 for non-upgrade request", res.StatusCode)
 	}
 }
 
-func TestNotificationWSHandler_OriginRejectedAtRouteMiddleware(t *testing.T) {
-	t.Setenv("PANEL_URL", "https://panel.example.com")
-	t.Setenv("API_WS_ALLOWED_ORIGINS", "https://panel.example.com")
-	cfg := Config{
-		AppEnv:     "development",
-		AuthSecret: "secret",
-		CORSConfig: CORSConfig{AllowedOrigins: []string{"https://panel.example.com"}},
-	}
+func TestNotificationWSRoute_NonUpgradeRejectedAtRegisteredRoute(t *testing.T) {
+	// Signature is now (protected, notificationService, mutationLimiter).
+	// A nil service is acceptable at registration time; the upgraded conn would
+	// then close with "authentication required", but a plain GET must still be
+	// refused with 426 by the route handler.
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	protected := app.Group("/", func(c *fiber.Ctx) error { return c.Next() })
-	registerEnhancedNotificationRoutes(protected, cfg, nil, func(c *fiber.Ctx) error { return c.Next() })
+	registerEnhancedNotificationRoutes(protected, nil, func(c *fiber.Ctx) error { return c.Next() })
 
 	req := httptestNewGetRequest("/notifications/ws")
-	req.Header.Set("Origin", "https://evil.example.com")
-	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
-	req.Header.Set("Sec-WebSocket-Version", "13")
-	req.Header.Set("Sec-WebSocket-Key", "dGhlIHNhbXBsZSBub25jZQ==")
 	res, err := app.Test(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.StatusCode != fiber.StatusForbidden {
-		t.Fatalf("status = %d, want 403 for disallowed origin on registered route", res.StatusCode)
+	if res.StatusCode != fiber.StatusUpgradeRequired {
+		t.Fatalf("status = %d, want 426 for non-upgrade request on registered route", res.StatusCode)
 	}
 }

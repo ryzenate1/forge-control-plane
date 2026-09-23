@@ -11,11 +11,15 @@ type HostInfo struct {
 	Hostname string `json:"hostname"`
 	OS       string `json:"os"`
 	Kernel   string `json:"kernel"`
-	Uptime   int64  `json:"uptimeSeconds"`
-	CPUModel string `json:"cpuModel"`
-	CPUCores int    `json:"cpuCores"`
-	Arch     string `json:"arch"`
-	Time     string `json:"time"`
+	// Uptime is wall time since the machine booted; DaemonUptime is since this
+	// process started. They answer different questions and are reported apart
+	// on purpose.
+	Uptime       int64  `json:"uptimeSeconds"`
+	DaemonUptime int64  `json:"daemonUptimeSeconds"`
+	CPUModel     string `json:"cpuModel"`
+	CPUCores     int    `json:"cpuCores"`
+	Arch         string `json:"arch"`
+	Time         string `json:"time"`
 }
 
 type DiskPartition struct {
@@ -57,14 +61,15 @@ type ProcessEntry struct {
 func (s *Server) handleHostInfo(w http.ResponseWriter, r *http.Request) {
 	hostname, _ := os.Hostname()
 	info := HostInfo{
-		Hostname: hostname,
-		OS:       runtime.GOOS,
-		Arch:     runtime.GOARCH,
-		Uptime:   int64(time.Since(s.started).Seconds()),
-		CPUCores: runtime.NumCPU(),
-		Time:     time.Now().UTC().Format(time.RFC3339),
-		Kernel:   kernelVersion(),
-		CPUModel: cpuModel(),
+		Hostname:     hostname,
+		OS:           runtime.GOOS,
+		Arch:         runtime.GOARCH,
+		Uptime:       hostUptimeSeconds(),
+		DaemonUptime: daemonUptimeSeconds(s.started),
+		CPUCores:     runtime.NumCPU(),
+		Time:         time.Now().UTC().Format(time.RFC3339),
+		Kernel:       kernelVersion(),
+		CPUModel:     cpuModel(),
 	}
 	writeJSON(w, http.StatusOK, info)
 }

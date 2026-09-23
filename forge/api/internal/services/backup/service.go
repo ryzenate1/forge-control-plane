@@ -767,7 +767,11 @@ func (s *Service) EnforceRetentionPolicy(ctx context.Context, serverID string, p
 	for index, backup := range completed {
 		withinCount := policy.MaxBackups <= 0 || index < policy.MaxBackups
 		withinAge := policy.RetentionDays <= 0 || now.Sub(backup.CreatedAt) <= time.Duration(policy.RetentionDays)*24*time.Hour
-		keep[backup.Name] = backup.IsLocked || (withinCount && withinAge)
+		// RetentionEngine union (OR) semantics: keep a backup if it is locked OR
+		// it is within the count limit OR it is within the age window. A backup is
+		// only pruned when BOTH the count and age thresholds are exceeded, matching
+		// store.RetentionEngine.ShouldKeep and the SQL prune in CleanupOldBackupsForServer.
+		keep[backup.Name] = backup.IsLocked || withinCount || withinAge
 	}
 
 	// Delete anything not marked for keeping

@@ -79,7 +79,7 @@ export default function NewDeploymentPage() {
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Server</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={serverId}
                 onChange={(e) => setServerId(e.target.value)}
               >
@@ -102,7 +102,7 @@ export default function NewDeploymentPage() {
                       type="button"
                       className={`rounded-lg border p-4 text-left transition-colors ${
                         isActive
-                          ? "border-[#dc2626]/60 bg-[var(--brand)]/[0.08]"
+                          ? "border-[var(--brand)]/60 bg-[var(--brand)]/[0.08]"
                           : "border-white/[0.06] bg-[var(--surface-input)] hover:border-white/[0.12]"
                       }`}
                       onClick={() => setStrategy(s.key)}
@@ -135,7 +135,7 @@ export default function NewDeploymentPage() {
                   max={50}
                   value={canaryPercent}
                   onChange={(e) => setCanaryPercent(Number(e.target.value))}
-                  className="w-full h-2 bg-[var(--surface-input)] rounded-lg appearance-none cursor-pointer accent-[#dc2626]"
+                  className="w-full h-2 bg-[var(--surface-input)] rounded-lg appearance-none cursor-pointer accent-[var(--brand)]"
                 />
               </div>
             )}

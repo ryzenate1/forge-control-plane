@@ -484,6 +484,32 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
+	protected.Post("/compose/:id/restart", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		stack, err := composeSvc.RestartStack(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(stack)
+	})
+
+	protected.Post("/compose/:id/pull", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		stack, err := composeSvc.PullStack(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(stack)
+	})
+
 	protected.Get("/compose/:id/logs", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")

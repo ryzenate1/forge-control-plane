@@ -7,7 +7,10 @@
 #
 # Usage:
 #   Interactive:  ./install.sh
-#   Unattended:   ./install.sh --unattended --fqdn panel.example.com --email admin@example.com
+#   Unattended:   GAMEPANEL_ADMIN_PASSWORD=... GAMEPANEL_DB_PASSWORD=... \
+#                 ./install.sh --unattended --fqdn panel.example.com --email admin@example.com
+#   (Passwords are taken from the environment or from hidden `read -s` prompts —
+#    never from command-line arguments, which are world-readable via ps/procfs.)
 # ============================================================
 
 set -euo pipefail
@@ -33,8 +36,13 @@ readonly SUPPORTED_OS=("Ubuntu 22.04" "Ubuntu 24.04" "Debian 12" "CentOS 7" "Cen
 # Default configuration
 DEFAULT_FQDN=""
 DEFAULT_ADMIN_EMAIL=""
-DEFAULT_ADMIN_PASSWORD=""
-DEFAULT_DB_PASSWORD=""
+# Credentials are seeded from the environment, NOT from argv: a command-line
+# argument is visible to every account on the host through `ps -e` and
+# /proc/<pid>/cmdline, and lands in shell history and CI logs. These are the
+# same keys the generated $CONFIG_DIR/.env uses, so a re-run can simply
+# `set -a; . /etc/gamepanel/.env; set +a`.
+DEFAULT_ADMIN_PASSWORD="${GAMEPANEL_ADMIN_PASSWORD:-}"
+DEFAULT_DB_PASSWORD="${GAMEPANEL_DB_PASSWORD:-}"
 
 # Installation flags
 UNATTENDED=false
@@ -115,13 +123,11 @@ parse_arguments() {
                 DEFAULT_ADMIN_EMAIL="$2"
                 shift 2
                 ;;
-            --password)
-                DEFAULT_ADMIN_PASSWORD="$2"
-                shift 2
-                ;;
-            --db-password)
-                DEFAULT_DB_PASSWORD="$2"
-                shift 2
+            --password|--db-password)
+                log_error "'$1' has been removed: secrets passed as arguments are readable by any local user (ps/proc) and leak into shell history and CI logs."
+                log_error "Set GAMEPANEL_ADMIN_PASSWORD and/or GAMEPANEL_DB_PASSWORD in the environment instead,"
+                log_error "or drop --unattended and answer the hidden (read -s) prompts."
+                exit 1
                 ;;
             --help|-h)
                 show_help
@@ -142,7 +148,7 @@ GamePanel Forge Installation Script
 
 Usage:
   Interactive:   ./install.sh
-  Unattended:   ./install.sh [OPTIONS]
+  Unattended:   GAMEPANEL_ADMIN_PASSWORD=... GAMEPANEL_DB_PASSWORD=... ./install.sh [OPTIONS]
 
 Options:
   --unattended       Run in non-interactive mode
@@ -151,9 +157,13 @@ Options:
   --verbose          Show verbose output
   --fqdn            Set the FQDN for the panel (required for unattended)
   --email           Set the admin email (required for unattended)
-  --password        Set the admin password (required for unattended)
-  --db-password     Set the database password (required for unattended)
   --help, -h        Show this help message
+
+Environment variables (used instead of password flags, which were removed):
+  GAMEPANEL_ADMIN_PASSWORD   Admin password for unattended runs
+  GAMEPANEL_DB_PASSWORD      Database password for unattended runs
+  When unattended and unset, the installer prompts with a hidden read -s if a
+  TTY is attached; with no TTY it fails rather than accept a secret via argv.
 
 Requirements:
   - Docker ${MIN_DOCKER_VERSION}+ and Docker Compose ${MIN_DOCKER_COMPOSE_VERSION}+
@@ -162,15 +172,14 @@ Requirements:
   - Root or sudo access
 
 Examples:
-  # Interactive installation
+  # Interactive installation (passwords entered at hidden prompts)
   ./install.sh
 
-  # Unattended installation
-  ./install.sh --unattended \\
+  # Unattended installation — credentials come from the environment
+  GAMEPANEL_ADMIN_PASSWORD='...' GAMEPANEL_DB_PASSWORD='...' \\
+    ./install.sh --unattended \\
     --fqdn panel.example.com \\
-    --email admin@example.com \\
-    --password MySecurePass123 \\
-    --db-password MyDBPass123
+    --email admin@example.com
 EOF
 }
 
@@ -337,6 +346,42 @@ check_existing_installation() {
     fi
 }
 
+# --- Hidden Credential Prompts ---
+# Collects a secret straight from the terminal: it never appears in argv (which
+# any local user can read through ps(1) / /proc/<pid>/cmdline), is not echoed,
+# and is not written to the logs. When a confirmation label is given the entry
+# must be repeated before it is accepted.
+prompt_secret() {
+    local var_name="$1" label="$2" confirm_label="${3:-}"
+    local value confirm
+    while true; do
+        if ! IFS= read -r -s -p "Enter ${label}: " value; then
+            echo >&2
+            log_error "No input available while asking for the ${label}; aborting instead of looping."
+            return 1
+        fi
+        echo >&2
+        if [ -z "$value" ]; then
+            log_error "${label} cannot be empty"
+            continue
+        fi
+        if [ -n "$confirm_label" ]; then
+            if ! IFS= read -r -s -p "Confirm ${label}: " confirm; then
+                echo >&2
+                log_error "No input available while confirming the ${label}; aborting."
+                return 1
+            fi
+            echo >&2
+            if [ "$value" != "$confirm" ]; then
+                log_error "${label}s do not match"
+                continue
+            fi
+        fi
+        printf -v "$var_name" '%s' "$value"
+        return 0
+    done
+}
+
 # --- Interactive Input ---
 gather_input() {
     if [ "$UNATTENDED" = true ]; then
@@ -351,14 +396,29 @@ gather_input() {
             exit 1
         fi
         
+        # No credential may arrive as a command-line argument. Take it from the
+        # environment; if that is empty, fall back to a hidden prompt when a TTY
+        # is attached, and fail closed when it is not.
         if [ -z "$DEFAULT_ADMIN_PASSWORD" ]; then
-            log_error "Admin password is required for unattended installation (use --password)"
-            exit 1
+            if [ -t 0 ]; then
+                log_warn "GAMEPANEL_ADMIN_PASSWORD is not set — prompting (input hidden)"
+                prompt_secret DEFAULT_ADMIN_PASSWORD "admin password" ""
+            else
+                log_error "Admin password is required for unattended installation."
+                log_error "Export GAMEPANEL_ADMIN_PASSWORD (do not pass it as an argument)."
+                exit 1
+            fi
         fi
         
         if [ -z "$DEFAULT_DB_PASSWORD" ]; then
-            log_error "Database password is required for unattended installation (use --db-password)"
-            exit 1
+            if [ -t 0 ]; then
+                log_warn "GAMEPANEL_DB_PASSWORD is not set — prompting (input hidden)"
+                prompt_secret DEFAULT_DB_PASSWORD "database password" ""
+            else
+                log_error "Database password is required for unattended installation."
+                log_error "Export GAMEPANEL_DB_PASSWORD (do not pass it as an argument)."
+                exit 1
+            fi
         fi
         
         FQDN="$DEFAULT_FQDN"
@@ -372,7 +432,8 @@ gather_input() {
     # Interactive mode
     echo
     
-    # Get FQDN
+    # Get FQDN (initialise defensively — these are unset under `set -u` otherwise)
+    FQDN="${FQDN:-$DEFAULT_FQDN}"
     while [ -z "$FQDN" ]; do
         read -p "Enter the FQDN for your panel (e.g., panel.example.com): " FQDN
         if [ -z "$FQDN" ]; then
@@ -381,6 +442,7 @@ gather_input() {
     done
 
     # Get admin email
+    ADMIN_EMAIL="${ADMIN_EMAIL:-$DEFAULT_ADMIN_EMAIL}"
     while [ -z "$ADMIN_EMAIL" ]; do
         read -p "Enter admin email: " ADMIN_EMAIL
         if [ -z "$ADMIN_EMAIL" ]; then
@@ -388,45 +450,20 @@ gather_input() {
         fi
     done
 
-    # Get admin password
-    while [ -z "$ADMIN_PASSWORD" ]; do
-        read -s -p "Enter admin password: " ADMIN_PASSWORD
-        echo
-        if [ -z "$ADMIN_PASSWORD" ]; then
-            log_error "Admin password cannot be empty"
-        fi
-    done
+    # Get admin password — a value supplied through the environment is reused,
+    # anything else is collected with a hidden, confirmed prompt.
+    ADMIN_PASSWORD="${ADMIN_PASSWORD:-$DEFAULT_ADMIN_PASSWORD}"
+    if [ -z "$ADMIN_PASSWORD" ]; then
+        prompt_secret ADMIN_PASSWORD "admin password" "admin password"
+    fi
 
-    # Confirm admin password
-    while true; do
-        read -s -p "Confirm admin password: " ADMIN_PASSWORD_CONFIRM
-        echo
-        if [ "$ADMIN_PASSWORD" = "$ADMIN_PASSWORD_CONFIRM" ]; then
-            break
-        else
-            log_error "Passwords do not match"
-        fi
-    done
+    # Get database password (environment first, hidden confirmed prompt otherwise)
+    DB_PASSWORD="${DB_PASSWORD:-$DEFAULT_DB_PASSWORD}"
+    if [ -z "$DB_PASSWORD" ]; then
+        prompt_secret DB_PASSWORD "database password" "database password"
+    fi
 
-    # Get database password
-    while [ -z "$DB_PASSWORD" ]; do
-        read -s -p "Enter database password: " DB_PASSWORD
-        echo
-        if [ -z "$DB_PASSWORD" ]; then
-            log_error "Database password cannot be empty"
-        fi
-    done
-
-    # Confirm database password
-    while true; do
-        read -s -p "Confirm database password: " DB_PASSWORD_CONFIRM
-        echo
-        if [ "$DB_PASSWORD" = "$DB_PASSWORD_CONFIRM" ]; then
-            break
-        else
-            log_error "Database passwords do not match"
-        fi
-    done
+    # The interactive confirmation is performed inside prompt_secret().
 }
 
 # --- Installation Functions ---

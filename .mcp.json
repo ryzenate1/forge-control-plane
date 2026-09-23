@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "graphify": {
+      "command": "/Users/riyaz/.local/bin/graphify-mcp",
+      "args": [
+        "/Users/riyaz/forge-plane/forge-test/graphify-out/graph.json"
+      ],
+      "env": {
+        "GRAPHIFY_MAX_GRAPH_BYTES": "2GB"
+      }
+    }
+  }
+}

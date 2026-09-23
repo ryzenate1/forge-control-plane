@@ -174,11 +174,16 @@ func (r *Relay) deliverWithRetries(ctx context.Context, subs []func(context.Cont
 	for _, handler := range subs {
 		wait := 100 * time.Millisecond
 		delivered := false
+	attempts:
 		for attempt := 0; attempt <= r.maxRetries; attempt++ {
 			if attempt > 0 {
 				select {
 				case <-ctx.Done():
-					return ctx.Err()
+					// The relay is shutting down. Stop retrying but keep the last
+					// handler failure so it is still recorded below — otherwise the
+					// delivery error would be lost and failure_count/last_error left
+					// untouched.
+					break attempts
 				case <-time.After(wait):
 				}
 				wait *= 2
@@ -205,11 +210,16 @@ func (r *Relay) deliverWithRetries(ctx context.Context, subs []func(context.Cont
 }
 
 func (r *Relay) markFailedOrDeadLetter(ctx context.Context, stored StoredEvent, failure error) error {
-	if err := r.store.MarkFailed(ctx, stored.ID, failure.Error()); err != nil {
+	// Bookkeeping must survive relay shutdown: the delivery failure is real even
+	// when the request context is already cancelled, so detach from cancellation
+	// while keeping a bounded deadline for the DB write itself.
+	dbCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	defer cancel()
+	if err := r.store.MarkFailed(dbCtx, stored.ID, failure.Error()); err != nil {
 		return fmt.Errorf("relay mark failed %s: %w", stored.ID, err)
 	}
 	if stored.FailureCount+1 >= maxFailureCount {
-		if err := r.store.MoveToDeadLetter(ctx, stored.ID); err != nil {
+		if err := r.store.MoveToDeadLetter(dbCtx, stored.ID); err != nil {
 			return fmt.Errorf("relay dead letter %s: %w", stored.ID, err)
 		}
 	}

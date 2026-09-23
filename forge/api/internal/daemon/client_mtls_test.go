@@ -17,6 +17,14 @@ import (
 	"time"
 )
 
+// NOTE: daemonMTLSConfig (client-certificate mTLS for the daemon HTTP client)
+// was removed from production code: the daemon client now authenticates with
+// HMAC request signing only, and daemonTransport() enforces TLS 1.2+ without
+// loading any MTLS_* certificate material. The tests below assert that
+// current behavior; the TLS handshake integration test is kept because it
+// still documents how a client-cert-enforcing server interacts with plain
+// HMAC-only clients.
+
 func generateCATest(t testing.TB) ([]byte, []byte, *x509.Certificate, *rsa.PrivateKey) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -85,122 +93,42 @@ func writeTempFile(t testing.TB, dir, name string, data []byte, perm os.FileMode
 	return path
 }
 
-func TestDaemonMTLSConfig_DisabledReturnsNil(t *testing.T) {
-	t.Setenv("MTLS_ENABLED", "false")
-	t.Setenv("MTLS_CA_CERT", "")
-	t.Setenv("MTLS_CERT", "")
-	t.Setenv("MTLS_KEY", "")
-	cfg, err := daemonMTLSConfig()
-	if err != nil {
-		t.Fatalf("unexpected error when disabled: %v", err)
+func TestDaemonTransport_TLSMinVersionOnly(t *testing.T) {
+	_ = writeTempFile // keep helper referenced
+	tr := daemonTransport()
+	if tr.TLSClientConfig == nil {
+		t.Fatal("expected TLSClientConfig")
 	}
-	if cfg != nil {
-		t.Fatalf("expected nil config when disabled, got %+v", cfg)
+	if got := tr.TLSClientConfig.MinVersion; got != uint16(tls.VersionTLS12) {
+		t.Fatalf("expected TLS 1.2 minimum, got %d", got)
+	}
+	if tr.TLSClientConfig.RootCAs != nil || len(tr.TLSClientConfig.Certificates) != 0 {
+		t.Fatal("daemonTransport must not load client certs (mTLS removed)")
 	}
 }
 
-func TestDaemonMTLSConfig_EnabledValidLoads(t *testing.T) {
+func TestDaemonTransport_IgnoresMTLSEnv(t *testing.T) {
+	// Even with MTLS_* env vars pointing at missing files, the transport must
+	// build cleanly: the daemon client no longer consumes them.
 	dir := t.TempDir()
-	caPEM, _, caCert, caKey := generateCATest(t)
-	clientCertPEM, clientKeyPEM := generateLeafTest(t, caCert, caKey, "panel", true, nil)
-	caPath := writeTempFile(t, dir, "ca.pem", caPEM, 0o600)
-	certPath := writeTempFile(t, dir, "client.pem", clientCertPEM, 0o600)
-	keyPath := writeTempFile(t, dir, "client.key", clientKeyPEM, 0o600)
-
 	t.Setenv("MTLS_ENABLED", "true")
-	t.Setenv("MTLS_CA_CERT", caPath)
-	t.Setenv("MTLS_CERT", certPath)
-	t.Setenv("MTLS_KEY", keyPath)
+	t.Setenv("MTLS_CA_CERT", filepath.Join(dir, "missing-ca.pem"))
+	t.Setenv("MTLS_CERT", filepath.Join(dir, "missing.pem"))
+	t.Setenv("MTLS_KEY", filepath.Join(dir, "missing.key"))
 
-	cfg, err := daemonMTLSConfig()
-	if err != nil {
-		t.Fatalf("daemonMTLSConfig: %v", err)
+	tr := daemonTransport()
+	if tr == nil {
+		t.Fatal("expected transport")
 	}
-	if cfg == nil {
-		t.Fatal("expected config, got nil")
-	}
-	if cfg.RootCAs == nil {
-		t.Fatal("expected RootCAs")
-	}
-	if len(cfg.Certificates) != 1 {
-		t.Fatalf("expected 1 certificate, got %d", len(cfg.Certificates))
-	}
-	if cfg.GetClientCertificate == nil {
-		t.Fatal("expected GetClientCertificate")
-	}
-	// Verify GetClientCertificate reloads correctly
-	cert, err := cfg.GetClientCertificate(nil)
-	if err != nil {
-		t.Fatalf("GetClientCertificate: %v", err)
-	}
-	if cert == nil {
-		t.Fatal("expected cert from callback")
-	}
-}
-
-func TestDaemonMTLSConfig_EnabledMissingCertFails(t *testing.T) {
-	t.Setenv("MTLS_ENABLED", "true")
-	t.Setenv("MTLS_CA_CERT", "/nonexistent/ca.pem")
-	t.Setenv("MTLS_CERT", "/nonexistent/client.pem")
-	t.Setenv("MTLS_KEY", "/nonexistent/client.key")
-	_, err := daemonMTLSConfig()
-	if err == nil {
-		t.Fatal("expected error when cert files missing")
-	}
-}
-
-func TestDaemonMTLSConfig_EnabledBadPermsFails(t *testing.T) {
-	dir := t.TempDir()
-	caPEM, _, caCert, caKey := generateCATest(t)
-	clientCertPEM, clientKeyPEM := generateLeafTest(t, caCert, caKey, "panel", true, nil)
-	caPath := writeTempFile(t, dir, "ca.pem", caPEM, 0o600)
-	certPath := writeTempFile(t, dir, "client.pem", clientCertPEM, 0o600)
-	keyPath := writeTempFile(t, dir, "client.key", clientKeyPEM, 0o644) // bad perm
-
-	t.Setenv("MTLS_ENABLED", "true")
-	t.Setenv("MTLS_CA_CERT", caPath)
-	t.Setenv("MTLS_CERT", certPath)
-	t.Setenv("MTLS_KEY", keyPath)
-	_, err := daemonMTLSConfig()
-	if err == nil {
-		t.Fatal("expected error for bad key perms")
-	}
-}
-
-func TestDaemonTransport_UsesMTLSWhenEnabled(t *testing.T) {
-	dir := t.TempDir()
-	caPEM, _, caCert, caKey := generateCATest(t)
-	clientCertPEM, clientKeyPEM := generateLeafTest(t, caCert, caKey, "panel", true, nil)
-	caPath := writeTempFile(t, dir, "ca.pem", caPEM, 0o600)
-	certPath := writeTempFile(t, dir, "client.pem", clientCertPEM, 0o600)
-	keyPath := writeTempFile(t, dir, "client.key", clientKeyPEM, 0o600)
-
-	t.Setenv("MTLS_ENABLED", "true")
-	t.Setenv("MTLS_CA_CERT", caPath)
-	t.Setenv("MTLS_CERT", certPath)
-	t.Setenv("MTLS_KEY", keyPath)
-
-	tr, err := daemonTransport()
-	if err != nil {
-		t.Fatalf("daemonTransport: %v", err)
-	}
-	if tr.TLSClientConfig == nil || tr.TLSClientConfig.RootCAs == nil || len(tr.TLSClientConfig.Certificates) == 0 {
-		t.Fatal("expected mTLS TLS config in transport")
-	}
-	// Disabled case
-	t.Setenv("MTLS_ENABLED", "false")
-	tr2, err := daemonTransport()
-	if err != nil {
-		t.Fatalf("daemonTransport disabled: %v", err)
-	}
-	if tr2.TLSClientConfig.RootCAs != nil || len(tr2.TLSClientConfig.Certificates) != 0 {
-		t.Fatalf("disabled transport should not have mTLS, got RootCAs=%v certs=%d", tr2.TLSClientConfig.RootCAs, len(tr2.TLSClientConfig.Certificates))
+	if len(tr.TLSClientConfig.Certificates) != 0 {
+		t.Fatal("expected no client certificates regardless of env")
 	}
 }
 
 // TestDaemonMTLSIntegration_ValidCertPasses validates that a valid client cert
-// is presented and the TLS handshake succeeds. Invalid/missing cert cases are
-// tested to fail, while HMAC-only mode still passes when mTLS disabled.
+// is presented and the TLS handshake succeeds on a server that requires client
+// certificates, while an HMAC-only client (as the daemon now is) is rejected
+// by such a server.
 func TestDaemonMTLSIntegration_ValidCertPasses(t *testing.T) {
 	_ = t.TempDir()
 	caPEM, _, caCert, caKey := generateCATest(t)
@@ -238,7 +166,7 @@ func TestDaemonMTLSIntegration_ValidCertPasses(t *testing.T) {
 	srv.StartTLS()
 	defer srv.Close()
 
-	// Helper to build a client TLS config similar to daemonMTLSConfig but for test
+	// Helper to build a client TLS config similar to the removed daemonMTLSConfig but for test
 	buildClientTLS := func(caPEM, certPEM, keyPEM []byte) *tls.Config {
 		pool := x509.NewCertPool()
 		pool.AppendCertsFromPEM(caPEM)
@@ -332,25 +260,18 @@ func TestDaemonMTLSIntegration_ValidCertPasses(t *testing.T) {
 	})
 }
 
-func TestDaemonClient_NewClient_FailsWhenMTLSMisconfigured(t *testing.T) {
-	// Use non-loopback URL to trigger daemonTransport path
+func TestDaemonClient_NewClient_SucceedsDespiteMTLSEnv(t *testing.T) {
+	// mTLS misconfiguration can no longer break NewClient: the client never
+	// reads MTLS_* variables. Non-loopback URLs are upgraded to https and the
+	// transport stays cert-free.
 	url := "https://beacon.example.com:9090"
 	t.Setenv("MTLS_ENABLED", "true")
 	t.Setenv("MTLS_CERT", "/tmp/missing.pem")
 	t.Setenv("MTLS_KEY", "/tmp/missing.key")
 	t.Setenv("MTLS_CA_CERT", "/tmp/missing-ca.pem")
-	_, err := NewClient(url, "node.secret")
-	if err == nil {
-		t.Fatal("expected NewClient to fail when MTLS_ENABLED but files missing")
-	}
-	// When disabled, same URL should succeed
-	t.Setenv("MTLS_ENABLED", "false")
-	t.Setenv("MTLS_CERT", "")
-	t.Setenv("MTLS_KEY", "")
-	t.Setenv("MTLS_CA_CERT", "")
 	cli, err := NewClient(url, "node.secret")
 	if err != nil {
-		t.Fatalf("NewClient without mTLS should succeed: %v", err)
+		t.Fatalf("NewClient should ignore MTLS_* env: %v", err)
 	}
 	if cli == nil {
 		t.Fatal("expected client")

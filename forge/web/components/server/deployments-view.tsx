@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { fetchJSON, postJSON, putJSON, type ApiServer } from "@/lib/api";
 import { errorMessage } from "@/lib/utils";
 import { AlertCircle, CheckCircle, Clock, Loader2, Play, RotateCcw, XCircle } from "lucide-react";
@@ -79,141 +80,139 @@ interface DeploymentsViewProps {
   server: ApiServer;
 }
 
+const DEFAULT_HC_CONFIG: HealthCheckConfig = {
+  path: "/health",
+  port: 8080,
+  protocol: "http",
+  intervalSeconds: 10,
+  timeoutSeconds: 5,
+  healthyThreshold: 2,
+  unhealthyThreshold: 3,
+};
+
+const IN_FLIGHT_STATUSES = ["pending", "building", "deploying", "health_checking"];
+
 export function DeploymentsView({ server }: DeploymentsViewProps) {
   const context = useOptionalServerContext();
   const access = context?.access ?? { user: null, permissions: null, isAdmin: false, isOwner: false };
   const canReinstall = hasServerPermission(access, "settings.reinstall");
+  const qc = useQueryClient();
 
-  const [releases, setReleases] = useState<Release[]>([]);
-  const [activeRelease, setActiveRelease] = useState<Release | null>(null);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [deploying, setDeploying] = useState(false);
   const [imageTag, setImageTag] = useState("");
-  const [selectedRelease, setSelectedRelease] = useState<Release | null>(null);
-  const [healthResults, setHealthResults] = useState<HealthCheckResult[]>([]);
-  const [events, setEvents] = useState<DeploymentEvent[]>([]);
-  const [hcConfig, setHcConfig] = useState<HealthCheckConfig>({
-    path: "/health",
-    port: 8080,
-    protocol: "http",
-    intervalSeconds: 10,
-    timeoutSeconds: 5,
-    healthyThreshold: 2,
-    unhealthyThreshold: 3,
-  });
+  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(null);
+  const [hcDraft, setHcDraft] = useState<HealthCheckConfig | null>(null);
   const [configSaved, setConfigSaved] = useState(false);
   const [configError, setConfigError] = useState<string | null>(null);
   const [showConfig, setShowConfig] = useState(false);
-  const timeoutRef = useRef<ReturnType<typeof setTimeout>[]>([]);
-
-  useEffect(() => {
-    return () => {
-      timeoutRef.current.forEach(clearTimeout);
-      timeoutRef.current = [];
-    };
-  }, []);
 
   const serverId = server.id;
-  const loadReleases = useCallback(async () => {
-    try {
+
+  const releasesQuery = useQuery({
+    queryKey: ["server-deployments", serverId],
+    queryFn: async () => {
       const res = await fetchJSON<Release[] | { data: Release[] }>(`/servers/${serverId}/deployments`);
-      const data = Array.isArray(res) ? res : (res?.data ?? []);
-      setReleases(data);
-      const live = data.find((r) => r.status === "live");
-      setActiveRelease(live ?? null);
-    } catch (err) {
-      setError(errorMessage(err, "Failed to load releases"));
-    } finally {
-      setLoading(false);
-    }
-  }, [serverId]);
+      return Array.isArray(res) ? res : (res?.data ?? []);
+    },
+    // Replaces the previous manual `setTimeout(loadReleases, 1000)` refresh:
+    // poll while any release is in-flight, then stop.
+    refetchInterval: (query) => {
+      const rows = query.state.data ?? [];
+      return rows.some((r) => IN_FLIGHT_STATUSES.includes(r.status)) ? 5000 : false;
+    },
+  });
+  const releases = releasesQuery.data ?? [];
+  const activeRelease = releases.find((r) => r.status === "live") ?? null;
+  const selectedRelease = releases.find((r) => r.id === selectedReleaseId) ?? null;
 
-  const loadHealthConfig = useCallback(async () => {
-    try {
+  const healthConfigQuery = useQuery({
+    queryKey: ["server-health-check", serverId],
+    queryFn: async () => {
       const res = await fetchJSON<{ data: HealthCheckConfig }>(`/servers/${serverId}/health-check`);
-      setHcConfig(res.data);
-    } catch {
-      // No config yet - use defaults
-    }
-  }, [serverId]);
+      return res.data;
+    },
+    retry: false,
+  });
+  const hcConfig = hcDraft ?? healthConfigQuery.data ?? DEFAULT_HC_CONFIG;
+  const setHcConfig = (next: HealthCheckConfig) => {
+    setConfigSaved(false);
+    setHcDraft(next);
+  };
 
-  const loadHealthResults = useCallback(async (releaseId: string) => {
-    try {
-      const res = await fetchJSON<{ data: HealthCheckResult[] }>(`/servers/${serverId}/deployments/${releaseId}/health`);
-      setHealthResults(res.data);
-    } catch {
-      setHealthResults([]);
-    }
-  }, [serverId]);
+  const healthResultsQuery = useQuery({
+    queryKey: ["deployment-health", serverId, selectedRelease?.id],
+    queryFn: async () => {
+      const res = await fetchJSON<{ data: HealthCheckResult[] }>(`/servers/${serverId}/deployments/${selectedRelease!.id}/health`);
+      return res.data ?? [];
+    },
+    enabled: !!selectedRelease,
+  });
+  const healthResults = healthResultsQuery.data ?? [];
 
-  const loadEvents = useCallback(async (releaseId: string) => {
-    try {
-      const res = await fetchJSON<{ data: DeploymentEvent[] }>(`/servers/${serverId}/deployments/${releaseId}/events`);
-      setEvents(res.data);
-    } catch {
-      setEvents([]);
-    }
-  }, [serverId]);
+  const eventsQuery = useQuery({
+    queryKey: ["deployment-events", serverId, selectedRelease?.id],
+    queryFn: async () => {
+      const res = await fetchJSON<{ data: DeploymentEvent[] }>(`/servers/${serverId}/deployments/${selectedRelease!.id}/events`);
+      return res.data ?? [];
+    },
+    enabled: !!selectedRelease,
+  });
+  const events = eventsQuery.data ?? [];
 
-  useEffect(() => {
-    loadReleases();
-    loadHealthConfig();
-  }, [loadReleases, loadHealthConfig]);
-
-  const handleDeploy = async () => {
-    if (!imageTag.trim() || deploying) return;
-    setDeploying(true);
-    setError(null);
-    try {
-      await postJSON(`/servers/${serverId}/deployments`, { imageTag: imageTag.trim() });
+  const deployMut = useMutation({
+    mutationFn: (tag: string) => postJSON(`/servers/${serverId}/deployments`, { imageTag: tag }),
+    onSuccess: () => {
       setImageTag("");
-      const timer = setTimeout(loadReleases, 1000);
-      timeoutRef.current.push(timer);
-    } catch (err) {
-      setError(errorMessage(err, "Deployment failed"));
-    } finally {
-      setDeploying(false);
-    }
-  };
+      setError(null);
+      void qc.invalidateQueries({ queryKey: ["server-deployments", serverId] });
+    },
+    onError: (err) => setError(errorMessage(err, "Deployment failed")),
+  });
 
-  const handleRollback = async (releaseId: string) => {
-    try {
-      await postJSON(`/servers/${serverId}/deployments/${releaseId}/rollback`);
-      const timer = setTimeout(loadReleases, 1000);
-      timeoutRef.current.push(timer);
-    } catch (err) {
-      setError(errorMessage(err, "Rollback failed"));
-    }
-  };
+  const rollbackMut = useMutation({
+    mutationFn: (releaseId: string) => postJSON(`/servers/${serverId}/deployments/${releaseId}/rollback`),
+    onSuccess: () => {
+      setError(null);
+      void qc.invalidateQueries({ queryKey: ["server-deployments", serverId] });
+    },
+    onError: (err) => setError(errorMessage(err, "Rollback failed")),
+  });
 
-  const handleForcePromote = async (releaseId: string) => {
-    try {
-      await postJSON(`/servers/${serverId}/deployments/${releaseId}/promote`);
-      const timer = setTimeout(loadReleases, 1000);
-      timeoutRef.current.push(timer);
-    } catch (err) {
-      setError(errorMessage(err, "Promotion failed"));
-    }
-  };
+  const promoteMut = useMutation({
+    mutationFn: (releaseId: string) => postJSON(`/servers/${serverId}/deployments/${releaseId}/promote`),
+    onSuccess: () => {
+      setError(null);
+      void qc.invalidateQueries({ queryKey: ["server-deployments", serverId] });
+    },
+    onError: (err) => setError(errorMessage(err, "Promotion failed")),
+  });
 
-  const handleSaveConfig = async () => {
-    setConfigError(null);
-    try {
-      await putJSON(`/servers/${serverId}/health-check`, hcConfig);
+  const saveConfigMut = useMutation({
+    mutationFn: (config: HealthCheckConfig) => putJSON(`/servers/${serverId}/health-check`, config),
+    onSuccess: () => {
+      setConfigError(null);
       setConfigSaved(true);
-      const timer = setTimeout(() => setConfigSaved(false), 2000);
-      timeoutRef.current.push(timer);
-    } catch (err) {
-      setConfigError(errorMessage(err, "Failed to save config"));
-    }
+      setHcDraft(null);
+      void healthConfigQuery.refetch();
+    },
+    onError: (err) => setConfigError(errorMessage(err, "Failed to save config")),
+  });
+
+  const deploying = deployMut.isPending;
+  const loading = releasesQuery.isLoading;
+  const queryError = releasesQuery.isError ? errorMessage(releasesQuery.error, "Failed to load releases") : null;
+
+  const handleDeploy = () => {
+    const tag = imageTag.trim();
+    if (!tag || deployMut.isPending) return;
+    deployMut.mutate(tag);
   };
 
-  const selectRelease = async (release: Release) => {
-    setSelectedRelease(release);
-    loadHealthResults(release.id);
-    loadEvents(release.id);
-  };
+  const handleRollback = (releaseId: string) => rollbackMut.mutate(releaseId);
+  const handleForcePromote = (releaseId: string) => promoteMut.mutate(releaseId);
+  const handleSaveConfig = () => saveConfigMut.mutate(hcConfig);
+
+  const selectRelease = (release: Release) => setSelectedReleaseId(release.id);
 
   if (loading) {
     return <CardSkeleton />;
@@ -231,9 +230,9 @@ export function DeploymentsView({ server }: DeploymentsViewProps) {
         </button>
       </div>
 
-      {error && (
+      {(error || queryError) && (
         <div className="ui-alert ui-alert-error" role="alert">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error}
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /> {error || queryError}
         </div>
       )}
 

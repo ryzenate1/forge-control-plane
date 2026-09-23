@@ -27,6 +27,8 @@ export default function AdminCertificatesPage() {
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadForm, setUploadForm] = useState({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
+  const [showIssueModal, setShowIssueModal] = useState(false);
+  const [issueForm, setIssueForm] = useState({ domains: "", email: "", challengeType: "http-01" as "http-01" | "dns-01", dnsProvider: "" });
 
   const certsQuery = useQuery({
     queryKey: ["admin", "certificates"],
@@ -40,7 +42,7 @@ export default function AdminCertificatesPage() {
   );
 
   const uploadMutation = useMutation({
-    mutationFn: () => postJSON("/certificates", uploadForm),
+    mutationFn: () => postJSON("/certificates/upload", { certificate: uploadForm.certificate, privateKey: uploadForm.privateKey }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
       setShowUploadModal(false);
@@ -58,6 +60,24 @@ export default function AdminCertificatesPage() {
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] }),
   });
 
+  const issueMutation = useMutation({
+    mutationFn: () => {
+      const domains = issueForm.domains.split(/[,\n]/).map((d) => d.trim()).filter(Boolean);
+      return postJSON("/certificates/issue", {
+        domains,
+        email: issueForm.email,
+        challengeType: issueForm.challengeType,
+        ...(issueForm.challengeType === "dns-01" && issueForm.dnsProvider ? { dnsProvider: issueForm.dnsProvider } : {}),
+        autoRenew: true,
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
+      setShowIssueModal(false);
+      setIssueForm({ domains: "", email: "", challengeType: "http-01", dnsProvider: "" });
+    },
+  });
+
   const isExpiring = (expiresAt: string) => {
     const days = (new Date(expiresAt).getTime() - Date.now()) / (1000 * 86400);
     return days < 30;
@@ -71,9 +91,14 @@ export default function AdminCertificatesPage() {
         title="Certificate Management"
         sub="Manage TLS/SSL certificates for proxy domains. Upload custom certificates or use Let's Encrypt auto-provisioning."
         action={
-          <Btn size="sm" tone="primary" onClick={() => setShowUploadModal(true)}>
-            <Plus size={12} /> Upload Certificate
-          </Btn>
+          <div className="flex gap-2">
+            <Btn size="sm" tone="primary" onClick={() => setShowIssueModal(true)}>
+              <Plus size={12} /> Request Certificate
+            </Btn>
+            <Btn size="sm" tone="ghost" onClick={() => setShowUploadModal(true)}>
+              <Plus size={12} /> Upload Certificate
+            </Btn>
+          </div>
         }
       />
 
@@ -152,6 +177,36 @@ export default function AdminCertificatesPage() {
         )}
       </Card>
 
+      {showIssueModal && (
+        <Modal title="Request Certificate (Let's Encrypt)" onClose={() => setShowIssueModal(false)}>
+          <div className="grid gap-4">
+            <Input label="Domains" value={issueForm.domains} onChange={(v) => setIssueForm({ ...issueForm, domains: v })} placeholder="example.com, *.example.com" />
+            <Input label="Contact Email" value={issueForm.email} onChange={(v) => setIssueForm({ ...issueForm, email: v })} placeholder="admin@example.com" />
+            <div>
+              <label className="block text-sm font-medium text-slate-300 mb-1.5">Challenge Type</label>
+              <select
+                className="w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100 outline-none"
+                value={issueForm.challengeType}
+                onChange={(e) => setIssueForm({ ...issueForm, challengeType: e.target.value as "http-01" | "dns-01" })}
+              >
+                <option value="http-01">HTTP-01 (single domains)</option>
+                <option value="dns-01">DNS-01 (supports wildcards)</option>
+              </select>
+            </div>
+            {issueForm.challengeType === "dns-01" && (
+              <Input label="DNS Provider" value={issueForm.dnsProvider} onChange={(v) => setIssueForm({ ...issueForm, dnsProvider: v })} placeholder="cloudflare / route53 / gandi" />
+            )}
+            <p className="text-xs text-slate-500">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
+          </div>
+          <ModalFooter
+            onCancel={() => setShowIssueModal(false)}
+            onConfirm={() => issueMutation.mutate()}
+            confirmLabel={issueMutation.isPending ? "Requesting..." : "Request"}
+            disabled={issueMutation.isPending || !issueForm.domains.trim()}
+          />
+        </Modal>
+      )}
+
       {showUploadModal && (
         <Modal title="Upload Custom Certificate" onClose={() => setShowUploadModal(false)}>
           <div className="grid gap-4">
@@ -159,7 +214,7 @@ export default function AdminCertificatesPage() {
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Certificate (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30"
+                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={uploadForm.certificate}
                 onChange={(e) => setUploadForm({ ...uploadForm, certificate: e.target.value })}
                 placeholder="-----BEGIN CERTIFICATE-----"
@@ -168,7 +223,7 @@ export default function AdminCertificatesPage() {
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Private Key (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30"
+                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={uploadForm.privateKey}
                 onChange={(e) => setUploadForm({ ...uploadForm, privateKey: e.target.value })}
                 placeholder="-----BEGIN PRIVATE KEY-----"

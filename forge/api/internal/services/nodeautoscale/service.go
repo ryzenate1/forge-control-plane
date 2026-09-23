@@ -121,27 +121,27 @@ func (s *Service) ListEvents(ctx context.Context, policyID string, limit int) ([
 
 // ClusterLoad aggregates fleet capacity used to evaluate policies.
 type ClusterLoad struct {
-	ActiveNodes int     `json:"activeNodes"`
-	TotalCPU    int     `json:"totalCpu"`
-	AllocatedCPU int    `json:"allocatedCpu"`
-	TotalMemMB  int     `json:"totalMemMb"`
-	AllocatedMem int    `json:"allocatedMemMb"`
-	LoadCPU     float64 `json:"loadCpu"`
-	LoadMemory  float64 `json:"loadMemory"`
-	LoadDisk    float64 `json:"loadDisk"`
+	ActiveNodes  int     `json:"activeNodes"`
+	TotalCPU     int     `json:"totalCpu"`
+	AllocatedCPU int     `json:"allocatedCpu"`
+	TotalMemMB   int     `json:"totalMemMb"`
+	AllocatedMem int     `json:"allocatedMemMb"`
+	LoadCPU      float64 `json:"loadCpu"`
+	LoadMemory   float64 `json:"loadMemory"`
+	LoadDisk     float64 `json:"loadDisk"`
 }
 
 // Evaluation is a dry-run result: what the cluster needs now.
 type Evaluation struct {
-	PolicyID    string          `json:"policyId"`
-	PolicyName  string          `json:"policyName"`
-	Load        ClusterLoad     `json:"load"`
-	Deficit     int             `json:"deficit"`
-	ScaleOut    bool            `json:"scaleOut"`
-	ScaleInNode string          `json:"scaleInNode,omitempty"`
-	Summary     string          `json:"summary"`
-	Cooldown    bool            `json:"cooldown"`
-	DryRun      bool            `json:"dryRun"`
+	PolicyID    string      `json:"policyId"`
+	PolicyName  string      `json:"policyName"`
+	Load        ClusterLoad `json:"load"`
+	Deficit     int         `json:"deficit"`
+	ScaleOut    bool        `json:"scaleOut"`
+	ScaleInNode string      `json:"scaleInNode,omitempty"`
+	Summary     string      `json:"summary"`
+	Cooldown    bool        `json:"cooldown"`
+	DryRun      bool        `json:"dryRun"`
 }
 
 const (
@@ -173,10 +173,10 @@ func (s *Service) Evaluate(ctx context.Context, policyID string, dryRun bool) (E
 		state = "observe"
 	}
 	detail, _ := json.Marshal(map[string]any{
-		"loadCpu":   evaluation.Load.LoadCPU,
-		"loadMem":   evaluation.Load.LoadMemory,
-		"active":    evaluation.Load.ActiveNodes,
-		"scaleOut":  evaluation.ScaleOut,
+		"loadCpu":     evaluation.Load.LoadCPU,
+		"loadMem":     evaluation.Load.LoadMemory,
+		"active":      evaluation.Load.ActiveNodes,
+		"scaleOut":    evaluation.ScaleOut,
 		"scaleInNode": evaluation.ScaleInNode,
 	})
 	_ = s.store.RecordNodeAutoscaleEvent(ctx, &store.NodeAutoscaleEvent{
@@ -380,19 +380,55 @@ func (s *Service) ScaleIn(ctx context.Context, nodeID string, deprovision bool) 
 	if err := s.membership.StartDrain(ctx, nodeID); err != nil {
 		return Event{}, err
 	}
+	// StartDrain only *initiates* an asynchronous drain, so the node is not yet
+	// drained. Report the real in-progress state rather than claiming drained=true.
 	detail := map[string]any{
-		"nodeId":      nodeID,
-		"drained":     true,
-		"deprovision": deprovision,
+		"nodeId":     nodeID,
+		"drainState": "draining",
 	}
-	if deprovision && s.cloud != nil {
-		node, err := s.store.GetNode(ctx, nodeID)
-		if err == nil && node.SchedulerType != "" {
-			_ = s.cloud.DeprovisionNode(ctx, cloud.ProviderKind("aws"), nodeID)
-			detail["deprovisioned"] = true
+	state := "applied"
+	if deprovision {
+		detail["deprovision"] = true
+		link, ok := s.findCloudLink(ctx, nodeID)
+		switch {
+		case s.cloud == nil:
+			state = "failed"
+			detail["deprovisionError"] = "cloud manager not configured"
+		case !ok:
+			state = "failed"
+			detail["deprovisionError"] = "no cloud instance is linked to this node"
+		default:
+			if derr := s.cloud.DeprovisionNode(ctx, cloud.ProviderKind(link.Provider), link.InstanceID); derr != nil {
+				state = "failed"
+				detail["deprovisionError"] = derr.Error()
+			} else {
+				detail["deprovisioned"] = true
+				detail["provider"] = link.Provider
+				detail["instanceId"] = link.InstanceID
+				_ = s.store.DeleteCloudNodeLink(ctx, link.Provider, link.InstanceID)
+			}
 		}
 	}
-	return s.recordEvent(ctx, store.NodeAutoscalePolicy{Name: "manual-scale-in"}, "scale-in", "applied", 1, detail)
+	return s.recordEvent(ctx, store.NodeAutoscalePolicy{Name: "manual-scale-in"}, "scale-in", state, 1, detail)
+}
+
+// findCloudLink resolves the cloud provider + instance ID linked to a node so
+// scale-in deprovisions the correct instance instead of assuming a provider and
+// passing the node UUID as an instance ID.
+func (s *Service) findCloudLink(ctx context.Context, nodeID string) (store.CloudNodeLink, bool) {
+	if s == nil || s.store == nil {
+		return store.CloudNodeLink{}, false
+	}
+	links, err := s.store.ListCloudNodeLinks(ctx)
+	if err != nil {
+		return store.CloudNodeLink{}, false
+	}
+	for _, l := range links {
+		if l.NodeID == nodeID {
+			return l, true
+		}
+	}
+	return store.CloudNodeLink{}, false
 }
 
 func (s *Service) recordEvent(ctx context.Context, policy Policy, action, state string, deficit int, detail any) (Event, error) {

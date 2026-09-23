@@ -3,17 +3,55 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown } from "lucide-react";
+import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown, HelpCircle, CheckCircle2, Clock } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser, logout } from "@/lib/api";
+import { fetchCurrentUser, logout, fetchHealthStatus, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
 import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
 import { useT } from "@/components/TranslationProvider";
 import { adminPagesForRole, findAdminPage, ADMIN_ALIAS_ROUTES } from "./admin-registry";
+import {
+  ForgeLogoIcon,
+  PlanetDefaultIcon,
+  NotificationBellIcon,
+  SettingsCogIcon,
+} from "@/components/ui/forge-icons";
+
+import { CommandPalette } from "./command-palette";
 
 function resolveAlias(pathname: string): string {
   return ADMIN_ALIAS_ROUTES[pathname] ?? pathname;
+}
+
+function relativeTime(value?: string): string {
+  if (!value) return "recently";
+  const then = new Date(value).getTime();
+  if (Number.isNaN(then)) return "recently";
+  const diffMin = Math.round((then - Date.now()) / 60_000);
+  const rtf = new Intl.RelativeTimeFormat("en", { numeric: "auto" });
+  if (Math.abs(diffMin) < 60) return rtf.format(diffMin, "minute");
+  if (Math.abs(diffMin) < 60 * 24) return rtf.format(Math.round(diffMin / 60), "hour");
+  return rtf.format(Math.round(diffMin / (60 * 24)), "day");
+}
+
+/** Closes a popover when the user clicks outside it or presses Escape. */
+function useDismissOnOutside(ref: React.RefObject<HTMLElement | null>, isOpen: boolean, close: () => void) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const onPointerDown = (event: PointerEvent) => {
+      if (ref.current && !ref.current.contains(event.target as Node)) close();
+    };
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [ref, isOpen, close]);
 }
 
 function NavStateLaneBadge({ hasPending }: { hasPending?: boolean }) {
@@ -25,36 +63,6 @@ function NavStateLaneBadge({ hasPending }: { hasPending?: boolean }) {
     </span>
   );
 }
-
-const SUB_GROUPS: Record<string, { title: string; hrefs: string[] }[]> = {
-  // Consolidated IA per docs/architecture/target-ia.md §3 — INFRA 4 top: Beacons/Networking/Storage/Cloud
-  Build: [
-    { title: "Workloads", hrefs: ["/admin/servers", "/admin/apps"] },
-    { title: "Catalog", hrefs: ["/admin/catalog", "/admin/app-store", "/admin/nests", "/admin/app-templates", "/admin/templates", "/admin/forgefile"] },
-  ],
-  Deploy: [
-    { title: "Releases", hrefs: ["/admin/deployments", "/admin/preview-deployments", "/admin/source-deployments", "/admin/zerodowntime"] },
-    { title: "Pipelines & Git", hrefs: ["/admin/pipelines", "/admin/compose", "/admin/git", "/admin/git-providers"] },
-  ],
-  Infra: [
-    { title: "Beacons", hrefs: ["/admin/nodes", "/admin/regions", "/admin/locations", "/admin/host", "/admin/kubernetes", "/admin/docker", "/admin/capabilities", "/admin/onboarding-tokens", "/admin/allocations"] },
-    { title: "Networking", hrefs: ["/admin/endpoints", "/admin/discovery", "/admin/firewall", "/admin/load-balancer", "/admin/traffic", "/admin/domains", "/admin/dns", "/admin/gateways", "/admin/crossnode", "/admin/certificates", "/admin/mtls", "/admin/security", "/admin/webhooks", "/admin/acme"] },
-    { title: "Storage", hrefs: ["/admin/databases", "/admin/database-services", "/admin/mounts", "/admin/sftp", "/admin/files", "/admin/terminal"] },
-    { title: "Cloud", hrefs: ["/admin/cloud"] },
-  ],
-  Operations: [
-    { title: "Data & Recovery", hrefs: ["/admin/backups", "/admin/migrations", "/admin/reconciliation", "/admin/operations", "/admin/orphans", "/admin/cleanup"] },
-    { title: "Automation", hrefs: ["/admin/cron-jobs", "/admin/procedures", "/admin/scheduler", "/admin/autoscaler", "/admin/failover", "/admin/node-autoscaler", "/admin/env-affinity"] },
-  ],
-  Access: [
-    { title: "Identity", hrefs: ["/admin/users", "/admin/roles", "/admin/oauth-clients", "/admin/social"] },
-    { title: "Tenancy", hrefs: ["/admin/organizations", "/admin/projects", "/admin/environments"] },
-  ],
-  Platform: [
-    { title: "Integrations", hrefs: ["/admin/plugins", "/admin/api"] },
-    { title: "Settings", hrefs: ["/admin/settings", "/admin/mail", "/admin/notifications", "/admin/billing", "/admin/onboarding"] },
-  ],
-};
 
 export function AdminShell({ children }: { children: React.ReactNode }) {
   const t = useT();
@@ -72,6 +80,22 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   });
   const user = userQuery.data === null ? null : userQuery.data ?? currentUser;
 
+  const healthQuery = useQuery({
+    queryKey: ["health"],
+    queryFn: fetchHealthStatus,
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const isHealthy = healthQuery.data?.status === "ok" && healthQuery.data?.ok !== false;
+
+  const notificationsQuery = useQuery({
+    queryKey: ["notification-logs", "recent"],
+    queryFn: () => fetchNotificationLogs(undefined, 5, 0),
+    staleTime: 30_000,
+    retry: 1,
+  });
+  const recentNotifications = notificationsQuery.data ?? [];
+
   useEffect(() => {
     if (userQuery.data === null) {
       router.replace("/");
@@ -81,32 +105,55 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }, [router, user, userQuery.data]);
 
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navSearch, setNavSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [collapsedSubGroups, setCollapsedSubGroups] = useState<Record<string, boolean>>({});
+  const [contextDropdownOpen, setContextDropdownOpen] = useState(false);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
+  const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const contextMenuRef = useRef<HTMLDivElement>(null);
+  const notificationsRef = useRef<HTMLDivElement>(null);
+  const userMenuRef = useRef<HTMLDivElement>(null);
+  const projectMenuRef = useRef<HTMLDivElement>(null);
+
+  useDismissOnOutside(contextMenuRef, contextDropdownOpen, () => setContextDropdownOpen(false));
+  useDismissOnOutside(notificationsRef, notificationsOpen, () => setNotificationsOpen(false));
+  useDismissOnOutside(userMenuRef, userMenuOpen, () => setUserMenuOpen(false));
+  useDismissOnOutside(projectMenuRef, projectMenuOpen, () => setProjectMenuOpen(false));
 
   const navGroups = useMemo(() => {
-        const plan = [
-      { title: "Command", titleKey: "admin.navGroup.command", hrefs: ["/admin/overview", "/admin/monitoring", "/admin/health", "/admin/activity"] },
-      { title: "Build", titleKey: "admin.navGroup.build", hrefs: ["/admin/servers", "/admin/apps", "/admin/app-store", "/admin/catalog", "/admin/nests", "/admin/app-templates", "/admin/templates", "/admin/forgefile"] },
-      { title: "Deploy", titleKey: "admin.navGroup.deploy", hrefs: ["/admin/deployments", "/admin/preview-deployments", "/admin/source-deployments", "/admin/compose", "/admin/git", "/admin/git-providers", "/admin/pipelines", "/admin/zerodowntime"] },
-      { title: "Infra", titleKey: "admin.navGroup.infra", hrefs: ["/admin/nodes", "/admin/regions", "/admin/locations", "/admin/allocations", "/admin/capabilities", "/admin/onboarding-tokens", "/admin/host", "/admin/kubernetes", "/admin/docker", "/admin/cloud", "/admin/files", "/admin/terminal", "/admin/databases", "/admin/database-services", "/admin/mounts", "/admin/sftp", "/admin/endpoints", "/admin/discovery", "/admin/firewall", "/admin/load-balancer", "/admin/traffic", "/admin/domains", "/admin/dns", "/admin/gateways", "/admin/crossnode", "/admin/certificates", "/admin/mtls", "/admin/security", "/admin/webhooks", "/admin/acme"] },
-      { title: "Operations", titleKey: "admin.navGroup.operations", hrefs: ["/admin/operations", "/admin/migrations", "/admin/reconciliation", "/admin/cron-jobs", "/admin/orphans", "/admin/cleanup", "/admin/backups", "/admin/procedures", "/admin/scheduler", "/admin/autoscaler", "/admin/failover", "/admin/env-affinity", "/admin/node-autoscaler"] },
-      { title: "Access", titleKey: "admin.navGroup.access", hrefs: ["/admin/users", "/admin/roles", "/admin/organizations", "/admin/projects", "/admin/environments", "/admin/oauth-clients", "/admin/social"] },
-      { title: "Platform", titleKey: "admin.navGroup.platform", hrefs: ["/admin/plugins", "/admin/api", "/admin/settings", "/admin/mail", "/admin/notifications", "/admin/billing", "/admin/onboarding"] },
-    ];
-    const entries = adminPagesForRole(user?.role).flatMap((group) => group.items);
-    return plan.map((group) => ({ ...group, items: group.hrefs.map((href) => entries.find((item) => item.href === href)).filter((item): item is (typeof entries)[number] => Boolean(item)) }))
-      .filter((group) => group.items.length > 0)
-      .map((group) => ({ ...group, items: group.items.filter((item) => !navSearch.trim() || `${item.label} ${item.description}`.toLowerCase().includes(navSearch.toLowerCase())) }))
+    const rawGroups = adminPagesForRole(user?.role);
+    if (!navSearch.trim()) return rawGroups;
+    const query = navSearch.toLowerCase().trim();
+    return rawGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter(
+          (item) => `${item.label} ${item.description} ${item.href}`.toLowerCase().includes(query)
+        ),
+      }))
       .filter((group) => group.items.length > 0);
   }, [navSearch, user?.role]);
 
   const currentPage = findAdminPage(resolvedPath);
 
-  useEffect(() => { setMobileOpen(false); }, [pathname]);
+  // Find active group for breadcrumbs
+  const activeGroup = useMemo(() => {
+    return adminPagesForRole(user?.role).find((g) =>
+      g.items.some((item) => resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`))
+    );
+  }, [resolvedPath, user?.role]);
+
+  useEffect(() => {
+    setMobileOpen(false);
+    setContextDropdownOpen(false);
+    setNotificationsOpen(false);
+    setUserMenuOpen(false);
+    setProjectMenuOpen(false);
+  }, [pathname]);
 
   useEffect(() => {
     if (mobileOpen) {
@@ -134,15 +181,18 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   }, [mobileOpen]);
 
   const toggleGroup = (title: string) => setCollapsedGroups((current) => ({ ...current, [title]: !current[title] }));
-  const toggleSubGroup = (key: string) => setCollapsedSubGroups((current) => ({ ...current, [key]: !current[key] }));
   const isGroupCollapsed = (title: string) => Boolean(collapsedGroups[title] && !navSearch.trim());
-  const isSubGroupCollapsed = (key: string) => Boolean(collapsedSubGroups[key] && !navSearch.trim());
 
   const handleLogout = async () => {
+    try {
       await logout();
+    } catch {
+      // Session may already be gone server-side; still clear local state and leave.
+    } finally {
       setCurrentUser(null);
       router.push("/");
-    };
+    }
+  };
 
   if (userQuery.isPending) {
       return (
@@ -189,145 +239,520 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="h-screen overflow-hidden bg-[var(--canvas)]">
+      <CommandPalette open={commandPaletteOpen} onOpenChange={setCommandPaletteOpen} />
+
       {/* Top bar — fixed */}
       <header className="flex h-14 shrink-0 items-center justify-between border-b border-[var(--line)] bg-[var(--surface)] px-4 sm:px-6">
-        <button aria-label="Open admin navigation" className="mr-3 rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] max-[899px]:inline-flex hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]" onClick={() => setMobileOpen(true)} type="button"><Menu size={19} /></button>
-        <button
-          className="text-lg font-bold text-[var(--text)] tracking-tight focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
-          onClick={() => router.push("/servers")}
-          type="button"
-        >
-          {companyName}
-        </button>
-        <div className="flex items-center gap-3 text-sm text-[var(--text-subtle)]">
+        <div className="flex items-center gap-3">
           <button
-            className="hover:text-white transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
-            onClick={() => router.push("/servers")}
+            aria-label="Open admin navigation"
+            className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] max-[899px]:inline-flex hidden focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]"
+            onClick={() => setMobileOpen(true)}
             type="button"
           >
-            {tOr("server.myServers", "My Servers")}
+            <Menu size={19} />
+          </button>
+          <button
+            className="text-base font-bold text-[var(--text)] tracking-tight hover:text-[var(--brand)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] flex items-center gap-2.5"
+            onClick={() => router.push("/admin/overview")}
+            type="button"
+          >
+            <ForgeLogoIcon size={24} className="shrink-0" />
+            <div className="flex flex-col text-left">
+              <span className="leading-tight font-extrabold text-xs tracking-wider uppercase text-slate-100">{companyName || "Forge"}</span>
+              <span className="text-[8px] font-mono tracking-widest text-slate-500 uppercase">Infrastructure Control Plane</span>
+            </div>
+          </button>
+
+          {/* Context Selector Dropdown Pill */}
+          <div ref={contextMenuRef} className="hidden lg:relative lg:flex items-center ml-2">
+            <button
+              type="button"
+              onClick={() => setContextDropdownOpen(!contextDropdownOpen)}
+              className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-slate-300 flex items-center gap-1.5 hover:bg-white/[0.06] hover:border-white/[0.15] transition cursor-pointer"
+            >
+              <span>{activeGroup ? activeGroup.title : "Command"}</span>
+              <ChevronDown size={11} className={cn("text-slate-400 transition-transform", contextDropdownOpen && "rotate-180")} />
+            </button>
+
+            {contextDropdownOpen && (
+              <div className="absolute top-full left-0 mt-1.5 w-52 rounded-xl border border-white/[0.1] bg-[var(--surface-raised)] p-1.5 shadow-2xl z-50 divide-y divide-white/[0.06]">
+                <div className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Navigation Context</div>
+                <div className="py-1 space-y-0.5 max-h-72 overflow-y-auto scrollbar-thin">
+                  {navGroups.map((g) => (
+                    <button
+                      key={g.title}
+                      type="button"
+                      onClick={() => {
+                        setContextDropdownOpen(false);
+                        if (g.items[0]) router.push(g.items[0].href);
+                      }}
+                      className={cn(
+                        "flex items-center justify-between w-full px-2 py-1.5 rounded-lg text-xs font-medium text-left transition",
+                        activeGroup?.title === g.title
+                          ? "bg-[var(--brand)]/15 text-[var(--brand)] font-semibold"
+                          : "text-slate-300 hover:bg-white/[0.05] hover:text-white"
+                      )}
+                    >
+                      <span>{g.title}</span>
+                      <span className="font-mono text-[10px] opacity-60">{g.items.length}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Breadcrumbs */}
+          {currentPage && (
+            <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-[var(--line)] text-xs font-mono">
+              {activeGroup && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => router.push(activeGroup.items[0]?.href || "/admin/overview")}
+                    className="text-[var(--text-muted)] hover:text-slate-200 transition"
+                  >
+                    {activeGroup.title}
+                  </button>
+                  <span className="text-[var(--text-muted)]">/</span>
+                </>
+              )}
+              <span className="font-semibold text-slate-200">{tOr(currentPage.labelKey, currentPage.label)}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Center: Command Palette Trigger */}
+        <div className="flex-1 max-w-md mx-4 hidden md:block">
+          <button
+            type="button"
+            onClick={() => setCommandPaletteOpen(true)}
+            className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-1.5 text-xs text-[var(--text-subtle)] hover:border-[var(--line-strong)] hover:text-[var(--text)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] cursor-pointer"
+          >
+            <span className="flex items-center gap-2">
+              <Search size={13} className="text-[var(--text-muted)]" />
+              <span className="truncate">Search servers, nodes, deployments, domains…</span>
+            </span>
+            <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1.5 py-0.5 font-mono text-[10px] text-[var(--text-muted)]">
+              ⌘K
+            </kbd>
+          </button>
+        </div>
+
+        {/* Right: Actions */}
+        <div className="flex items-center gap-2.5 text-xs text-[var(--text-subtle)]">
+          {/* Global System Status Pill — Clickable to Health */}
+          <button
+            type="button"
+            onClick={() => router.push("/admin/health")}
+            title="Inspect platform diagnostics & health checks"
+            className={cn(
+              "hidden xl:flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium transition cursor-pointer hover:opacity-90",
+              isHealthy
+                ? "border-emerald-500/25 bg-emerald-500/10 text-emerald-300"
+                : "border-amber-500/30 bg-amber-500/15 text-amber-300"
+            )}
+          >
+            <span className="relative flex h-2 w-2">
+              <span className={cn("animate-ping absolute inline-flex h-full w-full rounded-full opacity-75", isHealthy ? "bg-emerald-400" : "bg-amber-400")} />
+              <span className={cn("relative inline-flex rounded-full h-2 w-2", isHealthy ? "bg-emerald-500" : "bg-amber-500")} />
+            </span>
+            <span className="font-mono">{isHealthy ? "All Systems Operational" : "Platform Degraded"}</span>
+          </button>
+
+          {/* Quick Notifications Button with Interactive Popover */}
+          <div ref={notificationsRef} className="relative">
+            <button
+              type="button"
+              aria-label="Notifications"
+              aria-expanded={notificationsOpen}
+              onClick={() => setNotificationsOpen(!notificationsOpen)}
+              className="relative rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors cursor-pointer"
+            >
+              <NotificationBellIcon size={15} />
+              {recentNotifications.length > 0 && (
+                <span className="absolute top-1.5 right-1.5 flex h-2 w-2 rounded-full bg-[var(--brand)] ring-2 ring-[var(--surface)]" />
+              )}
+            </button>
+
+            {notificationsOpen && (
+              <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-white/[0.1] bg-[var(--surface-raised)] p-3 shadow-2xl z-50">
+                <div className="flex items-center justify-between pb-2 border-b border-white/[0.06]">
+                  <span className="text-xs font-bold text-slate-100">Notifications</span>
+                  {recentNotifications.length > 0 && (
+                    <span className="rounded-full bg-rose-500/20 px-1.5 py-0.5 text-[10px] font-mono font-semibold text-rose-300">{recentNotifications.length} recent</span>
+                  )}
+                </div>
+                {notificationsQuery.isPending ? (
+                  <p className="py-3 text-center text-[11px] text-slate-500">Loading…</p>
+                ) : notificationsQuery.isError ? (
+                  <p className="py-3 text-center text-[11px] text-slate-500">Notifications are unavailable right now.</p>
+                ) : recentNotifications.length === 0 ? (
+                  <p className="py-3 text-center text-[11px] text-slate-500">No recent notifications.</p>
+                ) : (
+                  <div className="py-2 space-y-2 text-xs divide-y divide-white/[0.04]">
+                    {recentNotifications.map((log) => (
+                      <div key={log.id} className="pt-1.5 flex items-start gap-2">
+                        <span
+                          className={cn(
+                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
+                            log.status === "failed" ? "bg-rose-400" : log.status === "pending" ? "bg-amber-400" : "bg-sky-400"
+                          )}
+                        />
+                        <div className="min-w-0">
+                          <p className="font-semibold text-slate-200 truncate">{EVENT_LABELS[log.eventType as keyof typeof EVENT_LABELS] ?? log.eventType}</p>
+                          <p className="text-[11px] text-slate-400">{log.status} · {relativeTime(log.sentAt)}</p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <button
+                  type="button"
+                  onClick={() => { setNotificationsOpen(false); router.push("/admin/activity"); }}
+                  className="mt-2 block w-full text-center text-[11px] font-semibold text-slate-400 hover:text-white pt-1.5 border-t border-white/[0.06]"
+                >
+                  View activity log →
+                </button>
+              </div>
+            )}
+          </div>
+
+          {/* Health Diagnostics / Help */}
+          <button
+            type="button"
+            aria-label="Health and documentation"
+            onClick={() => router.push("/admin/health")}
+            className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors cursor-pointer"
+          >
+            <HelpCircle size={15} />
+          </button>
+
+          {/* Admin Settings */}
+          <button
+            type="button"
+            aria-label="Admin settings"
+            onClick={() => router.push("/admin/settings")}
+            className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors cursor-pointer"
+          >
+            <SettingsCogIcon size={15} />
+          </button>
+
+          {/* User Avatar Chip with Interactive Dropdown */}
+          <div ref={userMenuRef} className="relative flex items-center pl-2 border-l border-white/[0.08]">
+            <button
+              type="button"
+              onClick={() => setUserMenuOpen(!userMenuOpen)}
+              className="flex items-center gap-2 rounded-lg p-1 hover:bg-white/[0.04] transition cursor-pointer"
+            >
+              <div className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 font-bold text-xs text-white uppercase ring-1 ring-white/10">
+                {user?.email ? user.email.charAt(0) : "A"}
+              </div>
+              <div className="hidden 2xl:flex flex-col text-left">
+                <span className="truncate max-w-[100px] text-xs font-semibold text-slate-200">
+                  {user?.email ? user.email.split("@")[0] : "Admin"}
+                </span>
+                <span className="text-[10px] text-slate-500 capitalize">{user?.role || "Administrator"}</span>
+              </div>
+              <ChevronDown size={11} className={cn("text-slate-400 transition-transform", userMenuOpen && "rotate-180")} />
+            </button>
+
+            {userMenuOpen && (
+              <div className="absolute right-0 top-full mt-2 w-56 rounded-xl border border-white/[0.1] bg-[var(--surface-raised)] p-1.5 shadow-2xl z-50 divide-y divide-white/[0.06]">
+                <div className="px-3 py-2">
+                  <p className="truncate text-xs font-bold text-slate-200">{user?.email || "admin@example.com"}</p>
+                  <p className="text-[10px] font-mono text-slate-500 capitalize">{user?.role || "administrator"} · Default Org</p>
+                </div>
+                <div className="py-1 space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => { setUserMenuOpen(false); router.push("/admin/settings"); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                  >
+                    <SettingsCogIcon size={13} />
+                    <span>Account Settings</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setUserMenuOpen(false); router.push("/admin/health"); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                  >
+                    <CheckCircle2 size={13} />
+                    <span>Diagnostics & Health</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setUserMenuOpen(false); router.push("/admin/activity"); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                  >
+                    <Clock size={13} />
+                    <span>Activity Audit</span>
+                  </button>
+                </div>
+                <div className="pt-1">
+                  <button
+                    type="button"
+                    onClick={handleLogout}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 hover:text-rose-200"
+                  >
+                    <LogOut size={13} />
+                    <span>Sign Out</span>
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => setCommandPaletteOpen(true)}
+            aria-label="Open command palette"
+            className="md:hidden rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] hover:text-white"
+            type="button"
+          >
+            <Search size={16} />
           </button>
         </div>
       </header>
 
       <div className="flex h-[calc(100vh-56px)]">
         {/* Sidebar — independently scrollable */}
-        <aside className="max-[899px]:hidden w-72 shrink-0 flex-col border-r border-[var(--line)] bg-[var(--surface)] flex">
-          <div className="border-b border-[var(--line)] p-3"><div className="relative"><Search size={14} className="absolute left-3 top-2.5 text-slate-600"/><input aria-label="Search admin navigation" value={navSearch} onChange={(event) => setNavSearch(event.target.value)} placeholder="Find a control…" className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-9 pr-3 text-xs text-[var(--text)] outline-none focus:border-[var(--focus)] focus:ring-2 focus:ring-[var(--focus)]/15"/></div></div>
-          <nav className="flex-1 overflow-y-auto px-3 py-5">
-            {navGroups.map((group) => {
-              const subGroups = SUB_GROUPS[group.title];
-              if (subGroups && !navSearch.trim()) {
-                const groupItems = group.items;
-                return (
-                  <div key={group.title} className="mb-4">
-                    <button type="button" onClick={() => toggleGroup(group.title)} className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" aria-expanded={!isGroupCollapsed(group.title)}>
-                      <span>{tOr(group.titleKey, group.title)} <span className="ml-1 text-slate-700">{group.items.length}</span></span>
-                      <ChevronDown size={13} className={cn("transition-transform motion-safe:transition-transform", isGroupCollapsed(group.title) && "-rotate-90")} />
-                    </button>
-                    {!isGroupCollapsed(group.title) && subGroups.map((sub) => {
-                      const subItems = sub.hrefs.map((href) => groupItems.find((item) => item.href === href)).filter((item): item is NonNullable<typeof item> => Boolean(item));
-                      if (subItems.length === 0) return null;
-                      const subKey = `${group.title}::${sub.title}`;
+        <aside className="max-[899px]:hidden w-64 shrink-0 flex-col border-r border-[var(--line)] bg-[var(--surface)] flex">
+          <div className="border-b border-[var(--line)] p-2.5">
+            <div className="relative">
+              <Search size={13} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
+              <input
+                aria-label="Search admin navigation"
+                value={navSearch}
+                onChange={(event) => setNavSearch(event.target.value)}
+                placeholder="Filter navigation…"
+                className="h-8 w-full rounded-md border border-[var(--line)] bg-[var(--surface-input)] pl-8 pr-2.5 text-xs text-[var(--text)] outline-none focus:border-[var(--focus)] focus:ring-1 focus:ring-[var(--focus)]"
+              />
+            </div>
+          </div>
+
+          <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-3 scrollbar-thin">
+            {navGroups.map((group) => (
+              <div key={group.title} className="space-y-0.5">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.title)}
+                  className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                  aria-expanded={!isGroupCollapsed(group.title)}
+                >
+                  <span>
+                    {tOr(group.titleKey, group.title)}{" "}
+                    <span className="ml-1 font-mono text-[10px] text-[var(--text-muted)] opacity-70">
+                      {group.items.length}
+                    </span>
+                  </span>
+                  <ChevronDown
+                    size={12}
+                    className={cn(
+                      "transition-transform motion-safe:transition-transform text-[var(--text-muted)]",
+                      isGroupCollapsed(group.title) && "-rotate-90"
+                    )}
+                  />
+                </button>
+
+                {!isGroupCollapsed(group.title) && (
+                  <div className="space-y-0.5 pt-0.5">
+                    {group.items.map((item) => {
+                      const Icon = item.icon;
+                      const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
                       return (
-                        <div key={subKey} className="ml-2 border-l border-[var(--line)] pl-2">
-                          <button type="button" onClick={() => toggleSubGroup(subKey)} className="mb-1 flex w-full items-center justify-between rounded px-2 py-1 text-left text-[11px] font-semibold text-[var(--text-subtle)] hover:text-[var(--text)]" aria-expanded={!isSubGroupCollapsed(subKey)}>
-                            <span>{sub.title} <span className="ml-1 text-slate-700">{subItems.length}</span></span>
-                            <ChevronDown size={11} className={cn("transition-transform motion-safe:transition-transform", isSubGroupCollapsed(subKey) && "-rotate-90")} />
-                          </button>
-                          {!isSubGroupCollapsed(subKey) && subItems.map((item) => {
-                            const Icon = item.icon;
-                            const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
-                            return (
-                              <button
-                                key={item.href}
-                                aria-current={active ? "page" : undefined}
-                                className={cn(
-                                  "flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium transition-all text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]",
-                                  active
-                                    ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 pl-2.5 text-[var(--brand)] shadow-sm"
-                                    : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]",
-                                )}
-                                onClick={() => router.push(item.href)}
-                                type="button"
-                              >
-                                <Icon size={15} className="shrink-0" />
-                                <span className="truncate">{tOr(item.labelKey, item.label)}</span>
-                                <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
-                              </button>
-                            );
-                          })}
-                        </div>
+                        <button
+                          key={item.href}
+                          aria-current={active ? "page" : undefined}
+                          className={cn(
+                            "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
+                            active
+                              ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)] font-semibold"
+                              : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]"
+                          )}
+                          onClick={() => router.push(item.href)}
+                          type="button"
+                        >
+                          <Icon size={14} className="shrink-0" />
+                          <span className="truncate">{tOr(item.labelKey, item.label)}</span>
+                          <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
+                        </button>
                       );
                     })}
-                    {/* Fallback: any items not in sub-groups (should be none, but safe) */}
-                    {(() => {
-                      const subHrefs = new Set(subGroups.flatMap((s) => s.hrefs));
-                      const leftover = groupItems.filter((item) => !subHrefs.has(item.href));
-                      if (leftover.length === 0) return null;
-                      return leftover.map((item) => {
-                        const Icon = item.icon;
-                        const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
-                        return (
-                          <button key={item.href} aria-current={active ? "page" : undefined} className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", active ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 pl-2.5 text-[var(--brand)]" : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]")} onClick={() => router.push(item.href)} type="button"><Icon size={15} className="shrink-0" /><span className="truncate">{tOr(item.labelKey, item.label)}</span><NavStateLaneBadge hasPending={item.hasPendingGenerations} /></button>
-                        );
-                      });
-                    })()}
                   </div>
-                );
-              }
-              return (
-                <div key={group.title} className="mb-4">
-                  <button type="button" onClick={() => toggleGroup(group.title)} className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" aria-expanded={!isGroupCollapsed(group.title)}>
-                    <span>{tOr(group.titleKey, group.title)} <span className="ml-1 text-slate-700">{group.items.length}</span></span>
-                    <ChevronDown size={13} className={cn("transition-transform motion-safe:transition-transform", isGroupCollapsed(group.title) && "-rotate-90")} />
-                  </button>
-                  {!isGroupCollapsed(group.title) && group.items.map((item) => {
-                    const Icon = item.icon;
-                    const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
-                    return (
-                      <button
-                        key={item.href}
-                        aria-current={active ? "page" : undefined}
-                        className={cn(
-                          "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]",
-                          active
-                            ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 pl-2.5 text-[var(--brand)] shadow-sm"
-                            : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]",
-                        )}
-                        onClick={() => router.push(item.href)}
-                        type="button"
-                      >
-                        <Icon size={15} className="shrink-0" />
-                        <span className="truncate">{tOr(item.labelKey, item.label)}</span>
-                        <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
-                      </button>
-                    );
-                  })}
-                </div>
-              );
-            })}
+                )}
+              </div>
+            ))}
           </nav>
-          <div className="shrink-0 border-t border-[var(--line)] px-3 py-3">
+
+          <div className="shrink-0 border-t border-[var(--line)] px-2.5 pt-2.5 pb-10 sm:pb-3 space-y-1.5">
+            {/* Project Switcher Pill Matching Reference Screenshot */}
+            <div ref={projectMenuRef} className="relative">
+              <button
+                type="button"
+                onClick={() => setProjectMenuOpen(!projectMenuOpen)}
+                className="flex items-center justify-between w-full px-2.5 py-1.5 rounded-lg border border-white/[0.08] bg-white/[0.02] hover:bg-white/[0.06] transition text-left cursor-pointer"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <PlanetDefaultIcon size={16} className="shrink-0" />
+                  <div className="min-w-0">
+                    <span className="block text-[9px] font-mono uppercase tracking-wider text-slate-500">Project</span>
+                    <span className="block text-xs font-semibold text-slate-200 truncate">Default</span>
+                  </div>
+                </div>
+                <ChevronDown size={12} className={cn("text-slate-400 transition-transform", projectMenuOpen && "rotate-180")} />
+              </button>
+
+              {projectMenuOpen && (
+                <div className="absolute bottom-full left-0 mb-1.5 w-full rounded-xl border border-white/[0.1] bg-[var(--surface-raised)] p-1.5 shadow-2xl z-50 divide-y divide-white/[0.06]">
+                  <div className="px-2 py-1 text-[10px] font-mono text-slate-500 uppercase tracking-wider">Switch Environment</div>
+                  <div className="py-1 space-y-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setProjectMenuOpen(false)}
+                      className="flex items-center justify-between w-full rounded-lg px-2 py-1.5 text-xs text-slate-200 hover:bg-white/[0.06] font-medium transition"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
+                        <span>Default (Production)</span>
+                      </span>
+                      <span className="text-[10px] font-mono text-emerald-400 font-semibold">Active</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setProjectMenuOpen(false); router.push("/admin/environments"); }}
+                      className="flex items-center justify-between w-full rounded-lg px-2 py-1.5 text-xs text-slate-400 hover:bg-white/[0.06] hover:text-slate-200 transition"
+                    >
+                      <span className="flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
+                        <span>Staging</span>
+                      </span>
+                    </button>
+                  </div>
+                  <div className="pt-1">
+                    <button
+                      type="button"
+                      onClick={() => { setProjectMenuOpen(false); router.push("/admin/projects"); }}
+                      className="flex items-center justify-between w-full rounded-lg px-2 py-1 text-[11px] text-slate-400 hover:bg-white/[0.06] hover:text-white transition"
+                    >
+                      <span>Manage Projects…</span>
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <button
               onClick={handleLogout}
-              className="flex items-center gap-2.5 w-full px-3 py-2 text-sm text-[var(--text-subtle)] hover:text-[var(--text)] hover:bg-white/[0.04] rounded-lg transition-all motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="flex items-center gap-2.5 w-full px-2.5 py-1.5 text-xs text-[var(--text-subtle)] hover:text-[var(--text)] hover:bg-white/[0.04] rounded-md transition-colors motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] cursor-pointer"
               type="button"
             >
-              <LogOut size={15} />
+              <LogOut size={14} />
               {tOr("auth.logout", "Sign Out")}
             </button>
           </div>
         </aside>
 
         {/* Content — independently scrollable */}
-        <main className="min-w-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,color-mix(in_srgb,var(--brand)_10%,transparent),transparent_32rem)] p-4 sm:p-6 lg:p-8">
-          <div className="mx-auto max-w-[1280px]">
-            {currentPage ? <div className="mb-5 hidden border-b border-[var(--line)] pb-4 md:block"><p className="text-[11px] font-bold uppercase tracking-[0.16em] text-[var(--brand)]">{currentPage.label}</p><p className="mt-1 text-sm text-[var(--text-subtle)]">{currentPage.description}</p></div> : null}{children}
+        <main className="min-w-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,color-mix(in_srgb,var(--brand)_8%,transparent),transparent_28rem)] p-4 sm:p-5 lg:p-6">
+          <div className="mx-auto max-w-[1440px]">
+            {children}
           </div>
         </main>
       </div>
-      {mobileOpen ? <div className="fixed inset-0 z-50 max-[899px]:flex hidden" role="dialog" aria-modal="true" aria-label="Admin navigation"><button aria-label="Close navigation overlay" className="absolute inset-0 bg-black/70 backdrop-blur-sm motion-safe:transition-opacity" onClick={() => setMobileOpen(false)} type="button"/><aside ref={drawerRef} className="relative flex h-full w-[min(88vw,340px)] flex-col border-r border-[var(--line)] bg-[var(--surface)] shadow-2xl motion-safe:animate-[slideIn_0.2s_ease-out]"><div className="flex items-center justify-between border-b border-[var(--line)] p-4"><span className="text-sm font-semibold text-[var(--text)]">Admin navigation</span><button ref={closeButtonRef} aria-label="Close admin navigation" className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" onClick={() => setMobileOpen(false)} type="button"><X size={18}/></button></div><div className="border-b border-[var(--line)] p-3"><div className="relative"><Search size={14} className="absolute left-3 top-2.5 text-slate-600"/><input aria-label="Search admin navigation" value={navSearch} onChange={(event) => setNavSearch(event.target.value)} placeholder="Find a control…" className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-9 pr-3 text-xs text-[var(--text)] outline-none focus:border-[var(--focus)] focus:ring-2 focus:ring-[var(--focus)]/15"/></div></div><nav className="flex-1 overflow-y-auto px-3 py-5">{navGroups.map((group) => <div key={group.title} className="mb-4"><button type="button" onClick={() => toggleGroup(group.title)} className="mb-1 flex w-full items-center justify-between rounded-md px-3 py-1.5 text-left text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]" aria-expanded={!isGroupCollapsed(group.title)}><span>{tOr(group.titleKey, group.title)} <span className="ml-1 text-slate-700">{group.items.length}</span></span><ChevronDown size={13} className={cn("transition-transform motion-safe:transition-transform", isGroupCollapsed(group.title) && "-rotate-90")} /></button>{!isGroupCollapsed(group.title) && group.items.map((item) => { const Icon = item.icon; const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`); return <button key={item.href} aria-current={active ? "page" : undefined} className={cn("flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-left text-sm font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", active ? "bg-[var(--brand)]/10 text-[var(--brand)]" : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]")} onClick={() => router.push(item.href)} type="button"><Icon size={15}/><span className="truncate">{tOr(item.labelKey, item.label)}</span><NavStateLaneBadge hasPending={item.hasPendingGenerations} /></button>; })}</div>)}</nav></aside></div> : null}
+
+      {/* Mobile Drawer Navigation */}
+      {mobileOpen ? (
+        <div className="fixed inset-0 z-50 max-[899px]:flex hidden" role="dialog" aria-modal="true" aria-label="Admin navigation">
+          <button
+            aria-label="Close navigation overlay"
+            className="absolute inset-0 bg-black/70 backdrop-blur-sm motion-safe:transition-opacity"
+            onClick={() => setMobileOpen(false)}
+            type="button"
+          />
+          <aside
+            ref={drawerRef}
+            className="relative flex h-full w-[min(88vw,320px)] flex-col border-r border-[var(--line)] bg-[var(--surface)] shadow-2xl motion-safe:animate-[slideIn_0.2s_ease-out]"
+          >
+            <div className="flex items-center justify-between border-b border-[var(--line)] p-3">
+              <span className="text-sm font-semibold text-[var(--text)]">Admin navigation</span>
+              <button
+                ref={closeButtonRef}
+                aria-label="Close admin navigation"
+                className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                onClick={() => setMobileOpen(false)}
+                type="button"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <div className="border-b border-[var(--line)] p-2.5">
+              <div className="relative">
+                <Search size={13} className="absolute left-2.5 top-2.5 text-[var(--text-muted)]" />
+                <input
+                  aria-label="Search admin navigation"
+                  value={navSearch}
+                  onChange={(event) => setNavSearch(event.target.value)}
+                  placeholder="Filter navigation…"
+                  className="h-8 w-full rounded-md border border-[var(--line)] bg-[var(--surface-input)] pl-8 pr-2.5 text-xs text-[var(--text)] outline-none focus:border-[var(--focus)] focus:ring-1 focus:ring-[var(--focus)]"
+                />
+              </div>
+            </div>
+            <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-3">
+              {navGroups.map((group) => (
+                <div key={group.title} className="space-y-0.5">
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.title)}
+                    className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)]"
+                    aria-expanded={!isGroupCollapsed(group.title)}
+                  >
+                    <span>
+                      {tOr(group.titleKey, group.title)}{" "}
+                      <span className="ml-1 font-mono text-[10px] text-[var(--text-muted)]">
+                        {group.items.length}
+                      </span>
+                    </span>
+                    <ChevronDown
+                      size={12}
+                      className={cn(
+                        "transition-transform motion-safe:transition-transform",
+                        isGroupCollapsed(group.title) && "-rotate-90"
+                      )}
+                    />
+                  </button>
+                  {!isGroupCollapsed(group.title) && (
+                    <div className="space-y-0.5 pt-0.5">
+                      {group.items.map((item) => {
+                        const Icon = item.icon;
+                        const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
+                        return (
+                          <button
+                            key={item.href}
+                            aria-current={active ? "page" : undefined}
+                            className={cn(
+                              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
+                              active
+                                ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)] font-semibold"
+                                : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]"
+                            )}
+                            onClick={() => router.push(item.href)}
+                            type="button"
+                          >
+                            <Icon size={14} className="shrink-0" />
+                            <span className="truncate">{tOr(item.labelKey, item.label)}</span>
+                            <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </nav>
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 }

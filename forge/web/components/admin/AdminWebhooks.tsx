@@ -236,7 +236,7 @@ export function AdminWebhooks() {
               <Input label="Signing Secret" value={secret} onChange={setSecret} type="password" placeholder={editId ? "Masked; replace to rotate" : "Optional secret"} autoComplete="off" />
               <p className="-mt-2 text-xs text-slate-500">Secrets are masked after creation. Enter a new value to replace the current secret.</p>
               <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
-                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[#dc2626]" />
+                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[var(--brand)]" />
                 Enabled
               </label>
             </AdminFormSection>
@@ -266,7 +266,7 @@ export function AdminWebhooks() {
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-32 sm:max-h-48 overflow-y-auto">
                 {AVAILABLE_EVENTS.map((ev) => (
                   <label key={ev} className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2.5 text-sm text-slate-200 hover:bg-white/[0.03]">
-                    <input type="checkbox" checked={events.includes(ev)} onChange={() => toggleEvent(ev)} className="accent-[#dc2626]" />
+                    <input type="checkbox" checked={events.includes(ev)} onChange={() => toggleEvent(ev)} className="accent-[var(--brand)]" />
                     {ev}
                   </label>
                 ))}

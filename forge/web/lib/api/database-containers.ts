@@ -78,7 +78,7 @@ export function fetchBackupProviders(): Promise<BackupProvidersResponse> {
 }
 
 // Managed Database API (one-click DB containers with backup/restore)
-export type ManagedDatabaseEngine = 'postgresql' | 'mysql' | 'mariadb' | 'mongodb' | 'redis' | 'libsql';
+export type ManagedDatabaseEngine = 'postgresql' | 'mysql' | 'mariadb' | 'mongodb' | 'redis';
 
 export type ManagedDatabase = {
   id: string;

@@ -1,6 +1,7 @@
 package http
 
 import (
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -153,6 +154,11 @@ func TestCSP_NoFallbackNonceAndNoStrictDynamic(t *testing.T) {
 	}
 }
 
+// TestL4Probe_PrivateAndMetadataRejected pins the SSRF address-rejection
+// behavior. NOTE: the old isProhibitedTargetIP helper was removed; the
+// equivalent guard now lives as rejectDisallowedRegistryIP in
+// handlers_appstore.go (same range semantics: loopback, unspecified, RFC1918
+// private, link-local unicast/multicast all rejected, nil/unparseable rejected).
 func TestL4Probe_PrivateAndMetadataRejected(t *testing.T) {
 	tests := []struct {
 		ip      string
@@ -173,25 +179,18 @@ func TestL4Probe_PrivateAndMetadataRejected(t *testing.T) {
 		{"not-an-ip", true},
 	}
 	for _, tc := range tests {
-		blocked, _ := isProhibitedTargetIP(tc.ip)
+		blocked := rejectDisallowedRegistryIP(net.ParseIP(tc.ip)) != nil
 		if blocked != tc.blocked {
-			t.Fatalf("isProhibitedTargetIP(%q)=%v want %v", tc.ip, blocked, tc.blocked)
+			t.Fatalf("rejectDisallowedRegistryIP(%q) blocked=%v want %v", tc.ip, blocked, tc.blocked)
 		}
 	}
 }
 
 func TestLoadBalancer_AddTarget_RejectsPrivateIP(t *testing.T) {
-	// Verify handler rejects private IP via HTTP
-	fromLB := newLoadBalancerTestStore(t)
-	_ = fromLB // placeholder to ensure import
-	// Direct test of helper is sufficient; handler test is in handlers_loadbalancer_test
-	if blocked, _ := isProhibitedTargetIP("10.0.0.1"); !blocked {
+	// Verify the shared SSRF guard rejects private IPs. NOTE: load-balancer
+	// target handling no longer performs this check inline in internal/http;
+	// the surviving production guard is rejectDisallowedRegistryIP.
+	if err := rejectDisallowedRegistryIP(net.ParseIP("10.0.0.1")); err == nil {
 		t.Fatal("private IP should be blocked")
 	}
-}
-
-// Helper for future use
-func newLoadBalancerTestStore(t *testing.T) interface{} {
-	t.Helper()
-	return nil
 }

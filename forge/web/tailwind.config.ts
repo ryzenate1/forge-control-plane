@@ -10,7 +10,7 @@ const config: Config = {
   theme: {
     extend: {
       fontFamily: {
-        sans: ["var(--font-sans)", "IBM Plex Sans", "system-ui", "sans-serif"],
+        sans: ["var(--font-sans)", "Manrope", "system-ui", "sans-serif"],
         display: ["var(--font-display)", "Space Grotesk", "system-ui", "sans-serif"],
         mono: ["var(--font-mono)", "JetBrains Mono", "Fira Code", "Cascadia Code", "monospace"],
       },

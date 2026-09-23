@@ -81,15 +81,23 @@ func writeFile(t testing.TB, dir, name string, data []byte) string {
 	return p
 }
 
-func TestTLSConfig_ManualWithClientCAEnablesmTLS(t *testing.T) {
+// NOTE: beacon-side mTLS was removed. tls.Config has no client-CA option
+// (Config only carries Mode/CertFile/KeyFile/Hostname/CacheDir/ACMEEmail) and
+// Apply never sets ClientAuth/ClientCAs — panel→beacon requests are
+// authenticated by the HMAC signature middleware instead. The three tests that
+// used to configure a ClientCAFile now pin today's behaviour instead: no TLS
+// mode ever requests a client certificate. Re-introducing mTLS has to update
+// these consciously.
+
+func TestTLSConfig_ManualModeNeverRequestsClientCerts(t *testing.T) {
 	dir := t.TempDir()
 	caPEM, _, caCert, caKey := genCA(t)
 	srvCertPEM, srvKeyPEM := genLeaf(t, caCert, caKey, "beacon", false)
-	caPath := writeFile(t, dir, "ca.pem", caPEM)
+	_ = writeFile(t, dir, "ca.pem", caPEM)
 	certPath := writeFile(t, dir, "srv.pem", srvCertPEM)
 	keyPath := writeFile(t, dir, "srv.key", srvKeyPEM)
 
-	cfg := &Config{Mode: ModeManual, CertFile: certPath, KeyFile: keyPath, ClientCAFile: caPath}
+	cfg := &Config{Mode: ModeManual, CertFile: certPath, KeyFile: keyPath}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate: %v", err)
 	}
@@ -100,11 +108,11 @@ func TestTLSConfig_ManualWithClientCAEnablesmTLS(t *testing.T) {
 	if srv.TLSConfig == nil {
 		t.Fatal("expected TLSConfig")
 	}
-	if srv.TLSConfig.ClientAuth != 4 { // RequireAndVerifyClientCert = 4
-		t.Fatalf("expected RequireAndVerifyClientCert, got %v", srv.TLSConfig.ClientAuth)
+	if srv.TLSConfig.ClientAuth != tls.NoClientCert {
+		t.Fatalf("manual mode must not request client certs, got %v", srv.TLSConfig.ClientAuth)
 	}
-	if srv.TLSConfig.ClientCAs == nil {
-		t.Fatal("expected ClientCAs")
+	if srv.TLSConfig.ClientCAs != nil {
+		t.Fatal("manual mode must not install a client CA pool")
 	}
 }
 
@@ -127,17 +135,32 @@ func TestTLSConfig_ManualWithoutClientCAIsNoClientCert(t *testing.T) {
 	}
 }
 
-func TestTLSConfig_NoneWithClientCAFails(t *testing.T) {
-	cfg := &Config{Mode: ModeNone, ClientCAFile: "/tmp/ca.pem"}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for client CA with none mode")
+func TestTLSConfig_NoneModeHasNoClientCAOption(t *testing.T) {
+	// Previously rejected a client CA supplied with mode "none"; there is no
+	// client-CA field to reject any more, so none-mode must stay inert.
+	cfg := &Config{Mode: ModeNone}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate(none): %v", err)
+	}
+	srv := &http.Server{}
+	if err := cfg.Apply(srv); err != nil {
+		t.Fatalf("Apply(none): %v", err)
+	}
+	if srv.TLSConfig != nil {
+		t.Fatalf("none mode must leave TLSConfig unset, got %+v", srv.TLSConfig)
 	}
 }
 
-func TestTLSConfig_AutoTLSWithClientCAFails(t *testing.T) {
-	cfg := &Config{Mode: ModeAutoTLS, Hostname: "example.com", ClientCAFile: "/tmp/ca.pem"}
-	if err := cfg.Validate(); err == nil {
-		t.Fatal("expected error for client CA with autotls")
+func TestTLSConfig_AutoTLSModeHasNoClientCAOption(t *testing.T) {
+	// Previously rejected a client CA supplied with autotls; autotls is
+	// hostname-only today (Validate is safe to call without starting the
+	// ACME challenge server).
+	if err := (&Config{Mode: ModeAutoTLS}).Validate(); err == nil {
+		t.Fatal("autotls without hostname should still fail validation")
+	}
+	cfg := &Config{Mode: ModeAutoTLS, Hostname: "example.com"}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate(autotls): %v", err)
 	}
 }
 

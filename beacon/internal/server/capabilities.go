@@ -93,11 +93,14 @@ func (s *Server) collectCapabilities() CapabilityReport {
 	stdruntime.ReadMemStats(&mem)
 
 	runtimeStatus := "unknown"
-	runtimeAvailable := false
 	runtimeProvider := ""
+	// A wired runtime is not necessarily a usable one: mock mode installs
+	// UnavailableRuntime, which answers every workload call with an error. The
+	// capability report has to say "not available" rather than advertise a
+	// runtime that can build nothing.
+	rtAvailable := runtimeAvailable(s.runtime)
 	if s.runtime != nil {
 		runtimeStatus = s.dockerStatus()
-		runtimeAvailable = true
 		if pinger, ok := s.runtime.(runtime.Pinger); ok {
 			if err := pinger.Ping(context.Background()); err == nil {
 				runtimeStatus = "ok"
@@ -109,8 +112,8 @@ func (s *Server) collectCapabilities() CapabilityReport {
 
 	_, dockerBuildErr := exec.LookPath("docker")
 	_, nixpacksErr := exec.LookPath("nixpacks")
-	dockerBuildEnabled := runtimeAvailable && dockerBuildErr == nil
-	nixpacksEnabled := runtimeAvailable && nixpacksErr == nil
+	dockerBuildEnabled := rtAvailable && dockerBuildErr == nil
+	nixpacksEnabled := rtAvailable && nixpacksErr == nil
 	buildStatus := "error"
 	if dockerBuildEnabled || nixpacksEnabled {
 		buildStatus = "ok"
@@ -155,7 +158,7 @@ func (s *Server) collectCapabilities() CapabilityReport {
 	}
 
 	databaseInfo := &DatabaseCapability{
-		ProvisioningEnabled: runtimeAvailable,
+		ProvisioningEnabled: rtAvailable,
 		SupportedEngines:    []string{"mysql", "postgresql"},
 	}
 
@@ -167,7 +170,7 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		MemoryMB:      mem.Alloc / (1024 * 1024),
 		UptimeSeconds: int64(time.Since(s.started).Seconds()),
 		Capabilities:  capabilities,
-		RuntimeInfo:   &RuntimeCapability{DockerAvailable: runtimeAvailable, DockerStatus: runtimeStatus, RuntimeProvider: runtimeProvider},
+		RuntimeInfo:   &RuntimeCapability{DockerAvailable: rtAvailable, DockerStatus: runtimeStatus, RuntimeProvider: runtimeProvider},
 		BuildInfo:     buildInfo,
 		ComposeInfo:   composeInfo,
 		StorageInfo:   storageInfo,

@@ -5,9 +5,25 @@ package server
 import (
 	"net"
 	"strings"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
+
+// hostUptimeSeconds returns wall-clock uptime since the machine booted, read
+// from kern.boottime via sysctl. -1 when it cannot be determined: an unknown
+// uptime is never reported as zero.
+func hostUptimeSeconds() int64 {
+	tv, err := unix.SysctlTimeval("kern.boottime")
+	if err != nil || tv == nil {
+		return -1
+	}
+	uptime := time.Now().Unix() - int64(tv.Sec)
+	if uptime < 0 {
+		return -1
+	}
+	return uptime
+}
 
 func totalSystemMemoryMB() uint64 {
 	value, err := unix.SysctlUint64("hw.memsize")

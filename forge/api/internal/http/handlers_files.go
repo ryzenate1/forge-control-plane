@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,8 +26,10 @@ type nodeTarget struct {
 	NodeID    string
 }
 
-// resolveNode looks up a node from the store by nodeId query param,
-// or picks the first active node.
+// resolveNode looks up a node from the store by the nodeId query param. The
+// node must be named explicitly: an empty nodeId is a bad request rather than
+// an invitation to silently pick whichever node happens to be active, which
+// would read (or write) a machine the caller never asked about.
 func resolveNode(cfg Config, c *fiber.Ctx) (*nodeTarget, error) {
 	if cfg.Store == nil {
 		return nil, fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -36,22 +39,7 @@ func resolveNode(cfg Config, c *fiber.Ctx) (*nodeTarget, error) {
 
 	nodeID := c.Query("nodeId")
 	if nodeID == "" {
-		nodes, err := cfg.Store.ListNodes(ctx)
-		if err != nil {
-			return nil, respondInternalError(c, err)
-		}
-		for _, n := range nodes {
-			if n.Status == "active" {
-				nodeID = n.ID
-				break
-			}
-		}
-		if nodeID == "" && len(nodes) > 0 {
-			nodeID = nodes[0].ID
-		}
-		if nodeID == "" {
-			return nil, fiber.NewError(fiber.StatusServiceUnavailable, "no nodes available — add a node in admin settings")
-		}
+		return nil, fiber.NewError(fiber.StatusBadRequest, "nodeId is required: specify which Beacon this request targets")
 	}
 
 	node, err := cfg.Store.GetNode(ctx, nodeID)
@@ -352,8 +340,25 @@ func hostFilesRemove(cfg Config) fiber.Handler {
 	}
 }
 
+// hostFilesUploadLimit caps proxied upload bodies at 100 MiB. It is enforced
+// from the request's declared Content-Length before any body is read into
+// memory, so an oversized upload is rejected without an allocation.
+const hostFilesUploadLimit = 100 * 1024 * 1024
+
 func hostFilesUpload(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		// Early size cap before alloc: reject oversized uploads from the declared
+		// Content-Length without buffering the body. Check the parsed header value
+		// and the raw header string, since some clients set only one of the two.
+		if cl := c.Request().Header.ContentLength(); cl > hostFilesUploadLimit {
+			return fiber.NewError(fiber.StatusRequestEntityTooLarge, "upload exceeds maximum size of 100 MiB")
+		}
+		if raw := c.Request().Header.Peek("Content-Length"); len(raw) > 0 {
+			if n, perr := strconv.ParseInt(string(raw), 10, 64); perr == nil && n > hostFilesUploadLimit {
+				return fiber.NewError(fiber.StatusRequestEntityTooLarge, "upload exceeds maximum size of 100 MiB")
+			}
+		}
+
 		target, err := resolveNode(cfg, c)
 		if err != nil {
 			return err
@@ -376,7 +381,7 @@ func hostFilesUpload(cfg Config) fiber.Handler {
 		req.Header.Set("Content-Type", string(c.Request().Header.ContentType()))
 		req.ContentLength = int64(len(rawBody))
 
-		headers, err := cfg.Daemon.SignedHeaders(target.NodeToken, http.MethodPost, req.URL.RequestURI(), rawBody)
+		headers, err := cfg.Daemon.SignedHeaders(target.NodeToken, http.MethodPost, req.URL.RequestURI(), nil)
 		if err != nil {
 			return respondInternalError(c, err)
 		}

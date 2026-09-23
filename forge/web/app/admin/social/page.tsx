@@ -129,7 +129,7 @@ function ProviderRow({
           <p className="text-xs text-slate-500">Provider key: {provider.name}</p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[#dc2626]" />
+          <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[var(--brand)]" />
           <span className="text-slate-300">Enabled</span>
         </label>
       </div>

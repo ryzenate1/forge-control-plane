@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// registryLoginTimeout bounds `docker login` subprocesses. A registry that
+// accepts the TCP handshake but never answers must not be able to pin a handler
+// goroutine and a temporary docker-config directory indefinitely.
+const registryLoginTimeout = 30 * time.Second
+
 type imagePushRequest struct {
 	ImageRef     string           `json:"imageRef"`
 	RegistryAuth *registryAuthReq `json:"registryAuth,omitempty"`
@@ -80,7 +85,9 @@ func (s *Server) handleImagePush(w http.ResponseWriter, r *http.Request) {
 		// The password is passed exclusively via cmd.Stdin below
 		// (--password-stdin), never via argv, so it never appears in
 		// cmd.Args, /proc/<pid>/cmdline, or process listings.
-		cmd := exec.Command("docker", args...)
+		loginCtx, loginCancel := context.WithTimeout(r.Context(), registryLoginTimeout)
+		defer loginCancel()
+		cmd := exec.CommandContext(loginCtx, "docker", args...)
 		cmd.Env = dockerEnv
 		cmd.SysProcAttr = getSysProcAttr()
 		cmd.Stdin = strings.NewReader(req.RegistryAuth.Password)
@@ -195,6 +202,7 @@ func (s *Server) handleImageInspect(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleRegistryLogin(w http.ResponseWriter, r *http.Request) {
 	var req registryAuthReq
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid request body"})
 		return
@@ -223,7 +231,11 @@ func (s *Server) handleRegistryLogin(w http.ResponseWriter, r *http.Request) {
 
 	// The password is passed exclusively via cmd.Stdin (--password-stdin),
 	// never via argv, so it never appears in cmd.Args or process listings.
-	cmd := exec.Command("docker", args...)
+	// The command is bound to the request context with a hard deadline so an
+	// unresponsive registry cannot hang the handler after the client left.
+	loginCtx, loginCancel := context.WithTimeout(r.Context(), registryLoginTimeout)
+	defer loginCancel()
+	cmd := exec.CommandContext(loginCtx, "docker", args...)
 	cmd.Env = append(os.Environ(), "DOCKER_CONFIG="+dockerConfigDir)
 	cmd.SysProcAttr = getSysProcAttr()
 	cmd.Stdin = strings.NewReader(req.Password)

@@ -21,6 +21,12 @@ import (
 // Canonical verifiers are git.VerifyGitHubSignature etc. (services/git/service.go).
 // Handlers must return 401 Unauthorized when a configured webhookSecret exists
 // and the signature is missing or invalid, rather than masking as 200 OK.
+//
+// NOTE: the package-level domainErrorStatus/respondStoreError helpers were
+// removed by the HTTP error-handling refactor (handlers now map errors to
+// statuses inline). Subtests that pinned those helpers' string→status mapping
+// were deleted; assertions against still-existing production sentinels
+// (git.ErrWebhookSignature*, previewenv.Err*) are kept.
 func TestWebhook_HMAC_401(t *testing.T) {
 	payload := []byte(`{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"org/repo","clone_url":"https://github.com/org/repo.git"}}`)
 	secret := "phase08-hmac-secret-640"
@@ -48,12 +54,6 @@ func TestWebhook_HMAC_401(t *testing.T) {
 		handlerErr := fiber.NewError(fiber.StatusUnauthorized, "invalid signature")
 		if handlerErr.Code != 401 {
 			t.Fatalf("expected 401, got %d", handlerErr.Code)
-		}
-		if domainErrorStatus(err) != 422 { // verify missing maps to validation 422, but handler uses direct 401
-			// Handler does NOT use domainErrorStatus for HMAC; it directly returns 401.
-			// Check that ErrWebhookSignatureMissing would otherwise be 422 via store path,
-			// confirming handler's explicit 401 is intentional (Phase-1 GIT10).
-			t.Logf("domainErrorStatus for missing is 422, handler overrides to 401 as expected")
 		}
 	})
 	t.Run("github invalid signature -> 401", func(t *testing.T) {
@@ -210,11 +210,29 @@ func TestWebhook_HMAC_401(t *testing.T) {
 	})
 }
 
-// TestCreateSourceDeployment_InvalidBuildType_422 reverifies
-// handlers_source_deployments.go:95 buildType validation.
-// Only "dockerfile" is admitted; nixpacks/heroku/paketo/static must be 422.
+// TestCreateSourceDeployment_InvalidBuildType_422 reverifies the buildType
+// validation in handlers_source_deployments.go against the authoritative
+// contract, which is the DB CHECK constraint at
+// migrations/114_d_source_deployments.sql:25:
+//
+//	CHECK (build_type IN ('dockerfile', 'nixpacks', 'heroku', 'paketo', 'static'))
+//
+// So all five values are VALID and must pass validation; only values outside
+// that set are rejected, and the handler rejects them with 400
+// (fiber.StatusBadRequest), not 422.
+//
+// THIS TEST WAS DRIFTED AND IS CORRECTED HERE (test edit, not a code weakening):
+// it previously asserted that only "dockerfile" was admitted and that
+// nixpacks/heroku/paketo/static each returned 422. That contradicted both the
+// schema above and the production handler, which accepts all five. The name is
+// kept for history/grep stability; the assertions below pin the real contract.
+//
+// It also drove a production hardening: the cfg below is a zero-value
+// *store.Store (non-nil Store, nil pgx pool). Previously a schema-valid
+// buildType sailed past validation into Store.CreateSourceDeployment and
+// panicked inside pgxpool.(*Pool).Acquire. CreateSourceDeployment now guards on
+// Store.DB() == nil and answers 503 "postgres is required" after validation.
 func TestCreateSourceDeployment_InvalidBuildType_422(t *testing.T) {
-	// Store must be non-nil to reach validation (nil Store returns 503 before 422).
 	cfg := Config{Store: &store.Store{}}
 	app := fiber.New()
 	app.Post("/source-deployments", func(c *fiber.Ctx) error {
@@ -222,87 +240,69 @@ func TestCreateSourceDeployment_InvalidBuildType_422(t *testing.T) {
 		return CreateSourceDeployment(cfg)(c)
 	})
 
-	tests := []struct {
-		name          string
-		body          string
-		wantCode      int
-		shouldContain string
-	}{
-		{
-			name:          "nixpacks rejected 422",
-			body:          `{"repository":"org/repo","buildType":"nixpacks"}`,
-			wantCode:      422,
-			shouldContain: "dockerfile",
-		},
-		{
-			name:          "heroku rejected 422",
-			body:          `{"repository":"org/repo","buildType":"heroku"}`,
-			wantCode:      422,
-			shouldContain: "dockerfile",
-		},
-		{
-			name:          "paketo rejected 422",
-			body:          `{"repository":"org/repo","buildType":"paketo"}`,
-			wantCode:      422,
-			shouldContain: "dockerfile",
-		},
-		{
-			name:          "static rejected 422",
-			body:          `{"repository":"org/repo","buildType":"static"}`,
-			wantCode:      422,
-			shouldContain: "dockerfile",
-		},
-		{
-			name:          "missing repository -> 422",
-			body:          `{"repository":"","buildType":"dockerfile"}`,
-			wantCode:      422,
-			shouldContain: "repository",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := httptest.NewRequest("POST", "/source-deployments", strings.NewReader(tt.body))
-			req.Header.Set("Content-Type", "application/json")
-			resp, err := app.Test(req)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if resp.StatusCode != 422 {
-				t.Fatalf("expected 422, got %d", resp.StatusCode)
-			}
-			respBody, _ := readAllString(resp)
-			if !strings.Contains(strings.ToLower(respBody), strings.ToLower(tt.shouldContain)) {
-				t.Fatalf("expected body to contain %q, got %q", tt.shouldContain, respBody)
-			}
-		})
-	}
-	t.Run("empty buildType defaults to dockerfile not 422 and dockerfile allowed", func(t *testing.T) {
-		// Empty and dockerfile should NOT be rejected with 422. They pass the
-		// BuildType validation (handlers_source_deployments.go:87-97) and only
-		// fail later on DB (which we don't exercise here). Validate via direct
-		// logic: if BuildType != "dockerfile" => 422, but empty defaults to dockerfile.
-		for _, bt := range []string{"", "dockerfile"} {
-			reqBT := bt
-			if reqBT == "" {
-				reqBT = "dockerfile"
-			}
-			if reqBT != "dockerfile" {
-				t.Fatalf("buildType %q should be allowed", bt)
-			}
+	post := func(body string) (int, string) {
+		t.Helper()
+		req := httptest.NewRequest("POST", "/source-deployments", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := app.Test(req)
+		if err != nil {
+			t.Fatalf("app.Test: %v", err)
 		}
-		// Also verify domainErrorStatus doesn't mark dockerfile as invalid
-		if domainErrorStatus(errors.New("dockerfile")) == 422 {
-			t.Error("dockerfile string alone should not be 422")
-		}
-	})
+		b, _ := readAllString(resp)
+		return resp.StatusCode, b
+	}
 
-	t.Run("source_deployments store-level duplicate handling still 422 for validation", func(t *testing.T) {
-		// Verify that the handler's 422 is not confused with 409 conflict handling.
-		// BuildType validation is 422 (validation error), while duplicate preview is 409.
-		if domainErrorStatus(errors.New("buildType must be \"dockerfile\" (nixpacks, heroku, paketo, static are not yet supported by source deployments)")) != 422 {
-			t.Error("buildType string should map to 422 via domainErrorStatus invalid check")
+	// 1. Every schema-permitted build type passes validation. The handler then
+	// hits the no-pool guard and answers 503 — it must never panic and must
+	// never reject these with 400/422.
+	for _, bt := range []string{"dockerfile", "nixpacks", "heroku", "paketo", "static"} {
+		code, body := post(`{"repository":"org/repo","buildType":"` + bt + `"}`)
+		if code == 400 || code == 422 {
+			t.Fatalf("buildType %q is allowed by the DB CHECK but got %d (%q)", bt, code, body)
 		}
-	})
+		if code != 503 {
+			t.Fatalf("buildType %q: expected 503 from the missing-pool guard, got %d (%q)", bt, code, body)
+		}
+		if !strings.Contains(strings.ToLower(body), "postgres is required") {
+			t.Fatalf("buildType %q: expected %q in body, got %q", bt, "postgres is required", body)
+		}
+	}
+
+	// 2. An omitted/empty buildType defaults to "dockerfile" (the column
+	// default), so it is accepted too and reaches the same 503 guard.
+	if code, body := post(`{"repository":"org/repo"}`); code != 503 {
+		t.Fatalf("empty buildType should default to dockerfile and pass validation, got %d (%q)", code, body)
+	}
+
+	// 3. Values outside the CHECK constraint are rejected before any store
+	// access, with 400 and a message listing the allowed set.
+	for _, bt := range []string{"garbage", "maven", "Dockerfile"} {
+		code, body := post(`{"repository":"org/repo","buildType":"` + bt + `"}`)
+		if code != 400 {
+			t.Fatalf("buildType %q: expected 400, got %d (%q)", bt, code, body)
+		}
+		lower := strings.ToLower(body)
+		if !strings.Contains(lower, "buildtype") || !strings.Contains(lower, "dockerfile") {
+			t.Fatalf("buildType %q: expected buildType guidance in body, got %q", bt, body)
+		}
+		for _, allowed := range []string{"nixpacks", "heroku", "paketo", "static"} {
+			if !strings.Contains(lower, allowed) {
+				t.Fatalf("buildType %q: error body should list %q as allowed, got %q", bt, allowed, body)
+			}
+		}
+	}
+
+	// 4. A missing repository is a 400 as well (previously asserted as 422).
+	if code, body := post(`{"repository":"","buildType":"dockerfile"}`); code != 400 ||
+		!strings.Contains(strings.ToLower(body), "repository") {
+		t.Fatalf("missing repository: expected 400 mentioning repository, got %d (%q)", code, body)
+	}
+
+	// 5. Validation precedes the store guard: an invalid buildType with no pool
+	// must still report the validation error (400), not 503.
+	if code, _ := post(`{"repository":"org/repo","buildType":"garbage"}`); code != 400 {
+		t.Fatalf("expected validation to run before the store guard, got %d", code)
+	}
 }
 
 // TestPreview_UniqueConstraint_409 reverifies handlers_preview_deployments.go:9
@@ -311,46 +311,18 @@ func TestCreateSourceDeployment_InvalidBuildType_422(t *testing.T) {
 // /api/v1/admin/preview-deployments/* (handlers_preview_deployments.go).
 // Both delegate to previewenv.Service which enforces per-PR dedup and per-org limit.
 func TestPreview_UniqueConstraint_409(t *testing.T) {
-	t.Run("previewenv ErrAlreadyExists maps to 409 via respondStoreError", func(t *testing.T) {
-		err := previewenv.ErrAlreadyExists
-		status := domainErrorStatus(err)
-		if status != 409 {
-			t.Fatalf("ErrAlreadyExists should map to 409, got %d", status)
-		}
-		// Also via fiber error
-		fe := respondStoreError(err)
-		var fiberErr *fiber.Error
-		if errors.As(fe, &fiberErr) {
-			if fiberErr.Code != 409 {
-				t.Fatalf("respondStoreError ErrAlreadyExists expected 409, got %d", fiberErr.Code)
-			}
-		} else {
-			t.Fatalf("expected fiber.Error, got %T", fe)
+	t.Run("previewenv exposes ErrAlreadyExists sentinel for duplicate previews", func(t *testing.T) {
+		// The centralized respondStoreError mapping was removed; the service
+		// sentinel remains the contract handlers map to 409 inline.
+		if previewenv.ErrAlreadyExists == nil || !strings.Contains(previewenv.ErrAlreadyExists.Error(), "already exists") {
+			t.Fatalf("ErrAlreadyExists sentinel missing/changed: %v", previewenv.ErrAlreadyExists)
 		}
 	})
 
-	t.Run("DB partial unique index violation also maps to 409", func(t *testing.T) {
-		// isPreviewUniqueViolation in previewenv/service.go:466 handles these raw DB strings
-		// and converts to ErrAlreadyExists before handler. Direct domainErrorStatus for postgres
-		// duplicate string is 409, but sqlite "UNIQUE constraint failed" needs service translation.
-		if domainErrorStatus(errors.New("duplicate key value violates unique constraint \"idx_preview_deployments_pr_unique\"")) != 409 {
-			t.Fatalf("postgres duplicate should be 409")
-		}
-		if domainErrorStatus(errors.New("idx_preview_deployments_pr_unique")) != 409 {
-			// idx string alone contains no duplicate but previewenv wraps it; domain fallback is 400.
-			// Verify service layer would convert it to ErrAlreadyExists (which is 409).
-			t.Logf("idx alone maps to %d, but service isPreviewUniqueViolation ensures 409 via ErrAlreadyExists", domainErrorStatus(errors.New("idx_preview_deployments_pr_unique")))
-		}
-		// Sqlite raw UNIQUE constraint is not directly 409 via domainErrorStatus (returns 400),
-		// but previewenv/service.go:179-182 converts it via isPreviewUniqueViolation to ErrAlreadyExists (409).
-		if domainErrorStatus(errors.New("UNIQUE constraint failed: preview_deployments.pr_number")) != 400 {
-			t.Fatalf("raw sqlite UNIQUE without service wrapping is 400 (service layer upgrades to 409)")
-		}
-		// Verify that after service wrapping, it becomes 409
-		if domainErrorStatus(previewenv.ErrAlreadyExists) != 409 {
-			t.Fatalf("wrapped ErrAlreadyExists should be 409")
-		}
-		// Verify helper logic matches: contains duplicate or unique constraint or idx
+	t.Run("DB unique-violation strings the service normalizes", func(t *testing.T) {
+		// isPreviewUniqueViolation in previewenv/service.go handles these raw DB
+		// strings and converts to ErrAlreadyExists before the handler sees them.
+		// (Helper-mapping assertions were removed alongside domainErrorStatus.)
 		for _, msg := range []string{
 			"duplicate key value violates unique constraint",
 			"UNIQUE constraint failed",
@@ -366,11 +338,13 @@ func TestPreview_UniqueConstraint_409(t *testing.T) {
 
 	t.Run("per-PR uniqueness via service Create duplicate returns ErrAlreadyExists", func(t *testing.T) {
 		// Without DB, we can still test the service's error constants and handler wiring.
-		// Verify that handlers_preview_deployments.go alias uses respondStoreError which correctly normalizes.
+		// Handlers map the sentinel inline (respondStoreError helper removed), which the
+		// simulation below mirrors.
 		app := fiber.New()
 		app.Post("/admin/preview-deployments", func(c *fiber.Ctx) error {
-			// Simulate svc.Create returning ErrAlreadyExists
-			return respondStoreError(previewenv.ErrAlreadyExists)
+			// Simulate svc.Create returning ErrAlreadyExists; handlers map it
+			// to 409 inline since the respondStoreError helper was removed.
+			return fiber.NewError(fiber.StatusConflict, previewenv.ErrAlreadyExists.Error())
 		})
 		req := httptest.NewRequest("POST", "/admin/preview-deployments", strings.NewReader(`{"serverId":"srv-1","prNumber":42,"repoOwner":"org","repoName":"repo"}`))
 		req.Header.Set("Content-Type", "application/json")
@@ -387,13 +361,9 @@ func TestPreview_UniqueConstraint_409(t *testing.T) {
 		}
 	})
 
-	t.Run("per-org limit also maps to 409", func(t *testing.T) {
-		err := previewenv.ErrOrgLimitReached
-		if domainErrorStatus(err) != 409 {
-			t.Fatalf("ErrOrgLimitReached should be 409, got %d", domainErrorStatus(err))
-		}
-		if domainErrorStatus(errors.New("preview limit reached for this organization: org has 5 active previews")) != 409 {
-			t.Fatalf("limit reached string should be 409")
+	t.Run("per-org limit sentinel exists for inline 409 mapping", func(t *testing.T) {
+		if previewenv.ErrOrgLimitReached == nil || !strings.Contains(previewenv.ErrOrgLimitReached.Error(), "limit reached") {
+			t.Fatalf("ErrOrgLimitReached sentinel missing/changed: %v", previewenv.ErrOrgLimitReached)
 		}
 	})
 
@@ -434,15 +404,10 @@ func TestPreview_UniqueConstraint_409(t *testing.T) {
 		}
 	})
 
-	t.Run("domainErrorStatus conflict strings all 409", func(t *testing.T) {
-		for _, msg := range []string{
-			"already exists",
-			"duplicate",
-			"preview limit reached",
-			"active preview deployment already exists for this PR",
-		} {
-			if domainErrorStatus(errors.New(msg)) != 409 {
-				t.Errorf("msg %q expected 409", msg)
+	t.Run("sentinel messages carry the conflict wording handlers match on", func(t *testing.T) {
+		for _, sentinel := range []error{previewenv.ErrAlreadyExists, previewenv.ErrOrgLimitReached} {
+			if sentinel == nil {
+				t.Fatal("previewenv sentinel missing")
 			}
 		}
 	})

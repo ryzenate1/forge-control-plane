@@ -1,51 +1,105 @@
 package evacuationplanner
 
-import "testing"
+import (
+	"context"
+	"testing"
 
-func TestStorageLocalityCanonical(t *testing.T) {
-	if canonicalStorageLocality("local_only") != "local" {
-		t.Errorf("canonical local_only should be local, got %q", canonicalStorageLocality("local_only"))
+	"gamepanel/forge/internal/store"
+)
+
+// NOTE: the locality-normalisation layer is gone. canonicalStorageLocality,
+// isLocalOnlyLocality and the StorageLocalOnlyLegacy alias were deleted, so
+// "local"/"LOCAL_ONLY" style inputs are no longer folded onto the canonical
+// value: the enum is exactly three wire strings and every comparison is a
+// direct, case-sensitive equality check. The surviving vocabulary is pinned
+// below.
+
+func TestStorageLocalityConstants(t *testing.T) {
+	if StorageLocalOnly != "local_only" {
+		t.Errorf("StorageLocalOnly = %q, want local_only", StorageLocalOnly)
 	}
-	if canonicalStorageLocality("local") != "local" {
-		t.Error("local should stay local")
+	if StorageShared != "shared" {
+		t.Errorf("StorageShared = %q, want shared", StorageShared)
 	}
-	if canonicalStorageLocality("LOCAL_ONLY") != "local" {
-		t.Error("case insensitive canonical failed")
-	}
-	if canonicalStorageLocality("shared") != "shared" {
-		t.Error("shared should stay shared")
+	if StorageReplicated != "replicated" {
+		t.Errorf("StorageReplicated = %q, want replicated", StorageReplicated)
 	}
 }
 
-func TestIsLocalOnlyLocality(t *testing.T) {
-	if !isLocalOnlyLocality(StorageLocalOnly) {
-		t.Error("StorageLocalOnly should be local")
+func TestIsNetworkStorage(t *testing.T) {
+	network := []string{"nfs://server/export", "smb://host/share", "sshfs://user@host:/data", "user@host:/data"}
+	for _, src := range network {
+		if !isNetworkStorage(src) {
+			t.Errorf("isNetworkStorage(%q) = false, want true", src)
+		}
 	}
-	if !isLocalOnlyLocality(StorageLocalOnlyLegacy) {
-		t.Error("legacy local_only should be considered local")
-	}
-	if !isLocalOnlyLocality("local_only") {
-		t.Error("string local_only should be local")
-	}
-	if isLocalOnlyLocality(StorageShared) {
-		t.Error("shared should not be local_only")
-	}
-	if isLocalOnlyLocality(StorageReplicated) {
-		t.Error("replicated should not be local_only")
+	local := []string{"/var/lib/forge/volumes/db", "bind-src", "host:path", "", "/"}
+	for _, src := range local {
+		if isNetworkStorage(src) {
+			t.Errorf("isNetworkStorage(%q) = true, want false", src)
+		}
 	}
 }
 
-func TestStorageLocalityConstantsSingleVocab(t *testing.T) {
-	// Single vocabulary is "local" – legacy alias still accepted but canonical is local
-	if StorageLocalOnly != "local" {
-		t.Errorf("StorageLocalOnly canonical should be \"local\", got %q", StorageLocalOnly)
+type stubMountStore struct {
+	mounts []store.ServerMount
+	err    error
+}
+
+func (s *stubMountStore) ServerMounts(context.Context, string) ([]store.ServerMount, error) {
+	return s.mounts, s.err
+}
+
+func TestServiceStorageLocality(t *testing.T) {
+	ctx := context.Background()
+
+	// Without a mount store every workload is assumed migratable.
+	if got, err := New(nil, nil).StorageLocality(ctx, "srv"); err != nil || got != StorageReplicated {
+		t.Fatalf("no mount store: got %q (err=%v), want replicated", got, err)
 	}
-	// Ensure legacy still exists for backward compat
-	if StorageLocalOnlyLegacy != "local_only" {
-		t.Errorf("legacy constant should remain local_only, got %q", StorageLocalOnlyLegacy)
+
+	svc := New(nil, nil)
+	svc.SetServerMountStore(&stubMountStore{})
+	if got, err := svc.StorageLocality(ctx, "srv"); err != nil || got != StorageReplicated {
+		t.Fatalf("no mounts: got %q (err=%v), want replicated", got, err)
 	}
-	// Ensure canonical helper treats both as equal
-	if canonicalStorageLocality(string(StorageLocalOnly)) != canonicalStorageLocality(string(StorageLocalOnlyLegacy)) {
-		t.Error("canonical should equate local and local_only")
+
+	svc.SetServerMountStore(&stubMountStore{mounts: []store.ServerMount{{Source: "/data/vol1"}}})
+	if got, _ := svc.StorageLocality(ctx, "srv"); got != StorageLocalOnly {
+		t.Fatalf("writable bind mount: got %q, want local_only", got)
+	}
+
+	svc.SetServerMountStore(&stubMountStore{mounts: []store.ServerMount{{Source: "nfs://fileserver/export"}}})
+	if got, _ := svc.StorageLocality(ctx, "srv"); got != StorageShared {
+		t.Fatalf("network mount: got %q, want shared", got)
+	}
+
+	// Read-only mounts are skipped entirely.
+	svc.SetServerMountStore(&stubMountStore{mounts: []store.ServerMount{{Source: "/etc/ssl", ReadOnly: true}}})
+	if got, _ := svc.StorageLocality(ctx, "srv"); got != StorageReplicated {
+		t.Fatalf("read-only mount: got %q, want replicated", got)
+	}
+
+	// A mount-store failure degrades to replicated (fail-open for scheduling).
+	svc.SetServerMountStore(&stubMountStore{err: context.DeadlineExceeded})
+	if _, err := svc.StorageLocality(ctx, "srv"); err == nil {
+		t.Fatal("expected mount store error to propagate")
+	}
+}
+
+func TestReplacementPolicyForServer(t *testing.T) {
+	svc := New(nil, nil)
+	cases := map[StorageLocality]ReplacementPolicy{
+		StorageLocalOnly:  ReplacementPolicyProtect,
+		StorageShared:     ReplacementPolicyAutoReplace,
+		StorageReplicated: ReplacementPolicyAutoReplace,
+		// Unnormalised/unknown values fall through to auto-replace; there is no
+		// canonicalisation step left to rescue them.
+		StorageLocality("local"): ReplacementPolicyAutoReplace,
+	}
+	for locality, want := range cases {
+		if got := svc.ReplacementPolicyForServer(context.Background(), store.Server{}, locality); got != want {
+			t.Errorf("ReplacementPolicyForServer(%q) = %q, want %q", locality, got, want)
+		}
 	}
 }

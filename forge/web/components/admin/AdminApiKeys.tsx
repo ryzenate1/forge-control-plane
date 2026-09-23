@@ -174,7 +174,7 @@ export function AdminApiKeys() {
                 <div id="api-key-scope-selector" className="mt-2 rounded-lg border border-white/10 bg-[var(--surface)] p-3 space-y-3 max-h-80 overflow-y-auto">
                   {/* Quick actions */}
                   <div className="flex gap-2 pb-2 border-b border-white/[0.06]">
-                    <button type="button" onClick={selectAll} className={`px-2 py-1 rounded text-xs transition ${isFullAccess ? "bg-[var(--brand)]/20 text-[#dc2626]" : "bg-white/5 text-slate-400 hover:text-white"}`}>
+                    <button type="button" onClick={selectAll} className={`px-2 py-1 rounded text-xs transition ${isFullAccess ? "bg-[var(--brand)]/20 text-[var(--brand)]" : "bg-white/5 text-slate-400 hover:text-white"}`}>
                       Full Access (*)
                     </button>
                     <button type="button" onClick={clearAll} className="px-2 py-1 rounded text-xs bg-white/5 text-slate-400 hover:text-white transition">
@@ -192,7 +192,7 @@ export function AdminApiKeys() {
                       <div key={group}>
                         <div className="flex items-center gap-2 mb-1.5">
                           <button type="button" onClick={() => toggleGroup(scopes)} className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white transition">
-                            <span className={`flex h-3 w-3 items-center justify-center rounded border ${scopes.every((scope) => selectedScopes.includes(scope)) ? "bg-[var(--brand)] border-[#dc2626]" : "border-white/20"}`}>
+                            <span className={`flex h-3 w-3 items-center justify-center rounded border ${scopes.every((scope) => selectedScopes.includes(scope)) ? "bg-[var(--brand)] border-[var(--brand)]" : "border-white/20"}`}>
                               {scopes.every((scope) => selectedScopes.includes(scope)) && <Check size={8} className="text-white" />}
                             </span>
                             {group}
@@ -200,7 +200,7 @@ export function AdminApiKeys() {
                         </div>
                         <div className="flex flex-wrap gap-1.5 ml-5">
                           {entries.map(({ scope, description }) => (
-                            <button key={scope} title={description} type="button" onClick={() => toggleScope(scope)} className={`rounded px-2 py-1 text-[11px] font-mono transition ${selectedScopes.includes(scope) ? "bg-[var(--brand)]/20 text-[#dc2626] border border-[#dc2626]/30" : "bg-white/5 text-slate-400 border border-white/[0.06] hover:border-white/20"}`}>
+                            <button key={scope} title={description} type="button" onClick={() => toggleScope(scope)} className={`rounded px-2 py-1 text-[11px] font-mono transition ${selectedScopes.includes(scope) ? "bg-[var(--brand)]/20 text-[var(--brand)] border border-[var(--brand)]/30" : "bg-white/5 text-slate-400 border border-white/[0.06] hover:border-white/20"}`}>
                               {scope.split(".")[1]}
                             </button>
                           ))}

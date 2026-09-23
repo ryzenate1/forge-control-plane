@@ -166,7 +166,7 @@ func (s *Service) DetectBuildpack(ctx context.Context, files []string) (*Languag
 
 	bps, err := s.store.ListBuildpacks(ctx)
 	if err != nil {
-		return &langInfo, nil
+		return nil, fmt.Errorf("list buildpacks: %w", err)
 	}
 
 	var compatible []store.Buildpack

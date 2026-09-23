@@ -250,7 +250,7 @@ export function AdminNestsEggs() {
     className={cn(
       "group flex items-center transition cursor-pointer",
       "hover:bg-white/[0.03]",
-      isSelected && "border-l-2 border-[#dc2626] bg-[var(--brand)]/10",
+      isSelected && "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10",
     )}
   >
   <button

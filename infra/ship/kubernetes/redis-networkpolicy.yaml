@@ -1,0 +1,36 @@
+# Restrict Redis ingress to the API pods only.
+#
+# Without this policy every pod in the cluster (and anything else with network
+# access to the `redis` Service) can talk to Redis — which, even with
+# `--requirepass`, means credential-guessing and a DoS surface. A default-deny
+# for the redis pods is created implicitly: declaring an Ingress policy for these
+# selectors makes all ingress that is not explicitly allowed below dropped.
+#
+# Requires a CNI that enforces NetworkPolicy (Calico, Cilium, Weave Net,
+# projectcalico/cloud on EKS/GKE, etc.).
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: redis-allow-api-only
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: redis
+spec:
+  # Applies to the redis pods.
+  podSelector:
+    matchLabels:
+      app: gamepanel
+      component: redis
+  policyTypes:
+    - Ingress
+  ingress:
+    # Only the API pods may open a connection to Redis on 6379.
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gamepanel
+              component: api
+      ports:
+        - protocol: TCP
+          port: 6379

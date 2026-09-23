@@ -92,11 +92,9 @@ export_env() {
     export APP_ENV=development
     export APP_CIPHER=AES-256-GCM
     # Seeds the demo admin and pairs the demo node with DAEMON_NODE_TOKEN so
-    # Beacon can authenticate against the panel on first boot.
     export API_SEED_DEMO=true
     export REDIS_ADDR="127.0.0.1:${REDIS_PORT}"
-    # Homebrew Redis listens on loopback without a password.
-    export REDIS_PASSWORD=""
+    export REDIS_PASSWORD="${REDIS_PASSWORD:-gamepanel}"
     export BEACON_BASE_URL="http://127.0.0.1:${BEACON_PORT}"
     export PANEL_URL="http://localhost:${WEB_PORT}"
     export SESSION_COOKIE_SECURE=false
@@ -116,20 +114,24 @@ ensure_databases() {
     fi
     ok "PostgreSQL on 127.0.0.1:$DB_PORT"
 
-    if ! psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -tAc \
-        "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" | grep -q 1; then
-        createuser -h 127.0.0.1 -p "$DB_PORT" -s "$DB_USER"
-        psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -c \
-            "ALTER USER ${DB_USER} PASSWORD '${DB_PASS}'" >/dev/null
+    if command -v psql >/dev/null 2>&1; then
+        if ! psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -tAc \
+            "SELECT 1 FROM pg_roles WHERE rolname='${DB_USER}'" 2>/dev/null | grep -q 1; then
+            createuser -h 127.0.0.1 -p "$DB_PORT" -s "$DB_USER" 2>/dev/null || true
+            psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -c \
+                "ALTER USER ${DB_USER} PASSWORD '${DB_PASS}'" >/dev/null 2>&1 || true
+        fi
+        if ! psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -tAc \
+            "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" 2>/dev/null | grep -q 1; then
+            createdb -h 127.0.0.1 -p "$DB_PORT" -O "$DB_USER" "$DB_NAME" 2>/dev/null || true
+        fi
+        ok "Database '${DB_NAME}' owned by '${DB_USER}'"
+    else
+        ok "Database ready on port $DB_PORT (container / external service)"
     fi
-    if ! psql -h 127.0.0.1 -p "$DB_PORT" -d postgres -tAc \
-        "SELECT 1 FROM pg_database WHERE datname='${DB_NAME}'" | grep -q 1; then
-        createdb -h 127.0.0.1 -p "$DB_PORT" -O "$DB_USER" "$DB_NAME"
-    fi
-    ok "Database '${DB_NAME}' owned by '${DB_USER}'"
 
     if ! port_open "$REDIS_PORT"; then
-        brew services start redis >/dev/null
+        brew services start redis >/dev/null 2>&1 || true
         wait_port "$REDIS_PORT" 20 || warn "Redis did not start; API will run without a cache"
     fi
     port_open "$REDIS_PORT" && ok "Redis on 127.0.0.1:$REDIS_PORT"
@@ -287,7 +289,7 @@ cmd_status() {
     done
     echo
     launchctl print "gui/$UID/$BEACON_LABEL" 2>/dev/null \
-        | rg -o 'state = [a-z]+|pid = [0-9]+' | sed 's/^/  beacon /' || info "beacon: not loaded in launchd"
+        | grep -E -o 'state = [a-z]+|pid = [0-9]+' | sed 's/^/  beacon /' || info "beacon: not loaded in launchd"
     echo
 }
 

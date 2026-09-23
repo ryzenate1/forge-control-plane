@@ -210,6 +210,21 @@ func (s *Service) List(ctx context.Context, serverID string) ([]store.PreviewDep
 	return s.store.ListPreviewDeployments(ctx, serverID)
 }
 
+// ListAll returns every preview deployment across all servers (admin list view).
+func (s *Service) ListAll(ctx context.Context) ([]store.PreviewDeployment, error) {
+	return s.store.ListAllPreviewDeployments(ctx)
+}
+
+// UpdateStatus sets the lifecycle status and publishes the change so the UI and
+// subscribers observe it. It does not itself provision or tear down any work.
+func (s *Service) UpdateStatus(ctx context.Context, id string, status string) error {
+	if err := s.store.UpdatePreviewDeploymentStatus(ctx, id, status); err != nil {
+		return fmt.Errorf("update preview status: %w", err)
+	}
+	s.publish(ctx, "preview_deployment_status_changed", id, map[string]any{"status": status})
+	return nil
+}
+
 // ListWithExpiry returns all rows including the computed expires_at, newest
 // first — the data source for the environments UI.
 func (s *Service) ListWithExpiry(ctx context.Context) ([]store.PreviewDeployment, error) {

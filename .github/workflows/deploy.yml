@@ -30,12 +30,19 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
 
       - name: Validate Deployment Configuration
+        # Workflow inputs are attacker-controllable text: never interpolate them
+        # into the script body. Pass them through the environment and quote the
+        # expansions instead.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_ROLLBACK: ${{ inputs.rollback }}
         run: |
-          echo "Deploying version ${{ inputs.version }} to ${{ inputs.environment }}"
-          if [ "${{ inputs.rollback }}" = "true" ]; then
+          echo "Deploying version ${INPUT_VERSION} to ${INPUT_ENVIRONMENT}"
+          if [ "${INPUT_ROLLBACK}" = "true" ]; then
             echo "Rollback flag is ENABLED"
           fi
           test -f infra/compose.yml

@@ -380,7 +380,7 @@ func validateMountPath(value, field string) error {
 			}
 		} else {
 			// Denylist mode: block sensitive host paths
-			blockedPrefixes := []string{"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/run", "/run", "/var/lib/forge", "/var/lib/docker"}
+			blockedPrefixes := []string{"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/run", "/run", "/var/lib/forge", "/var/lib/docker", "/home/container"}
 			for _, blocked := range blockedPrefixes {
 				if value == blocked || strings.HasPrefix(value, blocked+"/") {
 					return fmt.Errorf("mount source %q is in protected host path %q", value, blocked)

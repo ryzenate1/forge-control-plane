@@ -113,7 +113,7 @@ export function AdminSettings() {
 function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (value: boolean) => void }) {
   return (
     <label className="flex items-center gap-2 text-sm text-slate-300">
-      <input className="accent-[#dc2626]" checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
+      <input className="accent-[var(--brand)]" checked={checked} onChange={(event) => onChange(event.target.checked)} type="checkbox" />
       <span>{label}</span>
     </label>
   );

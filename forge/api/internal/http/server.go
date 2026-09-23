@@ -38,6 +38,8 @@ import (
 	"gamepanel/forge/internal/services/crashdetector"
 	cronjobsvc "gamepanel/forge/internal/services/cronjob"
 	"gamepanel/forge/internal/services/crossnode"
+	envaffinitysvc "gamepanel/forge/internal/services/envaffinity"
+	billingsvc "gamepanel/forge/internal/services/billing"
 	dbbackupsvc "gamepanel/forge/internal/services/dbbackup"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
@@ -51,11 +53,12 @@ import (
 	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
-	installersvc "gamepanel/forge/internal/services/installer"
 	"gamepanel/forge/internal/services/i18n"
+	installersvc "gamepanel/forge/internal/services/installer"
 	"gamepanel/forge/internal/services/loadbalancer"
 	mailservice "gamepanel/forge/internal/services/mail"
 	"gamepanel/forge/internal/services/migration"
+	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	notificationsvc "gamepanel/forge/internal/services/notification"
@@ -82,6 +85,7 @@ import (
 
 	fiberws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -142,6 +146,7 @@ type Config struct {
 
 	BackupSvc                  *backup.Service
 	AutoScaler                 *autoscaler.Service
+	NodeAutoscaler             *nodeautoscale.Service
 	CrashDetector              *crashdetector.Detector
 	DeploymentSvc              *deployment.Service
 	PreviewDeploymentSvc       *previewsvc.Service
@@ -185,6 +190,14 @@ type Config struct {
 
 	ClusterMembershipService *clustermembership.Service
 	CleanupService           *cleanupsvc.Service
+
+	// Orphan-wiring additions: services that previously lived behind internal
+	// callers only and now back admin endpoints (see handlers_billing.go and
+	// handlers_placement.go). All are nil-safe: routes are registered only when
+	// the field is populated in main. Drain is intentionally not wired here: its
+	// ledger service overlaps the drain routes already owned by clustermembership.
+	BillingService   *billingsvc.Service
+	PlacementService *envaffinitysvc.EnvAffinity
 
 	// Cross-node routing services
 	ServiceDiscovery    *servicediscovery.Service
@@ -803,16 +816,18 @@ type UpdateNodeRequest struct {
 }
 
 type NodeHeartbeatRequest struct {
-	Version         string `json:"version"`
-	OS              string `json:"os"`
-	Architecture    string `json:"architecture"`
-	CPUThreads      int    `json:"cpuThreads"`
-	MemoryMB        int    `json:"memoryMb"`
-	DiskMB          int    `json:"diskMb"`
-	DockerStatus    string `json:"dockerStatus,omitempty"`
-	RuntimeStatus   string `json:"runtimeStatus"`
-	RuntimeProvider string `json:"runtimeProvider"`
-	Error           string `json:"error"`
+	Version         string  `json:"version"`
+	OS              string  `json:"os"`
+	Architecture    string  `json:"architecture"`
+	CPUThreads      int     `json:"cpuThreads"`
+	MemoryMB        int     `json:"memoryMb"`
+	DiskMB          int     `json:"diskMb"`
+	DockerStatus    string  `json:"dockerStatus,omitempty"`
+	RuntimeStatus   string  `json:"runtimeStatus"`
+	RuntimeProvider string  `json:"runtimeProvider"`
+	Error           string  `json:"error"`
+	LoadAverage     float64 `json:"load_average"`
+	Uptime          int64   `json:"uptime_seconds"`
 }
 
 type CreateRegionRequest struct {
@@ -909,7 +924,7 @@ func NewServer(cfg Config) *fiber.App {
 		if raw := os.Getenv("API_CORS_ALLOWED_ORIGINS"); raw != "" {
 			corsCfg.AllowedOrigins = parseAllowedOrigins(raw)
 			corsCfg.AllowMethods = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-			corsCfg.AllowHeaders = "Origin,Content-Type,Accept,Authorization,X-CSRF-Token,X-Forge-Session-Mode"
+			corsCfg.AllowHeaders = "Origin,Content-Type,Accept,Authorization,X-API-Key,X-CSRF-Token,X-Forge-Session-Mode"
 			corsCfg.AllowCredentials = true
 			corsCfg.MaxAge = 86400
 		} else {
@@ -935,6 +950,14 @@ func NewServer(cfg Config) *fiber.App {
 	registerSwaggerRoutes(app, cfg.AppEnv)
 
 	registerWellKnownVerifyRoute(app, cfg.DomainService)
+
+	// ACME HTTP-01 challenge solver. Let's Encrypt fetches
+	// http://<domain>/.well-known/acme-challenge/<token>; without this mounted the
+	// default HTTP-01 issuance path can never validate. Served by the acme
+	// service's in-memory challenger (public, no auth).
+	if cfg.AcmeService != nil {
+		app.All("/.well-known/acme-challenge/*", adaptor.HTTPHandler(cfg.AcmeService.HTTPSolver()))
+	}
 
 	// Internationalization middleware
 	if cfg.Translator != nil {
@@ -1275,6 +1298,8 @@ func NewServer(cfg Config) *fiber.App {
 			RuntimeStatus:   req.RuntimeStatus,
 			RuntimeProvider: req.RuntimeProvider,
 			Error:           req.Error,
+			LoadAverage:     req.LoadAverage,
+			Uptime:          req.Uptime,
 		}
 		node, err := cfg.Store.UpdateNodeHeartbeat(ctx, c.Params("id"), heartbeat)
 		if err != nil {
@@ -1600,6 +1625,19 @@ func NewServer(cfg Config) *fiber.App {
 		Origins: getWebSocketAllowedOrigins(cfg),
 	}))
 	v1.Get("/servers/:id/ws/console", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "console"), fiberws.Config{
+		RecoverHandler: func(conn *fiberws.Conn) {
+			defer func() {
+				if err := recover(); err != nil {
+					_ = conn.WriteJSON(fiber.Map{"error": "internal error"})
+					_ = conn.Close()
+				}
+			}()
+		},
+		Origins: getWebSocketAllowedOrigins(cfg),
+	}))
+	// Backup progress streaming — proxies Beacon's GET /servers/:id/ws/backup so
+	// the UI receives live backup/restore progress instead of polling every 3s.
+	v1.Get("/servers/:id/ws/backup", requireRealtimeServices(cfg), fiberws.New(realtimeProxy(cfg, wsTickets, "backup"), fiberws.Config{
 		RecoverHandler: func(conn *fiberws.Conn) {
 			defer func() {
 				if err := recover(); err != nil {
@@ -2001,8 +2039,10 @@ func NewServer(cfg Config) *fiber.App {
 	v1.Post("/oauth2/token", authLimiter, IssueOAuth2Token(cfg))
 	v1.Post("/oauth/token", authLimiter, IssueOAuth2Token(cfg)) // alias
 
-	// Social authentication (Discord, Steam, Authentik)
-	registerSocialAuthRoutes(v1, cfg, mutationLimiter, authLimiter)
+	// Social authentication (Discord, Steam, Authentik). The public OAuth
+	// redirect/callback routes mount on v1; the account/admin half must ride the
+	// canonical protected router, so the full registration is deferred until
+	// just after `protected` is defined below.
 
 	// Git webhook endpoints (public, verified by HMAC signatures)
 	registerGitWebhookRoutes(v1, cfg)
@@ -2039,6 +2079,11 @@ func NewServer(cfg Config) *fiber.App {
 		return mutationLimiter(c)
 	}
 	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), sessMw, requireTwoFactorAuthentication(cfg), csrfMiddleware(LoadSessionCookieConfig()), methodLimiter)
+
+	// Social authentication: the canonical protected router now exists, so mount
+	// the public (v1) and protected/admin social routes on it.
+	registerSocialAuthRoutes(v1, protected, cfg, mutationLimiter, authLimiter)
+
 	protected.Post("/servers/:id/ws/ticket", IssueWSTicket(cfg, wsTickets))
 	protected.Post("/servers/:id/files/download-ticket", mutationLimiter, issueFileDownloadTicket(cfg, fileDownloadTickets))
 	protected.Post("/servers/:id/backups/download-ticket", mutationLimiter, issueBackupDownloadTicket(cfg, fileDownloadTickets))
@@ -2159,7 +2204,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerExternalLookupRoutes(protected, cfg)
 	registerAuthRoutes(protected, cfg, mutationLimiter)
 	registerPasswordResetRoutes(v1, cfg, authLimiter)
-	registerAccountRecoveryRoutes(v1, cfg, authLimiter)
+	registerAccountRecoveryRoutes(v1, protected, cfg, authLimiter)
 	// Register fixed plugin subroutes before admin's /admin/plugins/:id route.
 	// Otherwise paths such as /discover are parsed as a plugin identifier.
 	registerPluginRoutes(protected, cfg)
@@ -2172,6 +2217,12 @@ func NewServer(cfg Config) *fiber.App {
 	registerAuditLogRoutes(protected, cfg)
 	registerOrphanRemediationRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerAdminExtras(protected, cfg, nodeProbe)
+	// The following three registrars were defined but never invoked, so the
+	// admin Operations-timeline, Kubernetes and Installer pages (advertised as
+	// "available" in the admin registry and backed by lib/api modules) 404'd.
+	registerOperationsTimelineRoutes(protected, cfg)
+	registerKubernetesRoutes(protected, cfg, adminIPAccess)
+	registerInstallerRoutes(protected, cfg)
 	registerObservabilityRoutes(protected, cfg, cfg.Observability, cfg.HeartbeatMonitor)
 	registerAlertRoutes(protected, cfg.AlertService, cfg.Observability, mutationLimiter)
 	registerNotificationRoutes(protected, cfg.NotificationService, mutationLimiter)
@@ -2180,8 +2231,9 @@ func NewServer(cfg Config) *fiber.App {
 	}
 	registerMailSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerSFTPRoutes(protected, cfg, mutationLimiter)
-	registerWebAuthnRoutes(protected, cfg, mutationLimiter, cfg.WebAuthnService)
+	registerWebAuthnRoutes(v1, protected, cfg, authLimiter, mutationLimiter, cfg.WebAuthnService)
 	registerAutoScalerRoutes(protected, cfg, cfg.AutoScaler, adminIPAccess, mutationLimiter)
+	registerNodeAutoscaleRoutes(protected, cfg, cfg.NodeAutoscaler, adminIPAccess, mutationLimiter)
 	registerDeploymentRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
 	registerDeploymentHistoryRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 	registerRevisionRoutes(protected, cfg, cfg.DeploymentSvc, adminIPAccess, mutationLimiter)
@@ -2261,6 +2313,12 @@ func NewServer(cfg Config) *fiber.App {
 	// Cluster membership + cleanup routes
 	registerClusterMembershipRoutes(protected, cfg.ClusterMembershipService, mutationLimiter)
 	registerCleanupRoutes(protected, cfg.CleanupService, mutationLimiter)
+
+	// Billing / placement (previously-orphan services now wired). Drain is not
+	// registered: /nodes/:id/drain is already served by clustermembership.
+	registerBillingRoutes(protected, cfg, mutationLimiter)
+	registerBillingWebhookRoute(v1, cfg, mutationLimiter)
+	registerPlacementRoutes(protected, cfg, cfg.PlacementService, mutationLimiter)
 
 	// Cross-node routing and service discovery routes
 	registerServiceDiscoveryRoutes(protected, cfg, cfg.ServiceDiscovery, adminIPAccess, mutationLimiter)

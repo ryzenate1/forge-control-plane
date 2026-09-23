@@ -16,6 +16,11 @@ import (
 type Scope string
 
 const (
+	// ScopeAdmin authorizes node-wide administrative operations. It is never
+	// handed to a tenant: the scopes below are bound to a single server and
+	// grant stream or file access only.
+	ScopeAdmin Scope = "admin"
+
 	ScopeWebsocket      Scope = "websocket"
 	ScopeFileDownload   Scope = "file-download"
 	ScopeBackupDownload Scope = "backup-download"

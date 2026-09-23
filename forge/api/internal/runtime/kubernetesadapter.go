@@ -143,18 +143,11 @@ func (r *KubernetesAdapter) Stats(ctx context.Context, target Target) (Stats, er
 }
 
 func (r *KubernetesAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, KubernetesProvider)
 }
 
 func (r *KubernetesAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: KubernetesProvider}, nil
+	return inspectWorkload(ctx, r.client, target, KubernetesProvider)
 }
 
 func (r *KubernetesAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {

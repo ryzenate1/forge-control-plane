@@ -6,7 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler, wa *webauthn.Service) {
+func registerWebAuthnRoutes(public fiber.Router, protected fiber.Router, cfg Config, authLimiter fiber.Handler, mutationLimiter fiber.Handler, wa *webauthn.Service) {
 	if wa == nil {
 		return
 	}
@@ -72,7 +72,10 @@ func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(fiber.Map{"status": "ok"})
 	})
 
-	protected.Post("/auth/webauthn/login/begin", func(c *fiber.Ctx) error {
+	// Passkey login must be reachable without an existing session — the login
+	// finish handler is what establishes one. Register on the public router so a
+	// logged-out user can begin/finish an assertion (authLimiter throttles).
+	public.Post("/auth/webauthn/login/begin", authLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -90,7 +93,7 @@ func registerWebAuthnRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		})
 	})
 
-	protected.Post("/auth/webauthn/login/finish", func(c *fiber.Ctx) error {
+	public.Post("/auth/webauthn/login/finish", authLimiter, func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

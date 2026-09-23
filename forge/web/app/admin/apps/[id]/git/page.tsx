@@ -145,7 +145,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
                   type="checkbox"
                   checked={gitSource?.autoDeploy ?? false}
                   onChange={(e) => autoDeployMut.mutate(e.target.checked)}
-                  className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[#dc2626]"
+                  className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[var(--brand)]"
                 />
                 <span className={cn("text-xs", gitSource?.autoDeploy ? "text-emerald-400" : "text-slate-500")}>
                   {gitSource?.autoDeploy ? "Enabled" : "Disabled"}

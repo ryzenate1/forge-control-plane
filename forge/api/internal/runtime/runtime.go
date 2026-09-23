@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
+
+	"gamepanel/forge/internal/daemon"
 )
 
 const (
@@ -134,6 +137,63 @@ type Inspection struct {
 	ServerID string `json:"serverId"`
 	Exists   bool   `json:"exists"`
 	Provider string `json:"provider"`
+	// Running and Status carry the workload's observed lifecycle. They are only
+	// meaningful when StateKnown is true: an older Beacon that does not expose
+	// container state yields an inspection where existence was inferred from
+	// telemetry, and treating that as a lifecycle reading would let a stopped
+	// container look missing or a crashed one look fine.
+	Running    bool      `json:"running"`
+	Status     string    `json:"status,omitempty"`
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	StateKnown bool      `json:"stateKnown"`
+}
+
+// inspectWorkload reads a workload's lifecycle straight from the node instead
+// of inferring it from the presence of metrics. A container that has exited
+// still exists but streams no stats, so the old "the stats call worked, so it
+// is running" reading conflated running, stopped and missing into one signal.
+//
+// Against a Beacon that predates the state endpoint the call degrades to the
+// stats heuristic and marks the result not state-known, so callers can say they
+// observed less rather than claiming a lifecycle they never read.
+func inspectWorkload(ctx context.Context, client *daemon.Client, target Target, provider string) (Inspection, error) {
+	if client == nil {
+		return Inspection{}, ErrRuntimeUnavailable
+	}
+	serverID := target.ServerID
+	state, err := client.ContainerState(ctx, target.NodeURL, target.NodeToken, serverID)
+	if errors.Is(err, daemon.ErrContainerStateUnsupported) {
+		_, statsErr := client.Stats(ctx, target.NodeURL, target.NodeToken, serverID)
+		if statsErr != nil {
+			return Inspection{ServerID: serverID, Provider: provider}, statsErr
+		}
+		return Inspection{ServerID: serverID, Exists: true, Provider: provider, StateKnown: false}, nil
+	}
+	if err != nil {
+		return Inspection{ServerID: serverID, Provider: provider}, err
+	}
+	if state.ServerID != "" {
+		serverID = state.ServerID
+	}
+	return Inspection{
+		ServerID:   serverID,
+		Exists:     state.Exists,
+		Running:    state.Running,
+		Status:     state.Status,
+		StartedAt:  state.StartedAt,
+		Provider:   provider,
+		StateKnown: true,
+	}, nil
+}
+
+// existsWorkload reports only whether the node holds a container for the
+// server, using the same state-first reading as inspectWorkload.
+func existsWorkload(ctx context.Context, client *daemon.Client, target Target, provider string) (bool, error) {
+	inspection, err := inspectWorkload(ctx, client, target, provider)
+	if err != nil {
+		return false, err
+	}
+	return inspection.Exists, nil
 }
 
 type MigrationRequest struct {

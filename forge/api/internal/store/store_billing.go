@@ -75,6 +75,14 @@ type BillingSettings struct {
 
 const defaultBillingPlan = "free"
 
+// Sentinel errors for the billing surface so HTTP handlers can map not-found
+// and duplicate-plan conditions via errors.Is instead of string matching.
+var (
+	ErrBillingPlanNotFound = errors.New("billing plan not found")
+	ErrBillingPlanExists   = errors.New("billing plan already exists")
+	ErrOrgNotFound         = errors.New("organization not found")
+)
+
 // ---- Plans ----
 
 func scanBillingPlan(row interface{ Scan(...any) error }) (BillingPlan, error) {
@@ -144,6 +152,11 @@ func (s *Store) CreateBillingPlan(ctx context.Context, p BillingPlan) (*BillingP
 	if p.Code == "" || p.Name == "" {
 		return nil, errors.New("plan code and name are required")
 	}
+	if existing, err := s.GetBillingPlanByCode(ctx, p.Code); err != nil {
+		return nil, err
+	} else if existing != nil {
+		return nil, ErrBillingPlanExists
+	}
 	if len(p.Entitlements) == 0 {
 		p.Entitlements = json.RawMessage(`{}`)
 	}
@@ -154,6 +167,9 @@ func (s *Store) CreateBillingPlan(ctx context.Context, p BillingPlan) (*BillingP
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $8)`,
 		id, p.Code, p.Name, p.CentsPerMonth, []byte(p.Entitlements), p.TrialDays, p.Active, now)
 	if err != nil {
+		if isUniqueViolation(err) != nil {
+			return nil, ErrBillingPlanExists
+		}
 		return nil, fmt.Errorf("create billing plan %s: %w", p.Code, err)
 	}
 	return s.GetBillingPlanByID(ctx, id)
@@ -162,7 +178,7 @@ func (s *Store) CreateBillingPlan(ctx context.Context, p BillingPlan) (*BillingP
 func (s *Store) UpdateBillingPlan(ctx context.Context, id, name string, centsPerMonth *int64, entitlements json.RawMessage, trialDays *int, active *bool) (*BillingPlan, error) {
 	cur, err := s.GetBillingPlanByID(ctx, id)
 	if err != nil || cur == nil {
-		return nil, errors.New("billing plan not found")
+		return nil, ErrBillingPlanNotFound
 	}
 	if name != "" {
 		cur.Name = name
@@ -195,7 +211,7 @@ func (s *Store) DeleteBillingPlan(ctx context.Context, id string) error {
 		return fmt.Errorf("delete billing plan %s: %w", id, err)
 	}
 	if tag.RowsAffected() == 0 {
-		return errors.New("billing plan not found")
+		return ErrBillingPlanNotFound
 	}
 	return nil
 }

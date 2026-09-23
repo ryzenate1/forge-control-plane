@@ -202,7 +202,7 @@ export default function AdminDeploymentDetailPage() {
             <div className="absolute left-4 top-0 bottom-0 w-px bg-white/[0.06]" />
             {Array.isArray(timeline) && timeline.map((event) => (
               <div key={event.id} className="relative pb-4 last:pb-0">
-                <div className="absolute -left-[19px] mt-1.5 h-2.5 w-2.5 rounded-full border-2 border-[#dc2626] bg-[var(--surface-raised)]" />
+                <div className="absolute -left-[19px] mt-1.5 h-2.5 w-2.5 rounded-full border-2 border-[var(--brand)] bg-[var(--surface-raised)]" />
                 <div className="flex items-start justify-between">
                   <div>
                     <p className="text-sm font-medium text-slate-200">{(event.payload && typeof event.payload.message === "string" ? event.payload.message : event.eventType)}</p>

@@ -595,7 +595,14 @@ services:
       - caddy-data:/data
       - caddy-config:/config
     environment:
-      CADDY_ADMIN: "0.0.0.0:2019"
+      # Bind the admin API to loopback only — it is unauthenticated, so exposing
+      # it on 0.0.0.0:2019 would let every container on `frontend`/`backend`
+      # rewrite the gateway config. This matches the `admin` directive in the
+      # Caddyfile and infra/compose.caddy.production.yml. Containers that need to
+      # drive the admin API must be reachable via `localhost` inside the Caddy
+      # container (e.g. a shared network namespace / admin sidecar), not via
+      # `caddy:2019`.
+      CADDY_ADMIN: "127.0.0.1:2019"
     command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
     depends_on:
       api:
@@ -651,7 +658,9 @@ services:
       - path: .env
         required: false
     ports:
-      - "3000:3000"
+      # Loopback only: the public entrypoint for the web console is Caddy/Traefik
+      # on 80/443, never a raw 0.0.0.0:3000 publish.
+      - "127.0.0.1:3000:3000"
     depends_on:
       api:
         condition: service_healthy

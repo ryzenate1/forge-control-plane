@@ -885,6 +885,34 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	protected.Get("/operations/:id", func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
+		// Deny by default: an operation is only returned after a positive
+		// authorization check for the caller. Previously the ownership check was
+		// nested inside `resourceType == "server"` conditionals, so operations on
+		// any other resource type (or with a blank resource id) leaked to every
+		// authenticated caller.
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		authorize := func(resourceType, resourceID string) error {
+			if claims.Role == "admin" {
+				return nil
+			}
+			if resourceType != "server" || resourceID == "" || cfg.Store == nil {
+				// No server to positively authorize against — withhold it.
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			checkCtx, checkCancel := requestContext()
+			defer checkCancel()
+			allowed, checkErr := cfg.Store.UserCanAccessServer(checkCtx, resourceID, claims.Sub, claims.Role, "")
+			if checkErr != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to check access: "+checkErr.Error())
+			}
+			if !allowed {
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			return nil
+		}
 		if cfg.OperationService != nil {
 			op, err := cfg.OperationService.Get(ctx, c.Params("id"))
 			if err != nil {
@@ -893,20 +921,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if op == nil {
 				return fiber.NewError(fiber.StatusNotFound, "operation not found")
 			}
-			if op.ResourceType == "server" && op.ResourceID != "" && cfg.Store != nil {
-				claims, ok := c.Locals("user").(tokenClaims)
-				if !ok {
-					return fiber.NewError(fiber.StatusUnauthorized, "missing session")
-				}
-				checkCtx, checkCancel := requestContext()
-				allowed, checkErr := cfg.Store.UserCanAccessServer(checkCtx, op.ResourceID, claims.Sub, claims.Role, "")
-				checkCancel()
-				if checkErr != nil {
-					return fiber.NewError(fiber.StatusInternalServerError, "failed to check access: "+checkErr.Error())
-				}
-				if !allowed {
-					return fiber.NewError(fiber.StatusNotFound, "operation not found")
-				}
+			if err := authorize(op.ResourceType, op.ResourceID); err != nil {
+				return err
 			}
 			return c.JSON(op)
 		}
@@ -920,20 +936,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if job == nil {
 			return fiber.NewError(fiber.StatusNotFound, "operation not found")
 		}
-		if job.ServerID != "" && cfg.Store != nil {
-			claims, ok := c.Locals("user").(tokenClaims)
-			if !ok {
-				return fiber.NewError(fiber.StatusUnauthorized, "missing session")
-			}
-			checkCtx, checkCancel := requestContext()
-			allowed, checkErr := cfg.Store.UserCanAccessServer(checkCtx, job.ServerID, claims.Sub, claims.Role, "")
-			checkCancel()
-			if checkErr != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, "failed to check access: "+checkErr.Error())
-			}
-			if !allowed {
-				return fiber.NewError(fiber.StatusNotFound, "operation not found")
-			}
+		if err := authorize("server", job.ServerID); err != nil {
+			return err
 		}
 		return c.JSON(job)
 	})
@@ -952,7 +956,9 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		if cfg.Store != nil {
-			_ = cfg.Store.DispatchWebhookEvent(c.Context(), "server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")})
+			if err := cfg.Store.DispatchWebhookEvent(c.Context(), "server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")}); err != nil {
+				slog.Error("failed to dispatch server:installed webhook event", "server", c.Params("id"), "error", err.Error())
+			}
 		}
 		return c.Status(fiber.StatusAccepted).JSON(response)
 	})
@@ -1234,8 +1240,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		default:
 			return fiber.NewError(fiber.StatusBadRequest, "action must be suspend or unsuspend")
 		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -1244,41 +1250,48 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			actorID = &claims.Sub
 		}
 		suspended := body.Action == "suspend"
-		if suspended && cfg.Daemon != nil {
-			// Best-effort: stop server processes when suspending.
-			if target, err := cfg.Store.ServerControlTarget(ctx, c.Params("id")); err == nil {
-				if _, sendErr := cfg.Daemon.SendPower(ctx, target.NodeURL, target.NodeToken, target.ServerID, "stop"); sendErr != nil {
-					slog.Error("failed to send power-off on suspend", "server", c.Params("id"), "error", sendErr)
-				}
-				_ = cfg.Store.SetServerPowerState(ctx, target.ServerID, "stop")
-			}
+		// Suspension is a real operation (flag + stop), not a column update.
+		// The manager rolls the flag back itself when the stop fails.
+		var err error
+		if suspended {
+			err = clusterManager.SuspendServer(ctx, c.Params("id"), actorID)
+		} else {
+			err = clusterManager.UnsuspendServer(ctx, c.Params("id"), actorID)
 		}
-		if err := cfg.Store.SetServerSuspended(ctx, c.Params("id"), suspended, actorID); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		if err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true, "suspended": suspended})
 	})
 
 	protected.Post("/servers/:id/suspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.SetServerSuspension(ctx, c.Params("id"), true); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		if err := clusterManager.SuspendServer(ctx, c.Params("id"), actorID); err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
 	protected.Post("/servers/:id/unsuspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.SetServerSuspension(ctx, c.Params("id"), false); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		if err := clusterManager.UnsuspendServer(ctx, c.Params("id"), actorID); err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})

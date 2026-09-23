@@ -328,14 +328,14 @@ export default function CreateAppPage() {
                   className={cn(
                     "flex flex-col items-center gap-3 rounded-xl border p-5 sm:p-6 text-center transition-all duration-200",
                     sourceType === id
-                      ? "border-[#dc2626] bg-[var(--brand)]/5 shadow-sm shadow-[#dc2626]/10"
+                      ? "border-[var(--brand)] bg-[var(--brand)]/5 shadow-sm shadow-[var(--brand)]/10"
                       : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
                   )}
                   onClick={() => { setSourceType(id); setFieldsDirty(false); setTemplateConfirm(null); }}
                 >
                   <Icon size={28} className={cn(
                     "transition-colors duration-200",
-                    sourceType === id ? "text-[#dc2626]" : "text-slate-500",
+                    sourceType === id ? "text-[var(--brand)]" : "text-slate-500",
                   )} />
                   <div>
                     <p className="font-semibold text-slate-200 text-sm sm:text-base">{label}</p>
@@ -372,7 +372,7 @@ export default function CreateAppPage() {
                       className={cn(
                         "rounded-xl border p-4 text-left transition-all duration-200",
                         selectedTemplate === tpl.id
-                          ? "border-[#dc2626] bg-[var(--brand)]/5 shadow-sm shadow-[#dc2626]/10"
+                          ? "border-[var(--brand)] bg-[var(--brand)]/5 shadow-sm shadow-[var(--brand)]/10"
                           : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
                       )}
                       onClick={() => handleTemplateClick(tpl.id)}
@@ -555,7 +555,7 @@ export default function CreateAppPage() {
                       const file = e.target.files?.[0];
                       if (file) setComposeFile(file);
                     }}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[var(--brand)]/20 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[#dc2626] hover:file:bg-[var(--brand)]/30"
+                    className="block w-full text-xs text-slate-400 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[var(--brand)]/20 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[var(--brand)] hover:file:bg-[var(--brand)]/30"
                   />
                 </div>
                 <div>

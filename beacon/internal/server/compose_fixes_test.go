@@ -157,7 +157,16 @@ func TestEncodeComposeEnv_Rejection(t *testing.T) {
 }
 
 func TestValidateHostMountWithAllowlist_BeaconMatchesForge(t *testing.T) {
-	// Verify beacon's validateHostMountWithAllowlist matches forge's logic for sensitive paths
+	// Verify beacon's validateComposeVolumesWithAllowlist matches the mount
+	// policy it is shared with: an ordinary host path is allowed, /proc and /sys
+	// are never allowed, and *configuring* an allowlist turns it into the gate —
+	// a non-admin token may not use it at all, so even /data is refused once an
+	// allowlist is present.
+	//
+	// NOTE: the strict "/data passes regardless" parity row was wrong for
+	// today's predicate (an allowlist, once configured, gates every absolute
+	// source), and the forge-side host-mount gate it mirrored no longer exists —
+	// forge's compose validation reports host mounts as warnings instead.
 	tests := []struct {
 		src         string
 		isAdmin     bool
@@ -169,11 +178,13 @@ func TestValidateHostMountWithAllowlist_BeaconMatchesForge(t *testing.T) {
 		{"/etc", true, []string{"/etc"}, false},
 		{"/etc/passwd", true, []string{"/etc"}, false},
 		{"/etc/passwd", true, []string{"/other"}, true},
-		{"/data", false, nil, false}, // non-sensitive passes regardless
-		{"/data", false, []string{"/other"}, false},
+		{"/data", false, nil, false}, // no allowlist configured: ordinary host path passes
+		{"/data", false, []string{"/other"}, true},
+		{"/data", true, []string{"/data"}, false},
+		{"/proc", true, []string{"/proc"}, true}, // never openable, allowlist or not
 	}
 	for i, tc := range tests {
-		err := validateHostMountWithAllowlist(tc.src, tc.isAdmin, tc.allowed)
+		err := validateComposeVolumesWithAllowlist("app", []any{tc.src + ":/target"}, tc.isAdmin, tc.allowed)
 		if (err != nil) != tc.shouldError {
 			t.Errorf("case %d src=%q admin=%v allowed=%v: got err %v wantError %v", i, tc.src, tc.isAdmin, tc.allowed, err, tc.shouldError)
 		}

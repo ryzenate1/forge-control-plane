@@ -240,7 +240,7 @@ export function ServerConsole({ serverId, server }: ServerConsoleProps) {
           disabled={!connected}
           placeholder="Type a command..."
           className="flex-1 px-3 py-2 border border-white/10 rounded-md font-mono text-sm bg-[var(--surface)] text-slate-200
-                     focus:outline-none focus:ring-2 focus:ring-[#dc2626] disabled:bg-white/[0.03] disabled:text-slate-500"
+                     focus:outline-none focus:ring-2 focus:ring-[var(--brand)] disabled:bg-white/[0.03] disabled:text-slate-500"
         />
         <button
           type="submit"

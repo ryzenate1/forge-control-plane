@@ -299,21 +299,18 @@ describe("no hardcoded bg-[#...] remaining (except blurple)", () => {
 // 3. Space Grotesk / IBM Plex Sans / JetBrains Mono via next/font
 // ---------------------------------------------------------------------------
 describe("typography: next/font loading", () => {
-  it("app/fonts.ts imports Space_Grotesk, IBM_Plex_Sans, JetBrains_Mono from next/font/google", () => {
+  it("app/fonts.ts imports Manrope and JetBrains_Mono from next/font/google", () => {
     const src = readFileSync(resolve(__dirname, "../app/fonts.ts"), "utf8");
     expect(src).toContain('from "next/font/google"');
-    expect(src).toContain("Space_Grotesk");
-    expect(src).toContain("IBM_Plex_Sans");
+    expect(src).toContain("Manrope");
     expect(src).toContain("JetBrains_Mono");
   });
 
   it("fonts.ts exports sans/display/mono with correct variable names", () => {
     const src = readFileSync(resolve(__dirname, "../app/fonts.ts"), "utf8");
     expect(src).toContain('variable: "--font-sans"');
-    expect(src).toContain('variable: "--font-display"');
     expect(src).toContain('variable: "--font-mono"');
-    expect(src).toContain("export const sans = IBM_Plex_Sans");
-    expect(src).toContain("export const display = Space_Grotesk");
+    expect(src).toContain("export const sans = Manrope");
     expect(src).toContain("export const mono = JetBrains_Mono");
     // weights cover body/display
     expect(src).toContain('weight: ["400", "500", "600", "700"]');
@@ -338,7 +335,7 @@ describe("typography: next/font loading", () => {
 
   it("tailwind.config.ts fontFamily prefers next/font vars", () => {
     const tw = readFileSync(resolve(__dirname, "../tailwind.config.ts"), "utf8");
-    expect(tw).toContain('sans: ["var(--font-sans)", "IBM Plex Sans"');
+    expect(tw).toContain('sans: ["var(--font-sans)", "Manrope"');
     expect(tw).toContain('display: ["var(--font-display)", "Space Grotesk"');
     expect(tw).toContain('mono: ["var(--font-mono)", "JetBrains Mono"');
   });

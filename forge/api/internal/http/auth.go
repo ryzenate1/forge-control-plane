@@ -306,16 +306,21 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 			return c.Next()
 		}
 
-		// Fall back to Bearer token for API keys and OAuth tokens
+		// Fall back to Bearer token for API keys and OAuth tokens. API clients may
+		// also present their key via the X-API-Key header; Bearer takes precedence.
 		header := c.Get("Authorization")
-		if !strings.HasPrefix(header, "Bearer ") {
+		var rawToken string
+		if strings.HasPrefix(header, "Bearer ") {
+			rawToken = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
+		} else if xKey := strings.TrimSpace(c.Get("X-API-Key")); xKey != "" {
+			rawToken = xKey
+		} else {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing authentication")
 		}
 		if st == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 
-		rawToken := strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
 		ctx, cancel := requestContext()
 		defer cancel()
 

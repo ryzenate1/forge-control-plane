@@ -2,6 +2,7 @@ package reservations
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -78,7 +79,7 @@ func (m *Manager) Stop() {
 func (m *Manager) CreateReservation(ctx context.Context, req store.CreatePlacementReservationRequest) (store.PlacementReservation, error) {
 	reservation, err := m.store.CreatePlacementReservation(ctx, req)
 	if err != nil {
-		if isConflict(err) {
+		if IsConflict(err) {
 			m.increment(func(metrics *Metrics) {
 				metrics.ReservationConflictsTotal++
 			})
@@ -196,10 +197,16 @@ func (m *Manager) increment(update func(*Metrics)) {
 	update(&m.metrics)
 }
 
-func isConflict(err error) bool {
+// IsConflict reports whether a reservation attempt failed because the capacity,
+// or the server or migration it belongs to, is already claimed — as opposed to
+// the store being unreachable or the request being malformed. Only a conflict
+// means "the next candidate may work"; everything else must be surfaced to the
+// caller rather than folded into a capacity verdict.
+func IsConflict(err error) bool {
 	if err == nil {
 		return false
 	}
-	text := strings.ToLower(err.Error())
-	return strings.Contains(text, "reservation") || strings.Contains(text, "exceeds available capacity")
+	return errors.Is(err, store.ErrReservationCapacityExceeded) ||
+		errors.Is(err, store.ErrReservationServerBusy) ||
+		errors.Is(err, store.ErrReservationMigrationBusy)
 }

@@ -1,6 +1,8 @@
 package compose
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -8,191 +10,246 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestEnvFile_NotSupported(t *testing.T) {
-	t.Setenv("FORGE_ENV_FILE_STRICT", "true")
-	svc, _ := New(nil, nil)
-	yamlWithEnvFile := `
-services:
-  app:
-    image: nginx
-    env_file:
-      - .env
-`
-	_, err := svc.ParseComposeYAML([]byte(yamlWithEnvFile), "", nil)
-	require.Error(t, err)
-	assert.Contains(t, strings.ToLower(err.Error()), "env_file")
+// NOTE: this file used to pin three helpers that no longer exist:
+// ValidateHostMountWithAllowlist (the admin + allowlist host-mount predicate),
+// isEnvFileEmpty / the FORGE_ENV_FILE_STRICT gate, and isComposePathTraversal.
+// The refactor dropped the allowlist model entirely: host mounts are now only
+// reported as warnings by checkVolumesSecurity, while docker.sock, /proc and
+// /sys stay hard errors. env_file is no longer inspected at all, and the
+// path-escape guard moved inline into readComposeFromDir. The surviving
+// behaviour is pinned below.
 
-	result := svc.ValidateCompose([]byte(yamlWithEnvFile), "")
-	assert.False(t, result.Valid, "env_file should make validation invalid in strict mode")
-	found := false
-	for _, e := range result.Errors {
-		if strings.Contains(strings.ToLower(e.Message), "env_file") {
-			found = true
-		}
+// ---------- Volume security ----------
+
+func issuesForVolumes(t *testing.T, volumes ...string) []ValidationIssue {
+	t.Helper()
+	raw := make([]interface{}, 0, len(volumes))
+	for _, v := range volumes {
+		raw = append(raw, v)
 	}
-	if !found {
-		if len(result.Errors) > 0 && strings.Contains(strings.ToLower(result.Errors[0].Message), "env_file") {
-			found = true
-		}
-	}
-	assert.True(t, found, "expected env_file error in validation")
-
-	// env_file as string should also be rejected in strict mode
-	yamlWithEnvFileString := `
-services:
-  web:
-    image: nginx
-    env_file: .env
-`
-	_, err = svc.ParseComposeYAML([]byte(yamlWithEnvFileString), "", nil)
-	require.Error(t, err)
-	assert.Contains(t, strings.ToLower(err.Error()), "env_file")
-
-	// No env_file should pass
-	valid := `
-services:
-  app:
-    image: nginx
-    environment:
-      - FOO=bar
-`
-	_, err = svc.ParseComposeYAML([]byte(valid), "", nil)
-	require.NoError(t, err)
-	result = svc.ValidateCompose([]byte(valid), "")
-	assert.True(t, result.Valid)
-
-	// Non-strict mode should warn but not fail
-	t.Setenv("FORGE_ENV_FILE_STRICT", "false")
-	_, err = svc.ParseComposeYAML([]byte(yamlWithEnvFile), "", nil)
-	require.NoError(t, err)
-	result = svc.ValidateCompose([]byte(yamlWithEnvFile), "")
-	assert.True(t, result.Valid, "non-strict should not fail")
-	foundWarn := false
-	for _, w := range result.Warnings {
-		if strings.Contains(strings.ToLower(w.Message), "env_file") || strings.Contains(strings.ToLower(w.Field), "env_file") {
-			foundWarn = true
-		}
-	}
-	assert.True(t, foundWarn, "expected env_file warning in non-strict mode")
+	var issues []ValidationIssue
+	checkVolumesSecurity("app", raw, &issues)
+	return issues
 }
 
-func TestValidateHostMountWithAllowlist_Forge(t *testing.T) {
-	// Sensitive path /etc requires admin + allowlist
-	err := ValidateHostMountWithAllowlist("/etc", false, []string{"/etc"})
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "requires admin")
-
-	err = ValidateHostMountWithAllowlist("/etc", true, nil)
-	assert.Error(t, err)
-	assert.Contains(t, err.Error(), "allowedMounts")
-
-	err = ValidateHostMountWithAllowlist("/etc", true, []string{"/etc"})
-	assert.NoError(t, err)
-
-	err = ValidateHostMountWithAllowlist("/etc/passwd", true, []string{"/etc"})
-	assert.NoError(t, err)
-
-	err = ValidateHostMountWithAllowlist("/etc/passwd", true, []string{"/other"})
-	assert.Error(t, err)
-
-	// Non-sensitive should pass without allowlist
-	err = ValidateHostMountWithAllowlist("/data", false, nil)
-	assert.NoError(t, err)
-
-	err = ValidateHostMountWithAllowlist("/srv/game-panel/volumes", false, nil)
-	assert.NoError(t, err)
-
-	// Root and home are sensitive
-	err = ValidateHostMountWithAllowlist("/", true, []string{"/"})
-	assert.NoError(t, err)
-	err = ValidateHostMountWithAllowlist("/", true, nil)
-	assert.Error(t, err)
-
-	err = ValidateHostMountWithAllowlist("/home/user", true, []string{"/home"})
-	assert.NoError(t, err)
+func findIssue(issues []ValidationIssue, severity string) *ValidationIssue {
+	for i := range issues {
+		if issues[i].Severity == severity {
+			return &issues[i]
+		}
+	}
+	return nil
 }
 
-func TestVolumeAllowlist_UnifiedPredicate(t *testing.T) {
-	svc, _ := New(nil, nil)
-	// This yaml uses sensitive host mount /etc without allowlist; parse will succeed,
-	// but volume validation via Deploy would fail. Here we test the predicate directly.
-	// Ensure ValidateHostMountWithAllowlist is the shared predicate.
-	allowed := []string{"/mnt/allowed"}
-	// /etc not in allowed -> should fail even with admin
-	err := ValidateHostMountWithAllowlist("/etc", true, allowed)
-	assert.Error(t, err)
+func TestCheckVolumesSecurity_DockerSockAndKernelPathsAreErrors(t *testing.T) {
+	cases := []struct {
+		name    string
+		volume  string
+		message string
+	}{
+		{"docker.sock", "/var/run/docker.sock:/var/run/docker.sock", "docker.sock"},
+		{"proc", "/proc:/host-proc", "/proc"},
+		{"sys", "/sys/firmware:/host-sys", "/sys"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issues := issuesForVolumes(t, tc.volume)
+			issue := findIssue(issues, "error")
+			require.NotNil(t, issue, "expected a hard error for %s", tc.volume)
+			assert.Contains(t, issue.Message, tc.message)
+			assert.Contains(t, issue.Field, "services.app.volumes")
+		})
+	}
+}
 
-	// /mnt/allowed/data should pass if allowlisted
-	err = ValidateHostMountWithAllowlist("/mnt/allowed/data", true, allowed)
-	// But /mnt/allowed/data is not sensitive (since /mnt is not in sensitive list), so it passes regardless
-	assert.NoError(t, err)
+func TestCheckVolumesSecurity_SensitiveHostPathIsWarningOnly(t *testing.T) {
+	// The admin/allowlist gate is gone: a sensitive host path is surfaced as a
+	// warning and nothing more, regardless of who declares it.
+	issues := issuesForVolumes(t, "/etc:/host-etc")
+	err := findIssue(issues, "error")
+	assert.Nil(t, err, "sensitive host paths must no longer be hard errors")
+	warn := findIssue(issues, "warning")
+	require.NotNil(t, warn)
+	assert.Contains(t, warn.Message, "may expose sensitive host files")
 
-	// /home is sensitive
-	err = ValidateHostMountWithAllowlist("/home/bob", true, allowed)
-	assert.Error(t, err)
-	err = ValidateHostMountWithAllowlist("/home/bob", true, []string{"/home"})
-	assert.NoError(t, err)
+	// A map-form volume is handled the same way.
+	var mapped []ValidationIssue
+	checkVolumesSecurity("app", []interface{}{map[string]interface{}{"source": "/home/alice", "target": "/mnt"}}, &mapped)
+	require.NotNil(t, findIssue(mapped, "warning"))
+}
 
-	// Non-sensitive host mount like /var/log (not in sensitive list) passes without allowlist
-	err = ValidateHostMountWithAllowlist("/var/log", false, nil)
-	assert.NoError(t, err)
+func TestCheckVolumesSecurity_NonSensitivePathsPass(t *testing.T) {
+	for _, vol := range []string{"/data:/data", "/srv/game-panel/volumes:/vol", "named-vol:/var/lib/mysql", "./relative:/app"} {
+		t.Run(vol, func(t *testing.T) {
+			assert.Empty(t, issuesForVolumes(t, vol))
+		})
+	}
+}
 
-	// Ensure isEnvFileEmpty correctly handles various forms
-	assert.True(t, isEnvFileEmpty(nil))
-	assert.True(t, isEnvFileEmpty(""))
-	assert.True(t, isEnvFileEmpty("   "))
-	assert.True(t, isEnvFileEmpty([]interface{}{}))
-	assert.True(t, isEnvFileEmpty([]string{}))
-	assert.False(t, isEnvFileEmpty(".env"))
-	assert.False(t, isEnvFileEmpty([]interface{}{".env"}))
-	assert.False(t, isEnvFileEmpty(map[string]interface{}{"path": ".env"}))
+func TestCheckVolumesSecurity_NilAndMalformedInput(t *testing.T) {
+	var issues []ValidationIssue
+	checkVolumesSecurity("app", nil, &issues)
+	assert.Empty(t, issues)
 
-	// Test that Deploy-time validation would catch disallowed sensitive mount
-	yamlWithSensitiveMount := `
+	issues = nil
+	checkVolumesSecurity("app", "not-a-list", &issues)
+	assert.Empty(t, issues)
+
+	issues = nil
+	checkVolumesSecurity("app", []interface{}{"", map[string]interface{}{"target": "/mnt"}}, &issues)
+	assert.Empty(t, issues)
+}
+
+func TestIsSensitiveHostPath(t *testing.T) {
+	sensitive := []string{"/", "/etc", "/etc/passwd", "/home", "/home/user", "/root", "/root/.ssh"}
+	for _, p := range sensitive {
+		assert.True(t, isSensitiveHostPath(p), "%s should be sensitive", p)
+	}
+	safe := []string{"/data", "/var/log", "/srv/game-panel/volumes", "etc", "/etc-configs"}
+	for _, p := range safe {
+		assert.False(t, isSensitiveHostPath(p), "%s should not be sensitive", p)
+	}
+}
+
+func TestValidateCompose_HostMountSeverityMapping(t *testing.T) {
+	svc := &Service{}
+
+	yamlSensitiveMount := `
 services:
   app:
     image: nginx
     volumes:
       - /etc:/host
 `
-	parsed, err := svc.ParseComposeYAML([]byte(yamlWithSensitiveMount), "", nil)
-	require.NoError(t, err)
-	require.Len(t, parsed.Services, 1)
-	vol := parsed.Services[0].Volumes[0] // "/etc:/host"
-	src := strings.SplitN(vol, ":", 2)[0]
-	assert.Equal(t, "/etc", src)
-	err = ValidateHostMountWithAllowlist(src, false, nil)
-	assert.Error(t, err)
-	err = ValidateHostMountWithAllowlist(src, true, []string{"/etc"})
-	assert.NoError(t, err)
+	result := svc.ValidateCompose([]byte(yamlSensitiveMount), "")
+	assert.True(t, result.Valid, "a sensitive host mount warns but does not invalidate")
+	require.NotEmpty(t, result.Warnings)
+
+	yamlDockerSock := `
+services:
+  app:
+    image: nginx
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+`
+	result = svc.ValidateCompose([]byte(yamlDockerSock), "")
+	assert.False(t, result.Valid)
+	require.NotEmpty(t, result.Errors)
+	assert.Contains(t, result.Errors[0].Message, "docker.sock")
 }
+
+// ---------- env_file is no longer inspected ----------
+
+func TestEnvFileIsIgnored(t *testing.T) {
+	svc := &Service{}
+
+	for _, doc := range []string{
+		"services:\n  app:\n    image: nginx\n    env_file:\n      - .env\n",
+		"services:\n  app:\n    image: nginx\n    env_file: .env\n",
+	} {
+		_, err := svc.ParseComposeYAML([]byte(doc), "", nil)
+		require.NoError(t, err, "env_file must not be rejected any more")
+		result := svc.ValidateCompose([]byte(doc), "")
+		assert.True(t, result.Valid)
+		for _, issue := range append(append([]ValidationError{}, result.Errors...), result.Warnings...) {
+			assert.NotContains(t, strings.ToLower(issue.Message), "env_file")
+		}
+	}
+}
+
+// ---------- Path-escape guard (replaces isComposePathTraversal) ----------
+
+func TestReadComposeFromDir_RejectsParentTraversal(t *testing.T) {
+	dir := t.TempDir()
+	for _, p := range []string{"../compose.yml", "sub/../../escape.yml", ".."} {
+		_, err := readComposeFromDir(dir, p)
+		require.Error(t, err, "%s must be rejected", p)
+		assert.Contains(t, err.Error(), "invalid compose path")
+	}
+}
+
+func TestReadComposeFromDir_RejectsSymlinkEscape(t *testing.T) {
+	dir := realTempDir(t)
+	outside := realTempDir(t)
+	target := filepath.Join(outside, "compose.yml")
+	require.NoError(t, os.WriteFile(target, []byte("services:\n  app:\n    image: nginx\n"), 0o644))
+	require.NoError(t, os.Symlink(outside, filepath.Join(dir, "linked")))
+
+	_, err := readComposeFromDir(dir, filepath.Join("linked", "compose.yml"))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "escapes working directory")
+}
+
+func TestReadLimitedComposeFile_RejectsSymlink(t *testing.T) {
+	dir := realTempDir(t)
+	real := filepath.Join(dir, "base.yml")
+	require.NoError(t, os.WriteFile(real, []byte("services:\n  app:\n    image: nginx\n"), 0o644))
+	link := filepath.Join(dir, "compose.yml")
+	require.NoError(t, os.Symlink(real, link))
+
+	_, err := readLimitedComposeFile(link)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "regular non-symlink")
+
+	_, err = readLimitedComposeFile(filepath.Join(dir, "missing.yml"))
+	require.Error(t, err)
+}
+
+func TestReadComposeFromDir_ReadsInTreeComposeFile(t *testing.T) {
+	// Temp dirs live behind a symlinked /var -> /private/var on macOS, and the
+	// guard compares EvalSymlinks output against the raw dir, so resolve first.
+	dir := realTempDir(t)
+	body := "services:\n  app:\n    image: nginx\n"
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "compose.yaml"), []byte(body), 0o644))
+
+	// Explicit relative path.
+	got, err := readComposeFromDir(dir, "compose.yaml")
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+
+	// Discovery walk finds it when no path is given.
+	got, err = readComposeFromDir(dir, "")
+	require.NoError(t, err)
+	assert.Equal(t, body, got)
+
+	empty := realTempDir(t)
+	_, err = readComposeFromDir(empty, "")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "no compose file found")
+}
+
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	require.NoError(t, err)
+	return dir
+}
+
+func TestIsComposePathTraversalPredicateStillReferenced(t *testing.T) {
+	// The standalone helper is gone; the same intent now lives inline in
+	// gitops.go, so pin the guard text to catch an accidental removal.
+	src, err := os.ReadFile("gitops.go")
+	require.NoError(t, err)
+	assert.Contains(t, string(src), `strings.Contains(composePath, "..")`)
+	assert.Contains(t, string(src), "compose symlink escapes working directory")
+}
+
+// ---------- Unchanged helpers ----------
 
 func TestComposeDeleteWithOptions_Exists(t *testing.T) {
 	// Verify method signatures exist; DB-dependent path is covered by integration tests.
-	// Here we just ensure the wrapper doesn't panic on nil store by checking via build.
 	t.Skip("skip DB-dependent delete test in unit suite")
-}
-
-func TestIsComposePathTraversal(t *testing.T) {
-	assert.False(t, isComposePathTraversal("/data"))
-	assert.True(t, isComposePathTraversal("../etc"))
-	assert.True(t, isComposePathTraversal("a/../b"))
-	assert.True(t, isComposePathTraversal(".."))
-	assert.False(t, isComposePathTraversal("data"))
 }
 
 func TestGitOps_CreateBeforeUpdate_FreshID(t *testing.T) {
 	// Simulate DeployFromGit existence check: fresh ID should trigger Create, not Update
-	// Use mockStore from gitops_test.go pattern
 	store := &mockStoreForFixes{stacks: make(map[string]struct{})}
 	freshID := "cps-fresh12345"
-	// Get should fail for fresh
 	shouldFail := false
 	if _, ok := store.stacks[freshID]; !ok {
 		shouldFail = true
 	}
 	assert.True(t, shouldFail, "fresh ID should not exist")
-	// After Create, it should exist
 	store.stacks[freshID] = struct{}{}
 	_, ok := store.stacks[freshID]
 	assert.True(t, ok, "after create, ID should exist")

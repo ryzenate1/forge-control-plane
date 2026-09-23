@@ -306,7 +306,7 @@ export function VolumeEditor({
                 type="checkbox"
                 checked={vol.readOnly}
                 onChange={(e) => update(idx, { readOnly: e.target.checked })}
-                className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[#dc2626]"
+                className="h-3 w-3 rounded border-white/20 bg-[var(--surface-input)] accent-[var(--brand)]"
               />
               RO
             </label>

@@ -94,10 +94,13 @@ awk \
     print
   }' "$TMPL" > "$OUT"
 
-# 0644: the container runs as an unprivileged user and must read the mounted
-# file. The file can contain SMTP credentials — restrict the parent directory
-# instead (infra/alertmanager/ is only readable by operators on the host).
-chmod 0644 "$OUT"
+# 0600: the rendered file can contain SMTP credentials (auth_password) and a
+# webhook URL that may embed a bearer token, so it must never be world- or
+# group-readable. If the alertmanager container runs as a non-root user that
+# cannot read the operator's file, bind-mount it with an explicit `user:` (or
+# `chown <container-uid>:<container-gid>`) instead of widening the mode back to
+# 0644.
+chmod 0600 "$OUT"
 
 echo "[gen-alertmanager] wrote $OUT"
 echo "[gen-alertmanager] root receiver: $ROOT_RECEIVER; critical: $CRITICAL_RECEIVER; warning: $WARNING_RECEIVER"

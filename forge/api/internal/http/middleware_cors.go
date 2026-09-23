@@ -25,7 +25,7 @@ func DefaultCORSConfig() CORSConfig {
 			"http://127.0.0.1:3002",
 		},
 		AllowMethods:     "GET,POST,PUT,PATCH,DELETE,OPTIONS",
-		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-CSRF-Token,X-Forge-Session-Mode",
+		AllowHeaders:     "Origin,Content-Type,Accept,Authorization,X-API-Key,X-CSRF-Token,X-Forge-Session-Mode",
 		AllowCredentials: true,
 		MaxAge:           86400,
 	}

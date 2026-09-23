@@ -143,18 +143,11 @@ func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, er
 }
 
 func (r *ContainerdAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, ContainerdProvider)
 }
 
 func (r *ContainerdAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: ContainerdProvider}, nil
+	return inspectWorkload(ctx, r.client, target, ContainerdProvider)
 }
 
 func (r *ContainerdAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {

@@ -130,18 +130,11 @@ func (r *KVMAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
 }
 
 func (r *KVMAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, KVMProvider)
 }
 
 func (r *KVMAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: KVMProvider}, nil
+	return inspectWorkload(ctx, r.client, target, KVMProvider)
 }
 
 func (r *KVMAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {

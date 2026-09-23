@@ -166,6 +166,14 @@ type Pinger interface {
 	Ping(ctx context.Context) error
 }
 
+// Availability is an optional capability implemented by runtimes that can say
+// whether they are backed by a live engine. Mock and degraded runtimes report
+// false so health, readiness, and metrics tell the truth instead of advertising
+// a runtime that rejects every workload operation.
+type Availability interface {
+	Available() bool
+}
+
 type ConsoleSession interface {
 	io.Reader
 	io.Writer

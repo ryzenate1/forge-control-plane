@@ -13,6 +13,8 @@ import (
 	"strings"
 	"time"
 
+	"gamepanel/beacon/internal/tokens"
+
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
@@ -1147,7 +1149,13 @@ type AdminUserInfo struct {
 	Scope        string
 }
 
-// getAdminUserInfo extracts user information from the request context
+// getAdminUserInfo extracts user information from the request context.
+//
+// A bearer JWT is an administrative credential only when it carries the admin
+// scope. Tenant-facing scopes (websocket, file-download, file-upload,
+// backup-download, transfer) prove access to one server's streams or files and
+// must never widen into node administration, so a valid scoped token that is
+// not admin-scoped is rejected here rather than trusted.
 func (s *Server) getAdminUserInfo(r *http.Request) (*AdminUserInfo, error) {
 	// Check for token in header (used by Forge API)
 	tokenStr := r.Header.Get("Authorization")
@@ -1158,9 +1166,12 @@ func (s *Server) getAdminUserInfo(r *http.Request) (*AdminUserInfo, error) {
 			if s.tokenGenerator != nil {
 				claims, err := s.tokenGenerator.Validate(tokenStr)
 				if err == nil {
+					if claims.Scope != tokens.ScopeAdmin {
+						return nil, fmt.Errorf("token scope %q is not valid for admin access", claims.Scope)
+					}
 					return &AdminUserInfo{
 						UserID:       claims.User,
-						IsAdmin:      true, // Forge tokens for admin endpoints are admin
+						IsAdmin:      true,
 						IsInfraAdmin: true,
 						ServerID:     claims.ServerID,
 						Scope:        string(claims.Scope),

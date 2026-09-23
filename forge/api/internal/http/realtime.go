@@ -168,6 +168,20 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 			}
 		}
 
+		// Backup progress streaming is read-only but still gated by backup.read so
+		// a caller without backup access cannot observe it.
+		if stream == "backup" {
+			backupAllowed, backupErr := cfg.Store.UserCanAccessServer(ctx, client.Params("id"), userID, userRole, store.PermBackupRead)
+			if backupErr != nil {
+				_ = client.WriteJSON(map[string]any{"error": "server not found"})
+				return
+			}
+			if !backupAllowed {
+				_ = client.WriteJSON(map[string]any{"error": "missing server permission: " + store.PermBackupRead})
+				return
+			}
+		}
+
 		if ticketToConsume != "" && !consumeWSTicket(cfg, ticketStore, ticketToConsume) {
 			_ = client.WriteJSON(map[string]any{"error": "invalid or expired ws ticket"})
 			return

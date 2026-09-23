@@ -188,6 +188,28 @@ func (s *Service) RollbackToRevision(ctx context.Context, deploymentID string, r
 		return nil, fmt.Errorf("activate revision: %w", err)
 	}
 
+	// A rollback is only real once the node is running the target image. Apply it
+	// through the runtime executor; without one we must not claim the rollback
+	// succeeded (AGENTS: never report success for work not performed).
+	if s.runtimeExecutor == nil {
+		return nil, ErrNoRuntimeExecutor
+	}
+	if err := s.runtimeExecutor.ApplyDeployment(ctx, deployment.ServerID, targetRev.ImageRef); err != nil {
+		deployment.Status = StatusFailed
+		deployment.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateDeployment(ctx, toStoreDeployment(deployment))
+		return nil, fmt.Errorf("rollback apply: %w", err)
+	}
+	if running, verr := s.runtimeExecutor.VerifyRunning(ctx, deployment.ServerID); verr == nil && running {
+		deployment.Status = StatusCompleted
+	} else {
+		deployment.Status = StatusInProgress
+	}
+	deployment.UpdatedAt = time.Now().UTC()
+	if err := s.store.UpdateDeployment(ctx, toStoreDeployment(deployment)); err != nil {
+		return nil, fmt.Errorf("finalize rollback: %w", err)
+	}
+
 	if s.publisher != nil {
 		_ = s.publisher.Publish(ctx, events.NewEnvelope("deployment_rolled_back", "deployment", "deployment", deploymentID, map[string]any{
 			"serverId":     deployment.ServerID,

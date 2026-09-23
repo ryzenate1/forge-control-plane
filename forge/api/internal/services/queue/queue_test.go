@@ -40,15 +40,22 @@ func (m *memoryStore) Dequeue(_ context.Context, _ string, worker string, lease 
 func (m *memoryStore) Acknowledge(_ context.Context, id string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[id].Status = JobStatusCompleted
+	// Mirrors PostgresStore: `UPDATE ... WHERE id=$1` is a no-op for unknown ids.
+	if j := m.jobs[id]; j != nil {
+		j.Status = JobStatusCompleted
+	}
 	return nil
 }
 func (m *memoryStore) Fail(_ context.Context, id string, err error) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.jobs[id].Status = JobStatusFailed
+	j := m.jobs[id]
+	if j == nil {
+		return nil
+	}
+	j.Status = JobStatusFailed
 	if err != nil {
-		m.jobs[id].Error = err.Error()
+		j.Error = err.Error()
 	}
 	return nil
 }
@@ -56,6 +63,9 @@ func (m *memoryStore) Retry(_ context.Context, id string, err error, at time.Tim
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	j := m.jobs[id]
+	if j == nil {
+		return nil
+	}
 	j.Status = JobStatusPending
 	j.RetryCount++
 	j.AvailableAt = at

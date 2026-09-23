@@ -342,7 +342,7 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
             <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface-input)] px-4 py-3 transition hover:border-white/20">
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-[#dc2626]"
+                className="h-4 w-4 accent-[var(--brand)]"
                 checked={varUserViewable}
                 onChange={(e) => setVarUserViewable(e.target.checked)}
               />
@@ -351,7 +351,7 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
             <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface-input)] px-4 py-3 transition hover:border-white/20">
               <input
                 type="checkbox"
-                className="h-4 w-4 accent-[#dc2626]"
+                className="h-4 w-4 accent-[var(--brand)]"
                 checked={varUserEditable}
                 onChange={(e) => setVarUserEditable(e.target.checked)}
               />

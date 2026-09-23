@@ -94,7 +94,10 @@ a { text-underline-offset: 3px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
 @layer base {
-  h1, h2, h3, h4, h5, h6, .font-display {
+  h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-sans), sans-serif;
+  }
+  .font-display {
     font-family: var(--font-display), var(--font-sans), sans-serif;
   }
   code, pre, kbd, samp {

@@ -3,6 +3,7 @@ package trafficmanager
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -17,6 +18,11 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+// errNoBackup is returned by Rollback when there is no usable routes backup to
+// restore. A missing or empty backup means nothing was rolled back, so callers
+// must be able to tell that apart from a successful rollback.
+var errNoBackup = errors.New("no traffic configuration backup available to roll back to")
 
 type TraefikReverseProxy struct {
 	mu              sync.Mutex
@@ -513,10 +519,13 @@ func (p *TraefikReverseProxy) Rollback(ctx context.Context) error {
 
 	data, err := os.ReadFile(backupPath)
 	if err != nil {
-		return nil
+		if errors.Is(err, os.ErrNotExist) {
+			return errNoBackup
+		}
+		return fmt.Errorf("read routes backup for rollback: %w", err)
 	}
 	if len(data) == 0 {
-		return nil
+		return errNoBackup
 	}
 
 	if err := os.WriteFile(activePath, data, 0600); err != nil {

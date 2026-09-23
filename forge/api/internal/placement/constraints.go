@@ -48,22 +48,33 @@ func (c *ConstraintChecker) CheckHard(candidate Candidate, constraints []Constra
 }
 
 func (c *ConstraintChecker) CheckSoft(candidate Candidate, constraints []Constraint, ctx ConstraintContext) (float64, []string) {
-	var bonus float64
 	var reasons []string
+	var evaluated, satisfied int
 	for _, constraint := range constraints {
 		if constraint.Required {
 			continue
 		}
 		err := c.checkSingle(candidate, constraint, ctx)
+		evaluated++
 		if err == nil {
-			bonus += 1e12
+			satisfied++
 			reasons = append(reasons, fmt.Sprintf("soft constraint satisfied: %s %s", constraint.Type, constraint.Key))
 		} else {
-			bonus -= 1e10
 			reasons = append(reasons, fmt.Sprintf("soft constraint not satisfied: %s %s", constraint.Type, constraint.Key))
 		}
 	}
-	return bonus, reasons
+	if evaluated == 0 {
+		return 0, reasons
+	}
+	missed := evaluated - satisfied
+	if !placementV2() {
+		return float64(satisfied)*legacySoftWeight - float64(missed)*legacySoftPenalty, reasons
+	}
+	// Averaged rather than summed: ten copies of the same preference are still
+	// one preference. Summing let the number of constraints, rather than their
+	// strength, decide the placement.
+	return (float64(satisfied)/float64(evaluated))*kSoftWeight-
+		(float64(missed)/float64(evaluated))*kSoftPenalty, reasons
 }
 
 func (c *ConstraintChecker) checkSingle(candidate Candidate, constraint Constraint, ctx ConstraintContext) error {

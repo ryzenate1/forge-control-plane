@@ -207,6 +207,8 @@ type Node struct {
 	SchedulerType          string           `json:"schedulerType"`
 	SchedulerConfig        *json.RawMessage `json:"schedulerConfig,omitempty"`
 	Tags                   []string         `json:"tags,omitempty"`
+	LoadAverage            *float64         `json:"loadAverage,omitempty"`
+	UptimeSeconds          *int64           `json:"uptimeSeconds,omitempty"`
 }
 
 type CreateNodeRequest struct {
@@ -388,6 +390,8 @@ type NodeHeartbeatRequest struct {
 	RuntimeStatus   string
 	RuntimeProvider string
 	Error           string
+	LoadAverage     float64
+	Uptime          int64
 }
 
 type Template struct {
@@ -455,7 +459,7 @@ type Server struct {
 	TransferTargetNodeID *string            `json:"transferTargetNodeId,omitempty"`
 	TransferState        string             `json:"transferState"`
 	TransferError        *string            `json:"transferError,omitempty"`
-	TransferRunToken     *string            `json:"transferRunToken,omitempty"`
+	TransferRunToken     *string            `json:"-"`
 	MemoryMB             int                `json:"memoryMb"`
 	CPUShares            int                `json:"cpuShares"`
 	CPULimit             int                `json:"cpuLimit"`
@@ -1345,10 +1349,12 @@ func (s *Store) Seed(ctx context.Context) error {
 	if _, err = tx.Exec(ctx, `
 		INSERT INTO nodes (
 			id, uuid, name, region, base_url, fqdn, scheme, status, token_hash,
-			daemon_token_id, daemon_token, daemon_token_encrypted, daemon_listen, daemon_sftp, daemon_base, last_seen_at
+			daemon_token_id, daemon_token, daemon_token_encrypted, daemon_listen, daemon_sftp, daemon_base, last_seen_at,
+			memory_mb, disk_mb
 		)
 		VALUES ($1, $1, 'Ubuntu Demo Node', 'local-lab', $5, 'daemon', 'http', 'online',
-		        $2, $4, '', $3, 9090, 2022, '/srv/game-panel/servers', now())
+		        $2, $4, '', $3, 9090, 2022, '/srv/game-panel/servers', now(),
+		        16384, 102400)
 		ON CONFLICT (id) DO UPDATE SET
 			status = EXCLUDED.status,
 			base_url = EXCLUDED.base_url,
@@ -1356,7 +1362,9 @@ func (s *Store) Seed(ctx context.Context) error {
 			daemon_token_id = EXCLUDED.daemon_token_id,
 			daemon_token = '',
 			daemon_token_encrypted = EXCLUDED.daemon_token_encrypted,
-			last_seen_at = EXCLUDED.last_seen_at
+			last_seen_at = EXCLUDED.last_seen_at,
+			memory_mb = CASE WHEN COALESCE(nodes.memory_mb, 0) <= 0 THEN EXCLUDED.memory_mb ELSE nodes.memory_mb END,
+			disk_mb = CASE WHEN COALESCE(nodes.disk_mb, 0) <= 0 THEN EXCLUDED.disk_mb ELSE nodes.disk_mb END
 	`, nodeID, string(nodeTokenHash), nodeTokenEncrypted, nodeTokenID, nodeBaseURL); err != nil {
 		return err
 	}

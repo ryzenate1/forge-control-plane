@@ -241,10 +241,10 @@ export function AdminUsers() {
  </td>
  <td className="px-4 py-3">
  <div className="flex items-center gap-3">
- <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[#dc2626]/30 to-[#dc2626]/10 text-xs font-bold text-[#dc2626]">
+ <div className="flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br from-[var(--brand)]/30 to-[var(--brand)]/10 text-xs font-bold text-[var(--brand)]">
  {user.email.charAt(0).toUpperCase()}
  </div>
- <button type="button" className="text-left font-medium text-slate-200 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dc2626]" onClick={() => openUser(user)}>{user.email}</button>
+ <button type="button" className="text-left font-medium text-slate-200 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={() => openUser(user)}>{user.email}</button>
  </div>
  </td>
  <td className="px-4 py-3">

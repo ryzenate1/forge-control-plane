@@ -544,17 +544,27 @@ func TestBackup_ACMEAccountsDNSProviderAccountsEncryption(t *testing.T) {
 // TestBackup_ServiceEnforceRetentionPolicy_OR verifies the service-layer OR semantics.
 func TestBackup_ServiceEnforceRetentionPolicy_OR(t *testing.T) {
 	t.Parallel()
-	// Read service.go via filesystem relative to store
-	_, callerFile, _, _ := runtime.Caller(0)
+	// Read service.go relative to this test file (runtime.Caller) so it resolves
+	// regardless of the machine's absolute checkout path. From internal/store the
+	// backup service lives at ../services/backup/service.go.
+	_, callerFile, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatalf("runtime.Caller failed")
+	}
 	base := filepath.Dir(callerFile)
-	servicePath := filepath.Join(base, "../../services/backup/service.go")
-	data, err := os.ReadFile(servicePath)
-	if err != nil {
-		// fallback absolute
-		data, err = os.ReadFile("/Users/riyaz/project/gamepanel/forge/api/internal/services/backup/service.go")
-		if err != nil {
-			t.Fatalf("read service.go: %v", err)
+	candidates := []string{
+		filepath.Join(base, "../services/backup/service.go"),
+		filepath.Join(base, "../../services/backup/service.go"),
+	}
+	var data []byte
+	var err error
+	for _, c := range candidates {
+		if data, err = os.ReadFile(c); err == nil {
+			break
 		}
+	}
+	if err != nil {
+		t.Fatalf("read service.go: %v", err)
 	}
 	src := string(data)
 	if !strings.Contains(src, "withinCount || withinAge") {

@@ -131,18 +131,11 @@ func (r *LXCAdapter) Stats(ctx context.Context, target Target) (Stats, error) {
 }
 
 func (r *LXCAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, LXCProvider)
 }
 
 func (r *LXCAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: LXCProvider}, nil
+	return inspectWorkload(ctx, r.client, target, LXCProvider)
 }
 
 func (r *LXCAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {

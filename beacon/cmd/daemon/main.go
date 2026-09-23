@@ -216,6 +216,21 @@ func run() error {
 	server, handler := daemonhttp.NewServerWithBackup(rt, dataDir, backupAdapter, nodeToken)
 	server.SetVersion(Version)
 	server.SetAllowedMounts(beaconConfig.AllowedMountsList())
+	// Host file manager allowlist (comma-separated roots). When unset the handlers
+	// fall back to the conservative denylist; when set, access is confined to
+	// these roots. Applied before the server starts serving /v1/files/*.
+	if roots := strings.TrimSpace(os.Getenv("DAEMON_HOST_FILES_ALLOWLIST")); roots != "" {
+		var allowRoots []string
+		for _, r := range strings.Split(roots, ",") {
+			if t := strings.TrimSpace(r); t != "" {
+				allowRoots = append(allowRoots, t)
+			}
+		}
+		if err := server.SetHostFileAllowlist(allowRoots); err != nil {
+			return fmt.Errorf("configure host file allowlist: %w", err)
+		}
+		log.Printf("host file allowlist configured with %d root(s)", len(allowRoots))
+	}
 	metricsToken := strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
 	if metricsToken == "" && strings.TrimSpace(os.Getenv("METRICS_TOKEN_FILE")) != "" {
 		var err error
@@ -697,13 +712,36 @@ func heartbeatLoop(ctx context.Context, panelAPIURL, nodeID, token, dataDir stri
 		runtimeStatus, errText := runtimeHeartbeatStatus(pinger, runtimeProvider)
 		loadAvg := systemLoadAverage()
 
+		// Capacity that cannot be read is unknown, not zero. Zero-on-error would
+		// silently overwrite the last real reading (or the administrator's
+		// configured node capacity) with a bogus number the scheduler then plans
+		// against, so the field is omitted from the heartbeat entirely and the
+		// reason is surfaced in Error and the daemon log instead.
+		var memoryMB, diskMB *int64
+		if value, err := readMemoryMB(); err != nil {
+			log.Printf("heartbeat: system memory capacity unknown: %v", err)
+			if errText == "" {
+				errText = "system memory capacity unavailable: " + err.Error()
+			}
+		} else {
+			memoryMB = &value
+		}
+		if value, err := readDiskMB(dataDir); err != nil {
+			log.Printf("heartbeat: disk capacity unknown: %v", err)
+			if errText == "" {
+				errText = "disk capacity unavailable: " + err.Error()
+			}
+		} else {
+			diskMB = &value
+		}
+
 		heartbeat := remote.NodeHeartbeat{
 			Version:         version,
 			OS:              goruntime.GOOS,
 			Architecture:    goruntime.GOARCH,
 			CPUThreads:      goruntime.NumCPU(),
-			MemoryMB:        readMemoryMB(),
-			DiskMB:          readDiskMB(dataDir),
+			MemoryMB:        memoryMB,
+			DiskMB:          diskMB,
 			RuntimeStatus:   runtimeStatus,
 			RuntimeProvider: runtimeProvider,
 			Error:           errText,

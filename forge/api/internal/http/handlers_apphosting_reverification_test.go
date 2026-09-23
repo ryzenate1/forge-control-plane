@@ -299,10 +299,6 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 				if app.Name == "" || app.OrgID != orgID {
 					t.Fatalf("unexpected app fields: %+v", app)
 				}
-				// also verify domainErrorStatus mapping for handler layer: valid should not be 422
-				if domainErrorStatus(err) != 200 {
-					t.Fatalf("valid case should map to 200, got %d", domainErrorStatus(err))
-				}
 			} else {
 				if err == nil {
 					t.Fatalf("expected error for invalid sourceType %q, got app %+v", tt.sourceType, app)
@@ -310,18 +306,15 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 				if !strings.Contains(strings.ToLower(err.Error()), "invalid source_type") {
 					t.Fatalf("expected invalid source_type error, got %q", err.Error())
 				}
-				// handler layer maps invalid to 422
-				if domainErrorStatus(err) != 422 {
-					t.Fatalf("invalid source_type should map to 422, got %d for err %q", domainErrorStatus(err), err.Error())
-				}
 			}
 		})
 	}
 
-	t.Run("handler POST /apps maps valid types to 201 and invalid to 422", func(t *testing.T) {
-		// Simulate the handler path in handlers_apphosting.go:173 POST /apps
-		// which calls appSvc.CreateApp and uses respondStoreError to map to 422.
-		// We verify the mapping via fiber simulation without needing a real DB.
+	t.Run("handler POST /apps maps valid types to 201 and invalid to 400", func(t *testing.T) {
+		// Simulate the handler path in handlers_apphosting.go POST /apps, which
+		// calls appSvc.CreateApp and returns 400 for service errors (the
+		// respondStoreError/domainErrorStatus helpers were removed; handlers map
+		// inline now). We verify via fiber simulation without needing a real DB.
 		app := fiber.New()
 		// inject admin user so role checks pass if handler were used
 		app.Post("/apps", func(c *fiber.Ctx) error {
@@ -336,7 +329,7 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 			oc := tenancy.OrgContext{OrgID: req.OrgID, Role: "admin"}
 			result, err := svc.CreateApp(ctx, oc, req)
 			if err != nil {
-				return respondStoreError(err)
+				return fiber.NewError(fiber.StatusBadRequest, err.Error())
 			}
 			return c.Status(fiber.StatusCreated).JSON(result)
 		})
@@ -354,7 +347,7 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 				t.Fatalf("valid src %q: expected 201, got %d", src, resp.StatusCode)
 			}
 		}
-		// invalid -> 422
+		// invalid -> 400 (handler maps service errors inline)
 		body, _ := json.Marshal(map[string]string{"name": "bad", "sourceType": "INVALID", "orgId": orgID})
 		req := httptest.NewRequest(http.MethodPost, "/apps", strings.NewReader(string(body)))
 		req.Header.Set("Content-Type", "application/json")
@@ -362,8 +355,8 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 422 {
-			t.Fatalf("invalid sourceType: expected 422, got %d", resp.StatusCode)
+		if resp.StatusCode != 400 {
+			t.Fatalf("invalid sourceType: expected 400, got %d", resp.StatusCode)
 		}
 	})
 
@@ -389,9 +382,6 @@ func TestCreateApp_ValidTypes(t *testing.T) {
 		_, err = svc.UpdateApp(ctx, app.ID, orgID, apphosting.UpdateAppRequest{DesiredState: &invalid})
 		if err == nil || !strings.Contains(err.Error(), "invalid desired_state") {
 			t.Fatalf("DesiredState %q should be invalid, got %v", invalid, err)
-		}
-		if domainErrorStatus(err) != 422 {
-			t.Fatalf("invalid desired_state should be 422, got %d", domainErrorStatus(err))
 		}
 	})
 }

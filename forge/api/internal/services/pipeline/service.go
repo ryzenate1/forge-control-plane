@@ -102,12 +102,17 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	s.started = true
-	s.wg.Add(1)
+	s.wg.Add(2)
 	s.mu.Unlock()
 	go func() {
 		defer s.wg.Done()
 		defer guardRuntime("pipeline queue loop", s.logger)
 		s.queueLoop(ctx)
+	}()
+	go func() {
+		defer s.wg.Done()
+		defer guardRuntime("pipeline schedule loop", s.logger)
+		s.scheduleLoop(ctx)
 	}()
 }
 

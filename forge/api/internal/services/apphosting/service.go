@@ -6,12 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/store"
-
-	"github.com/google/uuid"
 )
 
 type Store interface {
@@ -676,30 +673,13 @@ func (svc *Service) TriggerDeploy(ctx context.Context, appID, orgID string) (*st
 	if err != nil {
 		return nil, err
 	}
+	_ = app
 
-	now := time.Now().UTC()
-	depl := &store.Deployment{
-		ID:        uuid.NewString(),
-		ServerID:  "",
-		Strategy:  "recreate",
-		Status:    "pending",
-		Image:     "",
-		CreatedAt: now,
-		UpdatedAt: now,
-	}
-
-	if app.ServerID != nil && *app.ServerID != "" {
-		depl.ServerID = *app.ServerID
-	}
-
-	if err := svc.store.CreateDeployment(ctx, depl); err != nil {
-		return nil, err
-	}
-
-	depID := depl.ID
-	if err := svc.store.SetApplicationDeployment(ctx, appID, &depID); err != nil {
-		return nil, err
-	}
-
-	return depl, nil
+	// This service owns no build/deploy engine, so it must not fabricate a
+	// "pending" deployment that nothing will ever run. Real application deploys
+	// are driven by the HTTP layer through the git deploy engine / bound-server
+	// power path (handlers_apphosting.appLifecycleAction). Fail closed here so no
+	// caller can silently record an un-executed deployment (AGENTS: never report
+	// success for work not performed).
+	return nil, errors.New("app-hosting deploy is not wired to a runtime engine; deploy the bound workload instead")
 }

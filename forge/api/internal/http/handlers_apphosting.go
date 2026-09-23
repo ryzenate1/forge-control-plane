@@ -1,6 +1,7 @@
 package http
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -12,6 +13,48 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 )
+
+// appLifecycleAction drives a REAL runtime action for an application bound to a
+// server. start/stop/restart go through the durable operation -> cluster
+// manager -> Beacon -> Docker power path; deploy rebuilds the server's linked git
+// source via the git deploy engine when one exists, otherwise restarts the
+// workload. An application with no bound server has no materialization path yet
+// and fails closed instead of fabricating a pending/success record.
+func appLifecycleAction(cfg Config, ctx context.Context, app store.Application, action string) error {
+	serverID := ""
+	if app.ServerID != nil {
+		serverID = *app.ServerID
+	}
+	if serverID == "" {
+		return fiber.NewError(fiber.StatusNotImplemented, "application is not bound to a runnable server; standalone app provisioning is not wired")
+	}
+	signal := ""
+	switch action {
+	case "start":
+		signal = "start"
+	case "stop":
+		signal = "stop"
+	case "restart":
+		signal = "restart"
+	case "deploy":
+		if cfg.GitDeployMgmtService != nil {
+			if source, err := cfg.Store.GetGitSourceByServerID(ctx, serverID); err == nil && source.RepositoryURL != "" {
+				if _, derr := cfg.GitDeployMgmtService.InitiateDeployment(ctx, source.RepositoryURL, source.Branch, source.LastCommitSHA); derr != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "git deploy failed: "+derr.Error())
+				}
+				return nil
+			}
+		}
+		signal = "restart"
+	}
+	if cfg.OperationService == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "operation service unavailable")
+	}
+	if _, err := cfg.OperationService.DispatchPower(ctx, serverID, signal, ""); err != nil {
+		return fiber.NewError(fiber.StatusBadGateway, signal+" failed: "+err.Error())
+	}
+	return nil
+}
 
 func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphosting.Service, mutationLimiter fiber.Handler) {
 	if appSvc == nil || cfg.Store == nil {
@@ -258,11 +301,10 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		depl, err := appSvc.TriggerDeploy(ctx, c.Params("id"), app.OrgID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		if err := appLifecycleAction(cfg, ctx, *app, "deploy"); err != nil {
+			return err
 		}
-		return c.Status(fiber.StatusCreated).JSON(depl)
+		return c.JSON(fiber.Map{"ok": true, "action": "deploy"})
 	})
 
 	// ---- Services ----
@@ -366,6 +408,9 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
+		if lerr := appLifecycleAction(cfg, ctx, *app, "start"); lerr != nil {
+			return lerr
+		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
@@ -391,6 +436,9 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
+		if lerr := appLifecycleAction(cfg, ctx, *app, "stop"); lerr != nil {
+			return lerr
+		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
@@ -411,11 +459,10 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		depl, err := appSvc.TriggerDeploy(ctx, c.Params("id"), app.OrgID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		if err := appLifecycleAction(cfg, ctx, *app, "restart"); err != nil {
+			return err
 		}
-		return c.Status(fiber.StatusCreated).JSON(depl)
+		return c.JSON(fiber.Map{"ok": true, "action": "restart"})
 	})
 
 	// ---- Deployments ----
@@ -793,11 +840,10 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		depl, err := appSvc.TriggerDeploy(ctx, c.Params("id"), app.OrgID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		if err := appLifecycleAction(cfg, ctx, *app, "deploy"); err != nil {
+			return err
 		}
-		return c.Status(fiber.StatusCreated).JSON(depl)
+		return c.JSON(fiber.Map{"ok": true, "action": "deploy"})
 	})
 
 	// ---- Git ----

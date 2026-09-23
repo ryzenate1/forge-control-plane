@@ -53,7 +53,12 @@ type socialAuthState struct {
 	Expires  int64  `json:"expires"`
 }
 
-func registerSocialAuthRoutes(v1 fiber.Router, cfg Config, mutationLimiter fiber.Handler, authLimiters ...fiber.Handler) {
+// registerSocialAuthRoutes mounts the public OAuth redirect/callback flow on v1
+// and the authenticated identity-management routes on the canonical `protected`
+// router (session auth + dual-session guard + 2FA enforcement + CSRF + per-method
+// rate limit). It must NOT re-create a shadow protected group: the shadow chain
+// omitted requireTwoFactorAuthentication and the method limiter.
+func registerSocialAuthRoutes(v1 fiber.Router, protected fiber.Router, cfg Config, mutationLimiter fiber.Handler, authLimiters ...fiber.Handler) {
 	v1.Get("/auth/social/:provider", func(c *fiber.Ctx) error {
 		return handleSocialAuthRedirect(c, cfg)
 	})
@@ -66,7 +71,6 @@ func registerSocialAuthRoutes(v1 fiber.Router, cfg Config, mutationLimiter fiber
 		v1.Get("/auth/social/:provider/callback", callback)
 	}
 
-	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), csrfMiddleware(LoadSessionCookieConfig()))
 	protected.Get("/account/social/identities", func(c *fiber.Ctx) error {
 		return listSocialIdentities(c, cfg)
 	})

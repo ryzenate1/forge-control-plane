@@ -319,11 +319,28 @@ func validateVariableValue(value, rules string) error {
 				if end != -1 {
 					flags = pattern[end+1:]
 					pattern = pattern[1:end]
+					// Validate trailing flags. Only i (case-insensitive), m
+					// (multiline) and s (dotall) map onto Go inline flags. Any
+					// other trailing character (e.g. the JS-only g/x flags) is not
+					// a valid Go regexp flag, so the rule must be rejected rather
+					// than silently compiling a different pattern.
+					flagPrefix := ""
+					seenFlag := map[byte]bool{}
+					for k := 0; k < len(flags); k++ {
+						switch f := flags[k]; f {
+						case 'i', 'm', 's':
+							if !seenFlag[f] {
+								seenFlag[f] = true
+								flagPrefix += string(f)
+							}
+						default:
+							return errors.New("invalid regex validation rule: unsupported flag")
+						}
+					}
+					if flagPrefix != "" {
+						pattern = "(?" + flagPrefix + ")" + pattern
+					}
 				}
-			}
-			// Handle case-insensitive flag
-			if strings.Contains(flags, "i") {
-				pattern = "(?i)" + pattern
 			}
 			compiled, err := regexp.Compile(pattern)
 			if err != nil {

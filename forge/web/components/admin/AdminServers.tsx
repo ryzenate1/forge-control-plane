@@ -100,7 +100,7 @@ export function AdminServers() {
               <tbody>
                 {filtered.map((s) => (
                   <tr key={s.id} className="border-b border-white/[0.04] transition hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-semibold"><button type="button" className="text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#dc2626]" onClick={() => { setSelectedServerId(s.id); setTab("about"); }}>{s.name}</button></td>
+                    <td className="px-4 py-3 font-semibold"><button type="button" className="text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={() => { setSelectedServerId(s.id); setTab("about"); }}>{s.name}</button></td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">{s.id.slice(0, 8)}…</td>
                     <td className="px-4 py-3 text-slate-400">{s.owner ?? "—"}</td>
                     <td className="px-4 py-3 text-slate-400">{s.node ?? "—"}</td>

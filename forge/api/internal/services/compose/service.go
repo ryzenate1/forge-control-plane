@@ -2,6 +2,7 @@ package compose
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -9,6 +10,53 @@ import (
 
 	"go.yaml.in/yaml/v3"
 )
+
+// envFileStrictEnabled reports whether FORGE_ENV_FILE_STRICT requests strict
+// env_file handling. In strict mode any env_file usage is rejected outright;
+// otherwise it is surfaced as a warning only.
+func envFileStrictEnabled() bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv("FORGE_ENV_FILE_STRICT")))
+	return v == "true" || v == "1"
+}
+
+// envFilePresent reports whether an env_file value (string or list form) is
+// actually populated. A missing or empty value is not treated as usage.
+func envFilePresent(v interface{}) bool {
+	switch x := v.(type) {
+	case nil:
+		return false
+	case string:
+		return strings.TrimSpace(x) != ""
+	case []interface{}:
+		return len(x) > 0
+	default:
+		return true
+	}
+}
+
+// collectEnvFileDiagnostics returns an env_file diagnostic (with a field name
+// containing "env_file") for every service-level and include-level env_file
+// usage found in the parsed compose document.
+func collectEnvFileDiagnostics(raw rawCompose) []ValidationError {
+	var issues []ValidationError
+	for name, svc := range raw.Services {
+		if envFilePresent(svc.EnvFile) {
+			issues = append(issues, ValidationError{
+				Field:   fmt.Sprintf("services.%s.env_file", name),
+				Message: fmt.Sprintf("env_file not supported for service %q; use inline environment variables", name),
+			})
+		}
+	}
+	for i, inc := range raw.Include {
+		if envFilePresent(inc.EnvFile) {
+			issues = append(issues, ValidationError{
+				Field:   fmt.Sprintf("include[%d].env_file", i),
+				Message: "env_file not supported in include; use inline environment variables",
+			})
+		}
+	}
+	return issues
+}
 
 const MaxComposeYAMLBytes = 1 * 1024 * 1024 // 1 MB
 
@@ -93,6 +141,7 @@ type rawService struct {
 	Build       map[string]interface{} `yaml:"build,omitempty"`
 	Ports       []interface{}          `yaml:"ports,omitempty"`
 	Environment interface{}            `yaml:"environment,omitempty"`
+	EnvFile     interface{}            `yaml:"env_file,omitempty"`
 	Volumes     []interface{}          `yaml:"volumes,omitempty"`
 	DependsOn   interface{}            `yaml:"depends_on,omitempty"`
 	Profiles    []string               `yaml:"profiles,omitempty"`
@@ -154,6 +203,12 @@ func (s *Service) ParseComposeYAML(content []byte, workingDir string, envVars ma
 	var raw rawCompose
 	if err := yaml.Unmarshal(content, &raw); err != nil {
 		return nil, fmt.Errorf("failed to parse compose YAML: %w", err)
+	}
+
+	if envFileStrictEnabled() {
+		if issues := collectEnvFileDiagnostics(raw); len(issues) > 0 {
+			return nil, fmt.Errorf("%s", issues[0].Message)
+		}
 	}
 
 	projectName := raw.Name
@@ -239,8 +294,27 @@ func (s *Service) ParseComposeYAML(content []byte, workingDir string, envVars ma
 func (s *Service) ValidateCompose(content []byte, workingDir string) *ValidateResult {
 	result := &ValidateResult{Valid: true}
 
+	// Detect env_file usage up front so we can emit structured diagnostics with
+	// an env_file-specific field: rejected in strict mode, warned otherwise.
+	var envScan rawCompose
+	if err := yaml.Unmarshal(content, &envScan); err == nil {
+		if issues := collectEnvFileDiagnostics(envScan); len(issues) > 0 {
+			if envFileStrictEnabled() {
+				result.Valid = false
+				result.Errors = append(result.Errors, issues...)
+			} else {
+				result.Warnings = append(result.Warnings, issues...)
+			}
+		}
+	}
+
 	parsed, err := s.ParseComposeYAML(content, workingDir, nil)
 	if err != nil {
+		// When the strict env_file gate fired we already recorded a precise
+		// env_file error above; return it instead of a generic "yaml" error.
+		if !result.Valid {
+			return result
+		}
 		result.Valid = false
 		result.Errors = append(result.Errors, ValidationError{
 			Field:   "yaml",

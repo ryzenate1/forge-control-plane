@@ -90,7 +90,8 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 	       COALESCE(n.heartbeat_state::text, ''), COALESCE(n.heartbeat_recovery_count, 0),
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
 	       COALESCE(n.tags, '[]'),
-	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text
+	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text,
+	       n.load_average, n.uptime_seconds
 		FROM nodes n
 		LEFT JOIN locations l ON l.id = n.location_id
 		ORDER BY n.name
@@ -133,6 +134,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
 			&node.SchedulerType, &schedulerConfig,
+			&node.LoadAverage, &node.UptimeSeconds,
 		); err != nil {
 			return nil, 0, err
 		}
@@ -184,7 +186,8 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
 	       COALESCE(n.tags, '[]'),
 	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text,
-	       COALESCE(n.runtime_provider, '')
+	       COALESCE(n.runtime_provider, ''),
+	       n.load_average, n.uptime_seconds
 	FROM nodes n
 	LEFT JOIN locations l ON l.id = n.location_id
 	WHERE n.id = $1
@@ -218,6 +221,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 			&node.Tags,
 			&node.SchedulerType, &schedulerConfig,
 			&node.RuntimeProvider,
+			&node.LoadAverage, &node.UptimeSeconds,
 		)
 	if err != nil {
 		return Node{}, err
@@ -742,9 +746,11 @@ func (s *Store) UpdateNodeHeartbeat(ctx context.Context, nodeID string, req Node
 		    docker_status = NULLIF($8, ''),
 		    runtime_status = NULLIF($9, ''),
 		    runtime_provider = NULLIF($10, ''),
-		    heartbeat_error = NULLIF($11, '')
+		    heartbeat_error = NULLIF($11, ''),
+		    load_average = CASE WHEN $13 > 0 THEN $13 ELSE load_average END,
+		    uptime_seconds = CASE WHEN $14 > 0 THEN $14 ELSE uptime_seconds END
 		WHERE id = $12
-	`, status, req.Version, req.OS, req.Architecture, req.CPUThreads, req.MemoryMB, req.DiskMB, req.DockerStatus, req.RuntimeStatus, req.RuntimeProvider, req.Error, nodeID)
+	`, status, req.Version, req.OS, req.Architecture, req.CPUThreads, req.MemoryMB, req.DiskMB, req.DockerStatus, req.RuntimeStatus, req.RuntimeProvider, req.Error, nodeID, req.LoadAverage, req.Uptime)
 	if err != nil {
 		return Node{}, err
 	}

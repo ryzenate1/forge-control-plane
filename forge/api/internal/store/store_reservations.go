@@ -4,10 +4,29 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+)
+
+// Reservation conflicts are typed so a caller can tell "this capacity is already
+// claimed" apart from "the database could not answer". Callers used to match on
+// the wording of these messages, which meant an error text edit silently changed
+// control flow. The messages themselves are unchanged.
+var (
+	// ErrReservationNodeNotFound means the requested node does not exist. It is
+	// deliberately not a conflict: nothing is holding that capacity, the request
+	// named something that isn't there.
+	ErrReservationNodeNotFound = errors.New("node not found")
+	// ErrReservationServerBusy means the server already holds a live reservation.
+	ErrReservationServerBusy = errors.New("server already has an active placement reservation")
+	// ErrReservationMigrationBusy means the migration already holds one.
+	ErrReservationMigrationBusy = errors.New("migration already has an active placement reservation")
+	// ErrReservationCapacityExceeded means the node cannot fit the request right
+	// now — the conflict that makes trying the next candidate meaningful.
+	ErrReservationCapacityExceeded = errors.New("reserved capacity exceeds available capacity")
 )
 
 func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacementReservationRequest) (PlacementReservation, error) {
@@ -43,7 +62,7 @@ func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacem
 
 	var nodeID string
 	if err := tx.QueryRow(ctx, `SELECT id::text FROM nodes WHERE id = $1 FOR UPDATE`, req.NodeID).Scan(&nodeID); err != nil {
-		return PlacementReservation{}, errors.New("node not found")
+		return PlacementReservation{}, ErrReservationNodeNotFound
 	}
 
 	if req.ServerID != "" {
@@ -59,7 +78,7 @@ func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacem
 			return PlacementReservation{}, err
 		}
 		if exists {
-			return PlacementReservation{}, errors.New("server already has an active placement reservation")
+			return PlacementReservation{}, ErrReservationServerBusy
 		}
 	}
 	if req.MigrationID != "" {
@@ -75,7 +94,7 @@ func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacem
 			return PlacementReservation{}, err
 		}
 		if exists {
-			return PlacementReservation{}, errors.New("migration already has an active placement reservation")
+			return PlacementReservation{}, ErrReservationMigrationBusy
 		}
 	}
 
@@ -84,13 +103,13 @@ func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacem
 		return PlacementReservation{}, err
 	}
 	if req.CPU > 0 && capacity.AvailableCPU < req.CPU {
-		return PlacementReservation{}, errors.New("reserved cpu exceeds available capacity")
+		return PlacementReservation{}, fmt.Errorf("%w: cpu available %d, requested %d", ErrReservationCapacityExceeded, capacity.AvailableCPU, req.CPU)
 	}
 	if req.Memory > 0 && int64(capacity.AvailableMemory) < req.Memory {
-		return PlacementReservation{}, errors.New("reserved memory exceeds available capacity")
+		return PlacementReservation{}, fmt.Errorf("%w: memory available %d MB, requested %d MB", ErrReservationCapacityExceeded, capacity.AvailableMemory, req.Memory)
 	}
 	if req.Disk > 0 && int64(capacity.AvailableDisk) < req.Disk {
-		return PlacementReservation{}, errors.New("reserved disk exceeds available capacity")
+		return PlacementReservation{}, fmt.Errorf("%w: disk available %d MB, requested %d MB", ErrReservationCapacityExceeded, capacity.AvailableDisk, req.Disk)
 	}
 
 	var serverID any

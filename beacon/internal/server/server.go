@@ -16,6 +16,7 @@ import (
 	"io"
 	"log"
 	"mime"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -99,6 +100,10 @@ type Server struct {
 	nonceMu           sync.Mutex
 	seenNonces        map[string]time.Time
 	diskFreeFn        func(dir string) (int64, error)
+	// installMu guards lazy creation of installs, which tracks the install
+	// currently running per server so the install websocket can attach to it.
+	installMu sync.Mutex
+	installs  *installHub
 }
 
 // SetPanelClient wires the remote panel client so that install-status
@@ -315,7 +320,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	// left behind by crashes or abandoned uploads, instead of relying solely
 	// on cleanup-on-next-chunk. Stops when serverCtx is cancelled by Shutdown.
 	startUploadCleanupLoop(serverCtx, dataDir)
-	if rt == nil {
+	if !runtimeAvailable(rt) {
 		server.dockerState = "error"
 	}
 	mux := http.NewServeMux()
@@ -332,6 +337,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /servers/{id}/power", server.power)
 	mux.HandleFunc("GET /servers/{id}/operations", server.listOperations)
 	mux.HandleFunc("GET /operations/{id}", server.getOperation)
+	mux.HandleFunc("GET /servers/{id}/state", server.state)
 	mux.HandleFunc("GET /servers/{id}/stats", server.stats)
 	mux.HandleFunc("GET /servers/{id}/logs", server.logs)
 	mux.HandleFunc("POST /servers/{id}/backups", server.createBackup)
@@ -481,6 +487,22 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /v1/firewall/forward", server.handleFirewallAddForward)
 	mux.HandleFunc("DELETE /v1/firewall/forward/{id}", server.handleFirewallDeleteForward)
 
+	// Host-level file management (v1 API). The panel's /host/files/* routes call
+	// these; confinement is enforced inside the handlers — an explicit allowlist
+	// set via SetHostFileAllowlist restricts to those roots, otherwise a
+	// conservative denylist still blocks sensitive paths.
+	mux.HandleFunc("GET /v1/files/list", server.handleHostFilesList)
+	mux.HandleFunc("GET /v1/files/download", server.handleHostFilesDownload)
+	mux.HandleFunc("POST /v1/files/read", server.handleHostFilesRead)
+	mux.HandleFunc("POST /v1/files/write", server.handleHostFilesWrite)
+	mux.HandleFunc("POST /v1/files/mkdir", server.handleHostFilesMkdir)
+	mux.HandleFunc("POST /v1/files/remove", server.handleHostFilesRemove)
+	mux.HandleFunc("POST /v1/files/rename", server.handleHostFilesRename)
+	mux.HandleFunc("POST /v1/files/copy", server.handleHostFilesCopy)
+	mux.HandleFunc("POST /v1/files/chmod", server.handleHostFilesChmod)
+	mux.HandleFunc("POST /v1/files/upload", server.handleHostFilesUpload)
+	mux.HandleFunc("GET /v1/terminal/ws", server.handleHostTerminalWS)
+
 	return server, sanitizeInternalErrors(recoverPanics(securityHeaders(requestTimeout(server.authenticate(mux)))))
 }
 
@@ -606,15 +628,33 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "daemon", "runtime": s.runtime != nil})
+	available := runtimeAvailable(s.runtime)
+	payload := map[string]any{"ok": true, "service": "daemon", "runtime": available}
+	if !available {
+		payload["reason"] = "container runtime unavailable"
+	}
+	writeJSON(w, http.StatusOK, payload)
 }
 
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
-	if s.runtime == nil {
+	if !runtimeAvailable(s.runtime) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "reason": "runtime unavailable"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ready": true})
+}
+
+// runtimeAvailable reports whether the wired runtime can actually serve
+// workloads. Mock mode installs UnavailableRuntime, which answers every call
+// with an error, so it must never be reported as an available runtime.
+func runtimeAvailable(rt runtime.Runtime) bool {
+	if rt == nil {
+		return false
+	}
+	if available, ok := rt.(runtime.Availability); ok {
+		return available.Available()
+	}
+	return true
 }
 
 func (s *Server) sessions() *sessionRegistry { return s.sessionsReg }
@@ -638,7 +678,7 @@ func (s *Server) trackWebSocket(r *http.Request, conn *websocket.Conn) func() {
 }
 
 func (s *Server) dockerStatus() string {
-	if s.runtime == nil {
+	if !runtimeAvailable(s.runtime) {
 		return "error"
 	}
 	return s.dockerState
@@ -655,7 +695,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 
 	writeMetric("game_panel_daemon_uptime_seconds", "Daemon process uptime.", "gauge", formatFloat(time.Since(process.StartTime).Seconds()))
 	runtimeEnabled := "0"
-	if s.runtime != nil {
+	if runtimeAvailable(s.runtime) {
 		runtimeEnabled = "1"
 	}
 	writeMetric("game_panel_daemon_runtime_enabled", "Runtime availability, 1 when enabled.", "gauge", runtimeEnabled)
@@ -666,7 +706,7 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	writeMetric("game_panel_daemon_memory_heap_bytes", "Heap bytes reserved by the Go runtime.", "gauge", formatUint(process.MemHeapBytes))
 	writeMetric("game_panel_daemon_gc_total", "Number of completed garbage collection cycles.", "counter", formatUint(process.NumGC))
 
-	if s.runtime != nil {
+	if runtimeAvailable(s.runtime) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		for _, serverID := range s.manager.ServerIDs() {
@@ -756,14 +796,34 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	// The control plane sends the provider it placed the workload on. This
-	// field was not read at all, so a request for lxc or kvm produced a Docker
-	// container and reported success. Serving a different runtime than the one
-	// asked for is a failure, not a fallback.
-	provider := s.runtimeProvider()
-	if requested := strings.ToLower(strings.TrimSpace(body.Provider)); requested != "" && requested != provider {
-		http.Error(w, fmt.Sprintf("runtime provider %q is not available on this node, which runs %q", requested, provider), http.StatusBadRequest)
+	// The control plane sends the provider it placed the workload on. Two
+	// different refusals matter here and are not the same thing:
+	//
+	//   - a name Forge has no runtime for at all (lxc, kvm without the opt-in,
+	//     or anything unrecognised) is a bad request, and must be rejected. It
+	//     used to be answered with a Docker container and a success response,
+	//     which is the phantom-provider bug.
+	//   - a real provider this particular node does not run is a placement
+	//     conflict: the panel put the workload on the wrong machine.
+	//
+	// A node that cannot advertise its own engine skips the second check rather
+	// than rejecting every request as a mismatch.
+	requestedProvider := strings.ToLower(strings.TrimSpace(body.Provider))
+	if err := runtime.ValidateProvider(requestedProvider); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
+	}
+	provider := s.runtimeProvider()
+	if requestedProvider != "" && provider != "" && provider != "unknown" && requestedProvider != provider {
+		http.Error(w, fmt.Sprintf("runtime provider %q is not available on this node, which runs %q", requestedProvider, provider), http.StatusConflict)
+		return
+	}
+	mode := requestedProvider
+	if mode == "" || mode == "unknown" {
+		mode = provider
+	}
+	if mode == "" || mode == "unknown" {
+		mode = runtime.ProviderDocker
 	}
 
 	rootDir, err := s.safePath(body.ServerID, "")
@@ -821,7 +881,7 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.manager.MarkCreated(body.ServerID, rootDir, body.DiskMB)
-	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": body.ServerID, "accepted": true, "mode": provider})
+	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": body.ServerID, "accepted": true, "mode": mode})
 }
 
 // runtimeProvider reports the runtime this beacon is actually configured with,
@@ -1096,10 +1156,19 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 	}
 	env := s.effectiveEnvMapList(serverID, body.Env)
 
-	// Mark as installing
-	s.manager.MarkInstalling(serverID, true)
+	// Claim the server for this install. BeginInstall refuses when a power
+	// operation or another install already holds it, instead of silently
+	// overwriting the claim.
+	if err := s.manager.BeginInstall(serverID); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	s.beginInstall(serverID)
+	defer s.finishInstall(serverID)
+	s.publishInstall(serverID, map[string]any{"type": "status", "data": "Running install script..."})
 
-	// Execute installation
+	// Execute installation. This request is the only place an install command is
+	// accepted; installWS only ever reads progress from the session opened above.
 	result, err := s.runtime.Install(r.Context(), runtime.InstallRequest{
 		ServerID:   serverID,
 		Image:      body.Image,
@@ -1109,7 +1178,8 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 		RootDir:    rootDir,
 	})
 	if err != nil {
-		s.manager.MarkInstalling(serverID, false)
+		s.manager.EndInstall(serverID, true)
+		s.publishInstall(serverID, map[string]any{"type": "error", "data": err.Error()})
 		s.notifyPanelInstallStatus(serverID, false, err.Error())
 		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
 		return
@@ -1119,16 +1189,27 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 	logPath := filepath.Join(installDir, "install.log")
 	_ = os.WriteFile(logPath, []byte(result.Logs), 0o640)
 
-	// Mark installation complete
-	s.manager.MarkInstalling(serverID, false)
+	// Mark installation complete — or failed. A non-zero installer exit must be
+	// recorded as a failure, not cleared to "installed" because the container
+	// happened to run to completion.
+	success := result.ExitCode == 0
+	s.manager.EndInstall(serverID, !success)
+
+	// Stream the collected output to any attached socket. The runtime hands back
+	// installer output once the container exits, so the lines land together.
+	for _, line := range strings.Split(result.Logs, "\n") {
+		if line != "" {
+			s.publishInstall(serverID, map[string]any{"type": "log", "data": line})
+		}
+	}
 
 	// Notify Panel of installation status
-	success := result.ExitCode == 0
 	errorMsg := ""
 	if !success {
 		errorMsg = "install script failed with exit code " + strconv.Itoa(result.ExitCode)
 	}
 	s.notifyPanelInstallStatus(serverID, success, errorMsg)
+	s.publishInstall(serverID, map[string]any{"type": "complete", "success": success, "exitCode": result.ExitCode, "error": errorMsg})
 
 	if result.ExitCode != 0 {
 		http.Error(w, "install script failed with exit code "+strconv.Itoa(result.ExitCode), http.StatusConflict)
@@ -1137,162 +1218,8 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "accepted": true, "mode": "docker", "exitCode": result.ExitCode, "logs": result.Logs})
 }
 
-func (s *Server) installWS(w http.ResponseWriter, r *http.Request) {
-	if s.runtime == nil {
-		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
-		return
-	}
-
-	// Authenticate WebSocket connection
-	claims, err := s.authenticateWebSocket(w, r)
-	if err != nil {
-		http.Error(w, "authentication required: "+err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	// Validate token scope for install operations
-	if claims.Scope != tokens.ScopeWebsocket {
-		http.Error(w, "invalid token scope for install websocket connection", http.StatusForbidden)
-		return
-	}
-
-	conn, err := websocketUpgrader.Upgrade(w, r, nil)
-	if err != nil {
-		return
-	}
-	defer conn.Close()
-	defer s.trackWebSocket(r, conn)()
-
-	serverID := r.PathValue("id")
-
-	// Validate that the token is for this specific server
-	if claims.ServerID != serverID {
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": "token not valid for this server",
-		})
-		return
-	}
-
-	// Send initial status
-	conn.WriteJSON(map[string]interface{}{
-		"type": "status",
-		"data": "Starting installation...",
-	})
-
-	// Read installation request from WebSocket
-	var body struct {
-		Image      string            `json:"image"`
-		Entrypoint string            `json:"entrypoint"`
-		Script     string            `json:"script"`
-		Env        map[string]string `json:"env"`
-	}
-	if err := conn.ReadJSON(&body); err != nil {
-		conn.WriteJSON(map[string]interface{}{
-			"type":  "error",
-			"data":  "Invalid install request",
-			"error": err.Error(),
-		})
-		return
-	}
-
-	rootDir, err := s.safePath(serverID, "")
-	if err != nil {
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": err.Error(),
-		})
-		return
-	}
-
-	installDir, err := s.safePath(serverID, ".install")
-	if err != nil {
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": err.Error(),
-		})
-		return
-	}
-
-	if err := os.MkdirAll(installDir, 0o750); err != nil {
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": err.Error(),
-		})
-		return
-	}
-
-	scriptPath := filepath.Join(installDir, "install.sh")
-	script := body.Script
-	if strings.TrimSpace(script) == "" {
-		script = "#!/bin/sh\nset -eu\necho \"No install script configured.\"\n"
-	}
-
-	if err := os.WriteFile(scriptPath, []byte(script), 0o750); err != nil {
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": err.Error(),
-		})
-		return
-	}
-
-	env := s.effectiveEnvMapList(serverID, body.Env)
-
-	s.manager.MarkInstalling(serverID, true)
-
-	conn.WriteJSON(map[string]interface{}{
-		"type": "status",
-		"data": "Running install script...",
-	})
-
-	result, err := s.runtime.Install(r.Context(), runtime.InstallRequest{
-		ServerID:   serverID,
-		Image:      body.Image,
-		Entrypoint: body.Entrypoint,
-		Script:     script,
-		Env:        env,
-		RootDir:    rootDir,
-	})
-	if err != nil {
-		s.manager.MarkInstalling(serverID, false)
-		conn.WriteJSON(map[string]interface{}{
-			"type": "error",
-			"data": err.Error(),
-		})
-		s.notifyPanelInstallStatus(serverID, false, err.Error())
-		return
-	}
-
-	// Stream logs
-	for _, line := range strings.Split(result.Logs, "\n") {
-		if line != "" {
-			conn.WriteJSON(map[string]interface{}{
-				"type": "log",
-				"data": line,
-			})
-		}
-	}
-
-	// Save logs
-	logPath := filepath.Join(installDir, "install.log")
-	_ = os.WriteFile(logPath, []byte(result.Logs), 0o640)
-
-	s.manager.MarkInstalling(serverID, false)
-
-	success := result.ExitCode == 0
-	errorMsg := ""
-	if !success {
-		errorMsg = "install script failed with exit code " + strconv.Itoa(result.ExitCode)
-	}
-	s.notifyPanelInstallStatus(serverID, success, errorMsg)
-
-	conn.WriteJSON(map[string]interface{}{
-		"type":     "complete",
-		"success":  success,
-		"exitCode": result.ExitCode,
-		"error":    errorMsg,
-	})
-}
+// The install websocket lives in install_stream.go: it attaches to an install
+// started by the HTTP POST above and streams progress only, never commands.
 
 func (s *Server) reinstall(w http.ResponseWriter, r *http.Request) {
 	serverID := r.PathValue("id")
@@ -1433,17 +1360,68 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": "delete", "accepted": true, "mode": "docker"})
 }
 
+// state reports the container's lifecycle truth: whether it exists, whether it
+// is running, and its runtime status string. Stats cannot answer this — a
+// stopped-but-existing container has no stats to stream, so before this
+// endpoint the control plane could only infer "missing" from a failed stats
+// call and could never tell missing from stopped.
+func (s *Server) state(w http.ResponseWriter, r *http.Request) {
+	if s.runtime == nil {
+		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
+		return
+	}
+	inspection, err := s.runtime.Inspect(r.Context(), r.PathValue("id"))
+	if err != nil {
+		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"serverId":  inspection.ServerID,
+		"exists":    inspection.Exists,
+		"running":   inspection.Running,
+		"status":    inspection.Status,
+		"startedAt": inspection.StartedAt,
+	})
+}
+
+// statsResponse carries telemetry plus the explicit lifecycle state. The state
+// fields are what let the control plane distinguish running from stopped from
+// missing; older panels ignore the extra keys and keep reading the metrics.
+type statsResponse struct {
+	runtime.Stats
+	Exists    bool      `json:"exists"`
+	Running   bool      `json:"running"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"startedAt"`
+}
+
 func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 	if s.runtime == nil {
 		http.Error(w, errRuntimeUnavailable.Error(), http.StatusServiceUnavailable)
 		return
 	}
-	stats, err := s.runtime.Stats(r.Context(), r.PathValue("id"))
+	serverID := r.PathValue("id")
+	// Lifecycle first: it answers even when there are no metrics to stream, and
+	// an inspect failure is reported as a failure rather than as zero telemetry.
+	inspection, err := s.runtime.Inspect(r.Context(), serverID)
 	if err != nil {
 		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
 		return
 	}
-	writeJSON(w, http.StatusOK, stats)
+	stats, err := s.runtime.Stats(r.Context(), serverID)
+	if err != nil && inspection.Exists && inspection.Running {
+		// A running workload that cannot report metrics is a real error; a
+		// stopped one legitimately has none.
+		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+		return
+	}
+	writeJSON(w, http.StatusOK, statsResponse{
+		Stats:     stats,
+		Exists:    inspection.Exists,
+		Running:   inspection.Running,
+		Status:    inspection.Status,
+		StartedAt: inspection.StartedAt,
+	})
 }
 
 func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
@@ -1666,6 +1644,16 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// Claim the server for the duration of the restore. Without this, a power
+	// start (or an install) can race the file rewrite and boot half-restored
+	// contents, or be silently clobbered by the restore finishing afterwards.
+	if s.manager != nil {
+		if err := s.manager.BeginRestore(serverID); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		defer func() { s.manager.EndRestore(serverID, true) }()
+	}
 	// A restore is destructive even when truncate is false because archive
 	// entries replace live files. Persist a complete recovery point first and
 	// serialize it with all other backup operations for this daemon.
@@ -1712,6 +1700,9 @@ func (s *Server) restoreBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.manager != nil {
+		s.manager.EndRestore(serverID, false)
+	}
 	if s.panelClient != nil {
 		go func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -3454,10 +3445,17 @@ func configureWebSocket(conn *websocket.Conn) {
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/metrics" {
-			expected := "Bearer " + s.metricsToken
-			if s.metricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(expected)) != 1 {
-				http.Error(w, "authentication required", http.StatusUnauthorized)
-				return
+			// Prometheus normally scrapes the daemon from the same machine, and a
+			// loopback connection cannot have come from anywhere else, so it is
+			// served without a bearer token. Anything that is not loopback keeps
+			// requiring it. Forwarded headers are deliberately not consulted: the
+			// socket peer is the only thing here that cannot be forged by the caller.
+			if !isLoopbackRequest(r) {
+				expected := "Bearer " + s.metricsToken
+				if s.metricsToken == "" || subtle.ConstantTimeCompare([]byte(r.Header.Get("Authorization")), []byte(expected)) != 1 {
+					http.Error(w, "authentication required", http.StatusUnauthorized)
+					return
+				}
 			}
 			next.ServeHTTP(w, r)
 			return
@@ -3570,12 +3568,22 @@ func securityHeaders(next http.Handler) http.Handler {
 	})
 }
 
+// Scoped (JWT-authenticated) routes are the streaming sockets under
+// /servers/{id}/ws/. /servers/{id}/install/ws is deliberately NOT in this set:
+// install progress is control-plane output, so it keeps requiring the panel
+// node HMAC signature like every other command channel.
 func isScopedTokenRoute(path string) bool {
-	return strings.HasPrefix(path, "/servers/") && (strings.Contains(path, "/ws/") || strings.HasSuffix(path, "/install/ws"))
+	return strings.HasPrefix(path, "/servers/") && strings.Contains(path, "/ws/")
 }
 
 func isStreamingUpload(r *http.Request) bool {
-	return r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/files/upload")
+	// Container uploads stream via PUT; host-file uploads via POST. Both authenticate
+	// the request metadata with an empty-body signature so the body is never spooled
+	// before the request is verified.
+	if strings.Contains(r.URL.Path, "/files/upload") {
+		return r.Method == http.MethodPut || r.Method == http.MethodPost
+	}
+	return false
 }
 
 // authenticateWebSocket validates JWT token for WebSocket connections.

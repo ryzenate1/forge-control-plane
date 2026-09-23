@@ -795,6 +795,18 @@ export async function fetchAdminActivity(filter: AdminActivityFilter = {}): Prom
   return apiFetch<AdminActivityPage>(`/admin/activity${adminActivityQuery(filter)}`);
 }
 
+export type ActivityStats = {
+  totalEvents?: number;
+  eventsToday?: number;
+  eventsThisHour?: number;
+  uniqueActors?: number;
+  byLevel?: Record<string, number>;
+};
+
+export async function fetchActivityStats(): Promise<ActivityStats> {
+  return apiFetch<ActivityStats>("/admin/activity/stats");
+}
+
 export async function fetchAdminAudit(): Promise<ApiAdminAuditEvent[]> {
   return apiFetch<ApiAdminAuditEvent[]>("/admin/audit");
 }

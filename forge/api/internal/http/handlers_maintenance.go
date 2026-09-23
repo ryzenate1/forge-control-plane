@@ -47,7 +47,7 @@ func registerMaintenanceRoutes(protected fiber.Router, cfg Config, mutationLimit
 		})
 	})
 
-	protected.Get("/admin/settings/maintenance", func(c *fiber.Ctx) error {
+	protected.Get("/admin/settings/maintenance", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return c.JSON(store.DefaultMaintenanceSettings())
 		}
@@ -57,6 +57,10 @@ func registerMaintenanceRoutes(protected fiber.Router, cfg Config, mutationLimit
 		if err != nil {
 			return c.JSON(store.DefaultMaintenanceSettings())
 		}
+		// The bypass token is a credential that lets its holder reach the panel
+		// while maintenance mode is on. It is owned by the settings write path and
+		// must never be serialized on a read.
+		ms.BypassToken = ""
 		return c.JSON(ms)
 	})
 }

@@ -14,6 +14,7 @@ import { useToast } from "@/components/ui/toast";
 import { Button as ButtonBase } from "./button";
 import { Input as InputBase } from "./input";
 import { Badge as BadgeBase } from "./badge";
+export * from "./forge-primitives";
 export {
   CardHeader, CardTitle, CardDescription, CardContent, CardFooter,
 } from "./card";

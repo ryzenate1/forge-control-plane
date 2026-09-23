@@ -81,7 +81,7 @@ export function RollbackConfirm({
             type="checkbox"
             checked={createSnapshot}
             onChange={(e) => setCreateSnapshot(e.target.checked)}
-            className="h-4 w-4 rounded border-white/20 bg-[var(--surface-input)] accent-[#dc2626]"
+            className="h-4 w-4 rounded border-white/20 bg-[var(--surface-input)] accent-[var(--brand)]"
           />
           <div>
             <div className="flex items-center gap-1.5 text-sm font-medium text-slate-200">

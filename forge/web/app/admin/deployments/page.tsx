@@ -126,7 +126,7 @@ export default function AdminDeploymentsPage() {
               className={cn(
                 "flex items-center gap-1.5 px-3 py-2 text-xs font-medium border-b-2 transition -mb-px",
                 tab === tId
-                  ? "border-[#dc2626] text-[#dc2626]"
+                  ? "border-[var(--brand)] text-[var(--brand)]"
                   : "border-transparent text-slate-500 hover:text-slate-300",
               )}
               onClick={() => { setTab(tId); setStatusFilter(""); setSearch(""); }}

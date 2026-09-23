@@ -88,5 +88,11 @@ func DefaultSeeder(store *Store) *Seeder {
 		return nil
 	})
 
+	// TMPL-01: register the curated game templates. SeedGameTemplates is
+	// idempotent (ON CONFLICT DO NOTHING), so re-running is safe.
+	s.Register("game-templates", func(ctx context.Context, store *Store) error {
+		return store.SeedGameTemplates(ctx)
+	})
+
 	return s
 }

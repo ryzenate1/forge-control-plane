@@ -224,7 +224,7 @@ export default function AdminDomainsPage() {
             <div>
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Server</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={addForm.serverId}
                 onChange={(e) => setAddForm({ ...addForm, serverId: e.target.value })}
               >
