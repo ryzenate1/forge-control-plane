@@ -61,7 +61,7 @@ describe("server overview", () => {
     renderServer(<OverviewView server={server} />);
 
     expect(await screen.findByRole("heading", { name: "Survival SMP", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText("192.168.1.10:25565")).toBeInTheDocument();
+    expect(await screen.findAllByText("192.168.1.10:25565")).not.toHaveLength(0);
     expect(screen.getByText("Ubuntu Demo Node")).toBeInTheDocument();
     expect(screen.getByText("4,096 MiB")).toBeInTheDocument();
     expect(screen.getByText("Recent activity")).toBeInTheDocument();
@@ -75,7 +75,7 @@ describe("server overview", () => {
     renderServer(<OverviewView server={server} />);
     const user = userEvent.setup();
 
-    await screen.findByText("192.168.1.10:25565");
+    await screen.findAllByText("192.168.1.10:25565");
     await user.click(screen.getByRole("button", { name: "Restart" }));
     await waitFor(() => {
       const powerCall = mocked.calls.find((call) => call.url.endsWith("/servers/s1/power"));
