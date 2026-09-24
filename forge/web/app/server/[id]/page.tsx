@@ -1,8 +1,12 @@
 "use client";
 
-import { ConsoleView } from "@/components/server/console-view";
+import { OverviewView } from "@/components/server/overview-view";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
 
-export default function ServerConsolePage() {
-  return <ServerConsoleLayout activeTab="console">{(server) => <ConsoleView server={server} />}</ServerConsoleLayout>;
+export default function ServerOverviewLandingPage() {
+  return (
+    <ServerConsoleLayout activeTab="overview">
+      {(server) => <OverviewView server={server} />}
+    </ServerConsoleLayout>
+  );
 }
