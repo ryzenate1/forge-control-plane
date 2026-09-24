@@ -245,30 +245,32 @@ export function AdminActivityLog() {
   const advancedFiltersCount = [actorId, subjectType, subjectId, source].filter(Boolean).length;
 
   const kpis = [
-    { label: "Total events", value: stats?.totalEvents },
-    { label: "Events today", value: stats?.eventsToday },
-    { label: "This hour", value: stats?.eventsThisHour },
-    { label: "Unique actors", value: stats?.uniqueActors },
+    { label: "Total events", value: stats?.totalEvents, icon: FileText, color: "text-sky-400", sub: "Recorded in audit store" },
+    { label: "Events today", value: stats?.eventsToday, icon: Calendar, color: "text-emerald-400", sub: "Since 00:00 UTC" },
+    { label: "This hour", value: stats?.eventsThisHour, icon: Activity, color: "text-amber-400", sub: "Rolling 60m window" },
+    { label: "Unique actors", value: stats?.uniqueActors, icon: UserCheck, color: "text-purple-400", sub: "Active identities" },
   ];
 
   return (
-    <div className="space-y-4">
-      <div className="flex items-center gap-2 text-xs text-slate-400">
-        <span>Command</span>
-        <span className="text-slate-600">/</span>
-        <span className="font-semibold text-slate-200">Activity</span>
-        <span className="ml-auto flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+    <div className="space-y-6">
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span>Command</span>
+          <span className="text-slate-600">/</span>
+          <span className="font-semibold text-slate-200">Activity</span>
+        </div>
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
           <span className="relative flex h-1.5 w-1.5">
             <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
             <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
           </span>
-          Live{activityQuery.dataUpdatedAt ? ` · updated ${timeAgo(activityQuery.dataUpdatedAt)}` : ""}
-        </span>
+          <span>Live · updated just now</span>
+        </div>
       </div>
 
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
         <div>
-          <h1 className="flex items-center gap-2 text-2xl font-bold tracking-tight text-slate-100 sm:text-3xl">
+          <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-slate-100 sm:text-3xl">
             <span>Activity</span>
             <PageInfoDisclosure
               title="Audit trail"
@@ -290,16 +292,45 @@ export function AdminActivityLog() {
               ]}
             />
           </h1>
-          <p className="mt-1 max-w-2xl text-xs text-slate-400 sm:text-sm">
+          <p className="mt-1 text-sm text-slate-400">
             Platform-wide audit history. Filters apply to the event count, table, and export.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0 sm:self-center">
+          <div className="relative">
+            <select
+              aria-label="Select time range"
+              value={from ? "custom" : "all"}
+              onChange={(e) => {
+                const val = e.target.value;
+                if (val === "1h") {
+                  setFrom(new Date(Date.now() - 3600000).toISOString().slice(0, 10));
+                  setTo(new Date().toISOString().slice(0, 10));
+                } else if (val === "24h") {
+                  setFrom(new Date(Date.now() - 86400000).toISOString().slice(0, 10));
+                  setTo(new Date().toISOString().slice(0, 10));
+                } else if (val === "7d") {
+                  setFrom(new Date(Date.now() - 604800000).toISOString().slice(0, 10));
+                  setTo(new Date().toISOString().slice(0, 10));
+                } else {
+                  setFrom("");
+                  setTo("");
+                }
+              }}
+              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-slate-200 shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
+            >
+              <option value="all">All time</option>
+              <option value="1h">Last 1 hour</option>
+              <option value="24h">Last 24 hours</option>
+              <option value="7d">Last 7 days</option>
+            </select>
+            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
+          </div>
           <button
             type="button"
             aria-label="Refresh activity"
             onClick={handleRefresh}
-            className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.02] text-slate-400 transition hover:border-white/20 hover:text-white"
+            className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface)] text-slate-300 transition hover:bg-white/[0.06] hover:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] disabled:opacity-50"
           >
             <RefreshCw size={13} className={isRefreshing ? "animate-spin text-sky-400" : ""} />
           </button>
@@ -308,7 +339,7 @@ export function AdminActivityLog() {
               type="button"
               onClick={() => setExportOpen((v) => !v)}
               disabled={exporting !== null}
-              className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand)] px-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[var(--brand-hover)] disabled:cursor-not-allowed disabled:opacity-40"
+              className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--brand)] px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-[var(--brand-hover)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40"
             >
               <Download size={14} />
               <span>{exporting ? "Exporting…" : "Export"}</span>
@@ -337,14 +368,23 @@ export function AdminActivityLog() {
       </div>
 
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
-        {kpis.map((kpi) => (
-          <div key={kpi.label} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm">
-            <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{kpi.label}</p>
-            <p className="mt-1.5 font-mono text-2xl font-bold tracking-tight text-slate-100">
-              {statsQuery.isLoading ? "…" : typeof kpi.value === "number" ? kpi.value.toLocaleString() : "—"}
-            </p>
-          </div>
-        ))}
+        {kpis.map((kpi) => {
+          const Icon = kpi.icon;
+          return (
+            <div key={kpi.label} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm">
+              <div className="flex items-center justify-between text-xs font-semibold text-slate-200">
+                <span className="flex items-center gap-2">
+                  <Icon size={14} className={kpi.color} />
+                  <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{kpi.label}</span>
+                </span>
+              </div>
+              <p className="mt-2 font-mono text-2xl font-bold tracking-tight text-slate-100">
+                {statsQuery.isLoading ? "…" : typeof kpi.value === "number" ? kpi.value.toLocaleString() : "—"}
+              </p>
+              <p className="mt-1 text-[11px] text-slate-500">{kpi.sub}</p>
+            </div>
+          );
+        })}
       </div>
       {!statsQuery.isLoading && !statsQuery.isError && levelTotal > 0 && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl border border-white/[0.07] bg-white/[0.015] px-4 py-2.5 text-[11px]">

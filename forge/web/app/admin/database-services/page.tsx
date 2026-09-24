@@ -102,13 +102,13 @@ function ServicesTab({
   const invalidate = () => qc.invalidateQueries({ queryKey: ["database-services"] });
 
   const deleteMut = useMutation({
-    mutationFn: deleteDatabaseService,
+    mutationFn: async (id: string) => { const result = await deleteDatabaseService(id); if (!result.ok) throw new Error("The server reported the deletion did not complete."); return result; },
     onSuccess: () => { invalidate(); onCloseDetail(); toast({ tone: "success", title: "Service deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Deletion failed", message: e.message }),
   });
 
   const restartMut = useMutation({
-    mutationFn: restartDatabaseService,
+    mutationFn: async (id: string) => { const result = await restartDatabaseService(id); if (!result.ok) throw new Error("The server reported the restart did not complete."); return result; },
     onSuccess: () => { invalidate(); toast({ tone: "success", title: "Service restarted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Restart failed", message: e.message }),
   });
@@ -279,7 +279,7 @@ function DetailModal({ serviceId, onClose }: { serviceId: string; onClose: () =>
   });
 
   const restoreMut = useMutation({
-    mutationFn: (backupId: string) => restoreServiceBackup(serviceId, backupId),
+    mutationFn: async (backupId: string) => { const result = await restoreServiceBackup(serviceId, backupId); if (!result.ok) throw new Error("The server reported the restore did not complete."); return result; },
     onSuccess: () => toast({ tone: "success", title: "Backup restored" }),
     onError: (e: Error) => toast({ tone: "error", title: "Restore failed", message: e.message }),
   });

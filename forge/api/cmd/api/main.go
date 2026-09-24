@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -83,7 +84,7 @@ import (
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/plugins"
-	previewsvc "gamepanel/forge/internal/services/preview"
+	previewenv "gamepanel/forge/internal/services/previewenv"
 	proceduresvc "gamepanel/forge/internal/services/procedure"
 	processsvc "gamepanel/forge/internal/services/process"
 	"gamepanel/forge/internal/services/queue"
@@ -281,7 +282,7 @@ func run() error {
 		domainSvc         *domains.Service
 		buildSvc          *buildsvc.Service
 		deploySvc         *deployment.Service
-		previewDeploySvc  *previewsvc.Service
+		previewDeploySvc  *previewenv.Service
 		cloudMgr          *cloud.Manager
 		lbSvc             *loadbalancer.Service
 		failSvc           *failover.Service
@@ -485,6 +486,291 @@ func run() error {
 			return composeQH.HandleRestart(ctx, job.Payload)
 		})
 
+		// server.install, server.uninstall, backup.create, backup.restore and
+		// server.transfer are defined job types that had no executor at all, so
+		// dispatching one only ever produced a "no handler registered" failure.
+		// Each executor below runs the same code path as the corresponding working
+		// HTTP endpoint: the node base URL and daemon token are resolved for that
+		// specific server through store.ServerControlTarget (never a first-node
+		// guess), the real work is performed inline, and every failure is returned
+		// so the job is recorded as failed instead of completing silently.
+		jobServerID := func(primary string, fallback string) (string, error) {
+			serverID := strings.TrimSpace(primary)
+			if serverID == "" {
+				serverID = strings.TrimSpace(fallback)
+			}
+			if serverID == "" {
+				return "", errors.New("serverId is required")
+			}
+			return serverID, nil
+		}
+		resolveControlTarget := func(ctx context.Context, serverID string) (store.ServerControlTarget, error) {
+			target, err := db.ServerControlTarget(ctx, serverID)
+			if err != nil {
+				return store.ServerControlTarget{}, fmt.Errorf("resolve the node running server %s: %w", serverID, err)
+			}
+			if strings.TrimSpace(target.NodeURL) == "" || strings.TrimSpace(target.NodeToken) == "" {
+				return store.ServerControlTarget{}, fmt.Errorf("server %s is assigned to a node without a base url or daemon token", serverID)
+			}
+			return target, nil
+		}
+		jobActor := func(id string) *string {
+			id = strings.TrimSpace(id)
+			if id == "" {
+				return nil
+			}
+			return &id
+		}
+
+		executeServerInstall := func(ctx context.Context, jobID string, serverID string, raw json.RawMessage) error {
+			var payload serverInstallPayload
+			if err := decodeJobPayload(raw, &payload); err != nil {
+				return fmt.Errorf("server.install: %w", err)
+			}
+			id, err := jobServerID(serverID, payload.ServerID)
+			if err != nil {
+				return fmt.Errorf("server.install: %w", err)
+			}
+			if cm == nil {
+				return errors.New("server.install: workload lifecycle service is unavailable")
+			}
+			// POST /servers/:id/install and /servers/:id/reinstall are the real
+			// installer entry points; they resolve the server's own node and turn a
+			// rejected or non-zero installer run into an error.
+			installCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+			defer cancel()
+			if payload.Reinstall {
+				_, err = cm.ReinstallServer(installCtx, id)
+			} else {
+				_, err = cm.InstallServer(installCtx, id)
+			}
+			if err != nil {
+				return fmt.Errorf("install server %s: %w", id, err)
+			}
+			if webhookErr := db.DispatchWebhookEvent(ctx, "server:installed", map[string]any{"subject_type": "server", "subject_id": id, "operation_id": jobID}); webhookErr != nil {
+				slogLogger.Error("webhook dispatch failed", slog.String("event", "server:installed"), slog.String("error", webhookErr.Error()))
+			}
+			return nil
+		}
+
+		executeServerUninstall := func(ctx context.Context, jobID string, serverID string, raw json.RawMessage) error {
+			var payload serverUninstallPayload
+			if err := decodeJobPayload(raw, &payload); err != nil {
+				return fmt.Errorf("server.uninstall: %w", err)
+			}
+			id, err := jobServerID(serverID, payload.ServerID)
+			if err != nil {
+				return fmt.Errorf("server.uninstall: %w", err)
+			}
+			if cm == nil {
+				return errors.New("server.uninstall: workload lifecycle service is unavailable")
+			}
+			// There is no HTTP "uninstall" endpoint; the destructive cleanup path the
+			// panel actually uses is DELETE /servers/:id, which stops and removes the
+			// workload at its node and then hard-deletes the record (recording an
+			// orphan first when force is requested and the node refused the delete).
+			uninstallCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+			defer cancel()
+			response, err := cm.DeleteServer(uninstallCtx, id, payload.Force)
+			if err != nil && payload.Force && response.Accepted && response.Mode == "force" {
+				slogLogger.Warn("server uninstall completed with a recorded orphan workload",
+					slog.String("job_id", jobID),
+					slog.String("server_id", id),
+					slog.String("error", err.Error()))
+				return nil
+			}
+			if err != nil {
+				return fmt.Errorf("uninstall server %s: %w", id, err)
+			}
+			return nil
+		}
+
+		executeBackupCreate := func(ctx context.Context, jobID string, serverID string, raw json.RawMessage) error {
+			var payload backupCreatePayload
+			if err := decodeJobPayload(raw, &payload); err != nil {
+				return fmt.Errorf("backup.create: %w", err)
+			}
+			id, err := jobServerID(serverID, payload.ServerID)
+			if err != nil {
+				return fmt.Errorf("backup.create: %w", err)
+			}
+			if daemonClient == nil {
+				return errors.New("backup.create: daemon client is unavailable")
+			}
+			target, err := resolveControlTarget(ctx, id)
+			if err != nil {
+				return fmt.Errorf("backup.create: %w", err)
+			}
+			actor := jobActor(payload.ActorID)
+			// Same record POST /servers/:id/backups writes before it asks the node
+			// to build the archive, so the client can track progress meanwhile.
+			name := strings.TrimSpace(payload.Name)
+			if name == "" {
+				name = fmt.Sprintf("backup-%s", time.Now().UTC().Format("20060102T150405Z"))
+			}
+			stored, storeErr := db.UpsertBackup(ctx, target.ServerID, store.UpsertBackupRequest{Name: name, Status: "pending"}, actor)
+			if storeErr != nil {
+				return fmt.Errorf("backup.create: record pending backup: %w", storeErr)
+			}
+			backupCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+			defer cancel()
+			entry, daemonErr := daemonClient.CreateBackup(backupCtx, target.NodeURL, target.NodeToken, target.ServerID, append([]string(nil), payload.IgnoredFiles...))
+			persistCtx, persistCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+			defer persistCancel()
+			if daemonErr != nil {
+				now := time.Now().UTC()
+				if _, upsertErr := db.UpsertBackup(persistCtx, target.ServerID, store.UpsertBackupRequest{
+					UUID: stored.UUID, Name: stored.Name, Status: "failed", CompletedAt: &now,
+				}, actor); upsertErr != nil {
+					slogLogger.Error("failed to mark backup as failed", slog.String("server_id", target.ServerID), slog.String("error", upsertErr.Error()))
+				}
+				return fmt.Errorf("backup.create: create backup %s for server %s: %w", stored.Name, target.ServerID, daemonErr)
+			}
+			completedAt := time.Now().UTC()
+			if entry.Completed != "" {
+				if parsed, parseErr := time.Parse(time.RFC3339, entry.Completed); parseErr == nil {
+					completedAt = parsed
+				}
+			}
+			// The node names archives "<name>.zip" and may return its own uuid; fall
+			// back to the pending record so a successful archive is never lost to an
+			// incomplete daemon response.
+			completedName := strings.TrimSpace(entry.Name)
+			if completedName == "" {
+				completedName = stored.Name
+			}
+			completedUUID := strings.TrimSpace(entry.UUID)
+			if completedUUID == "" {
+				completedUUID = stored.UUID
+			}
+			if _, updateErr := db.UpsertBackup(persistCtx, target.ServerID, store.UpsertBackupRequest{
+				UUID: completedUUID, Name: completedName, Checksum: entry.Checksum, Size: entry.Size,
+				Status: "completed", CompletedAt: &completedAt,
+			}, actor); updateErr != nil {
+				return fmt.Errorf("backup.create: persist completed backup %s: %w", completedName, updateErr)
+			}
+			if completedName != stored.Name {
+				// The completed record landed under the node's "<name>.zip" key, so close
+				// out the pending row as well; unlike the HTTP endpoint this job does not
+				// return early to an async callback.
+				if _, staleErr := db.UpsertBackup(persistCtx, target.ServerID, store.UpsertBackupRequest{
+					UUID: stored.UUID, Name: stored.Name, Checksum: entry.Checksum, Size: entry.Size,
+					Status: "completed", CompletedAt: &completedAt,
+				}, actor); staleErr != nil {
+					slogLogger.Warn("failed to close out pending backup record",
+						slog.String("job_id", jobID), slog.String("server_id", target.ServerID),
+						slog.String("backup", stored.Name), slog.String("error", staleErr.Error()))
+				}
+			}
+			return nil
+		}
+
+		executeBackupRestore := func(ctx context.Context, jobID string, serverID string, raw json.RawMessage) error {
+			var payload backupRestorePayload
+			if err := decodeJobPayload(raw, &payload); err != nil {
+				return fmt.Errorf("backup.restore: %w", err)
+			}
+			id, err := jobServerID(serverID, payload.ServerID)
+			if err != nil {
+				return fmt.Errorf("backup.restore: %w", err)
+			}
+			if daemonClient == nil {
+				return errors.New("backup.restore: daemon client is unavailable")
+			}
+			target, err := resolveControlTarget(ctx, id)
+			if err != nil {
+				return fmt.Errorf("backup.restore: %w", err)
+			}
+			actor := jobActor(payload.ActorID)
+			backup, err := resolveJobBackupName(ctx, db, target.ServerID, payload.Name)
+			if err != nil {
+				return fmt.Errorf("backup.restore: backup %q is not available for server %s: %w", payload.Name, target.ServerID, err)
+			}
+			if backup.Status != "completed" {
+				return fmt.Errorf("backup.restore: backup %s status is %q, cannot restore", backup.Name, backup.Status)
+			}
+			if statusErr := db.MarkBackupStatus(ctx, target.ServerID, backup.Name, "restoring", actor); statusErr != nil {
+				slogLogger.Warn("failed to mark backup as restoring",
+					slog.String("job_id", jobID), slog.String("server_id", target.ServerID),
+					slog.String("backup", backup.Name), slog.String("error", statusErr.Error()))
+			}
+			restoreCtx, cancel := context.WithTimeout(ctx, 15*time.Minute)
+			defer cancel()
+			if restoreErr := daemonClient.RestoreBackup(restoreCtx, target.NodeURL, target.NodeToken, target.ServerID, backup.Name, payload.Truncate); restoreErr != nil {
+				markCtx, markCancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+				defer markCancel()
+				if statusErr := db.MarkBackupStatus(markCtx, target.ServerID, backup.Name, "restore_failed", actor); statusErr != nil {
+					slogLogger.Error("failed to mark backup restore as failed",
+						slog.String("server_id", target.ServerID), slog.String("backup", backup.Name), slog.String("error", statusErr.Error()))
+				}
+				return fmt.Errorf("backup.restore: restore backup %s on server %s: %w", backup.Name, target.ServerID, restoreErr)
+			}
+			if statusErr := db.MarkBackupStatus(ctx, target.ServerID, backup.Name, "restored", actor); statusErr != nil {
+				return fmt.Errorf("backup.restore: mark backup %s restored: %w", backup.Name, statusErr)
+			}
+			return nil
+		}
+
+		executeServerTransfer := func(ctx context.Context, jobID string, serverID string, raw json.RawMessage) error {
+			var payload serverTransferPayload
+			if err := decodeJobPayload(raw, &payload); err != nil {
+				return fmt.Errorf("server.transfer: %w", err)
+			}
+			id, err := jobServerID(serverID, payload.ServerID)
+			if err != nil {
+				return fmt.Errorf("server.transfer: %w", err)
+			}
+			if mig == nil {
+				return errors.New("server.transfer: migration service is unavailable")
+			}
+			if !mig.ExecutorAvailable() {
+				return errors.New("server.transfer: migration executor (daemon client and runtime) is unavailable")
+			}
+			// The legacy transfer endpoints were retired in favour of durable
+			// migrations, so this mirrors POST /servers/:id/transfer: plan the
+			// migration, then hand it to the migration reconciler that main.go
+			// starts (mig.Start). A migration that cannot be planned or started is
+			// returned as an error, never a silent success.
+			created, err := mig.CreateMigration(ctx, migration.CreateMigrationRequest{
+				ServerID:     id,
+				SourceNodeID: strings.TrimSpace(payload.SourceNodeID),
+				TargetNodeID: strings.TrimSpace(payload.TargetNodeID),
+			})
+			if err != nil {
+				return fmt.Errorf("server.transfer: plan migration for server %s: %w", id, err)
+			}
+			executed, err := mig.ExecuteMigration(ctx, created.ID)
+			if err != nil {
+				return fmt.Errorf("server.transfer: execute migration %s: %w", created.ID, err)
+			}
+			switch store.MigrationStatus(executed.Status) {
+			case store.MigrationStatusFailed, store.MigrationStatusCancelled:
+				return fmt.Errorf("server.transfer: migration %s finished as %s", created.ID, executed.Status)
+			}
+			slogLogger.Info("server transfer handed to the migration reconciler",
+				slog.String("job_id", jobID),
+				slog.String("server_id", id),
+				slog.String("migration_id", created.ID),
+				slog.String("status", executed.Status))
+			return nil
+		}
+
+		queueSvc.RegisterHandler(queue.JobServerInstall, func(ctx context.Context, job *queue.Job) error {
+			return executeServerInstall(ctx, job.ID, job.ServerID, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobServerUninstall, func(ctx context.Context, job *queue.Job) error {
+			return executeServerUninstall(ctx, job.ID, job.ServerID, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobBackupCreate, func(ctx context.Context, job *queue.Job) error {
+			return executeBackupCreate(ctx, job.ID, job.ServerID, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobBackupRestore, func(ctx context.Context, job *queue.Job) error {
+			return executeBackupRestore(ctx, job.ID, job.ServerID, job.Payload)
+		})
+		queueSvc.RegisterHandler(queue.JobServerTransfer, func(ctx context.Context, job *queue.Job) error {
+			return executeServerTransfer(ctx, job.ID, job.ServerID, job.Payload)
+		})
+
 		gitSvc = gitsvc.NewService(db, slogLogger)
 		gitDeploySvc = gitsvc.NewDeployService(gitSvc, db, slogLogger,
 			env("REGISTRY_HOST", ""),
@@ -556,6 +842,24 @@ func run() error {
 		opSvc.RegisterHandler(operationsvc.OpComposeRestart, func(ctx context.Context, op *operationsvc.Operation) error {
 			return composeQH.HandleRestart(ctx, op.Input)
 		})
+		// The durable operation service declares the same server install,
+		// uninstall, transfer and backup kinds, so they get the identical executors
+		// reading the operation's resource id and input instead of the job's.
+		opSvc.RegisterHandler(operationsvc.OpServerInstall, func(ctx context.Context, op *operationsvc.Operation) error {
+			return executeServerInstall(ctx, op.ID, op.ResourceID, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpServerUninstall, func(ctx context.Context, op *operationsvc.Operation) error {
+			return executeServerUninstall(ctx, op.ID, op.ResourceID, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpBackupCreate, func(ctx context.Context, op *operationsvc.Operation) error {
+			return executeBackupCreate(ctx, op.ID, op.ResourceID, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpBackupRestore, func(ctx context.Context, op *operationsvc.Operation) error {
+			return executeBackupRestore(ctx, op.ID, op.ResourceID, op.Input)
+		})
+		opSvc.RegisterHandler(operationsvc.OpServerTransfer, func(ctx context.Context, op *operationsvc.Operation) error {
+			return executeServerTransfer(ctx, op.ID, op.ResourceID, op.Input)
+		})
 		opSvc.Start(appCtx)
 
 		runtimeRegistry = runtimesvc.NewRegistry()
@@ -587,7 +891,6 @@ func run() error {
 		if err := deploySvc.ResumeDeployments(appCtx); err != nil {
 			slogLogger.Error("resume deployments at boot failed", slog.String("error", err.Error()))
 		}
-		previewDeploySvc = previewsvc.New(db, outboxPub)
 		lbSvc = loadbalancer.New(db, outboxPub)
 
 		healthCheckRunner = healthchecksvc.New(db, healthchecksvc.DefaultConfig())
@@ -806,6 +1109,16 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeOffline, tmSvc)
 		eventRegistry.Subscribe(events.EventNodeRecovered, tmSvc)
 		tmSvc.Start(appCtx)
+		previewDeploySvc = previewenv.New(db, previewenv.Options{
+			Publisher:  outboxPub,
+			Logger:     slogLogger,
+			PanelURL:   panelURL,
+			GitService: gitSvc,
+			AcmeService: acmeSvc,
+			TrafficMgr: tmSvc,
+			DomainSvc:  domainSvc,
+		})
+		previewDeploySvc.StartReaper(appCtx, 5*time.Minute)
 		eventRegistry.Subscribe(events.EventNodeOffline, lbSvc)
 		eventRegistry.Subscribe(events.EventNodeRecovered, lbSvc)
 		eventRegistry.Subscribe(events.EventNodeOnline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
@@ -1362,6 +1675,86 @@ func healthcheck(target string) error {
 		return fmt.Errorf("unhealthy status %d", res.StatusCode)
 	}
 	return nil
+}
+
+// Job/operation payload shapes for the server install, uninstall, backup and
+// transfer executors wired in run(). "serverId" is optional when the queue job
+// (Job.ServerID) or operation (Operation.ResourceID) already carries it; the
+// backup jobs additionally carry the parameters the HTTP endpoints take in their
+// request body.
+type serverInstallPayload struct {
+	ServerID  string `json:"serverId,omitempty"`
+	Reinstall bool   `json:"reinstall,omitempty"`
+}
+
+type serverUninstallPayload struct {
+	ServerID string `json:"serverId,omitempty"`
+	Force    bool   `json:"force,omitempty"`
+}
+
+type backupCreatePayload struct {
+	ServerID     string   `json:"serverId,omitempty"`
+	Name         string   `json:"name,omitempty"`
+	IgnoredFiles []string `json:"ignored,omitempty"`
+	ActorID      string   `json:"actorId,omitempty"`
+}
+
+type backupRestorePayload struct {
+	ServerID string `json:"serverId,omitempty"`
+	Name     string `json:"name"`
+	Truncate bool   `json:"truncate,omitempty"`
+	ActorID  string `json:"actorId,omitempty"`
+}
+
+type serverTransferPayload struct {
+	ServerID     string `json:"serverId,omitempty"`
+	SourceNodeID string `json:"sourceNodeId,omitempty"`
+	TargetNodeID string `json:"targetNodeId,omitempty"`
+}
+
+// decodeJobPayload accepts an optional JSON payload. A missing payload is not an
+// error (the job or operation may carry every parameter it needs), but a
+// malformed one is reported instead of being silently ignored.
+func decodeJobPayload(raw json.RawMessage, dst any) error {
+	if len(strings.TrimSpace(string(raw))) == 0 {
+		return nil
+	}
+	if err := json.Unmarshal(raw, dst); err != nil {
+		return fmt.Errorf("invalid job payload: %w", err)
+	}
+	return nil
+}
+
+// backupNameCandidates mirrors the HTTP handlers: backups are stored on the node
+// as "<name>.zip" while legacy and pending records use the bare name, so both
+// forms are tried in order of exactness.
+func backupNameCandidates(identifier string) []string {
+	if strings.HasSuffix(identifier, ".zip") {
+		return []string{identifier, strings.TrimSuffix(identifier, ".zip")}
+	}
+	return []string{identifier, identifier + ".zip"}
+}
+
+// resolveJobBackupName resolves a payload-supplied backup identifier to the
+// stored row, which is the source of truth forwarded to the node. It is the
+// package main copy of the (unexported) HTTP resolveBackupName helper so async
+// jobs restore exactly what the POST /servers/:id/backups/restore endpoint would.
+func resolveJobBackupName(ctx context.Context, st *store.Store, serverID, identifier string) (store.Backup, error) {
+	var lastErr error
+	for _, name := range backupNameCandidates(strings.TrimSpace(identifier)) {
+		if name == "" {
+			continue
+		}
+		backup, err := st.GetBackupByName(ctx, serverID, name)
+		if err == nil {
+			return backup, nil
+		}
+		lastErr = err
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no backup name supplied")
+	}
+	return store.Backup{}, lastErr
 }
 
 func env(key, fallback string) string {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -109,7 +110,7 @@ func (s *Service) Start(ctx context.Context) {
 				if r := recover(); r != nil {
 					buf := make([]byte, 4096)
 					n := runtime.Stack(buf, false)
-					fmt.Printf("evacuation planner main loop panic: %v\nstack: %s", r, buf[:n])
+					slog.Error("evacuation planner main loop panic", "panic", r, "stack", string(buf[:n]))
 				}
 			}()
 			s.resumeRunningPlans(ctx)
@@ -156,7 +157,7 @@ func (s *Service) startObserver(parentCtx context.Context, planID, correlationID
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("evacuation plan observer panic: %v\nstack: %s", r, buf[:n])
+				slog.Error("evacuation plan observer panic", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		defer func() {

@@ -20,6 +20,16 @@ export type {
   CreateNodeResult,
   BackupListResponse,
   OkResponse,
+  PipelineStage,
+  PipelineDefinition,
+  PipelineRun,
+  PipelineLogEntry,
+  CreatePipelineInput,
+  BillingPlan,
+  OrgQuota,
+  BillingUsageSummary,
+  PlacementRequest,
+  PlacementExplainResult,
 } from './client.js';
 
 export type {

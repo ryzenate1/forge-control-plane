@@ -9,6 +9,7 @@ import {
 import { type ApiEgg, fetchNest, fetchEggs, createEgg, updateEgg, deleteEgg } from "@/lib/api";
 import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -84,6 +85,7 @@ function EggCard({
 
 export default function NestEggsPage() {
   const [confirm, renderConfirm] = useConfirm();
+  const { toast } = useToast();
   const params = useParams();
   const router = useRouter();
   const nestId = params.nestId as string;
@@ -140,6 +142,7 @@ export default function NestEggsPage() {
       installScript: eggInstallScript, installContainer: eggInstallContainer.trim(), installEntrypoint: eggInstallEntry.trim(),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", nestId] }); qc.invalidateQueries({ queryKey: ["nests"] }); setEggModal(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updateEggMut = useMutation({
@@ -151,11 +154,13 @@ export default function NestEggsPage() {
       installScript: eggInstallScript, installContainer: eggInstallContainer.trim(), installEntrypoint: eggInstallEntry.trim(),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", nestId] }); qc.invalidateQueries({ queryKey: ["nests"] }); setEggModal(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to update egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteEggMut = useMutation({
     mutationFn: deleteEgg,
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", nestId] }); qc.invalidateQueries({ queryKey: ["nests"] }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const cloneEggMut = useMutation({
@@ -170,6 +175,7 @@ export default function NestEggsPage() {
       });
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: ["eggs", nestId] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to clone egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const exportEgg = (egg: ApiEgg) => {
@@ -226,7 +232,7 @@ export default function NestEggsPage() {
         />
 
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading eggs\u2026</div>
+          <div className="p-8 text-center text-sm text-slate-500">{"Loading eggs\u2026"}</div>
         ) : isError ? (
           <div className="p-4">
             <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">

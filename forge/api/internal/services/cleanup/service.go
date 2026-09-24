@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"time"
@@ -20,7 +21,7 @@ type Metrics struct {
 }
 
 type Info struct {
-	StaleReservations int `json:"staleReservations"`
+	StaleReservations   int `json:"staleReservations"`
 	OrphanedAllocations int `json:"orphanedAllocations"`
 }
 
@@ -66,7 +67,7 @@ func (s *Service) Start(ctx context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("cleanup service panic recovered: %v\nstack: %s", r, buf[:n])
+				slog.Error("cleanup service panic recovered", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		ticker := time.NewTicker(5 * time.Minute)
@@ -115,7 +116,7 @@ func (s *Service) RunCleanup(ctx context.Context) (Info, error) {
 	info.OrphanedAllocations = orphaned
 
 	s.publish(ctx, events.EventReservationExpired, "cleanup", "system", map[string]any{
-		"staleReservations":  info.StaleReservations,
+		"staleReservations":   info.StaleReservations,
 		"orphanedAllocations": info.OrphanedAllocations,
 	})
 	return info, nil
@@ -171,7 +172,7 @@ func (s *Service) Inspect(ctx context.Context) (Info, error) {
 		}
 	}
 	return Info{
-		StaleReservations:  len(expired),
+		StaleReservations:   len(expired),
 		OrphanedAllocations: orphaned,
 	}, nil
 }

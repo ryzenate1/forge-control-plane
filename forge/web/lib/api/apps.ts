@@ -93,19 +93,29 @@ export type ComposeService = {
 
 export type AppDeployment = {
   id: string;
-  appId: string;
-  revision: number;
   status: DeploymentStatus;
-  source: AppType;
-  trigger: "manual" | "webhook" | "auto";
+  // Fields provided by the backend (store.Deployment projection over
+  // GET /apps/:id/deployments).
+  serverId?: string;
+  strategy?: string;
+  image?: string;
+  currentRevisionId?: string;
+  rolloutStrategy?: string;
+  progressPct?: number;
+  createdAt?: string;
+  updatedAt?: string;
+  error?: string;
+  // Optional/legacy fields some views still reference; may be absent from the API.
+  appId?: string;
+  revision?: number;
+  source?: AppType;
+  trigger?: "manual" | "webhook" | "auto";
   commit?: string;
   commitMessage?: string;
-  image?: string;
-  startedAt: string;
+  startedAt?: string;
   completedAt?: string;
   duration?: number;
   log?: string;
-  error?: string;
 };
 
 export type AppBackup = {

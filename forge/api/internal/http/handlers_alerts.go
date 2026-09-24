@@ -78,6 +78,15 @@ func handleResolveAlert(svc *alerting.Service) fiber.Handler {
 
 func handleMonitoringSummary(svc *observabilitysvc.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		if svc == nil {
+			return c.JSON(fiber.Map{
+				"totalServers":         0,
+				"totalUsers":           0,
+				"unacknowledgedAlerts": 0,
+				"nodes":                []any{},
+				"recentHealthChecks":   []any{},
+			})
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 
@@ -91,6 +100,9 @@ func handleMonitoringSummary(svc *observabilitysvc.Service) fiber.Handler {
 
 func handleNodeMetrics(svc *observabilitysvc.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		if svc == nil {
+			return c.JSON(fiber.Map{"data": []any{}})
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 

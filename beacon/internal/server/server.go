@@ -3442,6 +3442,26 @@ func configureWebSocket(conn *websocket.Conn) {
 	})
 }
 
+// isLoopbackRequest reports whether the connection peer is the machine the
+// daemon itself is running on. It reads only the socket address: trusting
+// X-Forwarded-For here would let any caller claim to be localhost and skip the
+// metrics credential.
+func isLoopbackRequest(r *http.Request) bool {
+	if r == nil {
+		return false
+	}
+	host := r.RemoteAddr
+	if splitHost, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
+		host = splitHost
+	}
+	// Zone suffixes ([::1%eth0]) do not change the address being loopback.
+	if percent := strings.IndexByte(host, '%'); percent >= 0 {
+		host = host[:percent]
+	}
+	ip := net.ParseIP(strings.Trim(host, "[]"))
+	return ip != nil && ip.IsLoopback()
+}
+
 func (s *Server) authenticate(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodGet && r.URL.Path == "/metrics" {

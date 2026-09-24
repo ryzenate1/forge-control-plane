@@ -1,5 +1,5 @@
 // Server management API functions
-import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, API_BASE_URL, getAuthHeaders, ApiError } from './http';
+import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, requestBlob, API_BASE_URL, ApiError } from './http';
 import type {
   ApiServerSubuser,
   ApiAuditEvent,
@@ -16,15 +16,7 @@ import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, Api
 // PaginatedEnvelope is the canonical paginated type from @forge/shared-types (re-exported via ./types).
 
 async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    headers: { Accept: 'application/json', ...getAuthHeaders() },
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    const errMsg = await response.text().catch(() => '');
-    throw new Error(`API GET ${path} failed with ${response.status}: ${errMsg}`);
-  }
-  return response.json();
+  return fetchJSON<PaginatedEnvelope<T>>(path);
 }
 
 export async function fetchServers(): Promise<ApiServer[]> {
@@ -173,12 +165,9 @@ export async function unlockBackup(serverId: string, backupId: string): Promise<
 }
 
 export async function downloadBackup(serverId: string, backupId: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/backups/download?name=${encodeURIComponent(backupId)}`, {
-    headers: getAuthHeaders(),
-    credentials: 'include',
-  });
-  if (!response.ok) throw new Error(`Failed to download backup: ${response.status}`);
-  return response.blob();
+  return requestBlob(
+    `/servers/${encodeURIComponent(serverId)}/backups/download?name=${encodeURIComponent(backupId)}`,
+  );
 }
 
 export async function restoreBackup(serverId: string, backupId: string, truncate?: boolean): Promise<{ ok: boolean; status: string; name: string }> {

@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON, API_BASE_URL } from './http';
+import { fetchJSON, postJSON, putJSON, deleteJSON, requestBlob } from './http';
 
 export interface Certificate {
   id: string;
@@ -70,14 +70,8 @@ export function uploadCertificate(cert: string, key: string, chain?: string): Pr
   return postJSON<Certificate>('/certificates/upload', { certificate: cert, privateKey: key, chain });
 }
 
-export async function downloadCertificate(id: string): Promise<Blob> {
-  const response = await fetch(`${API_BASE_URL}/certificates/${encodeURIComponent(id)}/download`, {
-    credentials: 'include',
-  });
-  if (!response.ok) {
-    throw new Error(`download failed: ${response.status}`);
-  }
-  return response.blob();
+export function downloadCertificate(id: string): Promise<Blob> {
+  return requestBlob(`/certificates/${encodeURIComponent(id)}/download`);
 }
 
 export function exportCertificate(id: string): Promise<{ certificate: string; privateKey: string }> {

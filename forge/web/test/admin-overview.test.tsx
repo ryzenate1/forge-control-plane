@@ -429,8 +429,8 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
   it("renders charts and beacon list when telemetry is present", async () => {
     const liveMetrics = nodeMetrics([
-      { cpuLoad1m: 1.2, networkRxBytes: 1024, cpuPercent: 30 },
-      { cpuLoad1m: 0.9, networkRxBytes: 2048, cpuPercent: 32 },
+      { cpuLoad1m: 1.2, networkRxBytes: 1024, cpuPercent: 30, observedAt: "2026-08-16T11:50:00Z" },
+      { cpuLoad1m: 0.9, networkRxBytes: 2048, cpuPercent: 32, observedAt: "2026-08-16T12:00:00Z" },
     ]);
 
     installMonitoringFetch(liveMetrics);
@@ -439,10 +439,13 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     // Should render monitoring heading and window controls
     expect(await screen.findByRole("heading", { name: "Monitoring", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/What happens over time/i)).toBeInTheDocument();
+    expect(screen.getByText(/Real-time telemetry from your beacons/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 hour" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "6 hours" })).toBeInTheDocument();
-    expect(screen.getByText(/Filter by beacon/i)).toBeInTheDocument();
+    expect(screen.getByText(/Resource Usage Over Time/i)).toBeInTheDocument();
+    expect(screen.getByText("Node Metrics")).toBeInTheDocument();
+    expect(screen.getByText("Top Workloads")).toBeInTheDocument();
+    expect(screen.getByText("System Health")).toBeInTheDocument();
   });
 
   it("allows switching time window", async () => {
@@ -455,14 +458,17 @@ describe("AdminMonitoring — time-series and telemetry", () => {
     expect(await screen.findByText(/No telemetry for 6 hours yet/i)).toBeInTheDocument();
   });
 
-  it("navigates or displays About Monitoring info cards", async () => {
+  it("renders screenshot sections with empty telemetry", async () => {
     installMonitoringFetch([]);
 
     renderWithQuery(<AdminMonitoring />);
 
-    expect(await screen.findByText(/About Monitoring/i)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Overview" })).toBeInTheDocument();
-    expect(screen.getAllByRole("button", { name: /Health/i }).length).toBeGreaterThanOrEqual(1);
+    expect(await screen.findByText(/No telemetry data yet/i)).toBeInTheDocument();
+    expect(screen.getByText("Node Metrics")).toBeInTheDocument();
+    expect(screen.getByText("Top Workloads")).toBeInTheDocument();
+    expect(screen.getByText("System Health")).toBeInTheDocument();
+    expect(screen.getByText("Recent Activity")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /View Health/i })).toBeInTheDocument();
   });
 
   // Unit sanity for the isSynthetic predicate itself (mirrors component logic)

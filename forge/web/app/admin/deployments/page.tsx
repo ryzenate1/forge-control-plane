@@ -76,7 +76,7 @@ export default function AdminDeploymentsPage() {
     if (!Array.isArray(appDeployments)) return [];
     return appDeployments.filter((d) => {
       const searchLower = search.toLowerCase();
-      if (search && !d.appId.toLowerCase().includes(searchLower) &&
+      if (search && !(d.appId ?? "").toLowerCase().includes(searchLower) &&
         !(d.image ?? "").toLowerCase().includes(searchLower) &&
         !(d.commit ?? "").toLowerCase().includes(searchLower)) return false;
       if (statusFilter && d.status !== statusFilter) return false;
@@ -259,14 +259,14 @@ export default function AdminDeploymentsPage() {
                       <button
                         type="button"
                         className="hover:text-white"
-                        onClick={() => router.push(`/admin/apps/${dep.appId}`)}
+                        onClick={() => router.push(`/admin/apps/${dep.appId ?? ""}`)}
                       >
-                        {dep.appId.slice(0, 8)}...
+                        {(dep.appId ?? "").slice(0, 8)}...
                       </button>
                     </td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">#{dep.revision}</td>
                     <td className="px-4 py-3">
-                      <Pill tone="neutral">{typeLabel(dep.source)}</Pill>
+                      <Pill tone="neutral">{dep.source ? typeLabel(dep.source) : "—"}</Pill>
                     </td>
                     <td className="px-4 py-3">
                       <Pill tone={dep.trigger === "webhook" ? "blue" : dep.trigger === "auto" ? "green" : "neutral"}>
@@ -332,7 +332,7 @@ function DeploymentDetailModal({
             </div>
             <div>
               <span className="text-slate-400">Source:</span>
-              <span className="text-slate-200 ml-1">{typeLabel(dep.source)}</span>
+              <span className="text-slate-200 ml-1">{dep.source ? typeLabel(dep.source) : "—"}</span>
             </div>
             <div>
               <span className="text-slate-400">Trigger:</span>

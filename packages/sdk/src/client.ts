@@ -161,6 +161,123 @@ export type OkResponse = {
   ok: boolean;
 };
 
+// ---- Pipeline (CI/CD) ----
+
+export type PipelineStage = {
+  name: string;
+  action: string;
+  config?: Record<string, unknown>;
+  timeoutSec?: number;
+  continueOnFailure?: boolean;
+};
+
+export type PipelineDefinition = {
+  id: string;
+  name: string;
+  description?: string;
+  categories?: string[];
+  stages: PipelineStage[];
+  trigger?: { type: string; cron?: string; enabled?: boolean };
+  createdBy?: string;
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+export type PipelineRun = {
+  id: string;
+  pipelineId: string;
+  pipelineName?: string;
+  trigger: string;
+  status: string;
+  progressPct?: number;
+  currentStage?: string;
+  error?: string;
+  retryOf?: string | null;
+  retryCount?: number;
+  requestedBy?: string;
+  createdAt: string;
+  startedAt?: string | null;
+  finishedAt?: string | null;
+  stages?: unknown[];
+};
+
+export type PipelineLogEntry = {
+  id: number;
+  runId: string;
+  stageId?: string;
+  level: string;
+  message: string;
+  timestamp: string;
+};
+
+export type CreatePipelineInput = {
+  name: string;
+  description?: string;
+  categories?: string[];
+  stages: PipelineStage[];
+  trigger?: { type: string; cron?: string; enabled?: boolean };
+};
+
+// ---- Billing (admin) ----
+
+export type BillingPlan = {
+  id: string;
+  code: string;
+  name: string;
+  centsPerMonth: number;
+  entitlements: unknown;
+  trialDays: number;
+  active: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type OrgQuota = {
+  orgId: string;
+  planCode: string;
+  trialUntil?: string | null;
+  memoryUsageBytes: number;
+  serversCount: number;
+  environmentsCount: number;
+  nodesCount: number;
+  storageBytes: number;
+  prevPlanCode: string;
+  quotaUpdatedAt: string;
+};
+
+export type BillingUsageSummary = {
+  orgId: string;
+  plan: string;
+  servers: number;
+  memoryBytes: number;
+  storageBytes: number;
+  environments: number;
+  nodes: number;
+  meterEvents: number;
+};
+
+// ---- Placement (env-affinity, admin) ----
+
+export type PlacementRequest = {
+  serverId?: string;
+  regionId?: string;
+  nodeId?: string;
+  cpu?: number;
+  memoryMb?: number;
+  diskMb?: number;
+};
+
+export type PlacementExplainResult = {
+  nodeId: string;
+  requestedEnv?: string;
+  nodeEnvGroups: string[];
+  nodeLabels: Record<string, string>;
+  constraints: unknown[];
+  matchedLabels: string[];
+  missingLabels: string[];
+  isCandidate: boolean;
+};
+
 function normalizeBaseUrl(baseUrl: string): string {
   let url = baseUrl.replace(/\/+$/, '');
   if (!/\/api\/v1$/.test(url)) {
@@ -797,6 +914,111 @@ export class ForgeApiClient {
       method: 'POST',
       body: JSON.stringify(egg),
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // Pipelines (CI/CD)
+  // -------------------------------------------------------------------------
+
+  /** List pipeline definitions (admin). `GET /pipelines`. */
+  public async listPipelines(): Promise<PipelineDefinition[]> {
+    const envelope = await this.request<PaginatedEnvelope<PipelineDefinition>>('/pipelines');
+    return envelope.data ?? [];
+  }
+
+  /** Get a single pipeline definition (admin). `GET /pipelines/:id`. */
+  public async getPipeline(id: string): Promise<PipelineDefinition> {
+    const envelope = await this.request<{ data: PipelineDefinition }>(`/pipelines/${id}`);
+    return envelope.data;
+  }
+
+  /** Create a pipeline definition (admin). `POST /pipelines`. */
+  public async createPipeline(input: CreatePipelineInput): Promise<PipelineDefinition> {
+    const envelope = await this.request<{ data: PipelineDefinition }>('/pipelines', {
+      method: 'POST',
+      body: JSON.stringify(input),
+    });
+    return envelope.data;
+  }
+
+  /** Delete a pipeline definition (admin). `DELETE /pipelines/:id`. */
+  public async deletePipeline(id: string): Promise<OkResponse> {
+    return this.request<OkResponse>(`/pipelines/${id}`, { method: 'DELETE' });
+  }
+
+  /** Trigger a manual run of a pipeline (admin). `POST /pipelines/:id/runs`. */
+  public async triggerPipeline(id: string, trigger = 'manual'): Promise<PipelineRun> {
+    const envelope = await this.request<{ data: PipelineRun }>(`/pipelines/${id}/runs`, {
+      method: 'POST',
+      body: JSON.stringify({ trigger }),
+    });
+    return envelope.data;
+  }
+
+  /** List pipeline runs, optionally filtered (admin). `GET /pipeline-runs`. */
+  public async listPipelineRuns(opts?: { pipelineId?: string; status?: string }): Promise<PipelineRun[]> {
+    const q = new URLSearchParams();
+    if (opts?.pipelineId) q.set('pipelineId', opts.pipelineId);
+    if (opts?.status) q.set('status', opts.status);
+    const suffix = q.toString() ? `?${q.toString()}` : '';
+    const envelope = await this.request<PaginatedEnvelope<PipelineRun>>(`/pipeline-runs${suffix}`);
+    return envelope.data ?? [];
+  }
+
+  /** Stream logs for a run after a cursor (admin). `GET /pipeline-runs/:id/logs`. */
+  public async listPipelineRunLogs(runId: string, after = 0): Promise<PipelineLogEntry[]> {
+    const suffix = after > 0 ? `?after=${after}` : '';
+    const envelope = await this.request<{ data: PipelineLogEntry[] }>(`/pipeline-runs/${runId}/logs${suffix}`);
+    return envelope.data ?? [];
+  }
+
+  /** Cancel a running pipeline (admin). `POST /pipeline-runs/:id/cancel`. */
+  public async cancelPipelineRun(runId: string): Promise<OkResponse> {
+    return this.request<OkResponse>(`/pipeline-runs/${runId}/cancel`, { method: 'POST' });
+  }
+
+  /** Retry a failed/cancelled run (admin). `POST /pipeline-runs/:id/retry`. */
+  public async retryPipelineRun(runId: string): Promise<PipelineRun> {
+    const envelope = await this.request<{ data: PipelineRun }>(`/pipeline-runs/${runId}/retry`, { method: 'POST' });
+    return envelope.data;
+  }
+
+  // -------------------------------------------------------------------------
+  // Billing (admin)
+  // -------------------------------------------------------------------------
+
+  /** List billing plans (admin). `GET /billing/plans`. */
+  public async listBillingPlans(): Promise<BillingPlan[]> {
+    const envelope = await this.request<{ data: BillingPlan[] }>('/billing/plans');
+    return envelope.data ?? [];
+  }
+
+  /** Assign an org to a billing plan (admin). `POST /billing/org/:orgId/plan`. */
+  public async setOrgBillingPlan(orgId: string, planCode: string, trial = false): Promise<OrgQuota> {
+    const envelope = await this.request<{ data: OrgQuota }>(`/billing/org/${orgId}/plan`, {
+      method: 'POST',
+      body: JSON.stringify({ planCode, trial }),
+    });
+    return envelope.data;
+  }
+
+  /** Get an org's usage summary (admin). `GET /billing/org/:orgId/usage`. */
+  public async getOrgUsage(orgId: string): Promise<BillingUsageSummary> {
+    const envelope = await this.request<{ data: BillingUsageSummary }>(`/billing/org/${orgId}/usage`);
+    return envelope.data;
+  }
+
+  // -------------------------------------------------------------------------
+  // Placement (env-affinity, admin)
+  // -------------------------------------------------------------------------
+
+  /** Explain why a node would or would not host a workload. `POST /placement/explain`. */
+  public async explainPlacement(nodeId: string, place: PlacementRequest): Promise<PlacementExplainResult> {
+    const envelope = await this.request<{ data: PlacementExplainResult }>('/placement/explain', {
+      method: 'POST',
+      body: JSON.stringify({ nodeId, place }),
+    });
+    return envelope.data;
   }
 }
 

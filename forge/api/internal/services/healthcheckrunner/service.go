@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -146,7 +147,7 @@ func (s *Service) Start(ctx context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("health check runner panic recovered: %v\nstack: %s", r, buf[:n])
+				slog.Error("health check runner panic recovered", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		s.loadExistingStates(ctx)
@@ -393,7 +394,7 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 					go func(serverID, targetID string, failures int) {
 						defer func() {
 							if r := recover(); r != nil {
-								fmt.Printf("health check onUnhealthy callback panic: %v", r)
+								slog.Error("health check onUnhealthy callback panic", "panic", r)
 							}
 						}()
 						callbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -410,7 +411,7 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 					go func(serverID, targetID string, failures int) {
 						defer func() {
 							if r := recover(); r != nil {
-								fmt.Printf("health check onUnhealthy callback panic: %v", r)
+								slog.Error("health check onUnhealthy callback panic", "panic", r)
 							}
 						}()
 						callbackCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)

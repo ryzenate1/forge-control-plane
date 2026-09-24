@@ -528,33 +528,30 @@ export function AdminOverview() {
     isDataStale(healthQuery, 30_000) ||
     isDataStale(activityQuery, 15_000);
 
-  const auditEvents = useMemo(() => {
-    const events = activityQuery.data ?? [];
-    const rangeMs: Record<string, number> = {
-      "1h": 3_600_000,
-      "6h": 21_600_000,
-      "24h": 86_400_000,
-      "7d": 604_800_000,
-    };
-    const cutoff = Date.now() - (rangeMs[timeRange] ?? rangeMs["24h"]);
-    return events.filter((event) => {
-      const at = new Date(event.createdAt).getTime();
-      return Number.isNaN(at) || at >= cutoff;
-    });
-  }, [activityQuery.data, timeRange]);
+  const auditEvents = activityQuery.data ?? [];
 
   return (
     <AdminPageLayout className="space-y-6">
       {/* ========================================================================= */}
       {/* ZONE 1: BREADCRUMB, HEADER & GLOBAL ACTIONS                                */}
       {/* ========================================================================= */}
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span>Command</span>
+          <span className="text-slate-600">/</span>
+          <span className="text-slate-200 font-semibold">Overview</span>
+        </div>
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          </span>
+          <span>Live · updated just now</span>
+        </div>
+      </div>
+
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
         <div>
-          <div className="flex items-center gap-2 mb-1.5 text-xs font-mono text-slate-400">
-            <span>Command</span>
-            <span>/</span>
-            <span className="text-slate-200 font-semibold">Overview</span>
-          </div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
             <span>Overview</span>
             <PageInfoDisclosure
@@ -1274,9 +1271,7 @@ export function AdminOverview() {
                         <User size={12} />
                       </div>
                       <div className="min-w-0">
-                        <p className="truncate text-xs font-semibold text-slate-200 capitalize">
-                          {event.action.replace(/_/g, " ")}
-                        </p>
+                        <p className="truncate text-xs font-semibold text-slate-200">{event.action.replace(/_/g, " ")}</p>
                         <p className="truncate text-[10px] font-mono text-slate-500">
                           {event.actorEmail || "system"}
                         </p>

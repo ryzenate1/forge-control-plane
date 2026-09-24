@@ -82,8 +82,8 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
     }
     changes.push({
       field: "revision",
-      oldValue: `#${dep.revision}`,
-      newValue: `#${dep.revision - 1}`,
+      oldValue: `#${dep.revision ?? "?"}`,
+      newValue: `#${(dep.revision ?? 0) - 1}`,
     });
     return changes;
   };
@@ -297,7 +297,7 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
 
       {showRollback && (
         <RollbackConfirm
-          revisionNumber={showRollback.revision}
+          revisionNumber={showRollback.revision ?? 0}
           changes={buildRollbackChanges(showRollback)}
           estimatedDowntime="30-60 seconds"
           onConfirm={handleRollbackConfirm}

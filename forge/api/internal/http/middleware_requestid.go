@@ -1,6 +1,8 @@
 package http
 
 import (
+	"gamepanel/forge/internal/events"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -31,5 +33,11 @@ func RequestIDMiddleware(c *fiber.Ctx) error {
 	id := generateRequestID(c)
 	c.Set("X-Request-ID", id)
 	c.Locals("requestId", id)
+	// Bridge request_id -> correlation_id so downstream services reading
+	// events.CorrelationIDFromContext get the same id. Guarded so a correlation
+	// id already present upstream is never overwritten (no double-emit).
+	if events.CorrelationIDFromContext(c.Context()) == "" {
+		c.SetUserContext(events.ContextWithCorrelationID(c.Context(), id))
+	}
 	return c.Next()
 }

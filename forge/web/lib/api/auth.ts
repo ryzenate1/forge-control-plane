@@ -1,38 +1,39 @@
 // Authentication and account management API functions
 import {
-  API_BASE_URL,
   ApiError,
   deleteJSON,
   fetchJSON,
-  getCSRFToken,
   patchJSON,
   postJSON,
   putJSON,
+  requestJSON,
 } from './http';
 import type { ApiUser, ApiUserSession, LoginResponse } from './types';
 
-export async function login(email: string, password: string): Promise<LoginResponse> {
-  const response = await fetch(`${API_BASE_URL}/auth/login`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'X-Forge-Session-Mode': 'cookie',
-    },
-    body: JSON.stringify({ email, password }),
-    credentials: 'include',
-  });
+// Login uses the canonical primitive with the 401 session-expiry signal
+// suppressed: here a 401 means "bad credentials", not "your session died", so
+// it must not trigger the logout/redirect side effect the app wires to 401s.
+const CREDENTIAL_HEADERS: Record<string, string> = {
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+  'X-Forge-Session-Mode': 'cookie',
+};
 
-  if (!response.ok) {
-    if (response.status === 401 || response.status === 404)
-      throw new Error('Invalid email or password.');
-    if (response.status === 429)
-      throw new Error('Too many login attempts. Please try again later.');
+export async function login(email: string, password: string): Promise<LoginResponse> {
+  try {
+    return await requestJSON<LoginResponse>(
+      '/auth/login',
+      { method: 'POST', headers: CREDENTIAL_HEADERS, body: JSON.stringify({ email, password }) },
+      { suppressSessionExpired: true },
+    );
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (err.status === 401 || err.status === 404) throw new Error('Invalid email or password.');
+      if (err.status === 429) throw new Error('Too many login attempts. Please try again later.');
+      if (err.status === 0) throw err;
+    }
     throw new Error('Unable to sign in. Please try again.');
   }
-
-  const payload = (await response.json()) as LoginResponse;
-  return payload;
 }
 
 export async function loginCheckpoint(
@@ -40,37 +41,35 @@ export async function loginCheckpoint(
   code?: string,
   recoveryToken?: string,
 ): Promise<LoginResponse> {
-  const response = await fetch(`${API_BASE_URL}/auth/login/checkpoint`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Accept: 'application/json',
-      'X-Forge-Session-Mode': 'cookie',
-    },
-    body: JSON.stringify({ confirmationToken, code, recoveryToken }),
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    if (response.status === 400 || response.status === 401)
-      throw new Error('Invalid authentication code.');
-    if (response.status === 429)
-      throw new Error('Too many verification attempts. Please try again later.');
+  try {
+    return await requestJSON<LoginResponse>(
+      '/auth/login/checkpoint',
+      {
+        method: 'POST',
+        headers: CREDENTIAL_HEADERS,
+        body: JSON.stringify({ confirmationToken, code, recoveryToken }),
+      },
+      { suppressSessionExpired: true },
+    );
+  } catch (err) {
+    if (err instanceof ApiError) {
+      if (err.status === 400 || err.status === 401) throw new Error('Invalid authentication code.');
+      if (err.status === 429) throw new Error('Too many verification attempts. Please try again later.');
+      if (err.status === 0) throw err;
+    }
     throw new Error('Unable to verify the authentication code.');
   }
-
-  const payload = (await response.json()) as LoginResponse;
-  return payload;
 }
 
 export async function logout(): Promise<void> {
-  const csrfToken = getCSRFToken();
-  const response = await fetch(`${API_BASE_URL}/auth/logout`, {
-    method: 'POST',
-    headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
-    credentials: 'include',
-  });
-  if (!response.ok) throw new ApiError(`Logout failed with ${response.status}`, response.status);
+  try {
+    await requestJSON<void>('/auth/logout', { method: 'POST' });
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw new ApiError(`Logout failed with ${err.status}`, err.status);
+    }
+    throw err;
+  }
 }
 
 export async function fetchCurrentUser(): Promise<ApiUser | null> {
@@ -83,14 +82,14 @@ export async function fetchCurrentUser(): Promise<ApiUser | null> {
 }
 
 export async function refreshSession(): Promise<void> {
-  const csrfToken = getCSRFToken();
-  const response = await fetch(`${API_BASE_URL}/auth/session/refresh`, {
-    method: 'POST',
-    headers: csrfToken ? { 'X-CSRF-Token': csrfToken } : undefined,
-    credentials: 'include',
-  });
-  if (!response.ok)
-    throw new ApiError(`Session refresh failed with ${response.status}`, response.status);
+  try {
+    await requestJSON<void>('/auth/session/refresh', { method: 'POST' });
+  } catch (err) {
+    if (err instanceof ApiError) {
+      throw new ApiError(`Session refresh failed with ${err.status}`, err.status);
+    }
+    throw err;
+  }
 }
 
 export async function requestPasswordReset(

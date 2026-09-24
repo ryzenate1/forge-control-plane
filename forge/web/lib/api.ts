@@ -66,7 +66,7 @@ import type {
   CreateEggInput, UpdateEggInput, SocialProvider,
   ApiEndpoint, ApiEndpointDiagnostics, ApiEndpointInventorySummary, ApiEndpointHealthRecord, ApiEndpointAccessPolicy, ApiEndpointNodeMember,
 } from './api/types';
-import { API_BASE_URL, getErrorMessage, requestJSON } from './api/http';
+import { API_BASE_URL, getErrorMessage, requestJSON, requestBlob, requestText } from './api/http';
 export { API_BASE_URL } from './api/http';
 import type { PaginationMeta as PaginationMetadata } from '@forge/shared-types';
 
@@ -597,14 +597,7 @@ export async function fetchServerStats(serverId: string): Promise<ApiStats> {
 }
 
 export async function fetchServerLogs(serverId: string): Promise<string> {
-  const response = await fetch(`${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/logs`, {
-    headers: { Accept: "application/json" },
-    credentials: "include",
-  });
-  if (!response.ok) {
-    throw new Error(`Logs request failed with ${response.status}`);
-  }
-  return response.text();
+  return requestText(`/servers/${encodeURIComponent(serverId)}/logs`);
 }
 
 export async function fetchDatabaseHosts(): Promise<ApiDatabaseHost[]> {
@@ -814,15 +807,9 @@ export async function fetchAdminAudit(): Promise<ApiAdminAuditEvent[]> {
 export async function exportAdminActivity(format: "csv" | "json", filter: AdminActivityFilter = {}): Promise<Blob> {
   const query = new URLSearchParams(adminActivityQuery(filter).slice(1));
   query.set("format", format);
-  const response = await fetch(`${API_BASE_URL}/admin/activity/export?${query.toString()}`, {
+  return requestBlob(`/admin/activity/export?${query.toString()}`, {
     headers: { Accept: format === "csv" ? "text/csv" : "application/json" },
-    credentials: "include",
   });
-  if (!response.ok) {
-    const errorMessage = await getErrorMessage(response, "Activity export failed with");
-    throw new Error(errorMessage);
-  }
-  return response.blob();
 }
 
 export async function fetchPermissions(): Promise<Record<string, Record<string, string>>> {

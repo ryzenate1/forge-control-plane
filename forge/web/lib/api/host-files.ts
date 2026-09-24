@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, API_BASE_URL, getAuthHeaders, getCSRFToken } from './http';
+import { fetchJSON, postJSON, requestText, requestBlob, requestVoid } from './http';
 
 export interface FileEntry {
   name: string;
@@ -25,20 +25,11 @@ export function listFiles(path: string = '/', nodeId?: string): Promise<FileEntr
 }
 
 export async function readFile(path: string, nodeId?: string): Promise<string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-    Accept: 'text/plain',
-  };
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-  const response = await fetch(
-    `${API_BASE_URL}${nodePath('/host/files/read', nodeId)}`,
-    { method: 'POST', headers, credentials: 'include', body: JSON.stringify({ path }) },
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to read file: ${response.status}`);
-  }
-  return response.text();
+  return requestText(nodePath('/host/files/read', nodeId), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'text/plain' },
+    body: JSON.stringify({ path }),
+  });
 }
 
 export async function writeFile(path: string, content: string, nodeId?: string): Promise<void> {
@@ -68,25 +59,29 @@ export async function chmodFile(path: string, mode: string, nodeId?: string): Pr
 export async function uploadFile(path: string, file: File, nodeId?: string): Promise<void> {
   const formData = new FormData();
   formData.append('files', file);
-  const headers: Record<string, string> = {};
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-  const response = await fetch(
-    `${API_BASE_URL}/host/files/upload?path=${encodeURIComponent(path)}${nodeQuery(nodeId)}`,
-    { method: 'POST', headers, credentials: 'include', body: formData },
-  );
-  if (!response.ok) {
-    throw new Error(`Failed to upload file: ${response.status}`);
-  }
+  // requestVoid routes through the canonical primitive (CSRF + credentials);
+  // the browser sets the multipart Content-Type boundary because no explicit
+  // Content-Type is passed.
+  await requestVoid(`/host/files/upload?path=${encodeURIComponent(path)}${nodeQuery(nodeId)}`, {
+    method: 'POST',
+    body: formData,
+  });
 }
 
 export async function downloadFile(path: string, nodeId?: string): Promise<Blob> {
-  const response = await fetch(
-    `${API_BASE_URL}/host/files/download?path=${encodeURIComponent(path)}${nodeQuery(nodeId)}`,
-    { headers: { ...getAuthHeaders() }, credentials: 'include' },
-  );
+  return requestBlob(`/host/files/download?path=${encodeURIComponent(path)}${nodeQuery(nodeId)}`);
+}
+
+/**
+ * Client-side pull of an ARBITRARY external URL (used by the host file manager
+ * when no dedicated beacon pull endpoint exists). This deliberately does NOT go
+ * through the API primitive: the target is a third-party origin, so we must not
+ * prepend `API_BASE_URL`, attach cookies or sign CSRF.
+ */
+export async function pullRemoteFile(url: string): Promise<Blob> {
+  const response = await fetch(url);
   if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.status}`);
+    throw new Error(`Fetch failed: ${response.status}`);
   }
   return response.blob();
 }

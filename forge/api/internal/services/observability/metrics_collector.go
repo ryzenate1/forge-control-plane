@@ -2,7 +2,7 @@ package observability
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"runtime"
 	"sync"
 	"time"
@@ -93,7 +93,7 @@ func (h *MetricsHistory) StartCollection(ctx context.Context, interval time.Dura
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("metrics collector panic: %v", r)
+				slog.Error("metrics collector panic", "panic", r)
 			}
 		}()
 		ticker := time.NewTicker(interval)

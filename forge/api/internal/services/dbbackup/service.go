@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -460,9 +461,9 @@ func (s *Service) EngineDumpCommands(engine string) json.RawMessage {
 
 func init() {
 	if err := os.MkdirAll(backupDir, 0700); err != nil {
-		log.Printf("failed to create backup dir %s: %v", backupDir, err)
+		slog.Error("failed to create backup dir", "dir", backupDir, "error", err)
 	} else if err := os.Chmod(backupDir, 0700); err != nil {
-		log.Printf("failed to secure backup dir %s: %v", backupDir, err)
+		slog.Error("failed to secure backup dir", "dir", backupDir, "error", err)
 	}
 }
 

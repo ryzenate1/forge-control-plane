@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"time"
 
+	"gamepanel/forge/internal/events"
+
 	"github.com/gofiber/fiber/v2"
 	"github.com/google/uuid"
 )
@@ -20,6 +22,16 @@ func StructuredLogger(logger *slog.Logger) fiber.Handler {
 			c.Set("X-Request-ID", requestID)
 		}
 
+		// Bridge request_id -> correlation_id so downstream handlers and
+		// services reading events.CorrelationIDFromContext observe the same id.
+		// Only wrap when the request context carries no correlation id yet, so
+		// an id already set upstream (e.g. RequestIDMiddleware) is preserved and
+		// never double-emitted.
+		if events.CorrelationIDFromContext(c.Context()) == "" {
+			c.SetUserContext(events.ContextWithCorrelationID(c.Context(), requestID))
+		}
+		correlationID := events.CorrelationIDFromContext(c.Context())
+
 		err := c.Next()
 
 		duration := time.Since(start)
@@ -35,6 +47,9 @@ func StructuredLogger(logger *slog.Logger) fiber.Handler {
 			slog.Int("status", status),
 			slog.Duration("duration", duration),
 			slog.String("ip", ip),
+		}
+		if correlationID != "" {
+			attrs = append(attrs, slog.String("correlation_id", correlationID))
 		}
 
 		if user, ok := c.Locals("user").(tokenClaims); ok {

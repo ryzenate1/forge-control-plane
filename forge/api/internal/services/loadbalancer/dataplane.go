@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"runtime"
 	"strings"
@@ -30,7 +30,7 @@ func (s *Service) Start(parent context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				log.Printf("load balancer main loop panic: %v\nstack: %s", r, buf[:n])
+				slog.Error("load balancer main loop panic", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		ticker := time.NewTicker(2 * time.Second)
@@ -115,7 +115,7 @@ func (s *Service) closeAll() {
 func (s *Service) serveTCP(ctx context.Context, groupID string, ln net.Listener) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("load balancer serveTCP panic: %v", r)
+			slog.Error("load balancer serveTCP panic", "panic", r)
 		}
 	}()
 	for {
@@ -131,7 +131,7 @@ func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn)
 	defer client.Close()
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("load balancer proxyTCP panic: %v", r)
+			slog.Error("load balancer proxyTCP panic", "panic", r)
 		}
 	}()
 	host, _, _ := net.SplitHostPort(client.RemoteAddr().String())
@@ -150,7 +150,7 @@ func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("load balancer proxyTCP copy panic: %v", r)
+				slog.Error("load balancer proxyTCP copy panic", "panic", r)
 			}
 		}()
 		_, _ = io.Copy(backend, client)
@@ -162,7 +162,7 @@ func (s *Service) proxyTCP(ctx context.Context, groupID string, client net.Conn)
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("load balancer proxyTCP copy panic: %v", r)
+				slog.Error("load balancer proxyTCP copy panic", "panic", r)
 			}
 		}()
 		_, _ = io.Copy(client, backend)
@@ -187,7 +187,7 @@ type udpSession struct {
 func (s *Service) serveUDP(ctx context.Context, groupID string, listener net.PacketConn) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("load balancer serveUDP panic: %v", r)
+			slog.Error("load balancer serveUDP panic", "panic", r)
 		}
 	}()
 	sessions := map[string]*udpSession{}
@@ -195,7 +195,7 @@ func (s *Service) serveUDP(ctx context.Context, groupID string, listener net.Pac
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				log.Printf("load balancer UDP reaper panic: %v", r)
+				slog.Error("load balancer UDP reaper panic", "panic", r)
 			}
 		}()
 		ticker := time.NewTicker(30 * time.Second)
@@ -256,7 +256,7 @@ func (s *Service) serveUDP(ctx context.Context, groupID string, listener net.Pac
 func relayUDPResponses(listener net.PacketConn, session *udpSession) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("load balancer relayUDPResponses panic: %v", r)
+			slog.Error("load balancer relayUDPResponses panic", "panic", r)
 		}
 	}()
 	buffer := make([]byte, 65535)

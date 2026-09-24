@@ -74,9 +74,29 @@ export function notifySessionExpired(): void {
   );
 }
 
-/** Canonical request primitive for every web API client. */
-export async function requestJSON<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const method = init.method ?? 'GET';
+export type ForgeRequestOptions = {
+  /**
+   * Suppress the 401 → `notifySessionExpired()` side effect. Used by credential
+   * checks (e.g. login) where a 401 is an expected "bad credentials" result and
+   * must not be mistaken for an expired session.
+   */
+  suppressSessionExpired?: boolean;
+};
+
+/**
+ * Shared request execution for every response shape. Applies CSRF signing,
+ * cookie credentials, the 401 session-expiry signal and error shaping, then
+ * returns a guaranteed-ok {@link Response}. Every public helper
+ * ({@link requestJSON}, {@link requestText}, {@link requestBlob},
+ * {@link requestVoid}) is built on this so the app keeps a single HTTP
+ * primitive instead of ad-hoc `fetch` call sites.
+ */
+async function sendRequest(
+  method: string,
+  path: string,
+  init: RequestInit = {},
+  options: ForgeRequestOptions = {},
+): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init.headers as Record<string, string> | undefined),
@@ -89,18 +109,11 @@ export async function requestJSON<T>(path: string, init: RequestInit = {}): Prom
       credentials: init.credentials ?? 'include',
     });
     if (!response.ok) {
-      if (response.status === 401) notifySessionExpired();
+      if (response.status === 401 && !options.suppressSessionExpired) notifySessionExpired();
       const errorMessage = await getErrorMessage(response, `API ${method} ${path} failed with`);
       throw new ApiError(errorMessage, response.status);
     }
-    if (response.status === 204) return undefined as T;
-    const text = await response.text();
-    if (!text) return undefined as T;
-    try {
-      return JSON.parse(text) as T;
-    } catch {
-      throw new Error(`API ${method} ${path} returned invalid JSON`);
-    }
+    return response;
   } catch (err) {
     if (err instanceof ApiError) throw err;
     const message = err instanceof TypeError
@@ -110,8 +123,68 @@ export async function requestJSON<T>(path: string, init: RequestInit = {}): Prom
   }
 }
 
-export async function fetchJSON<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestJSON<T>(path, init);
+/** Canonical request primitive for every web API client. */
+export async function requestJSON<T>(
+  path: string,
+  init: RequestInit = {},
+  options: ForgeRequestOptions = {},
+): Promise<T> {
+  const method = init.method ?? 'GET';
+  const response = await sendRequest(method, path, init, options);
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  if (!text) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ApiError(`API ${method} ${path} returned invalid JSON`, 0);
+  }
+}
+
+export async function fetchJSON<T>(path: string, init?: RequestInit, options?: ForgeRequestOptions): Promise<T> {
+  return requestJSON<T>(path, init, options);
+}
+
+/**
+ * Fetch a response body as a {@link Blob} (binary downloads). Shares the
+ * canonical CSRF signing, cookie credentials, 401 session-expiry handling and
+ * error shaping from {@link sendRequest} rather than calling bare `fetch`.
+ */
+export async function requestBlob(
+  path: string,
+  init: RequestInit = {},
+  options: ForgeRequestOptions = {},
+): Promise<Blob> {
+  const response = await sendRequest(init.method ?? 'GET', path, init, options);
+  if (response.status === 204) return new Blob();
+  return response.blob();
+}
+
+/** Fetch a response body as text. See {@link requestBlob} for rationale. */
+export async function requestText(
+  path: string,
+  init: RequestInit = {},
+  options: ForgeRequestOptions = {},
+): Promise<string> {
+  const response = await sendRequest(init.method ?? 'GET', path, init, options);
+  return response.text();
+}
+
+/**
+ * Issue a request whose response body is irrelevant (fire-and-forget uploads or
+ * raw-body writes). Still routes through {@link sendRequest} so CSRF,
+ * credentials, 401 handling and error shaping are never skipped. The body is
+ * drained so the connection can be reused.
+ */
+export async function requestVoid(
+  path: string,
+  init: RequestInit = {},
+  options: ForgeRequestOptions = {},
+): Promise<void> {
+  const response = await sendRequest(init.method ?? 'GET', path, init, options);
+  if (response.status !== 204) {
+    await response.text().catch(() => {});
+  }
 }
 
 export async function postJSON<T>(path: string, body?: unknown): Promise<T> {

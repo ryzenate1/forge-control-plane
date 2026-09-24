@@ -1,6 +1,6 @@
-import { Activity, Archive, ArrowLeftRight, Box, Calendar, Cpu, Database, Folder, GitBranch, HardDrive, History, Layers, Network, Rocket, Settings, Terminal, Users, type LucideIcon } from "lucide-react";
+import { Activity, Archive, ArrowLeftRight, Box, Calendar, Cpu, Database, Folder, GitBranch, HardDrive, History, Layers, LayoutDashboard, Network, Rocket, Settings, Terminal, Users, type LucideIcon } from "lucide-react";
 
-export type ServerTab = "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "transfer" | "lifecycle";
+export type ServerTab = "overview" | "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "transfer" | "lifecycle";
 
 export type ServerTabConfig = {
   id: ServerTab;
@@ -17,6 +17,7 @@ export type ServerTabConfig = {
  * Icons are unique per tab to aid scanning.
  */
 export const serverTabs: ServerTabConfig[] = [
+  { id: "overview", labelKey: "server.overview", fallback: "Overview", icon: LayoutDashboard, permissions: [] },
   { id: "console", labelKey: "server.console", fallback: "Console", icon: Terminal, permissions: ["websocket.connect"] },
   { id: "files", labelKey: "server.files", fallback: "Files", icon: Folder, permissions: ["file.read"] },
   { id: "databases", labelKey: "server.databases", fallback: "Databases", icon: Database, permissions: ["database.read"] },
@@ -37,7 +38,7 @@ export const serverTabs: ServerTabConfig[] = [
 ];
 
 export const serverTabGroups: Array<{ title: string; tabs: ServerTab[] }> = [
-  { title: "Daily", tabs: ["console", "files", "databases", "schedules", "backups"] },
+  { title: "Daily", tabs: ["overview", "console", "files", "databases", "schedules", "backups"] },
   { title: "Configuration", tabs: ["startup", "network", "mounts", "users", "settings"] },
   { title: "Deploy & Ops", tabs: ["deployments", "builds", "git", "processes", "activity", "lifecycle", "transfer"] },
 ];

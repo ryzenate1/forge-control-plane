@@ -2,7 +2,7 @@ package mail
 
 import (
 	"context"
-	"log"
+	"log/slog"
 	"runtime"
 	"sync"
 	"time"
@@ -32,7 +32,7 @@ func (w *Worker) Start(ctx context.Context) {
 				if r := recover(); r != nil {
 					buf := make([]byte, 4096)
 					n := runtime.Stack(buf, false)
-					log.Printf("mail worker panic: %v\nstack: %s", r, buf[:n])
+					slog.Error("mail worker panic", "panic", r, "stack", string(buf[:n]))
 				}
 			}()
 			w.loop(ctx)
@@ -69,7 +69,7 @@ func (w *Worker) processOne(ctx context.Context) bool {
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("mail worker claim: %v", err)
+			slog.Error("mail worker claim", "error", err)
 		}
 		return false
 	}
@@ -81,7 +81,7 @@ func (w *Worker) processOne(ctx context.Context) bool {
 	settingsCancel()
 	if err == nil {
 		if settings.Driver == "log" {
-			log.Printf("mail (log driver): to=%s subject=%q\n%s", item.Recipient, item.Subject, item.TextBody)
+			slog.Info("mail (log driver)", "to", item.Recipient, "subject", item.Subject)
 		} else {
 			sendCtx, sendCancel := context.WithTimeout(ctx, 20*time.Second)
 			err = w.sender.Send(sendCtx, settings, item.Recipient, item.Subject, item.TextBody, item.HTMLBody)
@@ -92,12 +92,12 @@ func (w *Worker) processOne(ctx context.Context) bool {
 	defer finishCancel()
 	if err == nil {
 		if e := w.store.CompleteMail(finishCtx, item.ID, w.workerID); e != nil {
-			log.Printf("mail worker complete %s: %v", item.ID, e)
+			slog.Error("mail worker complete", "id", item.ID, "error", e)
 		}
 		return true
 	}
 	if e := w.store.RetryMail(finishCtx, item.ID, w.workerID, err.Error(), RetryDelay(item.Attempts)); e != nil {
-		log.Printf("mail worker retry %s: %v", item.ID, e)
+		slog.Error("mail worker retry", "id", item.ID, "error", e)
 	}
 	return true
 }

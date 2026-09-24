@@ -299,11 +299,6 @@ export function AdminHealth({
     };
   }, [nodes, servers, checks]);
 
-  const lastRefreshed = healthQuery.data?.checkedAt
-    ? new Date(healthQuery.data.checkedAt)
-    : nodesQuery.data?.[0]?.lastSeenAt
-    ? new Date(nodesQuery.data[0].lastSeenAt)
-    : lastRefreshedRef.current;
 
   function refresh() {
     lastRefreshedRef.current = new Date();
@@ -413,18 +408,28 @@ export function AdminHealth({
   ].filter((e) => e.isError);
 
   return (
-    <div className="space-y-6 max-w-[1440px] mx-auto">
+    <div className="space-y-6">
       {/* ========================================================================= */}
       {/* ZONE 1: MISSION CONTROL HEADER WITH REPUTATION BADGES & ACTION TOOLS      */}
       {/* ========================================================================= */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-white/[0.08] pb-5">
+      <div className="flex items-center justify-between text-xs text-slate-400">
+        <div className="flex items-center gap-2">
+          <span>Command</span>
+          <span className="text-slate-600">/</span>
+          <span className="font-semibold text-slate-200">Health</span>
+        </div>
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
+          <span className="relative flex h-1.5 w-1.5">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+          </span>
+          <span>Live · updated just now</span>
+        </div>
+      </div>
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
         <div>
-          <div className="flex items-center gap-2">
-            <span className="text-xs font-bold uppercase tracking-wider text-[var(--brand)]">Control Plane</span>
-            <span className="text-slate-600">/</span>
-            <span className="text-xs font-semibold text-slate-400">Diagnostics</span>
-          </div>
-          <h1 className="mt-1 text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
             <span>Health</span>
             <PageInfoDisclosure
               title="Health Diagnostics & Verification"
@@ -458,21 +463,50 @@ export function AdminHealth({
               ]}
             />
           </h1>
-          <p className="mt-1 text-xs sm:text-sm text-slate-400">
+          <p className="mt-1 text-sm text-slate-400">
             What&apos;s wrong — failures, degraded subsystems and remediation steps. For what happens over time see Monitoring; for what to know now see Overview.
           </p>
         </div>
 
         {/* Global Toolbar Controls */}
-        <div className="flex items-center gap-2.5 shrink-0">
-          {lastRefreshed && (
-            <span className="hidden md:inline font-mono text-[11px] text-slate-500">
-              Last checked {lastRefreshed.toLocaleString()}
-            </span>
-          )}
-          <Btn onClick={refresh} disabled={isFetching}>
-            <RefreshCw className={isFetching ? "animate-spin" : ""} size={14} /> Refresh
-          </Btn>
+        <div className="flex items-center gap-2 shrink-0">
+          {/* Subsystem filter dropdown */}
+          <div className="relative">
+            <select
+              aria-label="Filter subsystem"
+              value={selected}
+              onChange={(e) => selectSection(e.target.value as MonitorSection)}
+              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-slate-200 shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
+            >
+              <option value="infrastructure">Infrastructure</option>
+              <option value="workloads">Workloads</option>
+              <option value="api">API &amp; Queue</option>
+              <option value="database">Database &amp; Cache</option>
+              <option value="resources">Runtime Resources</option>
+              <option value="orchestration">Orchestration</option>
+            </select>
+            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
+          </div>
+
+          {/* Quick refresh button */}
+          <button
+            type="button"
+            aria-label="Refresh health checks"
+            onClick={refresh}
+            className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.02] text-slate-400 transition hover:border-white/20 hover:text-white"
+          >
+            <RefreshCw size={13} className={isFetching ? "animate-spin text-sky-400" : ""} />
+          </button>
+
+          {/* Primary Action Button */}
+          <button
+            type="button"
+            onClick={refresh}
+            className="flex h-8 items-center gap-1.5 rounded-lg bg-[var(--brand)] px-3.5 text-xs font-bold text-white shadow-sm transition hover:bg-[var(--brand-hover)]"
+          >
+            <ActivityWaveIcon className="w-3.5 h-3.5" />
+            <span>Re-check</span>
+          </button>
         </div>
       </div>
 

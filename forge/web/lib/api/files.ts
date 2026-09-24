@@ -3,9 +3,9 @@ import {
   fetchJSON,
   postJSON,
   deleteJSON,
-  getAuthHeaders,
-  getCSRFToken,
-  API_BASE_URL,
+  requestBlob,
+  requestText,
+  requestVoid,
 } from './http';
 import type { ApiFileEntry } from './types';
 
@@ -23,19 +23,9 @@ export async function fetchServerFiles(serverId: string, path?: string): Promise
 }
 
 export async function downloadServerFile(serverId: string, path: string): Promise<Blob> {
-  const url = `/servers/${encodeURIComponent(serverId)}/files/download?path=${encodeURIComponent(path)}`;
-  const response = await fetch(url, {
-    headers: {
-      ...getAuthHeaders(),
-    },
-    credentials: 'include',
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.status}`);
-  }
-
-  return response.blob();
+  return requestBlob(
+    `/servers/${encodeURIComponent(serverId)}/files/download?path=${encodeURIComponent(path)}`,
+  );
 }
 
 export async function getServerFileDownloadURL(
@@ -59,25 +49,14 @@ export async function writeServerFile(
     contentType = content.type;
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': contentType,
-    ...getAuthHeaders(),
-  };
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
+  await requestVoid(
+    `/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
     {
       method: 'PUT',
-      headers,
+      headers: { 'Content-Type': contentType },
       body: content,
     },
   );
-
-  if (!response.ok) {
-    throw new Error(`Failed to write file content: ${response.status}`);
-  }
 }
 
 export async function deleteServerFile(serverId: string, path: string): Promise<void> {
@@ -169,41 +148,17 @@ export async function pullServerFile(
 export const downloadFileToServerViaFiles = pullServerFile;
 
 export async function readServerFile(serverId: string, path: string): Promise<string> {
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
-    {
-      headers: {
-        Accept: 'text/plain',
-        ...getAuthHeaders(),
-      },
-      credentials: 'include',
-    },
+  return requestText(
+    `/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
+    { headers: { Accept: 'text/plain' } },
   );
-  if (!response.ok) {
-    throw new Error(`Failed to read file: ${response.status}`);
-  }
-  return response.text();
 }
 
 export async function archiveServerFile(serverId: string, path: string): Promise<Blob> {
-  const headers: Record<string, string> = {
-    ...getAuthHeaders(),
-  };
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/archive?path=${encodeURIComponent(path)}`,
-    {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-    },
+  return requestBlob(
+    `/servers/${encodeURIComponent(serverId)}/files/archive?path=${encodeURIComponent(path)}`,
+    { method: 'POST' },
   );
-  if (!response.ok) {
-    throw new Error(`Failed to archive file: ${response.status}`);
-  }
-  return response.blob();
 }
 
 export async function uploadFileChunked(
@@ -229,26 +184,15 @@ export async function uploadFileChunked(
     });
     if (isLast) params.set('final', 'true');
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/octet-stream',
-      ...getAuthHeaders(),
-    };
-    const csrf = getCSRFToken();
-    if (csrf) headers['X-CSRF-Token'] = csrf;
-
-    const response = await fetch(
-      `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/upload?${params}`,
+    await requestVoid(
+      `/servers/${encodeURIComponent(serverId)}/files/upload?${params}`,
       {
         method: 'PUT',
-        headers,
+        headers: { 'Content-Type': 'application/octet-stream' },
         credentials: 'include',
         body: chunk,
       },
     );
-
-    if (!response.ok) {
-      throw new Error(`Upload failed at offset ${offset}: ${response.status}`);
-    }
 
     offset = end;
     onProgress?.(offset, totalSize);

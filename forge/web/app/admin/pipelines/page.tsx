@@ -2,8 +2,14 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Play, RotateCcw, XCircle, FileText, Clock3, Layers, ExternalLink } from "lucide-react";
-import { fetchJSON, postJSON } from "@/lib/api/http";
+import { Play, RotateCcw, XCircle, FileText, Clock3, Layers } from "lucide-react";
+import {
+  listPipelines,
+  listPipelineRuns,
+  triggerPipelineRun,
+  cancelPipelineRun,
+  retryPipelineRun,
+} from "@/lib/api/pipelines";
 import {
   AdminPageHeader,
   AdminPageLayout,
@@ -19,29 +25,6 @@ import { OfflineBanner } from "@/components/shared/states-offline";
 import { formatDate } from "@/lib/utils";
 import { statusTone } from "@/lib/api/status";
 
-type PipelineDef = {
-  id: string;
-  name: string;
-  description?: string;
-  trigger?: { type: string; enabled?: boolean; cron?: string };
-  stages?: Array<{ name: string; action: string }>;
-  createdAt?: string;
-};
-
-type PipelineRun = {
-  id: string;
-  pipelineId: string;
-  pipelineName?: string;
-  trigger: string;
-  status: string;
-  progressPct?: number;
-  currentStage?: string;
-  error?: string;
-  requestedBy?: string;
-  createdAt: string;
-  finishedAt?: string | null;
-};
-
 function pipelineStatusTone(s: string) {
   return statusTone(s, "deployment");
 }
@@ -52,29 +35,27 @@ export default function AdminPipelinesPage() {
 
   const defsQuery = useQuery({
     queryKey: ["pipelines-defs"],
-    queryFn: () => fetchJSON<{ data: PipelineDef[] }>("/pipelines").then((r) => r.data ?? []),
+    queryFn: () => listPipelines(),
   });
 
   const runsQuery = useQuery({
     queryKey: ["pipeline-runs", selectedPipeline || "all"],
-    queryFn: () =>
-      fetchJSON<{ data: PipelineRun[] }>(`/pipeline-runs${selectedPipeline ? `?pipelineId=${encodeURIComponent(selectedPipeline)}` : ""}`).then((r) => r.data ?? []),
+    queryFn: () => listPipelineRuns(selectedPipeline ? { pipelineId: selectedPipeline } : undefined),
     refetchInterval: 10_000,
   });
 
   const triggerMutation = useMutation({
-    mutationFn: (pipelineId: string) =>
-      postJSON<{ data: PipelineRun }>(`/pipelines/${encodeURIComponent(pipelineId)}/runs`, { trigger: "manual" }).then((r) => r.data),
+    mutationFn: (pipelineId: string) => triggerPipelineRun(pipelineId, "manual"),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-runs"] }),
   });
 
   const cancelMutation = useMutation({
-    mutationFn: (runId: string) => postJSON(`/pipeline-runs/${encodeURIComponent(runId)}/cancel`),
+    mutationFn: (runId: string) => cancelPipelineRun(runId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-runs"] }),
   });
 
   const retryMutation = useMutation({
-    mutationFn: (runId: string) => postJSON<{ data: PipelineRun }>(`/pipeline-runs/${encodeURIComponent(runId)}/retry`).then((r) => r.data),
+    mutationFn: (runId: string) => retryPipelineRun(runId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["pipeline-runs"] }),
   });
 

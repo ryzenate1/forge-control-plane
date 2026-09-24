@@ -95,6 +95,7 @@ export default function AdminCloudPage() {
       void queryClient.invalidateQueries({ queryKey: ["admin", "cloud", "instances", selectedProvider] });
       void queryClient.invalidateQueries({ queryKey: ["admin", "cloud", "links"] });
     },
+    onError: (error) => toast({ tone: "error", title: "Terminate failed", message: error instanceof Error ? error.message : "Could not terminate instance." }),
   });
 
   const linkedNode = (instance: CloudInstance): ApiNode | undefined => {

@@ -68,17 +68,23 @@ export function DeploymentsView({ appId, action, canDeploy = true }: Deployments
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2">
                 <p className="truncate text-sm font-semibold text-slate-200">
-                  v{deploy.revision}
+                  {deploy.strategy ?? (deploy.revision ? `v${deploy.revision}` : "deployment")}
                 </p>
                 <DeploymentStatus status={deploy.status} />
               </div>
-              {deploy.commit ? (
+              {deploy.image ? (
+                <p className="truncate font-mono text-xs text-slate-500" title={deploy.image}>
+                  {deploy.image}
+                </p>
+              ) : deploy.error ? (
+                <p className="truncate text-xs text-red-400">{deploy.error}</p>
+              ) : deploy.commit ? (
                 <p className="text-xs text-slate-500">
                   {deploy.commit.slice(0, 7)}
                   {deploy.commitMessage ? ` — ${deploy.commitMessage}` : ""}
                 </p>
               ) : null}
-              <p className="text-xs text-slate-400">{formatDate(deploy.startedAt)}</p>
+              <p className="text-xs text-slate-400">{formatDate(deploy.createdAt ?? deploy.startedAt ?? "")}</p>
             </div>
           </div>
         ))}

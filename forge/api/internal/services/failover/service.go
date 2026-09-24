@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -283,7 +283,7 @@ func (s *Service) CreatePolicy(ctx context.Context, policy *Policy) error {
 		if err := s.publisher.Publish(ctx, events.NewEnvelope("failover_policy_created", "failover", "policy", policy.ID, map[string]any{
 			"nodeId": policy.NodeID, "action": policy.Action,
 		})); err != nil {
-			log.Printf("failover: publish policy created event: %v", err)
+			slog.Error("failover: publish policy created event", "error", err)
 		}
 	}
 	return nil
@@ -472,7 +472,7 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_evacuation_triggered", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "reason": message,
 			})); err != nil {
-				log.Printf("failover: publish evacuation event: %v", err)
+				slog.Error("failover: publish evacuation event", "error", err)
 			}
 		}
 		s.mu.Lock()
@@ -485,7 +485,7 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_restart_triggered", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "reason": message,
 			})); err != nil {
-				log.Printf("failover: publish restart event: %v", err)
+				slog.Error("failover: publish restart event", "error", err)
 			}
 		}
 		s.mu.Lock()
@@ -498,7 +498,7 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 			if err := s.publisher.Publish(ctx, events.NewEnvelope("node_failure_notified", "failover", "node", nodeID, map[string]any{
 				"policyId": policy.ID, "failures": message,
 			})); err != nil {
-				log.Printf("failover: publish notify event: %v", err)
+				slog.Error("failover: publish notify event", "error", err)
 			}
 		}
 		s.mu.Lock()
@@ -512,7 +512,7 @@ func (s *Service) executeAction(ctx context.Context, policy *Policy, eventType F
 			event.Message = message + ": " + err.Error()
 			se := toStoreEvent(event)
 			if createErr := s.db.CreateFailoverEvent(ctx, &se); createErr != nil {
-				log.Printf("failover: create failover event: %v", createErr)
+				slog.Error("failover: create failover event", "error", createErr)
 			}
 			return event, err
 		}

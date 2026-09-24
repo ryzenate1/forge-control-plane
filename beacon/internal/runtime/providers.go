@@ -61,7 +61,10 @@ func ValidateProvider(provider string) error {
 		return nil
 	}
 	if experimentalProviders[name] {
-		return &ProviderError{Provider: name, Err: ErrUnsupportedProvider, Message: "provider " + name + " is experimental; set ENABLE_EXPERIMENTAL_RUNTIMES to serve it"}
+		// The wording still names the refusal the caller must handle
+		// (unsupported provider) and adds the way out, rather than replacing one
+		// message with another that clients cannot match on.
+		return &ProviderError{Provider: name, Err: ErrUnsupportedProvider, Message: "unsupported provider " + name + " (experimental; set ENABLE_EXPERIMENTAL_RUNTIMES to serve it)"}
 	}
 	return &ProviderError{Provider: name, Err: ErrUnsupportedProvider}
 }

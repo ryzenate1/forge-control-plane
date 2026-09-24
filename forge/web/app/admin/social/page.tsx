@@ -51,7 +51,7 @@ export default function SocialProvidersPage() {
   const saveMut = useMutation({
     mutationFn: async (provider: SocialProvider) => {
       const cfg = local[provider.name];
-      if (!cfg) return;
+      if (!cfg) throw new Error(`No editable configuration found for ${provider.name}.`);
       const body: ProviderUpdate = { enabled: cfg.enabled };
       if (cfg.clientId !== provider.clientId) body.clientId = cfg.clientId;
       if (cfg.issuerUrl !== (provider.issuerUrl ?? '')) body.issuerUrl = cfg.issuerUrl;
@@ -62,6 +62,7 @@ export default function SocialProvidersPage() {
       toast({ tone: 'success', title: 'Provider saved', message: 'The provider settings were updated. Credentials are not verified until a user completes the provider sign-in flow.' });
       qc.invalidateQueries({ queryKey: ['admin-social-providers'] });
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to save provider', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   return (

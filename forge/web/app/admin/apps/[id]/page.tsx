@@ -317,7 +317,7 @@ function DeploymentsTab({ appId }: { appId: string }) {
                       <DeployStatusBadge status={dep.status} type="deployment" />
                     </td>
                     <td className="px-4 py-3 text-xs text-slate-400">
-                      {typeLabel(dep.source)}
+                      {dep.source ? typeLabel(dep.source) : "—"}
                       {dep.commit && (
                         <span className="ml-1 font-mono text-slate-500">({dep.commit.slice(0, 7)})</span>
                       )}

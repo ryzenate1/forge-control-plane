@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
+	"log/slog"
 )
 
 type EmailTrigger interface {
@@ -71,7 +71,7 @@ func (ts *TriggerService) SendPasswordReset(ctx context.Context, email, resetURL
 // instead of showing a temporary password.
 func (ts *TriggerService) SendWelcome(ctx context.Context, email, recipientName, setPasswordURL string) error {
 	if setPasswordURL == "" {
-		log.Printf("mail: SendWelcome called without a setPasswordURL for %s; welcome email will omit the password/setup link", email)
+		slog.Warn("mail: SendWelcome called without a setPasswordURL; welcome email will omit the password/setup link", "email", email)
 	}
 	text, html, err := ts.renderer.Render(TemplateWelcome, EmailData{
 		RecipientName:  recipientName,

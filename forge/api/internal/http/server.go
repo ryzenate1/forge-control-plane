@@ -29,6 +29,7 @@ import (
 	"gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	billingsvc "gamepanel/forge/internal/services/billing"
 	"gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
 	cleanupsvc "gamepanel/forge/internal/services/cleanup"
@@ -38,13 +39,12 @@ import (
 	"gamepanel/forge/internal/services/crashdetector"
 	cronjobsvc "gamepanel/forge/internal/services/cronjob"
 	"gamepanel/forge/internal/services/crossnode"
-	envaffinitysvc "gamepanel/forge/internal/services/envaffinity"
-	billingsvc "gamepanel/forge/internal/services/billing"
 	dbbackupsvc "gamepanel/forge/internal/services/dbbackup"
 	"gamepanel/forge/internal/services/dbprovisioner"
 	"gamepanel/forge/internal/services/deployment"
 	dnssvc "gamepanel/forge/internal/services/dns"
 	"gamepanel/forge/internal/services/domains"
+	envaffinitysvc "gamepanel/forge/internal/services/envaffinity"
 	"gamepanel/forge/internal/services/environments"
 	envvarsvc "gamepanel/forge/internal/services/envvars"
 	"gamepanel/forge/internal/services/evacuationplanner"
@@ -66,7 +66,6 @@ import (
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/plugins"
-	previewsvc "gamepanel/forge/internal/services/preview"
 	proceduresvc "gamepanel/forge/internal/services/procedure"
 	processsvc "gamepanel/forge/internal/services/process"
 	"gamepanel/forge/internal/services/queue"
@@ -149,7 +148,7 @@ type Config struct {
 	NodeAutoscaler             *nodeautoscale.Service
 	CrashDetector              *crashdetector.Detector
 	DeploymentSvc              *deployment.Service
-	PreviewDeploymentSvc       *previewsvc.Service
+	PreviewDeploymentSvc       previewDeploymentService
 	CloudManager               *cloud.Manager
 	AcmeService                *acmesvc.Service
 	LoadBalancer               *loadbalancer.Service
@@ -1253,6 +1252,140 @@ func NewServer(cfg Config) *fiber.App {
 					body.WriteString("game_panel_api_events_by_type_total{" + labels + "} " + strconv.FormatUint(count, 10) + "\n")
 				}
 			}
+		}
+
+		// Dark service metrics: expose the cumulative counters (and the handful
+		// of instantaneous gauges) reported by long-lived services that
+		// implement Metrics() but were previously unobserved. Every block is
+		// nil-guarded so a partially configured API emits no missing series.
+		// Series are named game_panel_api_<service>_<metric> and carry no
+		// high-cardinality labels.
+		type mCounter struct {
+			name  string
+			help  string
+			value uint64
+		}
+		writeCounters := func(counters []mCounter) {
+			for _, counter := range counters {
+				body.WriteString("# HELP " + counter.name + " " + counter.help + "\n")
+				body.WriteString("# TYPE " + counter.name + " counter\n")
+				body.WriteString(counter.name + " " + strconv.FormatUint(counter.value, 10) + "\n")
+			}
+		}
+
+		if cfg.ClusterMembershipService != nil {
+			cmm := cfg.ClusterMembershipService.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_cluster_membership_nodes_joined_total", "Cumulative cluster nodes that joined.", cmm.NodesJoinedTotal},
+				{"game_panel_api_cluster_membership_nodes_left_total", "Cumulative cluster nodes that left.", cmm.NodesLeftTotal},
+				{"game_panel_api_cluster_membership_drain_started_total", "Cumulative node drains started.", cmm.DrainStartedTotal},
+				{"game_panel_api_cluster_membership_drain_completed_total", "Cumulative node drains completed.", cmm.DrainCompletedTotal},
+				{"game_panel_api_cluster_membership_maintenance_started_total", "Cumulative maintenance windows started.", cmm.MaintStartedTotal},
+				{"game_panel_api_cluster_membership_maintenance_ended_total", "Cumulative maintenance windows ended.", cmm.MaintEndedTotal},
+			})
+		}
+
+		if cfg.ReservationManager != nil {
+			rm := cfg.ReservationManager.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_reservations_placement_total", "Cumulative placement reservations made.", rm.PlacementReservationsTotal},
+				{"game_panel_api_reservations_conflicts_total", "Cumulative reservation conflicts.", rm.ReservationConflictsTotal},
+				{"game_panel_api_reservations_expirations_total", "Cumulative reservation expirations.", rm.ReservationExpirationsTotal},
+			})
+		}
+
+		if cfg.ReplicaManager != nil {
+			rpm := cfg.ReplicaManager.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_replica_manager_create_app_total", "Cumulative replica apps created.", rpm.CreateAppTotal},
+				{"game_panel_api_replica_manager_delete_app_total", "Cumulative replica apps deleted.", rpm.DeleteAppTotal},
+				{"game_panel_api_replica_manager_scale_up_total", "Cumulative replica scale-up operations.", rpm.ScaleUpTotal},
+				{"game_panel_api_replica_manager_scale_down_total", "Cumulative replica scale-down operations.", rpm.ScaleDownTotal},
+				{"game_panel_api_replica_manager_replacement_total", "Cumulative replica replacements.", rpm.ReplacementTotal},
+				{"game_panel_api_replica_manager_reservation_errors_total", "Cumulative replica reservation errors.", rpm.ReservationErrors},
+				{"game_panel_api_replica_manager_dispatch_errors_total", "Cumulative replica dispatch errors.", rpm.DispatchErrors},
+				{"game_panel_api_replica_manager_reconcile_total", "Cumulative replica reconciles.", rpm.ReconcileTotal},
+				{"game_panel_api_replica_manager_no_double_reservation_total", "Cumulative double-reservation preventions.", rpm.NoDoubleReservation},
+				{"game_panel_api_replica_manager_no_duplicate_alloc_total", "Cumulative duplicate-allocation preventions.", rpm.NoDuplicateAlloc},
+			})
+		}
+
+		if cfg.RecoveryCoordinator != nil {
+			rcm := cfg.RecoveryCoordinator.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_recovery_plans_total", "Cumulative recovery plans created.", rcm.RecoveryPlansTotal},
+				{"game_panel_api_recovery_items_total", "Cumulative recovery items processed.", rcm.RecoveryItemsTotal},
+				{"game_panel_api_recovery_failures_total", "Cumulative recovery failures.", rcm.RecoveryFailuresTotal},
+			})
+		}
+
+		if cfg.EvacuationPlanner != nil {
+			ep := cfg.EvacuationPlanner.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_evacuation_planner_plans_total", "Cumulative evacuation plans created.", ep.EvacuationPlansTotal},
+				{"game_panel_api_evacuation_planner_candidates_total", "Cumulative evacuation candidates evaluated.", ep.EvacuationCandidatesTotal},
+				{"game_panel_api_evacuation_planner_validation_failures_total", "Cumulative evacuation validation failures.", ep.EvacuationValidationFailuresTotal},
+				{"game_panel_api_evacuation_planner_storage_local_skipped_total", "Cumulative local-storage workloads skipped during evacuation.", ep.StorageLocalSkippedTotal},
+				{"game_panel_api_evacuation_planner_orphan_detection_total", "Cumulative orphan detections run.", ep.OrphanDetectionTotal},
+			})
+		}
+
+		if cfg.CleanupService != nil {
+			cl := cfg.CleanupService.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_cleanup_stale_reservations_cleaned_total", "Cumulative stale reservations cleaned.", cl.StaleReservationsCleaned},
+				{"game_panel_api_cleanup_orphaned_allocations_cleaned_total", "Cumulative orphaned allocations cleaned.", cl.OrphanedAllocationsCleaned},
+				{"game_panel_api_cleanup_runs_total", "Cumulative cleanup runs.", cl.CleanupRunsTotal},
+				{"game_panel_api_cleanup_errors_total", "Cumulative cleanup errors.", cl.CleanupErrorsTotal},
+			})
+		}
+
+		if cfg.AutoScaler != nil {
+			as := cfg.AutoScaler.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_autoscaler_scale_up_events_total", "Cumulative autoscaler scale-up events.", as.ScaleUpEventsTotal},
+				{"game_panel_api_autoscaler_scale_down_events_total", "Cumulative autoscaler scale-down events.", as.ScaleDownEventsTotal},
+				{"game_panel_api_autoscaler_scaling_errors_total", "Cumulative autoscaler scaling errors.", as.ScalingErrorsTotal},
+			})
+			// ActivePolicies is an instantaneous count, not a cumulative counter.
+			body.WriteString("# HELP game_panel_api_autoscaler_active_policies Current number of active autoscaling policies.\n")
+			body.WriteString("# TYPE game_panel_api_autoscaler_active_policies gauge\n")
+			body.WriteString("game_panel_api_autoscaler_active_policies " + strconv.Itoa(as.ActivePolicies) + "\n")
+		}
+
+		if cfg.FailoverSvc != nil {
+			fo := cfg.FailoverSvc.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_failover_failures_detected_total", "Cumulative failover failures detected.", fo.FailuresDetected},
+				{"game_panel_api_failover_evacuations_triggered_total", "Cumulative failover evacuations triggered.", fo.EvacuationsTriggered},
+				{"game_panel_api_failover_restarts_triggered_total", "Cumulative failover restarts triggered.", fo.RestartsTriggered},
+				{"game_panel_api_failover_notifications_sent_total", "Cumulative failover notifications sent.", fo.NotificationsSent},
+			})
+		}
+
+		if cfg.MigrationService != nil {
+			mg := cfg.MigrationService.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_migration_total", "Cumulative migrations started.", mg.MigrationTotal},
+				{"game_panel_api_migration_completed_total", "Cumulative migrations completed.", mg.MigrationCompletedTotal},
+				{"game_panel_api_migration_failed_total", "Cumulative migrations failed.", mg.MigrationFailedTotal},
+				{"game_panel_api_migration_reconciliation_total", "Cumulative migration reconciliations.", mg.ReconciliationTotal},
+				{"game_panel_api_migration_reconciliation_failures_total", "Cumulative migration reconciliation failures.", mg.ReconciliationFailures},
+				{"game_panel_api_migration_cleanup_completed_total", "Cumulative migration cleanups completed.", mg.CleanupCompletedTotal},
+			})
+		}
+
+		if cfg.HeartbeatMonitor != nil {
+			hb := cfg.HeartbeatMonitor.Metrics()
+			writeCounters([]mCounter{
+				{"game_panel_api_heartbeat_monitor_evaluations_total", "Cumulative heartbeat evaluations.", hb.HeartbeatEvaluationsTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_suspected_total", "Cumulative nodes marked suspected.", hb.NodesSuspectedTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_unreachable_total", "Cumulative nodes marked unreachable.", hb.NodesUnreachableTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_offline_total", "Cumulative nodes marked offline.", hb.NodesOfflineTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_recovered_total", "Cumulative nodes recovered.", hb.NodesRecoveredTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_reconciling_total", "Cumulative nodes placed into reconciling.", hb.NodesReconcilingTotal},
+				{"game_panel_api_heartbeat_monitor_nodes_unavailable_total", "Cumulative nodes marked unavailable.", hb.NodesUnavailableTotal},
+			})
 		}
 
 		c.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")

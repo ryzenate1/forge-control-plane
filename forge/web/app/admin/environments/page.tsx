@@ -7,9 +7,11 @@ import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Pi
 import { Dialog } from "@/components/ui/primitives";
 import { fetchOrganizations, fetchProjects, fetchEnvironments, createEnvironment, deleteEnvVar, fetchEnvVarRevisions, type EnvVarRevision } from "@/lib/api/tenancy";
 import { fetchEnvVars, createEnvVar, type EnvVarResponse } from "@/lib/api/env-vars";
+import { useToast } from "@/components/ui/toast";
 
 export default function AdminEnvironmentsPage() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [selectedOrg, setSelectedOrg] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
   const [envName, setEnvName] = useState("");
@@ -55,6 +57,7 @@ export default function AdminEnvironmentsPage() {
       queryClient.invalidateQueries({ queryKey: ["environments", selectedProject] });
       setEnvName("");
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to create environment", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const addVarMutation = useMutation({
@@ -64,6 +67,7 @@ export default function AdminEnvironmentsPage() {
       setVarKey("");
       setVarValue("");
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to add variable", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteVarMutation = useMutation({
@@ -71,6 +75,7 @@ export default function AdminEnvironmentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["env-vars", selectedEnv] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const handleCreateEnv = (e: React.FormEvent) => {
@@ -149,6 +154,7 @@ export default function AdminEnvironmentsPage() {
           <CardHeader title="Environments" icon={Globe} />
           {!selectedProject ? <EmptyState message="Select a project" /> :
            environmentsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+           environmentsQuery.isError ? <div className="p-4 text-sm text-red-300">Could not load environments: {environmentsQuery.error instanceof Error ? environmentsQuery.error.message : "unknown error"}</div> :
            !Array.isArray(environments) || environments.length === 0 ? <EmptyState message="No environments" /> :
            <div className="divide-y divide-white/[0.06]">
             {Array.isArray(environments) && environments.map((env) => (
@@ -178,6 +184,7 @@ export default function AdminEnvironmentsPage() {
               <Btn type="submit" loading={addVarMutation.isPending}><Plus size={14} /></Btn>
             </form>
             {envVarsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+             envVarsQuery.isError ? <div className="p-4 text-sm text-red-300">Could not load variables: {envVarsQuery.error instanceof Error ? envVarsQuery.error.message : "unknown error"}</div> :
              !Array.isArray(envVars) || envVars.length === 0 ? <EmptyState message="No environment variables" /> :
              <div className="divide-y divide-white/[0.06]">
               {Array.isArray(envVars) && envVars.map((v: EnvVarResponse) => (

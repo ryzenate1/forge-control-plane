@@ -3,6 +3,7 @@ package domains
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"runtime"
@@ -139,7 +140,7 @@ func (s *Service) StartReverify(ctx context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("domain reverify panic: %v\nstack: %s", r, buf[:n])
+				slog.Error("domain reverify panic", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		for {
@@ -221,7 +222,7 @@ func (s *Service) AddDomain(ctx context.Context, serverID, domain string) (*Doma
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
-				fmt.Printf("domain verify ownership panic: %v", r)
+				slog.Error("domain verify ownership panic", "panic", r)
 			}
 		}()
 		verifyCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -253,7 +254,7 @@ func (s *Service) RemoveDomain(ctx context.Context, id string) error {
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					fmt.Printf("domain sync caddy routes panic: %v", r)
+					slog.Error("domain sync caddy routes panic", "panic", r)
 				}
 			}()
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

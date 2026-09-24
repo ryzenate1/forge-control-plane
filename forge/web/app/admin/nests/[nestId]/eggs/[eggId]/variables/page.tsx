@@ -39,7 +39,7 @@ export default function EggVariablesPage() {
   if (eggQuery.isLoading) {
     return (
       <div className="flex items-center justify-center py-20 text-sm text-slate-500">
-        Loading egg\u2026
+        {"Loading egg\u2026"}
       </div>
     );
   }

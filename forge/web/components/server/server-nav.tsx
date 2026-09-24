@@ -3,17 +3,18 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, Layers, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
+import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, Layers, LayoutDashboard, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
 import { type ApiServer, logout } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/TranslationProvider";
 import { hasServerPermission, type ServerAccess } from "./server-context";
 
-export type ServerTab = "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "database" | "transfer";
+export type ServerTab = "overview" | "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "database" | "transfer";
 
 interface ServerNavProps { serverId: string; server: ApiServer; access: ServerAccess; activeTab?: ServerTab }
 
 const tabs: Array<{ id: ServerTab; labelKey: string; fallback: string; icon: typeof Terminal; permissions: string[] }> = [
+  { id: "overview", labelKey: "server.overview", fallback: "Overview", icon: LayoutDashboard, permissions: [] },
   { id: "console", labelKey: "server.console", fallback: "Console", icon: Terminal, permissions: ["websocket.connect", "control.console"] },
   { id: "files", labelKey: "server.files", fallback: "Files", icon: Folder, permissions: ["file.read"] },
   { id: "databases", labelKey: "server.databases", fallback: "Databases", icon: Database, permissions: ["database.read"] },

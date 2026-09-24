@@ -2,7 +2,7 @@ package heartbeatmonitor
 
 import (
 	"context"
-	"fmt"
+	"log/slog"
 	"runtime"
 	"sort"
 	"sync"
@@ -110,7 +110,7 @@ func (s *Service) Start(ctx context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("heartbeat monitor panic recovered: %v\nstack: %s", r, buf[:n])
+				slog.Error("heartbeat monitor panic recovered", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		ticker := time.NewTicker(s.config.Interval)

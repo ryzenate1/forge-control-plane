@@ -3,7 +3,7 @@ package reservations
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -54,7 +54,7 @@ func (m *Manager) Start(ctx context.Context) {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				fmt.Printf("reservation manager panic: %v\nstack: %s", r, buf[:n])
+				slog.Error("reservation manager panic", "panic", r, "stack", string(buf[:n]))
 			}
 		}()
 		ticker := time.NewTicker(time.Minute)

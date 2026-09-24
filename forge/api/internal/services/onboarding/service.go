@@ -154,7 +154,7 @@ func urlQueryEscape(value string) string {
 
 // Status summarizes what the current user has already connected.
 func (s *Service) Status(ctx context.Context, userID string) StatusView {
-	view := StatusView{TemplateKeys: templateKeys()}
+	view := StatusView{Providers: []string{}, TemplateKeys: templateKeys()}
 	view.OAuthURL = s.GitHubOAuthLink()
 	if s.store == nil {
 		return view

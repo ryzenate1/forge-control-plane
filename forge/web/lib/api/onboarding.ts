@@ -115,7 +115,13 @@ function unwrap<T>(data: unknown): T {
 
 export async function fetchOnboardingStatus(): Promise<StatusView> {
   const data = await fetchJSON<StatusView | { data: StatusView }>("/onboarding/status");
-  return unwrap<StatusView>(data);
+  const status = unwrap<StatusView>(data);
+  // Backend may serialize nil slices as null; normalize to arrays.
+  return {
+    ...status,
+    providers: status.providers ?? [],
+    templateKeys: status.templateKeys ?? [],
+  };
 }
 
 // legacy alias used by web copy

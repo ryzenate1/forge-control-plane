@@ -118,7 +118,7 @@ export function OnboardingManager() {
           {status ? (
             <div className="space-y-2 text-sm text-[var(--text)]">
               <p>Connected: {String(status.connected)} · Sources: {status.sourceCount} · Has apps: {String(status.hasApps)}</p>
-              <p className="text-xs text-[var(--text-subtle)]">Providers: {status.providers.join(", ") || "none"} · Templates: {status.templateKeys.join(", ")}</p>
+              <p className="text-xs text-[var(--text-subtle)]">Providers: {(status.providers ?? []).join(", ") || "none"} · Templates: {(status.templateKeys ?? []).join(", ")}</p>
               {status.oauthUrl && <a href={status.oauthUrl} target="_blank" rel="noreferrer" className="text-xs text-[var(--brand)] underline hover:text-[var(--brand-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] rounded">GitHub OAuth →</a>}
             </div>
           ) : (
@@ -210,7 +210,7 @@ export function OnboardingManager() {
                 <div key={s.id} className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] p-3 text-xs">
                   <p className="font-bold text-[var(--text)]">{s.owner}/{s.name} · {s.branch}</p>
                   <p className="text-[var(--text-subtle)]">{s.cloneUrl}</p>
-                  <p className="mt-1 font-mono text-[11px] text-[var(--text-subtle)]">{s.files.join(" · ")}</p>
+                  <p className="mt-1 font-mono text-[11px] text-[var(--text-subtle)]">{(s.files ?? []).join(" · ")}</p>
                 </div>
               ))}
             </div>

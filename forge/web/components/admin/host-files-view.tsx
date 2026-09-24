@@ -8,7 +8,7 @@ import {
 import Link from "next/link";
 import { cn, errorMessage, formatBytes } from "@/lib/utils";
 import {
-  listFiles, readFile, writeFile, createDir, deleteFile, renameFile, copyFile, chmodFile, downloadFile, uploadFile,
+  listFiles, readFile, writeFile, createDir, deleteFile, renameFile, copyFile, chmodFile, downloadFile, uploadFile, pullRemoteFile,
   type FileEntry,
 } from "@/lib/api/host-files";
 import { NodeSelect } from "./node-select";
@@ -390,9 +390,7 @@ export function HostFilesView() {
     setPullUrl("");
     void run("Pulling URL", async () => {
       // Client-side pull: fetch then upload – keeps host pull wired without a dedicated beacon endpoint.
-      const res = await fetch(raw);
-      if (!res.ok) throw new Error(`Fetch failed: ${res.status}`);
-      const blob = await res.blob();
+      const blob = await pullRemoteFile(raw);
       const file = new (File as unknown as new (parts: BlobPart[], name: string, opts?: FilePropertyBag) => File)([blob as BlobPart], name, { type: blob.type || "application/octet-stream" });
       await uploadFile(directory, file, nodeId || undefined);
       await refresh();
