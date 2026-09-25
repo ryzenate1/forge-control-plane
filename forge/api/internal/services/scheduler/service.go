@@ -105,6 +105,14 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 	if err != nil {
 		return domain.PlacementDecision{}, err
 	}
+	// Game-server placement honours the requested runtime provider the same way
+	// replica-app placement does (see PlaceReplicas and its RuntimeFilter):
+	// nodes that cannot run the requested runtime are not candidates. An empty
+	// or "docker" provider is treated as unconstrained for backward
+	// compatibility with requests that predate the field.
+	if requiresRuntimeProviderFilter(req.RuntimeProvider) {
+		filtered = filterByRuntimeProvider(filtered, req.RuntimeProvider)
+	}
 	if len(filtered) == 0 {
 		return domain.PlacementDecision{}, errors.New("no nodes satisfy placement constraints")
 	}
@@ -722,6 +730,14 @@ func filterByRuntimeProvider(nodes []store.Node, runtime string) []store.Node {
 	return filtered
 }
 
+// requiresRuntimeProviderFilter reports whether a requested runtime provider
+// must constrain game-server placement. Empty and "docker" are treated as
+// unconstrained so existing requests keep matching every node.
+func requiresRuntimeProviderFilter(provider string) bool {
+	provider = strings.TrimSpace(provider)
+	return provider != "" && !strings.EqualFold(provider, "docker")
+}
+
 func nodeToCandidate(snapshot store.NodeCapacitySnapshot, node store.Node) placement.Candidate {
 	status := "online"
 	if node.Maintenance || node.DesiredState == store.NodeDesiredStateMaintenance {
@@ -772,6 +788,7 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	req.RequiredNode = strings.TrimSpace(firstNonEmpty(req.RequiredNode, req.NodeID))
 	req.PreferredNode = strings.TrimSpace(req.PreferredNode)
 	req.AllocationID = strings.TrimSpace(req.AllocationID)
+	req.RuntimeProvider = strings.TrimSpace(req.RuntimeProvider)
 	req.StorageLocality = canonicalStorageLocality(req.StorageLocality)
 	if req.CPU == 0 {
 		req.CPU = req.CPUShares

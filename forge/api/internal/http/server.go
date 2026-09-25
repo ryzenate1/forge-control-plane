@@ -26,9 +26,13 @@ import (
 	alerting "gamepanel/forge/internal/services/alerting"
 	apphostingsvc "gamepanel/forge/internal/services/apphosting"
 	appstoresvc "gamepanel/forge/internal/services/appstore"
+	catalogsvc "gamepanel/forge/internal/services/catalog"
+	"gamepanel/forge/internal/services/forgefile"
+	"gamepanel/forge/internal/services/onboarding"
 	"gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	backupenginesvc "gamepanel/forge/internal/services/backupengine"
 	billingsvc "gamepanel/forge/internal/services/billing"
 	"gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
@@ -50,21 +54,25 @@ import (
 	envvarsvc "gamepanel/forge/internal/services/envvars"
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
+	fencingsvc "gamepanel/forge/internal/services/fencing"
 	gitsvc "gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
 	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
+	incussvc "gamepanel/forge/internal/services/incus"
 	installersvc "gamepanel/forge/internal/services/installer"
 	"gamepanel/forge/internal/services/loadbalancer"
 	mailservice "gamepanel/forge/internal/services/mail"
 	"gamepanel/forge/internal/services/migration"
+	netbirdsvc "gamepanel/forge/internal/services/netbird"
 	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	notificationsvc "gamepanel/forge/internal/services/notification"
 	enhancednotifsvc "gamepanel/forge/internal/services/notifications"
+	nomadsvc "gamepanel/forge/internal/services/nomad"
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/pipeline"
@@ -83,6 +91,7 @@ import (
 	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
+	upgradesvc "gamepanel/forge/internal/services/upgrade"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/zerodowntime"
 	"gamepanel/forge/internal/store"
@@ -144,6 +153,11 @@ type Config struct {
 	QueueService         *queue.Service
 	OperationService     *operationsvc.Service
 	RuntimeRegistry      *runtimesvc.Registry
+	// IncusService drives container/VM hosts (runtime=incus) over the Incus
+	// REST API; NomadService fronts a Nomad workload orchestrator control plane.
+	// Both are nil-safe — routes return 503 when unset.
+	IncusService *incussvc.Service
+	NomadService *nomadsvc.Service
 	WebAuthnService      *webauthn.Service
 	EventRelay           *eventstore.Relay
 	EventRegistry        *events.Registry
@@ -184,11 +198,19 @@ type Config struct {
 
 	ProcedureService *proceduresvc.Service
 
+	// BackupEngineService adds Restic and Kopia as selectable backup engines on
+	// top of the classic backup pipeline. Nil-safe: the /admin/backup-engines
+	// routes are registered only when main populates the field.
+	BackupEngineService *backupenginesvc.Service
+
 	// PipelineService drives multi-stage CI/CD pipelines (definitions, runs,
 	// logs, artifacts, manual approvals). Previously unwired to any route.
 	PipelineService *pipeline.Service
 	ReplicaManager  *replicamanager.Manager
 	AppStoreService *appstoresvc.Service
+	CatalogService  *catalogsvc.Service
+	ForgefileSvc    *forgefile.Service
+	OnboardingService *onboarding.Service
 
 	AlertService                *alerting.Service
 	NotificationService         *notificationsvc.Service
@@ -219,10 +241,22 @@ type Config struct {
 	// main; exposed read-only for the admin health dashboard.
 	HealthCheckRunner *healthchecksvc.Service
 
+	// FencingSvc bumps workload generations on a node when it recovers from an
+	// unexpected offline; exposed for manual admin fence operations.
+	FencingSvc *fencingsvc.Service
+	// UpgradeSvc is the control-plane self-upgrade orchestrator (version check,
+	// plan creation, execution with backup + rollback, health verification).
+	UpgradeSvc *upgradesvc.Service
+
 	// Cross-node routing services
 	ServiceDiscovery    *servicediscovery.Service
 	CrossNodeResolver   *crossnode.Resolver
 	IngressSynchronizer *crossnode.IngressSynchronizer
+
+	// NetBirdService is the WireGuard mesh VPN control plane client. It is
+	// nil-safe: without NETBIRD_API_URL/NETBIRD_API_TOKEN it reads empty and
+	// rejects mutations, so the admin routes always register cleanly.
+	NetBirdService *netbirdsvc.Service
 
 	MTLSEnabled    bool
 	MTLSCACertPath string
@@ -512,6 +546,10 @@ type CreateServerRequest struct {
 	DockerImage             string            `json:"dockerImage"`
 	StartupCommand          string            `json:"startupCommand"`
 	StartupVariables        map[string]string `json:"startupVariables"`
+	// RuntimeProvider selects the workload engine (docker, containerd, podman,
+	// firecracker, kubernetes, kvm, lxc). Empty means "use the node default"
+	// which resolves to docker. Placement filters nodes by this field.
+	RuntimeProvider string `json:"runtimeProvider"`
 }
 
 type CreateUserRequest struct {
@@ -2467,6 +2505,8 @@ func NewServer(cfg Config) *fiber.App {
 	// "available" in the admin registry and backed by lib/api modules) 404'd.
 	registerOperationsTimelineRoutes(protected, cfg)
 	registerKubernetesRoutes(protected, cfg, adminIPAccess)
+	registerIncusRoutes(protected, cfg, adminIPAccess)
+	registerNomadRoutes(protected, cfg, adminIPAccess)
 	registerInstallerRoutes(protected, cfg)
 	registerObservabilityRoutes(protected, cfg, cfg.Observability, cfg.HeartbeatMonitor)
 	registerAlertRoutes(protected, cfg.AlertService, cfg.Observability, mutationLimiter)
@@ -2498,11 +2538,13 @@ func NewServer(cfg Config) *fiber.App {
 	registerSchedulerRoutes(protected, cfg, cfg.PredictiveScorer, cfg.ConstraintScheduler, adminIPAccess, mutationLimiter)
 	registerCrashDetectionRoutes(protected, cfg, cfg.CrashDetector, mutationLimiter)
 	registerBackupRoutes(protected, cfg, cfg.BackupSvc, mutationLimiter)
+	registerBackupEngineRoutes(protected, cfg, cfg.BackupEngineService, mutationLimiter)
 	registerDNSRoutes(protected, cfg, cfg.DNSService, mutationLimiter)
 	registerMaintenanceRoutes(protected, cfg, mutationLimiter)
 	registerComposeRoutes(protected, cfg, mutationLimiter)
 	registerDBContainerRoutes(protected, cfg, mutationLimiter)
 	registerDatabaseServiceRoutes(protected, cfg, mutationLimiter)
+	registerDBDiagnosticRoutes(protected, cfg)
 	registerManagedDatabaseRoutes(protected, cfg, mutationLimiter)
 	registerGitRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 	RegisterGitDeploymentRoutes(protected, cfg, mutationLimiter)
@@ -2510,6 +2552,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerBuildpackRoutes(protected, cfg, cfg.BuildpackService, mutationLimiter)
 	registerZeroDowntimeRoutes(protected, cfg, cfg.ZeroDowntimeSvc, mutationLimiter)
 	registerSourceDeploymentRoutes(protected, cfg, mutationLimiter)
+	registerRegistryRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 	registerReconcileRoutes(protected, cfg, cfg.Reconciler, adminIPAccess, mutationLimiter)
 
 	// Capability inventory and onboarding token management
@@ -2531,6 +2574,8 @@ func NewServer(cfg Config) *fiber.App {
 	// Portainer-inspired container/image/network/volume administration
 	registerPortainerRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerAppStoreRoutes(protected, cfg, cfg.AppStoreService, mutationLimiter)
+	registerCatalogRoutes(protected, cfg, cfg.CatalogService, adminIPAccess, mutationLimiter)
+	registerForgefileRoutes(protected, cfg, cfg.ForgefileSvc, mutationLimiter)
 
 	// Docker management routes (cleaner replacement for Portainer admin routes)
 	registerDockerRoutes(protected, cfg, mutationLimiter, adminIPAccess)
@@ -2575,10 +2620,13 @@ func NewServer(cfg Config) *fiber.App {
 	registerPlacementRoutes(protected, cfg, cfg.PlacementService, mutationLimiter)
 	registerDrainRoutes(protected, cfg, cfg.DrainLedger)
 	registerHealthCheckRoutes(protected, cfg, cfg.HealthCheckRunner)
+	registerFencingRoutes(protected, cfg, cfg.FencingSvc, mutationLimiter)
+	registerUpgradeRoutes(protected, cfg, cfg.UpgradeSvc, mutationLimiter)
 
 	// Cross-node routing and service discovery routes
 	registerServiceDiscoveryRoutes(protected, cfg, cfg.ServiceDiscovery, adminIPAccess, mutationLimiter)
 	registerCrossNodeRoutes(protected, cfg, cfg.CrossNodeResolver, cfg.IngressSynchronizer, adminIPAccess, mutationLimiter)
+	registerNetBirdRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 
 	// Phase registrars (each of the 8 build phases registers here)
 	registerPhaseHooks(v1, protected, &cfg)

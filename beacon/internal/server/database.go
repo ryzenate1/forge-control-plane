@@ -17,9 +17,10 @@ import (
 	"strings"
 	"time"
 
+	"gamepanel/beacon/internal/runtime"
+
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/filters"
-	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
@@ -27,16 +28,17 @@ import (
 )
 
 type databaseProvisionRequest struct {
-	ServerID   string `json:"serverId"`
-	Engine     string `json:"engine"`
-	Version    string `json:"version"`
-	MemoryMB   int    `json:"memoryMb"`
-	CPUShares  int    `json:"cpuShares"`
-	DBName     string `json:"dbName"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	Port       int    `json:"port"`
-	VolumeName string `json:"volumeName"`
+	ServerID     string                `json:"serverId"`
+	Engine       string                `json:"engine"`
+	Version      string                `json:"version"`
+	MemoryMB     int                   `json:"memoryMb"`
+	CPUShares    int                   `json:"cpuShares"`
+	DBName       string                `json:"dbName"`
+	Username     string                `json:"username"`
+	Password     string                `json:"password"`
+	Port         int                   `json:"port"`
+	VolumeName   string                `json:"volumeName"`
+	RegistryAuth *runtime.RegistryAuth `json:"registryAuth,omitempty"`
 }
 
 type databaseProvisionResponse struct {
@@ -207,7 +209,12 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 	}
 
 	if _, _, err := cli.ImageInspectWithRaw(ctx, imageName); err != nil {
-		pull, err := cli.ImagePull(ctx, imageName, image.PullOptions{})
+		pullOpts, perr := runtime.ImagePullOptions(req.RegistryAuth)
+		if perr != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "prepare registry auth: " + perr.Error()})
+			return
+		}
+		pull, err := cli.ImagePull(ctx, imageName, pullOpts)
 		if err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "pull image " + imageName + ": " + err.Error()})
 			return

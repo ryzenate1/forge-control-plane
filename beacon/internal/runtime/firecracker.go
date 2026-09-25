@@ -35,6 +35,7 @@ type firecrackerInstance struct {
 	vmID       string
 	machineID  string
 	socketPath string
+	createReq  CreateRequest
 	pid        int
 	createdAt  time.Time
 	running    bool
@@ -186,6 +187,7 @@ func (r *FirecrackerRuntime) Create(ctx context.Context, req CreateRequest) erro
 		vmID:       vmID,
 		machineID:  req.ServerID,
 		socketPath: socketPath,
+		createReq:  req,
 		createdAt:  time.Now(),
 	}
 	r.instances[vmID] = inst
@@ -549,29 +551,11 @@ func (r *FirecrackerRuntime) Start(ctx context.Context, serverID string) error {
 		return fmt.Errorf("instance %s not found: create it first", serverID)
 	}
 
-	socketPath := inst.socketPath
-	if inst.cmd == nil {
-		if err := r.startFirecrackerProcess(ctx, vmID, socketPath); err != nil {
-			return err
-		}
-		if err := waitForUnixSocket(ctx, socketPath); err != nil {
-			return err
-		}
-	}
-
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/actions", map[string]string{
-		"action_type": "InstanceStart",
-	}); err != nil {
-		return fmt.Errorf("start instance: %w", err)
-	}
-
-	r.mu.Lock()
-	if inst, ok := r.instances[vmID]; ok {
-		inst.running = true
-	}
-	r.mu.Unlock()
-
-	return nil
+	// Booting a microVM requires the jailer process, the boot source / rootfs /
+	// machine config and any MMDS payload to be applied before InstanceStart is
+	// accepted, so reuse ensureInstanceRunning with the request recorded at
+	// Create time instead of firing InstanceStart at an unconfigured VM.
+	return r.ensureInstanceRunning(ctx, vmID, inst.socketPath, inst.createReq)
 }
 
 func (r *FirecrackerRuntime) SendCommand(ctx context.Context, serverID, command string) error {

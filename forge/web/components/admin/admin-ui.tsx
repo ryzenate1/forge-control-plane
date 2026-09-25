@@ -15,13 +15,19 @@ import { cn } from "@/lib/utils";
 export * from "@/components/ui/forge-primitives";
 export { cn };
 
-export function Pill({ children, tone = "neutral", className }: { children: React.ReactNode; tone?: "neutral" | "green" | "red" | "yellow" | "blue"; className?: string }) {
+export function Pill({ children, tone = "neutral", className }: { children: React.ReactNode; tone?: "neutral" | "green" | "red" | "yellow" | "blue" | "success" | "warning" | "danger" | "info"; className?: string }) {
   const tones: Record<string, string> = {
     neutral: "border-white/10 bg-white/[0.03] text-slate-300",
     green: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
     red: "border-red-500/25 bg-red-500/10 text-red-300",
     yellow: "border-amber-500/25 bg-amber-500/10 text-amber-300",
     blue: "border-blue-500/25 bg-blue-500/10 text-blue-300",
+    // Semantic aliases (Forge health vocabulary: success/warning/danger/info) map
+    // onto the same palette so callers can speak in meaning, not raw colour.
+    success: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300",
+    warning: "border-amber-500/25 bg-amber-500/10 text-amber-300",
+    danger: "border-red-500/25 bg-red-500/10 text-red-300",
+    info: "border-blue-500/25 bg-blue-500/10 text-blue-300",
   };
   return (
     <span className={cn("inline-flex items-center rounded-md border px-2 py-0.5 text-[11px] font-medium tracking-tight", tones[tone], className)}>

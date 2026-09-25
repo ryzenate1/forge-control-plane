@@ -8,6 +8,7 @@ import { Input as SharedInput } from "@/components/ui/primitives";
 import { AdminFormSection, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 import { DashHeader } from "./dashboard-cards";
 import { TableSkeleton } from "@/components/ui/loading-skeleton";
+import { useToast } from "@/components/ui/toast";
 
 type Webhook = ApiWebhook;
 type WebhookResponse = Webhook[] | { data?: unknown; error?: unknown; message?: unknown };
@@ -58,6 +59,7 @@ const AVAILABLE_EVENTS = [
 
 export function AdminWebhooks() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const webhooksQuery = useQuery({
     queryKey: ["webhooks"],
     queryFn: async () => {
@@ -105,6 +107,11 @@ export function AdminWebhooks() {
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteJSON(`/webhooks/${id}`),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setDeleteConfirmId(null); },
+  });
+
+  const testMut = useMutation({
+    mutationFn: (id: string) => postJSON<{ id: string; status: number }>(`/webhooks/${id}/test`, {}),
+    onSuccess: () => { toast({ tone: "success", title: "Test delivery fired", message: "Check the Deliveries view for the response." }); },
   });
 
   // No "test" endpoint exists in the API (only CRUD + deliveries + retry), so
@@ -183,7 +190,7 @@ export function AdminWebhooks() {
                     <div className="flex items-center gap-1.5">
                       <Btn size="sm" tone="ghost" onClick={() => setHistoryId(wh.id)}>Deliveries</Btn>
                       <Btn size="sm" tone="ghost" onClick={() => openEdit(wh)}>Edit</Btn>
-                      {/* No backend test endpoint exists; deliveries verify connectivity. */}
+                      <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(wh.id)} disabled={testMut.isPending}>{testMut.isPending ? "Testing…" : "Test"}</Btn>
                       <Btn size="sm" tone="danger" onClick={() => setDeleteConfirmId(wh.id)} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
                     </div>
                     </td>

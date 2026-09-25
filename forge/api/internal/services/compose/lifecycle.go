@@ -29,10 +29,10 @@ const (
 	StackStatusStopped        StackStatus = "stopped"
 	StackStatusDegraded       StackStatus = "degraded"
 	StackStatusUpdating       StackStatus = "updating"
-	StackStatusRollingBack StackStatus = "rolling_back"
-	StackStatusDeleting    StackStatus = "deleting"
-	StackStatusDeleted     StackStatus = "deleted"
-	StackStatusFailed      StackStatus = "failed"
+	StackStatusRollingBack    StackStatus = "rolling_back"
+	StackStatusDeleting       StackStatus = "deleting"
+	StackStatusDeleted        StackStatus = "deleted"
+	StackStatusFailed         StackStatus = "failed"
 )
 
 type ComposeStack struct {
@@ -52,30 +52,30 @@ type ComposeStack struct {
 	CreatedAt     time.Time         `json:"createdAt"`
 	UpdatedAt     time.Time         `json:"updatedAt"`
 
-	GitSourceID          string     `json:"gitSourceId,omitempty"`
-	GitRepositoryURL     string     `json:"gitRepositoryUrl,omitempty"`
-	GitRepositoryPath    string     `json:"gitRepositoryPath,omitempty"`
-	ComposePath          string     `json:"composePath,omitempty"`
-	GitBranch            string     `json:"gitBranch,omitempty"`
-	GitCommitSHA         string     `json:"gitCommitSha,omitempty"`
-	GitDesiredCommitSHA  string     `json:"gitDesiredCommitSha,omitempty"`
+	GitSourceID          string           `json:"gitSourceId,omitempty"`
+	GitRepositoryURL     string           `json:"gitRepositoryUrl,omitempty"`
+	GitRepositoryPath    string           `json:"gitRepositoryPath,omitempty"`
+	ComposePath          string           `json:"composePath,omitempty"`
+	GitBranch            string           `json:"gitBranch,omitempty"`
+	GitCommitSHA         string           `json:"gitCommitSha,omitempty"`
+	GitDesiredCommitSHA  string           `json:"gitDesiredCommitSha,omitempty"`
 	GitPreviousCommitSHA string           `json:"gitPreviousCommitSha,omitempty"`
 	GitPreviousCompose   string           `json:"gitPreviousCompose,omitempty"`
 	GitPreviousManifest  *json.RawMessage `json:"gitPreviousManifest,omitempty"`
 	GitAutoUpdate        bool             `json:"gitAutoUpdate"`
-	GitPollIntervalSec   int        `json:"gitPollIntervalSec,omitempty"`
-	GitWebhookSecret     string     `json:"-"`
-	GitWebhookID         string     `json:"gitWebhookId,omitempty"`
-	GitLastWebhookAt     *time.Time `json:"gitLastWebhookAt,omitempty"`
-	GitUpdateStatus      string     `json:"gitUpdateStatus,omitempty"`
-	GitUpdateError       string     `json:"gitUpdateError,omitempty"`
-	GitReconcileMode     string     `json:"gitReconcileMode,omitempty"`
-	GitFailedSHA         string     `json:"gitFailedSha,omitempty"`
-	GitNextPollAt        *time.Time `json:"gitNextPollAt,omitempty"`
-	GitCredentialID      string     `json:"gitCredentialId,omitempty"`
-	GitUpdateClaimedBy   *string    `json:"-"`
-	GitUpdateClaimedAt   *time.Time `json:"-"`
-	GitLastDeliveryID    string     `json:"-"`
+	GitPollIntervalSec   int              `json:"gitPollIntervalSec,omitempty"`
+	GitWebhookSecret     string           `json:"-"`
+	GitWebhookID         string           `json:"gitWebhookId,omitempty"`
+	GitLastWebhookAt     *time.Time       `json:"gitLastWebhookAt,omitempty"`
+	GitUpdateStatus      string           `json:"gitUpdateStatus,omitempty"`
+	GitUpdateError       string           `json:"gitUpdateError,omitempty"`
+	GitReconcileMode     string           `json:"gitReconcileMode,omitempty"`
+	GitFailedSHA         string           `json:"gitFailedSha,omitempty"`
+	GitNextPollAt        *time.Time       `json:"gitNextPollAt,omitempty"`
+	GitCredentialID      string           `json:"gitCredentialId,omitempty"`
+	GitUpdateClaimedBy   *string          `json:"-"`
+	GitUpdateClaimedAt   *time.Time       `json:"-"`
+	GitLastDeliveryID    string           `json:"-"`
 
 	ComposeType   string `json:"composeType"`
 	SourceType    string `json:"sourceType"`
@@ -83,25 +83,27 @@ type ComposeStack struct {
 }
 
 type DeployComposeRequest struct {
-	UserID        string            `json:"userId"`
-	Name          string            `json:"name"`
-	NodeID        string            `json:"nodeId"`
-	ComposeYAML   string            `json:"composeYaml"`
-	EnvVars       map[string]string `json:"envVars,omitempty"`
-	MemoryMB      int64             `json:"memoryMb"`
-	CPUShares     int64             `json:"cpuShares"`
-	DiskMB        int64             `json:"diskMb"`
-	ComposeType   string            `json:"composeType"`
-	SourceType    string            `json:"sourceType"`
-	EnvironmentID string            `json:"environmentId,omitempty"`
+	UserID        string                 `json:"userId"`
+	Name          string                 `json:"name"`
+	NodeID        string                 `json:"nodeId"`
+	ComposeYAML   string                 `json:"composeYaml"`
+	EnvVars       map[string]string      `json:"envVars,omitempty"`
+	RegistryAuth  []*daemon.RegistryAuth `json:"registryAuth,omitempty"`
+	MemoryMB      int64                  `json:"memoryMb"`
+	CPUShares     int64                  `json:"cpuShares"`
+	DiskMB        int64                  `json:"diskMb"`
+	ComposeType   string                 `json:"composeType"`
+	SourceType    string                 `json:"sourceType"`
+	EnvironmentID string                 `json:"environmentId,omitempty"`
 }
 
 type UpdateComposeRequest struct {
-	ComposeYAML string            `json:"composeYaml"`
-	EnvVars     map[string]string `json:"envVars,omitempty"`
-	MemoryMB    int64             `json:"memoryMb"`
-	CPUShares   int64             `json:"cpuShares"`
-	DiskMB      int64             `json:"diskMb"`
+	ComposeYAML  string                 `json:"composeYaml"`
+	EnvVars      map[string]string      `json:"envVars,omitempty"`
+	RegistryAuth []*daemon.RegistryAuth `json:"registryAuth,omitempty"`
+	MemoryMB     int64                  `json:"memoryMb"`
+	CPUShares    int64                  `json:"cpuShares"`
+	DiskMB       int64                  `json:"diskMb"`
 }
 
 type ServiceState struct {
@@ -253,10 +255,10 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 			return nil, errors.New("node selection is required for compose deployment")
 		}
 		decision, placeErr = s.scheduler.PlaceServer(ctx, domain.PlacementRequest{
-			CPU:       int(req.CPUShares),
-			MemoryMB:  int(req.MemoryMB),
-			DiskMB:    int(req.DiskMB),
-			RegionID:  "",
+			CPU:      int(req.CPUShares),
+			MemoryMB: int(req.MemoryMB),
+			DiskMB:   int(req.DiskMB),
+			RegionID: "",
 		})
 		if placeErr != nil {
 			return nil, fmt.Errorf("scheduler node selection failed: %w", placeErr)
@@ -349,9 +351,10 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 
 	client := s.getClient()
 	deployResp, err := client.ComposeDeploy(ctx, node.BaseURL, nodeCredential, daemon.ComposeDeployRequest{
-		StackID:     stackID,
-		ComposeYAML: req.ComposeYAML,
-		EnvVars:     req.EnvVars,
+		StackID:      stackID,
+		ComposeYAML:  req.ComposeYAML,
+		EnvVars:      req.EnvVars,
+		RegistryAuth: req.RegistryAuth,
 	})
 
 	if err != nil {
@@ -462,9 +465,10 @@ func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req Up
 	client := s.getClient()
 
 	deployResp, deployErr := client.ComposeDeploy(ctx, node.BaseURL, nodeCredential, daemon.ComposeDeployRequest{
-		StackID:     stackID,
-		ComposeYAML: req.ComposeYAML,
-		EnvVars:     req.EnvVars,
+		StackID:      stackID,
+		ComposeYAML:  req.ComposeYAML,
+		EnvVars:      req.EnvVars,
+		RegistryAuth: req.RegistryAuth,
 	})
 	if deployErr != nil {
 		s.rollbackStack(ctx, stack, rollbackYAML, rollbackHash, rollbackEnv)
@@ -842,95 +846,95 @@ func (s *Service) rollbackStack(ctx context.Context, stack *ComposeStack, yaml, 
 
 func toStoreComposeStack(s *ComposeStack) *store.ComposeStack {
 	return &store.ComposeStack{
-		ID:            s.ID,
-		UserID:        s.UserID,
-		Name:          s.Name,
-		NodeID:        s.NodeID,
-		Status:        string(s.Status),
-		ComposeYAML:   s.ComposeYAML,
-		ComposeHash:   s.ComposeHash,
-		EnvVars:       s.EnvVars,
-		MemoryMB:      s.MemoryMB,
-		CPUShares:     s.CPUShares,
-		DiskMB:        s.DiskMB,
-		Error:         s.Error,
-		ReservationID: s.ReservationID,
-		CreatedAt:     s.CreatedAt,
-		UpdatedAt:     s.UpdatedAt,
-		GitSourceID:   s.GitSourceID,
-		GitRepositoryURL: s.GitRepositoryURL,
-		GitRepositoryPath: s.GitRepositoryPath,
-		ComposePath:   s.ComposePath,
-		GitBranch:     s.GitBranch,
-		GitCommitSHA:  s.GitCommitSHA,
-		GitDesiredCommitSHA: s.GitDesiredCommitSHA,
+		ID:                   s.ID,
+		UserID:               s.UserID,
+		Name:                 s.Name,
+		NodeID:               s.NodeID,
+		Status:               string(s.Status),
+		ComposeYAML:          s.ComposeYAML,
+		ComposeHash:          s.ComposeHash,
+		EnvVars:              s.EnvVars,
+		MemoryMB:             s.MemoryMB,
+		CPUShares:            s.CPUShares,
+		DiskMB:               s.DiskMB,
+		Error:                s.Error,
+		ReservationID:        s.ReservationID,
+		CreatedAt:            s.CreatedAt,
+		UpdatedAt:            s.UpdatedAt,
+		GitSourceID:          s.GitSourceID,
+		GitRepositoryURL:     s.GitRepositoryURL,
+		GitRepositoryPath:    s.GitRepositoryPath,
+		ComposePath:          s.ComposePath,
+		GitBranch:            s.GitBranch,
+		GitCommitSHA:         s.GitCommitSHA,
+		GitDesiredCommitSHA:  s.GitDesiredCommitSHA,
 		GitPreviousCommitSHA: s.GitPreviousCommitSHA,
-		GitPreviousCompose: s.GitPreviousCompose,
-		GitPreviousManifest: s.GitPreviousManifest,
-		GitAutoUpdate: s.GitAutoUpdate,
-		GitPollIntervalSec: s.GitPollIntervalSec,
-		GitWebhookSecret: s.GitWebhookSecret,
-		GitWebhookID:  s.GitWebhookID,
-		GitLastWebhookAt: s.GitLastWebhookAt,
-		GitUpdateStatus: s.GitUpdateStatus,
-		GitUpdateError: s.GitUpdateError,
-		GitReconcileMode: s.GitReconcileMode,
-		GitFailedSHA: s.GitFailedSHA,
-		GitNextPollAt: s.GitNextPollAt,
-		GitCredentialID: s.GitCredentialID,
-		GitUpdateClaimedBy: s.GitUpdateClaimedBy,
-		GitUpdateClaimedAt: s.GitUpdateClaimedAt,
-		GitLastDeliveryID: s.GitLastDeliveryID,
-		ComposeType:   s.ComposeType,
-		SourceType:    s.SourceType,
-		EnvironmentID: s.EnvironmentID,
+		GitPreviousCompose:   s.GitPreviousCompose,
+		GitPreviousManifest:  s.GitPreviousManifest,
+		GitAutoUpdate:        s.GitAutoUpdate,
+		GitPollIntervalSec:   s.GitPollIntervalSec,
+		GitWebhookSecret:     s.GitWebhookSecret,
+		GitWebhookID:         s.GitWebhookID,
+		GitLastWebhookAt:     s.GitLastWebhookAt,
+		GitUpdateStatus:      s.GitUpdateStatus,
+		GitUpdateError:       s.GitUpdateError,
+		GitReconcileMode:     s.GitReconcileMode,
+		GitFailedSHA:         s.GitFailedSHA,
+		GitNextPollAt:        s.GitNextPollAt,
+		GitCredentialID:      s.GitCredentialID,
+		GitUpdateClaimedBy:   s.GitUpdateClaimedBy,
+		GitUpdateClaimedAt:   s.GitUpdateClaimedAt,
+		GitLastDeliveryID:    s.GitLastDeliveryID,
+		ComposeType:          s.ComposeType,
+		SourceType:           s.SourceType,
+		EnvironmentID:        s.EnvironmentID,
 	}
 }
 
 func fromStoreComposeStack(s store.ComposeStack) *ComposeStack {
 	return &ComposeStack{
-		ID:            s.ID,
-		UserID:        s.UserID,
-		Name:          s.Name,
-		NodeID:        s.NodeID,
-		Status:        StackStatus(s.Status),
-		ComposeYAML:   s.ComposeYAML,
-		ComposeHash:   s.ComposeHash,
-		EnvVars:       s.EnvVars,
-		MemoryMB:      s.MemoryMB,
-		CPUShares:     s.CPUShares,
-		DiskMB:        s.DiskMB,
-		Error:         s.Error,
-		ReservationID: s.ReservationID,
-		CreatedAt:     s.CreatedAt,
-		UpdatedAt:     s.UpdatedAt,
-		GitSourceID:   s.GitSourceID,
-		GitRepositoryURL: s.GitRepositoryURL,
-		GitRepositoryPath: s.GitRepositoryPath,
-		ComposePath:   s.ComposePath,
-		GitBranch:     s.GitBranch,
-		GitCommitSHA:  s.GitCommitSHA,
-		GitDesiredCommitSHA: s.GitDesiredCommitSHA,
+		ID:                   s.ID,
+		UserID:               s.UserID,
+		Name:                 s.Name,
+		NodeID:               s.NodeID,
+		Status:               StackStatus(s.Status),
+		ComposeYAML:          s.ComposeYAML,
+		ComposeHash:          s.ComposeHash,
+		EnvVars:              s.EnvVars,
+		MemoryMB:             s.MemoryMB,
+		CPUShares:            s.CPUShares,
+		DiskMB:               s.DiskMB,
+		Error:                s.Error,
+		ReservationID:        s.ReservationID,
+		CreatedAt:            s.CreatedAt,
+		UpdatedAt:            s.UpdatedAt,
+		GitSourceID:          s.GitSourceID,
+		GitRepositoryURL:     s.GitRepositoryURL,
+		GitRepositoryPath:    s.GitRepositoryPath,
+		ComposePath:          s.ComposePath,
+		GitBranch:            s.GitBranch,
+		GitCommitSHA:         s.GitCommitSHA,
+		GitDesiredCommitSHA:  s.GitDesiredCommitSHA,
 		GitPreviousCommitSHA: s.GitPreviousCommitSHA,
-		GitPreviousCompose: s.GitPreviousCompose,
-		GitPreviousManifest: s.GitPreviousManifest,
-		GitAutoUpdate: s.GitAutoUpdate,
-		GitPollIntervalSec: s.GitPollIntervalSec,
-		GitWebhookSecret: s.GitWebhookSecret,
-		GitWebhookID:  s.GitWebhookID,
-		GitLastWebhookAt: s.GitLastWebhookAt,
-		GitUpdateStatus: s.GitUpdateStatus,
-		GitUpdateError: s.GitUpdateError,
-		GitReconcileMode: s.GitReconcileMode,
-		GitFailedSHA: s.GitFailedSHA,
-		GitNextPollAt: s.GitNextPollAt,
-		GitCredentialID: s.GitCredentialID,
-		GitUpdateClaimedBy: s.GitUpdateClaimedBy,
-		GitUpdateClaimedAt: s.GitUpdateClaimedAt,
-		GitLastDeliveryID: s.GitLastDeliveryID,
-		ComposeType:   s.ComposeType,
-		SourceType:    s.SourceType,
-		EnvironmentID: s.EnvironmentID,
+		GitPreviousCompose:   s.GitPreviousCompose,
+		GitPreviousManifest:  s.GitPreviousManifest,
+		GitAutoUpdate:        s.GitAutoUpdate,
+		GitPollIntervalSec:   s.GitPollIntervalSec,
+		GitWebhookSecret:     s.GitWebhookSecret,
+		GitWebhookID:         s.GitWebhookID,
+		GitLastWebhookAt:     s.GitLastWebhookAt,
+		GitUpdateStatus:      s.GitUpdateStatus,
+		GitUpdateError:       s.GitUpdateError,
+		GitReconcileMode:     s.GitReconcileMode,
+		GitFailedSHA:         s.GitFailedSHA,
+		GitNextPollAt:        s.GitNextPollAt,
+		GitCredentialID:      s.GitCredentialID,
+		GitUpdateClaimedBy:   s.GitUpdateClaimedBy,
+		GitUpdateClaimedAt:   s.GitUpdateClaimedAt,
+		GitLastDeliveryID:    s.GitLastDeliveryID,
+		ComposeType:          s.ComposeType,
+		SourceType:           s.SourceType,
+		EnvironmentID:        s.EnvironmentID,
 	}
 }
 

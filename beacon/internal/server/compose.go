@@ -446,10 +446,24 @@ func (cs *composeStack) dirForID(stackID string) string {
 	return filepath.Join(cs.dir, stackID)
 }
 
+// composeRegistryAuth mirrors the API's per-registry auth payload so private
+// images referenced by a compose file can be pulled. Password is passed only
+// via --password-stdin and cleared after use.
+type composeRegistryAuth struct {
+	Username      string `json:"username,omitempty"`
+	Password      string `json:"password,omitempty"`
+	IdentityToken string `json:"identitytoken,omitempty"`
+	ServerAddress string `json:"serveraddress,omitempty"`
+}
+
 type composeDeployRequest struct {
 	StackID     string            `json:"stackId"`
 	ComposeYAML string            `json:"composeYaml"`
 	EnvVars     map[string]string `json:"envVars,omitempty"`
+	// RegistryAuth carries optional credentials for private registries used by
+	// services in the compose file. When present, the deploy runs against a
+	// temporary DOCKER_CONFIG populated via `docker login`.
+	RegistryAuth []*composeRegistryAuth `json:"registryAuth,omitempty"`
 	// RemoveOrphans is opt-in and defaults to false. When true, it passes
 	// --remove-orphans to `docker compose up`, which removes any containers
 	// Compose considers orphaned relative to the *current* compose file.
@@ -458,6 +472,52 @@ type composeDeployRequest struct {
 	// compose associates with this project name) that the caller did not
 	// intend to remove. Callers must explicitly request this behavior.
 	RemoveOrphans bool `json:"removeOrphans,omitempty"`
+}
+
+// prepareComposeRegistryConfig logs into every supplied registry inside a fresh
+// owner-only DOCKER_CONFIG dir and returns the env slice to run compose with
+// plus a cleanup func. Returns os.Environ() (and a no-op cleanup) when no
+// credentials are supplied, so unauthenticated pulls behave as before.
+func (s *Server) prepareComposeRegistryConfig(ctx context.Context, auths []*composeRegistryAuth) ([]string, func(), error) {
+	if len(auths) == 0 {
+		return os.Environ(), func() {}, nil
+	}
+	dockerConfigDir, err := os.MkdirTemp("", "compose-docker-config-*")
+	if err != nil {
+		return nil, func() {}, err
+	}
+	if err := os.Chmod(dockerConfigDir, 0o700); err != nil {
+		os.RemoveAll(dockerConfigDir)
+		return nil, func() {}, err
+	}
+	env := append(os.Environ(), "DOCKER_CONFIG="+dockerConfigDir)
+	cleanup := func() { os.RemoveAll(dockerConfigDir) }
+	for _, auth := range auths {
+		if auth == nil || (auth.Password == "" && auth.IdentityToken == "") {
+			continue
+		}
+		args := []string{"login"}
+		if auth.Username != "" {
+			args = append(args, "-u", auth.Username, "--password-stdin")
+		} else {
+			args = append(args, "--password-stdin")
+		}
+		if auth.ServerAddress != "" {
+			args = append(args, auth.ServerAddress)
+		}
+		loginCtx, cancel := context.WithTimeout(ctx, registryLoginTimeout)
+		cmd := exec.CommandContext(loginCtx, dockerBinary(), args...)
+		cmd.Env = env
+		cmd.Stdin = strings.NewReader(auth.Password)
+		_, lerr := cmd.CombinedOutput()
+		auth.Password = ""
+		cancel()
+		if lerr != nil {
+			cleanup()
+			return nil, func() {}, fmt.Errorf("registry login failed for %q: %w", auth.ServerAddress, lerr)
+		}
+	}
+	return env, cleanup, nil
 }
 
 type composeDeployResponse struct {
@@ -551,12 +611,23 @@ func (s *Server) handleComposeDeploy(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Minute)
 	defer cancel()
 
+	registryEnv, registryCleanup, err := s.prepareComposeRegistryConfig(ctx, req.RegistryAuth)
+	if err != nil {
+		writeJSON(w, http.StatusConflict, composeOperationResponse{
+			StackID: req.StackID,
+			Error:   err.Error(),
+		})
+		return
+	}
+	defer registryCleanup()
+
 	upArgs := []string{"compose", "-f", composePath, "-p", req.StackID, "up", "-d"}
 	if req.RemoveOrphans {
 		upArgs = append(upArgs, "--remove-orphans")
 	}
 	cmd := exec.CommandContext(ctx, dockerBinary(), upArgs...)
 	cmd.Dir = stackDir
+	cmd.Env = registryEnv
 	output, err := cmd.CombinedOutput()
 
 	if err != nil {

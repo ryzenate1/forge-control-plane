@@ -2173,6 +2173,23 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(wh)
 	})
 
+	// GET /webhooks/:id — fetch a single webhook definition.
+	protected.Get("/webhooks/:id", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		wh, err := cfg.Store.GetWebhook(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "webhook not found")
+		}
+		if wh.Secret != "" {
+			wh.Secret = maskedSecret
+		}
+		return c.JSON(wh)
+	})
+
 	protected.Get("/webhooks/:id/deliveries", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -2192,6 +2209,26 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(deliveries)
 	})
 
+	// GET /webhooks/:id/dead-letter — deliveries that exhausted all retries.
+	protected.Get("/webhooks/:id/dead-letter", requireRole("admin"), requireAdminScope("webhooks.read"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		offset := 0
+		if o := c.Query("offset"); o != "" {
+			if parsed, err := strconv.Atoi(o); err == nil && parsed >= 0 {
+				offset = parsed
+			}
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		deliveries, err := cfg.Store.ListDeadLetterDeliveries(ctx, c.Params("id"), queryLimit(c), offset)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		return c.JSON(deliveries)
+	})
+
 	protected.Post("/webhooks/:id/deliveries/:deliveryId/retry", requireRole("admin"), requireAdminScope("webhooks.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -2202,6 +2239,26 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		return c.JSON(fiber.Map{"ok": true})
+	})
+
+	// POST /webhooks/:id/test — fire a test delivery so the admin can verify the
+	// endpoint receives and ACKs events before enabling production traffic.
+	protected.Post("/webhooks/:id/test", requireRole("admin"), requireAdminScope("webhooks.write"), mutationLimiter, func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		wh, err := cfg.Store.GetWebhookWithSecret(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "webhook not found")
+		}
+		payload := []byte(`{"event":"test","message":"Forge webhook test delivery"}`)
+		delivery, err := cfg.Store.CreateTestDelivery(ctx, wh, "test", payload, payload)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(delivery)
 	})
 
 	protected.Delete("/webhooks/deliveries/:deliveryId", requireRole("admin"), requireAdminScope("webhooks.delete"), func(c *fiber.Ctx) error {

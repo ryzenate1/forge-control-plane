@@ -27,6 +27,13 @@ func (f *Factory) CreateRuntime(ctx context.Context) (Runtime, error) {
 		rt, err = createContainerdRuntime(f.config.Containerd)
 	case ProviderFirecracker:
 		rt, err = createFirecrackerRuntime(f.config.Firecracker)
+	case LXCProvider:
+		// Recognised experimental engines. The adapters are stubs that refuse
+		// every workload operation with an explicit message, which is still more
+		// honest than failing the switch with "unsupported runtime provider".
+		rt, err = NewLXCRuntime()
+	case KVMProvider:
+		rt, err = NewKVMRuntime()
 	default:
 		return nil, fmt.Errorf("unsupported runtime provider: %s", f.config.Provider)
 	}
@@ -49,5 +56,7 @@ func (f *Factory) AvailableProviders() []string {
 		ProviderPodman,
 		ProviderFirecracker,
 		ProviderKubernetes,
+		LXCProvider,
+		KVMProvider,
 	}
 }

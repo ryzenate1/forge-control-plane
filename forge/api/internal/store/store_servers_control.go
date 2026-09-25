@@ -61,11 +61,12 @@ func (s *Store) ServerControlTarget(ctx context.Context, serverID string) (Serve
 		SELECT s.id::text, n.base_url, n.id::text,
 		       COALESCE(n.daemon_token_id, ''),
 		       COALESCE(n.daemon_token, ''),
-		       COALESCE(n.daemon_token_encrypted, '')
+		       COALESCE(n.daemon_token_encrypted, ''),
+		       COALESCE(s.runtime_provider, 'docker')
 		FROM servers s
 		JOIN nodes n ON n.id = s.node_id
 		WHERE s.id = $1
-	`, serverID).Scan(&target.ServerID, &target.NodeURL, &nodeID, &tokenID, &daemonToken, &daemonTokenEncrypted)
+	`, serverID).Scan(&target.ServerID, &target.NodeURL, &nodeID, &tokenID, &daemonToken, &daemonTokenEncrypted, &target.RuntimeProvider)
 	if err != nil {
 		return ServerControlTarget{}, err
 	}
@@ -90,6 +91,7 @@ func (s *Store) ServerProvisionTarget(ctx context.Context, serverID string) (Ser
 		       COALESCE(n.daemon_token_id, ''),
 		       COALESCE(n.daemon_token, ''),
 		       COALESCE(n.daemon_token_encrypted, ''),
+		       COALESCE(s.runtime_provider, 'docker'),
 		       COALESCE(NULLIF(s.docker_image, ''), (SELECT value FROM jsonb_each_text(e.docker_images) ORDER BY key LIMIT 1), ''),
 		       COALESCE(NULLIF(s.startup_command, ''), e.startup),
 		       e.install_script, e.install_container, e.install_entrypoint, e.config::text, e.file_denylist::text,
@@ -110,6 +112,7 @@ func (s *Store) ServerProvisionTarget(ctx context.Context, serverID string) (Ser
 		&tokenID,
 		&daemonToken,
 		&daemonTokenEncrypted,
+		&target.RuntimeProvider,
 		&target.Image,
 		&target.StartupCommand,
 		&target.InstallScript,

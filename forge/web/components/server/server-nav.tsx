@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { useT } from "@/components/TranslationProvider";
 import { hasServerPermission, type ServerAccess } from "./server-context";
 
-export type ServerTab = "overview" | "console" | "files" | "databases" | "schedules" | "tasks" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "resource-limits" | "deployments" | "git" | "database" | "transfer";
+export type ServerTab = "overview" | "console" | "terminal" | "files" | "databases" | "schedules" | "tasks" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "resource-limits" | "deployments" | "git" | "database" | "transfer";
 
 interface ServerNavProps { serverId: string; server: ApiServer; access: ServerAccess; activeTab?: ServerTab }
 

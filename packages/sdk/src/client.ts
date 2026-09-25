@@ -278,6 +278,58 @@ export type PlacementExplainResult = {
   isCandidate: boolean;
 };
 
+// ---- Fencing (admin) ----
+
+export type FencePreviewRow = {
+  id: string;
+  name: string;
+  status: string;
+  generation: number;
+};
+
+export type FenceResult = {
+  nodeId: string;
+  fenced: boolean;
+  serverCount: number;
+  serverIds?: string[];
+  reason?: string;
+};
+
+// ---- Platform upgrade (admin) ----
+
+export type UpgradeVersionInfo = {
+  component: string;
+  current: string;
+  latest: string;
+  upgradable: boolean;
+};
+
+export type UpgradePlan = {
+  id: string;
+  type: string;
+  fromVersion: string;
+  toVersion: string;
+  components: string[];
+  status: string;
+  progress: number;
+  totalSteps: number;
+  currentStep: string;
+  error?: string;
+  backupPath?: string;
+  startedAt: string;
+  completedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type UpgradeResult = {
+  success: boolean;
+  message: string;
+  upgradePlan?: UpgradePlan;
+  versionInfo?: UpgradeVersionInfo[];
+  error?: string;
+};
+
 function normalizeBaseUrl(baseUrl: string): string {
   let url = baseUrl.replace(/\/+$/, '');
   if (!/\/api\/v1$/.test(url)) {
@@ -1019,6 +1071,58 @@ export class ForgeApiClient {
       body: JSON.stringify({ nodeId, place }),
     });
     return envelope.data;
+  }
+
+  // -------------------------------------------------------------------------
+  // Fencing (admin)
+  // -------------------------------------------------------------------------
+
+  /** Preview which servers would be fenced on a node. `GET /fencing/nodes/:id/preview`. */
+  public async previewFence(nodeId: string): Promise<FencePreviewRow[]> {
+    const envelope = await this.request<{ data: FencePreviewRow[] }>(`/fencing/nodes/${nodeId}/preview`);
+    return envelope.data ?? [];
+  }
+
+  /** Manually fence a node — bumps workload generations for all its servers. `POST /fencing/nodes/:id`. */
+  public async fenceNode(nodeId: string): Promise<FenceResult> {
+    const envelope = await this.request<{ data: FenceResult }>(`/fencing/nodes/${nodeId}`, { method: 'POST' });
+    return envelope.data;
+  }
+
+  // -------------------------------------------------------------------------
+  // Platform upgrade (admin)
+  // -------------------------------------------------------------------------
+
+  /** Check component versions and upgradability. `GET /upgrade/versions`. */
+  public async checkForUpgrades(): Promise<UpgradeVersionInfo[]> {
+    const envelope = await this.request<{ data: UpgradeVersionInfo[] }>('/upgrade/versions');
+    return envelope.data ?? [];
+  }
+
+  /** List upgrade plans (history). `GET /upgrade/plans`. */
+  public async listUpgradePlans(limit = 50): Promise<UpgradePlan[]> {
+    const envelope = await this.request<{ data: UpgradePlan[] }>(`/upgrade/plans?limit=${limit}`);
+    return envelope.data ?? [];
+  }
+
+  /** Create an upgrade plan. `POST /upgrade/plans`. */
+  public async createUpgradePlan(type: string, components: string[]): Promise<UpgradePlan> {
+    const envelope = await this.request<{ data: UpgradePlan }>('/upgrade/plans', {
+      method: 'POST',
+      body: JSON.stringify({ type, components }),
+    });
+    return envelope.data;
+  }
+
+  /** Execute an upgrade plan (backup → upgrade → verify → rollback-on-fail). `POST /upgrade/plans/:id/execute`. */
+  public async executeUpgradePlan(id: string): Promise<UpgradeResult> {
+    const envelope = await this.request<{ data: UpgradeResult }>(`/upgrade/plans/${id}/execute`, { method: 'POST' });
+    return envelope.data;
+  }
+
+  /** Cancel an in-progress upgrade. `POST /upgrade/plans/:id/cancel`. */
+  public async cancelUpgradePlan(id: string): Promise<OkResponse> {
+    return this.request<OkResponse>(`/upgrade/plans/${id}/cancel`, { method: 'POST' });
   }
 }
 

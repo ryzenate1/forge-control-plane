@@ -16,6 +16,14 @@ export type DockerContainerInfo = {
   created: string;
   nodeId: string;
   nodeName: string;
+  labels: Record<string, string>;
+  /**
+   * Panel server id for workload containers (label
+   * `modern-game-panel.server_id`), empty for unmanaged containers. Only a
+   * server id — never a container id — may be handed to the server-scoped
+   * container file manager.
+   */
+  serverId: string;
 };
 
 export type DockerImage = {
@@ -81,18 +89,22 @@ export async function listContainers(params?: { all?: boolean }): Promise<Docker
   for (const node of result) {
     if (Array.isArray(node.containers)) {
       for (const c of node.containers as Array<Record<string, unknown>>) {
-        const names = c.Names as string[] | undefined;
-        const ports = c.Ports as Array<Record<string, unknown>> | undefined;
+        const names = (c.Names ?? c.names) as string[] | undefined;
+        const ports = (c.Ports ?? c.ports) as Array<Record<string, unknown>> | undefined;
+        const rawLabels = (c.Labels ?? c.labels) as unknown;
+        const labels: Record<string, string> = rawLabels && typeof rawLabels === "object" ? (rawLabels as Record<string, string>) : {};
         flat.push({
           id: c.Id as string ?? c.id as string,
           name: names && names.length > 0 ? (names[0] as string).replace(/^\//, "") : "",
-          image: c.Image as string ?? "",
+          image: c.Image as string ?? c.image as string ?? "",
           state: c.State as string ?? (c.state as string) ?? "",
           status: c.Status as string ?? (c.status as string) ?? "",
           ports: ports ? ports.map((p) => `${p.hostPort || ""}:${p.containerPort}/${p.type || "tcp"}`).join(", ") : "",
           created: c.Created as string ?? (c.created as string) ?? "",
           nodeId: node.nodeId,
           nodeName: node.nodeName,
+          labels,
+          serverId: labels["modern-game-panel.server_id"] || "",
         });
       }
     }

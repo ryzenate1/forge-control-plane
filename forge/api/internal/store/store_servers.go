@@ -248,18 +248,22 @@ func (s *Store) CreateServer(ctx context.Context, req CreateServerRequest) (Serv
 
 	serverUUID := uuid.NewString()
 	uuidShort := serverUUID[:8]
+	runtimeProvider := strings.TrimSpace(req.RuntimeProvider)
+	if runtimeProvider == "" {
+		runtimeProvider = "docker"
+	}
 	_, err = tx.Exec(ctx, `
 		INSERT INTO servers (
 			id, node_id, owner_id, template_id, egg_id, name, status, desired_state, actual_state,
 			memory_mb, cpu_shares, cpu_limit, disk_mb, database_limit, backup_limit,
 			allocation_limit, io_weight, swap_mb, threads, oom_disabled, docker_image,
 			startup_command, primary_allocation_id, installed, config_sync_pending,
-			uuid, uuid_short, skip_scripts, docker_labels
+			uuid, uuid_short, skip_scripts, docker_labels, runtime_provider
 		)
 		VALUES ($1, $2, $3, $4, $4, $5, 'provisioning', 'stopped', 'stopped',
 			$6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, false, false,
-			$20, $21, $22, $23::jsonb)
-	`, serverID, req.NodeID, req.OwnerID, req.TemplateID, strings.TrimSpace(req.Name), req.MemoryMB, req.CPUShares, req.CPULimit, req.DiskMB, req.DatabaseLimit, req.BackupLimit, req.AllocationLimit, req.IOWeight, req.SwapMB, strings.TrimSpace(req.Threads), req.OOMDisabled, strings.TrimSpace(req.DockerImage), strings.TrimSpace(req.StartupCommand), req.AllocationID, serverUUID, uuidShort, req.SkipScripts, req.DockerLabels)
+			$20, $21, $22, $23::jsonb, $24)
+	`, serverID, req.NodeID, req.OwnerID, req.TemplateID, strings.TrimSpace(req.Name), req.MemoryMB, req.CPUShares, req.CPULimit, req.DiskMB, req.DatabaseLimit, req.BackupLimit, req.AllocationLimit, req.IOWeight, req.SwapMB, strings.TrimSpace(req.Threads), req.OOMDisabled, strings.TrimSpace(req.DockerImage), strings.TrimSpace(req.StartupCommand), req.AllocationID, serverUUID, uuidShort, req.SkipScripts, req.DockerLabels, runtimeProvider)
 	if err != nil {
 		return Server{}, err
 	}

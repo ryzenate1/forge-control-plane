@@ -27,10 +27,10 @@ import {
   StoragePlattersIcon,
 } from "@/components/ui/forge-icons";
 import {
-  Archive, ArrowLeftRight, Award, BarChart3, Bell, Boxes, Building2, Bug, Cable, Clock, Cloud, Code2, Compass,
+  Activity, Archive, ArrowLeftRight, Award, BarChart3, Bell, Boxes, Building2, Bug, Cable, Clock, Cloud, Code2, Compass,
   Cpu, CreditCard, Droplets, Eye, FileCode, FileText, Fingerprint, FlaskConical, FolderLock,
   GitPullRequest, Globe, HardDrive, KeyRound, Layers, LifeBuoy, Lock, Mail, Network, Plug,
-  Repeat, Route, Scale, Settings, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal,
+  ArrowUpCircle, Repeat, Route, Scale, Settings, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal,
   Tags, Terminal, Ticket, Trash2, TrendingUp, Users, Webhook, Workflow,
 } from "lucide-react";
 
@@ -56,8 +56,8 @@ export type AdminNavGroup = { title: string; titleKey: string; items: AdminNavEn
 /**
  * Consolidated IA — 7 goal-oriented groups (was 11).
  *
- * OVERVIEW (4) · WORKLOADS (11) · DELIVERY (8) · INFRASTRUCTURE (13)
- * NETWORK & SECURITY (14) · OPERATIONS (14) · ORGANIZATION & SETTINGS (15) = 79 hrefs.
+ * OVERVIEW (4) · WORKLOADS (12) · DELIVERY (8) · INFRASTRUCTURE (17)
+ * NETWORK & SECURITY (14) · OPERATIONS (15) · ORGANIZATION & SETTINGS (16) = 86 hrefs.
  *
  * All hrefs retained for compat; legacy paths map via ADMIN_ALIAS_ROUTES.
  * Database Services is intentionally NOT a second nav item — it lives as a
@@ -81,6 +81,7 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Databases", labelKey: "admin.nav.databaseHosts", href: "/admin/databases", icon: DatabaseCylinderIcon, requiredRole: "admin", capability: "available", description: "Databases — unified inventory, hosts, containers, managed DBs, services, catalog, server DBs", descriptionKey: "admin.navDesc.databaseHosts" },
     { label: "Catalog", labelKey: "admin.nav.catalog", href: "/admin/catalog", icon: TemplateSheetIcon, requiredRole: "admin", capability: "available", description: "One-click service catalog and provisioning", descriptionKey: "admin.navDesc.catalog" },
     { label: "App Store", labelKey: "admin.nav.appStore", href: "/admin/app-store", icon: AppStoreIcon, requiredRole: "admin", capability: "available", description: "Curated one-click service catalog", descriptionKey: "admin.navDesc.appStore", secondary: true },
+    { label: "Registries", labelKey: "admin.nav.registries", href: "/admin/registries", icon: Boxes, requiredRole: "admin", capability: "available", description: "Private Docker registry credentials for image pull/push", descriptionKey: "admin.navDesc.registries", secondary: true },
     { label: "Service Definitions", labelKey: "admin.nav.nestsEggs", href: "/admin/nests", icon: Layers, requiredRole: "admin", capability: "available", description: "Reusable server blueprints (nests and eggs)", descriptionKey: "admin.navDesc.nestsEggs", secondary: true },
     { label: "App Templates", labelKey: "admin.nav.appTemplates", href: "/admin/app-templates", icon: FileCode, requiredRole: "admin", capability: "available", description: "Application deployment blueprints", descriptionKey: "admin.navDesc.appTemplates", secondary: true },
     { label: "Legacy Templates", labelKey: "admin.nav.compatibilityTemplates", href: "/admin/templates", icon: Archive, requiredRole: "admin", capability: "available", description: "Legacy compatibility templates", descriptionKey: "admin.navDesc.compatibilityTemplates", secondary: true },
@@ -102,12 +103,16 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Nodes", labelKey: "admin.nav.nodes", href: "/admin/nodes", icon: NodeHostIcon, requiredRole: "admin", capability: "available", description: "Daemon hosts and heartbeat status", descriptionKey: "admin.navDesc.nodes" },
     { label: "Regions", labelKey: "admin.nav.regions", href: "/admin/regions", icon: GlobeGridIcon, requiredRole: "admin", capability: "available", description: "Cluster regions and placement zones", descriptionKey: "admin.navDesc.regions" },
     { label: "Docker", labelKey: "admin.nav.docker", href: "/admin/docker", icon: ContainerShippingIcon, requiredRole: "admin", capability: "available", description: "Container, image, network and volume management", descriptionKey: "admin.navDesc.docker" },
+    { label: "Docker Cleanup", labelKey: "admin.nav.dockerCleanup", href: "/admin/docker-cleanup", icon: HardDrive, requiredRole: "admin", capability: "available", description: "Per-node disk usage and scheduled, retention-aware image/cache/volume pruning", descriptionKey: "admin.navDesc.dockerCleanup", secondary: true },
     { label: "Storage Mounts", labelKey: "admin.nav.mounts", href: "/admin/mounts", icon: StoragePlattersIcon, requiredRole: "admin", capability: "available", description: "Shared storage mounts and volumes", descriptionKey: "admin.navDesc.mounts" },
     { label: "Locations", labelKey: "admin.nav.locations", href: "/admin/locations", icon: LocationPinIcon, requiredRole: "admin", capability: "available", description: "Physical and logical node locations", descriptionKey: "admin.navDesc.locations", secondary: true },
     { label: "Capabilities", labelKey: "admin.nav.capabilities", href: "/admin/capabilities", icon: Cpu, requiredRole: "admin", capability: "available", description: "Node capability inventory and drift", descriptionKey: "admin.navDesc.capabilities", secondary: true },
     { label: "Onboarding Tokens", labelKey: "admin.nav.onboardingTokens", href: "/admin/onboarding-tokens", icon: Ticket, requiredRole: "admin", capability: "available", description: "Node onboarding tokens: issue, approve, revoke", descriptionKey: "admin.navDesc.onboardingTokens", secondary: true },
     { label: "Host Detail", labelKey: "admin.nav.host", href: "/admin/host", icon: ServerRackIcon, requiredRole: "admin", capability: "available", description: "Per-node system, disk, memory and processes", descriptionKey: "admin.navDesc.host", secondary: true },
     { label: "Kubernetes", labelKey: "admin.nav.kubernetes", href: "/admin/kubernetes", icon: Boxes, requiredRole: "admin", capability: "available", description: "Kubernetes pods, deployments and services", descriptionKey: "admin.navDesc.kubernetes", secondary: true },
+    { label: "Incus", labelKey: "admin.nav.incus", href: "/admin/incus", icon: Boxes, requiredRole: "admin", capability: "available", description: "Incus system containers and virtual machines", descriptionKey: "admin.navDesc.incus", secondary: true },
+    { label: "Nomad", labelKey: "admin.nav.nomad", href: "/admin/nomad", icon: Workflow, requiredRole: "admin", capability: "available", description: "Nomad jobs, allocations, nodes and deployments", descriptionKey: "admin.navDesc.nomad", secondary: true },
+    { label: "NetBird VPN", labelKey: "admin.nav.netbird", href: "/admin/netbird", icon: Network, requiredRole: "admin", capability: "available", description: "WireGuard mesh VPN control plane", descriptionKey: "admin.navDesc.netbird", secondary: true },
     { label: "Cloud Instances", labelKey: "admin.nav.cloud", href: "/admin/cloud", icon: Cloud, requiredRole: "admin", capability: "available", description: "Cloud provider instances and provisioning", descriptionKey: "admin.navDesc.cloud", secondary: true },
     { label: "Host Files", labelKey: "admin.nav.files", href: "/admin/files", icon: FileText, requiredRole: "admin", capability: "available", description: "Browse and manage host files", descriptionKey: "admin.navDesc.files", secondary: true },
     { label: "Terminal", labelKey: "admin.nav.terminal", href: "/admin/terminal", icon: Terminal, requiredRole: "admin", capability: "available", description: "Secure host shell and console access", descriptionKey: "admin.navDesc.terminal", secondary: true },
@@ -131,7 +136,9 @@ export const adminPageRegistry: AdminNavGroup[] = [
   ]},
   { title: "Operations", titleKey: "admin.navGroup.operations", items: [
     { label: "Operations", labelKey: "admin.nav.operations", href: "/admin/operations", icon: SlidersHorizontal, requiredRole: "admin", capability: "available", description: "Control-plane operation history and controls", descriptionKey: "admin.navDesc.operations" },
+    { label: "Docker Events", labelKey: "admin.nav.dockerEvents", href: "/admin/docker-events", icon: Activity, requiredRole: "admin", capability: "available", description: "Live container lifecycle events streamed from every Beacon node", descriptionKey: "admin.navDesc.dockerEvents" },
     { label: "Backups", labelKey: "admin.nav.backups", href: "/admin/backups", icon: HardDrive, requiredRole: "admin", capability: "available", description: "Backups, artifacts and restore operations", descriptionKey: "admin.navDesc.backups" },
+    { label: "Backup Engines", labelKey: "admin.nav.backupEngines", href: "/admin/backups/engines", icon: Archive, requiredRole: "admin", capability: "available", description: "Restic and Kopia repositories, snapshots and restores", descriptionKey: "admin.navDesc.backupEngines", secondary: true },
     { label: "Migrations", labelKey: "admin.nav.migrations", href: "/admin/migrations", icon: ArrowLeftRight, requiredRole: "admin", capability: "available", description: "Live migration jobs and recovery plans", descriptionKey: "admin.navDesc.migrations" },
     { label: "Cron Jobs", labelKey: "admin.nav.cronJobs", href: "/admin/cron-jobs", icon: Clock, requiredRole: "admin", capability: "available", description: "Scheduled and recurring automation", descriptionKey: "admin.navDesc.cronJobs" },
     { label: "Reconciliation", labelKey: "admin.nav.reconciliation", href: "/admin/reconciliation", icon: FlaskConical, requiredRole: "admin", capability: "available", description: "Drift detection and state reconciliation", descriptionKey: "admin.navDesc.reconciliation", secondary: true },
@@ -161,6 +168,7 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Plugins", labelKey: "admin.nav.plugins", href: "/admin/plugins", icon: Plug, requiredRole: "admin", capability: "metadata-only", description: "Extensions and marketplace plugins", descriptionKey: "admin.navDesc.plugins", secondary: true },
     { label: "API Keys", labelKey: "admin.nav.apiKeys", href: "/admin/api", icon: Code2, requiredRole: "admin", capability: "available", description: "API keys and programmatic access", descriptionKey: "admin.navDesc.apiKeys", secondary: true },
     { label: "Onboarding", labelKey: "admin.nav.onboarding", href: "/admin/onboarding", icon: Compass, requiredRole: "admin", capability: "available", description: "Guided setup: connect and deploy", descriptionKey: "admin.navDesc.onboarding", secondary: true },
+    { label: "Platform Upgrade", labelKey: "admin.nav.upgrade", href: "/admin/upgrade", icon: ArrowUpCircle, requiredRole: "admin", capability: "available", description: "Self-upgrade the control plane with backup + rollback", descriptionKey: "admin.navDesc.upgrade", secondary: true },
   ]},
 ];
 

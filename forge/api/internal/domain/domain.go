@@ -121,6 +121,9 @@ type PlacementRequest struct {
 	AllocationID    string `json:"allocationId,omitempty"`
 	SkipReservation bool   `json:"skipReservation,omitempty"`
 	StorageLocality string `json:"storageLocality,omitempty"`
+	// RuntimeProvider constrains placement to nodes whose runtime_provider
+	// matches. Empty (or "docker") leaves placement unconstrained.
+	RuntimeProvider string `json:"runtimeProvider,omitempty"`
 	MemoryMB        int    `json:"memoryMb,omitempty"`
 	CPUShares       int    `json:"cpuShares,omitempty"`
 	CPU             int    `json:"cpu,omitempty"`

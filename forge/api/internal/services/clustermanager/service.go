@@ -87,6 +87,7 @@ func (s *Service) CreateServer(ctx context.Context, req store.CreateServerReques
 	placementReq.NodeID = firstNonEmpty(placementReq.NodeID, req.NodeID)
 	placementReq.RequiredNode = firstNonEmpty(placementReq.RequiredNode, req.NodeID)
 	placementReq.AllocationID = firstNonEmpty(placementReq.AllocationID, req.AllocationID)
+	placementReq.RuntimeProvider = firstNonEmpty(placementReq.RuntimeProvider, req.RuntimeProvider)
 	placementReq.MemoryMB = firstNonZero(placementReq.MemoryMB, req.MemoryMB)
 	placementReq.CPUShares = firstNonZero(placementReq.CPUShares, req.CPUShares)
 	placementReq.DiskMB = firstNonZero(placementReq.DiskMB, req.DiskMB)
@@ -820,7 +821,7 @@ func runtimeEnvironment(environment map[string]string, image string) map[string]
 }
 
 func runtimeTargetFromProvision(target store.ServerProvisionTarget) gpruntime.Target {
-	return gpruntime.Target{NodeURL: target.NodeURL, NodeToken: target.NodeToken, ServerID: target.ServerID}
+	return gpruntime.Target{NodeURL: target.NodeURL, NodeToken: target.NodeToken, ServerID: target.ServerID, Provider: target.RuntimeProvider}
 }
 
 func runtimeTarget(target store.ServerControlTarget) gpruntime.Target {
@@ -828,6 +829,7 @@ func runtimeTarget(target store.ServerControlTarget) gpruntime.Target {
 		NodeURL:   target.NodeURL,
 		NodeToken: target.NodeToken,
 		ServerID:  target.ServerID,
+		Provider:  target.RuntimeProvider,
 	}
 }
 

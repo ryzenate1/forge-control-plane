@@ -32,12 +32,97 @@ func registerDeploymentRoutes(protected fiber.Router, cfg Config, svc *deploymen
 		return c.Status(201).JSON(fiber.Map{"data": d})
 	})
 
+	// canary: start a canary deployment (provision new alongside old, health-gate,
+	// promote or rollback). Useful for risky image changes where you want to verify
+	// before cutting over.
+	dep.Post("/canary", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
+		var req struct {
+			ServerID        string `json:"serverId"`
+			Image           string `json:"image"`
+			HealthCheckPath string `json:"healthCheckPath"`
+			HealthCheckPort int    `json:"healthCheckPort"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		if err := deployment.ValidateImageRef(req.Image); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		d, err := svc.StartCanary(c.Context(), req.ServerID, req.Image, req.HealthCheckPath, req.HealthCheckPort)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(fiber.Map{"data": d})
+	})
+
+	// rolling: scale up new instances, optionally health-gate, then scale down old.
+	// No named targets; works with the replica manager.
+	dep.Post("/rolling", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
+		var req struct {
+			ServerID        string `json:"serverId"`
+			Image           string `json:"image"`
+			HealthCheckPath string `json:"healthCheckPath"`
+			HealthCheckPort int    `json:"healthCheckPort"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		if err := deployment.ValidateImageRef(req.Image); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		d, err := svc.StartRolling(c.Context(), req.ServerID, req.Image, req.HealthCheckPath, req.HealthCheckPort)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(fiber.Map{"data": d})
+	})
+
+	// recreate: stop-then-start. For workloads that cannot run two copies at once
+	// (game servers holding exclusive locks, databases).
+	dep.Post("/recreate", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
+		var req struct {
+			ServerID        string `json:"serverId"`
+			Image           string `json:"image"`
+			HealthCheckPath string `json:"healthCheckPath"`
+			HealthCheckPort int    `json:"healthCheckPort"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		if err := deployment.ValidateImageRef(req.Image); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		d, err := svc.StartRecreate(c.Context(), req.ServerID, req.Image, req.HealthCheckPath, req.HealthCheckPort)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(fiber.Map{"data": d})
+	})
+
 	dep.Post("/:id/rollback", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		d, err := svc.Rollback(c.Context(), c.Params("id"))
 		if err != nil {
 			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": d})
+	})
+
+	// rollout: unified endpoint the web UI uses to start a deployment with any
+	// strategy in one call. Replaces four separate POST endpoints for new code;
+	// the per-strategy endpoints above remain for backward-compatibility.
+	dep.Post("/:serverId/rollout", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
+		var req deployment.RolloutRequest
+		if err := c.BodyParser(&req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
+		}
+		// The server ID comes from the path; override anything in the body so a
+		// mismatched URL/body pair cannot target the wrong workload.
+		req.ServerID = c.Params("serverId")
+		d, err := svc.StartRollout(c.Context(), &req)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(201).JSON(fiber.Map{"data": d})
 	})
 
 	dep.Post("/:id/complete", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {

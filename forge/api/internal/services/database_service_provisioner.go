@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
@@ -24,6 +25,15 @@ import (
 )
 
 const dbServicePingTimeout = 5 * time.Second
+
+// readOnlyQueryRe admits only statements that cannot mutate state: SELECT /
+// SHOW / EXPLAIN / WITH and table-introspection DESCRIBE. Anything else
+// (DML, DDL, CALL, ...) is rejected before it reaches the engine.
+var readOnlyQueryRe = regexp.MustCompile(`(?is)^\s*(select|show|explain|describe|desc|with)\b`)
+
+// mutatingKeywordRe catches writes smuggled into an otherwise read-looking
+// statement (e.g. `SELECT ... INTO OUTFILE` in MySQL).
+var mutatingKeywordRe = regexp.MustCompile(`(?is)\b(insert|update|delete|drop|alter|truncate|create|grant|revoke|copy|call|execute|into\s+(out|dump)file|vacuum|analyze|reload|kill|do)\b`)
 
 type adminDB interface {
 	PingContext(context.Context) error
@@ -551,6 +561,68 @@ func (p *DatabaseServiceProvisioner) adminConn(ctx context.Context, serviceID st
 	default:
 		return nil, errors.New("admin connection not supported for this engine")
 	}
+}
+
+// RunReadOnlyQuery executes a single read-only statement against the service's
+// admin connection path (same credentials the provisioner uses everywhere
+// else) and returns at most maxRows rows as generic maps. The query is
+// validated against a read-only allow-list before execution; callers exposing
+// user-supplied SQL must apply their own stricter guard on top.
+func (p *DatabaseServiceProvisioner) RunReadOnlyQuery(ctx context.Context, serviceID, query string, maxRows int) ([]map[string]any, error) {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return nil, errors.New("query is required")
+	}
+	if !readOnlyQueryRe.MatchString(trimmed) {
+		return nil, errors.New("only read-only queries are allowed")
+	}
+	if mutatingKeywordRe.MatchString(trimmed) {
+		return nil, errors.New("only read-only queries are allowed")
+	}
+	if strings.Contains(strings.TrimRight(trimmed, ";"), ";") {
+		return nil, errors.New("multiple statements are not allowed")
+	}
+	if maxRows <= 0 {
+		maxRows = 100
+	}
+	conn, err := p.adminConn(ctx, serviceID)
+	if err != nil {
+		return nil, err
+	}
+	defer conn.Close()
+	rows, err := conn.QueryContext(ctx, trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("run diagnostic query: %w", err)
+	}
+	defer rows.Close()
+	columns, err := rows.Columns()
+	if err != nil {
+		return nil, err
+	}
+	out := make([]map[string]any, 0, 32)
+	for rows.Next() {
+		if len(out) >= maxRows {
+			break
+		}
+		raw := make([]any, len(columns))
+		ptrs := make([]any, len(columns))
+		for i := range raw {
+			ptrs[i] = &raw[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			return nil, err
+		}
+		row := make(map[string]any, len(columns))
+		for i, col := range columns {
+			val := raw[i]
+			if b, ok := val.([]byte); ok {
+				val = string(b)
+			}
+			row[col] = val
+		}
+		out = append(out, row)
+	}
+	return out, rows.Err()
 }
 
 func quoteIdent(engine, value string) string {

@@ -11,9 +11,10 @@ import (
 )
 
 type ComposeDeployRequest struct {
-	StackID     string            `json:"stackId"`
-	ComposeYAML string            `json:"composeYaml"`
-	EnvVars     map[string]string `json:"envVars,omitempty"`
+	StackID      string            `json:"stackId"`
+	ComposeYAML  string            `json:"composeYaml"`
+	EnvVars      map[string]string `json:"envVars,omitempty"`
+	RegistryAuth []*RegistryAuth   `json:"registryAuth,omitempty"`
 }
 
 type ComposeDeployResponse struct {

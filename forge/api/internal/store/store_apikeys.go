@@ -97,6 +97,8 @@ var AdminScopes = map[string]string{
 	"services.write":        "Manage services",
 	"traffic.read":          "View traffic manager rules and policies",
 	"traffic.write":         "Manage traffic manager rules and policies",
+	"netbird.read":          "View NetBird VPN peers, networks, routes, ACLs and DNS",
+	"netbird.write":         "Manage NetBird VPN peers, networks, routes, ACLs and DNS",
 }
 
 // ClientScopes are the scopes a non-admin may delegate to a personal API key.

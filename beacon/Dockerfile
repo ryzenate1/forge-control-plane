@@ -11,7 +11,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 COPY . .
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=1 GOOS=linux go build -o /out/daemon ./cmd/daemon
+    CGO_ENABLED=1 GOOS=linux go build -tags "firecracker containerd" -o /out/daemon ./cmd/daemon
 
 FROM alpine:3.21
 

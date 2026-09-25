@@ -1034,6 +1034,13 @@ func imagePullOptions(auth *RegistryAuth) (image.PullOptions, error) {
 	return image.PullOptions{RegistryAuth: base64.URLEncoding.EncodeToString(body)}, nil
 }
 
+// ImagePullOptions exposes imagePullOptions to the server package so node
+// handlers that pull outside the runtime (database provisioning) encode
+// registry credentials exactly the same way the runtime does.
+func ImagePullOptions(auth *RegistryAuth) (image.PullOptions, error) {
+	return imagePullOptions(auth)
+}
+
 func buildNetworkingConfig(req CreateRequest) *network.NetworkingConfig {
 	settings := &network.EndpointSettings{}
 	if req.NetworkIP != "" {

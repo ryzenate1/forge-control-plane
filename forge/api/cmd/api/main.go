@@ -44,9 +44,13 @@ import (
 	alerting "gamepanel/forge/internal/services/alerting"
 	apphostingsvc "gamepanel/forge/internal/services/apphosting"
 	appstoresvc "gamepanel/forge/internal/services/appstore"
+	catalogsvc "gamepanel/forge/internal/services/catalog"
+	"gamepanel/forge/internal/services/forgefile"
+	onboardingsvc "gamepanel/forge/internal/services/onboarding"
 	auditlogsvc "gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
+	backupenginesvc "gamepanel/forge/internal/services/backupengine"
 	billingsvc "gamepanel/forge/internal/services/billing"
 	buildsvc "gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
@@ -75,16 +79,19 @@ import (
 	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
+	incussvc "gamepanel/forge/internal/services/incus"
 	installersvc "gamepanel/forge/internal/services/installer"
 	"gamepanel/forge/internal/services/loadbalancer"
 	"gamepanel/forge/internal/services/logger"
 	mailservice "gamepanel/forge/internal/services/mail"
 	"gamepanel/forge/internal/services/migration"
+	netbirdsvc "gamepanel/forge/internal/services/netbird"
 	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	notification "gamepanel/forge/internal/services/notification"
 	notifs "gamepanel/forge/internal/services/notifications"
+	nomadsvc "gamepanel/forge/internal/services/nomad"
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	pipelinesvc "gamepanel/forge/internal/services/pipeline"
@@ -103,6 +110,7 @@ import (
 	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
+	upgradesvc "gamepanel/forge/internal/services/upgrade"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/webhook"
 	"gamepanel/forge/internal/services/zerodowntime"
@@ -313,6 +321,7 @@ func run() error {
 		drainLedger       *drainsvc.Service
 		placementSvc      *envaffinitysvc.EnvAffinity
 		fenceSvc          *fencing.Service
+		upgradeSvc        *upgradesvc.Service
 		membershipSvc     *clustermembership.Service
 		nodeAutoSvc       *nodeautoscale.Service
 		cleanupSvc        *cleanupsvc.Service
@@ -325,14 +334,19 @@ func run() error {
 		discoverySvc      *servicediscovery.Service
 		crossNodeResolver *crossnode.Resolver
 		ingressSync       *crossnode.IngressSynchronizer
+		netbirdSvc        *netbirdsvc.Service
 		healthFilter      *crossnode.HealthFilter
 		appStoreSvc       *appstoresvc.Service
+		catalogSvc        *catalogsvc.Service
+		forgefileSvc      *forgefile.Service
+		onboardingSvc    *onboardingsvc.Service
 		cronJobSvc        *cronjobsvc.Service
 		scheduledTaskSvc  *scheduledtaskssvc.Service
 		gitDeployMgmtSvc  *gitsvc.DeploymentManagementService
 		zdSvc             *zerodowntime.Service
 		dbSvcProv         *services.DatabaseServiceProvisioner
 		dbBackupSvc       *dbbackupsvc.Service
+		backupEngineSvc   *backupenginesvc.Service
 		buildpackSvc      *buildpacksvc.Service
 		processSvc        *processsvc.Service
 		certSvc           *services.CertService
@@ -380,8 +394,22 @@ func run() error {
 			WithPredictiveScorer(predictiveScorer).
 			WithConstraintScheduler(constraintSched).
 			WithReservations(resMgr)
+
+		// Build the multi-runtime adapter: one dispatcher that routes operations
+		// to the correct engine based on Target.Provider. Docker is always available;
+		// other adapters are registered unconditionally — Beacon's own provider check
+		// (409 Conflict) is the enforcement point at runtime.
 		dockerRT := gpruntime.NewDockerAdapter(daemonClient)
-		cm = clustermanager.New(db, dockerRT, sched, resMgr, outboxPub)
+		multiRT := gpruntime.NewMultiRuntimeAdapter(dockerRT)
+		multiRT.Register(gpruntime.DockerProvider, dockerRT)
+		multiRT.Register(gpruntime.ContainerdProvider, gpruntime.NewContainerdAdapter(daemonClient))
+		multiRT.Register(gpruntime.PodmanProvider, gpruntime.NewPodmanAdapter(daemonClient))
+		multiRT.Register(gpruntime.FirecrackerProvider, gpruntime.NewFirecrackerAdapter(daemonClient))
+		multiRT.Register(gpruntime.KubernetesProvider, gpruntime.NewKubernetesAdapter(daemonClient))
+		multiRT.Register(gpruntime.KVMProvider, gpruntime.NewKVMAdapter(daemonClient))
+		multiRT.Register(gpruntime.LXCProvider, gpruntime.NewLXCAdapter(daemonClient))
+
+		cm = clustermanager.New(db, multiRT, sched, resMgr, outboxPub)
 
 		// Dev/demo: the seeded demo server is inserted directly into the
 		// database, bypassing the normal create-provision flow, so its
@@ -426,6 +454,11 @@ func run() error {
 		ep.SetServerMountStore(db)
 		fenceSvc = fencing.New(db, outboxPub)
 		eventRegistry.Subscribe(events.EventNodeRecovered, fenceSvc)
+		upgradeSvc = upgradesvc.New(upgradesvc.AdaptStore(db), slogLogger,
+			env("FORGE_INSTALL_DIR", "."),
+			env("FORGE_BACKUP_DIR", env("DATA_DIR", ".")+"/backups"),
+			env("FORGE_VERSION_FILE", "VERSION"),
+		)
 		rcv = recoverysvc.NewWithMigrationExecutor(db, sched, resMgr, mig, outboxPub)
 		recTokenStore := recoverysvc.NewStore(db.GetDB())
 		rts = recoverysvc.NewTokenService(recTokenStore)
@@ -816,6 +849,9 @@ func run() error {
 			slogLogger.Warn("seed app store catalog failed", slog.String("error", err.Error()))
 		}
 
+		// One-click service catalog (postgres/redis/rabbitmq/…).
+		// Initialized after dbContainerSvc/composeLifecycle are ready (see below).
+
 		queueSvc.Start(appCtx)
 
 		opStore := operationsvc.NewPostgresStore(db.GetDB())
@@ -1072,6 +1108,10 @@ func run() error {
 		bkAdmin := backup.NewMainService(db, backup.NewSlogLogger(slogLogger))
 		bkAdmin.SetDaemonClient(daemonClient)
 		bkWorker.SetJobService(bkAdmin.JobService())
+		// Restic / Kopia backup engines: repository registration, scheduled
+		// snapshots and restores. The service shells out to the restic/kopia CLI on
+		// the control-plane host or on a bound beacon node through the daemon.
+		backupEngineSvc = backupenginesvc.New(db, daemonClient, slogLogger)
 		dnsSvc, err = dnssvc.New(db)
 		if err != nil {
 			return fmt.Errorf("create dns service: %w", err)
@@ -1095,6 +1135,10 @@ func run() error {
 		ingressSync = crossnode.NewIngressSynchronizer(caddyProxy, crossNodeResolver, healthFilter, outboxPub)
 		ingressSync.Start(appCtx, 30*time.Second)
 
+		// NetBird mesh VPN control plane client (nil-safe when NETBIRD_API_URL /
+		// NETBIRD_API_TOKEN are unset).
+		netbirdSvc = netbirdsvc.New(db, slogLogger)
+
 		domainNodeResolver := &domainNodeResolver{store: db}
 		domainSvc = domains.New(store.NewDomainAdapter(db), caddyProxy, env("PANEL_IP", ""), outboxPub)
 		domainSvc.SetNodeResolver(domainNodeResolver)
@@ -1102,6 +1146,7 @@ func run() error {
 		tenancySvc = tenancy.New(db)
 		procedureSvc = proceduresvc.New(db, outboxPub, slogLogger, db)
 		apphostingSvc = apphostingsvc.New(db, tenancySvc, composeStackDeployer{lifecycle: composeLifecycle})
+		onboardingSvc = onboardingsvc.NewService(db, gitSvc, apphostingSvc, slogLogger)
 		endpointSvc = environments.New(db)
 		if psvc, perr := pipelinesvc.New(pipelinesvc.Options{
 			Store:          pipelinesvc.NewStore(db.GetDB()),
@@ -1163,8 +1208,21 @@ func run() error {
 			eventRegistry.Subscribe(et, drainLedgerSub)
 		}
 		dbContainerSvc = dbprovisioner.NewDBContainerService(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"))
+		// One-click service catalog (postgres/redis/rabbitmq/…). Depends on
+		// dbContainerSvc and composeLifecycle being initialised above.
+		catalogSvc, err = catalogsvc.New(catalogsvc.Options{
+			Store:        db,
+			DBProvider:   dbContainerSvc,
+			ComposeStack: composeLifecycle,
+			EnvSvc:       envvarsvc.New(db),
+			Logger:       slogLogger,
+		})
+		if err != nil {
+			return fmt.Errorf("create catalog service: %w", err)
+		}
+		forgefileSvc = forgefile.NewService(db, apphostingSvc, slogLogger, env("PANEL_BASE_DOMAIN", ""))
 		dbSvcProv = services.NewDatabaseServiceProvisioner(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"), masterKeyring)
-		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewNoopStorage())
+		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewLocalStorage(env("DB_BACKUP_STORAGE_DIR", ".dev-data/db-backups")))
 		tmSvc = trafficmanager.NewWithPersistence(db, db, db, db, caddyProxy, outboxPub)
 		eventRegistry.Subscribe(events.EventNodeOffline, tmSvc)
 		eventRegistry.Subscribe(events.EventNodeRecovered, tmSvc)
@@ -1263,6 +1321,9 @@ func run() error {
 		}
 		if err := scheduledTaskSvc.Start(appCtx); err != nil {
 			slogLogger.Error("scheduled tasks service startup failed", slog.String("error", err.Error()))
+		}
+		if err := backupEngineSvc.Start(appCtx); err != nil {
+			slogLogger.Error("backup engine service startup failed", slog.String("error", err.Error()))
 		}
 		resMgr.Start(appCtx)
 		hbm.Start(appCtx)
@@ -1481,6 +1542,12 @@ func run() error {
 		return err
 	}
 
+	// Incus (containers/VMs) and Nomad (workload orchestration) runtime
+	// integrations. Both are nil-safe and configured from the environment / node
+	// registry, so they are always constructed and passed to the HTTP layer.
+	incusSvc := incussvc.New(db, slogLogger)
+	nomadSvc := nomadsvc.New(db, slogLogger)
+
 	appCfg := http.Config{
 		Logger:                     slogLogger,
 		Addr:                       env("API_ADDR", ":8080"),
@@ -1517,6 +1584,8 @@ func run() error {
 		QueueService:               queueSvc,
 		OperationService:           opSvc,
 		RuntimeRegistry:            runtimeRegistry,
+		IncusService:               incusSvc,
+		NomadService:               nomadSvc,
 		WebAuthnService:            waSvc,
 		ActivityService:            actSvc,
 		AuditLogService:            auditLogSvc,
@@ -1534,6 +1603,7 @@ func run() error {
 		PredictiveScorer:           predictiveScorer,
 		ConstraintScheduler:        constraintSched,
 		BackupSvc:                  bkSvc,
+		BackupEngineService:        backupEngineSvc,
 		DNSService:                 dnsSvc,
 		AcmeService:                acmeSvc,
 		DomainService:              domainSvc,
@@ -1560,11 +1630,16 @@ func run() error {
 		DrainLedger:                drainLedger,
 		PlacementService:           placementSvc,
 		HealthCheckRunner:          healthCheckRunner,
+		FencingSvc:                 fenceSvc,
+		UpgradeSvc:                 upgradeSvc,
 		ClusterMembershipService:   membershipSvc,
 		CleanupService:             cleanupSvc,
 		ReplicaManager:             replicaMgr,
 		GitDeployMgmtService:       gitDeployMgmtSvc,
 		AppStoreService:            appStoreSvc,
+		CatalogService:             catalogSvc,
+		ForgefileSvc:               forgefileSvc,
+		OnboardingService:          onboardingSvc,
 		CronJobService:             cronJobSvc,
 		ScheduledTaskService:       scheduledTaskSvc,
 		BuildpackService:           buildpackSvc,
@@ -1573,6 +1648,7 @@ func run() error {
 		ServiceDiscovery:           discoverySvc,
 		CrossNodeResolver:          crossNodeResolver,
 		IngressSynchronizer:        ingressSync,
+		NetBirdService:             netbirdSvc,
 		MTLSEnabled:                mtlsCfg.Enabled,
 		MTLSCACertPath:             mtlsCfg.CACertPath,
 		MTLSCertPath:               mtlsCfg.CertPath,
@@ -1600,9 +1676,9 @@ func run() error {
 	defer stopSignals()
 	select {
 	case <-signalCtx.Done():
-		shutdownServices(app, appCancel, nil, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc)
+		shutdownServices(app, appCancel, nil, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc, backupEngineSvc)
 	case err := <-listenErr:
-		shutdownServices(app, appCancel, err, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc)
+		shutdownServices(app, appCancel, err, slogLogger, mailWorker, whSvc, queueSvc, opSvc, procedureSvc, gitOpsController, eventRelay, replicaMgr, discoverySvc, ingressSync, healthFilter, resMgr, hbm, rec, mig, ep, failSvc, bkWorker, healthCheckRunner, lbSvc, autoSvc, tmSvc, cleanupSvc, cronJobSvc, domainSvc, acmeSvc, backupEngineSvc)
 	}
 	return nil
 }
@@ -1634,6 +1710,7 @@ func shutdownServices(app *fiber.App, cancelBackground context.CancelFunc, liste
 	cronJobSvc *cronjobsvc.Service,
 	domainSvc *domains.Service,
 	acmeSvc *acmesvc.Service,
+	backupEngineSvc *backupenginesvc.Service,
 ) {
 	cancelBackground()
 	if err := app.Shutdown(); err != nil {
@@ -1716,6 +1793,9 @@ func shutdownServices(app *fiber.App, cancelBackground context.CancelFunc, liste
 	}
 	if acmeSvc != nil {
 		acmeSvc.StopAutoRenewal()
+	}
+	if backupEngineSvc != nil {
+		backupEngineSvc.Stop()
 	}
 	if listenErr != nil {
 		log.Warn("api listener stopped", slog.String("error", listenErr.Error()))

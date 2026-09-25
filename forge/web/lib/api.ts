@@ -8,6 +8,7 @@ export {
   listBackupProviders, listBackupPolicies, createBackupPolicy, deleteBackupPolicy, triggerBackup, cleanupExpiredBackups, lockBackupPolicy, unlockBackupPolicy,
   type BackupPolicy, type BackupPolicyConfig, type BackupProvider, type BackupProvidersResponse, type BackupPoliciesResponse,
 } from './api/backup';
+export * from './api/backup-engine';
 export * from './api/types';
 export * from './api/apps';
 export * from './api/app-store';
@@ -16,6 +17,8 @@ export * from './api/notifications';
 export * from './api/monitoring';
 export * from './api/acme';
 export * from './api/docker';
+export * from './api/incus';
+export * from './api/nomad';
 export * from './api/env-vars';
 export * from './api/deployments';
 export {
@@ -94,7 +97,9 @@ export * from './api/database-services';
 export * from './api/preview-deployments';
 export * from './api/source-deployments';
 export * from './api/domains';
+export * from './api/netbird';
 export * from './api/rateLimits';
+export * from './api/registries';
 export { fetchPublicPanelSettings } from './api/panel-settings';
 export { fetchSetupStatus, runSetup } from './api/setup';
 export {

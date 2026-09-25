@@ -847,6 +847,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			DockerImage:             req.DockerImage,
 			StartupCommand:          req.StartupCommand,
 			StartupVariables:        req.StartupVariables,
+			RuntimeProvider:         req.RuntimeProvider,
 		}, domain.PlacementRequest{
 			RegionID:      req.RegionID,
 			Region:        req.Region,

@@ -374,6 +374,14 @@ func run() error {
 			}
 		}
 		go heartbeatLoop(daemonCtx, panelAPIURL, nodeID, nodeToken, dataDir, pinger, runtimeProvider, Version)
+
+		// Container lifecycle events feed: tails the local Docker event stream and
+		// batches start/stop/die/kill/oom/recreate/destroy to the panel's
+		// /api/remote/docker/events ingest. Best effort by design - a panel that is
+		// unreachable buffers locally (capped) and never fails the daemon, and a
+		// daemon without a Docker socket just retries with backoff. Set
+		// DAEMON_DOCKER_EVENTS=false to switch it off.
+		go server.StartDockerEventStream(daemonCtx)
 	} else {
 		if err := recoverServersFromDisk(daemonCtx, dataDir, server); err != nil {
 			log.Printf("local server recovery failed: %v", err)

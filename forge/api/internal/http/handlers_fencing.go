@@ -77,7 +77,7 @@ func registerFencingRoutes(protected fiber.Router, cfg Config, svc *fencingsvc.S
 			ID         string `json:"id"`
 			Name       string `json:"name"`
 			Status     string `json:"status"`
-			Generation int    `json:"generation"`
+			Generation int64  `json:"generation"`
 		}
 		out := make([]previewRow, 0, len(servers))
 		for _, s := range servers {

@@ -2020,6 +2020,43 @@ func (c *Client) adminPostJSON(ctx context.Context, nodeToken, url string, body 
 	return payload, nil
 }
 
+// --- Kubernetes proxy ---
+
+// KubernetesPods fetches the pod list from a Kubernetes-backed Beacon node.
+func (c *Client) KubernetesPods(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/pods"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesDeployments fetches the deployment list from a Kubernetes-backed node.
+func (c *Client) KubernetesDeployments(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesServices fetches the service list from a Kubernetes-backed node.
+func (c *Client) KubernetesServices(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/services"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesEvents fetchs the recent-events list from a Kubernetes-backed node.
+func (c *Client) KubernetesEvents(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/events"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesScale scales a named deployment on a Kubernetes-backed node.
+func (c *Client) KubernetesScale(ctx context.Context, baseURL, nodeToken, name string, replicas int32) error {
+	body, err := json.Marshal(map[string]int32{"replicas": replicas})
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments/"+name+"/scale"
+	_, err = c.adminPostJSON(ctx, nodeToken, url, body)
+	return err
+}
+
 func sign(token, method, requestURI, timestamp string, body []byte, nonce ...string) string {
 	mac := hmac.New(sha256.New, []byte(token))
 	_, _ = mac.Write([]byte(method))

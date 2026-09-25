@@ -16,9 +16,14 @@ var ErrUnsupportedProvider = errors.New("unsupported provider")
 // enough to serve by default. They are accepted only while
 // ENABLE_EXPERIMENTAL_RUNTIMES is set, so an operator can exercise them
 // explicitly instead of the panel falling back to Docker behind their back.
+//
+// LXC and KVM are backed by placeholder adapters: the factory can build them,
+// so requests get a specific "runtime not implemented" error from the engine
+// rather than a generic unsupported-provider refusal, but they stay behind this
+// gate because no workload can actually be served by them yet.
 var experimentalProviders = map[string]bool{
-	"lxc": true,
-	"kvm": true,
+	LXCProvider: true,
+	KVMProvider: true,
 }
 
 // supportedProviders are engines this Beacon build can actually run.

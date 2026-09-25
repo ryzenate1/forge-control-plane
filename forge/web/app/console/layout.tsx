@@ -41,7 +41,7 @@ export default function ConsoleLayout({ children }: { children: React.ReactNode 
   if (userQuery.isPending || userQuery.data === undefined) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--canvas)] p-4 text-sm text-slate-300">
-        Preparing console…
+        Preparing Console…
       </div>
     );
   }

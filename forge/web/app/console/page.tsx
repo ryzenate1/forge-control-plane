@@ -140,7 +140,7 @@ function StatCard({ title, value, subtitle, icon: Icon, href, loading }: {
           <div>
             <p className="text-xs font-medium text-slate-400">{title}</p>
             {loading ? (
-              <LoadingSpinner size="sm" className="mt-2" />
+              <LoadingSpinner className="mt-2 h-5 w-5" />
             ) : (
               <p className="mt-1 text-2xl font-bold text-white">{value}</p>
             )}

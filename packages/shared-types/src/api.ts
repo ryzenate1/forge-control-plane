@@ -386,6 +386,8 @@ export type ServerCreateInput = {
   dockerImage?: string;
   startupCommand?: string;
   startupVariables?: Record<string, string>;
+  /** Workload engine: docker | containerd | podman | firecracker | kubernetes | kvm | lxc */
+  runtimeProvider?: string;
 };
 
 export type ServerUpdateInput = {

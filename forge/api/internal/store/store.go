@@ -610,6 +610,7 @@ type CreateServerRequest struct {
 	DockerImage             string
 	StartupCommand          string
 	StartupVariables        map[string]string
+	RuntimeProvider         string
 	SkipScripts             bool
 	DockerLabels            map[string]string
 }
@@ -642,9 +643,10 @@ type UpdateAllocationRequest struct {
 }
 
 type ServerControlTarget struct {
-	ServerID  string
-	NodeURL   string
-	NodeToken string
+	ServerID        string
+	NodeURL         string
+	NodeToken       string
+	RuntimeProvider string
 }
 
 // ServerControlTargetDTO is a safe DTO for API responses (excludes NodeToken)
@@ -675,6 +677,7 @@ type ServerProvisionTarget struct {
 	Name              string
 	NodeURL           string
 	NodeToken         string
+	RuntimeProvider   string
 	Image             string
 	StartupCommand    string
 	InstallScript     string

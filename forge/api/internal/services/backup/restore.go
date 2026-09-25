@@ -379,6 +379,13 @@ func (s *RestoreService) Execute(ctx context.Context, restoreID string, userID s
 	if err != nil {
 		return fmt.Errorf("failed to get backup artifact: %w", err)
 	}
+	// Verify the artifact's integrity (independent re-download + re-hash) BEFORE
+	// restoring. Restoring a corrupt/truncated archive onto a live workload is
+	// worse than refusing to; a stored checksum alone is beacon-self-reported and
+	// not proof of integrity.
+	if err := s.artifactService.Verify(ctx, artifact.ID); err != nil {
+		return fmt.Errorf("refusing to restore: backup verification failed: %w", err)
+	}
 	if s.daemonClient != nil {
 		switch restore.RestoreType {
 		case BackupTypeApp:

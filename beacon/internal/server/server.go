@@ -383,6 +383,16 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /servers/{id}/files/content", server.readFile)
 	mux.HandleFunc("PUT /servers/{id}/files/content", server.writeFile)
 	mux.HandleFunc("PUT /servers/{id}/files/upload", server.uploadFileChunk)
+	// Container file manager: operates inside the running workload container
+	// bound to this server id (resolved by the daemon, never supplied by the
+	// caller) via the Docker archive/exec APIs.
+	mux.HandleFunc("GET /servers/{id}/container/files/ls", server.handleServerContainerFilesLs)
+	mux.HandleFunc("GET /servers/{id}/container/files/read", server.handleServerContainerFilesRead)
+	mux.HandleFunc("GET /servers/{id}/container/files/download", server.handleServerContainerFilesDownload)
+	mux.HandleFunc("PUT /servers/{id}/container/files/write", server.handleServerContainerFilesWrite)
+	mux.HandleFunc("POST /servers/{id}/container/files/upload", server.handleServerContainerFilesUpload)
+	mux.HandleFunc("POST /servers/{id}/container/files/mkdir", server.handleServerContainerFilesMkdir)
+	mux.HandleFunc("DELETE /servers/{id}/container/files", server.handleServerContainerFilesRemove)
 	mux.HandleFunc("POST /servers/{id}/command", server.command)
 	mux.HandleFunc("POST /servers/{id}/transfers", server.startTransfer)
 	mux.HandleFunc("GET /servers/{id}/transfers/{transferId}", server.getTransferStatus)
@@ -485,6 +495,14 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /api/admin/volumes/{id}", server.handleVolumeInspect)
 	mux.HandleFunc("GET /api/admin/volumes/usage", server.handleVolumeUsage)
 
+	// Docker disk-usage reporting & automated cleanup (called by the panel's
+	// dockerleanup service over the signed admin channel). The retention decision
+	// lives in the control plane; Beacon only queries the engine and prunes.
+	mux.HandleFunc("GET /api/admin/docker-cleanup/disk-usage", server.handleDockerDiskUsage)
+	mux.HandleFunc("POST /api/admin/docker-cleanup/prune-images", server.handleDockerPruneImages)
+	mux.HandleFunc("POST /api/admin/docker-cleanup/prune-build-cache", server.handleDockerPruneBuildCache)
+	mux.HandleFunc("POST /api/admin/docker-cleanup/prune-volumes", server.handleDockerPruneVolumes)
+
 	// Host system info endpoints (v1 API)
 	mux.HandleFunc("GET /v1/host/info", server.handleHostInfo)
 	mux.HandleFunc("GET /v1/host/disk", server.handleHostDisk)
@@ -520,6 +538,16 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("POST /v1/files/chmod", server.handleHostFilesChmod)
 	mux.HandleFunc("POST /v1/files/upload", server.handleHostFilesUpload)
 	mux.HandleFunc("GET /v1/terminal/ws", server.handleHostTerminalWS)
+
+	// Kubernetes proxy endpoints. The panel calls these to populate the
+	// /admin/kubernetes dashboard without needing a kubeconfig on the API host.
+	// They are gated behind the same token auth as every other v1 route; when the
+	// runtime is not KubernetesRuntime the handlers return 503 rather than fabricating data.
+	mux.HandleFunc("GET /v1/kubernetes/pods", server.handleKubernetesListPods)
+	mux.HandleFunc("GET /v1/kubernetes/deployments", server.handleKubernetesListDeployments)
+	mux.HandleFunc("GET /v1/kubernetes/services", server.handleKubernetesListServices)
+	mux.HandleFunc("GET /v1/kubernetes/events", server.handleKubernetesListEvents)
+	mux.HandleFunc("POST /v1/kubernetes/deployments/{name}/scale", server.handleKubernetesScaleDeployment)
 
 	return server, sanitizeInternalErrors(recoverPanics(securityHeaders(requestTimeout(server.authenticate(mux)))))
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -63,8 +64,9 @@ func (s *Service) InstallApp(ctx context.Context, req *InstallRequest) (*store.A
 		return nil, fmt.Errorf("app not found: %w", err)
 	}
 
-	paramsJSON, _ := json.Marshal(req.Params)
-	resolvedCompose := resolveTemplate(app.ComposeContent, req.Params)
+	params := mergeParams(app.Params, req.Params, app.Key, req.Name)
+	paramsJSON, _ := json.Marshal(params)
+	resolvedCompose := resolveTemplate(app.ComposeContent, params)
 
 	inst := &store.AppStoreInstall{
 		ID:             uuid.NewString(),
@@ -89,7 +91,7 @@ func (s *Service) InstallApp(ctx context.Context, req *InstallRequest) (*store.A
 		Name:        req.Name,
 		NodeID:      req.NodeID,
 		ComposeYAML: resolvedCompose,
-		EnvVars:     req.Params,
+		EnvVars:     params,
 		MemoryMB:    req.MemoryMB,
 		CPUShares:   req.CPUShares,
 		DiskMB:      req.DiskMB,
@@ -222,13 +224,82 @@ func (s *Service) SyncFromRemote(ctx context.Context, registryURL string) error 
 }
 
 func resolveTemplate(tmpl string, params map[string]string) string {
-	if params == nil {
+	if params == nil || tmpl == "" {
 		return tmpl
 	}
 	result := tmpl
 	for k, v := range params {
+		if v == "" {
+			continue
+		}
+		// Substitute every common interpolation form so a template that uses
+		// ${VAR}, ${VAR:-fallback} or ${VAR-fallback} all resolve consistently.
 		result = strings.ReplaceAll(result, "${"+k+"}", v)
 		result = strings.ReplaceAll(result, "${"+k+":-}", v)
+		result = strings.ReplaceAll(result, "${"+k+"-}", v)
 	}
 	return result
+}
+
+// mergeParams builds the full variable set used to render an app's compose
+// template: declared defaults first, then APP_NAME/INSTANCE_NAME derived from
+// the install, then any user-supplied overrides. Without this, installing with
+// empty/partial params left ${APP_NAME} and default-bearing variables unresolved,
+// producing blank container names / ports and a failing "docker compose up".
+func mergeParams(declaredParamsJSON []byte, user map[string]string, appKey, installName string) map[string]string {
+	merged := map[string]string{}
+	if len(declaredParamsJSON) > 0 {
+		var declared map[string]struct {
+			Default any `json:"default"`
+		}
+		if err := json.Unmarshal(declaredParamsJSON, &declared); err == nil {
+			for key, spec := range declared {
+				switch v := spec.Default.(type) {
+				case string:
+					merged[key] = v
+				case float64:
+					merged[key] = strconv.FormatFloat(v, 'f', -1, 64)
+				case bool:
+					merged[key] = strconv.FormatBool(v)
+				}
+			}
+		}
+	}
+	// A sanitized instance name is always available for ${APP_NAME}-style refs.
+	slug := sanitizeInstanceName(installName)
+	if slug == "" {
+		slug = sanitizeInstanceName(appKey)
+	}
+	if _, ok := merged["APP_NAME"]; !ok {
+		merged["APP_NAME"] = slug
+	}
+	if _, ok := merged["INSTANCE_NAME"]; !ok {
+		merged["INSTANCE_NAME"] = slug
+	}
+	for k, v := range user {
+		if strings.TrimSpace(v) != "" {
+			merged[k] = v
+		}
+	}
+	return merged
+}
+
+// sanitizeInstanceName lowercases and reduces an install name to Docker-safe
+// characters ([a-z0-9_-]), so it can be embedded in container/volume names.
+func sanitizeInstanceName(name string) string {
+	var b strings.Builder
+	prevUnderscore := false
+	for _, r := range strings.ToLower(strings.TrimSpace(name)) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
+			b.WriteRune(r)
+			prevUnderscore = false
+		case r == '-' || r == '_' || r == ' ' || r == '.':
+			if !prevUnderscore && b.Len() > 0 {
+				b.WriteByte('_')
+				prevUnderscore = true
+			}
+		}
+	}
+	return strings.Trim(b.String(), "_")
 }

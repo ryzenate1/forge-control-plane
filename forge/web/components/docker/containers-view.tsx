@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  Play, Square, RotateCcw, Pause, Trash2, RefreshCw, Plus, Terminal, Download, Folder, FileText, ChevronLeft,
+  Play, Square, RotateCcw, Pause, Trash2, RefreshCw, Plus, Terminal, Download, Folder, FolderOpen, FileText, ChevronLeft,
 } from "lucide-react";
 import {
   listContainers, operateContainer, deleteContainer, getContainerLogs, getContainerStats,
@@ -14,6 +14,7 @@ import { Btn, Card, EmptyState, Input, cn, AdminLoadingState } from "@/component
 import { ConfirmDialog, Pagination } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { ContainerCreateModal } from "@/components/docker/container-create-modal";
+import { ContainerFilesView } from "@/components/docker/container-files-view";
 
 function formatDate(ts: string): string {
   if (!ts) return "";
@@ -41,6 +42,9 @@ export function ContainersView() {
   const [showCreate, setShowCreate] = useState(false);
   const [logContainer, setLogContainer] = useState<DockerContainerInfo | null>(null);
   const [filesContainer, setFilesContainer] = useState<DockerContainerInfo | null>(null);
+  // Workload containers open the server-scoped file manager: the API resolves
+  // the container from the server binding, so only the server id travels.
+  const [serverFiles, setServerFiles] = useState<{ serverId: string; name: string } | null>(null);
   const [statsMap, setStatsMap] = useState<Record<string, { cpu: string; mem: string }>>({});
   const [deleteTarget, setDeleteTarget] = useState<DockerContainerInfo | null>(null);
   const [page, setPage] = useState(1);
@@ -165,7 +169,11 @@ export function ContainersView() {
                           <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-emerald-400" disabled={operateMut.isPending} onClick={() => operateMut.mutate({ id: c.id, action: "start", nodeId: c.nodeId })} title="Start" type="button"><Play size={13} /></button>
                         )}
                         <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-slate-200" onClick={() => { setLogContainer(c); void fetchStats(c.id, c.nodeId); }} title="Logs / Stats" type="button"><Terminal size={13} /></button>
-                        <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-sky-300" onClick={() => setFilesContainer(c)} title="Browse files" type="button"><Folder size={13} /></button>
+                        {c.serverId ? (
+                          <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-sky-300" onClick={() => setServerFiles({ serverId: c.serverId, name: c.name || c.id.slice(0, 12) })} title="Container files" type="button"><FolderOpen size={13} /></button>
+                        ) : (
+                          <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-sky-300" onClick={() => setFilesContainer(c)} title="Browse files" type="button"><Folder size={13} /></button>
+                        )}
                         <button className="rounded min-h-11 min-w-11 inline-grid place-items-center p-2 text-slate-400 hover:bg-white/[0.06] hover:text-red-400" onClick={() => setDeleteTarget(c)} title="Delete" type="button"><Trash2 size={13} /></button>
                       </div>
                     </td>
@@ -192,6 +200,10 @@ export function ContainersView() {
 
       {filesContainer && (
         <ContainerFilesModal container={filesContainer} onClose={() => setFilesContainer(null)} />
+      )}
+
+      {serverFiles && (
+        <ContainerFilesView serverId={serverFiles.serverId} serverName={serverFiles.name} onClose={() => setServerFiles(null)} />
       )}
 
       <ConfirmDialog

@@ -11,16 +11,17 @@ import (
 )
 
 type DBContainerProvisionRequest struct {
-	ServerID   string `json:"serverId"`
-	Engine     string `json:"engine"`
-	Version    string `json:"version"`
-	MemoryMB   int    `json:"memoryMb"`
-	CPUShares  int    `json:"cpuShares"`
-	DBName     string `json:"dbName"`
-	Username   string `json:"username"`
-	Password   string `json:"password"`
-	Port       int    `json:"port"`
-	VolumeName string `json:"volumeName"`
+	ServerID     string          `json:"serverId"`
+	Engine       string          `json:"engine"`
+	Version      string          `json:"version"`
+	MemoryMB     int             `json:"memoryMb"`
+	CPUShares    int             `json:"cpuShares"`
+	DBName       string          `json:"dbName"`
+	Username     string          `json:"username"`
+	Password     string          `json:"password"`
+	Port         int             `json:"port"`
+	VolumeName   string          `json:"volumeName"`
+	RegistryAuth []*RegistryAuth `json:"registryAuth,omitempty"`
 }
 
 type DBContainerProvisionResponse struct {

@@ -16,6 +16,21 @@ import (
 )
 
 func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nodeprobe.Service) {
+	// GET /workload-kinds — reports available runtime providers and their
+	// operational status so the UI can render honest create-workload forms.
+	protected.Get("/workload-kinds", func(c *fiber.Ctx) error {
+		kinds := []fiber.Map{
+			{"provider": "docker", "available": true, "experimental": false, "vmLifecycle": false, "description": "Containerized workloads via Docker Engine"},
+			{"provider": "podman", "available": true, "experimental": false, "vmLifecycle": false, "description": "Containerized workloads via Podman (Docker-API compatible)"},
+			{"provider": "kubernetes", "available": true, "experimental": false, "vmLifecycle": false, "description": "Pod-managed workloads on a Kubernetes cluster"},
+			{"provider": "containerd", "available": false, "experimental": false, "vmLifecycle": false, "description": "Requires containerd build tag in Beacon binary"},
+			{"provider": "firecracker", "available": false, "experimental": true, "vmLifecycle": true, "description": "MicroVM isolation; requires firecracker build tag + kernel/rootfs on node"},
+			{"provider": "lxc", "available": false, "experimental": true, "vmLifecycle": true, "description": "System containers via LXC/Incus; not yet implemented in Beacon"},
+			{"provider": "kvm", "available": false, "experimental": true, "vmLifecycle": true, "description": "Full virtualization via QEMU/KVM; not yet implemented in Beacon"},
+		}
+		return c.JSON(fiber.Map{"data": kinds})
+	})
+
 	// GET /capabilities — list all node capabilities (inventory view)
 	protected.Get("/capabilities", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {

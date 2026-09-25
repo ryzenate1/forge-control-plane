@@ -14,11 +14,12 @@
  */
 
 import { useMemo, useState } from "react";
+import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import {
   Activity, Boxes, Cable, ChevronRight, Cpu, Gauge,
-  HardDrive, MemoryStick, Network, Settings2, ShieldQuestion, Wrench, Wifi,
+  HardDrive, MemoryStick, Network, Settings2, ShieldQuestion, Terminal, Wrench, Wifi,
 } from "lucide-react";
 import {
   AdminBackButton, AdminErrorState, AdminLoadingState, AdminPageHeader, AdminSection,
@@ -31,13 +32,17 @@ import {
   type ApiAllocation, type ApiNode, type ApiServer,
 } from "@/lib/api";
 
-type Tab = "overview" | "workloads" | "network" | "capacity";
+type Tab = "overview" | "workloads" | "network" | "capacity" | "hardware" | "firewall" | "terminal" | "maintenance";
 
 const TABS = [
   { id: "overview", label: "Overview", icon: Activity },
   { id: "workloads", label: "Workloads", icon: Boxes },
   { id: "network", label: "Network", icon: Cable },
   { id: "capacity", label: "Capacity", icon: Gauge },
+  { id: "hardware", label: "Hardware", icon: Cpu },
+  { id: "firewall", label: "Firewall", icon: ShieldQuestion },
+  { id: "terminal", label: "Terminal", icon: Terminal },
+  { id: "maintenance", label: "Maintenance", icon: Wrench },
 ] as const;
 
 function fmtMiB(mib?: number): string {
@@ -376,6 +381,78 @@ export function BeaconWorkspace() {
               </Card>
             </div>
           )}
+        </AdminSection>
+      ) : null}
+
+      {/* ─── Hardware Tab ──────────────────────────────────────────────────── */}
+      {tab === "hardware" ? (
+        <AdminSection title="Hardware & Virtualization">
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Card className="p-5">
+              <h3 className="mb-3 text-sm font-semibold text-white">CPU</h3>
+              <dl className="space-y-2 text-xs">
+                <div className="flex justify-between"><dt className="text-slate-400">Model</dt><dd className="font-mono text-slate-200">{sysQuery.data?.cpu_model ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Cores / Threads</dt><dd className="font-mono text-slate-200">{sysQuery.data?.cpu_threads ?? "—"} threads</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Architecture</dt><dd className="font-mono text-slate-200">{sysQuery.data?.architecture ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Kernel</dt><dd className="font-mono text-slate-200">{sysQuery.data?.kernel ?? "—"}</dd></div>
+              </dl>
+            </Card>
+            <Card className="p-5">
+              <h3 className="mb-3 text-sm font-semibold text-white">Memory & Storage</h3>
+              <dl className="space-y-2 text-xs">
+                <div className="flex justify-between"><dt className="text-slate-400">Total Memory</dt><dd className="font-mono text-slate-200">{fmtMiB(sysQuery.data?.memory_mb)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Disk Capacity</dt><dd className="font-mono text-slate-200">{fmtMiB(sysQuery.data?.disk_mb)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">OS</dt><dd className="font-mono text-slate-200">{sysQuery.data?.os ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Uptime</dt><dd className="font-mono text-slate-200">{fmtUptime(sysQuery.data?.uptime_seconds)}</dd></div>
+              </dl>
+            </Card>
+            <Card className="p-5 lg:col-span-2">
+              <h3 className="mb-3 text-sm font-semibold text-white">Virtualization Capabilities</h3>
+              <p className="text-xs text-slate-400">Nested virt detection (vmx/svm), hugepages, IOMMU groups, and GPU passthrough require the Beacon host-capabilities endpoint. This section will populate from <code className="rounded bg-white/[0.06] px-1">GET /nodes/:id/host/capabilities</code> once available.</p>
+            </Card>
+          </div>
+        </AdminSection>
+      ) : null}
+
+      {/* ─── Firewall Tab ───────────────────────────────────────────────────── */}
+      {tab === "firewall" ? (
+        <AdminSection title="Firewall & Port Forwards">
+          <Card className="p-5">
+            <p className="text-xs text-slate-400">Manage iptables rules and DNAT port-forwards for this node via the dedicated <Link href={`/admin/firewall?node=${nodeId}`} className="text-red-400 hover:underline">Firewall page</Link>. The firewall supports allow-rules (INPUT chain) and port-forwards (PREROUTING DNAT).</p>
+          </Card>
+        </AdminSection>
+      ) : null}
+
+      {/* ─── Terminal Tab ───────────────────────────────────────────────────── */}
+      {tab === "terminal" ? (
+        <AdminSection title="Host Terminal">
+          <Card className="p-5">
+            <p className="text-xs text-slate-400">Interactive shell on this node requires the PTY host terminal implementation in Beacon. Use <Link href="/admin/terminal" className="text-red-400 hover:underline">Admin Terminal</Link> when it becomes live. Container exec is available via <Link href="/admin/docker" className="text-red-400 hover:underline">Docker</Link>.</p>
+          </Card>
+        </AdminSection>
+      ) : null}
+
+      {/* ─── Maintenance Tab ───────────────────────────────────────────────── */}
+      {tab === "maintenance" ? (
+        <AdminSection title="Maintenance Operations">
+          <div className="grid gap-4 sm:grid-cols-2">
+            <Card className="p-5">
+              <h3 className="mb-2 text-sm font-semibold text-white">Drain & Evacuate</h3>
+              <p className="text-xs text-slate-400">Set lifecycle to draining/maintenance via Configure. Evacuation previews at <Link href="/admin/drain" className="text-red-400 hover:underline">/admin/drain</Link>.</p>
+            </Card>
+            <Card className="p-5">
+              <h3 className="mb-2 text-sm font-semibold text-white">Beacon Upgrade</h3>
+              <p className="text-xs text-slate-400">Self-upgrade endpoints exist on Beacon but the API service currently simulates them. Fleet upgrade orchestration is planned.</p>
+            </Card>
+            <Card className="p-5">
+              <h3 className="mb-2 text-sm font-semibold text-white">Reconciliation</h3>
+              <p className="text-xs text-slate-400">Desired-vs-actual drift detection at <Link href="/admin/reconciliation" className="text-red-400 hover:underline">/admin/reconciliation</Link>. Plan→confirm→execute pattern reusable for dangerous VM ops.</p>
+            </Card>
+            <Card className="p-5">
+              <h3 className="mb-2 text-sm font-semibold text-white">Operations Timeline</h3>
+              <p className="text-xs text-slate-400">Recent migrations, recovery plans, install workflows at <Link href="/admin/operations" className="text-red-400 hover:underline">/admin/operations</Link>.</p>
+            </Card>
+          </div>
         </AdminSection>
       ) : null}
 

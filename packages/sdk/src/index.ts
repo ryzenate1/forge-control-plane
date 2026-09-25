@@ -30,6 +30,11 @@ export type {
   BillingUsageSummary,
   PlacementRequest,
   PlacementExplainResult,
+  FencePreviewRow,
+  FenceResult,
+  UpgradeVersionInfo,
+  UpgradePlan,
+  UpgradeResult,
 } from './client.js';
 
 export type {

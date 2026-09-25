@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Plus, Trash2, RotateCcw, FlaskConical, Layers, Server, Search, List, LayoutGrid } from "lucide-react";
+import { Database, Plus, Trash2, RotateCcw, FlaskConical, Layers, Server, Search, List, LayoutGrid, Rows3, FileText, History, KeyRound, RefreshCw, Power } from "lucide-react";
 import {
   listDatabaseServices,
   provisionDatabaseService,
@@ -11,11 +11,22 @@ import {
   testConnection,
   listServiceTemplates,
   createServiceTemplate,
+  getServiceLogs,
+  listServiceBackups,
+  restoreServiceBackup,
+  createServiceBackup,
+  createServiceCredential,
+  listServiceCredentials,
+  revokeServiceCredential,
   type DatabaseService,
+  type DatabaseServiceBackup,
+  type DatabaseServiceCredential,
 } from "@/lib/api/database-services";
 import { Btn, EmptyState, Input, Modal, ModalFooter, SectionHeader, Pill, cn } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { statusTone } from "@/lib/api/status";
+import { formatBytes, formatDate } from "@/lib/utils";
 import { DbStatCards, type DbStat } from "./databases-overview";
 
 const selectCls = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15";
@@ -33,6 +44,7 @@ export function DatabaseServicesView() {
   const [sort, setSort] = useState("name-asc");
   const [page, setPage] = useState(1);
   const [pageSize, setPageSize] = useState(20);
+  const [detailSvc, setDetailSvc] = useState<DatabaseService | null>(null);
 
   const servicesQ = useQuery({ queryKey: ["database-services"], queryFn: listDatabaseServices });
   const templatesQ = useQuery({ queryKey: ["service-templates"], queryFn: listServiceTemplates });
@@ -210,6 +222,7 @@ export function DatabaseServicesView() {
             <ServiceCard
               key={svc.id}
               svc={svc}
+              onManage={() => setDetailSvc(svc)}
               onRestart={() => restartMut.mutate(svc.id)}
               onDelete={() => deleteMut.mutate(svc.id)}
               restartPending={restartMut.isPending}
@@ -254,6 +267,7 @@ export function DatabaseServicesView() {
                     <td className="px-2 py-3 text-[11px] text-slate-400">{svc.memoryMb} MB</td>
                     <td className="px-2 py-3">
                       <div className="flex items-center justify-end gap-1">
+                        <button disabled={false} onClick={() => setDetailSvc(svc)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-sky-200" title="Manage — logs, backups, credentials" type="button"><Rows3 size={14} /></button>
                         <button disabled={restartMut.isPending} onClick={() => restartMut.mutate(svc.id)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-amber-200 disabled:opacity-40" title="Restart — POST /admin/database-services/:id/restart" type="button"><RotateCcw size={14} /></button>
                         <button disabled={deleteMut.isPending} onClick={() => deleteMut.mutate(svc.id)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-red-200 disabled:opacity-40" title="Delete" type="button"><Trash2 size={14} /></button>
                       </div>
@@ -280,9 +294,10 @@ export function DatabaseServicesView() {
           </div>
         </div>
       )}
-      <p className="text-[11px] text-slate-500">Wires <code className="font-mono">provisionDatabaseService</code>, <code className="font-mono">restartDatabaseService</code>, <code className="font-mono">testConnection</code></p>
+      <p className="text-[11px] text-slate-500">Wires <code className="font-mono">provisionDatabaseService</code>, <code className="font-mono">restartDatabaseService</code>, <code className="font-mono">testConnection</code>; Manage opens <code className="font-mono">getServiceLogs</code>, <code className="font-mono">listServiceBackups</code>/<code className="font-mono">restoreServiceBackup</code>, and the credentials section</p>
       </div>
 
+      {detailSvc && <ServiceDetailModal svc={detailSvc} onClose={() => setDetailSvc(null)} />}
       {showProvision && <ProvisionModal onClose={() => setShowProvision(false)} onDone={() => { setShowProvision(false); qc.invalidateQueries({ queryKey: ["database-services"] }); }} />}
       {showTemplate && <TemplateModal onClose={() => setShowTemplate(false)} onDone={() => { setShowTemplate(false); qc.invalidateQueries({ queryKey: ["service-templates"] }); }} />}
       {showTest && <TestConnectionModal onClose={() => setShowTest(false)} />}
@@ -301,8 +316,9 @@ function ServiceStatusDot({ status }: { status: string }) {
   );
 }
 
-function ServiceCard({ svc, onRestart, onDelete, restartPending, deletePending }: {
+function ServiceCard({ svc, onManage, onRestart, onDelete, restartPending, deletePending }: {
   svc: DatabaseService;
+  onManage: () => void;
   onRestart: () => void;
   onDelete: () => void;
   restartPending: boolean;
@@ -325,6 +341,9 @@ function ServiceCard({ svc, onRestart, onDelete, restartPending, deletePending }
         <p className="truncate">{svc.memoryMb} MB</p>
       </div>
       <div className="mt-3 flex gap-2">
+        <button type="button" onClick={onManage} title="Manage — logs, backups, credentials" className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-bold text-slate-200 transition hover:border-white/20 hover:text-sky-200">
+          <Rows3 size={14} /> Manage
+        </button>
         <button type="button" disabled={restartPending} onClick={onRestart} title="Restart — POST /admin/database-services/:id/restart" className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-bold text-slate-200 transition hover:border-white/20 hover:text-amber-200 disabled:opacity-40">
           <RotateCcw size={14} /> Restart
         </button>
@@ -458,6 +477,218 @@ function TestConnectionModal({ onClose }: { onClose: () => void }) {
         <p className="text-xs text-slate-400">Tests <code className="font-mono">POST /admin/database-services/test-connection</code> — host/engine/username required, port defaults via defaultPortForEngine.</p>
       </div>
       <ModalFooter onCancel={onClose} onConfirm={() => mut.mutate()} disabled={mut.isPending || !host || !engine || !username} confirmLabel={mut.isPending ? "Testing…" : "Test Connection"} />
+    </Modal>
+  );
+}
+
+const detailTabs = [
+  { id: "logs", label: "Logs", icon: FileText },
+  { id: "backups", label: "Backups", icon: History },
+  { id: "credentials", label: "Credentials", icon: KeyRound },
+] as const;
+
+type DetailTabId = (typeof detailTabs)[number]["id"];
+
+function ServiceDetailModal({ svc, onClose }: { svc: DatabaseService; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
+  const [section, setSection] = useState<DetailTabId>("logs");
+  const [credUser, setCredUser] = useState("");
+  const [credPass, setCredPass] = useState("");
+  const [credDb, setCredDb] = useState(svc.databaseName ?? "");
+  const [credPerms, setCredPerms] = useState("read-write");
+
+  const logsQ = useQuery({
+    queryKey: ["db-service-logs", svc.id],
+    queryFn: () => getServiceLogs(svc.id),
+    enabled: section === "logs",
+    refetchInterval: 15_000,
+  });
+  const backupsQ = useQuery({
+    queryKey: ["db-service-backups", svc.id],
+    queryFn: () => listServiceBackups(svc.id),
+    enabled: section === "backups",
+  });
+  const credsQ = useQuery({
+    queryKey: ["db-service-credentials", svc.id],
+    queryFn: () => listServiceCredentials(svc.id),
+    enabled: section === "credentials",
+  });
+
+  const createBackupMut = useMutation({
+    mutationFn: () => createServiceBackup(svc.id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["db-service-backups", svc.id] }); toast({ tone: "success", title: "Backup created — POST /admin/database-services/:id/backups" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Backup failed", message: e.message }),
+  });
+  const restoreMut = useMutation({
+    mutationFn: async (backupId: string) => {
+      const result = await restoreServiceBackup(svc.id, backupId);
+      if (!result.ok) throw new Error("The server reported the restore did not complete.");
+      return result;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["db-service-backups", svc.id] }); toast({ tone: "success", title: "Restore started" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Restore failed", message: e.message }),
+  });
+  const createCredMut = useMutation({
+    mutationFn: (data: { username: string; password: string; database?: string; permissions?: string }) => createServiceCredential(svc.id, data),
+    onSuccess: () => {
+      setCredUser(""); setCredPass("");
+      qc.invalidateQueries({ queryKey: ["db-service-credentials", svc.id] });
+      toast({ tone: "success", title: "Credential created — POST …/credentials" });
+    },
+    onError: (e: Error) => toast({ tone: "error", title: "Create credential failed", message: e.message }),
+  });
+  const revokeCredMut = useMutation({
+    mutationFn: async (credId: string) => {
+      const result = await revokeServiceCredential(svc.id, credId);
+      if (!result.ok) throw new Error("The server reported the credential was not revoked.");
+      return result;
+    },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["db-service-credentials", svc.id] }); toast({ tone: "success", title: "Credential revoked" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Revoke failed", message: e.message }),
+  });
+
+  const logs = logsQ.data?.logs ?? [];
+  const backups: DatabaseServiceBackup[] = backupsQ.data ?? [];
+  const creds: DatabaseServiceCredential[] = credsQ.data ?? [];
+
+  return (
+    <Modal title={`Manage ${svc.name || svc.id.slice(0, 8)}`} description={`${svc.type} ${svc.version} · ${svc.host}:${svc.port} — logs, backups, credentials`} onClose={onClose} wide>
+      <div className="mb-4 flex gap-1 border-b border-white/[0.06]">
+        {detailTabs.map(({ id: tId, label, icon: Icon }) => (
+          <button key={tId} type="button" onClick={() => setSection(tId)} className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition", section === tId ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-slate-500 hover:text-slate-300")}>
+            <Icon size={12} /> {label}
+          </button>
+        ))}
+      </div>
+
+      {section === "logs" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-slate-500">GET /admin/database-services/:id/logs — last 50 lines</p>
+            <Btn size="sm" tone="ghost" onClick={() => void logsQ.refetch()} disabled={logsQ.isFetching}><RefreshCw size={12} className={logsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
+          </div>
+          {logsQ.isLoading ? (
+            <div className="py-8 text-center text-sm text-slate-500">Loading logs…</div>
+          ) : logsQ.isError ? (
+            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(logsQ.error as Error).message}</div>
+          ) : logs.length === 0 ? (
+            <EmptyState icon={FileText} title="No logs" message="Container produced no recent log lines." />
+          ) : (
+            <pre className="max-h-96 overflow-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-3 font-mono text-xs text-slate-400 whitespace-pre-wrap">{logs.join("\n")}</pre>
+          )}
+        </div>
+      )}
+
+      {section === "backups" && (
+        <div className="space-y-3">
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-slate-500">GET/POST /admin/database-services/:id/backups · restore via POST …/backups/:backupId/restore</p>
+            <div className="flex gap-2">
+              <Btn size="sm" tone="ghost" onClick={() => void backupsQ.refetch()} disabled={backupsQ.isFetching}><RefreshCw size={12} className={backupsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
+              <Btn size="sm" onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}>{createBackupMut.isPending ? "Creating…" : "Create Backup"}</Btn>
+            </div>
+          </div>
+          {backupsQ.isLoading ? (
+            <div className="py-8 text-center text-sm text-slate-500">Loading backups…</div>
+          ) : backupsQ.isError ? (
+            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(backupsQ.error as Error).message}</div>
+          ) : backups.length === 0 ? (
+            <EmptyState icon={History} title="No backups" message="No backup history for this service yet." />
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                    <th className="px-3 py-2 font-medium">Backup</th><th className="px-3 py-2 font-medium">Status</th><th className="px-3 py-2 font-medium">Size</th><th className="px-3 py-2 font-medium">Created</th><th className="px-3 py-2 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {backups.map((b) => (
+                    <tr key={b.id}>
+                      <td className="px-3 py-2 font-mono text-[11px] text-slate-300" title={b.filePath || b.id}>{b.filePath ? b.filePath.split("/").pop() : b.id.slice(0, 8)}</td>
+                      <td className="px-3 py-2"><Pill tone={b.status === "completed" ? "green" : b.status === "failed" ? "red" : b.status === "running" || b.status === "creating" ? "blue" : "neutral"}>{b.status}</Pill></td>
+                      <td className="px-3 py-2 text-[11px] text-slate-400">{b.sizeBytes ? formatBytes(b.sizeBytes) : "—"}</td>
+                      <td className="px-3 py-2 text-[11px] text-slate-500">{formatDate(b.createdAt)}</td>
+                      <td className="px-3 py-2 text-right">
+                        <Btn size="sm" tone="ghost" disabled={b.status !== "completed" || restoreMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Restore backup ${b.id.slice(0, 8)}?`, description: `Current data in ${svc.name || svc.id} will be overwritten by this backup.`, danger: true, confirmLabel: "Restore" })) restoreMut.mutate(b.id); })(); }}>
+                          <Power size={12} /> Restore
+                        </Btn>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+
+      {section === "credentials" && (
+        <div className="space-y-4">
+          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
+            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Create credential — POST …/credentials</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Input label="Username" value={credUser} onChange={setCredUser} placeholder="app_user" />
+              <Input label="Password" value={credPass} onChange={setCredPass} type="password" placeholder="••••••••" />
+              <Input label="Database (optional grant)" value={credDb} onChange={setCredDb} placeholder={svc.databaseName || "db"} />
+              <div>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Permissions</label>
+                <select className={selectCls} value={credPerms} onChange={(e) => setCredPerms(e.target.value)}>
+                  <option value="read-write">read-write</option>
+                  <option value="read-only">read-only</option>
+                </select>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end">
+              <Btn size="sm" onClick={() => createCredMut.mutate({ username: credUser.trim(), password: credPass, database: credDb.trim() || undefined, permissions: credPerms })} disabled={createCredMut.isPending || !credUser.trim() || !credPass}>
+                {createCredMut.isPending ? "Creating…" : "Create Credential"}
+              </Btn>
+            </div>
+          </div>
+          <div className="flex items-center justify-between">
+            <p className="text-[11px] text-slate-500">GET /admin/database-services/:id/credentials — issued credentials (passwords stay server-side)</p>
+            <Btn size="sm" tone="ghost" onClick={() => void credsQ.refetch()} disabled={credsQ.isFetching}><RefreshCw size={12} className={credsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
+          </div>
+          {credsQ.isLoading ? (
+            <div className="py-8 text-center text-sm text-slate-500">Loading credentials…</div>
+          ) : credsQ.isError ? (
+            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(credsQ.error as Error).message}</div>
+          ) : creds.length === 0 ? (
+            <EmptyState icon={KeyRound} title="No credentials" message="No credentials issued for this service yet." />
+          ) : (
+            <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                    <th className="px-3 py-2 font-medium">Username</th><th className="px-3 py-2 font-medium">Database</th><th className="px-3 py-2 font-medium">Permissions</th><th className="px-3 py-2 font-medium">Created</th><th className="px-3 py-2 font-medium">State</th><th className="px-3 py-2 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {creds.map((cred) => (
+                    <tr key={cred.id}>
+                      <td className="px-3 py-2 font-mono text-[11px] text-slate-200">{cred.username}</td>
+                      <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{cred.databaseName || "—"}</td>
+                      <td className="px-3 py-2"><Pill tone={cred.permissions === "read-only" ? "blue" : "yellow"}>{cred.permissions}</Pill></td>
+                      <td className="px-3 py-2 text-[11px] text-slate-500">{formatDate(cred.createdAt)}</td>
+                      <td className="px-3 py-2"><Pill tone={cred.revokedAt ? "neutral" : "green"}>{cred.revokedAt ? "revoked" : "active"}</Pill></td>
+                      <td className="px-3 py-2 text-right">
+                        {!cred.revokedAt && (
+                          <Btn size="sm" tone="danger" disabled={revokeCredMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Revoke ${cred.username}?`, description: "Apps relying on this credential will lose database access.", danger: true, confirmLabel: "Revoke" })) revokeCredMut.mutate(cred.id); })(); }}>
+                            Revoke
+                          </Btn>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
+      {renderConfirm()}
     </Modal>
   );
 }

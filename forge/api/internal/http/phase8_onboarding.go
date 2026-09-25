@@ -138,3 +138,22 @@ func ideFilesHandler(svc *onboarding.Service) fiber.Handler {
 		return c.JSON(fiber.Map{"data": sources})
 	}
 }
+
+func init() {
+	RegisterPhaseRegistrar("phase8-onboarding", 170, registerPhase8OnboardingRoutes)
+}
+
+func registerPhase8OnboardingRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
+	svc := cfg.OnboardingService
+	if svc == nil {
+		return nil
+	}
+	wizard := v1.Group("/onboarding", authMiddleware(cfg.AuthSecret, cfg.Store))
+	wizard.Get("/status", onboardingStatusHandler(svc))
+	wizard.Get("/repos", onboardingReposHandler(svc))
+	wizard.Get("/repos/:repo/branches", onboardingBranchesHandler(svc))
+	wizard.Post("/connect", onboardingConnectHandler(svc))
+	wizard.Post("/deploy", onboardingDeployHandler(svc))
+	v1.Get("/ide/files", authMiddleware(cfg.AuthSecret, cfg.Store), ideFilesHandler(svc))
+	return nil
+}

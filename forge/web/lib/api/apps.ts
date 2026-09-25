@@ -23,6 +23,12 @@ export type ApiApp = {
   name: string;
   type: AppType;
   status: AppStatus;
+  // Explicit desired vs observed lifecycle state, projected straight from the
+  // backend store.Application row. Absent means unknown — never defaulted.
+  desiredState?: string;
+  observedStatus?: string;
+  // Convenience primary domain (first configured domain); full list in `domains`.
+  domain?: string;
   node?: string;
   region?: string;
   image?: string;
@@ -369,6 +375,9 @@ export function mapApplication(raw: BackendApplication): ApiApp {
     name: raw.name,
     type,
     status: (raw.observedStatus || raw.status || "idle") as ApiApp["status"],
+    desiredState: raw.desiredState,
+    observedStatus: raw.observedStatus,
+    domain: (raw.domains ?? [])[0]?.domain,
     node: raw.node ?? cfg.nodeId,
     region: raw.region ?? cfg.regionId,
     image: split.image,
