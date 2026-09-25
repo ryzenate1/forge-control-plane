@@ -299,7 +299,7 @@ export function AdminAllocations() {
 
       {editing ? (
         <Modal title="Edit Allocation Alias" onClose={() => { setEditing(null); setEditError(null); }}>
-          <div className="space-y-5">
+          <div className="space-y-4">
             <div className="flex items-center gap-3 rounded-lg border border-white/[0.06] bg-surface-card-header p-4 font-mono text-sm">
               <Network size={16} className="shrink-0 text-slate-500" />
               <span className="text-slate-300">{editing.ip}</span>
@@ -327,16 +327,16 @@ export function AdminAllocations() {
 
       {modal ? (
         <Modal title="Create Allocations" onClose={() => { setModal(false); setCreateError(null); }} className="max-w-2xl">
+          <div className="space-y-4">
           {nodesQuery.isError ? (
-            <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
               <span>Could not load allocation nodes: {nodesQuery.error.message}</span>
               <Btn size="sm" tone="ghost" onClick={() => nodesQuery.refetch()}>Retry</Btn>
             </div>
           ) : null}
-          <div className="space-y-5">
             {/* Node Selection */}
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-300">Node</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Node</label>
               <select className={selectStyle} value={nodeId} onChange={(e) => setNodeId(e.target.value)}>
                 {nodes.length === 0 ? <option value="">No nodes available</option> : null}
                 {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
@@ -345,21 +345,21 @@ export function AdminAllocations() {
             </div>
 
             {/* IP & Ports */}
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
                 <Input label="IP address" value={ip} onChange={setIp} placeholder="0.0.0.0" mono />
-                <p className="mt-1.5 text-xs text-slate-500">Use <code className="text-slate-400">0.0.0.0</code> to bind on every interface, or a specific IP to limit exposure.</p>
+                <p className="mt-1.5 text-xs text-slate-400">Use <code className="text-slate-400">0.0.0.0</code> to bind on every interface, or a specific IP to limit exposure.</p>
               </div>
               <div>
                 <Input label="Ports" value={ports} onChange={setPorts} placeholder="25565" mono />
-                <p className="mt-1.5 text-xs text-slate-500">Single port (<code className="text-slate-400">25565</code>), range (<code className="text-slate-400">25565-25580</code>), or comma list.</p>
+                <p className="mt-1.5 text-xs text-slate-400">Single port (<code className="text-slate-400">25565</code>), range (<code className="text-slate-400">25565-25580</code>), or comma list.</p>
               </div>
             </div>
 
             {/* Protocol, Container Port, Alias, Notes */}
-            <div className="grid gap-5 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">Protocol</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Protocol</label>
                 <select className={selectStyle} value={protocol} onChange={(e) => setProtocol(e.target.value as "tcp" | "udp")}>
                   <option value="tcp">TCP</option>
                   <option value="udp">UDP</option>

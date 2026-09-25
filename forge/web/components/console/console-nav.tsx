@@ -4,38 +4,47 @@ import Link from "next/link";
 import { Fragment } from "react";
 import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { Archive, HeartPulse, Server, type LucideIcon } from "lucide-react";
+import { ChevronLeft, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchCurrentUser, fetchServer } from "@/lib/api";
 import { useT } from "@/components/TranslationProvider";
 import { computeServerAccess, hasServerPermission } from "@/components/server/server-context";
-import { serverTabHref, serverTabs, serverTabGroups } from "@/components/server/server-tabs";
+import {
+  consoleNavGroups,
+  workloadTabs,
+  workloadTabGroups,
+  workloadTabHref,
+  type ConsoleNavItem,
+  type WorkloadTabId,
+} from "@/components/console/console-registry";
 
-export type ConsoleNavItem = {
-  href: string;
-  label: string;
-  icon: LucideIcon;
-  badge?: string;
-};
+export type { ConsoleNavItem, ConsoleNavGroup } from "@/components/console/console-registry";
 
-export type ConsoleNavGroup = {
-  title: string;
-  items: ConsoleNavItem[];
-};
+/**
+ * Routes that have actual page.tsx files under app/console/.
+ * The nav filters out entries whose href is not in this set (unless they are
+ * workload routes which resolve dynamically via /console/servers/[id]).
+ *
+ * As new pages are created, add them here. This makes it structurally impossible
+ * for the nav to advertise a 404.
+ */
+const RESOLVED_ROUTES = new Set<string>([
+  "/console",
+  "/console/health",
+  "/console/servers",
+  "/console/apps",
+  "/console/databases",
+  "/console/backups",
+  "/console/domains",
+]);
 
-// Only routes with pages under app/console/ are listed; the workloads,
-// web-server, domains, etc. sections have no console pages yet.
-export const consoleNavGroups: ConsoleNavGroup[] = [
-  { title: "Overview", items: [
-    { href: "/console/health", label: "Health", icon: HeartPulse },
-  ] },
-  { title: "Workloads", items: [
-    { href: "/console/servers", label: "Servers", icon: Server },
-  ] },
-  { title: "Console", items: [
-    { href: "/console/backups", label: "Backups", icon: Archive },
-  ] },
-];
+function isRouteAvailable(href: string): boolean {
+  // Workload items always render — they link to list pages that exist
+  if (href === "/console/servers" || href === "/console/apps") return true;
+  // Dynamic server/app detail routes resolve via path prefix match
+  if (href.startsWith("/console/servers/")) return true;
+  return RESOLVED_ROUTES.has(href);
+}
 
 function matchServerId(pathname: string): string | null {
   const match = pathname.match(/^\/console\/servers\/([^/]+)(?:\/|$)/);
@@ -76,11 +85,7 @@ function ServerSection() {
   const access = server ? computeServerAccess(server, user) : null;
   const tr = (key: string, fallback: string) => { const value = t(key); return value === key ? fallback : value; };
   const visibleTabs = access
-    ? serverTabs.filter((tab) =>
-        tab.id === "console"
-          ? hasServerPermission(access, "websocket.connect") && hasServerPermission(access, "control.console")
-          : hasServerPermission(access, tab.permissions),
-      )
+    ? workloadTabs.filter((tab) => hasServerPermission(access, tab.permissions))
     : [];
   const state = server
     ? (server.suspended ? tr("server.nav.suspended", "Suspended")
@@ -90,23 +95,27 @@ function ServerSection() {
 
   return (
     <div>
-      <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{tr("server.nav.title", "Server")}</p>
+      <Link className="mb-2 flex items-center gap-1 px-3 text-[11px] font-medium text-slate-400 transition-colors hover:text-white" href="/console/servers">
+        <ChevronLeft size={12} /> All servers
+      </Link>
       <div className="mb-2 flex items-center gap-2 rounded-lg bg-white/[0.03] px-3 py-2.5">
         <span className={cn("h-1.5 w-1.5 shrink-0 rounded-full", server ? statusDot(server) : "animate-pulse bg-slate-600")} />
         <p className="min-w-0 truncate text-xs font-bold text-slate-200">{server?.name ?? serverId}</p>
         {state ? <span className="ml-auto shrink-0 text-[10px] text-slate-400">{state}</span> : null}
       </div>
       <div className="space-y-3">
-        {serverTabGroups.map((group) => {
-          const groupVisible = group.tabs.map((id) => visibleTabs.find((tab) => tab.id === id)).filter(Boolean) as typeof visibleTabs;
+        {workloadTabGroups.map((group) => {
+          const groupVisible = group.tabs
+            .map((id) => visibleTabs.find((tab) => tab.id === id))
+            .filter(Boolean) as typeof visibleTabs;
           if (groupVisible.length === 0) return null;
           return (
             <div key={group.title}>
-              <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-400">{group.title}</p>
+              <p className="mb-1 px-3 text-[10px] font-semibold uppercase tracking-wider text-slate-500">{group.title}</p>
               <ul className="space-y-0.5">
                 {groupVisible.map((tab) => {
-                  const Icon = tab.icon;
-                  const href = serverTabHref(serverId, tab.id);
+                  const Icon = tab.icon as LucideIcon;
+                  const href = workloadTabHref(serverId, tab.id);
                   const active = pathname === href;
                   const label = t(tab.labelKey);
                   return (
@@ -114,14 +123,14 @@ function ServerSection() {
                       <Link
                         aria-current={active ? "page" : undefined}
                         className={cn(
-                          "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--nav)]",
+                          "flex min-h-9 w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50",
                           active
                             ? "border-l-2 border-red-400 bg-red-500/10 pl-2.5 text-red-300"
                             : "text-slate-300 hover:bg-white/[0.04] hover:text-white",
                         )}
                         href={href}
                       >
-                        <Icon size={15} className="shrink-0" />
+                        <Icon size={14} className="shrink-0" />
                         <span className="truncate">{label === tab.labelKey ? tab.fallback : label}</span>
                       </Link>
                     </li>
@@ -138,7 +147,7 @@ function ServerSection() {
           </div>
         ) : null}
         {serverQuery.isError ? (
-          <p className="px-3 text-xs text-slate-400">Server unavailable — tabs are hidden.</p>
+          <p className="px-3 text-xs text-slate-400">Server unavailable — tabs hidden.</p>
         ) : null}
       </div>
     </div>
@@ -147,55 +156,69 @@ function ServerSection() {
 
 export function ConsoleNav() {
   const pathname = usePathname();
+  const t = useT();
 
-  // Longest-match wins so nested sections (/console/apps) never light up the
-  // Dashboard (/console) entry. Server tabs are exact matches and are longer
-  // than the /console/servers list entry, so they win while inside a server.
   const serverId = matchServerId(pathname);
-  const serverNavItems: ConsoleNavItem[] = serverId
-    ? serverTabs.map((tab) => ({ href: serverTabHref(serverId, tab.id), label: tab.fallback, icon: tab.icon }))
-    : [];
-  const flat = [...consoleNavGroups.flatMap((group) => group.items), ...serverNavItems];
-  const best = flat
+
+  // Build flat item list for longest-match highlighting
+  const allItems: ConsoleNavItem[] = [
+    ...consoleNavGroups.flatMap((g) => g.items),
+    ...(serverId
+      ? workloadTabs.map((tab) => ({
+          href: workloadTabHref(serverId, tab.id as WorkloadTabId),
+          label: tab.fallback,
+          icon: tab.icon,
+          audience: "customer" as const,
+        }))
+      : []),
+  ];
+  const best = allItems
     .filter((item) => pathname === item.href || pathname.startsWith(`${item.href}/`))
     .sort((left, right) => right.href.length - left.href.length)[0];
 
   return (
     <div className="space-y-5">
-      {consoleNavGroups.map((group, index) => (
-        <Fragment key={group.title}>
-          {index === 0 && serverId ? <ServerSection /> : null}
-          <div>
-            <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-400">{group.title}</p>
-            <ul className="space-y-0.5">
-              {group.items.map((item) => {
-                const Icon = item.icon;
-                const active = best?.href === item.href;
-                return (
-                  <li key={item.href}>
-                    <Link
-                      aria-current={active ? "page" : undefined}
-                      className={cn(
-                        "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400 focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--nav)]",
-                        active
-                          ? "border-l-2 border-red-400 bg-red-500/10 pl-2.5 text-red-300"
-                          : "text-slate-300 hover:bg-white/[0.04] hover:text-white",
-                      )}
-                      href={item.href}
-                    >
-                      <Icon size={15} className="shrink-0" />
-                      <span className="truncate">{item.label}</span>
-                      {item.badge ? (
-                        <span className="ml-auto rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-bold text-slate-300">{item.badge}</span>
-                      ) : null}
-                    </Link>
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        </Fragment>
-      ))}
+      {serverId ? <ServerSection /> : null}
+      {consoleNavGroups.map((group) => {
+        const availableItems = group.items.filter((item) => isRouteAvailable(item.href));
+        if (availableItems.length === 0) return null;
+        return (
+          <Fragment key={group.title}>
+            <div>
+              <p className="mb-1 px-3 text-[10px] font-bold uppercase tracking-[0.12em] text-slate-500">
+                {group.title}
+              </p>
+              <ul className="space-y-0.5">
+                {availableItems.map((item) => {
+                  const Icon = item.icon;
+                  const active = best?.href === item.href;
+                  const label = item.labelKey ? t(item.labelKey) : item.label;
+                  return (
+                    <li key={item.href}>
+                      <Link
+                        aria-current={active ? "page" : undefined}
+                        className={cn(
+                          "flex min-h-11 w-full items-center gap-2.5 rounded-lg px-3 py-2.5 text-sm font-medium transition-all focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400/50",
+                          active
+                            ? "border-l-2 border-red-400 bg-red-500/10 pl-2.5 text-red-300"
+                            : "text-slate-300 hover:bg-white/[0.04] hover:text-white",
+                        )}
+                        href={item.href}
+                      >
+                        <Icon size={15} className="shrink-0" />
+                        <span className="truncate">{label === item.labelKey ? item.label : label}</span>
+                        {item.badge ? (
+                          <span className="ml-auto rounded-full bg-white/[0.06] px-2 py-0.5 text-[10px] font-bold text-slate-300">{item.badge}</span>
+                        ) : null}
+                      </Link>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          </Fragment>
+        );
+      })}
     </div>
   );
 }

@@ -8,8 +8,7 @@ import {
   ArrowLeft, ArrowRightLeft, GitCommit, History, Layers,
   Package, RefreshCw, RotateCcw, Search, ShieldAlert,
 } from "lucide-react";
-import { fetchJSON, postJSON } from "@/lib/api";
-import { compareRevisions, fetchDeploymentRevisions } from "@/lib/api/deployments";
+import { compareRevisions, fetchDeploymentRevisions, rollbackToRevision } from "@/lib/api/deployments";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 
 type Revision = {
@@ -58,8 +57,7 @@ export default function DeploymentRevisionsPage() {
   });
 
   const rollbackMutation = useMutation({
-    mutationFn: (revisionId: string) =>
-      postJSON(`/admin/deployments/${id}/revisions/${revisionId}/rollback`),
+    mutationFn: (revisionId: string) => rollbackToRevision(id, revisionId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id, "revisions"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id] });
@@ -70,12 +68,21 @@ export default function DeploymentRevisionsPage() {
   const revisions = useMemo(() => revsQuery.data ?? [], [revsQuery.data]);
   const activeRevision = Array.isArray(revisions) ? revisions.find((r) => r.status === "active") : undefined;
 
-  const handleCompare = async (from: string, to: string) => {
-    try {
-      const data = await compareRevisions(id, from, to);
+  // A failed comparison must not look like "no changes": the mutation only
+  // swaps in the diff once the panel has returned it, otherwise it reports the
+  // failure next to the selector and through a toast.
+  const diffMutation = useMutation({
+    mutationFn: ({ from, to }: { from: string; to: string }) => compareRevisions(id, from, to),
+    onSuccess: (data) => {
       setDiffData(data);
       setShowDiff(true);
-    } catch {}
+    },
+    onError: (err) => toast({ tone: "error", title: "Could not compare revisions", message: err instanceof Error ? err.message : "An error occurred" }),
+  });
+
+  const handleCompare = (from: string, to: string) => {
+    setDiffData(null);
+    diffMutation.mutate({ from, to });
   };
 
   return (
@@ -166,12 +173,19 @@ export default function DeploymentRevisionsPage() {
               <Btn
                 tone="primary"
                 size="sm"
-                disabled={!diffFrom || !diffTo}
+                disabled={!diffFrom || !diffTo || diffMutation.isPending}
                 onClick={() => handleCompare(diffFrom, diffTo)}
               >
-                <Search size={14} /> Compare
+                <Search size={14} /> {diffMutation.isPending ? "Comparing…" : "Compare"}
               </Btn>
             </div>
+            {diffMutation.isError && (
+              <p className="mb-3 text-xs text-red-300" role="alert">
+                The comparison could not be loaded:
+                {" "}
+                {diffMutation.error instanceof Error ? diffMutation.error.message : "An error occurred"}
+              </p>
+            )}
             {diffData && (
               <div className="space-y-2">
                 <p className="text-xs font-medium text-slate-400">

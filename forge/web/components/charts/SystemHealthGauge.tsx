@@ -54,7 +54,7 @@ export function SystemHealthGauge() {
       <div className="flex flex-col items-center p-6">
         <div className="relative h-32 w-32">
           <svg className="h-full w-full -rotate-90" viewBox="0 0 120 120">
-            <circle cx="60" cy="60" r="54" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="8" />
+            <circle cx="60" cy="60" r="54" fill="none" stroke={chart.grid} strokeWidth="8" />
             <circle
               cx="60"
               cy="60"

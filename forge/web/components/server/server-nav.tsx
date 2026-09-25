@@ -3,23 +3,24 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useState } from "react";
-import { Activity, Calendar, ChevronLeft, Database, Folder, HardDrive, Layers, LayoutDashboard, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
+import { Activity, Calendar, ChevronLeft, Database, Folder, Gauge, HardDrive, Layers, LayoutDashboard, ListChecks, LogOut, Menu, Network, Rocket, Settings, Terminal, User, Users, X } from "lucide-react";
 import { type ApiServer, logout } from "@/lib/api";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/TranslationProvider";
 import { hasServerPermission, type ServerAccess } from "./server-context";
 
-export type ServerTab = "overview" | "console" | "files" | "databases" | "schedules" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "deployments" | "git" | "database" | "transfer";
+export type ServerTab = "overview" | "console" | "files" | "databases" | "schedules" | "tasks" | "users" | "backups" | "builds" | "network" | "startup" | "settings" | "activity" | "mounts" | "processes" | "resource-limits" | "deployments" | "git" | "database" | "transfer";
 
 interface ServerNavProps { serverId: string; server: ApiServer; access: ServerAccess; activeTab?: ServerTab }
 
 const tabs: Array<{ id: ServerTab; labelKey: string; fallback: string; icon: typeof Terminal; permissions: string[] }> = [
   { id: "overview", labelKey: "server.overview", fallback: "Overview", icon: LayoutDashboard, permissions: [] },
-  { id: "console", labelKey: "server.console", fallback: "Console", icon: Terminal, permissions: ["websocket.connect", "control.console"] },
+  { id: "console", labelKey: "server.terminal", fallback: "Terminal", icon: Terminal, permissions: ["websocket.connect", "control.console"] },
   { id: "files", labelKey: "server.files", fallback: "Files", icon: Folder, permissions: ["file.read"] },
   { id: "databases", labelKey: "server.databases", fallback: "Databases", icon: Database, permissions: ["database.read"] },
   { id: "database", labelKey: "server.database", fallback: "Database", icon: Database, permissions: ["database.read"] },
   { id: "schedules", labelKey: "server.schedules", fallback: "Schedules", icon: Calendar, permissions: ["schedule.read"] },
+  { id: "tasks", labelKey: "server.scheduledTasks", fallback: "Scheduled Tasks", icon: ListChecks, permissions: ["schedule.read"] },
   { id: "users", labelKey: "admin.users", fallback: "Users", icon: Users, permissions: ["user.read"] },
   { id: "backups", labelKey: "server.backups", fallback: "Backups", icon: HardDrive, permissions: ["backup.read"] },
   { id: "builds", labelKey: "server.builds", fallback: "Builds", icon: Rocket, permissions: [] },
@@ -29,6 +30,7 @@ const tabs: Array<{ id: ServerTab; labelKey: string; fallback: string; icon: typ
   { id: "mounts", labelKey: "server.mounts", fallback: "Mounts", icon: Folder, permissions: ["mount.read"] },
   { id: "activity", labelKey: "admin.activity", fallback: "Activity", icon: Activity, permissions: ["activity.read"] },
   { id: "processes", labelKey: "server.processes", fallback: "Processes", icon: Layers, permissions: ["control.start"] },
+  { id: "resource-limits", labelKey: "server.resourceLimits", fallback: "Resources", icon: Gauge, permissions: ["settings.rename"] },
   { id: "deployments", labelKey: "server.deployments", fallback: "Deployments", icon: Rocket, permissions: [] },
   { id: "transfer", labelKey: "server.transfer", fallback: "Transfer", icon: Network, permissions: ["settings.reinstall"] },
 ];

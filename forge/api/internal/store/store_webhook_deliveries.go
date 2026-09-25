@@ -145,7 +145,13 @@ func (s *Store) EnqueueWebhookEvent(ctx context.Context, event string, payload m
 			return err
 		}
 	}
-	return tx.Commit(ctx)
+	if err := tx.Commit(ctx); err != nil {
+		return err
+	}
+	// Notify the notifications engine (if wired) that this control-plane event
+	// fired, independently of whether any outbound webhook subscribes to it.
+	s.notifyWebhookEventHook(ctx, event, raw)
+	return nil
 }
 
 func (s *Store) ClaimWebhookDelivery(ctx context.Context, workerID string, staleAfter time.Duration) (*WebhookDelivery, error) {

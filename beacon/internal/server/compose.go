@@ -555,7 +555,7 @@ func (s *Server) handleComposeDeploy(w http.ResponseWriter, r *http.Request) {
 	if req.RemoveOrphans {
 		upArgs = append(upArgs, "--remove-orphans")
 	}
-	cmd := exec.CommandContext(ctx, "docker", upArgs...)
+	cmd := exec.CommandContext(ctx, dockerBinary(), upArgs...)
 	cmd.Dir = stackDir
 	output, err := cmd.CombinedOutput()
 
@@ -599,7 +599,7 @@ func (s *Server) handleComposeStop(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, "docker", "compose", "-f", composePath, "-p", stackID, "stop")
+	cmd := exec.CommandContext(ctx, dockerBinary(), "compose", "-f", composePath, "-p", stackID, "stop")
 	cmd.Dir = stackDir
 	output, err := cmd.CombinedOutput()
 
@@ -907,4 +907,22 @@ func (s *Server) handleComposePull(w http.ResponseWriter, r *http.Request) {
 		StackID: stackID,
 		Output:  string(output),
 	})
+}
+
+func dockerBinary() string {
+	if p, err := exec.LookPath("docker"); err == nil {
+		return p
+	}
+	for _, candidate := range []string{
+		filepath.Join(os.Getenv("HOME"), ".docker/bin/docker"),
+		"/Users/riyaz/.docker/bin/docker",
+		"/usr/local/bin/docker",
+		"/opt/homebrew/bin/docker",
+		"/usr/bin/docker",
+	} {
+		if _, err := os.Stat(candidate); err == nil {
+			return candidate
+		}
+	}
+	return "docker"
 }

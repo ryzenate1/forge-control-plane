@@ -95,7 +95,7 @@ export function ServerCPUChart({ nodeId, height = 300, period = "1h" }: ServerCP
                   <stop offset="95%" stopColor={chart.cpu} stopOpacity={0} />
                 </linearGradient>
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
+              <CartesianGrid strokeDasharray="3 3" stroke={chart.grid} />
               <XAxis
                 dataKey="timestamp"
                 tick={{ fill: chart.axis, fontSize: 11 }}

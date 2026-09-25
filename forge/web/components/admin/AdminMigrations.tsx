@@ -126,7 +126,7 @@ function CreateMigrationModal({ open, onClose }: { open: boolean; onClose: () =>
           </select>
         </label>
         {createMut.error && (
-          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-xs text-red-200">
+          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-300">
             {errorMessage(createMut.error)}
           </div>
         )}
@@ -177,7 +177,7 @@ function CreateRecoveryPlanModal({ open, onClose }: { open: boolean; onClose: ()
         </label>
         <Input label="Recovery reason" value={reason} onChange={setReason} placeholder="e.g. node is unavailable" />
         {createMut.error && (
-          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-xs text-red-200">
+          <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-sm text-red-300">
             {errorMessage(createMut.error)}
           </div>
         )}

@@ -27,6 +27,7 @@ import {
   EmptyState,
   Input,
   Modal,
+  ModalFooter,
   Textarea,
 } from "./admin-ui";
 
@@ -317,7 +318,7 @@ function PlanModal({ plan, onClose, onDone }: { plan?: BillingPlan; onClose: () 
   });
 
   return (
-    <Modal title={plan ? `Edit plan — ${plan.code}` : "Create billing plan — POST /billing/plans"} onClose={onClose}>
+    <Modal title={plan ? "Edit billing plan" : "Create billing plan"} description={plan ? `Code: ${plan.code}` : "POST /billing/plans"} onClose={onClose}>
       <div className="space-y-4">
         {!plan && <Input label="Code (unique, e.g. pro, free)" value={code} onChange={setCode} placeholder="pro" mono required />}
         <Input label="Name" value={name} onChange={setName} placeholder="Pro Plan" required />
@@ -329,12 +330,9 @@ function PlanModal({ plan, onClose, onDone }: { plan?: BillingPlan; onClose: () 
           <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="accent-[var(--brand)]" /> Active
         </label>
         <Textarea label="Entitlements (JSON)" value={entitlements} onChange={setEntitlements} rows={6} placeholder='{"max_servers": 10}' />
-        {createMut.isError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{(createMut.error as Error).message}</div>}
-        <div className="flex justify-end gap-2 border-t border-[var(--line)] pt-4">
-          <Btn tone="ghost" onClick={onClose}>Cancel</Btn>
-          <Btn tone="primary" loading={createMut.isPending} onClick={() => createMut.mutate()}>{plan ? "Save" : "Create"}</Btn>
-        </div>
+        {createMut.isError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{(createMut.error as Error).message}</div>}
       </div>
+      <ModalFooter onCancel={onClose} onConfirm={() => createMut.mutate()} disabled={createMut.isPending} confirmLabel={plan ? "Save" : "Create"} />
     </Modal>
   );
 }

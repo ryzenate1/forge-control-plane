@@ -43,12 +43,12 @@ Light (`[data-theme="light"]`): `--canvas: #f4f7fb`, `--surface: #ffffff`, `--su
 
 | Role | Family | Weight | Usage |
 |------|--------|--------|-------|
-| **Display** | `Space Grotesk` | 400/500/600/700 | Page titles (`text-[30px] tracking-[-0.03em]`), nav group labels, metric numbers (e.g. `AdminOverview.tsx:101` 28px/20px) |
-| **Body** | `IBM Plex Sans` | 400/500/600/700 | Cards, tables, forms, descriptions (12/14 body, 1.5 line-height) |
-| **Mono** | `JetBrains Mono` | 400-700 | Badges, log lines, server IDs, env keys (`forge/web/app/fonts.ts:27` `var(--font-mono)`) |
+| **Body / UI** | `Manrope` | 400/500/600/700 | Everything, including headings (`globals.css:99`); cards, tables, forms, descriptions (12/14 body, 1.5 line-height) |
+| **Display** | `Space Grotesk` | 400/500/600/700 | Opt-in only via the `.font-display` utility (`globals.css:102`) |
+| **Mono** | `JetBrains Mono` | 400 (variable) | Badges, log lines, server IDs, env keys (`app/fonts.ts` `var(--font-mono)`, `globals.css:106`) |
 
-Implementation: `forge/web/app/fonts.ts:1` exports `sans` (IBM Plex Sans → `var(--font-sans)`), `display` (Space Grotesk → `var(--font-display)`), `mono` (`var(--font-mono)`).  
-Tailwind: `tailwind.config.ts:12` `fontFamily.sans: ["IBM Plex Sans","Space Grotesk",...]`, `display: ["Space Grotesk",...]`, `mono: ["JetBrains Mono",...]`. Root applies `font-family: var(--font-sans)` in `globals.css:53`.
+Implementation: `forge/web/app/fonts.ts` exports `sans` (Manrope → `var(--font-sans)`), `display` (Space Grotesk → `var(--font-display)`), `mono` (JetBrains Mono → `var(--font-mono)`), loaded with `next/font/google`; self-hosting via `next/font/local` is pending the vendored woff2 files. `lib/design-tokens.ts` `type.body` / `type.display` keep the legacy `IBM Plex Sans` / `Space Grotesk` names as registry aliases only — IBM Plex Sans is no longer requested by the app.
+Tailwind: `tailwind.config.ts:13` `fontFamily.sans: ["var(--font-sans)","Manrope",...]`, `display: ["var(--font-display)","Space Grotesk",...]`, `mono: ["var(--font-mono)","JetBrains Mono",...]`. Root applies `font-family: var(--font-sans)` in `globals.css:89`.
 
 Scale: 11 utility / 12-14 body / 20-24 display; tracking -0.02 display caps; `prefers-reduced-motion` disables animation (`globals.css:63`).
 
@@ -135,7 +135,7 @@ Check exemplar propagation:
 - `app/admin/host/page.tsx:182` ✅ `border-[var(--line)] bg-[var(--surface-input)]`
 - `components/admin/AdminOverview.tsx:142` ✅ `border-[var(--line)] bg-white/[0.02]`
 
-Registry `tailwind.config.ts:13` enforces `IBM Plex Sans` + `Space Grotesk` per §2; `app/fonts.ts:5` provisions both.
+Registry `tailwind.config.ts:13` enforces `Manrope` (body) + `Space Grotesk` (display utility) per §2; `app/fonts.ts` provisions Manrope, Space Grotesk and JetBrains Mono.
 
 ---
 
@@ -146,8 +146,9 @@ Registry `tailwind.config.ts:13` enforces `IBM Plex Sans` + `Space Grotesk` per 
 <div className="border border-[var(--line)] bg-[var(--surface)] text-[var(--text)] rounded-[var(--radius)] shadow-[var(--shadow-card)]" />
 
 // JS (charts, canvas)
-import { tokens, colors } from "@/lib/design-tokens";
+import { tokens, colors, chart } from "@/lib/design-tokens";
 <Area stroke={colors.phosphor} fill={tokens.brand.DEFAULT} />
+<CartesianGrid stroke={chart.grid} />   // SVG attrs can't resolve var(--*)
 ```
 
 Never: `bg-[#161b28]`, `border-white/10` for cards, `text-[#dc2626]`. Lint by `grep -rn "bg-\[#\|border-\[#\|#161b28" forge/web/lib forge/web/app forge/web/components` — should be 0 outside `globals.css`/`design-tokens.ts` (exception: `AdminWebhooks.tsx` Discord).
@@ -159,4 +160,4 @@ Never: `bg-[#161b28]`, `border-white/10` for cards, `text-[#dc2626]`. Lint by `g
 - `forge/web/app/globals.css:5` — 32 vars (dark) + 28 (light) across 10 families
 - `forge/web/lib/design-tokens.ts:1` — 7 exports + `tokens`, `colors`, `type`, `space`, `motion`
 - `forge/web/tailwind.config.ts:10` — theme.extend maps to `var(--*)`
-- `forge/web/app/fonts.ts:1` — Space Grotesk / IBM Plex Sans / JetBrains Mono
+- `forge/web/app/fonts.ts` — Manrope / Space Grotesk / JetBrains Mono via `next/font` (IBM Plex Sans survives only as the `type.body` legacy alias)

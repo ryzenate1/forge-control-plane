@@ -132,7 +132,7 @@ func CaptchaMiddleware(cfg Config) fiber.Handler {
 			})
 		}
 
-		if err := verifyCaptchaToken(ctx, secretKey, token, c.IP()); err != nil {
+		if err := verifyCaptchaToken(ctx, secretKey, token, ExtractClientIP(c)); err != nil {
 			return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
 				"error": "captcha verification failed",
 			})

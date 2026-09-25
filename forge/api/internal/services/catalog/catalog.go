@@ -101,6 +101,7 @@ func New(opts Options) (*Service, error) {
 // ProvisionInput is a one-click provision request.
 type ProvisionInput struct {
 	Kind          string
+	UserID        string
 	Version       string
 	EnvironmentID string
 	NodeID        string
@@ -156,7 +157,7 @@ func (s *Service) Provision(ctx context.Context, in ProvisionInput) (*store.Cata
 	if isManagedDBKind(entry.Key) {
 		ref, err = s.provisionDB(ctx, entry, in.NodeID, version, memoryMB, cpuShares)
 	} else {
-		ref, err = s.provisionCompose(ctx, entry, in.NodeID, version, memoryMB, cpuShares, in.EnvironmentID)
+		ref, err = s.provisionCompose(ctx, entry, in.NodeID, version, memoryMB, cpuShares, in.EnvironmentID, in.UserID)
 	}
 	if err != nil {
 		_ = s.store.UpdateCatalogInstanceStatus(ctx, created.ID, store.CatalogInstanceRef{
@@ -237,7 +238,10 @@ func (s *Service) provisionDB(ctx context.Context, entry *store.CatalogEntry, no
 	}, nil
 }
 
-func (s *Service) provisionCompose(ctx context.Context, entry *store.CatalogEntry, nodeID, version string, memoryMB, cpuShares int, envID string) (store.CatalogInstanceRef, error) {
+func (s *Service) provisionCompose(ctx context.Context, entry *store.CatalogEntry, nodeID, version string, memoryMB, cpuShares int, envID string, userID string) (store.CatalogInstanceRef, error) {
+	if strings.TrimSpace(userID) == "" {
+		return store.CatalogInstanceRef{}, errors.New("compose-backed catalog kinds require an owning user id")
+	}
 	password := randomPassword(24)
 	template := composeTemplateFor(entry, version, password)
 	host, err := s.nodeHost(ctx, nodeID)
@@ -245,7 +249,7 @@ func (s *Service) provisionCompose(ctx context.Context, entry *store.CatalogEntr
 		return store.CatalogInstanceRef{}, err
 	}
 	stack, err := s.composeSvc.DeployComposeStack(ctx, compose.DeployComposeRequest{
-		UserID:        "catalog",
+		UserID:        userID,
 		Name:          templateName(entry, version, nodeID),
 		NodeID:        nodeID,
 		ComposeYAML:   template,

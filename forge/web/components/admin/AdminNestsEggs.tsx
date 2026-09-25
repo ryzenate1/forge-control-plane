@@ -351,10 +351,12 @@ export function AdminNestsEggs() {
  {/* Nest modal */}
   {nestModal !== null ? (
   <Modal title={nestModal === "create" ? "Create Nest" : "Edit Nest"} onClose={() => setNestModal(null)}>
+  <div className="space-y-4">
   <AdminFormSection title="Nest Details">
   <Input label="Name" value={nestName} onChange={setNestName} placeholder="Minecraft" />
   <Input label="Description" value={nestDesc} onChange={setNestDesc} placeholder="Games based on Minecraft" />
   </AdminFormSection>
+  </div>
   <ModalFooter
  onCancel={() => setNestModal(null)}
  onConfirm={() => nestModal === "create" ? createNestMut.mutate() : updateNestMut.mutate((nestModal as ApiNest).id)}

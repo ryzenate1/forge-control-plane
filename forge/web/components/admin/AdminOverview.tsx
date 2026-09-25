@@ -902,7 +902,7 @@ export function AdminOverview() {
                       <Tooltip
                         contentStyle={{
                           backgroundColor: chart.panel,
-                          borderColor: "rgba(255,255,255,0.1)",
+                          borderColor: chart.panelBorder,
                           borderRadius: "8px",
                           fontSize: "11px",
                         }}

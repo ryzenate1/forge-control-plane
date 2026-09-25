@@ -209,16 +209,22 @@ func (s *Store) GetApplication(ctx context.Context, id string) (*Application, er
 }
 
 func (s *Store) ListApplications(ctx context.Context, orgID string) ([]Application, error) {
-	rows, err := s.db.Query(ctx, `
+	baseQuery := `
 		SELECT id::text, name, COALESCE(description, ''), org_id::text,
 			project_id::text, environment_id::text, server_id::text,
 			source_type, COALESCE(source_config::text, '{}'),
 			desired_state, observed_status, current_deployment_id::text,
 			created_at, updated_at
-		FROM applications
-		WHERE org_id = $1
-		ORDER BY created_at DESC
-	`, orgID)
+		FROM applications`
+	var query string
+	var args []any
+	if orgID == "" {
+		query = baseQuery + ` ORDER BY created_at DESC`
+	} else {
+		query = baseQuery + ` WHERE org_id = $1 ORDER BY created_at DESC`
+		args = append(args, orgID)
+	}
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, err
 	}

@@ -200,6 +200,7 @@ func (svc *Service) applyEnvSteps(ctx context.Context, envID string, m EnvManife
 	}
 
 	applied := 0
+	var warnings []string
 	for _, step := range m.Env {
 		if step.Service != "" {
 			// Service-scoped steps require the service id; we record them as
@@ -217,6 +218,10 @@ func (svc *Service) applyEnvSteps(ctx context.Context, envID string, m EnvManife
 		if v, ok := byKey[key]; ok {
 			req := store.UpdateEnvVarRequest{Value: value, IsSensitive: step.Sensitive}
 			if _, err := svc.envvar.UpdateEnvironmentVariable(ctx, v.ID, req, actorID); err != nil {
+				// A failed step is non-fatal to the rest of the manifest, but it
+				// must be surfaced rather than silently dropped — a skipped
+				// variable is not an applied one.
+				warnings = append(warnings, fmt.Sprintf("env %q update failed: %v", key, err))
 				continue
 			}
 		} else {
@@ -227,13 +232,14 @@ func (svc *Service) applyEnvSteps(ctx context.Context, envID string, m EnvManife
 				Value:         value,
 				IsSensitive:   step.Sensitive,
 			}, actorID); err != nil {
+				warnings = append(warnings, fmt.Sprintf("env %q create failed: %v", key, err))
 				continue
 			}
 			byKey[key] = store.EnvironmentVariable{}
 		}
 		applied++
 	}
-	return applied, nil
+	return applied, warnings
 }
 
 // Render returns the last applied manifest (nil when none applied yet) plus

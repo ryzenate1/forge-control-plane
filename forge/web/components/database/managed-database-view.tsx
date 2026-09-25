@@ -1,8 +1,8 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Trash2, Archive, RefreshCw, Plus, Download } from "lucide-react";
+import { Archive, Box, Database, Download, LayoutGrid, List, Plus, RefreshCw, Search, Server, Trash2 } from "lucide-react";
 import {
   type ManagedDatabase,
   type ManagedDatabaseBackup,
@@ -16,9 +16,10 @@ import {
   listManagedDatabaseRestores,
   updateManagedDatabase,
 } from "@/lib/api/database-containers";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Pill, AdminConfirmDialog } from "@/components/admin/admin-ui";
+import { AdminConfirmDialog, Btn, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { statusTone } from "@/lib/api/status";
+import { DbStatCards } from "./databases-overview";
 
 const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15";
 
@@ -30,6 +31,37 @@ const engineVersions: Record<string, string[]> = {
   mongodb: ["6", "7"],
 };
 
+function fmtDate(iso?: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+}
+
+function ManagedStatusDot({ status }: { status: string }) {
+  const tone = statusTone(status);
+  const color =
+    tone === "green" ? "bg-emerald-400"
+    : tone === "yellow" ? "bg-amber-400"
+    : tone === "red" ? "bg-red-400"
+    : tone === "blue" ? "bg-sky-400"
+    : "bg-slate-500";
+  const text =
+    tone === "green" ? "text-emerald-300"
+    : tone === "yellow" ? "text-amber-300"
+    : tone === "red" ? "text-red-300"
+    : tone === "blue" ? "text-sky-300"
+    : "text-slate-300";
+  return (
+    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold capitalize ${text}`}>
+      <span className={`h-1.5 w-1.5 rounded-full ${color}`} />{status}
+    </span>
+  );
+}
+
+const filterSelectCls = "h-10 cursor-pointer appearance-none rounded-lg border border-white/[0.08] bg-black/20 pl-3 pr-8 text-xs text-slate-200 outline-none";
+const filterSelectWrap = "relative flex flex-col justify-center rounded-lg border border-white/[0.08] bg-black/20 px-3 py-1";
+
 export function ManagedDatabaseView() {
   const qc = useQueryClient();
   const { toast } = useToast();
@@ -38,12 +70,63 @@ export function ManagedDatabaseView() {
   const [forceDelete, setForceDelete] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [editingDb, setEditingDb] = useState<ManagedDatabase | null>(null);
+  const [search, setSearch] = useState("");
+  const [engineFilter, setEngineFilter] = useState("all");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [view, setView] = useState<"table" | "cards">("table");
+  const [sort, setSort] = useState("name-asc");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(10);
 
   const dbsQuery = useQuery({
     queryKey: ["managed-databases"],
     queryFn: () => listManagedDatabases(),
   });
-  const dbs = dbsQuery.data ?? [];
+  const dbs = useMemo(() => dbsQuery.data ?? [], [dbsQuery.data]);
+
+  const engines = useMemo(() => [...new Set(dbs.map((db) => db.engine).filter(Boolean))].sort(), [dbs]);
+  const statuses = useMemo(() => [...new Set(dbs.map((db) => db.status).filter(Boolean))].sort(), [dbs]);
+
+  function resetPage(update: () => void) {
+    setPage(1);
+    update();
+  }
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return dbs.filter((db) => {
+      if (engineFilter !== "all" && db.engine !== engineFilter) return false;
+      if (statusFilter !== "all" && db.status !== statusFilter) return false;
+      if (!term) return true;
+      return `${db.name} ${db.engine} ${db.version} ${db.status}`.toLowerCase().includes(term);
+    });
+  }, [dbs, search, engineFilter, statusFilter]);
+
+  const sorted = useMemo(() => {
+    const list = [...filtered];
+    switch (sort) {
+      case "name-desc": return list.sort((a, b) => b.name.localeCompare(a.name));
+      case "status": return list.sort((a, b) => a.status.localeCompare(b.status) || a.name.localeCompare(b.name));
+      case "engine": return list.sort((a, b) => a.engine.localeCompare(b.engine) || a.name.localeCompare(b.name));
+      default: return list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }, [filtered, sort]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visible = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const hasActiveFilters = Boolean(search.trim() || engineFilter !== "all" || statusFilter !== "all");
+
+  const readyCount = useMemo(
+    () => dbs.filter((db) => ["ready", "running"].includes((db.status ?? "").toLowerCase())).length,
+    [dbs],
+  );
+  const failedCount = useMemo(
+    () => dbs.filter((db) => ["failed", "error"].includes((db.status ?? "").toLowerCase())).length,
+    [dbs],
+  );
+  const memoryTotal = useMemo(() => dbs.reduce((acc, db) => acc + (db.memoryMb ?? 0), 0), [dbs]);
+  const statsLoading = dbsQuery.isLoading;
 
   const backupsQuery = useQuery({
     queryKey: ["managed-database-backups", selected],
@@ -125,55 +208,175 @@ export function ManagedDatabaseView() {
         </div>
       )}
 
-      <Card className="overflow-hidden">
-        <CardHeader title="Databases" icon={Database} />
+      <div className="space-y-4">
+        <DbStatCards
+          stats={[
+            { key: "total", label: "Total Databases", icon: Database, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300", value: statsLoading ? "…" : dbs.length },
+            { key: "ready", label: "Ready", icon: Box, tile: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", value: statsLoading ? "…" : readyCount },
+            { key: "failed", label: "Failed / Error", icon: Archive, tile: "border-red-500/25 bg-red-500/10 text-red-300", value: statsLoading ? "…" : failedCount },
+            { key: "memory", label: "Memory Total", icon: Server, tile: "border-sky-500/25 bg-sky-500/10 text-sky-300", value: statsLoading ? "…" : `${memoryTotal} MB` },
+          ]}
+        />
+
+        <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+          <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2">
+            <Search size={13} className="shrink-0 text-slate-500" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => resetPage(() => setSearch(e.target.value))}
+              placeholder="Search by name, engine, status…"
+              aria-label="Search managed databases"
+              className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600"
+            />
+          </label>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className={filterSelectWrap}>
+              <span className="text-[10px] leading-3 text-slate-500">Engine</span>
+              <select aria-label="Filter by engine" value={engineFilter} onChange={(e) => resetPage(() => setEngineFilter(e.target.value))} className={filterSelectCls + " h-6 border-0 bg-transparent pl-0 text-xs"}>
+                <option value="all">All</option>
+                {engines.map((e) => <option key={e} value={e}>{e}</option>)}
+              </select>
+            </label>
+            <label className={filterSelectWrap}>
+              <span className="text-[10px] leading-3 text-slate-500">Status</span>
+              <select aria-label="Filter by status" value={statusFilter} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} className={filterSelectCls + " h-6 border-0 bg-transparent pl-0 text-xs"}>
+                <option value="all">All</option>
+                {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+              </select>
+            </label>
+            <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1" role="group" aria-label="View mode">
+              <button type="button" aria-label="Table view" aria-pressed={view === "table"} onClick={() => setView("table")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "table" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
+                <List size={14} /> Table
+              </button>
+              <button type="button" aria-label="Cards view" aria-pressed={view === "cards"} onClick={() => setView("cards")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "cards" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
+                <LayoutGrid size={14} /> Cards
+              </button>
+            </div>
+            {hasActiveFilters && (
+              <button type="button" onClick={() => { setSearch(""); setEngineFilter("all"); setStatusFilter("all"); setPage(1); }} className="rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-400 transition hover:text-white">
+                Clear
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-sm font-bold text-slate-100">Managed Databases ({sorted.length})</h2>
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-500">Sort by</span>
+            <select aria-label="Sort managed databases" value={sort} onChange={(e) => setSort(e.target.value)} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+              <option value="name-asc">Name (A → Z)</option>
+              <option value="name-desc">Name (Z → A)</option>
+              <option value="status">Status</option>
+              <option value="engine">Engine</option>
+            </select>
+          </label>
+        </div>
+
         {dbsQuery.isLoading ? (
           <div className="py-10 text-center text-sm text-slate-300">Loading...</div>
         ) : dbsQuery.isError ? (
-          <div className="p-5">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-              <span>Failed to load: {dbsQuery.error.message}</span>
-              <Btn size="sm" tone="ghost" onClick={() => void dbsQuery.refetch()}>Retry</Btn>
-            </div>
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+            <span>Failed to load: {dbsQuery.error.message}</span>
+            <Btn size="sm" tone="ghost" onClick={() => void dbsQuery.refetch()}>Retry</Btn>
           </div>
         ) : dbs.length === 0 ? (
           <EmptyState icon={Database} message="No managed databases. Create one to get started." />
+        ) : sorted.length === 0 ? (
+          <EmptyState
+            icon={Database}
+            title="No matches"
+            message="No managed databases match these filters."
+          />
+        ) : view === "cards" ? (
+          <div className="space-y-3">
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {visible.map((db) => (
+                <ManagedDBCard
+                  key={db.id}
+                  db={db}
+                  isSelected={selected === db.id}
+                  onSelect={() => setSelected(selected === db.id ? null : db.id)}
+                  onBackup={(id) => backupMut.mutate(id)}
+                  onRestore={(id, backupId) => restoreMut.mutate({ dbId: id, backupId })}
+                  onRotate={(id) => rotateMut.mutate(id)}
+                  onEdit={(item) => setEditingDb(item)}
+                  onDelete={(id) => setConfirmDeleteId(id)}
+                  backups={selected === db.id ? backups : []}
+                  restores={selected === db.id ? restores : []}
+                  isPending={backupMut.isPending || restoreMut.isPending || updateMut.isPending}
+                />
+              ))}
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[var(--surface)] px-4 py-3 text-xs text-slate-400">
+              <span>Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sorted.length)} of {sorted.length} databases</span>
+              <div className="flex items-center gap-2">
+                <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">‹</button>
+                <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
+                <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">›</button>
+                <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
+                  <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
+                    <option value={10}>10 / page</option>
+                    <option value={20}>20 / page</option>
+                    <option value={50}>50 / page</option>
+                  </select>
+                </label>
+              </div>
+            </div>
+          </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06] text-left text-xs text-slate-400 uppercase tracking-wider">
-                  <th className="px-4 py-3 font-semibold">Name</th>
-                  <th className="px-4 py-3 font-semibold">Engine</th>
-                  <th className="px-4 py-3 font-semibold">Status</th>
-                  <th className="px-4 py-3 font-semibold">Port</th>
-                  <th className="px-4 py-3 font-semibold">Resources</th>
-                  <th className="px-4 py-3 font-semibold">Backups</th>
-                  <th className="px-4 py-3 font-semibold" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                {dbs.map((db) => (
-                  <ManagedDBRow
-                    key={db.id}
-                    db={db}
-                    isSelected={selected === db.id}
-                    onSelect={() => setSelected(selected === db.id ? null : db.id)}
-                    onBackup={(id) => backupMut.mutate(id)}
-                    onRestore={(id, backupId) => restoreMut.mutate({ dbId: id, backupId })}
-                    onRotate={(id) => rotateMut.mutate(id)}
-                    onEdit={(db) => setEditingDb(db)}
-                    onDelete={(id) => setConfirmDeleteId(id)}
-                    backups={selected === db.id ? backups : []}
-                    restores={selected === db.id ? restores : []}
-                    isPending={backupMut.isPending || restoreMut.isPending || updateMut.isPending}
-                  />
-                ))}
-              </tbody>
-            </table>
+          <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+            <div className="overflow-x-auto">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                    <th className="px-4 py-3 font-medium">Name</th>
+                    <th className="px-2 py-3 font-medium">Engine / Version</th>
+                    <th className="px-2 py-3 font-medium">Status</th>
+                    <th className="px-2 py-3 font-medium">Host : Port</th>
+                    <th className="px-2 py-3 font-medium">Resources</th>
+                    <th className="px-2 py-3 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {visible.map((db) => (
+                    <ManagedDBRow
+                      key={db.id}
+                      db={db}
+                      isSelected={selected === db.id}
+                      onSelect={() => setSelected(selected === db.id ? null : db.id)}
+                      onBackup={(id) => backupMut.mutate(id)}
+                      onRestore={(id, backupId) => restoreMut.mutate({ dbId: id, backupId })}
+                      onRotate={(id) => rotateMut.mutate(id)}
+                      onEdit={(item) => setEditingDb(item)}
+                      onDelete={(id) => setConfirmDeleteId(id)}
+                      backups={selected === db.id ? backups : []}
+                      restores={selected === db.id ? restores : []}
+                      isPending={backupMut.isPending || restoreMut.isPending || updateMut.isPending}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3 text-xs text-slate-400">
+              <span>Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sorted.length)} of {sorted.length} databases</span>
+              <div className="flex items-center gap-2">
+                <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">‹</button>
+                <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
+                <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">›</button>
+                <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
+                  <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
+                    <option value={10}>10 / page</option>
+                    <option value={20}>20 / page</option>
+                    <option value={50}>50 / page</option>
+                  </select>
+                </label>
+              </div>
+            </div>
           </div>
         )}
-      </Card>
+      </div>
 
       {showCreate && (
         <ManagedDBCreateModal
@@ -208,35 +411,39 @@ function ManagedDBRow({
   restores: import("@/lib/api/database-containers").ManagedDatabaseRestore[];
   isPending: boolean;
 }) {
-  const tone = statusTone(db.status);
-  const completed = backups.filter((b) => b.status === "completed").length;
+  const hostPort = db.host ? `${db.host}:${db.port}` : db.port > 0 ? String(db.port) : "—";
 
   return (
     <>
       <tr
-        className="cursor-pointer transition-colors hover:bg-white/[0.02]"
+        className="cursor-pointer transition hover:bg-white/[0.02]"
         onClick={onSelect}
       >
         <td className="px-4 py-3">
-          <div className="font-medium text-slate-200">{db.name}</div>
-          <div className="font-mono text-xs text-slate-400">{db.id.slice(0, 8)}</div>
+          <div className="flex items-center gap-2.5">
+            <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
+              <Database size={14} />
+            </span>
+            <span className="min-w-0">
+              <span className="block max-w-44 truncate text-xs font-bold text-slate-100" title={db.name}>{db.name}</span>
+              <span className="block font-mono text-[10px] text-slate-500">{fmtDate(db.createdAt)}</span>
+            </span>
+          </div>
         </td>
-        <td className="px-4 py-3">
-          <Pill tone="blue">{db.engine} {db.version}</Pill>
+        <td className="px-2 py-3">
+          <span className="block text-xs text-slate-200">{db.engine}</span>
+          <span className="block font-mono text-[10px] text-slate-500">{db.version || "—"}</span>
         </td>
-        <td className="px-4 py-3">
-          <Pill tone={tone}>{db.status}</Pill>
+        <td className="px-2 py-3">
+          <ManagedStatusDot status={db.status} />
         </td>
-        <td className="px-4 py-3 font-mono text-xs text-slate-400">
-          {db.port > 0 ? db.port : "-"}
+        <td className="px-2 py-3 font-mono text-[11px] text-slate-300">
+          {hostPort}
         </td>
-        <td className="px-4 py-3 text-xs text-slate-400">
+        <td className="px-2 py-3 text-[11px] text-slate-400">
           {db.memoryMb}MB / {db.cpuShares} CPU
         </td>
-        <td className="px-4 py-3 text-xs text-slate-400">
-          {completed} completed
-        </td>
-        <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+        <td className="px-2 py-3" onClick={(e) => e.stopPropagation()}>
            <div className="flex items-center justify-end gap-1">
             <button
               className="grid h-11 w-11 place-items-center rounded text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-[var(--brand)] disabled:opacity-40"
@@ -279,7 +486,7 @@ function ManagedDBRow({
       </tr>
       {isSelected && (backups.length > 0 || restores.length > 0) && (
         <tr>
-          <td colSpan={7} className="px-4 pb-3">
+          <td colSpan={6} className="px-4 pb-3">
             <div className="rounded-lg bg-white/[0.02] p-3 space-y-3">
               {backups.length > 0 && (
                 <div>
@@ -337,6 +544,132 @@ function ManagedDBRow({
   );
 }
 
+function ManagedDBCard({
+  db, isSelected, onSelect, onBackup, onRestore, onRotate, onEdit, onDelete, backups, restores, isPending,
+}: {
+  db: ManagedDatabase;
+  isSelected: boolean;
+  onSelect: () => void;
+  onBackup: (id: string) => void;
+  onRestore: (id: string, backupId: string) => void;
+  onRotate: (id: string) => void;
+  onEdit: (db: ManagedDatabase) => void;
+  onDelete: (id: string) => void;
+  backups: ManagedDatabaseBackup[];
+  restores: import("@/lib/api/database-containers").ManagedDatabaseRestore[];
+  isPending: boolean;
+}) {
+  const hostPort = db.host ? `${db.host}:${db.port}` : db.port > 0 ? String(db.port) : "—";
+  return (
+    <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition hover:border-white/20">
+      <div className="flex cursor-pointer items-start gap-3" onClick={onSelect}>
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
+          <Database size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-sm font-bold text-slate-100" title={db.name}>{db.name}</p>
+          <p className="font-mono text-[10px] text-slate-500">{fmtDate(db.createdAt)}</p>
+        </div>
+        <ManagedStatusDot status={db.status} />
+      </div>
+      <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-slate-400">
+        <p className="truncate">{db.engine}{db.version ? ` ${db.version}` : ""} · {hostPort}</p>
+        <p className="truncate">{db.memoryMb}MB / {db.cpuShares} CPU</p>
+      </div>
+      <div className="mt-3 flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+        <button
+          className="grid h-9 flex-1 place-items-center rounded-lg border border-white/[0.08] text-slate-400 transition-colors hover:border-white/20 hover:text-[var(--brand)] disabled:opacity-40"
+          disabled={isPending}
+          onClick={() => onEdit(db)}
+          title="Edit — PATCH /managed-databases/:id"
+          type="button"
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </button>
+        <button
+          className="grid h-9 flex-1 place-items-center rounded-lg border border-white/[0.08] text-slate-400 transition-colors hover:border-white/20 hover:text-amber-200 disabled:opacity-40"
+          disabled={isPending}
+          onClick={() => onBackup(db.id)}
+          title="Backup"
+          type="button"
+        >
+          <Archive size={14} />
+        </button>
+        <button
+          className="grid h-9 flex-1 place-items-center rounded-lg border border-white/[0.08] text-slate-400 transition-colors hover:border-white/20 hover:text-blue-200 disabled:opacity-40"
+          disabled={isPending}
+          onClick={() => onRotate(db.id)}
+          title="Rotate Password"
+          type="button"
+        >
+          <RefreshCw size={14} />
+        </button>
+        <button
+          className="grid h-9 flex-1 place-items-center rounded-lg border border-white/[0.08] text-slate-400 transition-colors hover:border-white/20 hover:text-red-200 disabled:opacity-40"
+          disabled={isPending}
+          onClick={() => onDelete(db.id)}
+          title="Delete — supports ?force"
+          type="button"
+        >
+          <Trash2 size={14} />
+        </button>
+      </div>
+      {isSelected && (backups.length > 0 || restores.length > 0) && (
+        <div className="mt-3 rounded-lg bg-white/[0.02] p-3 space-y-3">
+          {backups.length > 0 && (
+            <div>
+              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">Backups — GET /managed-databases/:id/backups</div>
+              <div className="space-y-1">
+                {backups.map((b) => (
+                  <div key={b.id} className="flex items-center justify-between rounded bg-white/[0.02] px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <Pill tone={b.status === "completed" ? "green" : b.status === "failed" ? "red" : "yellow"}>{b.status}</Pill>
+                      <span className="text-slate-300">{b.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-400">{b.size > 0 ? `${(b.size / 1024 / 1024).toFixed(2)} MB` : "-"}</span>
+                      {b.status === "completed" && (
+                        <button
+                          className="text-slate-400 transition-colors hover:text-blue-200"
+                          onClick={() => onRestore(db.id, b.id)}
+                          title="Restore"
+                          type="button"
+                        >
+                          <Download size={14} />
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+          {restores.length > 0 && (
+            <div>
+              <div className="mb-2 text-xs font-medium uppercase tracking-wider text-slate-400">Restores — GET /managed-databases/:id/restores</div>
+              <div className="space-y-1">
+                {restores.map((r) => (
+                  <div key={r.id} className="flex items-center justify-between rounded bg-white/[0.02] px-3 py-2 text-xs">
+                    <div className="flex items-center gap-2">
+                      <Pill tone={r.status === "completed" ? "green" : r.status === "failed" ? "red" : "yellow"}>{r.status}</Pill>
+                      <span className="text-slate-300">{r.id.slice(0,8)}</span>
+                      {r.backupId && <span className="text-slate-400">backup:{r.backupId.slice(0,8)}</span>}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {r.errorMessage && <span className="text-red-400 truncate max-w-[200px]">{r.errorMessage}</span>}
+                      <span className="text-slate-500">{new Date(r.createdAt).toLocaleDateString()}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function ManagedDBCreateModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
   const { toast } = useToast();
   const [name, setName] = useState("");
@@ -355,8 +688,8 @@ function ManagedDBCreateModal({ onClose, onCreated }: { onClose: () => void; onC
   });
 
   return (
-    <Modal title={<span className="text-base font-semibold text-slate-100">Create Managed Database</span>} onClose={onClose} wide>
-      <div className="space-y-5">
+    <Modal title="Create Managed Database" onClose={onClose} wide>
+      <div className="space-y-4">
         <Input label="Name" value={name} onChange={setName} placeholder="my-database" />
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -389,7 +722,7 @@ function ManagedDBCreateModal({ onClose, onCreated }: { onClose: () => void; onC
               min={64}
               step={64}
             />
-            <p className="mt-1 text-[11px] text-slate-400">Min 64 MB. Default 256 MB.</p>
+            <p className="mt-1 text-xs text-slate-400">Min 64 MB. Default 256 MB.</p>
           </div>
           <div>
             <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">CPU Shares</label>
@@ -401,7 +734,7 @@ function ManagedDBCreateModal({ onClose, onCreated }: { onClose: () => void; onC
               min={0}
               max={1024}
             />
-            <p className="mt-1 text-[11px] text-slate-400">Relative CPU weight. 0 = default (1024).</p>
+            <p className="mt-1 text-xs text-slate-400">Relative CPU weight. 0 = default (1024).</p>
           </div>
         </div>
       </div>
@@ -421,8 +754,8 @@ function ManagedDBEditModal({ db, onClose, onSave, saving }: { db: ManagedDataba
   const [memoryMb, setMemoryMb] = useState(db.memoryMb);
   const [cpuShares, setCpuShares] = useState(db.cpuShares);
   return (
-    <Modal title={<span className="text-base font-semibold text-slate-100">Edit Managed Database — PATCH /managed-databases/:id</span>} onClose={onClose} wide>
-      <div className="space-y-5">
+    <Modal title="Edit Managed Database" description="PATCH /managed-databases/:id" onClose={onClose} wide>
+      <div className="space-y-4">
         <Input label="Name" value={name} onChange={setName} placeholder={db.name} />
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -443,7 +776,7 @@ function ManagedDBEditModal({ db, onClose, onSave, saving }: { db: ManagedDataba
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">CPU Shares</label>
           <input type="number" className={selectStyle} value={cpuShares} onChange={(e) => setCpuShares(Number(e.target.value))} min={0} max={1024} />
         </div>
-        <p className="text-[11px] text-slate-500">Wires <code className="font-mono">updateManagedDatabase</code> — PATCH /managed-databases/:id with name/version/memoryMb/cpuShares</p>
+        <p className="text-xs text-slate-400">Wires <code className="font-mono">updateManagedDatabase</code> — PATCH /managed-databases/:id with name/version/memoryMb/cpuShares</p>
       </div>
       <ModalFooter onCancel={onClose} onConfirm={() => onSave({ name, version, memoryMb, cpuShares })} disabled={saving} confirmLabel={saving ? "Saving..." : "Save"} />
     </Modal>

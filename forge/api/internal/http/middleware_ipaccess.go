@@ -46,7 +46,13 @@ func getClientIP(c *fiber.Ctx, trustProxy bool) string {
 		return ExtractClientIP(c)
 	}
 
-	// Fall back to direct connection IP
+	// Not trusting proxy headers means the socket peer and nothing else. c.IP()
+	// is not that: once a proxy header is configured at the framework level it
+	// returns an address parsed out of the request, so an allowlist keyed on
+	// "the direct connection" would start believing a header the caller wrote.
+	if peer := socketPeerIP(c); peer != nil {
+		return peer.String()
+	}
 	return c.IP()
 }
 

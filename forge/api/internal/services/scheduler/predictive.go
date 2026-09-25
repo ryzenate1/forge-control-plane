@@ -345,6 +345,8 @@ func (s *PredictiveScorer) ListAllScores(ctx context.Context) ([]*PredictiveScor
 	return scores, nil
 }
 
+// ListAffinityRules returns a copy of the current affinity rules, served from the
+// in-memory cache under a read lock. ctx is accepted for interface stability.
 func (s *PredictiveScorer) ListAffinityRules(ctx context.Context) ([]AffinityRule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -353,6 +355,7 @@ func (s *PredictiveScorer) ListAffinityRules(ctx context.Context) ([]AffinityRul
 	return rules, nil
 }
 
+// ListAntiAffinityRules returns a copy of the current anti-affinity rules.
 func (s *PredictiveScorer) ListAntiAffinityRules(ctx context.Context) ([]AntiAffinityRule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -373,26 +376,4 @@ func randomSuffix() string {
 	defer idMu.Unlock()
 	idCounter++
 	return fmt.Sprintf("%06x", idCounter)
-}
-
-// ListAffinityRules returns a copy of the current affinity rules. The ctx is
-// accepted for interface stability with the scheduler's async surface; the
-// read is served from the in-memory cache under a read lock.
-func (s *PredictiveScorer) ListAffinityRules(ctx context.Context) ([]AffinityRule, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	rules := make([]AffinityRule, len(s.affinityRules))
-	copy(rules, s.affinityRules)
-	return rules, nil
-}
-
-// ListAntiAffinityRules returns a copy of the current anti-affinity rules.
-func (s *PredictiveScorer) ListAntiAffinityRules(ctx context.Context) ([]AntiAffinityRule, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	rules := make([]AntiAffinityRule, len(s.antiAffinityRules))
-	copy(rules, s.antiAffinityRules)
-	return rules, nil
 }

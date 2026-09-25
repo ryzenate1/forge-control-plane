@@ -173,6 +173,59 @@ func TestSafeClonePath(t *testing.T) {
 			t.Error("expected error for traversal path")
 		}
 	})
+
+	// A sibling directory whose name merely starts with the base is a different
+	// directory. The original string-prefix comparison accepted it, so a clone
+	// could be aimed outside the git-sources tree.
+	t.Run("rejects sibling sharing the base name prefix", func(t *testing.T) {
+		root := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(root, "git-sources"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "git-sources-evil", "abc"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		dir := filepath.Join(root, "git-sources-evil", "abc", "repo")
+		if _, err := safeClonePath(dir, root); err == nil {
+			t.Error("expected git-sources-evil to be rejected as outside the tree")
+		}
+	})
+
+	// On macOS os.TempDir() lives behind a symlink (/var -> /private/var), so a
+	// check that resolves the candidate but not the base rejects every real
+	// clone. Using a genuinely symlinked temp root reproduces that shape anywhere.
+	t.Run("accepts path through a symlinked temp root", func(t *testing.T) {
+		real := t.TempDir()
+		link := filepath.Join(t.TempDir(), "tmp-link")
+		if err := os.Symlink(real, link); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if err := os.MkdirAll(filepath.Join(real, "git-sources", "abc123"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := safeClonePath(filepath.Join(link, "git-sources", "abc123", "repo"), link); err != nil {
+			t.Fatalf("expected no error for a path under a symlinked base, got %v", err)
+		}
+	})
+
+	// A clone directory whose parent is a symlink out of the tree must still be
+	// refused, which is the attack the resolved-path check exists for.
+	t.Run("rejects symlinked clone parent escaping the tree", func(t *testing.T) {
+		root := t.TempDir()
+		outside := filepath.Join(t.TempDir(), "secret")
+		if err := os.MkdirAll(outside, 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(filepath.Join(root, "git-sources"), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, filepath.Join(root, "git-sources", "escape")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		if _, err := safeClonePath(filepath.Join(root, "git-sources", "escape", "repo"), root); err == nil {
+			t.Error("expected symlink escape to be rejected")
+		}
+	})
 }
 
 func writeFile(t *testing.T, dir, name, content string) {

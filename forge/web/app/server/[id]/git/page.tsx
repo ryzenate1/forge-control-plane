@@ -1,39 +1,24 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState } from "react";
 import { useParams } from "next/navigation";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
-import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
+import {
+  listGitDeployments,
+  listGitDeploymentHooks,
+  triggerGitDeployment,
+  createGitDeploymentHook,
+  deleteGitDeploymentHook,
+} from "@/lib/api/git-deployments";
+import type { GitDeploymentHook } from "@/lib/api/git-deployments";
 import { errorMessage } from "@/lib/utils";
 import { ConfirmDialog, EmptyState, StatusPill } from "@/components/ui/primitives";
 import { CardSkeleton } from "@/components/ui/loading-skeleton";
 import { useOptionalServerContext } from "@/components/server/server-context";
 
-interface GitDeployment {
-  id: string;
-  gitSourceId: string;
-  commitSha: string;
-  branch: string;
-  status: string;
-  statusMessage: string;
-  imageTag: string;
-  buildLog: string;
-  deployLog: string;
-  error: string;
-  startedAt: string;
-  completedAt: string | null;
-  createdAt: string;
-  updatedAt: string;
-}
-
-interface GitDeploymentHook {
-  id: string;
-  gitSourceId: string;
-  secret: string;
-  events: string[];
-  createdAt: string;
-  updatedAt: string;
-}
+const DEPLOYMENTS_KEY = ["git-deployments"] as const;
+const HOOKS_KEY = ["git-deployment-hooks"] as const;
 
 const statusTone: Record<string, "neutral" | "success" | "warning" | "danger"> = {
   success: "success",
@@ -42,81 +27,80 @@ const statusTone: Record<string, "neutral" | "success" | "warning" | "danger"> =
 };
 
 export default function GitDeployPage() {
-  const [deployments, setDeployments] = useState<GitDeployment[]>([]);
-  const [hooks, setHooks] = useState<GitDeploymentHook[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [deployError, setDeployError] = useState<string | null>(null);
-  const [hookError, setHookError] = useState<string | null>(null);
-  const [repoUrl, setRepoUrl] = useState("");
-  const [branch, setBranch] = useState("main");
-  const [hookToDelete, setHookToDelete] = useState<GitDeploymentHook | null>(null);
-  const [deletingHook, setDeletingHook] = useState(false);
   const params = useParams();
   const serverId = String(params.id ?? "");
   const serverContext = useOptionalServerContext();
   const canManageHooks = Boolean(serverContext?.access?.isOwner || serverContext?.access?.isAdmin);
+  const queryClient = useQueryClient();
 
-  const fetchData = useCallback(async (sid: string) => {
-    try {
-      setFetchError(null);
-      const [deployments, hooks] = await Promise.all([
-        fetchJSON<GitDeployment[]>(`/git/servers/${sid}/deployments`),
-        fetchJSON<GitDeploymentHook[]>(`/git/servers/${sid}/hooks`),
-      ]);
-      setDeployments(Array.isArray(deployments) ? deployments : []);
-      setHooks(Array.isArray(hooks) ? hooks : []);
-    } catch (err) {
-      setFetchError(errorMessage(err, "Failed to load git data"));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
+  const [repoUrl, setRepoUrl] = useState("");
+  const [branch, setBranch] = useState("main");
+  const [hookToDelete, setHookToDelete] = useState<GitDeploymentHook | null>(null);
 
-  useEffect(() => {
-    if (serverId) {
-      fetchData(serverId);
-    }
-  }, [serverId, fetchData]);
+  // Server state lives in react-query; every write is a mutation that refreshes
+  // the cache only once the panel has accepted it.
+  const deploymentsQuery = useQuery({
+    queryKey: [...DEPLOYMENTS_KEY, serverId],
+    queryFn: () => listGitDeployments(serverId),
+    enabled: Boolean(serverId),
+  });
+  const hooksQuery = useQuery({
+    queryKey: [...HOOKS_KEY, serverId],
+    queryFn: () => listGitDeploymentHooks(serverId),
+    enabled: Boolean(serverId),
+  });
 
-  const triggerDeploy = async () => {
-    if (!serverId || !repoUrl) return;
-    try {
-      setDeployError(null);
-      await postJSON(`/git/servers/${serverId}/deployments`, { repoUrl, branch });
+  const deployments = deploymentsQuery.data ?? [];
+  const hooks = hooksQuery.data ?? [];
+  const loading = deploymentsQuery.isPending || hooksQuery.isPending;
+
+  const deployMut = useMutation({
+    mutationFn: (input: { repoUrl: string; branch: string }) => triggerGitDeployment(serverId, input),
+    onSuccess: () => {
       setRepoUrl("");
       setBranch("main");
-      fetchData(serverId);
-    } catch (err) {
-      setDeployError(errorMessage(err, "Deploy failed"));
-    }
-  };
+      void queryClient.invalidateQueries({ queryKey: [...DEPLOYMENTS_KEY, serverId] });
+      void queryClient.invalidateQueries({ queryKey: [...HOOKS_KEY, serverId] });
+    },
+  });
 
-  const createHook = async () => {
-    if (!serverId) return;
-    try {
-      setHookError(null);
-      await postJSON(`/git/servers/${serverId}/hooks`, { events: ["push"] });
-      fetchData(serverId);
-    } catch (err) {
-      setHookError(errorMessage(err, "Failed to create hook"));
-    }
-  };
+  const createHookMut = useMutation({
+    mutationFn: () => createGitDeploymentHook(serverId),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: [...HOOKS_KEY, serverId] });
+    },
+  });
 
-  const deleteHook = async (hookId: string) => {
-    if (!serverId) return;
-    setDeletingHook(true);
-    try {
-      setHookError(null);
-      await deleteJSON(`/git/servers/${serverId}/hooks/${hookId}`);
+  const deleteHookMut = useMutation({
+    mutationFn: (hookId: string) => deleteGitDeploymentHook(serverId, hookId),
+    onSuccess: () => {
       setHookToDelete(null);
-      fetchData(serverId);
-    } catch (err) {
-      setHookError(errorMessage(err, "Failed to delete hook"));
-    } finally {
-      setDeletingHook(false);
-    }
-  };
+      void queryClient.invalidateQueries({ queryKey: [...HOOKS_KEY, serverId] });
+    },
+  });
+
+  const fetchError = deploymentsQuery.isError
+    ? errorMessage(deploymentsQuery.error, "Failed to load git data")
+    : hooksQuery.isError
+      ? errorMessage(hooksQuery.error, "Failed to load git data")
+      : null;
+  const deployError = deployMut.isError ? errorMessage(deployMut.error, "Deploy failed") : null;
+  const hookError = createHookMut.isError
+    ? errorMessage(createHookMut.error, "Failed to create hook")
+    : deleteHookMut.isError
+      ? errorMessage(deleteHookMut.error, "Failed to delete hook")
+      : null;
+  const deletingHook = deleteHookMut.isPending;
+
+  function triggerDeploy() {
+    if (!serverId || !repoUrl) return;
+    deployMut.mutate({ repoUrl, branch });
+  }
+
+  function retryLoad() {
+    void deploymentsQuery.refetch();
+    void hooksQuery.refetch();
+  }
 
   return (
     <ServerConsoleLayout activeTab="git">
@@ -127,7 +111,7 @@ export default function GitDeployPage() {
           {fetchError && (
             <div className="ui-alert ui-alert-error" role="alert">
               <p className="text-sm">{fetchError}</p>
-              <button className="ui-button ui-button-secondary" onClick={() => { setLoading(true); void fetchData(serverId); }} type="button">Retry</button>
+              <button className="ui-button ui-button-secondary" onClick={retryLoad} type="button">Retry</button>
             </div>
           )}
 
@@ -155,10 +139,10 @@ export default function GitDeployPage() {
               />
               <button
                 onClick={triggerDeploy}
-                disabled={!repoUrl}
+                disabled={!repoUrl || deployMut.isPending}
                 className="ui-button ui-button-primary"
               >
-                Deploy
+                {deployMut.isPending ? "Deploying…" : "Deploy"}
               </button>
             </div>
           </div>
@@ -167,6 +151,8 @@ export default function GitDeployPage() {
             <h3 className="mb-4 text-lg font-semibold text-slate-100">Deployments</h3>
             {loading ? (
               <CardSkeleton />
+            ) : deploymentsQuery.isError ? (
+              <p className="text-sm text-red-300" role="alert">Deployments could not be loaded, so this list is unknown rather than empty.</p>
             ) : deployments.length === 0 ? (
               <EmptyState icon={<GitBranchIcon />} title="No deployments yet" description="Trigger a deployment above or push to a connected repository to see deployments here." />
             ) : (
@@ -192,10 +178,11 @@ export default function GitDeployPage() {
             <div className="mb-4 flex items-center justify-between">
               <h3 className="text-lg font-semibold text-slate-100">Webhook hooks</h3>
               <button
-                onClick={createHook}
+                onClick={() => createHookMut.mutate()}
+                disabled={createHookMut.isPending}
                 className="ui-button ui-button-primary"
               >
-                Create hook
+                {createHookMut.isPending ? "Creating hook…" : "Create hook"}
               </button>
             </div>
             {hookError && (
@@ -208,7 +195,9 @@ export default function GitDeployPage() {
                 Only the server owner or an administrator can delete hooks.
               </p>
             ) : null}
-            {hooks.length === 0 ? (
+            {hooksQuery.isError ? (
+              <p className="mb-4 text-sm text-red-300" role="alert">Webhooks could not be loaded, so this list is unknown rather than empty.</p>
+            ) : hooks.length === 0 ? (
               <EmptyState icon={<GitBranchIcon />} title="No hooks configured" description="Create a hook to let your git provider notify this server of pushes automatically." />
             ) : (
               <div className="space-y-2">
@@ -234,7 +223,7 @@ export default function GitDeployPage() {
           </div>
 
           <ConfirmDialog
-            confirmAction={() => { if (hookToDelete) void deleteHook(hookToDelete.id); }}
+            confirmAction={() => { if (hookToDelete) deleteHookMut.mutate(hookToDelete.id); }}
             confirmLabel={hookToDelete ? `Delete hook ${hookToDelete.id.slice(0, 8)}` : "Delete hook"}
             description="This removes the webhook URL and its secret. The git provider will no longer be able to trigger deployments until a new hook is created."
             destructive

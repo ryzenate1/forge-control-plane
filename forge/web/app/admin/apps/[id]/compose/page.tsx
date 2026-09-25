@@ -59,7 +59,10 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
   const services: ComposeService[] = sourceConfig?.services
     ? (sourceConfig.services as ComposeService[])
     : [];
+  // The editor screen stores the document under "content", the creation form
+  // under "composeContent" — accept both before falling back to raw JSON.
   const composeContent = typeof sourceConfig?.content === "string" ? sourceConfig.content
+    : typeof sourceConfig?.composeContent === "string" ? (sourceConfig.composeContent as string)
     : sourceConfig ? JSON.stringify(sourceConfig, null, 2) : "";
 
   if (appLoading) {
@@ -164,9 +167,11 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
 
       {showConfig && composeData && (
         <Modal title="Compose Configuration" onClose={() => setShowConfig(false)} wide>
+          <div className="space-y-4">
           <pre className="max-h-96 overflow-y-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-4 font-mono text-xs text-slate-400 whitespace-pre-wrap">
             {composeContent || JSON.stringify(composeData.sourceConfig, null, 2)}
           </pre>
+          </div>
         </Modal>
       )}
 
@@ -190,7 +195,9 @@ function ServiceLogsModal({ appId, serviceName, onClose }: { appId: string; serv
 
   return (
     <Modal title={`${serviceName} Logs`} onClose={onClose} wide>
+      <div className="space-y-4">
       <LogViewer logs={displayLogs} loading={isLoading} />
+      </div>
     </Modal>
   );
 }

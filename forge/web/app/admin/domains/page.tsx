@@ -233,9 +233,9 @@ export default function AdminDomainsPage() {
 
       {showAddModal && (
         <Modal title="Add Domain" onClose={() => setShowAddModal(false)}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Server</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server</label>
               <select
                 className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={addForm.serverId}
@@ -270,7 +270,7 @@ export default function AdminDomainsPage() {
 
       {showDNSModal && (
         <Modal title="Check DNS Resolution" onClose={() => { setShowDNSModal(false); setDnsResult(null); }}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input
               label="Domain"
               value={dnsForm.domain}
@@ -288,7 +288,7 @@ export default function AdminDomainsPage() {
                 <p className={`text-sm font-medium ${dnsResult.match ? "text-emerald-400" : "text-amber-400"}`}>
                   {dnsResult.match ? "DNS matches expected IP" : "DNS mismatch or not verified"}
                 </p>
-                {dnsResult.error && <p className="text-xs text-red-400 mt-1">{dnsResult.error}</p>}
+                {dnsResult.error && <p className="text-sm text-red-300">{dnsResult.error}</p>}
                 {dnsResult.ips && dnsResult.ips.length > 0 && (
                   <p className="text-xs text-slate-400 mt-1">
                     Resolved IPs: {dnsResult.ips.join(", ")}

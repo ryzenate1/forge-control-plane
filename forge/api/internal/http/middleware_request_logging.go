@@ -66,7 +66,7 @@ func RequestLoggingMiddleware(cfg RequestLoggingConfig) fiber.Handler {
 			Path:      c.Path(),
 			Status:    status,
 			Duration:  duration.String(),
-			ClientIP:  c.IP(),
+			ClientIP:  ExtractClientIP(c),
 			UserAgent: c.Get("User-Agent"),
 			RequestID: requestID,
 			Timestamp: start.UTC().Format(time.RFC3339),

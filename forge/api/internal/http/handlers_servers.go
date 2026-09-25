@@ -168,7 +168,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				tokenHash, err := bcrypt.GenerateFromPassword([]byte(plain), store.BcryptCost())
 				if err == nil {
 					setPwdURL := strings.TrimRight(cfg.PanelURL, "/") + "/reset-password#token=" + url.QueryEscape(plain) + "&email=" + url.QueryEscape(user.Email)
-					cfg.Store.EnqueuePasswordReset(ctx, user.Email, string(tokenHash), 7*24*time.Hour, c.IP(), setPwdURL)
+					cfg.Store.EnqueuePasswordReset(ctx, user.Email, string(tokenHash), 7*24*time.Hour, ExtractClientIP(c), setPwdURL)
 					cfg.MailTriggerService.SendWelcome(ctx, user.Email, user.Email, setPwdURL)
 				}
 			}

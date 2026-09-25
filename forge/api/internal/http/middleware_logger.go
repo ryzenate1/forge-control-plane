@@ -38,7 +38,10 @@ func StructuredLogger(logger *slog.Logger) fiber.Handler {
 		status := c.Response().StatusCode()
 		method := c.Method()
 		path := c.Path()
-		ip := c.IP()
+		// Same resolver as every other IP decision, so the access log cannot be
+		// made to record an address the caller invented. With no trusted proxy this
+		// is the socket peer, exactly as before.
+		ip := ExtractClientIP(c)
 
 		attrs := []slog.Attr{
 			slog.String("request_id", requestID),

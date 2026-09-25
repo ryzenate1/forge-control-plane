@@ -63,7 +63,7 @@ export function MailManager() {
       : null;
 
   const saveMut = useMutation({
-    mutationFn: (next: mail.PanelMailSettings) => mail.updateMailSettings(next),
+    mutationFn: async (next: mail.PanelMailSettings) => { const result = await mail.updateMailSettings(next); if (!result.ok) throw new Error("The server reported the mail settings update did not complete."); return result; },
     onSuccess: () => {
       setDraft(null);
       setSuccess("Mail settings saved");
@@ -72,7 +72,7 @@ export function MailManager() {
   });
 
   const testMut = useMutation({
-    mutationFn: (recipient: string) => mail.testMail(recipient),
+    mutationFn: async (recipient: string) => { const result = await mail.testMail(recipient); if (!result.ok) throw new Error(result.message || "The server reported the test email was not sent."); return result; },
     onSuccess: (_result, recipient) => setSuccess(`Test email queued for ${recipient}`),
   });
 

@@ -356,7 +356,7 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 
 	if err != nil {
 		s.cancelReservation(ctx, reservationID)
-		s.markFailed(ctx, stack, err.Error())
+		s.markFailed(ctx, stack, daemonFailureDetail(err))
 		return nil, fmt.Errorf("compose deploy to node: %w", err)
 	}
 
@@ -468,6 +468,11 @@ func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req Up
 	})
 	if deployErr != nil {
 		s.rollbackStack(ctx, stack, rollbackYAML, rollbackHash, rollbackEnv)
+		// Preserve the real "docker compose" failure on the (admin-visible) stack
+		// record; rollbackStack only writes a generic rollback notice.
+		stack.Error = "update failed: " + daemonFailureDetail(deployErr)
+		stack.UpdatedAt = time.Now().UTC()
+		_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
 		return nil, fmt.Errorf("deploy updated stack: %w", deployErr)
 	}
 
@@ -770,6 +775,19 @@ func (s *Service) markFailed(ctx context.Context, stack *ComposeStack, errMsg st
 	stack.Error = errMsg
 	stack.UpdatedAt = time.Now().UTC()
 	_ = s.store.UpdateComposeStack(ctx, toStoreComposeStack(stack))
+}
+
+// daemonFailureDetail returns the trusted diagnostic carried by a daemon
+// ResponseError. The user-facing Error() intentionally omits Details (which can
+// contain workload paths / daemon internals), but the stored stack error is an
+// admin-only field where the real "docker compose" output must be preserved so
+// a failed deploy is actually debuggable. Falls back to err.Error().
+func daemonFailureDetail(err error) string {
+	var re *daemon.ResponseError
+	if errors.As(err, &re) && strings.TrimSpace(re.Details) != "" {
+		return fmt.Sprintf("%s: %s", re.Operation, re.Details)
+	}
+	return err.Error()
 }
 
 func (s *Service) rollbackStack(ctx context.Context, stack *ComposeStack, yaml, hash string, env map[string]string) {

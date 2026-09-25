@@ -29,9 +29,9 @@ import {
 import {
   Archive, ArrowLeftRight, Award, BarChart3, Bell, Boxes, Building2, Bug, Cable, Clock, Cloud, Code2, Compass,
   Cpu, CreditCard, Droplets, Eye, FileCode, FileText, Fingerprint, FlaskConical, FolderLock,
-  GitFork, GitPullRequest, Globe, HardDrive, KeyRound, Layers, LifeBuoy, Lock, Mail, Network, Plug,
+  GitPullRequest, Globe, HardDrive, KeyRound, Layers, LifeBuoy, Lock, Mail, Network, Plug,
   Repeat, Route, Scale, Settings, Shield, ShieldAlert, ShieldCheck, SlidersHorizontal,
-  Database, Terminal, Ticket, Trash2, TrendingUp, Users, Webhook, Workflow,
+  Tags, Terminal, Ticket, Trash2, TrendingUp, Users, Webhook, Workflow,
 } from "lucide-react";
 
 export type NavIcon = LucideIcon | FC<IconProps>;
@@ -56,10 +56,12 @@ export type AdminNavGroup = { title: string; titleKey: string; items: AdminNavEn
 /**
  * Consolidated IA — 7 goal-oriented groups (was 11).
  *
- * OVERVIEW (4) · WORKLOADS (10) · DELIVERY (8) · INFRASTRUCTURE (13)
- * NETWORK & SECURITY (14) · OPERATIONS (14) · ORGANIZATION & SETTINGS (15) = 78 hrefs.
+ * OVERVIEW (4) · WORKLOADS (11) · DELIVERY (8) · INFRASTRUCTURE (13)
+ * NETWORK & SECURITY (14) · OPERATIONS (14) · ORGANIZATION & SETTINGS (15) = 79 hrefs.
  *
- * All 78 hrefs retained for compat; legacy paths map via ADMIN_ALIAS_ROUTES.
+ * All hrefs retained for compat; legacy paths map via ADMIN_ALIAS_ROUTES.
+ * Database Services is intentionally NOT a second nav item — it lives as a
+ * tab inside the unified Databases page (/admin/databases?tab=services).
  * Sidebar shows primary items; `secondary: true` items collapse under "More"
  * per group but remain in search, command palette, and breadcrumbs.
  * Hidden routes (/admin/containers, /admin/logs, /admin/dev/states, .../new,
@@ -76,14 +78,15 @@ export const adminPageRegistry: AdminNavGroup[] = [
   { title: "Workloads", titleKey: "admin.navGroup.workloads", items: [
     { label: "Servers", labelKey: "admin.nav.servers", href: "/admin/servers", icon: GamepadIcon, requiredRole: "admin", capability: "available", description: "Game server instances and lifecycle", descriptionKey: "admin.navDesc.servers" },
     { label: "Apps", labelKey: "admin.nav.apps", href: "/admin/apps", icon: ApplicationsCubeIcon, requiredRole: "admin", capability: "available", description: "Container apps, Git repos, and stacks", descriptionKey: "admin.navDesc.apps" },
-    { label: "Database Hosts", labelKey: "admin.nav.databaseHosts", href: "/admin/databases", icon: DatabaseCylinderIcon, requiredRole: "admin", capability: "available", description: "Managed database hosts", descriptionKey: "admin.navDesc.databaseHosts" },
+    { label: "Databases", labelKey: "admin.nav.databaseHosts", href: "/admin/databases", icon: DatabaseCylinderIcon, requiredRole: "admin", capability: "available", description: "Databases — unified inventory, hosts, containers, managed DBs, services, catalog, server DBs", descriptionKey: "admin.navDesc.databaseHosts" },
     { label: "Catalog", labelKey: "admin.nav.catalog", href: "/admin/catalog", icon: TemplateSheetIcon, requiredRole: "admin", capability: "available", description: "One-click service catalog and provisioning", descriptionKey: "admin.navDesc.catalog" },
     { label: "App Store", labelKey: "admin.nav.appStore", href: "/admin/app-store", icon: AppStoreIcon, requiredRole: "admin", capability: "available", description: "Curated one-click service catalog", descriptionKey: "admin.navDesc.appStore", secondary: true },
     { label: "Service Definitions", labelKey: "admin.nav.nestsEggs", href: "/admin/nests", icon: Layers, requiredRole: "admin", capability: "available", description: "Reusable server blueprints (nests and eggs)", descriptionKey: "admin.navDesc.nestsEggs", secondary: true },
     { label: "App Templates", labelKey: "admin.nav.appTemplates", href: "/admin/app-templates", icon: FileCode, requiredRole: "admin", capability: "available", description: "Application deployment blueprints", descriptionKey: "admin.navDesc.appTemplates", secondary: true },
     { label: "Legacy Templates", labelKey: "admin.nav.compatibilityTemplates", href: "/admin/templates", icon: Archive, requiredRole: "admin", capability: "available", description: "Legacy compatibility templates", descriptionKey: "admin.navDesc.compatibilityTemplates", secondary: true },
-    { label: "Database Services", labelKey: "admin.nav.databaseServices", href: "/admin/database-services", icon: Database, requiredRole: "admin", capability: "available", description: "Managed application databases", descriptionKey: "admin.navDesc.databaseServices", secondary: true },
     { label: "Forgefile", labelKey: "admin.nav.forgefile", href: "/admin/forgefile", icon: FileText, requiredRole: "admin", capability: "available", description: "Environment-as-code: validate and apply a Forgefile", descriptionKey: "admin.navDesc.forgefile", secondary: true },
+    { label: "App Mounts", labelKey: "admin.nav.appMounts", href: "/admin/app-mounts", icon: HardDrive, requiredRole: "admin", capability: "available", description: "Per-application persistent storage (volumes, binds, tmpfs, seed files)", descriptionKey: "admin.navDesc.appMounts", secondary: true },
+    { label: "Tags", labelKey: "admin.nav.tags", href: "/admin/tags", icon: Tags, requiredRole: "admin", capability: "available", description: "Color-coded labels for organizing resources", descriptionKey: "admin.navDesc.tags", secondary: true },
   ]},
   { title: "Delivery", titleKey: "admin.navGroup.delivery", items: [
     { label: "Deployments", labelKey: "admin.nav.deployments", href: "/admin/deployments", icon: RocketLaunchIcon, requiredRole: "admin", capability: "available", description: "Blue-green and rolling deployments", descriptionKey: "admin.navDesc.deployments" },
@@ -91,8 +94,8 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Pipelines", labelKey: "admin.nav.pipelines", href: "/admin/pipelines", icon: PipelineFlowIcon, requiredRole: "admin", capability: "available", description: "CI/CD pipelines and delivery workflows", descriptionKey: "admin.navDesc.pipelines" },
     { label: "Git Integrations", labelKey: "admin.nav.gitConnections", href: "/admin/git", icon: GitBranchTreeIcon, requiredRole: "admin", capability: "available", description: "Git credentials, providers, and sources", descriptionKey: "admin.navDesc.gitConnections" },
     { label: "Preview Deployments", labelKey: "admin.nav.previewDeployments", href: "/admin/preview-deployments", icon: Eye, requiredRole: "admin", capability: "available", description: "Pull-request preview environments", descriptionKey: "admin.navDesc.previewDeployments", secondary: true },
+    { label: "Preview Environments", labelKey: "admin.nav.previewEnvironments", href: "/admin/preview-environments", icon: FlaskConical, requiredRole: "admin", capability: "available", description: "Ephemeral per-branch environments scoped to a project", descriptionKey: "admin.navDesc.previewEnvironments" },
     { label: "Source Deployments", labelKey: "admin.nav.sourceDeployments", href: "/admin/source-deployments", icon: GitPullRequest, requiredRole: "admin", capability: "available", description: "Build and deploy from Git sources", descriptionKey: "admin.navDesc.sourceDeployments", secondary: true },
-    { label: "Git Providers", labelKey: "admin.nav.gitProviders", href: "/admin/git-providers", icon: GitFork, requiredRole: "admin", capability: "available", description: "Connected Git provider accounts", descriptionKey: "admin.navDesc.gitProviders", secondary: true },
     { label: "Zero Downtime", labelKey: "admin.nav.zeroDowntime", href: "/admin/zerodowntime", icon: ShieldCheck, requiredRole: "admin", capability: "available", description: "Zero-downtime releases and health gates", descriptionKey: "admin.navDesc.zeroDowntime", secondary: true },
   ]},
   { title: "Infrastructure", titleKey: "admin.navGroup.infrastructure", items: [
@@ -152,7 +155,7 @@ export const adminPageRegistry: AdminNavGroup[] = [
     { label: "Single Sign-On", labelKey: "admin.nav.socialLogin", href: "/admin/social", icon: Fingerprint, requiredRole: "admin", capability: "available", description: "Social and enterprise SSO providers", descriptionKey: "admin.navDesc.socialLogin", secondary: true },
     { label: "Environments", labelKey: "admin.nav.environments", href: "/admin/environments", icon: Globe, requiredRole: "admin", capability: "available", description: "Environment stages and variables", descriptionKey: "admin.navDesc.environments", secondary: true },
     { label: "Billing", labelKey: "admin.nav.billing", href: "/admin/billing", icon: CreditCard, requiredRole: "admin", capability: "available", description: "Billing plans, quotas and usage", descriptionKey: "admin.navDesc.billing", secondary: true },
-    { label: "Notifications", labelKey: "admin.nav.notifications", href: "/admin/notifications", icon: Bell, requiredRole: "admin", capability: "available", description: "Channels, alerts and delivery logs", descriptionKey: "admin.navDesc.notifications", secondary: true },
+    { label: "Notifications", labelKey: "admin.nav.notifications", href: "/admin/notifications", icon: Bell, requiredRole: "admin", capability: "available", description: "Notification engine channels, event subscriptions and delivery logs", descriptionKey: "admin.navDesc.notifications", secondary: true },
     { label: "Mail", labelKey: "admin.nav.mail", href: "/admin/mail", icon: Mail, requiredRole: "admin", capability: "available", description: "Mail settings and triggers", descriptionKey: "admin.navDesc.mail", secondary: true },
     { label: "Webhooks", labelKey: "admin.nav.webhooks", href: "/admin/webhooks", icon: Webhook, requiredRole: "admin", capability: "available", description: "Event delivery and webhook endpoints", descriptionKey: "admin.navDesc.webhooks", secondary: true },
     { label: "Plugins", labelKey: "admin.nav.plugins", href: "/admin/plugins", icon: Plug, requiredRole: "admin", capability: "metadata-only", description: "Extensions and marketplace plugins", descriptionKey: "admin.navDesc.plugins", secondary: true },
@@ -175,6 +178,7 @@ export const ADMIN_ALIAS_ROUTES: Record<string, string> = {
   "/admin/storage": "/admin/mounts",
   "/admin/volumes": "/admin/mounts",
   "/admin/database-hosts": "/admin/databases",
+  "/admin/database-services": "/admin/databases",
   "/admin/build": "/admin/catalog",
   "/admin/deploy": "/admin/deployments",
   "/admin/operations/advanced": "/admin/operations",

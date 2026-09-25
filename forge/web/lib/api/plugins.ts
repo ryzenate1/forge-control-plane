@@ -65,7 +65,14 @@ export function installPlugin(input: PluginInstallInput): Promise<ApiPlugin> {
   return postJSON<ApiPlugin>('/admin/plugins/install', input);
 }
 
-export function setPluginEnabled(id: string, enabled: boolean): Promise<unknown> {
+/**
+ * Flip a plugin between enabled and disabled.
+ *
+ * `enabled` is the plugin's *current* state (as returned by `GET /admin/plugins`),
+ * so the request targets the opposite transition — mirroring the original admin
+ * component, which called `disable` when the manifest was already enabled.
+ */
+export function togglePluginLifecycle(id: string, enabled: boolean): Promise<unknown> {
   return postJSON(`/admin/plugins/${encodeURIComponent(id)}/${enabled ? 'disable' : 'enable'}`, {});
 }
 

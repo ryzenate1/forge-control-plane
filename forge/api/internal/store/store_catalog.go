@@ -144,7 +144,7 @@ func (s *Store) CreateCatalogInstance(ctx context.Context, inst CatalogInstance)
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO catalog_instances
 		    (id, entry_key, kind, version, environment_id, node_id, ref_type, instance_ref, host, port, conn_string, status, error_message, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10, $11, $12, $13, $14, $14)
+		VALUES ($1, $2, $3, $4, NULLIF($5::text, '')::uuid, NULLIF($6::text, '')::uuid, $7, $8, $9, $10, $11, $12, $13, $14, $14)
 	`, id, inst.EntryKey, inst.Kind, inst.Version, inst.EnvironmentID, inst.NodeID, inst.RefType, ref, inst.Host, inst.Port, inst.ConnString, inst.Status, inst.ErrorMessage, now)
 	if err != nil {
 		return CatalogInstance{}, err

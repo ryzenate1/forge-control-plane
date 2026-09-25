@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"gamepanel/forge/internal/services/apphosting"
@@ -301,10 +302,21 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		if err := appLifecycleAction(cfg, ctx, *app, "deploy"); err != nil {
+		// GIT-sourced apps are materialized by the git deploy engine; every other
+		// source type (COMPOSE, DOCKER_IMAGE) is released by the app-hosting
+		// service, which now performs a real compose deployment instead of
+		// recording a pending no-op. Failures are surfaced, never swallowed.
+		if strings.EqualFold(app.SourceType, "GIT") {
+			if err := appLifecycleAction(cfg, ctx, *app, "deploy"); err != nil {
+				return err
+			}
+			return c.JSON(fiber.Map{"ok": true, "action": "deploy"})
+		}
+		deployment, err := appSvc.TriggerDeploy(ctx, app.ID, app.OrgID)
+		if err != nil {
 			return err
 		}
-		return c.JSON(fiber.Map{"ok": true, "action": "deploy"})
+		return c.JSON(fiber.Map{"ok": true, "action": "deploy", "deployment": deployment})
 	})
 
 	// ---- Services ----
@@ -840,10 +852,14 @@ func registerAppHostingRoutes(protected fiber.Router, cfg Config, appSvc *apphos
 				return fiber.NewError(fiber.StatusNotFound, "application not found")
 			}
 		}
-		if err := appLifecycleAction(cfg, ctx, *app, "deploy"); err != nil {
+		// /compose/redeploy is compose-specific: materialize it through the
+		// app-hosting service so a real release happens, rather than the old
+		// restart-shaped no-op.
+		deployment, err := appSvc.TriggerDeploy(ctx, app.ID, app.OrgID)
+		if err != nil {
 			return err
 		}
-		return c.JSON(fiber.Map{"ok": true, "action": "deploy"})
+		return c.JSON(fiber.Map{"ok": true, "action": "deploy", "deployment": deployment})
 	})
 
 	// ---- Git ----

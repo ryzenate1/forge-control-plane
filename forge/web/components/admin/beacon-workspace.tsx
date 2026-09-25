@@ -305,9 +305,9 @@ export function BeaconWorkspace() {
                           <button
                             type="button"
                             className="text-xs text-slate-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400"
-                            onClick={() => router.push(`/console/servers/${server.id}`)}
+                            onClick={() => router.push(`/server/${server.id}/console`)}
                           >
-                            Open console <ChevronRight size={10} className="inline" />
+                            Open terminal <ChevronRight size={10} className="inline" />
                           </button>
                         </td>
                       </tr>

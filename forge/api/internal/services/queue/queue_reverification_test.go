@@ -129,6 +129,11 @@ func TestCancel_AcceptsPending(t *testing.T) {
 	svc := New(store, 1)
 	ctx := context.Background()
 
+	// These tests exercise cancellation bookkeeping, but Dispatch requires a
+	// handler for the job type so that no caller can be told a job was accepted
+	// when nothing will ever run it.
+	svc.RegisterHandler(JobServerStart, func(context.Context, *Job) error { return nil })
+
 	j, err := svc.Dispatch(ctx, JobServerStart, "", "", nil, 0)
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +154,8 @@ func TestCancel_AcceptsRunning(t *testing.T) {
 	store := newMemoryStore()
 	svc := New(store, 1)
 	ctx := context.Background()
+
+	svc.RegisterHandler(JobServerStart, func(context.Context, *Job) error { return nil })
 
 	j, err := svc.Dispatch(ctx, JobServerStart, "", "", nil, 0)
 	if err != nil {

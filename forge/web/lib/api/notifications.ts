@@ -291,3 +291,93 @@ export async function deleteNotificationPreference(id: string): Promise<void> {
 export async function testNotification(channelId: string): Promise<void> {
   await postJSON("/notifications/test", { channelId });
 }
+
+// ---- Notifications Engine (handlers_notifications_crud.go) ----
+// User-scoped channels + event subscriptions with server-rendered templates.
+// Backed by /api/v1/notifications/{channels,subscriptions,events}; legacy
+// admin endpoints above remain untouched.
+
+export type EngineChannel = NotificationChannel & {
+  userId?: string;
+  orgId?: string;
+};
+
+export type NotificationLevel = "info" | "success" | "warning" | "error" | "critical";
+
+export type EventDescriptor = {
+  type: string;
+  name: string;
+  description: string;
+  category: string;
+  severity: NotificationLevel;
+  legacyAliases?: string[];
+};
+
+export type EngineTestResult = {
+  channelId: string;
+  name: string;
+  ok: boolean;
+  error?: string;
+};
+
+export async function fetchEngineChannels(): Promise<EngineChannel[]> {
+  const res = await fetchJSON<{ channels: EngineChannel[] | null }>("/notifications/channels");
+  return res.channels ?? [];
+}
+
+export async function createEngineChannel(data: {
+  type: NotificationChannelType;
+  name: string;
+  config: Record<string, unknown>;
+  enabled?: boolean;
+  orgId?: string;
+}): Promise<EngineChannel> {
+  return postJSON<EngineChannel>("/notifications/channels", data);
+}
+
+export async function updateEngineChannel(
+  id: string,
+  data: { name?: string; config?: Record<string, unknown>; enabled?: boolean },
+): Promise<EngineChannel> {
+  return patchJSON<EngineChannel>(`/notifications/channels/${encodeURIComponent(id)}`, data);
+}
+
+export async function deleteEngineChannel(id: string): Promise<void> {
+  return deleteJSON(`/notifications/channels/${encodeURIComponent(id)}`);
+}
+
+export async function testEngineChannel(id: string): Promise<void> {
+  await postJSON<{ ok: boolean }>(`/notifications/channels/${encodeURIComponent(id)}/test`);
+}
+
+export async function testAllEngineChannels(): Promise<EngineTestResult[]> {
+  const res = await postJSON<{ results: EngineTestResult[] | null }>("/notifications/channels/test");
+  return res.results ?? [];
+}
+
+export async function fetchEventCatalog(): Promise<EventDescriptor[]> {
+  const res = await fetchJSON<{ events: EventDescriptor[] | null }>("/notifications/events");
+  return res.events ?? [];
+}
+
+export async function fetchEngineSubscriptions(): Promise<NotificationEventSubscription[]> {
+  const res = await fetchJSON<{ subscriptions: NotificationEventSubscription[] | null }>("/notifications/subscriptions");
+  return res.subscriptions ?? [];
+}
+
+export async function subscribeToEvent(
+  channelId: string,
+  eventType: string,
+  template?: string,
+): Promise<NotificationEventSubscription> {
+  return postJSON<NotificationEventSubscription>("/notifications/subscriptions", {
+    channelId,
+    eventType,
+    template: template ?? "",
+  });
+}
+
+export async function unsubscribeFromEvent(subscriptionId: string): Promise<void> {
+  return deleteJSON(`/notifications/subscriptions/${encodeURIComponent(subscriptionId)}`);
+}
+

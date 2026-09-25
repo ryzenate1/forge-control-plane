@@ -308,6 +308,33 @@ func toStoreStep(s *DeploymentStep) *store.DeploymentStep {
 }
 
 func (s *Service) StartBlueGreen(ctx context.Context, serverID, newImage string, healthCheckPath string, healthCheckPort int) (*Deployment, error) {
+	return s.startDeployment(ctx, serverID, StrategyBlueGreen, newImage, healthCheckPath, healthCheckPort)
+}
+
+// StartCanary creates a canary deployment. The step machine already knows how
+// to run it (init → provision → health_gate → promote → drain_canary →
+// complete); this method records the row so the engine has something to pick up.
+func (s *Service) StartCanary(ctx context.Context, serverID, newImage string, healthCheckPath string, healthCheckPort int) (*Deployment, error) {
+	return s.startDeployment(ctx, serverID, StrategyCanary, newImage, healthCheckPath, healthCheckPort)
+}
+
+// StartRolling creates a rolling-update deployment. The step machine scales up,
+// optionally health-gates, then scales down — no blue/green targets needed.
+func (s *Service) StartRolling(ctx context.Context, serverID, newImage string, healthCheckPath string, healthCheckPort int) (*Deployment, error) {
+	return s.startDeployment(ctx, serverID, StrategyRolling, newImage, healthCheckPath, healthCheckPort)
+}
+
+// StartRecreate creates a stop-then-start deployment for workloads that cannot
+// tolerate two instances running simultaneously (stateful servers, game engines
+// with exclusive file locks).
+func (s *Service) StartRecreate(ctx context.Context, serverID, newImage string, healthCheckPath string, healthCheckPort int) (*Deployment, error) {
+	return s.startDeployment(ctx, serverID, StrategyRecreate, newImage, healthCheckPath, healthCheckPort)
+}
+
+// startDeployment is the shared creation path every strategy goes through.
+// Validation lives here rather than in each caller so a new strategy added to
+// stepsForStrategy automatically gets the same guards.
+func (s *Service) startDeployment(ctx context.Context, serverID string, strategy Strategy, newImage, healthCheckPath string, healthCheckPort int) (*Deployment, error) {
 	if serverID == "" {
 		return nil, ErrInvalidServer
 	}
@@ -333,16 +360,24 @@ func (s *Service) StartBlueGreen(ctx context.Context, serverID, newImage string,
 	deployment := &Deployment{
 		ID:              uuid.NewString(),
 		ServerID:        serverID,
-		Strategy:        StrategyBlueGreen,
+		Strategy:        strategy,
 		Status:          StatusPending,
 		Image:           newImage,
-		BlueTargetID:    fmt.Sprintf("%s-blue", serverID),
-		GreenTargetID:   fmt.Sprintf("%s-green-%d", serverID, time.Now().Unix()),
-		ActiveTarget:    "blue",
 		HealthCheckPath: healthCheckPath,
 		HealthCheckPort: healthCheckPort,
 		CreatedAt:       now,
 		UpdatedAt:       now,
+	}
+	// Blue-green and canary use named targets; rolling and recreate do not.
+	switch strategy {
+	case StrategyBlueGreen:
+		deployment.BlueTargetID = fmt.Sprintf("%s-blue", serverID)
+		deployment.GreenTargetID = fmt.Sprintf("%s-green-%d", serverID, now.Unix())
+		deployment.ActiveTarget = "blue"
+	case StrategyCanary:
+		deployment.BlueTargetID = fmt.Sprintf("%s-stable", serverID)
+		deployment.GreenTargetID = fmt.Sprintf("%s-canary-%d", serverID, now.Unix())
+		deployment.ActiveTarget = "blue"
 	}
 
 	if err := s.store.CreateDeployment(ctx, toStoreDeployment(deployment)); err != nil {

@@ -367,6 +367,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /servers/{id}/ws/logs", server.logsWS)
 	mux.HandleFunc("GET /servers/{id}/ws/console", server.consoleWS)
 	mux.HandleFunc("GET /servers/{id}/ws/backup", server.backupProgressWS)
+	mux.HandleFunc("POST /servers/{id}/health/report", server.handleServerHealthReport)
 	mux.HandleFunc("GET /servers/{id}/files", server.listFiles)
 	mux.HandleFunc("DELETE /servers/{id}/files", server.deleteFile)
 	mux.HandleFunc("POST /servers/{id}/files/mkdir", server.makeDir)
@@ -716,6 +717,14 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	// machine that booted this instant.
 	if hostUptime := hostUptimeSeconds(); hostUptime >= 0 {
 		writeMetric("game_panel_host_uptime_seconds", "Wall time since the host booted.", "gauge", formatInt64(hostUptime))
+	}
+	// Reported only when it is positive: the estimate is the difference between
+	// wall and monotonic clocks, and zero is also what a correctly synchronised
+	// clock produces, so emitting 0 everywhere would advertise a fact the node
+	// did not observe. Clock slew (an NTP step) reads as suspend time and is
+	// labelled as the estimate it is.
+	if suspended := suspendDuration(s.started); suspended > 0 {
+		writeMetric("game_panel_host_suspend_seconds", "Estimated time the host was suspended since the daemon started (wall minus monotonic; includes clock steps).", "gauge", formatFloat(suspended.Seconds()))
 	}
 	runtimeEnabled := "0"
 	if runtimeAvailable(s.runtime) {
@@ -1291,6 +1300,101 @@ func (s *Server) notifyPanelInstallStatus(serverID string, success bool, errorMs
 	if err := s.panelClient.SetInstallationStatus(ctx, serverID, success); err != nil {
 		log.Printf("[beacon] failed to notify panel of install status for %s: %v", serverID, err)
 	}
+}
+
+// handleServerHealthReport receives a health-probe result for one server and
+// forwards it to the control plane's remote health-ingest endpoint
+// (POST /api/remote/servers/:id/health), where the resource-limits service
+// records the observation that gates deploys and auto-rollback.
+//
+// Beacon owns the container and therefore the probe verdict; the observation
+// store lives on the API. This handler is a thin, node-authenticated forward:
+// the surrounding auth middleware has already verified the caller's HMAC
+// signature, and we re-sign the outbound request with the same node credential
+// (s.token) used for every other panel call. A standalone beacon with no panel
+// configured acknowledges the probe locally instead of surfacing a spurious
+// failure to the healthcheck loop.
+func (s *Server) handleServerHealthReport(w http.ResponseWriter, r *http.Request) {
+	serverID := strings.TrimSpace(r.PathValue("id"))
+	if serverID == "" {
+		http.Error(w, "server id is required", http.StatusBadRequest)
+		return
+	}
+	var body struct {
+		Healthy     bool   `json:"healthy"`
+		Detail      string `json:"detail"`
+		ProcessType string `json:"processType"`
+	}
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&body); err != nil {
+		http.Error(w, "invalid request body", http.StatusBadRequest)
+		return
+	}
+	// The API fails closed on an empty process type, so fall back to the
+	// compose convention for a single-process service rather than dropping it.
+	processType := strings.TrimSpace(body.ProcessType)
+	if processType == "" {
+		processType = "main"
+	}
+
+	payload, err := json.Marshal(map[string]any{
+		"healthy":     body.Healthy,
+		"detail":      body.Detail,
+		"processType": processType,
+	})
+	if err != nil {
+		http.Error(w, "encode health report", http.StatusInternalServerError)
+		return
+	}
+
+	panelBase := strings.TrimSpace(os.Getenv("PANEL_API_URL"))
+	if panelBase == "" {
+		panelBase = strings.TrimSpace(os.Getenv("WINGS_PANEL_URL"))
+	}
+	// Derive the panel root from either env form, tolerating a value that
+	// already carries the /api/remote or /api/v1 suffix.
+	panelBase = strings.TrimRight(strings.TrimSuffix(strings.TrimSuffix(panelBase, "/api/remote"), "/api/v1"), "/")
+	if panelBase == "" || s.token == "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_ = json.NewEncoder(w).Encode(map[string]any{"accepted": true, "forwarded": false})
+		return
+	}
+
+	endpoint := panelBase + "/api/remote/servers/" + url.PathEscape(serverID) + "/health"
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		http.Error(w, "build panel health request", http.StatusInternalServerError)
+		return
+	}
+	timestamp := time.Now().UTC().Format(time.RFC3339)
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		http.Error(w, "generate panel request nonce", http.StatusInternalServerError)
+		return
+	}
+	nonce := hex.EncodeToString(nonceBytes)
+	req.Header.Set("Authorization", "Bearer "+s.token)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Accept", "application/vnd.forge.v1+json")
+	req.Header.Set("X-Panel-Timestamp", timestamp)
+	req.Header.Set("X-Panel-Nonce", nonce)
+	req.Header.Set("X-Panel-Signature", sign(s.token, req.Method, req.URL.RequestURI(), timestamp, payload, nonce))
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	res, err := client.Do(req)
+	if err != nil {
+		http.Error(w, "forward health report: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer res.Body.Close()
+	_, _ = io.Copy(io.Discard, io.LimitReader(res.Body, 4096))
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		http.Error(w, "panel rejected health report: "+res.Status, http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(map[string]any{"accepted": true, "forwarded": true})
 }
 
 func (s *Server) power(w http.ResponseWriter, r *http.Request) {

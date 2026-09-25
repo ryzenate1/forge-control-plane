@@ -1,9 +1,10 @@
 "use client";
 
 import { useQuery } from "@tanstack/react-query";
-import { Check, Copy, Eye, EyeOff, TriangleAlert } from "lucide-react";
+import { Check, Copy, Eye, EyeOff, KeyRound, TriangleAlert } from "lucide-react";
 import { useEffect, useState } from "react";
-import { Modal } from "@/components/admin/admin-ui";
+import { Btn, Modal } from "@/components/admin/admin-ui";
+import { DashHeader } from "@/components/admin/dashboard-cards";
 import { getDBContainerCredentials } from "@/lib/api/database-containers";
 import { copySecret } from "@/lib/clipboard";
 
@@ -30,7 +31,7 @@ function CopyField({ label, value }: { label: string; value: string }) {
 
   return (
     <div>
-      <label className="mb-1 block text-xs font-medium text-slate-400 uppercase tracking-wider">{label}</label>
+      <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">{label}</label>
       <div className="flex items-center gap-2">
         <code className="flex-1 rounded-lg bg-[var(--surface)] px-3 py-2 text-sm text-emerald-300 break-all font-mono">
           {revealed ? value : "••••••••••••••••••••••"}
@@ -71,7 +72,7 @@ export function DBContainerCredentialsModal({
   });
 
   return (
-    <Modal title={`Credentials: ${containerName}`} onClose={onClose} wide>
+    <Modal title={`Credentials: ${containerName}`} description="Shown once — store them securely." onClose={onClose} wide>
       {credsQuery.isLoading ? (
         <div className="py-6 text-center text-sm text-slate-500">Loading credentials...</div>
       ) : credsQuery.isError ? (
@@ -80,7 +81,12 @@ export function DBContainerCredentialsModal({
           <span>Failed to load credentials: {credsQuery.error.message}</span>
         </div>
       ) : credsQuery.data ? (
-        <div className="space-y-5">
+        <div className="space-y-4">
+          <DashHeader
+            icon={KeyRound}
+            eyebrow="Database credentials"
+            title={containerName}
+          />
           <div className="flex items-start gap-3 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-300">
             <TriangleAlert size={14} className="mt-0.5 shrink-0" />
             <span>
@@ -94,9 +100,9 @@ export function DBContainerCredentialsModal({
           )}
 
           {credsQuery.data.credentials && Object.keys(credsQuery.data.credentials).length > 0 && (
-            <div className="space-y-3">
-              <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">Credentials</p>
-              <div className="rounded-lg bg-[var(--surface)] p-3 space-y-3">
+            <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm">
+              <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100"><KeyRound size={15} className="text-slate-400" /> Credentials</h3>
+              <div className="mt-3 space-y-3">
                 {Object.entries(credsQuery.data.credentials).map(([key, value]) => (
                   <CopyField key={key} label={key} value={value} />
                 ))}
@@ -104,14 +110,8 @@ export function DBContainerCredentialsModal({
             </div>
           )}
 
-          <div className="flex justify-end">
-            <button
-              className="rounded-lg bg-[var(--surface-raised)] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-[var(--surface-raised)]"
-              onClick={onClose}
-              type="button"
-            >
-              Close
-            </button>
+          <div className="-mx-6 -mb-5 mt-5 flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end">
+            <Btn tone="ghost" onClick={onClose}>Close</Btn>
           </div>
         </div>
       ) : null}

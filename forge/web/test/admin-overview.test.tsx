@@ -7,7 +7,7 @@ import { AdminHealth } from "@/components/admin/AdminHealth";
 import AdminMonitoring from "@/app/admin/monitoring/page";
 import AdminHost from "@/app/admin/host/page";
 import { AdminServers } from "@/components/admin/AdminServers";
-import { jsonResponse } from "@/test/fetch-mock";
+import { jsonResponse, mockFetchByUrl } from "@/test/fetch-mock";
 import { renderWithQuery } from "@/test/render";
 import { apiPage } from "@/test/fixtures";
 
@@ -636,5 +636,61 @@ describe("AdminServers page", () => {
     await userEvent.click(screen.getByRole("button", { name: "List view" }));
     await userEvent.click(screen.getByLabelText("Select alpha-mc"));
     expect(screen.getByText("1 selected")).toBeInTheDocument();
+  });
+
+  it("opens the detail modal with live KPIs, info rows and power actions", async () => {
+    const { mockFetchByUrl } = await import("@/test/fetch-mock");
+    const server = {
+      id: "s1", name: "alpha-mc", description: "Test server.", status: "running",
+      desiredState: "running", actualState: "running", nodeId: "n1", node: "node-a",
+      ownerEmail: "admin@example.com", template: "Minecraft Java", dockerImage: "itzg/minecraft-server:java21",
+      memoryMb: 2048, diskMb: 10240, cpuLimit: 100, allocationLimit: 2, databaseLimit: 1, backupLimit: 2,
+      createdAt: "2025-09-20T14:22:00Z", generation: 1,
+    };
+    const mocked = mockFetchByUrl({
+      "/servers?page=1&per_page=100": jsonResponse(apiPage([server])),
+      "/servers/s1": jsonResponse(server),
+      "/servers/s1/stats": jsonResponse({
+        cpuPercent: 12.5, memoryBytes: 1174405120, memoryLimit: 4294967296,
+        diskBytes: 3355443200, diskLimit: 10737418240,
+        networkRxBytes: 1048576, networkTxBytes: 2097152, uptime: 367782,
+      }),
+      "/servers/s1/startup": jsonResponse({
+        startupCommand: "java -jar server.jar", rawStartupCommand: "java -jar server.jar", dockerImages: {},
+        variables: [
+          { name: "Minecraft Version", description: "Version", envVariable: "VANILLA_VERSION", defaultValue: "latest", serverValue: "1.21.1", isEditable: true, rules: "" },
+        ],
+      }),
+      "/servers/s1/activity?page=1&per_page=50": jsonResponse({
+        data: [{ id: "e1", action: "server.start", actorEmail: "admin@example.com", targetType: "server", targetId: "s1", createdAt: "2025-09-23T09:14:00Z" }],
+        pagination: { page: 1, per_page: 50, total: 1, total_pages: 1 },
+      }),
+      "/servers/s1/power": { method: "POST", response: jsonResponse({ serverId: "s1", signal: "restart", accepted: true }) },
+      "/users": jsonResponse([]),
+      "/nodes": jsonResponse([{ id: "n1", name: "node-a", heartbeatState: "healthy", lastSeenAt: new Date().toISOString() }]),
+      "/allocations": jsonResponse([]),
+      "/regions": jsonResponse([]),
+      "/mounts": jsonResponse([]),
+    });
+    // eggs + templates (order-independent routes)
+    mocked.addRoute((url) => url.includes("/eggs"), jsonResponse([]));
+
+    renderWithQuery(<AdminServers />);
+    const user = userEvent.setup();
+
+    await screen.findByText("alpha-mc");
+    await user.click(screen.getByRole("button", { name: "alpha-mc" }));
+
+    expect(await screen.findByText("12.5%")).toBeInTheDocument();
+    expect(screen.getAllByText("4d 6h 9m").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("Quick Actions")).toBeInTheDocument();
+    expect(screen.getByText("Server Information")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Restart" }));
+    await waitFor(() => {
+      const powerCall = mocked.calls.find((call) => call.url.endsWith("/servers/s1/power"));
+      expect(powerCall).toBeDefined();
+      expect(JSON.parse(String(powerCall!.init.body))).toEqual({ signal: "restart" });
+    });
   });
 });

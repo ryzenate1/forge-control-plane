@@ -251,14 +251,14 @@ export function Dialog({ open, title, description, children, closeAction, classN
   return (
     <div className="ui-dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAction(); }}>
       <div ref={dialogRef} aria-describedby={description ? descriptionId : undefined} aria-labelledby={titleId} aria-modal="true" className={cn("ui-dialog", className)} role="dialog">
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 className="text-lg font-semibold text-white" id={titleId}>{title}</h2>
-            {description ? <p className="mt-1 text-sm text-slate-400" id={descriptionId}>{description}</p> : null}
+        <div className="ui-dialog-header">
+          <div className="min-w-0">
+            <h2 className="ui-dialog-title" id={titleId}>{title}</h2>
+            {description ? <p className="ui-dialog-description" id={descriptionId}>{description}</p> : null}
           </div>
-          <button aria-label="Close dialog" className="ui-icon-button" onClick={closeAction} type="button"><X className="h-4 w-4" /></button>
+          <button aria-label="Close dialog" className="ui-icon-button shrink-0" onClick={closeAction} type="button"><X className="h-4 w-4" /></button>
         </div>
-        <div className="mt-5">{children}</div>
+        <div className="ui-dialog-body">{children}</div>
       </div>
     </div>
   );

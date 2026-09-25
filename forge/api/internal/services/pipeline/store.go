@@ -25,6 +25,17 @@ func NewStore(db *pgxpool.Pool) *Store {
 
 // ---- pipeline definitions ----
 
+// normalizeCategories ensures a nil category slice reaches Postgres as an empty
+// TEXT[] array ("{}") rather than SQL NULL, which would violate the column's
+// NOT NULL constraint (the DEFAULT '{}' only applies when the column is omitted
+// from the statement entirely). categories is a TEXT[] column, not JSONB.
+func normalizeCategories(cats []string) []string {
+	if cats == nil {
+		return []string{}
+	}
+	return cats
+}
+
 func (s *Store) CreateDefinition(ctx context.Context, def *Definition) error {
 	def.ID = uuid.NewString()
 	stages, err := json.Marshal(def.Stages)
@@ -35,10 +46,11 @@ func (s *Store) CreateDefinition(ctx context.Context, def *Definition) error {
 	if err != nil {
 		return fmt.Errorf("marshal trigger: %w", err)
 	}
+	categories := normalizeCategories(def.Categories)
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO pipeline_defs (id, name, description, categories, stages, trigger, created_by)
 		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		def.ID, def.Name, def.Description, def.Categories, stages, trigger, def.CreatedBy)
+		def.ID, def.Name, def.Description, categories, stages, trigger, def.CreatedBy)
 	if err != nil {
 		return fmt.Errorf("insert pipeline def: %w", err)
 	}
@@ -90,11 +102,12 @@ func (s *Store) UpdateDefinition(ctx context.Context, id string, def *Definition
 	if err != nil {
 		return fmt.Errorf("marshal trigger: %w", err)
 	}
+	categories := normalizeCategories(def.Categories)
 	tag, err := s.db.Exec(ctx, `
 		UPDATE pipeline_defs
 		SET name = $2, description = $3, categories = $4, stages = $5, trigger = $6, updated_at = now()
 		WHERE id = $1`,
-		id, def.Name, def.Description, def.Categories, stages, trigger)
+		id, def.Name, def.Description, categories, stages, trigger)
 	if err != nil {
 		return fmt.Errorf("update pipeline def: %w", err)
 	}

@@ -4,6 +4,8 @@ export { BackupsView } from "./backups-view";
 export { NetworkView } from "./network-view";
 export { StartupView } from "./startup-view";
 export { SchedulesView } from "./schedules-view";
+export { ScheduledTasksView } from "./scheduled-tasks-view";
+export { ResourceLimitsView } from "./resource-limits-view";
 export { DatabasesView } from "./databases-view";
 export { ServerUsersView } from "./users-view";
 export { ServerSettingsView } from "./settings-view";

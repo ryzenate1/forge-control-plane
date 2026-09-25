@@ -79,7 +79,7 @@ export default function AdminAcmePage() {
 
       {showCreate && (
         <Modal title="Create ACME Account" onClose={() => setShowCreate(false)}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input label="Email *" value={email} onChange={setEmail} placeholder="admin@example.com" />
             <Input label="CA URL (optional)" value={caUrl} onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" />
             <p className="text-xs text-slate-400">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>

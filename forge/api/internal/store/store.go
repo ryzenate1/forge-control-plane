@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"gamepanel/forge/internal/secrets"
@@ -21,6 +22,39 @@ import (
 type Store struct {
 	db      *pgxpool.Pool
 	secrets *secrets.Keyring
+
+	// webhookHookMu guards webhookHook, the observer notified after each
+	// webhook event is persisted to the outbox.
+	webhookHookMu sync.RWMutex
+	webhookHook   func(context.Context, string, map[string]any)
+}
+
+// SetWebhookEventHook registers a callback invoked after every event is
+// enqueued into the durable webhook outbox (DispatchWebhookEvent and
+// EnqueueWebhookEvent share that choke point). This is how the notifications
+// engine consumes the same control-plane events as outbound webhooks without
+// importing the notifications package into the store layer (which would be a
+// cycle) or touching every producer call site. The hook receives a deep copy
+// of the event payload and is invoked asynchronously.
+func (s *Store) SetWebhookEventHook(fn func(ctx context.Context, event string, payload map[string]any)) {
+	s.webhookHookMu.Lock()
+	s.webhookHook = fn
+	s.webhookHookMu.Unlock()
+}
+
+// notifyWebhookEventHook fires the registered webhook event observer, if any.
+func (s *Store) notifyWebhookEventHook(ctx context.Context, event string, payloadRaw []byte) {
+	s.webhookHookMu.RLock()
+	hook := s.webhookHook
+	s.webhookHookMu.RUnlock()
+	if hook == nil {
+		return
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(payloadRaw, &payload); err != nil || payload == nil {
+		return
+	}
+	go hook(context.WithoutCancel(ctx), event, payload)
 }
 
 type ScheduleTaskAction string

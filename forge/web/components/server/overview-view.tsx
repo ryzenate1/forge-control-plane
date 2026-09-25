@@ -37,6 +37,7 @@ import {
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { CardSkeleton } from "@/components/ui/loading-skeleton";
 import { EmptyState } from "@/components/ui/primitives";
+import { chart } from "@/lib/design-tokens";
 import { cn } from "@/lib/utils";
 
 function timeAgo(iso?: string | null): string {
@@ -292,7 +293,7 @@ export function OverviewView({ server }: { server?: ApiServer }) {
     return value || null;
   };
   const versionValue = varValue(/version/i);
-  const jarValue = varValue(/\.jar$|^jar\b|jar file/i);
+  const jarValue = varValue(/jar/i);
 
   const imageShort = shortImage(server?.dockerImage);
   const tags = [server?.template, imageShort === "—" ? null : imageShort].filter((t): t is string => Boolean(t)).slice(0, 3);
@@ -354,19 +355,19 @@ export function OverviewView({ server }: { server?: ApiServer }) {
 
       <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
         {[
-          { key: "cpu", title: "CPU", icon: Cpu, color: "#38bdf8", iconClass: "text-sky-400",
+          { key: "cpu", title: "CPU", icon: Cpu, color: chart.sky, iconClass: "text-sky-400",
             value: statsLive && stats ? `${stats.cpuPercent.toFixed(1)}%` : null,
             sub: statsLive ? "live" : statsQuery.isLoading ? "…" : "Offline",
             data: samples.map((s) => s.cpu), bar: statsLive && stats ? Math.min(100, stats.cpuPercent) : null },
-          { key: "memory", title: "Memory", icon: MemoryStick, color: "#a855f7", iconClass: "text-purple-400",
+          { key: "memory", title: "Memory", icon: MemoryStick, color: chart.violet, iconClass: "text-purple-400",
             value: memPct != null ? `${memPct.toFixed(1)}%` : null,
             sub: stats && statsLive ? `${formatBytes(stats.memoryBytes)} / ${formatBytes(stats.memoryLimit)}` : statsQuery.isLoading ? "…" : "Offline",
             data: samples.map((s) => s.mem), bar: statsLive ? memPct : null },
-          { key: "disk", title: "Disk", icon: Database, color: "#fb923c", iconClass: "text-orange-400",
+          { key: "disk", title: "Disk", icon: Database, color: chart.lightOrange, iconClass: "text-orange-400",
             value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
             sub: stats && statsLive ? `${formatBytes(stats.diskBytes)} / ${formatBytes(stats.diskLimit)}` : statsQuery.isLoading ? "…" : "Offline",
             data: samples.map((s) => s.disk), bar: statsLive ? diskPct : null },
-          { key: "network", title: "Network", icon: Network, color: "#22d3ee", iconClass: "text-cyan-400",
+          { key: "network", title: "Network", icon: Network, color: chart.lightCyan, iconClass: "text-cyan-400",
             value: statsLive && stats ? formatBytes(stats.networkRxBytes + stats.networkTxBytes) : null,
             sub: stats && statsLive ? `RX ${formatBytes(stats.networkRxBytes)} · TX ${formatBytes(stats.networkTxBytes)}` : statsQuery.isLoading ? "…" : "Offline",
             data: samples.map((s) => s.net), bar: null },

@@ -129,7 +129,14 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 		}
 		rows.Close()
 		for _, value := range values {
-			aad := secretAAD(spec.table, value.id, spec.plainColumn)
+			// The AAD field is the semantic secret name, not the plaintext column name.
+			// The reversible-legacy columns are suffixed *_plaintext (e.g. git_credentials
+			// .credential_plaintext) while the encrypt/decrypt call sites bind AAD to the
+			// stripped name ("credential"). Reusing the column name here produces a
+			// mismatched AAD that fails GCM authentication and bricks startup, so strip
+			// the suffix to match the call sites (a no-op for tables whose column already
+			// equals the field name, e.g. nodes.daemon_token).
+			aad := secretAAD(spec.table, value.id, strings.TrimSuffix(spec.plainColumn, "_plaintext"))
 			secret := value.plain
 			if value.encrypted != "" {
 				secret, err = s.decryptSecret(value.encrypted, "", aad)
@@ -570,7 +577,7 @@ func (s *Store) RestoreOperationalSecrets(ctx context.Context) error {
 		}
 		rows.Close()
 		for _, value := range values {
-			plaintext, err := s.decryptSecret(value.encrypted, "", secretAAD(spec.table, value.id, spec.plainColumn))
+			plaintext, err := s.decryptSecret(value.encrypted, "", secretAAD(spec.table, value.id, strings.TrimSuffix(spec.plainColumn, "_plaintext")))
 			if err != nil {
 				return err
 			}

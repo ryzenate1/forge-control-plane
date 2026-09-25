@@ -116,7 +116,7 @@ function CronForm({ job, onClose }: { job?: CronJob; onClose: () => void }) {
   const cronError = errors.schedule;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <AdminFormSection title="Identity">
         <AdminFormField label="Name" error={errors.name}>
           <input

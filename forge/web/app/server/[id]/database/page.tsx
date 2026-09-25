@@ -2,7 +2,7 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Plus, RotateCcw, Archive, Eye } from "lucide-react";
+import { Database, Plus, RotateCcw, Archive, Eye, X } from "lucide-react";
 import { Btn, Card, CardHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
 import { useToast } from "@/components/ui/toast";
@@ -226,31 +226,38 @@ function LinkServiceModal({ serverId, linkedIds, onClose, onLinked }: {
 
   return (
     <div className="ui-dialog-layer" onClick={onClose}>
-      <div className="ui-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h2 className="mb-4 text-lg font-semibold text-slate-100">Link database service</h2>
-        {available.length === 0 ? (
-          <p className="text-sm text-slate-400">No unlinked database services available. Create one first, then reload this panel.</p>
-        ) : (
-          <div className="space-y-2">
-            {available.map((s) => (
-              <label key={s.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition-colors ${selectedId === s.id ? "border-red-500/50 bg-red-500/10" : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"}`}>
-                <input
-                  type="radio"
-                  name="service"
-                  value={s.id}
-                  checked={selectedId === s.id}
-                  onChange={() => setSelectedId(s.id)}
-                  className="accent-red-600"
-                />
-                <div>
-                  <span className="text-slate-200">{s.name || s.id.slice(0, 8)}</span>
-                  <span className="ml-2 font-mono text-xs text-slate-500">{engineLabels[s.type] || s.type} {s.version}</span>
-                </div>
-              </label>
-            ))}
+      <div className="ui-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Link database service">
+        <div className="ui-dialog-header">
+          <div className="min-w-0">
+            <h2 className="ui-dialog-title">Link database service</h2>
           </div>
-        )}
-        <div className="mt-4 flex justify-end gap-2">
+          <button aria-label="Close dialog" className="ui-icon-button shrink-0" onClick={onClose} type="button"><X size={16} /></button>
+        </div>
+        <div className="ui-dialog-body">
+          {available.length === 0 ? (
+            <p className="text-sm text-slate-400">No unlinked database services available. Create one first, then reload this panel.</p>
+          ) : (
+            <div className="space-y-2">
+              {available.map((s) => (
+                <label key={s.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm transition-colors ${selectedId === s.id ? "border-red-500/50 bg-red-500/10" : "border-white/10 bg-white/[0.02] hover:bg-white/[0.04]"}`}>
+                  <input
+                    type="radio"
+                    name="service"
+                    value={s.id}
+                    checked={selectedId === s.id}
+                    onChange={() => setSelectedId(s.id)}
+                    className="accent-red-600"
+                  />
+                  <div>
+                    <span className="text-slate-200">{s.name || s.id.slice(0, 8)}</span>
+                    <span className="ml-2 font-mono text-xs text-slate-500">{engineLabels[s.type] || s.type} {s.version}</span>
+                  </div>
+                </label>
+              ))}
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end">
           <Btn size="sm" tone="ghost" onClick={onClose}>Cancel</Btn>
           <Btn size="sm" disabled={!selectedId || linkMut.isPending} onClick={() => linkMut.mutate()}>
             {linkMut.isPending ? "Linking..." : "Link service"}
@@ -274,25 +281,32 @@ function ConnectionDetailModal({ serviceId, onClose }: { serviceId: string; onCl
 
   return (
     <div className="ui-dialog-layer" onClick={onClose}>
-      <div className="ui-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
-        <h2 className="mb-4 text-lg font-semibold text-slate-100">Connection details</h2>
-        {!svc ? (
-          <p className="text-sm text-slate-400">Loading...</p>
-        ) : (
-          <div className="space-y-3 text-sm">
-            <div>
-              <span className="text-slate-500">Connection String:</span>
-              <pre className="mt-1 select-all break-all rounded bg-black/40 p-3 font-mono text-xs text-emerald-300">{svc.connectionString}</pre>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <div><span className="text-slate-500">Host:</span><br /><span className="font-mono text-xs text-slate-200">{svc.host}:{svc.port}</span></div>
-              <div><span className="text-slate-500">Database:</span><br /><span className="font-mono text-xs text-slate-200">{svc.databaseName}</span></div>
-              <div><span className="text-slate-500">Username:</span><br /><span className="font-mono text-xs text-slate-200">{svc.username}</span></div>
-              <div><span className="text-slate-500">Engine:</span><br /><span className="text-slate-200">{engineLabels[svc.type] || svc.type} {svc.version}</span></div>
-            </div>
+      <div className="ui-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-label="Connection details">
+        <div className="ui-dialog-header">
+          <div className="min-w-0">
+            <h2 className="ui-dialog-title">Connection details</h2>
           </div>
-        )}
-        <div className="mt-4 flex justify-end">
+          <button aria-label="Close dialog" className="ui-icon-button shrink-0" onClick={onClose} type="button"><X size={16} /></button>
+        </div>
+        <div className="ui-dialog-body">
+          {!svc ? (
+            <p className="text-sm text-slate-400">Loading...</p>
+          ) : (
+            <div className="space-y-3 text-sm">
+              <div>
+                <span className="text-slate-500">Connection String:</span>
+                <pre className="mt-1 select-all break-all rounded bg-black/40 p-3 font-mono text-xs text-emerald-300">{svc.connectionString}</pre>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><span className="text-slate-500">Host:</span><br /><span className="font-mono text-xs text-slate-200">{svc.host}:{svc.port}</span></div>
+                <div><span className="text-slate-500">Database:</span><br /><span className="font-mono text-xs text-slate-200">{svc.databaseName}</span></div>
+                <div><span className="text-slate-500">Username:</span><br /><span className="font-mono text-xs text-slate-200">{svc.username}</span></div>
+                <div><span className="text-slate-500">Engine:</span><br /><span className="text-slate-200">{engineLabels[svc.type] || svc.type} {svc.version}</span></div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end">
           <Btn size="sm" tone="ghost" onClick={onClose}>Close</Btn>
         </div>
       </div>

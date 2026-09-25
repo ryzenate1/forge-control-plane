@@ -707,7 +707,7 @@ export function AdminMonitoring() {
               <div className="relative h-full">
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={[]} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
+                    <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStrong} vertical={false} />
                     <XAxis dataKey="iso" tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} />
                     <YAxis tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
                   </AreaChart>
@@ -729,7 +729,7 @@ export function AdminMonitoring() {
                       </linearGradient>
                     ))}
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStrong} vertical={false} />
                   <XAxis
                     dataKey="iso"
                     tick={{ fill: chart.axis, fontSize: 10 }}
@@ -768,7 +768,7 @@ export function AdminMonitoring() {
                       <stop offset="95%" stopColor={chart.violet} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
+                  <CartesianGrid strokeDasharray="3 3" stroke={chart.gridStrong} vertical={false} />
                   <XAxis
                     dataKey="iso"
                     tick={{ fill: chart.axis, fontSize: 10 }}

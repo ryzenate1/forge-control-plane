@@ -117,6 +117,17 @@ export const chart = {
   dangerSoft: "#f87171",
   critical: "#f43f5e",
   onColor: "#ffffff",
+  /**
+   * Chart chrome hairlines. Same SVG-attribute restriction as above, so the
+   * translucent line colours live here instead of inline in each chart.
+   * `grid`/`gridStrong` track the dark `--line` family, `gridSlate` the
+   * `--text-subtle` (slate-400) ramp used by the sparkline baselines.
+   */
+  grid: "rgba(255,255,255,0.06)",
+  gridStrong: "rgba(255,255,255,0.07)",
+  gridSlate: "rgba(148,163,184,0.12)",
+  /** Floating panel / tooltip border on the dark canvas. */
+  panelBorder: "rgba(255,255,255,0.1)",
 } as const;
 
 /** Categorical swatches offered by the environment colour picker (persisted data values). */

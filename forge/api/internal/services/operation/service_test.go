@@ -104,6 +104,10 @@ func TestProcessStopsAfterConfiguredAttempts(t *testing.T) {
 func TestDispatchPowerIdempotencyReturnsPersistedOperation(t *testing.T) {
 	st := newMemoryStore()
 	svc := New(st)
+	// Dispatch requires a handler for the kind, so an operation can never be
+	// accepted into a store no worker will drain. Register the one this test's
+	// "restart" kind needs before checking ID stability.
+	svc.RegisterHandler(OpServerRestart, func(context.Context, *Operation) error { return nil })
 	first, err := svc.DispatchPower(context.Background(), "server-1", "restart", "request-1")
 	if err != nil {
 		t.Fatal(err)

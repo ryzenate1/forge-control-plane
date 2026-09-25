@@ -48,7 +48,7 @@ func registerAccountRecoveryRoutes(v1 fiber.Router, protected fiber.Router, cfg 
 			return c.JSON(accountRecoveryResponse{Status: "sent"})
 		}
 
-		token, err := cfg.RecoveryTokenService.GenerateToken(ctx, user.ID, recovery.TokenAccountRecovery, c.IP(), c.Get("User-Agent"), "")
+		token, err := cfg.RecoveryTokenService.GenerateToken(ctx, user.ID, recovery.TokenAccountRecovery, ExtractClientIP(c), c.Get("User-Agent"), "")
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to generate token")
 		}

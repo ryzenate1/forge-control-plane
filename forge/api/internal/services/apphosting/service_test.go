@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/store"
 
 	"github.com/google/uuid"
@@ -90,6 +91,9 @@ func (m *mockStore) UpdateApplication(ctx context.Context, id string, input stor
 	}
 	if input.DesiredState != nil {
 		app.DesiredState = *input.DesiredState
+	}
+	if input.SourceConfig != nil {
+		app.SourceConfig = input.SourceConfig
 	}
 	return nil
 }
@@ -373,6 +377,166 @@ func TestCreateApp(t *testing.T) {
 	}
 	if app.ObservedStatus != "idle" {
 		t.Errorf("expected observed_status 'idle', got %q", app.ObservedStatus)
+	}
+}
+
+func TestCreateAppFlatWizardFields(t *testing.T) {
+	m := newMockStore()
+	svc := &Service{store: m}
+	ctx := context.Background()
+	orgID := uuid.NewString()
+
+	app, err := svc.CreateApp(ctx, tenancy.OrgContext{OrgID: orgID}, CreateAppRequest{
+		Name:           "web",
+		Type:           "image",
+		Image:          "nginx:latest",
+		NodeID:         "node-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateApp failed: %v", err)
+	}
+	if app.SourceType != "DOCKER_IMAGE" {
+		t.Errorf("expected source type DOCKER_IMAGE, got %q", app.SourceType)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(app.SourceConfig, &spec); err != nil {
+		t.Fatalf("source config is not JSON: %v", err)
+	}
+	if spec["image"] != "nginx:latest" {
+		t.Errorf("expected image nginx:latest in source config, got %v", spec["image"])
+	}
+	if spec["nodeId"] != "node-1" {
+		t.Errorf("expected nodeId node-1 in source config, got %v", spec["nodeId"])
+	}
+}
+
+func TestCreateAppFlatFieldsGitAndCompose(t *testing.T) {
+	m := newMockStore()
+	svc := &Service{store: m}
+	ctx := context.Background()
+	orgID := uuid.NewString()
+
+	gitApp, err := svc.CreateApp(ctx, tenancy.OrgContext{OrgID: orgID}, CreateAppRequest{
+		Name: "api", Type: "git", GitURL: "https://github.com/acme/api.git", GitBranch: "main",
+	})
+	if err != nil {
+		t.Fatalf("CreateApp git failed: %v", err)
+	}
+	if gitApp.SourceType != "GIT" {
+		t.Errorf("expected source type GIT, got %q", gitApp.SourceType)
+	}
+
+	composeApp, err := svc.CreateApp(ctx, tenancy.OrgContext{OrgID: orgID}, CreateAppRequest{
+		Name: "stack", Type: "compose", ComposeContent: "services:\n  web:\n    image: nginx:latest\n",
+	})
+	if err != nil {
+		t.Fatalf("CreateApp compose failed: %v", err)
+	}
+	if composeApp.SourceType != "COMPOSE" {
+		t.Errorf("expected source type COMPOSE, got %q", composeApp.SourceType)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(composeApp.SourceConfig, &spec); err != nil {
+		t.Fatalf("source config is not JSON: %v", err)
+	}
+	if _, ok := spec["composeContent"]; !ok {
+		t.Errorf("expected composeContent in source config, got %v", spec)
+	}
+}
+
+func TestCreateAppExplicitSourceConfigWins(t *testing.T) {
+	m := newMockStore()
+	svc := &Service{store: m}
+	ctx := context.Background()
+	orgID := uuid.NewString()
+
+	app, err := svc.CreateApp(ctx, tenancy.OrgContext{OrgID: orgID}, CreateAppRequest{
+		Name:         "web",
+		SourceType:   "DOCKER_IMAGE",
+		SourceConfig: json.RawMessage(`{"image":"custom:1"}`),
+		Image:        "nginx:latest",
+	})
+	if err != nil {
+		t.Fatalf("CreateApp failed: %v", err)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(app.SourceConfig, &spec); err != nil {
+		t.Fatalf("source config is not JSON: %v", err)
+	}
+	if spec["image"] != "custom:1" {
+		t.Errorf("explicit source config should win, got %v", spec["image"])
+	}
+}
+
+func TestResolveSourceType(t *testing.T) {
+	tests := []struct{ sourceType, typeAlias, want string }{
+		{"GIT", "image", "GIT"},
+		{"", "image", "DOCKER_IMAGE"},
+		{"", "git", "GIT"},
+		{"", "compose", "COMPOSE"},
+		{"", "DOCKER_IMAGE", "DOCKER_IMAGE"},
+		{"", "", ""},
+	}
+	for _, tt := range tests {
+		if got := resolveSourceType(tt.sourceType, tt.typeAlias); got != tt.want {
+			t.Errorf("resolveSourceType(%q, %q) = %q, want %q", tt.sourceType, tt.typeAlias, got, tt.want)
+		}
+	}
+}
+
+func TestUpdateAppMergesFlatFields(t *testing.T) {
+	m := newMockStore()
+	svc := &Service{store: m}
+	ctx := context.Background()
+	orgID := uuid.NewString()
+
+	app, err := svc.CreateApp(ctx, tenancy.OrgContext{OrgID: orgID}, CreateAppRequest{
+		Name: "web", OrgID: orgID, Type: "image", Image: "nginx:1.25", NodeID: "node-1",
+	})
+	if err != nil {
+		t.Fatalf("CreateApp failed: %v", err)
+	}
+
+	image := "nginx:1.26"
+	memory := "2048"
+	env := map[string]string{"FOO": "bar"}
+	updated, err := svc.UpdateApp(ctx, app.ID, orgID, UpdateAppRequest{
+		Image: &image, MemoryLimit: &memory, EnvVars: env,
+	})
+	if err != nil {
+		t.Fatalf("UpdateApp failed: %v", err)
+	}
+	var spec map[string]any
+	if err := json.Unmarshal(updated.SourceConfig, &spec); err != nil {
+		t.Fatalf("source config is not JSON: %v", err)
+	}
+	if spec["image"] != "nginx:1.26" {
+		t.Errorf("expected merged image, got %v", spec["image"])
+	}
+	if spec["nodeId"] != "node-1" {
+		t.Errorf("expected surviving nodeId, got %v", spec["nodeId"])
+	}
+	if spec["memoryMb"] != float64(2048) {
+		t.Errorf("expected numeric memoryMb 2048, got %v", spec["memoryMb"])
+	}
+	envBack, ok := spec["envVars"].(map[string]any)
+	if !ok || envBack["FOO"] != "bar" {
+		t.Errorf("expected merged envVars, got %v", spec["envVars"])
+	}
+}
+
+func TestParseResourceNumber(t *testing.T) {
+	if n, err := parseResourceNumber("1024"); err != nil || n != 1024 {
+		t.Errorf("expected 1024, got %d (%v)", n, err)
+	}
+	if _, err := parseResourceNumber("1024abc"); err == nil {
+		t.Errorf("expected error for trailing garbage")
+	}
+	if _, err := parseResourceNumber("-5"); err == nil {
+		t.Errorf("expected error for negative value")
+	}
+	if _, err := parseResourceNumber(""); err == nil {
+		t.Errorf("expected error for empty value")
 	}
 }
 

@@ -131,8 +131,8 @@ function AttachedServersTab({ mountId }: { mountId: string }) {
           </AdminTable>
         )}
       {showAttach && (
-        <Modal title="Attach Server to Mount — POST /mounts/:id/servers" onClose={() => { setShowAttach(false); setSelectedServerId(""); setServerSearch(""); }}>
-          <div className="space-y-3">
+        <Modal title="Attach Server to Mount" description="POST /mounts/:id/servers" onClose={() => { setShowAttach(false); setSelectedServerId(""); setServerSearch(""); }}>
+          <div className="space-y-4">
             <div className="relative">
               <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
               <input value={serverSearch} onChange={(e) => setServerSearch(e.target.value)} placeholder="Search servers…" className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface)] pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500" />
@@ -152,8 +152,8 @@ function AttachedServersTab({ mountId }: { mountId: string }) {
                 </div>
               )}
             <p className="text-xs text-slate-400">Wires <code className="font-mono">assignServerToMount(mountId, serverId)</code> → POST /mounts/:id/servers and <code className="font-mono">fetchMountServers</code> for GET.</p>
+            {attachMut.isError && <p className="text-sm text-red-300">{(attachMut.error as Error).message}</p>}
           </div>
-          {attachMut.isError && <p className="mt-3 text-sm text-red-300">{(attachMut.error as Error).message}</p>}
           <ModalFooter onCancel={() => setShowAttach(false)} onConfirm={() => attachMut.mutate()} disabled={!selectedServerId || attachMut.isPending} confirmLabel={attachMut.isPending ? "Attaching…" : "Attach"} />
         </Modal>
       )}
@@ -472,13 +472,14 @@ export function AdminMounts() {
         {/* Add Eggs Modal */}
         {showAddEggs && selected && (
           <Modal title="Add Eggs" onClose={() => { setShowAddEggs(false); setSelectedEggIds([]); }}>
+            <div className="space-y-4">
             {eggsQuery.isError ? (
-              <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
                 <span>Could not load eggs: {eggsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void eggsQuery.refetch()}>Retry</Btn>
               </div>
             ) : nestsQuery.isError ? (
-              <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
                 <span>Could not load nests: {nestsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void nestsQuery.refetch()}>Retry</Btn>
               </div>
@@ -493,7 +494,7 @@ export function AdminMounts() {
               )) : null}
             </div>
             {attachEggsMut.isError ? (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{attachEggsMut.error?.message || "An unexpected error occurred."}</span>
               </div>
@@ -504,14 +505,16 @@ export function AdminMounts() {
               disabled={selectedEggIds.length === 0 || attachEggsMut.isPending || eggsQuery.isError || nestsQuery.isError}
               confirmLabel={attachEggsMut.isPending ? "Attaching..." : "Add Selected Eggs"}
             />
+            </div>
           </Modal>
         )}
 
         {/* Add Nodes Modal */}
         {showAddNodes && selected && (
           <Modal title="Add Nodes" onClose={() => { setShowAddNodes(false); setSelectedNodeIds([]); }}>
+            <div className="space-y-4">
             {nodesQuery.isError ? (
-              <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+              <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
                 <span>Could not load nodes: {nodesQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" onClick={() => void nodesQuery.refetch()}>Retry</Btn>
               </div>
@@ -526,7 +529,7 @@ export function AdminMounts() {
               )) : null}
             </div>
             {attachNodesMut.isError ? (
-              <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{attachNodesMut.error?.message || "An unexpected error occurred."}</span>
               </div>
@@ -537,6 +540,7 @@ export function AdminMounts() {
               disabled={selectedNodeIds.length === 0 || attachNodesMut.isPending || nodesQuery.isError}
               confirmLabel={attachNodesMut.isPending ? "Attaching..." : "Add Selected Nodes"}
             />
+            </div>
           </Modal>
         )}
       </div>
@@ -597,27 +601,28 @@ export function AdminMounts() {
 
       {showCreate ? (
         <Modal title="Create Mount" onClose={() => setShowCreate(false)}>
+          <div className="space-y-4">
           <div className="grid gap-4 md:grid-cols-2">
             <div className="md:col-span-2">
               <Input label="Name" value={cName} onChange={setCName} placeholder="Shared Plugins" />
-              {cErrors.name ? <p className="mt-1 text-xs text-red-400">{cErrors.name}</p> : null}
-              <p className="mt-1 text-xs text-slate-500">Unique name used to separate this mount from another.</p>
+              {cErrors.name ? <p className="mt-1 text-sm text-red-300">{cErrors.name}</p> : null}
+              <p className="mt-1 text-xs text-slate-400">Unique name used to separate this mount from another.</p>
             </div>
             <div className="md:col-span-2">
-              <label className="mb-1.5 block text-sm font-medium text-slate-300">Description</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Description</label>
               <textarea className="h-20 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 py-2 text-sm text-slate-100" value={cDesc} onChange={(e) => setCDesc(e.target.value)} />
-              <p className="mt-1 text-xs text-slate-500">A longer description for this mount.</p>
+              <p className="mt-1 text-xs text-slate-400">A longer description for this mount.</p>
             </div>
             <div>
               <Input label="Source Path" value={cSource} onChange={setCSource} placeholder="/mnt/shared/plugins" mono />
-              {cErrors.source ? <p className="mt-1 text-xs text-red-400">{cErrors.source}</p> : null}
+              {cErrors.source ? <p className="mt-1 text-sm text-red-300">{cErrors.source}</p> : null}
             </div>
             <div>
               <Input label="Target Path" value={cTarget} onChange={setCTarget} placeholder="/plugins" mono />
-              {cErrors.target ? <p className="mt-1 text-xs text-red-400">{cErrors.target}</p> : null}
+              {cErrors.target ? <p className="mt-1 text-sm text-red-300">{cErrors.target}</p> : null}
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-300">Read Only</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Read Only</label>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-readonly" checked={!cReadOnly} onChange={() => setCReadOnly(false)} className="accent-[var(--brand)]" /> False
@@ -628,7 +633,7 @@ export function AdminMounts() {
               </div>
             </div>
             <div>
-              <label className="mb-1.5 block text-sm font-medium text-slate-300">User Mountable</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">User Mountable</label>
               <div className="flex gap-4">
                 <label className="flex items-center gap-2 rounded-lg border border-white/10 bg-[var(--surface)] px-4 py-2 text-sm cursor-pointer">
                   <input type="radio" name="c-usermount" checked={!cUserMount} onChange={() => setCUserMount(false)} className="accent-[var(--brand)]" /> False
@@ -650,13 +655,13 @@ export function AdminMounts() {
             />
           </div>
           {createMut.isError ? (
-            <div className="mt-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{createMut.error?.message || "An unexpected error occurred."}</span>
             </div>
           ) : null}
           {createMut.isSuccess ? (
-            <div className="mt-4 flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3 text-xs text-emerald-200">
+            <div className="flex items-start gap-2 rounded-lg border border-emerald-500/20 bg-emerald-950/10 p-3 text-xs text-emerald-200">
               <CheckCircle2 size={14} className="mt-0.5 shrink-0" />
               <span>Mount created successfully.</span>
             </div>
@@ -667,6 +672,7 @@ export function AdminMounts() {
             disabled={!cName.trim() || !cSource.trim() || !cTarget.trim() || createMut.isPending}
             confirmLabel={createMut.isPending ? "Creating..." : "Create"}
           />
+          </div>
         </Modal>
       ) : null}
       {renderConfirm()}

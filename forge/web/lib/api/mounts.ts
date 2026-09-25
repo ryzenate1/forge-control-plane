@@ -113,3 +113,105 @@ export function assignServerMount(serverId: string, mountId: string): Promise<Ap
 export function removeServerMount(serverId: string, mountId: string): Promise<ApiMountAssignmentResponse> {
   return removeMount(serverId, mountId);
 }
+
+// ---------------------------------------------------------------------------
+// Per-application declarative mounts
+//
+// These are distinct from the admin `mounts` catalogue above (host paths shared
+// across servers). An AppMount is a persistent mount declared on a single
+// application — a named volume, host bind mount, tmpfs, or a DB-stored seed
+// file — that survives redeploys because the deploy pipeline injects it into
+// the compose document. Backed by /api/v1/apps/:appId/mounts.
+// ---------------------------------------------------------------------------
+
+/** Persistent storage kinds. Mirrors the backend `mounts.MountType` enum. */
+export type AppMountType = 'volume' | 'bind' | 'tmpfs' | 'seed-file';
+
+export interface AppMount {
+  id: string;
+  applicationId: string;
+  name: string;
+  type: AppMountType;
+  /** Host path (bind), volume name (volume), empty for tmpfs/seed-file. */
+  source: string;
+  /** Absolute container path the mount is materialized at. */
+  target: string;
+  readOnly: boolean;
+  /** File body, only present for `seed-file` mounts. */
+  content?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CreateAppMountInput {
+  name: string;
+  type: AppMountType;
+  source?: string;
+  target: string;
+  readOnly?: boolean;
+  content?: string | null;
+}
+
+export interface UpdateAppMountInput {
+  name?: string;
+  type?: AppMountType;
+  source?: string;
+  target?: string;
+  readOnly?: boolean;
+  content?: string | null;
+}
+
+export interface AppMountValidationResult {
+  valid: boolean;
+  error?: string;
+}
+
+type ListEnvelope<T> = { data?: T[] } | T[];
+
+function unwrapMountList<T>(body: ListEnvelope<T>): T[] {
+  return Array.isArray(body) ? body : body?.data ?? [];
+}
+
+function appMountBase(appId: string): string {
+  return `/apps/${encodeURIComponent(appId)}/mounts`;
+}
+
+export async function fetchAppMounts(appId: string): Promise<AppMount[]> {
+  const body = await fetchJSON<ListEnvelope<AppMount>>(appMountBase(appId));
+  return unwrapMountList(body);
+}
+
+export async function createAppMount(
+  appId: string,
+  input: CreateAppMountInput,
+): Promise<AppMount> {
+  return postJSON<AppMount>(appMountBase(appId), input);
+}
+
+export async function updateAppMount(
+  appId: string,
+  mountId: string,
+  input: UpdateAppMountInput,
+): Promise<AppMount> {
+  return patchJSON<AppMount>(`${appMountBase(appId)}/${encodeURIComponent(mountId)}`, input);
+}
+
+export async function deleteAppMount(
+  appId: string,
+  mountId: string,
+): Promise<{ ok: boolean }> {
+  return deleteJSON<{ ok: boolean }>(`${appMountBase(appId)}/${encodeURIComponent(mountId)}`);
+}
+
+/**
+ * Ask the backend to run the authoritative mount validation against a draft
+ * definition without persisting it, so the settings form can surface the exact
+ * rule a path or type violates (reserved target, disallowed bind prefix, etc.).
+ * Returns the validation message rather than throwing on an invalid draft.
+ */
+export async function validateAppMount(
+  appId: string,
+  input: CreateAppMountInput,
+): Promise<AppMountValidationResult> {
+  return postJSON<AppMountValidationResult>(`${appMountBase(appId)}/validate`, input);
+}

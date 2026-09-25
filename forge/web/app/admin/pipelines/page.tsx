@@ -40,6 +40,7 @@ import {
   AdminLoadingState,
   AdminErrorState,
 } from "@/components/admin/admin-ui";
+import { DashHeader } from "@/components/admin/dashboard-cards";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { formatDate, cn } from "@/lib/utils";
 import { API_BASE_URL } from "@/lib/api/http";
@@ -307,11 +308,19 @@ export default function AdminPipelinesPage() {
       </Card>
 
       {logRun && (
-        <Modal title={`Run ${logRun.id.slice(0, 8)}`} onClose={() => setLogRun(null)} wide description={logRun.pipelineName ? `${logRun.pipelineName} · ${logRun.status}` : logRun.status}>
-          <div className="flex flex-col gap-4">
+        <Modal title={`Run ${logRun.id.slice(0, 8)}`} onClose={() => setLogRun(null)} wide className="max-w-6xl" description={logRun.pipelineName ? `${logRun.pipelineName} · ${logRun.status}` : logRun.status}>
+          <div className="space-y-4">
+            <DashHeader
+              icon={Workflow}
+              eyebrow="Pipeline run"
+              title={`Run ${logRun.id.slice(0, 8)}`}
+              pill={{ tone: logRun.status === "completed" ? "green" : logRun.status === "failed" ? "red" : "yellow", label: logRun.status }}
+              description={logRun.pipelineName ?? undefined}
+              meta={artifacts.length > 0 ? [{ label: "Artifacts", value: String(artifacts.length) }] : undefined}
+            />
             {artifacts.length > 0 && (
               <div>
-                <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-500">Artifacts</h4>
+                <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Artifacts</h4>
                 <div className="flex flex-wrap gap-2">
                   {artifacts.map((a) => (
                     <a
@@ -327,7 +336,7 @@ export default function AdminPipelinesPage() {
               </div>
             )}
             <div>
-              <h4 className="mb-2 text-[11px] font-semibold uppercase tracking-widest text-slate-500">Logs</h4>
+              <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Logs</h4>
               {logsQuery.isLoading ? (
                 <AdminLoadingState label="Loading logs…" />
               ) : logs.length === 0 ? (

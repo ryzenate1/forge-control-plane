@@ -34,6 +34,11 @@ const (
 
 type JobStatus string
 
+// ErrNoJobHandler means nothing in this process is wired to run a job type. It
+// is reported by Dispatch rather than after the fact, so no caller can be told
+// their work was accepted when no worker will ever pick it up.
+var ErrNoJobHandler = errors.New("no handler registered for job type")
+
 const (
 	JobStatusPending   JobStatus = "pending"
 	JobStatusRunning   JobStatus = "running"
@@ -111,6 +116,15 @@ func (s *Service) RegisterHandler(jobType JobType, handler HandlerFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[jobType] = handler
+}
+
+// HasHandler reports whether something is actually wired to run this job type.
+// Callers consult it before telling a client their work was accepted.
+func (s *Service) HasHandler(jobType JobType) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.handlers[jobType]
+	return ok
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -222,6 +236,13 @@ func (s *Service) Dispatch(ctx context.Context, jobType JobType, serverID, nodeI
 }
 
 func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string, jobType JobType, serverID, nodeID string, payload any, priority int) (*Job, error) {
+	// Refuse at enqueue time rather than after the caller has been told their
+	// request was accepted. A job nobody handles only surfaces as "failed" once a
+	// worker picks it up, which is far too late: the client already holds a 202
+	// and an operation id for work that was never going to happen.
+	if !s.HasHandler(jobType) {
+		return nil, ErrNoJobHandler
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err

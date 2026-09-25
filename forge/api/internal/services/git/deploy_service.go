@@ -458,20 +458,47 @@ func ValidateRepoURL(repoURL string) error {
 
 func safeClonePath(target, tempBase string) (string, error) {
 	cleaned := filepath.Clean(target)
-	gitSourcesBase := filepath.Join(tempBase, "git-sources")
-	if !strings.HasPrefix(cleaned, gitSourcesBase) {
+	gitSourcesBase := filepath.Join(filepath.Clean(tempBase), "git-sources")
+	// Containment is compared path component by component. A bare string prefix
+	// test accepted "/tmp/git-sources-evil", which is a different directory.
+	if !pathIsUnder(cleaned, gitSourcesBase) {
 		return "", fmt.Errorf("clone path must be under %s", gitSourcesBase)
+	}
+	// The base has to be symlink-resolved as well. On macOS the temp dir sits
+	// behind a symlink (/var -> /private/var), so resolving only the candidate
+	// and comparing it against the unresolved base rejected every legitimate
+	// clone - and any other symlinked temp root behaves the same way.
+	if resolvedBase, err := filepath.EvalSymlinks(gitSourcesBase); err == nil {
+		gitSourcesBase = resolvedBase
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("resolve git-sources base: %w", err)
+	} else {
+		// The tree does not exist yet, so there is nothing to resolve on either
+		// side; the spelling check above stands on its own.
+		return cleaned, nil
 	}
 	resolved, err := filepath.EvalSymlinks(filepath.Dir(cleaned))
 	if err != nil && !os.IsNotExist(err) {
 		return "", fmt.Errorf("resolve clone parent: %w", err)
 	}
-	if err == nil {
-		if !strings.HasPrefix(resolved, gitSourcesBase) {
-			return "", fmt.Errorf("resolved clone parent %q escapes git-sources tree", resolved)
-		}
+	if err == nil && !pathIsUnder(resolved, gitSourcesBase) {
+		return "", fmt.Errorf("resolved clone parent %q escapes git-sources tree", resolved)
 	}
 	return cleaned, nil
+}
+
+// pathIsUnder reports whether child lies inside parent (equal counts as inside,
+// because the parent of a clone directory may legitimately be the git-sources
+// root itself), comparing cleaned path components rather than raw characters.
+func pathIsUnder(child, parent string) bool {
+	rel, err := filepath.Rel(filepath.Clean(parent), filepath.Clean(child))
+	if err != nil {
+		return false
+	}
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
 func resolveCommitSHA(ctx context.Context, dir string) (string, error) {

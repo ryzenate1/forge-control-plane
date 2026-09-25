@@ -280,15 +280,17 @@ export default function AdminFailoverPage() {
 
       {(showCreate || editingPolicy) && (
         <Modal title={showCreate ? "Create Failover Policy" : "Edit Failover Policy"} onClose={closeModal}>
+          <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Node ID" value={form.nodeId} onChange={(nodeId) => setForm({ ...form, nodeId })} placeholder="node_abc" required />
             <label className="flex items-center gap-2 pt-6 text-sm font-medium text-slate-300"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" /> Enabled</label>
             <Input label="Max Failures" type="number" value={String(form.maxFailures)} onChange={(value) => setForm({ ...form, maxFailures: Number(value) })} />
             <Input label="Failure Window (seconds)" type="number" value={String(form.failureWindowSec)} onChange={(value) => setForm({ ...form, failureWindowSec: Number(value) })} />
             <Input label="Cooldown (seconds)" type="number" value={String(form.cooldownSec)} onChange={(value) => setForm({ ...form, cooldownSec: Number(value) })} />
-            <div className="sm:col-span-2"><label className="mb-1.5 block text-sm font-medium text-slate-300">Action</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30" value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value as FailoverAction })}><option value="evacuate">Evacuate</option><option value="restart">Restart</option><option value="notify">Notify</option></select></div>
+            <div className="sm:col-span-2"><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Action</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30" value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value as FailoverAction })}><option value="evacuate">Evacuate</option><option value="restart">Restart</option><option value="notify">Notify</option></select></div>
           </div>
-          <p className="mt-2 text-xs text-slate-500">Backend: POST /admin/failover/policies creates, PUT /policies/:id updates, GET/:id and GET /policies/node/:nodeId wired via lookup cards. Crash endpoint POST /crash/:serverId/:nodeId wired.</p>
+          <p className="text-xs text-slate-400">Backend: POST /admin/failover/policies creates, PUT /policies/:id updates, GET/:id and GET /policies/node/:nodeId wired via lookup cards. Crash endpoint POST /crash/:serverId/:nodeId wired.</p>
+          </div>
           <ModalFooter onCancel={closeModal} onConfirm={() => showCreate ? createMutation.mutate() : updateMutation.mutate()} confirmLabel="Save" disabled={createMutation.isPending || updateMutation.isPending || !form.nodeId.trim() || form.maxFailures < 1 || form.failureWindowSec < 1 || form.cooldownSec < 1} />
         </Modal>
       )}

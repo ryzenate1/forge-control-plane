@@ -15,6 +15,7 @@ import (
 
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/services/acme"
+	composesvc "gamepanel/forge/internal/services/compose"
 	"gamepanel/forge/internal/services/domains"
 	"gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/services/trafficmanager"
@@ -28,13 +29,15 @@ var (
 	ErrNotDeploying            = errors.New("preview deployment is not in deploying status")
 	ErrAlreadyExists           = errors.New("active preview deployment already exists for this PR")
 	ErrOrgLimitReached         = errors.New("preview limit reached for this organization")
-	ErrSourceRequired           = errors.New("server_id and pr_number are required")
+	ErrSourceRequired          = errors.New("server_id and pr_number are required")
 	ErrWebhookSignatureMissing = git.ErrWebhookSignatureMissing
 	ErrWebhookSignatureInvalid = git.ErrWebhookSignatureInvalid
 )
 
-// Options configures lifecycle behavior. All values have env-backed defaults
-// applied in New (PREVIEW_DOMAIN, PREVIEW_TTL, PREVIEW_MAX_PER_ORG).
+// Options configures lifecycle behavior. Every field has a default applied in
+// New; callers are expected to pass what the environment already knows (the
+// binary reads config itself in cmd/api/main.go), so this package never reads
+// process environment directly.
 type Options struct {
 	// BaseDomain is the root domain previews are issued under; per-PR
 	// hostnames look like pr<Number>-<owner>-<repo>.<BaseDomain>.
@@ -45,6 +48,40 @@ type Options struct {
 	MaxPerOrg int
 	// RetainCleaned is how long cleaned_up rows are kept before deletion.
 	RetainCleaned time.Duration
+
+	// ---- project-scoped previews (preview_environments) ----
+
+	// PreviewDomain is the wildcard root project previews are issued under;
+	// hostnames look like <branch>-<project-slug>.<PreviewDomain>. Empty falls
+	// back to defaultPreviewDomain.
+	PreviewDomain string
+	// PreviewTTL bounds how long a project preview lives when it was created
+	// without an explicit expiry. Non-positive falls back to defaultPreviewTTL.
+	PreviewTTL time.Duration
+	// MaxPreviewsPerProject caps concurrent live previews per project. Negative
+	// is normalized to defaultMaxPreviewsPerProject; an explicit zero means
+	// "unlimited" so an operator can lift the cap without removing it.
+	MaxPreviewsPerProject int
+	// Compose is the compose lifecycle that actually runs previews. When it is
+	// set (and Deployer is not) previews are provisioned for real; when neither
+	// is set the preview surface reports ErrPreviewRuntimeUnavailable instead
+	// of recording rows that can never run.
+	Compose *composesvc.Service
+	// Deployer runs the real workload behind a preview. Injected directly by
+	// callers that do not use the compose lifecycle (tests, alternative
+	// runtimes); it takes precedence over Compose.
+	Deployer PreviewDeployer
+	// PreviewStore overrides preview_environments persistence. Nil uses the
+	// pool-backed store of the shared *store.Store.
+	PreviewStore PreviewEnvStore
+	// BackgroundContext anchors provisioning goroutines so process shutdown
+	// cancels them. Nil falls back to context.Background().
+	BackgroundContext context.Context
+	// Preview limits are handed to the deployer verbatim; zero means the compose
+	// service applies its own default rather than this package inventing one.
+	PreviewMemoryMB  int64
+	PreviewCPUShares int64
+	PreviewDiskMB    int64
 
 	Logger      *slog.Logger
 	Publisher   events.Publisher
@@ -57,15 +94,24 @@ type Options struct {
 }
 
 const (
-	defaultBaseDomain = "env.example.com"
-	defaultTTL        = 24 * time.Hour
-	defaultMaxPerOrg  = 10
-	defaultRetain     = 24 * time.Hour
+	defaultBaseDomain            = "env.example.com"
+	defaultTTL                   = 24 * time.Hour
+	defaultMaxPerOrg             = 10
+	defaultRetain                = 24 * time.Hour
+	defaultPreviewTTL            = 7 * 24 * time.Hour
+	defaultMaxPreviewsPerProject = 10
 )
 
 type Service struct {
 	store *store.Store
 	opts  Options
+
+	// previewsStore and deployer back the project-scoped preview surface
+	// (previews.go). Both are resolved in New and either may be nil, in which
+	// case that surface reports ErrPreviewRuntimeUnavailable rather than
+	// pretending a preview exists.
+	previewsStore PreviewEnvStore
+	deployer      PreviewDeployer
 }
 
 func New(s *store.Store, opts Options) *Service {
@@ -85,7 +131,29 @@ func New(s *store.Store, opts Options) *Service {
 	if opts.RetainCleaned <= 0 {
 		opts.RetainCleaned = defaultRetain
 	}
-	return &Service{store: s, opts: opts}
+
+	opts.PreviewDomain = strings.TrimPrefix(strings.TrimSpace(strings.ToLower(opts.PreviewDomain)), "*.")
+	if opts.PreviewTTL <= 0 {
+		opts.PreviewTTL = defaultPreviewTTL
+	}
+	if opts.MaxPreviewsPerProject < 0 {
+		opts.MaxPreviewsPerProject = defaultMaxPreviewsPerProject
+	}
+
+	svc := &Service{store: s, opts: opts}
+	// Defaults are resolved here rather than in the constructing caller, so the
+	// existing wiring (cmd/api/main.go) keeps compiling and still gains the
+	// project-scoped surface as soon as a compose service is handed over.
+	if svc.previewsStore = opts.PreviewStore; svc.previewsStore == nil {
+		svc.previewsStore = newPreviewEnvStore(s)
+	}
+	switch {
+	case opts.Deployer != nil:
+		svc.deployer = opts.Deployer
+	case opts.Compose != nil:
+		svc.deployer = composePreviewDeployer{lifecycle: opts.Compose}
+	}
+	return svc
 }
 
 // PreviewURL builds the per-PR canonical hostname.
@@ -349,19 +417,26 @@ func (s *Service) Destroy(ctx context.Context, id string) error {
 
 // ---- TLS / routing / DNS wiring ----
 
-// ensureBaseCertificate issues (or reuses) a certificate covering the base
-// domain. ACME is service-gated at the caller; unknown errors are returned so
-// Deploy can log and continue. Uses http-01 for the base host which works for
-// preview wildcards once the operator points DNS at the panel.
+// ensureBaseCertificate issues (or reuses) a certificate covering the legacy
+// preview base domain. ACME is service-gated at the caller; unknown errors are
+// returned so Deploy can log and continue.
 func (s *Service) ensureBaseCertificate(ctx context.Context) error {
-	if s.opts.AcmeService == nil {
+	return s.ensureCertificateForDomain(ctx, s.opts.BaseDomain)
+}
+
+// ensureCertificateForDomain issues (or reuses) a certificate for domain. ACME
+// is service-gated at the caller; unknown errors are returned so the caller can
+// log and continue. Uses http-01 for the apex host which works for preview
+// wildcards once the operator points DNS at the panel.
+func (s *Service) ensureCertificateForDomain(ctx context.Context, domain string) error {
+	if s.opts.AcmeService == nil || domain == "" {
 		return nil
 	}
 	existing, err := s.opts.AcmeService.ListCertificates(ctx, store.CertificateFilter{})
 	if err == nil {
 		for _, c := range existing {
 			for _, d := range c.Domains {
-				if strings.EqualFold(strings.TrimPrefix(d, "*."), s.opts.BaseDomain) {
+				if strings.EqualFold(strings.TrimPrefix(d, "*."), domain) {
 					return nil
 				}
 			}
@@ -370,7 +445,7 @@ func (s *Service) ensureBaseCertificate(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 120*time.Second)
 	defer cancel()
 	_, err = s.opts.AcmeService.IssueCertificate(ctx, acme.IssueCertificateRequest{
-		Domains:       []string{s.opts.BaseDomain},
+		Domains:       []string{domain},
 		Provider:      acme.ProviderLetsEncrypt,
 		Email:         "admin@localhost",
 		ChallengeType: acme.ChallengeTypeHTTP01,
@@ -470,6 +545,12 @@ func (s *Service) publish(ctx context.Context, eventType, resourceID string, pay
 // Options accessor used by the registrar for the UI config endpoint.
 func (s *Service) Config() (baseDomain string, ttl, retain time.Duration, maxPerOrg int) {
 	return s.opts.BaseDomain, s.opts.TTL, s.opts.RetainCleaned, s.opts.MaxPerOrg
+}
+
+// PreviewConfig exposes the project-scoped preview settings for the UI so the
+// panel shows the domain and lifetime previews actually use.
+func (s *Service) PreviewConfig() (domain string, ttl time.Duration, maxPerProject int) {
+	return s.PreviewBaseDomain(), s.opts.PreviewTTL, s.opts.MaxPreviewsPerProject
 }
 
 // resolveServerID finds the server a git source is linked to (via

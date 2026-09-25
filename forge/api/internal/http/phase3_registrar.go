@@ -102,8 +102,13 @@ func catalogRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config, svc *ca
 		}
 		ctx, cancel := longRequestContext()
 		defer cancel()
+		var actorID string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = claims.Sub
+		}
 		inst, err := svc.Provision(ctx, catalog.ProvisionInput{
 			Kind:          req.Kind,
+			UserID:        actorID,
 			Version:       req.Version,
 			EnvironmentID: req.EnvID,
 			NodeID:        req.NodeID,

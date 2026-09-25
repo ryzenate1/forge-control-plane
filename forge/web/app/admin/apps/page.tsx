@@ -183,13 +183,15 @@ export default function AdminAppsPage() {
 
       {deleteTarget && (
         <Modal title={`Delete ${deleteTarget.name}`} onClose={() => setDeleteTarget(null)}>
+          <div className="space-y-4">
           <p className="text-sm text-slate-300">
             Are you sure you want to delete <span className="font-semibold text-white">{deleteTarget.name}</span>?
             This action cannot be undone.
           </p>
           {deleteMut.error ? (
-            <p className="mt-3 text-sm text-red-400">{deleteMut.error.message}</p>
+            <p className="text-sm text-red-300">{deleteMut.error.message}</p>
           ) : null}
+          </div>
           <ModalFooter
             onCancel={() => setDeleteTarget(null)}
             onConfirm={() => deleteMut.mutate(deleteTarget.id)}

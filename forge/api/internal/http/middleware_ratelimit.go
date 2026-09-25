@@ -95,17 +95,57 @@ func (m *memRateLimiter) cleanup() {
 // right-most forwarded value so a caller-supplied left-most XFF entry cannot
 // rotate rate-limit keys.
 func ExtractClientIP(c *fiber.Ctx) string {
-	peer := strings.TrimSpace(c.IP())
-	peerIP := net.ParseIP(peer)
+	// c.IP() is deliberately not used to obtain the peer. When the app configures
+	// a proxy header, c.IP() returns an address parsed out of the request itself,
+	// so the value that decides whether proxy headers are trusted would itself be
+	// caller-controlled - a forged XFF entry could present itself as the trusted
+	// proxy and have the rest of that header believed. The socket peer is the
+	// only thing here the caller cannot choose.
+	return resolveClientIP(socketPeerIP(c), c.Get("X-Forwarded-For"), c.Get("X-Real-IP"))
+}
+
+// socketPeerIP returns the IP the connection actually arrived from, or nil when
+// there is no real peer to speak of (a synthetic test connection, for example).
+func socketPeerIP(c *fiber.Ctx) net.IP {
+	if c == nil {
+		return nil
+	}
+	ctx := c.Context()
+	if ctx == nil {
+		return nil
+	}
+	switch addr := ctx.RemoteAddr().(type) {
+	case *net.TCPAddr:
+		if addr != nil && addr.IP != nil {
+			return addr.IP
+		}
+	case *net.UDPAddr:
+		if addr != nil && addr.IP != nil {
+			return addr.IP
+		}
+	}
+	if ip := ctx.RemoteIP(); ip != nil && !ip.IsUnspecified() {
+		return ip
+	}
+	return nil
+}
+
+// resolveClientIP applies the trust decision to explicit inputs, separated from
+// the transport so the rules can be tested against a named peer instead of a
+// live socket.
+func resolveClientIP(peer net.IP, forwardedFor, realIP string) string {
+	peerStr := ""
+	if peer != nil {
+		peerStr = peer.String()
+	}
 	// Default-deny: private/loopback status alone is never sufficient to trust
 	// proxy headers. isTrustedProxy keeps the "metric" slog.Warn and sync.Once
 	// de-dupe for the unconfigured case.
-	if peerIP == nil || !isTrustedProxy(peerIP) {
-		return peer
+	if peer == nil || !isTrustedProxy(peer) {
+		return peerStr
 	}
-	xff := c.Get("X-Forwarded-For")
-	if xff != "" {
-		parts := strings.Split(xff, ",")
+	if forwardedFor != "" {
+		parts := strings.Split(forwardedFor, ",")
 		for index := len(parts) - 1; index >= 0; index-- {
 			candidate := strings.TrimSpace(parts[index])
 			if net.ParseIP(candidate) != nil {
@@ -113,11 +153,10 @@ func ExtractClientIP(c *fiber.Ctx) string {
 			}
 		}
 	}
-	xri := c.Get("X-Real-IP")
-	if net.ParseIP(strings.TrimSpace(xri)) != nil {
-		return strings.TrimSpace(xri)
+	if ip := net.ParseIP(strings.TrimSpace(realIP)); ip != nil {
+		return strings.TrimSpace(realIP)
 	}
-	return peer
+	return peerStr
 }
 
 func isTrustedIP(clientIP string, trustedIPs []string) bool {

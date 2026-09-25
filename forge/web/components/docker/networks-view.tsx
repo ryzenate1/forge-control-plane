@@ -147,7 +147,7 @@ function CreateNetworkModal({ onClose, onCreate, loading, error }: { onClose: ()
         {error && <Alert tone="error" title="Create failed">{error}</Alert>}
         <Input label="Network Name *" placeholder="my-network" value={name} onChange={setName} />
         <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-300">Driver</label>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Driver</label>
           <select className="ui-input" value={driver} onChange={(e) => setDriver(e.target.value)}>
             <option value="bridge">bridge</option>
             <option value="host">host</option>

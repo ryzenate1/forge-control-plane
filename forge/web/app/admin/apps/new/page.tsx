@@ -12,6 +12,7 @@ import {
   type AppType, type AppPort, type AppVolume, type CreateAppInput,
 } from "@/lib/api/apps";
 import { fetchNodes, fetchRegions } from "@/lib/api";
+import { validateCompose as validateComposeServer } from "@/lib/api/compose";
 import { AdminFormSection, AdminPageHeader, Btn, Card, CardHeader, Input, Pill, cn } from "@/components/admin/admin-ui";
 import { EnvVarEditor, PortMapper, VolumeEditor } from "@/components/admin/AdminAppsShared";
 import { Switch } from "@/components/ui/primitives";
@@ -103,6 +104,8 @@ export default function CreateAppPage() {
   const [templateConfirm, setTemplateConfirm] = useState<string | null>(null);
 
   const debouncedGitUrl = useDebounce(gitUrl, 400);
+  const debouncedCompose = useDebounce(composeContent, 600);
+  const [composeValidatorError, setComposeValidatorError] = useState("");
 
   const { data: templates = [] } = useQuery({
     queryKey: ["app-templates"],
@@ -130,13 +133,33 @@ export default function CreateAppPage() {
     }
   }, [composeFile]);
 
+  const composeCheckQ = useQuery({
+    queryKey: ["compose-validate", debouncedCompose],
+    queryFn: () => validateComposeServer(debouncedCompose),
+    enabled: sourceType === "compose" && debouncedCompose.trim().length > 50,
+    retry: false,
+    staleTime: 30_000,
+  });
+
   useEffect(() => {
-    if (sourceType === "compose" && composeContent.length > 50) {
-      validateCompose(composeContent);
-    } else {
+    if (sourceType !== "compose" || debouncedCompose.trim().length <= 50) {
       setComposeValidation(null);
+      setComposeValidatorError("");
+      return;
     }
-  }, [sourceType, composeContent]);
+    if (composeCheckQ.data) {
+      const errs = [
+        ...(composeCheckQ.data.errors ?? []).map((e) => (e.field ? `${e.field}: ${e.message}` : e.message)),
+        ...(composeCheckQ.data.warnings ?? []).map((w) => `Warning — ${w.field ? `${w.field}: ` : ""}${w.message}`),
+      ];
+      setComposeValidation({ valid: composeCheckQ.data.valid, errors: errs });
+      setComposeValidatorError("");
+    } else if (composeCheckQ.isError) {
+      // Validator unreachable: say so and don't block submit on an unknown.
+      setComposeValidation(null);
+      setComposeValidatorError(`Server validator unreachable (${(composeCheckQ.error as Error).message}) — content will be validated when the stack is created.`);
+    }
+  }, [sourceType, debouncedCompose, composeCheckQ.data, composeCheckQ.isError, composeCheckQ.error]);
 
   useEffect(() => {
     if (debouncedGitUrl && sourceType === "git") {
@@ -146,13 +169,6 @@ export default function CreateAppPage() {
       setGitUrlMessage("");
     }
   }, [debouncedGitUrl, sourceType]);
-
-  const validateCompose = (content: string) => {
-    const errors: string[] = [];
-    if (!/^\s*services\s*:/m.test(content)) errors.push("No 'services' section found");
-    if (!/^\s*services\s*:\s*\n\s+[a-zA-Z]/m.test(content)) errors.push("No services defined under 'services:'");
-    setComposeValidation({ valid: errors.length === 0, errors });
-  };
 
   const doValidateGitUrl = (url: string) => {
     const trimmed = url.trim();
@@ -543,9 +559,18 @@ export default function CreateAppPage() {
                   <Pill tone={composeValidation.valid ? "green" : "red"}>
                     {composeValidation.valid ? "Valid" : `${composeValidation.errors.length} issue${composeValidation.errors.length === 1 ? "" : "s"}`}
                   </Pill>
+                ) : composeCheckQ.isFetching ? (
+                  <Pill tone="neutral">Checking…</Pill>
                 ) : undefined}
               />
               <div className="space-y-4 p-4">
+                <div className="rounded-lg border border-white/[0.06] bg-white/[0.015] px-3 py-2 text-xs leading-5 text-slate-400">
+                  Creates an app of type Compose. For full stack lifecycle (logs, rollback, GitOps), create a{" "}
+                  <button type="button" onClick={() => router.push("/admin/compose/new")} className="underline hover:text-slate-200">
+                    Compose Stack
+                  </button>{" "}
+                  instead — same file, managed deployment surface.
+                </div>
                 <div>
                   <label className="mb-1.5 block text-sm font-medium text-slate-300">Upload compose file</label>
                   <input
@@ -575,6 +600,11 @@ export default function CreateAppPage() {
                 </div>
                 {fieldErrors.composeContent && (
                   <p className="text-xs text-red-400">{fieldErrors.composeContent}</p>
+                )}
+                {composeValidatorError && (
+                  <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.07] p-3 text-xs leading-5 text-amber-200">
+                    {composeValidatorError}
+                  </p>
                 )}
                 {composeValidation && !composeValidation.valid && (
                   <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">

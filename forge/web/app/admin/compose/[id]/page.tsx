@@ -431,7 +431,8 @@ function ComposeStackDetailContent() {
       </>
       )}
       {editingYaml && (
-        <Modal title="Edit Compose YAML — PATCH /compose/:id" onClose={() => setEditingYaml(false)} wide>
+        <Modal title="Edit Compose YAML" description="PATCH /compose/:id" onClose={() => setEditingYaml(false)} wide>
+          <div className="space-y-4">
           <textarea
             value={editYaml}
             onChange={(e) => setEditYaml(e.target.value)}
@@ -439,7 +440,8 @@ function ComposeStackDetailContent() {
             className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
             placeholder="services: ..."
           />
-          <p className="mt-2 text-[11px] text-slate-500">Wires <code className="font-mono">updateComposeStack</code> — PATCH /compose/:id with composeYaml</p>
+          <p className="text-xs text-slate-400">Wires <code className="font-mono">updateComposeStack</code> — PATCH /compose/:id with composeYaml</p>
+          </div>
           <ModalFooter
             onCancel={() => setEditingYaml(false)}
             onConfirm={() => updateMutation.mutate(editYaml)}

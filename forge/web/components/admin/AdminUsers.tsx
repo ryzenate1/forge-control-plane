@@ -7,6 +7,7 @@ import { type ApiUser, assignUserRoles, createUser, deleteUser, fetchRoles, fetc
 import { toast } from "@/components/ui/sonner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow, AdminSelect, AdminFormSection } from "./admin-ui";
+import { DashHeader } from "./dashboard-cards";
 import { Skeleton } from "@/components/ui/loading-skeleton";
 import { UserLimitsGrid } from "./user-limits";
 
@@ -269,7 +270,18 @@ export function AdminUsers() {
  </div>
 
   {selectedUser ? (
-  <Modal title="User Details" onClose={() => setSelectedUser(null)} wide>
+  <Modal title="User Details" description={selectedUser.email} onClose={() => setSelectedUser(null)} wide className="max-w-6xl">
+  <div className="space-y-4">
+  <DashHeader
+    icon={Users}
+    eyebrow="User account"
+    title={selectedUser.email}
+    pill={{ tone: selectedUser.role === "admin" ? "red" : "neutral", label: selectedUser.role }}
+    meta={[
+      { label: "Owned servers", value: String(ownedCount(selectedUser)) },
+      { label: "ID", value: <span key="id" className="font-mono">{selectedUser.id.slice(0, 8)}…</span> },
+    ]}
+  />
   <div className="grid gap-4 md:grid-cols-2" aria-busy={updateMut.isPending || deleteMut.isPending}>
   <AdminFormSection title="Account">
   <Input label="Email Address" value={editEmail} onChange={setEditEmail} type="email" />
@@ -278,12 +290,12 @@ export function AdminUsers() {
   </AdminFormSection>
   <AdminFormSection title="Owned Servers">
   <div className="rounded-lg border border-white/[0.06] bg-[var(--surface-input)] p-3 text-sm text-slate-300">
-  <p className="text-xs uppercase tracking-wide text-slate-500">Owned Servers</p>
+  <p className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Owned Servers</p>
   <p className="mt-1 text-2xl font-bold text-slate-100">{ownedCount(selectedUser)}</p>
   </div>
   </AdminFormSection>
   </div>
-  <div className="mt-4"><UserRoleAssignments userId={selectedUser.id} /></div>
+  <div><UserRoleAssignments userId={selectedUser.id} /></div>
   <AdminFormSection title="Resource Limits">
   <UserLimitsGrid
  serverLimit={eServerLimit} onServerLimit={setEServerLimit}
@@ -297,7 +309,8 @@ export function AdminUsers() {
  scheduleLimit={eScheduleLimit} onScheduleLimit={setEScheduleLimit}
   />
   </AdminFormSection>
-  <div className="mt-5 flex flex-wrap justify-between gap-2 border-t border-white/[0.06] pt-4" aria-busy={deleteMut.isPending || updateMut.isPending}>
+  </div>
+  <div className="-mx-6 -mb-5 mt-5 flex flex-wrap justify-between gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4" aria-busy={deleteMut.isPending || updateMut.isPending}>
   <Btn tone="danger" disabled={!ownershipKnown(selectedUser) || ownedCount(selectedUser) > 0 || deleteMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Delete user ${selectedUser.email}?`, description: `This user owns ${ownedCount(selectedUser)} server${ownedCount(selectedUser) === 1 ? "" : "s"} and will only be deleted if they own none. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(selectedUser.id); })(); }}>
   <Trash2 size={13} /> Delete
   </Btn>
@@ -311,7 +324,7 @@ export function AdminUsers() {
 
   {modal ? (
   <Modal title="Create User" onClose={() => setModal(false)}>
-  <div className="grid gap-4" aria-busy={createMut.isPending}>
+  <div className="space-y-4" aria-busy={createMut.isPending}>
   <AdminFormSection title="Account">
   <Input label="Email Address" value={email} onChange={setEmail} placeholder="user@example.com" type="email" />
   <Input label="Password" value={password} onChange={setPassword} placeholder="********" type="password" autoComplete="new-password" />
@@ -355,5 +368,5 @@ function UserRoleAssignments({ userId }: { userId: string }) {
   const assignMut = useMutation({ mutationFn: (roleKey: string) => assignUserRoles(userId, [roleKey]), onSuccess: refresh, onError: (e: Error) => toast.error(e.message || "Failed to assign role") });
   const removeMut = useMutation({ mutationFn: (roleKey: string) => removeUserRoles(userId, [roleKey]), onSuccess: refresh, onError: (e: Error) => toast.error(e.message || "Failed to remove role") });
   if (rolesQuery.isError || assignedQuery.isError) return <div className="flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-2 text-xs text-red-200"><span>Additional roles could not be loaded{rolesQuery.isError ? `: ${rolesQuery.error.message}` : assignedQuery.isError ? `: ${assignedQuery.error.message}` : ""}</span><Btn size="sm" tone="ghost" onClick={() => { void rolesQuery.refetch(); void assignedQuery.refetch(); }}>Retry</Btn></div>;
-  return <div className="rounded-lg border border-white/[0.06] bg-[var(--surface-input)] p-3"><p className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Additional Roles</p>{!Array.isArray(roles) || roles.length === 0 ? <p className="text-xs text-slate-400">No additional roles configured.</p> : <div className="flex flex-wrap gap-2">{Array.isArray(roles) && roles.map((role) => <label className="flex items-center gap-2 rounded border border-white/10 px-2 py-1 text-xs text-slate-300" key={role.id}><input type="checkbox" checked={assigned.has(role.key)} disabled={assignMut.isPending || removeMut.isPending} onChange={(event) => event.target.checked ? assignMut.mutate(role.key) : removeMut.mutate(role.key)}/>{role.name}</label>)}</div>}</div>;
+  return <div className="rounded-lg border border-white/[0.06] bg-[var(--surface-input)] p-3"><p className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Additional Roles</p>{!Array.isArray(roles) || roles.length === 0 ? <p className="text-xs text-slate-400">No additional roles configured.</p> : <div className="flex flex-wrap gap-2">{Array.isArray(roles) && roles.map((role) => <label className="flex items-center gap-2 rounded border border-white/10 px-2 py-1 text-xs text-slate-300" key={role.id}><input type="checkbox" checked={assigned.has(role.key)} disabled={assignMut.isPending || removeMut.isPending} onChange={(event) => event.target.checked ? assignMut.mutate(role.key) : removeMut.mutate(role.key)}/>{role.name}</label>)}</div>}</div>;
 }

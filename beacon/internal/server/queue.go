@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
@@ -13,6 +14,23 @@ import (
 	"github.com/google/uuid"
 	_ "github.com/mattn/go-sqlite3"
 )
+
+// journalTimeout bounds every command-journal statement. The journal is opened
+// with a single connection, and most writes happen while the queue mutex is
+// held, so an unbounded statement is not just a slow call: it parks every other
+// queue operation behind the mutex, including Shutdown, and a stalled disk or a
+// second process holding the file turns it into a daemon-wide hang. Failing
+// fast with an error is survivable; hanging forever is not.
+const journalTimeout = 15 * time.Second
+
+// shutdownGrace is how long Shutdown waits for running workers to notice
+// cancellation before journaling state anyway. A handler stuck in a runtime
+// call with no deadline must not prevent the daemon from exiting.
+const shutdownGrace = 30 * time.Second
+
+func journalContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), journalTimeout)
+}
 
 type OperationType string
 
@@ -124,7 +142,9 @@ func newOperationQueue(concurrency int, handler OperationHandler, db *sql.DB) *O
 }
 
 func (q *OperationQueue) loadJournal() error {
-	rows, err := q.db.Query(`SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at,
+	ctx, cancel := journalContext()
+	defer cancel()
+	rows, err := q.db.QueryContext(ctx, `SELECT id,COALESCE(command_id,''),server_id,type,status,error,created_at,started_at,completed_at,
 		COALESCE(ttl,0),COALESCE(progress,''),COALESCE(progress_pct,0),COALESCE(result_data,''),COALESCE(acknowledged,0)
 		FROM beacon_operations ORDER BY created_at`)
 	if err != nil {
@@ -433,7 +453,14 @@ func (q *OperationQueue) removeUnqueued(op *Operation) {
 		delete(q.serverOps, op.ServerID)
 	}
 	if q.db != nil {
-		_, _ = q.db.Exec(`DELETE FROM beacon_operations WHERE id = ? AND status = ?`, op.ID, string(StatusPending))
+		ctx, cancel := journalContext()
+		defer cancel()
+		// The in-memory entry is already gone, so a failed delete leaves a row the
+		// next start would treat as an unexecuted pending command and run. Say so
+		// rather than let a rejected command come back after a restart.
+		if _, err := q.db.ExecContext(ctx, `DELETE FROM beacon_operations WHERE id = ? AND status = ?`, op.ID, string(StatusPending)); err != nil {
+			log.Printf("beacon: could not withdraw queued operation %s from the journal: %v", op.ID, err)
+		}
 	}
 }
 
@@ -445,7 +472,9 @@ func (q *OperationQueue) persist(op *Operation) error {
 	if op.Acknowledged {
 		ackVal = 1
 	}
-	_, err := q.db.Exec(`INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at,ttl,progress,progress_pct,result_data,acknowledged)
+	ctx, cancel := journalContext()
+	defer cancel()
+	_, err := q.db.ExecContext(ctx, `INSERT INTO beacon_operations(id,command_id,server_id,type,status,error,created_at,started_at,completed_at,ttl,progress,progress_pct,result_data,acknowledged)
 		VALUES(?,NULLIF(?,''),?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,error=excluded.error,
 		started_at=excluded.started_at,completed_at=excluded.completed_at,
 		progress=excluded.progress,progress_pct=excluded.progress_pct,result_data=excluded.result_data,acknowledged=excluded.acknowledged`,
@@ -525,7 +554,16 @@ func (q *OperationQueue) Shutdown() {
 		cancel()
 	}
 	if started {
-		<-q.done
+		// Bounded, because a handler blocked in a runtime call that never notices
+		// cancellation would otherwise stop the daemon from ever shutting down. On
+		// timeout the state below is still journaled - an operation left running is
+		// recorded as pending and re-runs after restart, which is the same
+		// guarantee a crash gives.
+		select {
+		case <-q.done:
+		case <-time.After(shutdownGrace):
+			log.Printf("beacon: operation queue workers still running after %s; journaling state and closing", shutdownGrace)
+		}
 	}
 	q.mu.Lock()
 	for _, op := range q.operations {

@@ -157,8 +157,9 @@ export function AdminEndpoints() {
 
       {modal === "create" && (
         <Modal title="New Endpoint" onClose={() => setModal(null)}>
+          <div className="space-y-4">
           {formError && (
-            <div className="mb-3 flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/5 p-2.5 text-sm text-red-400">
+            <div className="flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/5 p-2.5 text-sm text-red-300">
               <AlertCircle size={14} /> {formError}
             </div>
           )}
@@ -180,6 +181,7 @@ export function AdminEndpoints() {
             </div>
             <Input label="URL" value={url} onChange={setUrl} placeholder="https://docker.example.com:2375" />
           </AdminFormSection>
+          </div>
           <ModalFooter
             onCancel={() => setModal(null)}
             onConfirm={() => createMut.mutate()}

@@ -149,7 +149,7 @@ export default function AdminDNSPage() {
             <p className="text-xs text-slate-400">Credentials are stored encrypted and used only for DNS-01 challenges.</p>
             {selectedSupported ? (
               <div className="space-y-3 rounded-lg border border-white/[0.06] bg-[var(--surface)] p-4">
-                <h5 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Credentials for {selectedSupported.name}</h5>
+                <h5 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Credentials for {selectedSupported.name}</h5>
                 {selectedSupported.credentialFields.map((field) => (
                   <Input
                     key={field.key}
@@ -162,7 +162,7 @@ export default function AdminDNSPage() {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-slate-500">Select a supported type to see credential fields, or type arbitrary keys.</p>
+              <p className="text-xs text-slate-400">Select a supported type to see credential fields, or type arbitrary keys.</p>
             )}
             {!selectedSupported && (
               <div className="space-y-2">

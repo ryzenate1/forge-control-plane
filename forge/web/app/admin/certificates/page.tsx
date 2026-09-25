@@ -185,11 +185,11 @@ export default function AdminCertificatesPage() {
 
       {showIssueModal && (
         <Modal title="Request Certificate (Let's Encrypt)" onClose={() => setShowIssueModal(false)}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input label="Domains" value={issueForm.domains} onChange={(v) => setIssueForm({ ...issueForm, domains: v })} placeholder="example.com, *.example.com" />
             <Input label="Contact Email" value={issueForm.email} onChange={(v) => setIssueForm({ ...issueForm, email: v })} placeholder="admin@example.com" />
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Challenge Type</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Challenge Type</label>
               <select
                 className="w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100 outline-none"
                 value={issueForm.challengeType}
@@ -202,7 +202,7 @@ export default function AdminCertificatesPage() {
             {issueForm.challengeType === "dns-01" && (
               <Input label="DNS Provider" value={issueForm.dnsProvider} onChange={(v) => setIssueForm({ ...issueForm, dnsProvider: v })} placeholder="cloudflare / route53 / gandi" />
             )}
-            <p className="text-xs text-slate-500">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
+            <p className="text-xs text-slate-400">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
           </div>
           <ModalFooter
             onCancel={() => setShowIssueModal(false)}
@@ -215,10 +215,10 @@ export default function AdminCertificatesPage() {
 
       {showUploadModal && (
         <Modal title="Upload Custom Certificate" onClose={() => setShowUploadModal(false)}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input label="Domain ID" value={uploadForm.domainId} onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Domain UUID" />
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Certificate (PEM)</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Certificate (PEM)</label>
               <textarea
                 className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={uploadForm.certificate}
@@ -227,7 +227,7 @@ export default function AdminCertificatesPage() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Private Key (PEM)</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Private Key (PEM)</label>
               <textarea
                 className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={uploadForm.privateKey}

@@ -76,7 +76,9 @@ import (
 	recoverysvc "gamepanel/forge/internal/services/recovery"
 	replicamanager "gamepanel/forge/internal/services/replicamanager"
 	"gamepanel/forge/internal/services/reservations"
+	"gamepanel/forge/internal/services/resourcelimits"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
+	scheduledtaskssvc "gamepanel/forge/internal/services/scheduledtasks"
 	"gamepanel/forge/internal/services/scheduler"
 	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
@@ -191,9 +193,14 @@ type Config struct {
 	AlertService                *alerting.Service
 	NotificationService         *notificationsvc.Service
 	EnhancedNotificationService *enhancednotifsvc.Service
-	CronJobService              *cronjobsvc.Service
-	ProcessService              *processsvc.Service
-	ZeroDowntimeSvc             *zerodowntime.Service
+	// NotificationRouter is the notifications engine (channels + subscriptions
+	// + templated fan-out). Previously the plural package was only reachable via
+	// the dormant enhanced service; the engine gives it a live wiring.
+	NotificationRouter   *enhancednotifsvc.Router
+	CronJobService       *cronjobsvc.Service
+	ScheduledTaskService *scheduledtaskssvc.Service
+	ProcessService       *processsvc.Service
+	ZeroDowntimeSvc      *zerodowntime.Service
 
 	ClusterMembershipService *clustermembership.Service
 	CleanupService           *cleanupsvc.Service
@@ -290,7 +297,7 @@ var (
 
 func checkLoginRateLimit(ctx context.Context, cfg Config, c *fiber.Ctx, email string) error {
 	keys := []string{
-		loginRateLimitKey("ip", c.IP()),
+		loginRateLimitKey("ip", ExtractClientIP(c)),
 		loginRateLimitKey("email", email),
 	}
 	if cfg.Redis != nil && cfg.RedisEnabled {
@@ -318,7 +325,7 @@ func checkLoginRateLimit(ctx context.Context, cfg Config, c *fiber.Ctx, email st
 
 func recordLoginFailure(ctx context.Context, cfg Config, c *fiber.Ctx, email string) {
 	keys := []string{
-		loginRateLimitKey("ip", c.IP()),
+		loginRateLimitKey("ip", ExtractClientIP(c)),
 		loginRateLimitKey("email", email),
 	}
 	if cfg.Redis != nil && cfg.RedisEnabled {
@@ -360,7 +367,7 @@ func recordLoginFailure(ctx context.Context, cfg Config, c *fiber.Ctx, email str
 
 func clearLoginFailures(ctx context.Context, cfg Config, c *fiber.Ctx, email string) {
 	keys := []string{
-		loginRateLimitKey("ip", c.IP()),
+		loginRateLimitKey("ip", ExtractClientIP(c)),
 		loginRateLimitKey("email", email),
 	}
 	if cfg.Redis != nil && cfg.RedisEnabled {
@@ -477,7 +484,7 @@ func recordUserSession(ctx context.Context, cfg Config, c *fiber.Ctx, token stri
 		return
 	}
 	sum := sha256.Sum256([]byte(claims.JTI))
-	_, _ = cfg.Store.CreateUserSession(ctx, claims.Sub, hex.EncodeToString(sum[:]), c.IP(), c.Get("User-Agent"), configuredTokenTTL(cfg))
+	_, _ = cfg.Store.CreateUserSession(ctx, claims.Sub, hex.EncodeToString(sum[:]), ExtractClientIP(c), c.Get("User-Agent"), configuredTokenTTL(cfg))
 }
 
 type CreateServerRequest struct {
@@ -1618,7 +1625,7 @@ func NewServer(cfg Config) *fiber.App {
 		}
 
 		if user.UseTOTP {
-			confToken, err := issue2FAConfirmationToken(cfg.AuthSecret, user.ID, c.IP(), c.Get("User-Agent"))
+			confToken, err := issue2FAConfirmationToken(cfg.AuthSecret, user.ID, ExtractClientIP(c), c.Get("User-Agent"))
 			if err != nil {
 				return fiber.NewError(fiber.StatusInternalServerError, "could not issue confirmation token")
 			}
@@ -1666,8 +1673,10 @@ func NewServer(cfg Config) *fiber.App {
 		}
 
 		// The confirmation token is bound to the IP/user agent it was issued
-		// to; replaying it from another client is rejected.
-		if claims.IP != "" && claims.IP != c.IP() {
+		// to; replaying it from another client is rejected. Both ends resolve the
+		// address the same way, otherwise the binding either never matches or
+		// matches whatever header the replaying client sends.
+		if claims.IP != "" && claims.IP != ExtractClientIP(c) {
 			return fiber.NewError(fiber.StatusUnauthorized, "confirmation token was issued to a different client")
 		}
 		if claims.UA != "" && claims.UA != truncateUserAgent(c.Get("User-Agent")) {
@@ -2182,6 +2191,59 @@ func NewServer(cfg Config) *fiber.App {
 		return c.JSON(fiber.Map{"ok": true, "id": crashID})
 	})
 
+	// remote.Post("/servers/:id/health") is the control-plane ingest seam for
+	// Beacon's post-deploy health probes: it records a HealthObservation through
+	// the resource-limits service so HealthStatus/ShouldRollback can gate a
+	// release. Beacon runs the probe; the observation store lives here, so this
+	// handler is a thin, node-authenticated forward into resourcelimits.Service.
+	remote.Post("/servers/:id/health", func(c *fiber.Ctx) error {
+		node, ok := c.Locals("remoteNode").(store.Node)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing node")
+		}
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		pool := cfg.Store.GetDB()
+		if pool == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "resource limits store is not configured")
+		}
+		var body struct {
+			Healthy      bool   `json:"healthy"`
+			Detail       string `json:"detail"`
+			ProcessType  string `json:"processType"`
+			ProcessType2 string `json:"process_type"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		// Accept both camelCase (the panel-facing twin) and snake_case (the
+		// daemon's convention) for the process type; it is required because a
+		// probe that names no process type cannot be attributed to a release.
+		processType := strings.TrimSpace(body.ProcessType)
+		if processType == "" {
+			processType = strings.TrimSpace(body.ProcessType2)
+		}
+		if processType == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "processType is required")
+		}
+		serverID := strings.TrimSpace(c.Params("id"))
+		if serverID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "server id is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		belongs, err := cfg.Store.ServerBelongsToNode(ctx, serverID, node.ID)
+		if err != nil || !belongs {
+			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		}
+		svc := resourcelimits.NewFromPool(pool)
+		if err := svc.ReportHealth(ctx, serverID, processType, body.Healthy, body.Detail); err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.JSON(fiber.Map{"ok": true})
+	})
+
 	// Additional /api/remote/* routes for daemon parity
 	// (cluster-wide activity, backup lifecycle, archive completion, transfer state).
 	registerRemoteExtras(remote, cfg)
@@ -2257,7 +2319,7 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		_ = cfg.ActivityService.NewEvent("http:"+c.Method()+" "+routePath).
 			Actor(actorID, actorEmail, "user").
-			IP(c.IP()).
+			IP(ExtractClientIP(c)).
 			Description(c.Method()+" "+c.OriginalURL()).
 			Save(c.Context(), cfg.ActivityService)
 		return herr
@@ -2409,6 +2471,9 @@ func NewServer(cfg Config) *fiber.App {
 	registerObservabilityRoutes(protected, cfg, cfg.Observability, cfg.HeartbeatMonitor)
 	registerAlertRoutes(protected, cfg.AlertService, cfg.Observability, mutationLimiter)
 	registerNotificationRoutes(protected, cfg.NotificationService, mutationLimiter)
+	// User-facing notifications engine routes. Registered before the enhanced
+	// admin-only registrar so /notifications/channels is the user-scoped list.
+	registerNotificationCrudRoutes(protected, cfg.NotificationRouter, mutationLimiter)
 	if cfg.EnhancedNotificationService != nil {
 		registerEnhancedNotificationRoutes(protected, cfg.EnhancedNotificationService, mutationLimiter)
 	}
@@ -2477,6 +2542,11 @@ func NewServer(cfg Config) *fiber.App {
 	// Cron job management
 	if cfg.CronJobService != nil {
 		registerCronJobRoutes(protected, cfg, cfg.CronJobService, mutationLimiter)
+	}
+
+	// Per-app scheduled tasks (cron-expression commands dispatched to Beacon)
+	if cfg.ScheduledTaskService != nil {
+		registerScheduledTaskRoutes(protected, cfg, cfg.ScheduledTaskService, mutationLimiter)
 	}
 
 	// Procfile process management

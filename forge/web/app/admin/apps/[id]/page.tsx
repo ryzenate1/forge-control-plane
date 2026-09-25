@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback, use, Suspense, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, use, Suspense, useMemo, type ReactNode } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -19,6 +19,7 @@ import {
   type ApiAppDetail, type AppDeployment,
 } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { DashHeader, InfoCard } from "@/components/admin/dashboard-cards";
 import { DeployStatusBadge, LogViewer, ResourceGauge, EnvVarEditor, PortMapper, VolumeEditor } from "@/components/admin/AdminAppsShared";
 import { formatDate, formatBytes } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -344,29 +345,28 @@ function DeploymentsTab({ appId }: { appId: string }) {
       </Card>
 
       {selected && (
-        <Modal title={`Deployment #${selected.revision}`} onClose={() => setSelected(null)} wide>
+        <Modal title={`Deployment #${selected.revision}`} description={selected.commitMessage ?? selected.status} onClose={() => setSelected(null)} wide className="max-w-6xl">
           <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4 text-sm">
-              <div>
-                <span className="text-slate-400">Status:</span>
-                <DeployStatusBadge status={selected.status} type="deployment" />
-              </div>
-              <div><span className="text-slate-400">Trigger:</span> <span className="text-slate-200">{selected.trigger}</span></div>
-              <div><span className="text-slate-400">Started:</span> <span className="text-slate-200">{formatDate(selected.startedAt)}</span></div>
-              <div><span className="text-slate-400">Completed:</span> <span className="text-slate-200">{formatDate(selected.completedAt)}</span></div>
-              {selected.commit && (
-                <div className="col-span-2">
-                  <span className="text-slate-400">Commit:</span>
-                  <span className="font-mono text-xs text-slate-200 ml-1">{selected.commit}</span>
-                </div>
-              )}
-              {selected.commitMessage && (
-                <div className="col-span-2">
-                  <span className="text-slate-400">Message:</span>
-                  <span className="text-slate-200 ml-1">{selected.commitMessage}</span>
-                </div>
-              )}
-            </div>
+            <DashHeader
+              icon={History}
+              eyebrow="App deployment"
+              title={`Deployment #${selected.revision}`}
+              pill={{ tone: selected.status === "completed" ? "green" : selected.status === "failed" ? "red" : selected.status === "pending" ? "neutral" : "yellow", label: selected.status }}
+              description={selected.commitMessage ?? undefined}
+              meta={[
+                { label: "Trigger", value: selected.trigger },
+                { label: "Started", value: formatDate(selected.startedAt) },
+                { label: "Completed", value: formatDate(selected.completedAt) },
+              ]}
+            />
+            <InfoCard icon={History} title="Deployment Information" rows={[
+              ["Status", <DeployStatusBadge key="st" status={selected.status} type="deployment" />],
+              ["Trigger", <span key="trig" className="text-slate-200">{selected.trigger}</span>],
+              ["Started", <span key="started" className="text-slate-200">{formatDate(selected.startedAt)}</span>],
+              ["Completed", <span key="done" className="text-slate-200">{formatDate(selected.completedAt)}</span>],
+              ...(selected.commit ? [["Commit", <span key="commit" className="font-mono text-slate-200">{selected.commit}</span>] as [string, ReactNode]] : []),
+              ...(selected.commitMessage ? [["Message", <span key="msg" className="text-slate-200">{selected.commitMessage}</span>] as [string, ReactNode]] : []),
+            ]} />
             {selected.error && (
               <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
                 {selected.error}
@@ -374,7 +374,7 @@ function DeploymentsTab({ appId }: { appId: string }) {
             )}
             {selected.log && (
               <div>
-                <p className="mb-2 text-xs font-semibold text-slate-400">Build/Deploy Log</p>
+                <p className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Build/Deploy Log</p>
                 <pre className="max-h-48 overflow-y-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-3 font-mono text-xs text-slate-400 whitespace-pre-wrap">
                   {selected.log}
                 </pre>

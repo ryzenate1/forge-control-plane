@@ -184,6 +184,7 @@ func sqliteCompatibleMigration(sql string) string {
 		"gen_random_uuid()", "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
 		"split_part(email, '@', 1)", "substr(email, 1, instr(email, '@') - 1)",
 		"CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')", "CHECK (length(slug) > 0)",
+		"CHECK (color ~ '^#[0-9a-fA-F]{6}$')", "CHECK (length(color) = 7)",
 		"::text", "", "::json", "",
 		"::textb", "",
 	)

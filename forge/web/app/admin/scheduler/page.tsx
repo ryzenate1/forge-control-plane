@@ -606,11 +606,11 @@ export default function AdminSchedulerPage() {
 
       {showCreateAffinity && (
         <Modal title="Create Affinity Rule" onClose={() => setShowCreateAffinity(false)}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input label="Label" value={affinityForm.label} onChange={(v) => setAffinityForm({ ...affinityForm, label: v })} placeholder="Co-locate cache nodes" />
             <Input label="Name" value={affinityForm.name} onChange={(v) => setAffinityForm({ ...affinityForm, name: v })} placeholder="cache-affinity" />
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
                 className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={affinityForm.type}
@@ -639,13 +639,14 @@ export default function AdminSchedulerPage() {
 
       {showCreateConstraint && (
         <Modal title="Add Constraint" onClose={() => setShowCreateConstraint(false)}>
-          <div className="mb-3 flex items-center gap-2 text-xs">
+          <div className="space-y-4">
+          <div className="flex items-center gap-2 text-xs text-slate-400">
             <label className="flex items-center gap-1"><input type="checkbox" checked={useBackendConstraintShape} onChange={(e) => setUseBackendConstraintShape(e.target.checked)} /> Use backend shape (required/preferred/forbidden + key)</label>
           </div>
           {useBackendConstraintShape ? (
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
                 <select className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100" value={constraintFormBackend.type} onChange={(e) => setConstraintFormBackend({ ...constraintFormBackend, type: e.target.value as ConstraintBackend["type"] })}>
                   <option value="required">required</option>
                   <option value="preferred">preferred</option>
@@ -654,7 +655,7 @@ export default function AdminSchedulerPage() {
               </div>
               <Input label="Key" value={constraintFormBackend.key} onChange={(v) => setConstraintFormBackend({ ...constraintFormBackend, key: v })} placeholder="region | node_id | name" />
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Operator</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Operator</label>
                 <select className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100" value={constraintFormBackend.operator} onChange={(e) => setConstraintFormBackend({ ...constraintFormBackend, operator: e.target.value })}>
                   <option value="eq">eq</option>
                   <option value="neq">neq</option>
@@ -673,7 +674,7 @@ export default function AdminSchedulerPage() {
                 Enabled
               </label>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Type (maps to key)</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type (maps to key)</label>
                 <select
                   className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                   value={constraintFormUI.type}
@@ -687,7 +688,7 @@ export default function AdminSchedulerPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-300 mb-1.5">Operator</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Operator</label>
                 <select
                   className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                   value={constraintFormUI.operator}
@@ -703,8 +704,9 @@ export default function AdminSchedulerPage() {
               <Input label="Value" value={constraintFormUI.value} onChange={(v) => setConstraintFormUI({ ...constraintFormUI, value: v })} placeholder="80" />
             </div>
           )}
-          <div className="mt-2 text-xs text-slate-400">Will PUT full array to /admin/scheduler/constraints (backend expects []Constraint). Legacy single POST was 400.</div>
-          {createConstraintMutation.isError && <p className="text-xs text-red-400">{createConstraintMutation.error instanceof Error ? createConstraintMutation.error.message : "Create failed"}</p>}
+          <div className="text-xs text-slate-400">Will PUT full array to /admin/scheduler/constraints (backend expects []Constraint). Legacy single POST was 400.</div>
+          {createConstraintMutation.isError && <p className="text-sm text-red-300">{createConstraintMutation.error instanceof Error ? createConstraintMutation.error.message : "Create failed"}</p>}
+          </div>
           <ModalFooter
             onCancel={() => setShowCreateConstraint(false)}
             onConfirm={() => createConstraintMutation.mutate()}

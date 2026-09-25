@@ -3,7 +3,8 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
-import { listSourceDeployments, createSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, listGitProviders, type SourceDeployment, type GitProvider } from "@/lib/api/source-deployments";
+import { listSourceDeployments, createSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, type SourceDeployment } from "@/lib/api/source-deployments";
+import { listGitProviderTokens, type GitProviderToken } from "@/lib/api/git-admin";
 import { Plus, Play, XCircle, Trash2, GitBranch, CheckCircle, Loader2, Clock, AlertTriangle } from "lucide-react";
 import Link from "next/link";
 import { AdminFormSection, AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader } from "@/components/admin/admin-ui";
@@ -58,8 +59,8 @@ export default function SourceDeploymentsPage() {
   });
 
   const { data: providers } = useQuery({
-    queryKey: ["gitProviders"],
-    queryFn: listGitProviders,
+    queryKey: ["git-providers"],
+    queryFn: listGitProviderTokens,
   });
 
   const safeDeployments = useMemo(() => Array.isArray(deployments) ? deployments : [], [deployments]);
@@ -184,8 +185,8 @@ export default function SourceDeploymentsPage() {
                     onChange={(e) => setForm({ ...form, gitProviderId: e.target.value })}
                   >
                     <option value="">None</option>
-                    {safeProviders.map((p: GitProvider) => (
-                      <option key={p.id} value={p.id}>{p.username || p.name} ({p.type})</option>
+                    {safeProviders.map((p: GitProviderToken) => (
+                      <option key={p.id} value={p.id}>{p.username || p.providerName} ({p.provider})</option>
                     ))}
                   </select>
                 </div>

@@ -453,7 +453,15 @@ func (s *Service) ResumeDeployments(ctx context.Context) error {
 		deployment := toServiceDeployment(d)
 		if deployment.TimeoutAt != nil && time.Now().UTC().After(*deployment.TimeoutAt) {
 			now := time.Now().UTC()
-			_ = s.store.UpdateDeploymentFailure(ctx, d.ID, d.Version, "deployment timed out during API restart")
+			// The database write decides whether this deployment failed. Marking it
+			// failed in memory and publishing the event anyway told the UI and every
+			// subscriber an outcome the authority had not accepted, while the row
+			// stayed in progress - the next resume would then announce it a second time.
+			if err := s.store.UpdateDeploymentFailure(ctx, d.ID, d.Version, "deployment timed out during API restart"); err != nil {
+				slog.Error("resume: could not fail timed-out deployment, leaving it in progress",
+					"deploymentId", d.ID, "version", d.Version, "error", err.Error())
+				continue
+			}
 			deployment.Status = StatusFailed
 			deployment.Error = "deployment timed out during API restart"
 			deployment.UpdatedAt = now
@@ -521,7 +529,12 @@ func (s *Service) resumeFromStep(ctx context.Context, deploymentID string) error
 			startIndex = i
 
 			if step.Status == string(StepStatusRunning) {
-				_ = s.store.UpdateDeploymentStepStatus(ctx, step.ID, string(StepStatusPending), "")
+				// Best-effort: the step is re-run either way, but a failed reset means
+				// the audit trail still shows it running while this pass re-executes it.
+				if err := s.store.UpdateDeploymentStepStatus(ctx, step.ID, string(StepStatusPending), ""); err != nil {
+					slog.Warn("resume: could not reset running step to pending, re-running it anyway",
+						"stepId", step.ID, "error", err.Error())
+				}
 
 				if step.StepName == StepInit && deployment.CurrentRevisionID != nil {
 					_ = s.markStepCompleted(ctx, step.ID)
@@ -612,7 +625,13 @@ func (s *Service) CleanupFailedDeployments(ctx context.Context, olderThan time.D
 			if !d.CleanupOnFailure {
 				continue
 			}
-			_ = s.store.DeleteDeployment(ctx, d.ID)
+			// Counting a row that failed to delete would report more cleanup than
+			// actually happened, and the next sweep would count it again.
+			if err := s.store.DeleteDeployment(ctx, d.ID); err != nil {
+				slog.Warn("deployment cleanup: could not delete old deployment",
+					"deploymentId", d.ID, "error", err.Error())
+				continue
+			}
 			count++
 		}
 	}

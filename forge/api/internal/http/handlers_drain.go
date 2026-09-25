@@ -13,19 +13,20 @@ import (
 // passively mirrors clustermembership's drain/evacuation events into the
 // drain_states table (migration 191) so progress survives restarts.
 //
-// Deliberately non-conflicting: clustermembership already owns the per-node
-// begin/cancel/status routes (/nodes/:id/drain POST/GET, /nodes/:id/drain/cancel).
-// Those keep orchestrating drains. The ledger adds only a fleet-wide listing and
-// a per-node progress view on distinct paths, so both can coexist with no
-// shadowing. Reads are node-scoped admin reads; the ledger records, never drives,
-// so there are no mutations here.
+// Mounted on its own /drain-ledger group rather than under /nodes: the admin
+// router registers GET /nodes/:id, which greedily matches /nodes/drain and would
+// otherwise shadow the aggregate listing as "node not found". clustermembership
+// keeps the per-node begin/cancel/status routes (/nodes/:id/drain, .../cancel);
+// the ledger only records and reads, so there is no mutation or collision here.
 func registerDrainRoutes(protected fiber.Router, cfg Config, svc *drainsvc.Service) {
 	if svc == nil {
 		return
 	}
 
-	// Fleet-wide drain ledger listing. No existing route owns /nodes/drain.
-	protected.Get("/nodes/drain", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
+	ledger := protected.Group("/drain-ledger", requireAdminScope("nodes.read"))
+
+	// Fleet-wide drain ledger listing.
+	ledger.Get("", func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		states, err := svc.List(ctx)
@@ -38,10 +39,9 @@ func registerDrainRoutes(protected fiber.Router, cfg Config, svc *drainsvc.Servi
 		return c.JSON(fiber.Map{"data": states})
 	})
 
-	// Per-node durable progress. Uses /drain/progress to avoid clobbering the
-	// clustermembership GET /nodes/:id/drain status endpoint.
-	protected.Get("/nodes/:id/drain/progress", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		nodeID := strings.TrimSpace(c.Params("id"))
+	// Per-node durable progress.
+	ledger.Get("/:nodeId", func(c *fiber.Ctx) error {
+		nodeID := strings.TrimSpace(c.Params("nodeId"))
 		if nodeID == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "node id is required")
 		}

@@ -55,7 +55,7 @@ func registerPasswordResetRoutes(v1 fiber.Router, cfg Config, authLimiter fiber.
 		sum := sha256.Sum256([]byte(plain))
 		tokenHash := hex.EncodeToString(sum[:])
 		resetURL := strings.TrimRight(cfg.PanelURL, "/") + "/reset-password#token=" + url.QueryEscape(plain) + "&email=" + url.QueryEscape(email)
-		if _, err := cfg.Store.EnqueuePasswordReset(ctx, email, tokenHash, 30*time.Minute, c.IP(), resetURL); err != nil {
+		if _, err := cfg.Store.EnqueuePasswordReset(ctx, email, tokenHash, 30*time.Minute, ExtractClientIP(c), resetURL); err != nil {
 			return passwordResetMailUnavailable(c)
 		}
 		// Unknown accounts intentionally receive the same accepted response. A

@@ -106,6 +106,10 @@ func TestFailedJobUsesRetryUpdateInsteadOfDuplicateInsert(t *testing.T) {
 func TestDispatchIdempotentUsesStableOperationID(t *testing.T) {
 	store := newMemoryStore()
 	service := New(store, 1)
+	// Dispatch now requires a handler for the job type, so that a caller can
+	// never be told a job was accepted when nothing will run it. Register the
+	// no-op this test needs before exercising ID stability.
+	service.RegisterHandler(JobServerRestart, func(context.Context, *Job) error { return nil })
 	first, err := service.DispatchIdempotent(context.Background(), "request-1", JobServerRestart, "srv", "", nil, 0)
 	if err != nil {
 		t.Fatal(err)

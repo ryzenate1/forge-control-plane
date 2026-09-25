@@ -3,8 +3,8 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, AlertCircle, AlertTriangle, ChevronRight, Cpu, Database, Eye, EyeOff, Globe, History, Layers, GitCompare, KeyRound, Lock, Mail,
-  Network, Plus, Search, Settings as SettingsIcon, Shield, Trash2, Unlock, Wrench, Zap,
+  Activity, AlertCircle, AlertTriangle, ChevronRight, Cpu, Database, Eye, EyeOff, Globe, HardDrive, History, Layers, GitCompare, KeyRound, Lock, Mail,
+  MemoryStick, Network, Plus, Search, Server, Settings as SettingsIcon, Shield, Trash2, Unlock, Wrench, Zap,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -18,7 +18,9 @@ import { fetchCapability, fetchCapabilityDelta, fetchCapabilityHistory, probeCap
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { copySecret } from "@/lib/clipboard";
-import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, SectionHeader, Textarea, cn, Pill, AdminLoadingState, AdminErrorState } from "./admin-ui";
+import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn, Pill, AdminLoadingState, AdminErrorState } from "./admin-ui";
+import { DashHeader, InfoCard, KpiGrid, QuickActionsCard, type KpiDatum, type QuickAction } from "./dashboard-cards";
+import { chart } from "@/lib/design-tokens";
 
 type Tab = "about" | "settings" | "configuration" | "allocation" | "servers" | "capabilities";
 
@@ -265,12 +267,33 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
     );
   }
 
+  const nodeState: { tone: "neutral" | "yellow"; label: string } =
+    node.maintenanceMode ? { tone: "yellow", label: "Maintenance" }
+    : node.desiredState === "draining" || node.draining ? { tone: "yellow", label: "Draining" }
+    : { tone: "neutral", label: "Active" };
+
   return (
-    <Modal title={node.name} onClose={onClose} wide>
-      <div className="space-y-6">
-        <div className="flex justify-end"><Btn tone="danger" size="sm" type="button" disabled={deleteMut.isPending} onClick={requestDelete}><Trash2 size={14} /> {deleteMut.isPending ? "Deleting…" : "Delete Node"}</Btn></div>
+    <Modal title={node.name} description="Inspect capacity and manage this host." onClose={onClose} wide className="max-w-6xl">
+      <div className="space-y-4">
+        <DashHeader
+          icon={Server}
+          eyebrow="Compute node"
+          title={node.name}
+          pill={nodeState}
+          description={node.description ?? undefined}
+          tags={[node.schedulerType ?? "docker", node.runtimeProvider].filter((t): t is string => Boolean(t))}
+          meta={[
+            { label: "FQDN", value: <span key="fqdn" className="font-mono">{node.fqdn ?? "—"}</span> },
+            { label: "Daemon", value: <span key="daemon" className="font-mono">{node.daemonListen ?? "9090"} / {node.daemonSftp ?? "2022"}</span> },
+            { label: "Visibility", value: node.public ?? node.isPublic ? "Public" : "Private" },
+            { label: "Memory cap", value: <span key="mem" className="font-mono">{node.memoryMb != null ? `${node.memoryMb.toLocaleString()} MiB` : "—"}</span> },
+          ]}
+          actions={(
+            <Btn tone="danger" size="sm" type="button" disabled={deleteMut.isPending} onClick={requestDelete}><Trash2 size={14} /> {deleteMut.isPending ? "Deleting…" : "Delete Node"}</Btn>
+          )}
+        />
         <AdminTabs tabs={ADMIN_TABS} active={tab} onChange={(id) => setTab(id as Tab)} label="Node sections" />
-        {tab === "about" && <NodeAboutTab nodeId={nodeId} />}
+        {tab === "about" && <NodeAboutTab nodeId={nodeId} setTab={setTab} />}
         {tab === "settings" && <NodeSettingsTab node={node} />}
         {tab === "configuration" && <NodeConfigurationTab node={node} />}
         {tab === "allocation" && <NodeAllocationTab node={node} allocations={allocations} />}
@@ -282,8 +305,8 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
   );
 }
 
-function NodeAboutTab({ nodeId }: { nodeId: string }) {
-  const { data: lifecycle, isError: isLifecycleError } = useQuery({
+function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => void }) {
+  const { data: lifecycle, isError: isLifecycleError, isLoading: isLifecycleLoading } = useQuery({
     queryKey: ["node-lifecycle", nodeId],
     queryFn: () => fetchNodeLifecycle(nodeId),
     refetchInterval: 10_000,
@@ -300,166 +323,121 @@ function NodeAboutTab({ nodeId }: { nodeId: string }) {
   });
   const filteredServers = useMemo(() => Array.isArray(serversQuery.data) ? serversQuery.data : [], [serversQuery.data]);
 
-  return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <div className="lg:col-span-2 space-y-4">
-        {serversQuery.isError ? (
-          <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-            <span>Could not load servers on this node: {serversQuery.error.message}</span>
-            <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
-          </div>
-        ) : null}
-        <Card>
-          <CardHeader title="Information" icon={Activity} />
-          <ul className="divide-y divide-white/[0.04]">
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Daemon Version</span>
-              <span className="font-mono text-slate-200" data-attr="info-version">{sys?.version ?? (isError ? "Offline" : "Probing…")}</span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">System</span>
-              <span className="font-mono text-slate-200" data-attr="info-system">
-                {sys ? `${sys.os ?? "?"} (${sys.architecture ?? "?"})` : "—"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">CPU Threads</span>
-              <span className="font-mono text-slate-200" data-attr="info-cpus">{sys?.cpuThreads ?? "—"}</span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Docker</span>
-              <span className={cn("font-mono", sys?.dockerAvailable ? "text-emerald-400" : "text-red-400")}>
-                {sys?.dockerStatus ?? "unknown"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">FQDN</span>
-              <span className="font-mono text-slate-200">{node?.fqdn ?? "—"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Runtime / scheduler</span>
-              <span className="text-right font-mono text-slate-200">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Beacon version</span>
-              <span className="text-right font-mono text-slate-200">{sys?.version ?? node?.version ?? "Not reported"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Last seen</span>
-              <span className="text-right font-mono text-slate-200">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Labels</span>
-              <span className="max-w-[60%] text-right font-mono text-xs text-slate-200">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Desired state</span>
-              <span className="text-right font-mono text-slate-200 capitalize">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Daemon ports</span>
-              <span className="text-right font-mono text-slate-200">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Behind proxy</span>
-              <span className="text-right font-mono text-slate-200">{node?.behindProxy ? "Yes" : "No"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Public</span>
-              <span className="text-right font-mono text-slate-200">{node?.public ?? node?.isPublic ? "Yes" : "No"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Public hostname</span>
-              <span className="text-right font-mono text-slate-200">{node?.publicHostname || "—"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Display name</span>
-              <span className="text-right font-mono text-slate-200">{node?.displayName || "—"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Scheduler</span>
-              <span className="text-right font-mono text-slate-200 capitalize">{node?.schedulerType ?? "docker"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Upload limit</span>
-              <span className="text-right font-mono text-slate-200">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : "Default"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Memory overallocation</span>
-              <span className="text-right font-mono text-slate-200">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : "0%"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Disk overallocation</span>
-              <span className="text-right font-mono text-slate-200">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : "0%"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">CPU overallocation</span>
-              <span className="text-right font-mono text-slate-200">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : "0%"}</span>
-            </li>
-            <li className="flex justify-between gap-4 px-4 py-3 text-sm">
-              <span className="text-slate-400">Tags</span>
-              <span className="text-right font-mono text-xs text-slate-200">{node?.tags?.length ? node.tags.join(", ") : "None"}</span>
-            </li>
-          </ul>
-        </Card>
-        <Card>
-          <CardHeader title="Lifecycle" icon={Activity} />
-          <ul className="divide-y divide-white/[0.04]">
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Readiness</span>
-              <span className={cn("font-mono", lifecycle?.placementEligible ? "text-emerald-400" : "text-amber-400")}>
-                {lifecycle ? `${lifecycle.healthScore.total}/100` : isLifecycleError ? "Unavailable" : "Loading…"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Actual State / Heartbeat</span>
-              <span className="font-mono text-slate-200 capitalize">
-                {lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : "—"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Placement</span>
-              <span className={cn("font-mono", lifecycle?.placementEligible ? "text-emerald-400" : "text-amber-400")}>
-                {lifecycle?.placementEligible ? "Eligible" : lifecycle?.placementBlockedReason ?? "Not eligible"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Capacity (allocated / available)</span>
-              <span className="font-mono text-slate-200">
-                {lifecycle ? `${lifecycle.capacity.allocated_memory} / ${lifecycle.capacity.available_memory} MiB memory · ${lifecycle.capacity.allocated_disk} / ${lifecycle.capacity.available_disk} MiB disk` : "—"}
-              </span>
-            </li>
-            <li className="flex justify-between px-4 py-3 text-sm">
-              <span className="text-slate-400">Allocated CPU / Servers</span>
-              <span className="font-mono text-slate-200">
-                {lifecycle ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} available · ${lifecycle.capacity.server_count} servers` : "—"}
-              </span>
-            </li>
-          </ul>
-        </Card>
-        {node?.description && (
-          <Card>
-            <CardHeader title="Description" icon={Mail} />
-            <pre className="px-4 py-3 text-xs text-slate-300 whitespace-pre-wrap">{node.description}</pre>
-          </Card>
-        )}
-      </div>
-      <div className="space-y-3">
-        <SmallBox tone={node?.maintenanceMode ? "warning" : "neutral"} label="Maintenance" value={node?.maintenanceMode ? "Enabled" : "Normal"} />
-        <SmallBox tone="neutral" label="Total Servers" value={String(filteredServers.length)} />
-        <SmallBox tone="neutral" label="Memory Limit" value={`${node?.memoryMb ?? 0} MiB`} />
-        <SmallBox tone="neutral" label="Disk Limit" value={`${node?.diskMb ?? 0} MiB`} />
-      </div>
-    </div>
-  );
-}
+  const cap = lifecycle?.capacity;
+  const memTotal = (cap?.allocated_memory ?? 0) + (cap?.available_memory ?? 0);
+  const memPct = cap && memTotal > 0 ? (cap.allocated_memory / memTotal) * 100 : null;
+  const diskTotal = (cap?.allocated_disk ?? 0) + (cap?.available_disk ?? 0);
+  const diskPct = cap && diskTotal > 0 ? (cap.allocated_disk / diskTotal) * 100 : null;
+  const score = lifecycle?.healthScore.total;
 
-function SmallBox({ tone, label, value }: { tone: "neutral" | "warning"; label: string; value: string }) {
-  const map: Record<string, string> = { neutral: "border-white/[0.08] bg-white/[0.02] text-slate-100", warning: "border-amber-500/30 bg-amber-500/[0.08] text-amber-100" };
+  const kpis: KpiDatum[] = [
+    { key: "servers", title: "Servers", icon: Layers, color: chart.sky, iconClass: "text-sky-400", valueClass: "text-sky-300",
+      value: serversQuery.isLoading ? null : String(filteredServers.length),
+      sub: serversQuery.isLoading ? "…" : "on this node" },
+    { key: "memory", title: "Memory allocated", icon: MemoryStick, color: chart.violet, iconClass: "text-purple-400", valueClass: "text-purple-300",
+      value: memPct != null ? `${memPct.toFixed(1)}%` : null,
+      sub: cap ? `${cap.allocated_memory} / ${memTotal} MiB` : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(cap), bar: memPct },
+    { key: "disk", title: "Disk allocated", icon: HardDrive, color: chart.lightOrange, iconClass: "text-orange-400", valueClass: "text-orange-300",
+      value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
+      sub: cap ? `${cap.allocated_disk} / ${diskTotal} MiB` : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(cap), bar: diskPct },
+    { key: "readiness", title: "Readiness", icon: Activity, color: chart.lightEmerald, iconClass: "text-emerald-400", valueClass: "text-emerald-300",
+      value: typeof score === "number" ? `${score}/100` : null,
+      sub: lifecycle ? (lifecycle.placementEligible ? "Eligible" : lifecycle.placementBlockedReason ?? "Not eligible") : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(lifecycle), bar: typeof score === "number" ? score : null },
+  ];
+
+  const quickActions: QuickAction[] = [
+    { label: "Servers", hint: "Workloads on node", icon: Layers, onSelect: () => setTab("servers") },
+    { label: "Allocations", hint: "Addresses & ports", icon: Network, onSelect: () => setTab("allocation") },
+    { label: "Capabilities", hint: "Probes & deltas", icon: Shield, onSelect: () => setTab("capabilities") },
+    { label: "Settings", hint: "Name & limits", icon: SettingsIcon, onSelect: () => setTab("settings") },
+  ];
+
   return (
-    <div className={cn("rounded-xl border p-4", map[tone])}>
-      <div className="text-[10px] font-bold uppercase tracking-widest opacity-70">{label}</div>
-      <div className="mt-1 text-lg font-bold">{value}</div>
+    <div className="space-y-4">
+      {serversQuery.isError ? (
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <span>Could not load servers on this node: {serversQuery.error.message}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
+        </div>
+      ) : null}
+      <KpiGrid kpis={kpis} />
+
+      <div className="grid gap-4 xl:grid-cols-5">
+        <InfoCard wide icon={Activity} title="Information" rows={[
+          ["Daemon Version", <span key="v" className="font-mono text-slate-200">{sys?.version ?? (isError ? "Offline" : "Probing…")}</span>],
+          ["System", <span key="sys" className="font-mono text-slate-200">{sys ? `${sys.os ?? "?"} (${sys.architecture ?? "?"})` : "—"}</span>],
+          ["CPU Threads", <span key="cpu" className="font-mono text-slate-200">{sys?.cpuThreads ?? "—"}</span>],
+          ["Docker", <span key="docker" className={cn("font-mono", sys?.dockerAvailable ? "text-emerald-400" : "text-red-400")}>{sys?.dockerStatus ?? "unknown"}</span>],
+          ["FQDN", <span key="fqdn" className="font-mono text-slate-200">{node?.fqdn ?? "—"}</span>],
+          ["Runtime / scheduler", <span key="rt" className="font-mono text-slate-200">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>],
+          ["Beacon version", <span key="bv" className="font-mono text-slate-200">{sys?.version ?? node?.version ?? "Not reported"}</span>],
+          ["Last seen", <span key="seen" className="font-mono text-slate-200">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>],
+          ["Labels", <span key="labels" className="font-mono text-xs text-slate-200">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>],
+          ["Desired state", <span key="ds" className="font-mono capitalize text-slate-200">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>],
+          ["Daemon ports", <span key="ports" className="font-mono text-slate-200">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>],
+          ["Behind proxy", <span key="proxy" className="font-mono text-slate-200">{node?.behindProxy ? "Yes" : "No"}</span>],
+          ["Public", <span key="pub" className="font-mono text-slate-200">{node?.public ?? node?.isPublic ? "Yes" : "No"}</span>],
+          ["Public hostname", <span key="ph" className="font-mono text-slate-200">{node?.publicHostname || "—"}</span>],
+          ["Display name", <span key="dn" className="font-mono text-slate-200">{node?.displayName || "—"}</span>],
+          ["Scheduler", <span key="sched" className="font-mono capitalize text-slate-200">{node?.schedulerType ?? "docker"}</span>],
+          ["Upload limit", <span key="ul" className="font-mono text-slate-200">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : "Default"}</span>],
+          ["Memory overallocation", <span key="mo" className="font-mono text-slate-200">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : "0%"}</span>],
+          ["Disk overallocation", <span key="do" className="font-mono text-slate-200">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : "0%"}</span>],
+          ["CPU overallocation", <span key="co" className="font-mono text-slate-200">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : "0%"}</span>],
+          ["Tags", <span key="tags" className="font-mono text-xs text-slate-200">{node?.tags?.length ? node.tags.join(", ") : "None"}</span>],
+        ]} />
+
+        <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100"><Activity size={15} className="text-slate-400" /> Lifecycle</h3>
+          <div className={cn("mt-3 rounded-lg border p-3", lifecycle?.placementEligible ? "border-emerald-500/20 bg-emerald-500/[0.05]" : "border-white/[0.06] bg-black/20")}>
+            <p className={cn("flex items-center gap-1.5 text-sm font-bold", lifecycle?.placementEligible ? "text-emerald-300" : "text-slate-200")}>
+              <span className={cn("h-2 w-2 rounded-full", lifecycle ? (lifecycle.placementEligible ? "bg-emerald-400" : "bg-amber-400") : "bg-slate-500")} />
+              {lifecycle ? (lifecycle.placementEligible ? "Eligible for placement" : "Not eligible") : isLifecycleError ? "Lifecycle unavailable" : "Loading…"}
+            </p>
+            <p className="mt-0.5 font-mono text-[11px] text-slate-400">
+              {lifecycle
+                ? (!lifecycle.placementEligible && lifecycle.placementBlockedReason
+                    ? lifecycle.placementBlockedReason
+                    : `Readiness ${lifecycle.healthScore.total}/100`)
+                : ""}
+            </p>
+          </div>
+          <dl className="mt-2 divide-y divide-white/[0.05] text-xs">
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Actual state / heartbeat</dt>
+              <dd className="font-mono capitalize text-slate-200">{lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : "—"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Placement</dt>
+              <dd className={cn("font-mono", lifecycle?.placementEligible ? "text-emerald-400" : "text-amber-400")}>{lifecycle?.placementEligible ? "Eligible" : lifecycle?.placementBlockedReason ?? "Not eligible"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Memory</dt>
+              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_memory} / ${lifecycle.capacity.available_memory} MiB` : "—"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Disk</dt>
+              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_disk} / ${lifecycle.capacity.available_disk} MiB` : "—"}</dd>
+            </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">CPU / servers</dt>
+              <dd className="font-mono text-slate-200">{lifecycle ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} · ${lifecycle.capacity.server_count} servers` : "—"}</dd>
+            </div>
+          </dl>
+        </div>
+      </div>
+
+      {node?.description && (
+        <Card>
+          <CardHeader title="Description" icon={Mail} />
+          <pre className="whitespace-pre-wrap px-4 py-3 text-xs text-slate-300">{node.description}</pre>
+        </Card>
+      )}
+
+      <QuickActionsCard icon={Zap} title="Quick Actions" actions={quickActions} />
     </div>
   );
 }
@@ -1123,24 +1101,24 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           </div>
         </div>
       ) : <form
-        className="space-y-8"
+        className="space-y-4"
         onSubmit={(e) => { e.preventDefault(); createMut.mutate(); }}
       >
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2">
           <Card>
             <CardHeader title="Basic Details" icon={Shield} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <Input label="Name" value={name} onChange={setName} placeholder="nyc-dal-01" required />
               <Input label="Display Name" value={displayName} onChange={setDisplayName} placeholder="NYC Dallas Node 1" />
               <Textarea label="Description" value={description} onChange={setDescription} rows={2} placeholder="Optional description for this node" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-sm font-medium text-slate-300">Location</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Location</span>
                 <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locations.length === 0 || locationsError !== null}>
                   <option value="">Select…</option>
                   {locations.map((location) => <option key={location.id} value={location.id}>{location.short} — {location.long}</option>)}
                 </select>
                 {locationsError ? (
-                  <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+                  <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
                     <span>Could not load locations: {locationsError.message}</span>
                     <Btn size="sm" tone="ghost" type="button" onClick={onRetryLocations}>Retry</Btn>
                   </div>
@@ -1155,11 +1133,11 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
 
           <Card>
             <CardHeader title="Network" icon={Globe} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <Input label="FQDN" value={fqdn} onChange={setFqdn} placeholder="node1.example.com" required />
               <Input label="Public Hostname" value={publicHostname} onChange={setPublicHostname} placeholder="Optional public-facing hostname" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-sm font-medium text-slate-300">SSL</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">SSL</span>
                 <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={scheme} onChange={(e) => setScheme(e.target.value)}>
                   <option value="https">https</option>
                   <option value="http">http</option>
@@ -1175,10 +1153,10 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           </Card>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2">
           <Card>
             <CardHeader title="Resource Limits" icon={Cpu} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Total Memory (MiB)" value={memoryMb} onChange={setMemoryMb} type="number" />
                 <Input label="Total Disk (MiB)" value={diskMb} onChange={setDiskMb} type="number" />
@@ -1198,7 +1176,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
 
           <Card>
             <CardHeader title="Daemon" icon={Wrench} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <Input label="Server File Directory" value={daemonBase} onChange={setDaemonBase} />
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Daemon Port" value={daemonListen} onChange={setDaemonListen} type="number" />
@@ -1212,10 +1190,10 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           </Card>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-3">
           <Card>
             <CardHeader title="Allocation" icon={Network} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <Input label="Default IP" value={defaultAllocationIp} onChange={setDefaultAllocationIp} />
               <div className="grid grid-cols-2 gap-4">
                 <Input label="Port Min" value={allocationPortMin} onChange={setAllocationPortMin} type="number" />
@@ -1230,9 +1208,9 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
 
           <Card>
             <CardHeader title="Scheduler" icon={SettingsIcon} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <label className="block text-sm">
-                <span className="mb-1.5 block text-sm font-medium text-slate-300">Backend</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Backend</span>
                 <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
                   <option value="docker">Docker</option>
                   <option value="k3s">K3s (Kubernetes)</option>
@@ -1244,17 +1222,17 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
 
           <Card>
             <CardHeader title="Tags" icon={Activity} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <Input label="Tags" value={tags} onChange={setTags} placeholder="ssd, gpu, low-latency" />
-              <p className="text-xs text-slate-500">Tags let you filter and group nodes for scheduling constraints.</p>
+              <p className="text-xs text-slate-400">Tags let you filter and group nodes for scheduling constraints.</p>
             </div>
           </Card>
         </div>
 
-        <div className="grid gap-6 md:grid-cols-2">
+        <div className="grid gap-4 md:grid-cols-2">
           <Card>
             <CardHeader title="Monitoring & Alerts" icon={Activity} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
                 <input type="checkbox" checked={enableHealthChecks} onChange={(e) => setEnableHealthChecks(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable health checks</span>
@@ -1277,7 +1255,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
 
           <Card>
             <CardHeader title="Maintenance & Security" icon={Lock} />
-            <div className="space-y-5 p-5">
+            <div className="space-y-4 p-5">
               <label className="flex cursor-pointer items-center gap-2.5 text-sm text-slate-300">
                 <input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Maintenance mode</span>
@@ -1292,14 +1270,14 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 </div>
               )}
               <label className="block text-sm">
-                <span className="mb-1.5 block text-sm font-medium text-slate-300">Token Rotation</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Token Rotation</span>
                 <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={tokenRotationPolicy} onChange={(e) => setTokenRotationPolicy(e.target.value)}>
                   <option value="manual">Manual</option>
                   <option value="auto">Auto</option>
                 </select>
               </label>
               <label className="block text-sm">
-                <span className="mb-1.5 block text-sm font-medium text-slate-300">TLS Setting</span>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">TLS Setting</span>
                 <select className="h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-600 hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15" value={tlsSetting} onChange={(e) => setTlsSetting(e.target.value)}>
                   <option value="auto">Auto</option>
                   <option value="manual">Manual</option>
@@ -1310,17 +1288,8 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           </Card>
         </div>
 
-        <div className="flex items-start justify-between gap-4 border-t border-white/[0.06] pt-6">
-          <div className="min-w-0 flex-1">
-            {createError ? <div className="inline-flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}
-          </div>
-          <div className="flex shrink-0 gap-3">
-            <Btn tone="ghost" type="button" onClick={onClose}>Cancel</Btn>
-            <Btn tone="primary" type="submit" disabled={createMut.isPending || !locationId || locationsError !== null}>
-              {createMut.isPending ? "Creating…" : "Create Node"}
-            </Btn>
-          </div>
-        </div>
+        {createError ? <div className="inline-flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}
+        <ModalFooter onCancel={onClose} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create Node"} disabled={createMut.isPending || !locationId || locationsError !== null} />
       </form>}
     </Modal>
   );

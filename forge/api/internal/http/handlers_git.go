@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/url"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/store"
@@ -214,6 +215,90 @@ func DisconnectGitProvider(cfg Config) fiber.Handler {
 			return fiber.NewError(fiber.StatusNotFound, err.Error())
 		}
 		return c.SendStatus(fiber.StatusNoContent)
+	}
+}
+
+func TestGitProviderToken(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.GitService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "git service is not available")
+		}
+		var req struct {
+			Provider    string `json:"provider"`
+			AccessToken string `json:"accessToken"`
+			BaseURL     string `json:"baseUrl"`
+			Username    string `json:"username"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		login, err := cfg.GitService.ValidateProviderToken(ctx, store.GitProviderType(req.Provider), req.AccessToken, req.BaseURL)
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"ok": false, "message": err.Error(), "provider": req.Provider})
+		}
+		return c.JSON(fiber.Map{"ok": true, "message": "token accepted for " + login, "provider": req.Provider})
+	}
+}
+
+func TestSavedGitProviderToken(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.GitService == nil || cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "git service is not available")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		token, err := cfg.Store.GetGitProviderTokenUnmasked(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		if err := requireResourceOwner(c, token.UserID); err != nil {
+			return err
+		}
+		start := time.Now()
+		login, err := cfg.GitService.ValidateProviderToken(ctx, token.Provider, token.AccessToken, token.BaseURL)
+		latencyMs := time.Since(start).Milliseconds()
+		if err != nil {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"ok": false, "message": err.Error(), "latencyMs": latencyMs})
+		}
+		return c.JSON(fiber.Map{"ok": true, "message": "token accepted for " + login, "latencyMs": latencyMs})
+	}
+}
+
+func UpdateGitProviderToken(cfg Config) fiber.Handler {
+	return func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		var req struct {
+			ProviderName *string `json:"providerName"`
+			Username     *string `json:"username"`
+			BaseURL      *string `json:"baseUrl"`
+			AvatarURL    *string `json:"avatarUrl"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		existing, err := cfg.Store.GetGitProviderToken(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, err.Error())
+		}
+		if err := requireResourceOwner(c, existing.UserID); err != nil {
+			return err
+		}
+		updated, err := cfg.Store.UpdateGitProviderToken(ctx, c.Params("id"), store.UpdateGitProviderTokenRequest{
+			ProviderName: req.ProviderName,
+			Username:     req.Username,
+			BaseURL:      req.BaseURL,
+			AvatarURL:    req.AvatarURL,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(updated)
 	}
 }
 
@@ -1023,6 +1108,9 @@ func registerGitRoutes(protected fiber.Router, cfg Config, adminIPAccess, mutati
 
 	gitGroup.Get("/providers", ListGitProviderTokens(cfg))
 	gitGroup.Post("/providers", mutationLimiter, ConnectGitProvider(cfg))
+	gitGroup.Post("/providers/test", mutationLimiter, TestGitProviderToken(cfg))
+	gitGroup.Post("/providers/:id/test", mutationLimiter, TestSavedGitProviderToken(cfg))
+	gitGroup.Patch("/providers/:id", mutationLimiter, UpdateGitProviderToken(cfg))
 	gitGroup.Delete("/providers/:id", mutationLimiter, DisconnectGitProvider(cfg))
 	gitGroup.Get("/providers/:id/repos", ListProviderRepos(cfg))
 	gitGroup.Get("/providers/:id/branches", ListProviderBranches(cfg))

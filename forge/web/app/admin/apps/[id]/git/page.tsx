@@ -26,7 +26,16 @@ interface GitConfig {
 
 function parseGitConfig(sourceConfig: unknown): GitConfig | null {
   if (!sourceConfig || typeof sourceConfig !== "object") return null;
-  return sourceConfig as GitConfig;
+  const cfg = sourceConfig as Record<string, unknown>;
+  const str = (v: unknown) => (typeof v === "string" ? v : undefined);
+  // Accept both the legacy keys (repoUrl/branch/provider) and the canonical
+  // keys the create/update API persists (gitUrl/gitBranch/gitProvider).
+  return {
+    ...(cfg as object),
+    repoUrl: str(cfg.repoUrl) ?? str(cfg.gitUrl),
+    branch: str(cfg.branch) ?? str(cfg.gitBranch),
+    provider: str(cfg.provider) ?? str(cfg.gitProvider),
+  } as GitConfig;
 }
 
 export default function GitSourcePage({ params }: { params: Promise<{ id: string }> }) {
@@ -59,7 +68,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
   });
 
   const autoDeployMut = useMutation({
-    mutationFn: (enabled: boolean) => toggleAppAutoDeploy(id, enabled),
+    mutationFn: async (enabled: boolean) => { const result = await toggleAppAutoDeploy(id, enabled); if (!result.ok) throw new Error(`The server reported auto-deploy ${enabled ? "enable" : "disable"} did not complete.`); return result; },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-git", id] }),
     onError: (error) => toast.error(error instanceof Error ? error.message : "Failed to toggle auto-deploy"),
   });
@@ -123,7 +132,7 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
                 rel="noopener noreferrer"
                 className="font-mono text-xs text-blue-400 hover:text-blue-300"
               >
-                {gitSource?.repoUrl ?? "—"}
+                {gitSource?.repoUrl ?? app?.gitRepo ?? "—"}
               </a>
             </div>
             <div className="flex justify-between px-4 py-3">

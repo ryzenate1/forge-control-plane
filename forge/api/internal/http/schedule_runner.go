@@ -22,7 +22,8 @@ type scheduleRunner struct {
 	running  bool
 	lastTick time.Time
 	lastErr  string
-	wg       sync.WaitGroup
+	cancel context.CancelFunc
+	wg     sync.WaitGroup
 
 	// lastRetention gates the once-daily metrics-retention sweep. It is only
 	// touched from tick (single goroutine), so it needs no lock.
@@ -40,6 +41,8 @@ func newScheduleRunner(cfg Config) *scheduleRunner {
 }
 
 func (r *scheduleRunner) Start(ctx context.Context) {
+	runnerCtx, cancel := context.WithCancel(ctx)
+	r.cancel = cancel
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
@@ -50,11 +53,18 @@ func (r *scheduleRunner) Start(ctx context.Context) {
 				r.cfg.Logger.Error("schedule runner panic recovered", "panic", recovered, "stack", string(buf[:n]))
 			}
 		}()
-		r.loop(ctx)
+		r.loop(runnerCtx)
 	}()
 }
 
-func (r *scheduleRunner) Wait() { r.wg.Wait() }
+func (r *scheduleRunner) Stop() {
+	if r.cancel != nil {
+		r.cancel()
+	}
+	r.wg.Wait()
+}
+
+func (r *scheduleRunner) Wait() { r.Stop() }
 
 func (r *scheduleRunner) loop(ctx context.Context) {
 	if r.cfg.Store == nil {

@@ -1,4 +1,13 @@
 {
+  "console": {
+    "dashboard": "Dashboard",
+    "health": "Platform Health",
+    "servers": "Game Servers",
+    "apps": "Applications",
+    "databases": "Databases",
+    "backups": "Backups",
+    "domains": "Domains"
+  },
   "app": {
     "name": "GamePanel",
     "tagline": "Game Server Management Panel",
@@ -83,6 +92,7 @@
     "restart": "Restart",
     "kill": "Kill",
     "console": "Console",
+    "terminal": "Terminal",
     "files": "Files",
     "databases": "Databases",
     "backups": "Backups",

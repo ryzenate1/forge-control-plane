@@ -365,7 +365,7 @@ func authMiddlewareWithStore(secret string, st authenticationStore, verifyOAuth 
 			}
 		}
 
-		user, scopes, keyErr := st.ValidateApiKey(ctx, rawToken, c.IP())
+		user, scopes, keyErr := st.ValidateApiKey(ctx, rawToken, ExtractClientIP(c))
 		if keyErr == nil && user != nil {
 			c.Locals("user", claimsFromUser(*user, "", time.Now().Add(defaultTokenTTL).Unix()))
 			c.Locals("apiScopes", scopes)

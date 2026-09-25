@@ -656,9 +656,12 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 
 func getUserID(c *fiber.Ctx) string {
 	if val := c.Locals("userId"); val != nil {
-		if s, ok := val.(string); ok {
+		if s, ok := val.(string); ok && s != "" {
 			return s
 		}
+	}
+	if claims, ok := c.Locals("user").(tokenClaims); ok && claims.Sub != "" {
+		return claims.Sub
 	}
 	return ""
 }

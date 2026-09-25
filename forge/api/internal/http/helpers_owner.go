@@ -16,7 +16,11 @@ func serverOwner(ctx context.Context, cfg Config, serverID string) (string, bool
 	if err != nil {
 		return "", false
 	}
-	return srv.Owner, true
+	// Owner is the display email; per-user limit checks need the UUID primary key.
+	if srv.OwnerID == "" {
+		return "", false
+	}
+	return srv.OwnerID, true
 }
 
 // IsUserLimitError is a convenience re-export so handlers in this package

@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Plus, Pencil, Trash2, Layers,
 } from "lucide-react";
-import { AdminPageLayout, Btn, Card, CardHeader, Input, SectionHeader, Pill, cn, Modal } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, Input, SectionHeader, Pill, cn, Modal, ModalFooter } from "@/components/admin/admin-ui";
 import { type AppType, type AppTemplate, type AppPort } from "@/lib/api/apps";
 import { DEFAULT_APP_TEMPLATES, loadUserTemplates, saveUserTemplates, getAllTemplates } from "@/lib/app-templates-data";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -224,7 +224,7 @@ export default function AppTemplatesPage() {
                 <Input label="Name" value={form.name} onChange={(v) => setForm((f) => ({ ...f, name: v }))} placeholder="My Template" required />
               </div>
               <div className="sm:col-span-2">
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">Description</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Description</label>
                 <input
                   className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3.5 text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   value={form.description}
@@ -233,7 +233,7 @@ export default function AppTemplatesPage() {
                 />
               </div>
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">Type</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
                 <select
                   className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   value={form.type}
@@ -259,7 +259,7 @@ export default function AppTemplatesPage() {
             )}
             {form.type === "compose" && (
               <div>
-                <label className="mb-1.5 block text-sm font-medium text-slate-300">Compose YAML</label>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Compose YAML</label>
                 <textarea
                   className="h-40 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] p-3 font-mono text-xs text-slate-100 outline-none resize-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15"
                   value={form.composeContent}
@@ -278,10 +278,7 @@ export default function AppTemplatesPage() {
             <Input label="Ports (host:container, comma-separated)" value={form.ports} onChange={(v) => setForm((f) => ({ ...f, ports: v }))} placeholder="8080:80, 3000:3000" />
             <Input label="Env Vars (KEY=value, comma-separated)" value={form.envVars} onChange={(v) => setForm((f) => ({ ...f, envVars: v }))} placeholder="NODE_ENV=production, PORT=3000" />
 
-            <div className="flex justify-end gap-2 border-t border-white/[0.06] pt-4">
-              <Btn tone="ghost" onClick={() => setShowModal(false)}>Cancel</Btn>
-              <Btn tone="primary" onClick={save} disabled={!form.name.trim()}>Save Template</Btn>
-            </div>
+            <ModalFooter onCancel={() => setShowModal(false)} onConfirm={save} confirmLabel="Save Template" disabled={!form.name.trim()} />
           </div>
         </Modal>
       )}

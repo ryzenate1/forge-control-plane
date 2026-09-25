@@ -36,6 +36,7 @@ import (
 
 	"github.com/go-acme/lego/v4/challenge"
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 
 	"gamepanel/forge/internal/services"
 	acmesvc "gamepanel/forge/internal/services/acme"
@@ -83,6 +84,7 @@ import (
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
 	notification "gamepanel/forge/internal/services/notification"
+	notifs "gamepanel/forge/internal/services/notifications"
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	pipelinesvc "gamepanel/forge/internal/services/pipeline"
@@ -96,6 +98,7 @@ import (
 	"gamepanel/forge/internal/services/replicamanager"
 	"gamepanel/forge/internal/services/reservations"
 	runtimesvc "gamepanel/forge/internal/services/runtime"
+	scheduledtaskssvc "gamepanel/forge/internal/services/scheduledtasks"
 	"gamepanel/forge/internal/services/scheduler"
 	"gamepanel/forge/internal/services/servicediscovery"
 	"gamepanel/forge/internal/services/tenancy"
@@ -304,6 +307,7 @@ func run() error {
 		pipelineSvc       *pipelinesvc.Service
 		alertSvc          *alerting.Service
 		notifSvc          *notification.Service
+		notifRouter       *notifs.Router
 		installerSvc      *installersvc.Service
 		billingSvc        *billingsvc.Service
 		drainLedger       *drainsvc.Service
@@ -324,6 +328,7 @@ func run() error {
 		healthFilter      *crossnode.HealthFilter
 		appStoreSvc       *appstoresvc.Service
 		cronJobSvc        *cronjobsvc.Service
+		scheduledTaskSvc  *scheduledtaskssvc.Service
 		gitDeployMgmtSvc  *gitsvc.DeploymentManagementService
 		zdSvc             *zerodowntime.Service
 		dbSvcProv         *services.DatabaseServiceProvisioner
@@ -804,6 +809,12 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("create app store service: %w", err)
 		}
+		// Populate the built-in app-store catalog (nginx/postgres/redis/…). Without
+		// this, GET /app-store/apps returns null and installs fail "app not found".
+		// Idempotent upsert; a failure is logged, not fatal to boot.
+		if err := appStoreSvc.SeedDefaultApps(appCtx); err != nil {
+			slogLogger.Warn("seed app store catalog failed", slog.String("error", err.Error()))
+		}
 
 		queueSvc.Start(appCtx)
 
@@ -1115,14 +1126,19 @@ func run() error {
 		if err := notifSvc.RefreshChannels(appCtx); err != nil {
 			slogLogger.Warn("failed to refresh notification channels", slog.String("error", err.Error()))
 		}
-		eventRegistry.Subscribe(events.EventServerCrashed, notifSvc)
-		eventRegistry.Subscribe(events.EventServerInstallCompleted, notifSvc)
-		eventRegistry.Subscribe(events.EventServerBackupCreated, notifSvc)
-		eventRegistry.Subscribe(events.EventServerBackupFailed, notifSvc)
-		eventRegistry.Subscribe(events.EventDeploymentCompleted, notifSvc)
-		eventRegistry.Subscribe(events.EventDeploymentFailed, notifSvc)
-		eventRegistry.Subscribe(events.EventNodeOffline, notifSvc)
-		eventRegistry.Subscribe(events.EventNodeOnline, notifSvc)
+		// Notifications engine: replaces the per-event legacy subscriptions with
+		// a single wildcard consumer that understands the catalog (canonical +
+		// legacy event names) and performs concurrent fan-out with templating.
+		notifRouter = notifs.NewRouter(db, db, slogLogger)
+		notifRouter.RegisterWith(eventRegistry)
+		// Control-plane events published to the durable webhook outbox (power
+		// operations, node CRUD, compose gitops) reach the engine through the
+		// same choke point, so channel notifications mirror outbound webhooks.
+		db.SetWebhookEventHook(func(ctx context.Context, event string, payload map[string]any) {
+			if err := notifRouter.DispatchEvent(ctx, event, payload); err != nil {
+				slogLogger.Warn("notification dispatch failed", "event", event, "error", err.Error())
+			}
+		})
 		membershipSvc = clustermembership.New(db, outboxPub)
 		membershipSvc.SetEvacuationPlanner(ep)
 
@@ -1208,6 +1224,11 @@ func run() error {
 			return fmt.Errorf("create cron job service: %w", err)
 		}
 
+		scheduledTaskSvc, err = scheduledtaskssvc.New(db, daemonClient, slogLogger, "api-"+uuid.NewString())
+		if err != nil {
+			return fmt.Errorf("create scheduled tasks service: %w", err)
+		}
+
 		zdSvc = zerodowntime.New(db)
 		zdSvc.SetRollbackExecutor(func(ctx context.Context, serverID, imageTag string) error {
 			if _, err := db.UpdateServer(ctx, serverID, store.UpdateServerRequest{DockerImage: &imageTag}, nil); err != nil {
@@ -1239,6 +1260,9 @@ func run() error {
 		// Start background services.
 		if err := cronJobSvc.Start(appCtx); err != nil {
 			slogLogger.Error("cron job service startup failed", slog.String("error", err.Error()))
+		}
+		if err := scheduledTaskSvc.Start(appCtx); err != nil {
+			slogLogger.Error("scheduled tasks service startup failed", slog.String("error", err.Error()))
 		}
 		resMgr.Start(appCtx)
 		hbm.Start(appCtx)
@@ -1530,6 +1554,7 @@ func run() error {
 		PipelineService:            pipelineSvc,
 		AlertService:               alertSvc,
 		NotificationService:        notifSvc,
+		NotificationRouter:         notifRouter,
 		InstallerService:           installerSvc,
 		BillingService:             billingSvc,
 		DrainLedger:                drainLedger,
@@ -1541,6 +1566,7 @@ func run() error {
 		GitDeployMgmtService:       gitDeployMgmtSvc,
 		AppStoreService:            appStoreSvc,
 		CronJobService:             cronJobSvc,
+		ScheduledTaskService:       scheduledTaskSvc,
 		BuildpackService:           buildpackSvc,
 		ProcessService:             processSvc,
 		ZeroDowntimeSvc:            zdSvc,
@@ -1609,12 +1635,10 @@ func shutdownServices(app *fiber.App, cancelBackground context.CancelFunc, liste
 	domainSvc *domains.Service,
 	acmeSvc *acmesvc.Service,
 ) {
+	cancelBackground()
 	if err := app.Shutdown(); err != nil {
 		log.Warn("api shutdown error", slog.String("error", err.Error()))
 	}
-	// Drain HTTP first so no new background work is admitted, then cancel the
-	// shared service context before waiting for workers to finish.
-	cancelBackground()
 	if mailWorker != nil {
 		mailWorker.Wait()
 	}

@@ -28,15 +28,14 @@ export type DrainState = {
 
 export async function fetchDrainStates(): Promise<DrainState[]> {
   // Durable ledger: every node that has ever been drained, newest first.
-  const res = await fetchJSON<{ data: DrainState[] }>("/nodes/drain");
+  const res = await fetchJSON<{ data: DrainState[] }>("/drain-ledger");
   return res.data ?? [];
 }
 
 export async function fetchDrainState(nodeId: string): Promise<DrainState | null> {
-  // Ledger per-node progress. Separate from clustermembership's lightweight
-  // GET /nodes/:id/drain status, so the durable step-by-step record survives
-  // restarts. Returns { data: null } when no drain has ever been recorded.
-  const res = await fetchJSON<{ data: DrainState | null }>(`/nodes/${encodeURIComponent(nodeId)}/drain/progress`);
+  // Ledger per-node progress (distinct from clustermembership's GET
+  // /nodes/:id/drain status). Returns { data: null } when nothing recorded.
+  const res = await fetchJSON<{ data: DrainState | null }>(`/drain-ledger/${encodeURIComponent(nodeId)}`);
   return (res as unknown as { data: DrainState | null }).data ?? null;
 }
 

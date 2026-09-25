@@ -29,8 +29,11 @@ export function BillingManager() {
     setError(null);
     try {
       const [plansRes, settingsRes] = await Promise.all([
-        billing.fetchBillingPlans().catch(() => [] as billing.BillingPlan[]),
-        billing.fetchBillingSettings().catch(() => null),
+        // No `.catch(() => [])` / `.catch(() => null)` here: a failed request has
+        // to surface as the error below instead of rendering as "no plans"
+        // and "no settings configured".
+        billing.fetchBillingPlans(),
+        billing.fetchBillingSettings(),
       ]);
       setPlans(plansRes);
       setSettings(settingsRes);

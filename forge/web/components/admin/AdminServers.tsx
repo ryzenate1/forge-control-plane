@@ -1,25 +1,27 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
-  AlertTriangle, Ban, Box, ChevronDown, ChevronLeft, ChevronRight, Cpu, Database, ExternalLink, HardDrive, Info,
-  KeyRound, Layers, LayoutGrid, List, MoreVertical, Network, Play, Plus, RefreshCw, Search, Server, Square, Trash2, Zap,
+  Activity, AlertTriangle, Archive, Ban, Box, ChevronDown, ChevronLeft, ChevronRight, Cpu, Database, ExternalLink, Folder, HardDrive, Info,
+  KeyRound, Layers, LayoutGrid, List, MemoryStick, MoreVertical, Network, Play, Plus, RefreshCw, Rocket, RotateCw, Search, Server, Settings, ShieldCheck, Square, Terminal, Trash2, Zap,
 } from "lucide-react";
 import {
   type ApiServer, type ApiNode, type ApiAllocation, type ApiEgg,
   type ApiUser, type ApiMount, type ApiRegion,
   fetchServer, fetchServers, fetchNodes, fetchEggs, fetchAllocations, fetchUsers,
   fetchTemplates, fetchRegions, fetchMounts, fetchServerMounts, fetchServerDatabases, fetchServerStartup,
-  assignServerAllocation, assignServerMount, fetchServerAllocations, removeServerMount, searchUsers, createServer, createServerDatabase,
+  assignServerAllocation, assignServerMount, fetchServerActivity, fetchServerAllocations, fetchServerStats, removeServerMount, searchUsers, createServer, createServerDatabase,
   rotateServerDatabasePasswordByBody, deleteServerDatabaseWithSuffix, setPrimaryServerAllocation, unassignServerAllocation, updateServerStartupVariable,
   cancelServerTransfer, deleteServer, fetchServerTransferStatus, suspendServer, transferServer, unsuspendServer, reinstallServer, updateServer,
   sendPowerSignal,
 } from "@/lib/api";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea, cn } from "./admin-ui";
+import { DashActionButton, DashHeader, InfoCard, KpiGrid, QuickActionsCard, TrendChart, type KpiDatum, type QuickAction } from "./dashboard-cards";
+import { chart } from "@/lib/design-tokens";
 
 type ServerTab = "about" | "details" | "build" | "startup" | "allocations" | "database" | "mounts" | "manage" | "delete";
 const SERVER_TABS: Array<{ id: ServerTab; label: string; danger?: boolean }> = [
@@ -406,7 +408,7 @@ export function AdminServers() {
       )}
 
       {selectedServerId && (
-        <Modal title="Server" onClose={() => setSelectedServerId(null)} wide>
+        <Modal title="Server details" description="Inspect live state and manage this workload." onClose={() => setSelectedServerId(null)} wide className="max-w-6xl">
           <ServerDetailContent
             serverId={selectedServerId}
             tab={tab}
@@ -696,11 +698,11 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
   const iconClasses = "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500";
 
   return (
-    <Modal title={<span className="text-base font-semibold text-slate-100">Create Server</span>} onClose={onClose} wide>
-      <form className="space-y-6" onSubmit={(event) => { event.preventDefault(); if (!validationError) createMut.mutate(); }}>
+    <Modal title="Create Server" onClose={onClose} wide>
+      <form className="space-y-4" onSubmit={(event) => { event.preventDefault(); if (!validationError) createMut.mutate(); }}>
         <div>
-          <label className="mb-3 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server Identity</label>
-          <div className="grid gap-5 sm:grid-cols-2">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server Identity</label>
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server Name</label>
               <div className="relative">
@@ -719,8 +721,8 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
         </div>
 
         <div>
-          <label className="mb-3 block text-xs font-semibold uppercase tracking-wider text-slate-400">Deployment</label>
-          <div className="grid gap-5 sm:grid-cols-2">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Deployment</label>
+          <div className="grid gap-4 sm:grid-cols-2">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Node</label>
               <select className={selectBase + " px-3"} value={nodeId} onChange={(event) => { setNodeId(event.target.value); setAllocationId(""); }}>
@@ -753,8 +755,8 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
         </div>
 
         <div>
-          <label className="mb-3 block text-xs font-semibold uppercase tracking-wider text-slate-400">Resources</label>
-          <div className="grid gap-5 sm:grid-cols-3">
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Resources</label>
+          <div className="grid gap-4 sm:grid-cols-3">
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
                 Memory <span className="font-normal normal-case text-slate-500">(MiB)</span>
@@ -763,7 +765,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
                 <HardDrive size={14} className={iconClasses} strokeWidth={1.5} />
                 <input className={cn(inputBase, "pl-9 [&::-webkit-inner-spin-button]:appearance-none")} type="number" min={64} step={64} value={memoryMb} onChange={(e) => setMemoryMb(e.target.value)} required />
               </div>
-              <p className="mt-1 text-[11px] text-slate-500">Minimum 64 MiB</p>
+              <p className="mt-1 text-xs text-slate-400">Minimum 64 MiB</p>
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -773,7 +775,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
                 <Cpu size={14} className={iconClasses} strokeWidth={1.5} />
                 <input className={cn(inputBase, "pl-9 [&::-webkit-inner-spin-button]:appearance-none")} type="number" min={1} value={cpuShares} onChange={(e) => setCpuShares(e.target.value)} required />
               </div>
-              <p className="mt-1 text-[11px] text-slate-500">Relative CPU weight (default 1024)</p>
+              <p className="mt-1 text-xs text-slate-400">Relative CPU weight (default 1024)</p>
             </div>
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -783,7 +785,7 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
                 <Database size={14} className={iconClasses} strokeWidth={1.5} />
                 <input className={cn(inputBase, "pl-9 [&::-webkit-inner-spin-button]:appearance-none")} type="number" min={64} step={64} value={diskMb} onChange={(e) => setDiskMb(e.target.value)} required />
               </div>
-              <p className="mt-1 text-[11px] text-slate-500">Minimum 64 MiB</p>
+              <p className="mt-1 text-xs text-slate-400">Minimum 64 MiB</p>
             </div>
           </div>
         </div>
@@ -822,22 +824,61 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
   const suspendMut = useMutation({ mutationFn: async () => { const result = await suspendServer(serverId); if (!result.ok) throw new Error("The server reported the suspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
   const unsuspendMut = useMutation({ mutationFn: async () => { const result = await unsuspendServer(serverId); if (!result.ok) throw new Error("The server reported the unsuspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
   const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
+  const powerMut = useMutation({
+    mutationFn: (signal: "start" | "stop" | "restart") => sendPowerSignal(serverId, signal),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["server", serverId] });
+      void qc.invalidateQueries({ queryKey: ["servers"] });
+    },
+    onError: (error) => toast({ tone: "error", title: "Power action failed", message: error instanceof Error ? error.message : "Could not change power state" }),
+  });
 
   if (isLoading || !server) return <div className="p-8 text-center text-sm text-slate-500">Loading…</div>;
 
+  const headerNode = nodes.find((n) => n.id === server.nodeId) ?? nodes.find((n) => n.name === server.node);
+  const headerNodeName = headerNode?.name ?? server.node ?? "—";
+  const headerAlloc = allocations.find((a) => a.id === server.primaryAllocationId || a.id === server.allocationId || a.id === server.allocation);
+  const headerConnection = headerAlloc ? `${headerAlloc.ip}:${headerAlloc.port}` : null;
+  const headerStatusTone: "green" | "red" | "neutral" = server.suspended || server.status === "crashed" ? "red" : server.status === "running" ? "green" : "neutral";
+  const headerTags = [server.template, shortImage(server.dockerImage)].filter((t): t is string => Boolean(t) && t !== "—");
+
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-lg font-bold text-white">{server.name}</h2>
-          <p className="text-xs text-slate-400">{server.description ?? ""}</p>
-        </div>
-        <a className="flex items-center gap-1 text-xs text-sky-400 hover:underline" href={`/server/${server.id}/console`} target="_blank" rel="noreferrer">
-          Open console <ExternalLink size={12} />
-        </a>
-      </div>
+      <DashHeader
+        icon={Box}
+        eyebrow="Game server"
+        title={server.name}
+        pill={{ tone: headerStatusTone, label: server.suspended ? "Suspended" : server.status }}
+        description={server.description ?? undefined}
+        tags={headerTags}
+        meta={[
+          { label: "Node", value: headerNodeName },
+          { label: "Connection", value: <span key="conn" className="font-mono">{headerConnection ?? "—"}</span> },
+          { label: "Memory", value: <span key="mem" className="font-mono">{typeof server.memoryMb === "number" ? `${server.memoryMb.toLocaleString()} MiB` : "—"}</span> },
+          { label: "Owner", value: <span key="owner" className="max-w-44 truncate" title={server.owner ?? server.ownerEmail ?? ""}>{server.owner ?? server.ownerEmail ?? "—"}</span> },
+        ]}
+        actions={(
+          <>
+            {([
+              { signal: "start" as const, label: "Start", icon: Play },
+              { signal: "stop" as const, label: "Stop", icon: Square },
+              { signal: "restart" as const, label: "Restart", icon: RotateCw },
+            ]).map(({ signal, label, icon: Icon }) => (
+              <DashActionButton
+                key={signal}
+                label={label}
+                icon={Icon}
+                disabled={powerMut.isPending || (signal === "start" ? server.status === "running" : server.status !== "running")}
+                pending={powerMut.isPending && powerMut.variables === signal}
+                onClick={() => powerMut.mutate(signal)}
+              />
+            ))}
+            <DashActionButton label="Open console" icon={ExternalLink} href={`/server/${server.id}/console`} tone="brand" />
+          </>
+        )}
+      />
       <AdminTabs tabs={SERVER_TABS} active={tab} onChange={(id) => setTab(id as ServerTab)} label="Server sections" />
-      {tab === "about" && <ServerAboutTab server={server} users={users} nodes={nodes} allocations={allocations} />}
+      {tab === "about" && <ServerAboutTab server={server} users={users} nodes={nodes} allocations={allocations} setTab={setTab} />}
       {tab === "details" && <ServerDetailsTab server={server} users={users} />}
       {tab === "build" && <ServerBuildTab server={server} users={users} allocations={allocations} />}
       {tab === "startup" && <ServerStartupTab server={server} />}
@@ -859,88 +900,225 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
   );
 }
 
-function ServerAboutTab({ server, users, nodes, allocations }: { server: ApiServer; users: ApiUser[]; nodes: ApiNode[]; allocations: ApiAllocation[] }) {
+function pctOf(used?: number | null, total?: number | null): number | null {
+  if (typeof used !== "number" || typeof total !== "number" || !Number.isFinite(used) || !Number.isFinite(total) || total <= 0) return null;
+  return Math.min(100, Math.max(0, (used / total) * 100));
+}
+
+function fmtBytes(bytes?: number | null): string {
+  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0) return "—";
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GiB`;
+  if (bytes >= 1024 ** 2) return `${(bytes / 1024 ** 2).toFixed(1)} MiB`;
+  if (bytes >= 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
+  return `${Math.round(bytes)} B`;
+}
+
+function ago(iso?: string | null): string {
+  if (!iso) return "—";
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "—";
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins}m ago`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function uptimeLabel(totalSeconds?: number | null): string {
+  if (typeof totalSeconds !== "number" || !Number.isFinite(totalSeconds) || totalSeconds < 0) return "—";
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const mins = Math.floor((totalSeconds % 3600) / 60);
+  if (days > 0) return `${days}d ${hours}h ${mins}m`;
+  if (hours > 0) return `${hours}h ${mins}m`;
+  return `${mins}m`;
+}
+
+function ServerAboutTab({ server, users, nodes, allocations, setTab }: { server: ApiServer; users: ApiUser[]; nodes: ApiNode[]; allocations: ApiAllocation[]; setTab: (t: ServerTab) => void }) {
   const owner = users.find((u) => u.id === server.owner)?.email ?? server.owner ?? "—";
-  const node = nodes.find((n) => n.id === server.node)?.name ?? server.node ?? "—";
-  const alloc = allocations.find((a) => a.id === server.allocation);
-  const fieldClasses = "h-10 w-full rounded-lg border border-white/10 bg-[var(--surface)] text-sm leading-10 shadow-inner shadow-black/10";
-  const iconClasses = "pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500";
+  const nodeEntry = nodes.find((n) => n.id === server.nodeId) ?? nodes.find((n) => n.name === server.node);
+  const nodeName = nodeEntry?.name ?? server.node ?? "—";
+  const nodeHeartbeat = (nodeEntry as unknown as { heartbeatState?: string } | undefined)?.heartbeatState;
+  const nodeLastSeen = (nodeEntry as unknown as { lastSeenAt?: string; lastHeartbeatAt?: string } | undefined)?.lastSeenAt
+    ?? (nodeEntry as unknown as { lastHeartbeatAt?: string } | undefined)?.lastHeartbeatAt;
+  const alloc = allocations.find((a) => a.id === server.primaryAllocationId || a.id === server.allocationId || a.id === server.allocation)
+    ?? allocations.find((a) => a.isPrimary || a.primary);
+  const connection = alloc ? `${alloc.ip}:${alloc.port}` : null;
+
+  const statsQuery = useQuery({
+    queryKey: ["server-stats", server.id],
+    queryFn: () => fetchServerStats(server.id),
+    refetchInterval: 15_000,
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
+  const startupQuery = useQuery({
+    queryKey: ["server-startup", server.id],
+    queryFn: () => fetchServerStartup(server.id),
+    staleTime: 60_000,
+    retry: 1,
+  });
+  const activityQuery = useQuery({
+    queryKey: ["server-activity", server.id],
+    queryFn: () => fetchServerActivity(server.id),
+    refetchInterval: 30_000,
+    refetchIntervalInBackground: false,
+    retry: 1,
+  });
+
+  const [samples, setSamples] = useState<Array<{ t: number; cpu: number; mem: number; disk: number; net: number }>>([]);
+  useEffect(() => { setSamples([]); }, [server.id]);
+  useEffect(() => {
+    const s = statsQuery.data;
+    if (!s) return;
+    setSamples((prev) => [...prev.slice(-19), {
+      t: Date.now(),
+      cpu: s.cpuPercent,
+      mem: pctOf(s.memoryBytes, s.memoryLimit) ?? 0,
+      disk: pctOf(s.diskBytes, s.diskLimit) ?? 0,
+      net: s.networkRxBytes + s.networkTxBytes,
+    }]);
+  }, [statsQuery.data]);
+
+  const stats = statsQuery.data;
+  const live = statsQuery.isSuccess && Boolean(stats);
+  const memPct = stats ? pctOf(stats.memoryBytes, stats.memoryLimit) : null;
+  const diskPct = stats ? pctOf(stats.diskBytes, stats.diskLimit) : null;
+
+  const startupVars = startupQuery.data?.variables ?? [];
+  const startupValue = (matcher: RegExp): string | null => {
+    const v = startupVars.find((item) => matcher.test(item.name ?? "") || matcher.test(item.envVariable ?? item.env_variable ?? ""));
+    if (!v) return null;
+    const value = (v.serverValue ?? v.server_value ?? v.defaultValue ?? "").trim();
+    return value || null;
+  };
+  const versionValue = startupValue(/version/i);
+  const jarValue = startupValue(/jar/i);
+
+  const sortedActivity = useMemo(() => [...(activityQuery.data?.data ?? [])]
+    .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()),
+  [activityQuery.data]);
+  const lastStart = sortedActivity.find((e) => /start/i.test(e.action) && !/restart|install/i.test(e.action));
+
+  const kpis: KpiDatum[] = [
+    { key: "cpu", title: "CPU", icon: Cpu, color: chart.sky, iconClass: "text-sky-400", valueClass: "text-sky-300",
+      value: live && stats ? `${stats.cpuPercent.toFixed(1)}%` : null,
+      sub: live ? "live" : statsQuery.isLoading ? "…" : "Offline",
+      live,
+      trend: samples.map((s) => s.cpu), bar: live && stats ? Math.min(100, stats.cpuPercent) : null },
+    { key: "memory", title: "Memory", icon: MemoryStick, color: chart.violet, iconClass: "text-purple-400", valueClass: "text-purple-300",
+      value: memPct != null ? `${memPct.toFixed(1)}%` : null,
+      sub: live && stats ? `${fmtBytes(stats.memoryBytes)} / ${fmtBytes(stats.memoryLimit)}` : statsQuery.isLoading ? "…" : "Offline",
+      live,
+      trend: samples.map((s) => s.mem), bar: live ? memPct : null },
+    { key: "disk", title: "Disk", icon: Database, color: chart.lightOrange, iconClass: "text-orange-400", valueClass: "text-orange-300",
+      value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
+      sub: live && stats ? `${fmtBytes(stats.diskBytes)} / ${fmtBytes(stats.diskLimit)}` : statsQuery.isLoading ? "…" : "Offline",
+      live,
+      trend: samples.map((s) => s.disk), bar: live ? diskPct : null },
+    { key: "network", title: "Network", icon: Network, color: chart.lightCyan, iconClass: "text-cyan-400", valueClass: "text-cyan-300",
+      value: live && stats ? fmtBytes(stats.networkRxBytes + stats.networkTxBytes) : null,
+      sub: live && stats ? `RX ${fmtBytes(stats.networkRxBytes)} · TX ${fmtBytes(stats.networkTxBytes)}` : statsQuery.isLoading ? "…" : "Offline",
+      live,
+      trend: samples.map((s) => s.net), bar: null },
+  ];
+
+  const heartbeatOk = nodeHeartbeat === "healthy";
+  const infoRows: Array<[string, React.ReactNode]> = [
+    ["Internal ID", <span key="id" className="font-mono text-slate-200" title={server.id}>{server.id}</span>],
+    ["UUID", <span key="uuid" className="font-mono text-slate-200">{server.uuid || "—"}</span>],
+    ["Node", (
+      <span key="node" className="inline-flex items-center gap-1.5">
+        <span className="text-slate-200">{nodeName}</span>
+        {nodeHeartbeat ? (
+          <span className={cn("rounded border px-1.5 py-0.5 font-mono text-[10px]", heartbeatOk ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300" : "border-amber-500/30 bg-amber-500/10 text-amber-300")}>
+            {heartbeatOk ? "Online" : nodeHeartbeat}
+          </span>
+        ) : null}
+      </span>
+    )],
+    ["Connection", <span key="conn" className="font-mono text-slate-200">{connection ?? "—"}</span>],
+    ...(versionValue ? [["Version", <span key="ver" className="font-mono text-slate-200">{versionValue}</span>] as [string, React.ReactNode]] : []),
+    ...(jarValue ? [["Server JAR", <span key="jar" className="font-mono text-slate-200">{jarValue}</span>] as [string, React.ReactNode]] : []),
+    ["Owner", <span key="owner" className="text-slate-200">{owner}</span>],
+    ["Created", <span key="created" className="text-slate-200">{server.createdAt ? new Date(server.createdAt).toLocaleString() : "—"}</span>],
+    ["Last started", <span key="started" className="text-slate-200" title={lastStart ? new Date(lastStart.createdAt).toLocaleString() : undefined}>{lastStart ? ago(lastStart.createdAt) : "—"}</span>],
+  ];
+
+  const quickActions: QuickAction[] = [
+    { label: "Open Console", hint: "Live terminal", icon: Terminal, href: `/server/${server.id}/console`, highlight: true },
+    { label: "File Manager", hint: "Browse & edit", icon: Folder, href: `/server/${server.id}/files` },
+    { label: "Edit Startup", hint: "Image & variables", icon: Rocket, onSelect: () => setTab("startup") },
+    { label: "Allocations", hint: "Addresses & ports", icon: Network, onSelect: () => setTab("allocations") },
+    { label: "Manage Backups", hint: "Snapshots", icon: Archive, href: `/server/${server.id}/backups` },
+    { label: "View Activity", hint: "Audit trail", icon: Activity, href: `/server/${server.id}/activity` },
+    { label: "Database", hint: "Manage access", icon: Database, onSelect: () => setTab("database") },
+    { label: "Manage", hint: "Suspend & reinstall", icon: Settings, onSelect: () => setTab("manage") },
+  ];
+
   return (
-    <div className="space-y-5">
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5">
-        <label className="mb-4 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server Identity</label>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Internal ID</label>
-            <div className="relative">
-              <Info size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 font-mono text-slate-400")}>{server.id.slice(0, 8)}&hellip;</div>
-            </div>
+    <div className="space-y-4">
+      <KpiGrid kpis={kpis} />
+      {!live && !statsQuery.isLoading && (
+        <p className="-mt-1 text-[11px] text-slate-600">Live resource usage is reported by the beacon while the server runs — cards stay empty while it is offline.</p>
+      )}
+
+      <div className="grid gap-4 xl:grid-cols-5">
+        <InfoCard wide icon={Info} title="Server Information" rows={infoRows} />
+
+        <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100"><ShieldCheck size={15} className="text-slate-400" /> Status</h3>
+          <div className={cn("mt-3 rounded-lg border p-3", server.status === "running" ? "border-emerald-500/20 bg-emerald-500/[0.05]" : "border-white/[0.06] bg-black/20")}>
+            <p className={cn("flex items-center gap-1.5 text-sm font-bold", server.status === "running" ? "text-emerald-300" : "text-slate-200")}>
+              <span className={cn("h-2 w-2 rounded-full", server.suspended || server.status === "crashed" ? "bg-red-400" : server.status === "running" ? "bg-emerald-400" : server.status === "installing" ? "bg-amber-400" : "bg-slate-500")} />
+              <span className="capitalize">{server.suspended ? "Suspended" : server.status}</span>
+            </p>
+            <p className="mt-0.5 text-[11px] text-slate-400">
+              {server.status === "running" ? "The server is online." : server.status === "crashed" ? (server.transferError ?? "The server has crashed.") : `The server is ${server.status}.`}
+            </p>
           </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">UUID</label>
-            <div className="relative">
-              <KeyRound size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 font-mono text-slate-400 truncate")}>{server.uuid ?? server.id}</div>
+          <dl className="mt-2 divide-y divide-white/[0.05] text-xs">
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Desired state</dt>
+              <dd className="font-semibold capitalize text-slate-200">{server.desiredState ?? "—"}</dd>
             </div>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server Name</label>
-            <div className="relative">
-              <Server size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 text-slate-100")}>{server.name}</div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Actual state</dt>
+              <dd className="font-semibold capitalize text-slate-200">{server.actualState ?? server.status}</dd>
             </div>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Default Connection</label>
-            <div className="relative">
-              <Network size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 font-mono text-slate-400")}>{alloc ? `${alloc.ip}:${alloc.port}` : "\u2014"}</div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Node heartbeat</dt>
+              <dd className={cn("font-semibold", heartbeatOk ? "text-emerald-300" : "text-amber-300")}>
+                {nodeHeartbeat ? `${nodeHeartbeat} · ${ago(nodeLastSeen)}` : "Unavailable"}
+              </dd>
             </div>
-          </div>
+            <div className="flex items-center justify-between gap-3 py-2">
+              <dt className="text-slate-500">Uptime</dt>
+              <dd className="font-mono text-slate-200" title={live && stats ? `Beacon-reported uptime: ${stats.uptime}s` : undefined}>
+                {live && stats ? uptimeLabel(stats.uptime) : "—"}
+              </dd>
+            </div>
+          </dl>
         </div>
       </div>
 
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-5">
-        <label className="mb-4 block text-xs font-semibold uppercase tracking-wider text-slate-400">Resources</label>
-        <div className="grid gap-5 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Memory <span className="font-normal normal-case text-slate-500">(MiB)</span>
-            </label>
-            <div className="relative">
-              <HardDrive size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 text-slate-100")}>{server.memoryMb != null ? `${server.memoryMb} MiB` : "\u2014"}</div>
-            </div>
-          </div>
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">
-              Disk <span className="font-normal normal-case text-slate-500">(MiB)</span>
-            </label>
-            <div className="relative">
-              <Database size={14} className={iconClasses} strokeWidth={1.5} />
-              <div className={cn(fieldClasses, "pl-9 text-slate-100")}>{server.diskMb != null ? `${server.diskMb} MiB` : "\u2014"}</div>
-            </div>
-          </div>
-        </div>
-      </div>
+      <div className="grid gap-4 xl:grid-cols-5">
+        <QuickActionsCard wide icon={Zap} title="Quick Actions" actions={quickActions} />
 
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-          <label className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Status</label>
-          <div className="flex items-center gap-2">
-            <span className={cn("inline-block h-2 w-2 rounded-full", server.suspended ? "bg-red-400" : server.status === "running" ? "bg-emerald-400" : server.status === "installing" ? "bg-amber-400" : "bg-slate-500")} />
-            <span className="text-sm font-semibold text-slate-200">{server.suspended ? "Suspended" : server.status}</span>
-          </div>
-        </div>
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-          <label className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Owner</label>
-          <span className="text-sm font-semibold text-slate-200">{owner}</span>
-        </div>
-        <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-4">
-          <label className="mb-2 block text-[10px] font-bold uppercase tracking-widest text-slate-500">Node</label>
-          <span className="text-sm font-semibold text-slate-200">{node}</span>
-        </div>
+        <TrendChart
+          icon={Activity}
+          title="Resource Usage"
+          subtitle="(live session)"
+          live={live}
+          loading={statsQuery.isLoading}
+          emptyHint="No samples yet — the chart builds from live beacon telemetry while the server runs."
+          series={[
+            { key: "cpu", color: chart.sky, label: "CPU", display: kpis[0].value ?? "—", values: samples.map((s) => s.cpu) },
+            { key: "mem", color: chart.violet, label: "Memory", display: kpis[1].value ?? "—", values: samples.map((s) => s.mem) },
+            { key: "disk", color: chart.lightOrange, label: "Disk", display: kpis[2].value ?? "—", values: samples.map((s) => s.disk) },
+          ]}
+        />
       </div>
     </div>
   );

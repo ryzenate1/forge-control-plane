@@ -27,6 +27,7 @@ import {
   AdminErrorState,
   EmptyState,
   Modal,
+  ModalFooter,
 } from "./admin-ui";
 
 function ttlLabel(hours: number): string {
@@ -225,13 +226,13 @@ export function AdminOnboardingTokens() {
       </div>
 
       {created && (
-        <Modal title="Token created — copy once" onClose={() => setCreated(null)} wide>
+        <Modal title="Token created" description="Copy once — store it securely" onClose={() => setCreated(null)} wide>
           <div className="space-y-4">
             <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-200">
               This plaintext token is shown <span className="font-semibold">once</span>. Store it securely — the backend only keeps the bcrypt hash. It expires {new Date(created.expiresAt).toLocaleString()}.
             </div>
             <div className="space-y-2">
-              <div className="text-xs font-semibold uppercase tracking-widest text-[var(--text-subtle)]">Plaintext (id.secret)</div>
+              <div className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Plaintext (id.secret)</div>
               <div className="flex gap-2">
                 <pre className="flex-1 overflow-auto rounded-lg border border-[var(--line)] bg-black/30 p-3 font-mono text-xs leading-5 text-emerald-300">{created.token}</pre>
                 <Btn
@@ -251,13 +252,10 @@ export function AdminOnboardingTokens() {
                   {copied ? <Check size={14} /> : <Copy size={14} />} {copied ? "Copied" : "Copy"}
                 </Btn>
               </div>
-              <div className="text-xs text-[var(--text-subtle)]">tokenId: <code className="font-mono">{created.tokenId}</code></div>
-            </div>
-            <div className="flex justify-end gap-2">
-              <Btn tone="ghost" onClick={() => setCreated(null)}>Close</Btn>
-              <Btn tone="primary" onClick={() => { void navigator.clipboard.writeText(created.token); setCreated(null); }}>Copy & close</Btn>
+              <div className="text-xs text-slate-400">tokenId: <code className="font-mono">{created.tokenId}</code></div>
             </div>
           </div>
+          <ModalFooter onCancel={() => setCreated(null)} onConfirm={() => { void navigator.clipboard.writeText(created.token); setCreated(null); }} confirmLabel="Copy & close" />
         </Modal>
       )}
 

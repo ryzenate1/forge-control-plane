@@ -146,8 +146,10 @@ export function pillToneToStatusPillTone(tone: StatusTone): StatusPillTone {
  * @param status - raw status string (case-insensitive trimming handled by caller)
  * @param kind - hint for disambiguation; defaults to app (covers deployment fallthrough)
  */
-export function statusTone(status: string, kind: "app" | "deployment" | "compose" | "preview" | "source" | "build" | "server-deployment" = "app"): StatusTone {
+export function statusTone(status: string | null | undefined, kind: "app" | "deployment" | "compose" | "preview" | "source" | "build" | "server-deployment" = "app"): StatusTone {
+  if (typeof status !== "string") return "neutral";
   const normalized = status.trim().toLowerCase();
+  if (!normalized) return "neutral";
   // Kind-specific overrides first where semantics diverge (e.g., preview deploying neutral vs blue historically — now unified to blue)
   if (kind === "compose") return COMPOSE_STATUS_INVENTORY[normalized] ?? DEPLOYMENT_STATUS_TONE[normalized] ?? APP_STATUS_TONE[normalized] ?? "neutral";
   if (kind === "preview") return PREVIEW_STATUS_INVENTORY[normalized] ?? DEPLOYMENT_STATUS_TONE[normalized] ?? "neutral";
@@ -162,41 +164,41 @@ export function statusTone(status: string, kind: "app" | "deployment" | "compose
 }
 
 /** Backward-compatible alias for deployment statuses */
-export function deploymentStatusTone(status: string): StatusTone {
+export function deploymentStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "deployment");
 }
 
 /** Alias for app statuses (explicit) */
-export function appStatusTone(status: string): StatusTone {
+export function appStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "app");
 }
 
 /** Compose helper — thin wrapper so call sites read compose semantics but still single source */
-export function composeStatusTone(status: string): StatusTone {
+export function composeStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "compose");
 }
 
 /** Preview helper */
-export function previewStatusTone(status: string): StatusTone {
+export function previewStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "preview");
 }
 
 /** Source helper */
-export function sourceStatusTone(status: string): StatusTone {
+export function sourceStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "source");
 }
 
 /** Build helper (Pill tone; map to StatusPill via pillToneToStatusPillTone) */
-export function buildStatusTone(status: string): StatusTone {
+export function buildStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "build");
 }
 
 /** Server deployment helper */
-export function serverDeploymentStatusTone(status: string): StatusTone {
+export function serverDeploymentStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "server-deployment");
 }
 
 /** Unified StatusPill tone (success/warning/danger/info/neutral) — uses same single source, just adapted */
-export function statusPillTone(status: string, kind: "app" | "deployment" | "compose" | "preview" | "source" | "build" | "server-deployment" = "app"): StatusPillTone {
+export function statusPillTone(status: string | null | undefined, kind: "app" | "deployment" | "compose" | "preview" | "source" | "build" | "server-deployment" = "app"): StatusPillTone {
   return pillToneToStatusPillTone(statusTone(status, kind));
 }

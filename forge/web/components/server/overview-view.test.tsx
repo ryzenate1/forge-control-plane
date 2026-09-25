@@ -109,4 +109,16 @@ describe("server overview", () => {
       expect(copyButton.querySelector(".text-emerald-400")).not.toBeNull();
     });
   });
+
+  it("renders live resource KPIs, version rows and uptime from beacon stats", async () => {
+    installOverviewFetch();
+    renderServer(<OverviewView server={server} />);
+
+    // memory: 1174405120 / 4294967296 = 27.34% ; uptime 367782s = 4d 6h 9m
+    expect(await screen.findByText("12.5%")).toBeInTheDocument();
+    expect(screen.getByText("27.3%")).toBeInTheDocument();
+    expect(screen.getAllByText("4d 6h 9m").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("paper-1.21.1-123.jar")).toBeInTheDocument();
+    expect(screen.getAllByText("live").length).toBeGreaterThanOrEqual(1);
+  });
 });

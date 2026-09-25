@@ -28,6 +28,7 @@ import {
   EmptyState,
   Input,
   Modal,
+  ModalFooter,
 } from "./admin-ui";
 
 export function AdminSftp() {
@@ -47,9 +48,11 @@ export function AdminSftp() {
   }, [globalQ.data, globalForm]);
 
   const saveGlobalMut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!globalForm) throw new Error("No form data");
-      return updateSFTPGlobalConfig(globalForm);
+      const result = await updateSFTPGlobalConfig(globalForm);
+      if (!result.ok) throw new Error("The server reported the global SFTP settings update did not complete.");
+      return result;
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin-sftp-settings"] });
@@ -269,9 +272,11 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
   useEffect(() => { if (q.data && !form) setForm(q.data); }, [q.data, form]);
 
   const saveMut = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!form) throw new Error("No form");
-      return updateSFTPNodeConfig(nodeId, form);
+      const result = await updateSFTPNodeConfig(nodeId, form);
+      if (!result.ok) throw new Error("The server reported the node SFTP config update did not complete.");
+      return result;
     },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin-sftp-nodes"] });
@@ -283,8 +288,9 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
   });
 
   return (
-    <Modal title={`SFTP — ${nodeName}`} onClose={onClose} wide>
+    <Modal title="Edit node SFTP config" description={`Node: ${nodeName}`} onClose={onClose} wide>
       {q.isLoading ? <AdminLoadingState label="Loading node config…" /> : q.isError ? <AdminErrorState message={(q.error as Error).message} retry={() => void q.refetch()} /> : form ? (
+        <>
         <div className="space-y-4">
           <label className="flex items-center gap-2 text-sm">
             <input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} className="accent-[var(--brand)]" />
@@ -306,7 +312,7 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Log level</span>
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Log level</span>
             <select className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm" value={form.logLevel} onChange={(e) => setForm({ ...form, logLevel: e.target.value })}>
               <option value="error">error</option>
               <option value="warn">warn</option>
@@ -316,24 +322,20 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Allowed IPs (comma-separated, blank = all)</span>
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Allowed IPs (comma-separated, blank = all)</span>
             <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(form.allowedIps ?? []).join(", ")} onChange={(e) => setForm({ ...form, allowedIps: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="10.0.0.0/8, 192.168.1.10" />
           </label>
 
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Banner</span>
+            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Banner</span>
             <textarea className="min-h-[60px] w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] p-3 text-sm" value={form.banner ?? ""} onChange={(e) => setForm({ ...form, banner: e.target.value })} placeholder="Welcome to Forge SFTP" rows={2} />
           </label>
 
-          {saveMut.isError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-200">{(saveMut.error as Error).message}</div>}
+          {saveMut.isError && <div className="rounded-lg border border-red-500/30 bg-red-500/10 p-3 text-sm text-red-300">{(saveMut.error as Error).message}</div>}
 
-          <div className="flex justify-end gap-2 border-t border-[var(--line)] pt-4">
-            <Btn tone="ghost" onClick={onClose}>Cancel</Btn>
-            <Btn tone="primary" loading={saveMut.isPending} onClick={() => saveMut.mutate()}>
-              <Save size={14} /> Save node config
-            </Btn>
           </div>
-        </div>
+          <ModalFooter onCancel={onClose} onConfirm={() => saveMut.mutate()} disabled={saveMut.isPending} confirmLabel="Save node config" />
+        </>
       ) : null}
     </Modal>
   );

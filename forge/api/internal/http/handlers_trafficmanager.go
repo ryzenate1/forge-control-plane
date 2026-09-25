@@ -118,4 +118,14 @@ func registerTrafficManagerRoutes(protected fiber.Router, cfg Config, svc *traff
 		}
 		return c.JSON(fiber.Map{"message": "routes synced"})
 	})
+
+	// Restore the gateway's last saved configuration from backup. RollbackGateway
+	// errors (rather than reporting success) when no backup exists, so a 5xx here
+	// genuinely means nothing was rolled back.
+	tm.Post("/gateway/rollback", mutationLimiter, requireRole("admin"), requireAdminScope("traffic.write"), func(c *fiber.Ctx) error {
+		if err := svc.RollbackGateway(c.Context()); err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.JSON(fiber.Map{"message": "gateway config rolled back"})
+	})
 }

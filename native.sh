@@ -30,9 +30,15 @@ PID_DIR="$ROOT/.dev-pids"
 DATA_DIR="$ROOT/.dev-data"
 SECRETS="$ROOT/.dev-secrets.env"
 
-# Colima owns the active Docker context; launchd agents get no shell env, so
-# the socket has to be passed explicitly.
-DOCKER_SOCK="$HOME/.colima/default/docker.sock"
+if [ -S "$HOME/.docker/run/docker.sock" ]; then
+    DOCKER_SOCK="$HOME/.docker/run/docker.sock"
+elif [ -S "$HOME/.colima/default/docker.sock" ]; then
+    DOCKER_SOCK="$HOME/.colima/default/docker.sock"
+elif [ -S "/var/run/docker.sock" ]; then
+    DOCKER_SOCK="/var/run/docker.sock"
+else
+    DOCKER_SOCK="$HOME/.colima/default/docker.sock"
+fi
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
@@ -186,7 +192,7 @@ start_beacon() {
     <key>EnvironmentVariables</key>
     <dict>
         <key>PATH</key>
-        <string>$BREW_PREFIX/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>$HOME/.docker/bin:$BREW_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>APP_ENV</key>
         <string>development</string>
         <key>DAEMON_ADDR</key>

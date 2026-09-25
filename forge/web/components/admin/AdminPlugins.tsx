@@ -3,25 +3,35 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Plug, Plus, Trash2, Zap, Upload, Store, Compass, Settings2, Wrench, Search } from "lucide-react";
-import { deleteJSON, fetchJSON, postJSON, patchJSON, type ApiPlugin } from "@/lib/api";
-import { API_BASE_URL, getCSRFToken, putJSON } from "@/lib/api/http";
+import { type ApiPlugin } from "@/lib/api";
+import {
+  deletePlugin,
+  fetchDiscoveredPlugins,
+  fetchMarketplacePlugins,
+  fetchPluginHooks,
+  fetchPlugins,
+  importPluginFile,
+  importPluginFromURL,
+  installPlugin,
+  togglePluginLifecycle,
+  updatePlugin,
+  updatePluginSettings,
+  type PluginDiscoverItem,
+  type PluginMarketplaceItem,
+} from "@/lib/api/plugins";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminFormSection, AdminTabs, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd } from "./admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminFormSection, AdminTabs } from "./admin-ui";
 import { useToast } from "@/components/ui/toast";
 
 type PluginTab = "installed" | "marketplace" | "discover";
 
-type MarketplaceItem = ApiPlugin & { source?: string; manifest?: string; author?: string; description?: string };
-type DiscoverItem = ApiPlugin & { source?: string; path?: string };
+type MarketplaceItem = PluginMarketplaceItem;
+type DiscoverItem = PluginDiscoverItem;
 
 function useMarketplaceQuery(enabled: boolean) {
   return useQuery({
     queryKey: ["plugins-marketplace"],
-    queryFn: async () => {
-      const res = await fetchJSON<{ marketplace: MarketplaceItem[] } | MarketplaceItem[]>("/admin/plugins/marketplace");
-      if (Array.isArray(res as MarketplaceItem[])) return res as MarketplaceItem[];
-      return (res as { marketplace: MarketplaceItem[] }).marketplace ?? [];
-    },
+    queryFn: fetchMarketplacePlugins,
     enabled,
   });
 }
@@ -29,11 +39,7 @@ function useMarketplaceQuery(enabled: boolean) {
 function useDiscoverQuery(enabled: boolean) {
   return useQuery({
     queryKey: ["plugins-discover"],
-    queryFn: async () => {
-      const res = await fetchJSON<{ plugins: DiscoverItem[] } | DiscoverItem[]>("/admin/plugins/discover");
-      if (Array.isArray(res as DiscoverItem[])) return res as DiscoverItem[];
-      return (res as { plugins: DiscoverItem[] }).plugins ?? [];
-    },
+    queryFn: fetchDiscoveredPlugins,
     enabled,
   });
 }
@@ -41,10 +47,7 @@ function useDiscoverQuery(enabled: boolean) {
 function usePluginHooks(pluginId: string | null) {
   return useQuery({
     queryKey: ["plugin-hooks", pluginId],
-    queryFn: () => fetchJSON<{ hooks: unknown[] } | unknown[]>(`/admin/plugins/${encodeURIComponent(pluginId!)}/hooks`).then((r) => {
-      if (Array.isArray(r as unknown[])) return r as unknown[];
-      return (r as { hooks: unknown[] }).hooks ?? [];
-    }),
+    queryFn: () => fetchPluginHooks(pluginId!),
     enabled: !!pluginId,
   });
 }
@@ -58,7 +61,7 @@ export function AdminPlugins() {
 
   const query = useQuery({
     queryKey: ["plugins"],
-    queryFn: () => fetchJSON<ApiPlugin[]>("/admin/plugins"),
+    queryFn: fetchPlugins,
   });
   const marketplaceQuery = useMarketplaceQuery(tab === "marketplace");
   const discoverQuery = useDiscoverQuery(tab === "discover");
@@ -72,7 +75,7 @@ export function AdminPlugins() {
   const hooksQuery = usePluginHooks(hooksPluginId);
 
   const importMut = useMutation({
-    mutationFn: () => postJSON<ApiPlugin>("/admin/plugins/import/url", { url: url.trim() }),
+    mutationFn: () => importPluginFromURL(url.trim()),
     onSuccess: () => {
       setOpen(false);
       setUrl("");
@@ -83,24 +86,7 @@ export function AdminPlugins() {
   });
 
   const fileImportMut = useMutation({
-    mutationFn: async (file: File) => {
-      const form = new FormData();
-      form.append("file", file);
-      const headers: Record<string, string> = {};
-      const csrf = getCSRFToken();
-      if (csrf) headers["X-CSRF-Token"] = csrf;
-      const res = await fetch(`${API_BASE_URL}/admin/plugins/import/file`, {
-        method: "POST",
-        body: form,
-        credentials: "include",
-        headers,
-      });
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || `Import failed ${res.status}`);
-      }
-      return (await res.json()) as ApiPlugin;
-    },
+    mutationFn: (file: File) => importPluginFile(file),
     onSuccess: () => {
       setShowFile(false);
       if (fileRef.current) fileRef.current.value = "";
@@ -111,7 +97,7 @@ export function AdminPlugins() {
   });
 
   const installMut = useMutation({
-    mutationFn: (item: MarketplaceItem | DiscoverItem) => postJSON<ApiPlugin>("/admin/plugins/install", {
+    mutationFn: (item: MarketplaceItem | DiscoverItem) => installPlugin({
       name: item.name,
       source: (item as MarketplaceItem).source ?? `marketplace:${item.id ?? item.name}`,
       manifest: (item as MarketplaceItem).manifest ?? JSON.stringify(item),
@@ -124,19 +110,18 @@ export function AdminPlugins() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteJSON(`/admin/plugins/${encodeURIComponent(id)}`),
+    mutationFn: (id: string) => deletePlugin(id),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["plugins"] }); toast({ tone: "success", title: "Plugin deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
   const lifecycleMut = useMutation({
-    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
-      postJSON(`/admin/plugins/${encodeURIComponent(id)}/${enabled ? "disable" : "enable"}`, {}),
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) => togglePluginLifecycle(id, enabled),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["plugins"] }); toast({ tone: "success", title: "State updated" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Lifecycle failed", message: e.message }),
   });
 
   const patchMut = useMutation({
-    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => patchJSON<ApiPlugin>(`/admin/plugins/${encodeURIComponent(id)}`, data),
+    mutationFn: ({ id, data }: { id: string; data: Record<string, unknown> }) => updatePlugin(id, data),
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["plugins"] });
       setEditingPlugin(null);
@@ -147,8 +132,9 @@ export function AdminPlugins() {
 
   const updateSettingsMut = useMutation({
     mutationFn: ({ id, settings }: { id: string; settings: Record<string, unknown> }) =>
-      putJSON<ApiPlugin>(`/admin/plugins/${encodeURIComponent(id)}/settings`, settings),
+      updatePluginSettings(id, settings),
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["plugins"] }); toast({ tone: "success", title: "Settings updated" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Settings update failed", message: e.message }),
   });
 
   const plugins = useMemo(() => Array.isArray(query.data) ? query.data : [], [query.data]);
@@ -332,7 +318,7 @@ export function AdminPlugins() {
 
     {/* Import URL Modal */}
     {open ? (
-      <Modal title="Import Plugin Manifest — POST /admin/plugins/import/url" onClose={() => setOpen(false)}>
+      <Modal title="Import Plugin Manifest" description="POST /admin/plugins/import/url" onClose={() => setOpen(false)}>
         <AdminFormSection title="Manifest URL">
         <Input label="HTTPS manifest URL" value={url} onChange={setUrl} placeholder="https://example.com/plugin.json"/>
         <p className="text-xs text-slate-400">The backend fetches this URL and stores JSON manifest metadata. Review network and trust implications before importing.</p>
@@ -349,7 +335,7 @@ export function AdminPlugins() {
 
     {/* Import File Modal */}
     {showFile ? (
-      <Modal title="Import Plugin Manifest — POST /admin/plugins/import/file" onClose={() => { setShowFile(false); if (fileRef.current) fileRef.current.value = ""; }}>
+      <Modal title="Import Plugin Manifest" description="POST /admin/plugins/import/file" onClose={() => { setShowFile(false); if (fileRef.current) fileRef.current.value = ""; }}>
         <AdminFormSection title="Manifest File">
           <input ref={fileRef} type="file" accept=".json,application/json" className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-[var(--brand)]/30 file:bg-[var(--brand)]/10 file:px-3 file:py-2 file:text-sm file:text-slate-100 hover:file:bg-[var(--brand)]/20" onChange={(e) => {
             const f = e.target.files?.[0];
@@ -384,7 +370,7 @@ function PatchPluginModal({ plugin, onClose, onSave, isPending, error }: { plugi
   const [kind, setKind] = useState(plugin.kind ?? "");
 
   return (
-    <Modal title={`Edit Plugin — PATCH /admin/plugins/${plugin.id}`} onClose={onClose}>
+    <Modal title="Edit Plugin" description={`PATCH /admin/plugins/${plugin.id}`} onClose={onClose}>
       <div className="space-y-4">
         <Input label="Name" value={name} onChange={setName} placeholder="Plugin name" />
         <Input label="Description" value={description} onChange={setDescription} placeholder="Description" />
@@ -400,7 +386,7 @@ function PatchPluginModal({ plugin, onClose, onSave, isPending, error }: { plugi
         ...(description !== (plugin.description ?? "") ? { description } : {}),
         ...(version !== (plugin.version ?? "") ? { version } : {}),
         ...(kind !== (plugin.kind ?? "") ? { kind } : {}),
-      })} disabled={isPending || !name.trim()} confirmLabel={isPending ? "Saving…" : "Save (PATCH)"} />
+      })} disabled={isPending || !name.trim()} confirmLabel={isPending ? "Saving…" : "Save"} />
     </Modal>
   );
 }

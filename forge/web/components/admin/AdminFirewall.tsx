@@ -467,7 +467,7 @@ function AddForwardModal({ nodeId, onClose }: { nodeId: string; onClose: () => v
           ]} />
           <Input label="Description" value={description} onChange={setDescription} placeholder="Optional description" />
         </AdminFormSection>
-        {validationError && <p className="text-sm text-amber-300">{validationError}</p>}
+        {validationError && <p className="text-sm text-red-300">{validationError}</p>}
         {addMut.error && <p className="text-sm text-red-300">{addMut.error instanceof Error ? addMut.error.message : "Failed to add forward."}</p>}
         <ModalFooter onCancel={onClose} onConfirm={() => { if (!validationError) addMut.mutate(); }} confirmLabel={addMut.isPending ? "Adding…" : "Add Forward"} disabled={Boolean(validationError) || addMut.isPending} />
       </form>
@@ -495,7 +495,7 @@ function QuickOpenPortModal({ nodeId, onClose }: { nodeId: string; onClose: () =
   const validationError = !port ? "Port is required." : Number(port) < 1 || Number(port) > 65535 ? "Port must be 1-65535." : null;
 
   return (
-    <Modal title="Quick Open Port — POST /host/firewall/port" onClose={onClose}>
+    <Modal title="Quick Open Port" description="POST /host/firewall/port" onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!validationError) openMut.mutate(); }}>
         <AdminFormSection title="Open Port">
           <Input label="Port" value={port} onChange={setPort} type="number" placeholder="e.g. 25565" required />
@@ -506,7 +506,7 @@ function QuickOpenPortModal({ nodeId, onClose }: { nodeId: string; onClose: () =
           ]} />
           <p className="text-xs text-slate-400">Wires <code className="font-mono">openFirewallPort({`{port, protocol}`})</code> → POST /host/firewall/port?nodeId={nodeId || "auto"}. The daemon applies an allow rule directly.</p>
         </AdminFormSection>
-        {validationError && <p className="text-sm text-amber-300">{validationError}</p>}
+        {validationError && <p className="text-sm text-red-300">{validationError}</p>}
         {openMut.error && <p className="text-sm text-red-300">{openMut.error instanceof Error ? openMut.error.message : "Failed to open port."}</p>}
         <ModalFooter
           onCancel={onClose}

@@ -4,11 +4,12 @@ import { useState, useRef, useEffect, useCallback } from "react";
 import { Download } from "lucide-react";
 import { Btn, Input, Pill, cn } from "./admin-ui";
 import type { AppStatus, DeploymentStatus, AppPort, AppVolume, AppLogEntry } from "@/lib/api/apps";
-import { statusTone, deploymentStatusTone } from "@/lib/api/apps";
+import { statusTone } from "@/lib/api/status";
 
-export function DeployStatusBadge({ status, type = "app" }: { status: AppStatus | DeploymentStatus; type?: "app" | "deployment" }) {
-  const tone = type === "app" ? statusTone(status as AppStatus) : deploymentStatusTone(status as DeploymentStatus);
-  const label = status.replace(/_/g, " ");
+export function DeployStatusBadge({ status, type = "app" }: { status?: AppStatus | DeploymentStatus | string | null; type?: "app" | "deployment" }) {
+  const raw = typeof status === "string" ? status : "";
+  const tone = statusTone(raw || "unknown", type);
+  const label = raw ? raw.replace(/_/g, " ") : "unknown";
   return <Pill tone={tone}>{label}</Pill>;
 }
 

@@ -199,6 +199,45 @@ func validateWebhookURL(rawURL string) error {
 	return nil
 }
 
+// postJSON posts an arbitrary JSON document to a validated HTTPS webhook
+// endpoint. Used by the channel notifiers (Discord/Slack/Telegram), whose
+// payloads do not fit the generic WebhookMessage envelope.
+func (s *WebhookService) postJSON(ctx context.Context, endpoint string, payload any) error {
+	return s.postJSONWithHeaders(ctx, endpoint, payload, nil)
+}
+
+// postJSONWithHeaders posts JSON with optional custom headers and treats any
+// non-2xx response as an error, including a short body preview for honest
+// failure messages.
+func (s *WebhookService) postJSONWithHeaders(ctx context.Context, endpoint string, payload any, headers map[string]string) error {
+	if err := validateWebhookURL(endpoint); err != nil {
+		return err
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("failed to marshal notification payload: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return fmt.Errorf("failed to create notification request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Forge-Notifications/1.0")
+	for name, value := range headers {
+		req.Header.Set(name, value)
+	}
+	resp, err := s.client.Do(req)
+	if err != nil {
+		return fmt.Errorf("notification delivery failed: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		return fmt.Errorf("notification endpoint returned %d: %s", resp.StatusCode, strings.TrimSpace(string(snippet)))
+	}
+	return nil
+}
+
 // RetryPolicy defines retry behavior for webhook deliveries
 type RetryPolicy struct {
 	MaxRetries        int

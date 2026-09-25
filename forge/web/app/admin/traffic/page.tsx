@@ -308,10 +308,10 @@ export default function AdminTrafficPage() {
 
       {showCreatePolicy && (
         <Modal title="Create Traffic Policy" onClose={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <Input label="Name" value={policyForm.name} onChange={(v) => setPolicyForm({ ...policyForm, name: v })} placeholder="Rate limit API" />
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
                 className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={policyForm.type}
@@ -324,13 +324,13 @@ export default function AdminTrafficPage() {
               </select>
             </div>
             <Input label="Config (JSON)" value={policyForm.config} onChange={(v) => setPolicyForm({ ...policyForm, config: v })} placeholder='{"requests_per_second": 100}' />
-            {policyConfigError ? <p className="text-xs text-red-400">{policyConfigError}</p> : null}
+            {policyConfigError ? <p className="text-sm text-red-300">{policyConfigError}</p> : null}
             <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
               <input type="checkbox" checked={policyForm.enabled} onChange={(e) => setPolicyForm({ ...policyForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
               Enabled
             </label>
+            <p className="text-xs text-slate-400">POST /admin/traffic/policies — backend persists via trafficmanager.Service</p>
           </div>
-          <p className="mt-2 text-xs text-slate-500">POST /admin/traffic/policies — backend persists via trafficmanager.Service</p>
           <ModalFooter
             onCancel={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}
             onConfirm={() => { setPolicyConfigError(null); createPolicyMutation.mutate(); }}
@@ -341,11 +341,11 @@ export default function AdminTrafficPage() {
       )}
       {editingPolicy && (
         <Modal title="Edit Traffic Policy" onClose={() => { setEditingPolicy(null); setPolicyForm(defaultPolicyForm); setPolicyConfigError(null); }}>
-          <div className="grid gap-4">
+          <div className="space-y-4">
             <p className="text-xs text-slate-400">PUT /admin/traffic/policies/:id — wired to backend UpdateTrafficPolicy</p>
             <Input label="Name" value={policyForm.name} onChange={(v) => setPolicyForm({ ...policyForm, name: v })} placeholder="Rate limit API" />
             <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1.5">Type</label>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
                 className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
                 value={policyForm.type}
@@ -358,7 +358,7 @@ export default function AdminTrafficPage() {
               </select>
             </div>
             <Input label="Config (JSON)" value={policyForm.config} onChange={(v) => setPolicyForm({ ...policyForm, config: v })} placeholder='{"requests_per_second": 100}' />
-            {policyConfigError ? <p className="text-xs text-red-400">{policyConfigError}</p> : null}
+            {policyConfigError ? <p className="text-sm text-red-300">{policyConfigError}</p> : null}
             <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
               <input type="checkbox" checked={policyForm.enabled} onChange={(e) => setPolicyForm({ ...policyForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
               Enabled
@@ -390,8 +390,8 @@ function RouteFormModal({
 }) {
   return (
     <Modal title={title} onClose={onClose}>
-      <div className="grid gap-4">
-        <p className="text-xs text-slate-500">{title.includes("Edit") ? "PUT /admin/traffic/rules/:id" : "POST /admin/traffic/rules"} — backend now correctly uses PUT for updates</p>
+      <div className="space-y-4">
+        <p className="text-xs text-slate-400">{title.includes("Edit") ? "PUT /admin/traffic/rules/:id" : "POST /admin/traffic/rules"} — backend now correctly uses PUT for updates</p>
         <Input label="Path" value={form.path} onChange={(v) => onChange({ ...form, path: v })} placeholder="/api/v1/servers" />
         <Input label="Target Group" value={form.targetGroup} onChange={(v) => onChange({ ...form, targetGroup: v })} placeholder="prod-servers" />
         <Input label="Priority" type="number" value={String(form.priority)} onChange={(v) => onChange({ ...form, priority: Number(v) })} />

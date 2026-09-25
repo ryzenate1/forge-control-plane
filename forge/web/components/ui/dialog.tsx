@@ -66,12 +66,12 @@ function DialogContent({ className, children, ...props }: React.HTMLAttributes<H
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60"
+      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/70 p-4 backdrop-blur-md sm:p-6"
       onClick={(e) => { if (e.target === e.currentTarget) onOpenChange(false); }}
     >
       <div
         className={cn(
-          "relative w-full max-w-lg rounded-xl border border-white/[0.08] bg-surface-card shadow-card p-6",
+          "relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-dialog)]",
           className
         )}
         {...props}
@@ -79,9 +79,9 @@ function DialogContent({ className, children, ...props }: React.HTMLAttributes<H
         <button
           type="button"
           onClick={() => onOpenChange(false)}
-          className="absolute right-4 top-4 rounded-sm opacity-70 hover:opacity-100 focus:outline-none focus:ring-2 focus:ring-brand/50"
+          className="ui-icon-button absolute right-4 top-4"
         >
-          <X className="h-4 w-4 text-slate-400" />
+          <X className="h-4 w-4" />
           <span className="sr-only">Close</span>
         </button>
         {children}
@@ -95,11 +95,11 @@ function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivEleme
 }
 
 function DialogTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className={cn("text-lg font-semibold text-slate-100", className)} {...props} />;
+  return <h2 className={cn("text-[15px] font-bold tracking-tight text-[var(--text)]", className)} {...props} />;
 }
 
 function DialogDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-sm text-slate-400", className)} {...props} />;
+  return <p className={cn("text-[13px] leading-5 text-[var(--text-subtle)]", className)} {...props} />;
 }
 
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {

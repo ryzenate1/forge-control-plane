@@ -663,6 +663,9 @@ GET     /api/v1/git/oauth/:provider/callback                                    
 GET     /api/v1/git/oauth/:provider/status                                             Phase1GitProviderStatus
 GET     /api/v1/git/providers                                                          ListGitProviderTokens
 POST    /api/v1/git/providers                                                          ConnectGitProvider
+POST    /api/v1/git/providers/test                                                     TestGitProviderToken
+POST    /api/v1/git/providers/:id/test                                                 TestSavedGitProviderToken
+PATCH   /api/v1/git/providers/:id                                                      UpdateGitProviderToken
 DELETE  /api/v1/git/providers/:id                                                      DisconnectGitProvider
 GET     /api/v1/git/providers/:id/branches                                             ListProviderBranches
 GET     /api/v1/git/providers/:id/repos                                                ListProviderRepos

@@ -419,7 +419,7 @@ function ImportTemplateModal({
 
   return (
     <Modal title={`Import "${template.name}"`} onClose={onClose} wide>
-      <div className="space-y-5">
+      <div className="space-y-4">
         <div>
           <h4 className="text-sm font-semibold text-slate-200 mb-1">{template.name}</h4>
           <p className="text-xs text-slate-400">{template.description}</p>
@@ -427,7 +427,7 @@ function ImportTemplateModal({
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Images</h4>
+            <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Images</h4>
             <div className="space-y-1">
               {Object.entries(template.images).map(([label, img]) => (
                 <code key={label} className="block truncate rounded bg-white/[0.04] px-2 py-1 font-mono text-[11px] text-slate-300">{label}: {img}</code>
@@ -435,7 +435,7 @@ function ImportTemplateModal({
             </div>
           </div>
           <div className="space-y-2">
-            <h4 className="text-[10px] font-semibold uppercase tracking-widest text-slate-500">Variables ({template.env.length})</h4>
+            <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Variables ({template.env.length})</h4>
             <div className="space-y-1">
               {template.env.slice(0, 5).map((v) => (
                 <div key={v.envVariable} className="flex items-center gap-2 text-[11px]">
@@ -451,9 +451,9 @@ function ImportTemplateModal({
         </div>
 
         <div className="border-t border-white/[0.06] pt-4">
-          <label className="mb-1.5 block text-xs font-semibold text-slate-300">Target Nest</label>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Target Nest</label>
           {nests.length === 0 ? (
-            <p className="text-xs text-slate-500">No nests available. Create a nest first.</p>
+            <p className="text-xs text-slate-400">No nests available. Create a nest first.</p>
           ) : (
             <select
               value={selectedNest}

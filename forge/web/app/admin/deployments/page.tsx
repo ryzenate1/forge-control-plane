@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
@@ -10,6 +10,7 @@ import {
 import { fetchJSON } from "@/lib/api";
 import { fetchAllDeployments, typeLabel, type AppDeployment } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, Modal, cn } from "@/components/admin/admin-ui";
+import { DashHeader, InfoCard } from "@/components/admin/dashboard-cards";
 import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";
 import { formatDate } from "@/lib/utils";
 
@@ -318,61 +319,36 @@ function DeploymentDetailModal({
 }) {
   if (isApp) {
     const dep = deployment as AppDeployment;
+    const appTone: "green" | "red" | "neutral" | "yellow" = dep.status === "completed" ? "green" : dep.status === "failed" ? "red" : dep.status === "pending" ? "neutral" : "yellow";
     return (
-      <Modal title={`Deployment #${dep.revision}`} onClose={onClose} wide>
+      <Modal title={`Deployment #${dep.revision}`} description={dep.commitMessage ?? dep.appId} onClose={onClose} wide className="max-w-6xl">
         <div className="space-y-4">
-          <div className="grid grid-cols-2 gap-4 text-sm">
-            <div>
-              <span className="text-slate-400">App:</span>
-              <span className="font-mono text-xs text-slate-200 ml-1">{dep.appId}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Revision:</span>
-              <span className="text-slate-200 ml-1">#{dep.revision}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Source:</span>
-              <span className="text-slate-200 ml-1">{dep.source ? typeLabel(dep.source) : "—"}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Trigger:</span>
-              <span className="text-slate-200 ml-1">{dep.trigger}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Status:</span>
-              <DeployStatusBadge status={dep.status} type="deployment" />
-            </div>
-            <div>
-              <span className="text-slate-400">Duration:</span>
-              <span className="text-slate-200 ml-1">{dep.duration != null ? `${dep.duration}s` : "—"}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Started:</span>
-              <span className="text-slate-200 ml-1">{formatDate(dep.startedAt)}</span>
-            </div>
-            <div>
-              <span className="text-slate-400">Completed:</span>
-              <span className="text-slate-200 ml-1">{formatDate(dep.completedAt)}</span>
-            </div>
-            {dep.commit && (
-              <div className="col-span-2">
-                <span className="text-slate-400">Commit:</span>
-                <span className="font-mono text-xs text-slate-200 ml-1">{dep.commit}</span>
-              </div>
-            )}
-            {dep.commitMessage && (
-              <div className="col-span-2">
-                <span className="text-slate-400">Message:</span>
-                <span className="text-slate-200 ml-1">{dep.commitMessage}</span>
-              </div>
-            )}
-            {dep.image && (
-              <div className="col-span-2">
-                <span className="text-slate-400">Image:</span>
-                <span className="font-mono text-xs text-slate-200 ml-1">{dep.image}</span>
-              </div>
-            )}
-          </div>
+          <DashHeader
+            icon={Layers}
+            eyebrow="App deployment"
+            title={`Deployment #${dep.revision}`}
+            pill={{ tone: appTone, label: dep.status }}
+            description={dep.commitMessage ?? undefined}
+            tags={[dep.source ? typeLabel(dep.source) : "", dep.trigger].filter((t): t is string => Boolean(t))}
+            meta={[
+              { label: "App", value: <span key="app" className="font-mono">{dep.appId}</span> },
+              { label: "Duration", value: dep.duration != null ? `${dep.duration}s` : "—" },
+              { label: "Started", value: formatDate(dep.startedAt) },
+            ]}
+          />
+          <InfoCard icon={Layers} title="Deployment Information" rows={[
+            ["App", <span key="app" className="font-mono text-slate-200">{dep.appId}</span>],
+            ["Revision", <span key="rev" className="text-slate-200">#{dep.revision}</span>],
+            ["Source", <span key="src" className="text-slate-200">{dep.source ? typeLabel(dep.source) : "—"}</span>],
+            ["Trigger", <span key="trig" className="text-slate-200">{dep.trigger}</span>],
+            ["Status", <DeployStatusBadge key="st" status={dep.status} type="deployment" />],
+            ["Duration", <span key="dur" className="text-slate-200">{dep.duration != null ? `${dep.duration}s` : "—"}</span>],
+            ["Started", <span key="started" className="text-slate-200">{formatDate(dep.startedAt)}</span>],
+            ["Completed", <span key="done" className="text-slate-200">{formatDate(dep.completedAt)}</span>],
+            ...(dep.commit ? [["Commit", <span key="commit" className="font-mono text-slate-200">{dep.commit}</span>] as [string, ReactNode]] : []),
+            ...(dep.commitMessage ? [["Message", <span key="msg" className="text-slate-200">{dep.commitMessage}</span>] as [string, ReactNode]] : []),
+            ...(dep.image ? [["Image", <span key="img" className="font-mono text-slate-200">{dep.image}</span>] as [string, ReactNode]] : []),
+          ]} />
           {dep.error && (
             <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
               {dep.error}
@@ -380,7 +356,7 @@ function DeploymentDetailModal({
           )}
           {dep.log && (
             <div>
-              <p className="mb-2 text-xs font-semibold text-slate-400">Build/Deploy Log</p>
+              <p className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Build/Deploy Log</p>
               <pre className="max-h-48 overflow-y-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-3 font-mono text-xs text-slate-400 whitespace-pre-wrap">
                 {dep.log}
               </pre>
@@ -396,48 +372,29 @@ function DeploymentDetailModal({
   const StatusIcon = cfg.icon;
 
   return (
-    <Modal title="Deployment Details" onClose={onClose} wide>
+    <Modal title="Deployment Details" description={`${dep.serverId} · ${dep.image}`} onClose={onClose} wide className="max-w-6xl">
       <div className="space-y-4">
-        <div className="grid grid-cols-2 gap-4 text-sm">
-          <div>
-            <span className="text-slate-400">Server:</span>
-            <span className="font-mono text-xs text-slate-200 ml-1">{dep.serverId}</span>
-          </div>
-          <div>
-            <span className="text-slate-400">Image:</span>
-            <span className="text-slate-200 ml-1">{dep.image}</span>
-          </div>
-          <div>
-            <span className="text-slate-400">Strategy:</span>
-            <Pill tone={dep.strategy === "blue_green" ? "blue" : dep.strategy === "rolling" ? "yellow" : "neutral"}>
-              {dep.strategy.replace(/_/g, "-")}
-            </Pill>
-          </div>
-          <div>
-            <span className="text-slate-400">Status:</span>
-            <div className="inline-flex items-center gap-1.5 ml-1">
-              <StatusIcon size={12} className={cn(
-                dep.status === "completed" && "text-emerald-400",
-                dep.status === "failed" && "text-red-400",
-              )} />
-              <Pill tone={cfg.tone}>{dep.status.replace(/_/g, " ")}</Pill>
-            </div>
-          </div>
-          <div>
-            <span className="text-slate-400">Target Group:</span>
-            <span className="text-slate-200 ml-1">{dep.targetGroup ?? "—"}</span>
-          </div>
-          <div>
-            <span className="text-slate-400">Created:</span>
-            <span className="text-slate-200 ml-1">{formatDate(dep.createdAt)}</span>
-          </div>
-          {dep.healthCheckPath && (
-            <div className="col-span-2">
-              <span className="text-slate-400">Health Check:</span>
-              <span className="text-slate-200 ml-1">{dep.healthCheckPath}:{dep.healthCheckPort}</span>
-            </div>
-          )}
-        </div>
+        <DashHeader
+          icon={Box}
+          eyebrow="Server deployment"
+          title="Deployment Details"
+          pill={{ tone: cfg.tone, label: dep.status.replace(/_/g, " ") }}
+          description={dep.image}
+          tags={[dep.strategy.replace(/_/g, "-"), dep.targetGroup ?? ""].filter(Boolean)}
+          meta={[
+            { label: "Server", value: <span key="srv" className="font-mono">{dep.serverId}</span> },
+            { label: "Created", value: formatDate(dep.createdAt) },
+          ]}
+        />
+        <InfoCard icon={Box} title="Deployment Information" rows={[
+          ["Server", <span key="srv" className="font-mono text-slate-200">{dep.serverId}</span>],
+          ["Image", <span key="img" className="text-slate-200">{dep.image}</span>],
+          ["Strategy", <Pill key="strat" tone={dep.strategy === "blue_green" ? "blue" : dep.strategy === "rolling" ? "yellow" : "neutral"}>{dep.strategy.replace(/_/g, "-")}</Pill>],
+          ["Status", <span key="st" className="inline-flex items-center gap-1.5"><StatusIcon size={12} className={cn(dep.status === "completed" && "text-emerald-400", dep.status === "failed" && "text-red-400")} /><Pill tone={cfg.tone}>{dep.status.replace(/_/g, " ")}</Pill></span>],
+          ["Target group", <span key="tg" className="text-slate-200">{dep.targetGroup ?? "—"}</span>],
+          ["Created", <span key="created" className="text-slate-200">{formatDate(dep.createdAt)}</span>],
+          ...(dep.healthCheckPath ? [["Health check", <span key="hc" className="text-slate-200">{dep.healthCheckPath}:{dep.healthCheckPort}</span>] as [string, ReactNode]] : []),
+        ]} />
         {dep.error && (
           <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
             {dep.error}
@@ -445,7 +402,7 @@ function DeploymentDetailModal({
         )}
         {dep.log && (
           <div>
-            <p className="mb-2 text-xs font-semibold text-slate-400">Deployment Log</p>
+            <p className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Deployment Log</p>
             <pre className="max-h-48 overflow-y-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-3 font-mono text-xs text-slate-400 whitespace-pre-wrap">
               {dep.log}
             </pre>

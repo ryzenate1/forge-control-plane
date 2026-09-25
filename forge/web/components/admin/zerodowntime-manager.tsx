@@ -4,6 +4,7 @@ import { useState } from "react";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { AdminCard, AdminPageLayout } from "@/components/admin/admin-layout";
 import * as api from "@/lib/api/zerodowntime";
+import { ApiError } from "@/lib/api/http";
 import { sanitizeError } from "@/lib/sanitize";
 
 export function ZerodowntimeManager() {
@@ -39,7 +40,13 @@ export function ZerodowntimeManager() {
     try {
       const [list, h] = await Promise.all([
         api.listReleases(serverId.trim()),
-        api.getHealthCheckConfig(serverId.trim()).catch(() => null),
+        // A server with no health-check config yet answers 404, which is a real
+        // "not configured" state; any other failure must surface instead of
+        // quietly leaving the previous/default form on screen.
+        api.getHealthCheckConfig(serverId.trim()).catch((e: unknown) => {
+          if (e instanceof ApiError && e.status === 404) return null;
+          throw e;
+        }),
       ]);
       setReleases(list);
       if (h) {
@@ -101,10 +108,15 @@ export function ZerodowntimeManager() {
 
   async function handleSelect(release: api.Release) {
     setSelected(release);
+    // Drop the previous release's details first: if either request fails we
+    // surface the error below rather than showing stale rows as if they were
+    // this release's (empty) events and health results.
+    setEvents([]);
+    setHealthResults([]);
     try {
       const [ev, hr] = await Promise.all([
-        api.getDeploymentEvents(serverId.trim(), release.id).catch(() => [] as api.DeploymentEvent[]),
-        api.getHealthCheckResults(serverId.trim(), release.id).catch(() => [] as api.HealthCheckResult[]),
+        api.getDeploymentEvents(serverId.trim(), release.id),
+        api.getHealthCheckResults(serverId.trim(), release.id),
       ]);
       setEvents(ev);
       setHealthResults([...hr].sort((a, b) => new Date(b.checkTimestamp).getTime() - new Date(a.checkTimestamp).getTime()));

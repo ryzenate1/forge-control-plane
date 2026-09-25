@@ -1,4 +1,5 @@
 import { fetchJSON, postJSON, patchJSON, deleteJSON } from './http';
+import { connectGitProviderToken, disconnectGitProviderToken, listGitProviderTokens } from './git-admin';
 
 export interface GitProvider {
   id: string;
@@ -83,21 +84,64 @@ export interface GitProviderBranch {
   isMain: boolean;
 }
 
+/**
+ * @deprecated Provider management is canonical in `@/lib/api/git-admin`
+ * (listGitProviderTokens / connectGitProviderToken /
+ * disconnectGitProviderToken, query key `["git-providers"]`). These wrappers
+ * remain for compatibility and delegate to the same `/git/providers`
+ * endpoints with the canonical field names.
+ */
 export async function listGitProviders(): Promise<GitProvider[]> {
-  return fetchJSON<GitProvider[]>('/git/providers');
+  const tokens = await listGitProviderTokens();
+  return tokens.map((t) => ({
+    id: t.id,
+    userId: t.userId,
+    name: t.providerName,
+    type: t.provider,
+    tokenType: t.tokenType,
+    baseUrl: t.baseUrl,
+    username: t.username,
+    avatarUrl: t.avatarUrl,
+    scope: "",
+    createdAt: t.createdAt,
+    updatedAt: t.updatedAt,
+  }));
 }
 
+/** @deprecated Use `connectGitProviderToken` from `@/lib/api/git-admin`. */
 export async function connectGitProvider(body: {
   provider: string;
   accessToken: string;
   baseUrl?: string;
   providerName?: string;
 }): Promise<GitProvider> {
-  return postJSON<GitProvider>('/git/providers', body);
+  const token = await connectGitProviderToken({
+    provider: body.provider,
+    providerName: body.providerName ?? body.provider,
+    accessToken: body.accessToken,
+    refreshToken: "",
+    tokenType: "bearer",
+    baseUrl: body.baseUrl ?? "",
+    username: "",
+  });
+  return {
+    id: token.id,
+    userId: token.userId,
+    name: token.providerName,
+    type: token.provider,
+    tokenType: token.tokenType,
+    baseUrl: token.baseUrl,
+    username: token.username,
+    avatarUrl: token.avatarUrl,
+    scope: "",
+    createdAt: token.createdAt,
+    updatedAt: token.updatedAt,
+  };
 }
 
+/** @deprecated Use `disconnectGitProviderToken` from `@/lib/api/git-admin`. */
 export async function disconnectGitProvider(id: string): Promise<void> {
-  await deleteJSON(`/git/providers/${encodeURIComponent(id)}`);
+  await disconnectGitProviderToken(id);
 }
 
 export async function listProviderRepos(providerId: string): Promise<GitProviderRepo[]> {

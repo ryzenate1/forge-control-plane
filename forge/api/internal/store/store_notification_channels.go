@@ -28,6 +28,11 @@ type NotificationChannel struct {
 	Enabled   bool                    `json:"enabled"`
 	CreatedAt time.Time               `json:"createdAt"`
 	UpdatedAt time.Time               `json:"updatedAt"`
+	// UserID scopes the channel to its owner (notifications engine, migration
+	// 223). Nil means a global channel managed by admins.
+	UserID *string `json:"userId,omitempty"`
+	// OrgID marks the channel as organization-wide when set by an admin.
+	OrgID *string `json:"orgId,omitempty"`
 }
 
 type CreateNotificationChannelRequest struct {
@@ -35,6 +40,8 @@ type CreateNotificationChannelRequest struct {
 	Name    string
 	Config  map[string]any
 	Enabled bool
+	UserID  *string
+	OrgID   *string
 }
 
 type UpdateNotificationChannelRequest struct {
@@ -76,9 +83,9 @@ func (s *Store) CreateNotificationChannel(ctx context.Context, req CreateNotific
 	}
 	now := time.Now().UTC()
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO notification_channels (id, type, name, config, config_encrypted, enabled, created_at, updated_at)
-		VALUES ($1,$2,$3,'{}'::jsonb,$4,$5,$6,$7)
-	`, id, string(req.Type), req.Name, configEncrypted, req.Enabled, now, now)
+		INSERT INTO notification_channels (id, type, name, config, config_encrypted, enabled, user_id, org_id, created_at, updated_at)
+		VALUES ($1,$2,$3,'{}'::jsonb,$4,$5,$6,$7,$8,$9)
+	`, id, string(req.Type), req.Name, configEncrypted, req.Enabled, req.UserID, req.OrgID, now, now)
 	if err != nil {
 		return NotificationChannel{}, err
 	}
@@ -89,12 +96,19 @@ func (s *Store) GetNotificationChannel(ctx context.Context, id string) (Notifica
 	var ch NotificationChannel
 	var configBytes []byte
 	var configEncrypted string
+	var userID, orgID sql.NullString
 	err := s.db.QueryRow(ctx, `
-		SELECT id::text, type, name, config, COALESCE(config_encrypted, ''), enabled, created_at, updated_at
+		SELECT id::text, type, name, config, COALESCE(config_encrypted, ''), enabled, user_id::text, org_id::text, created_at, updated_at
 		FROM notification_channels WHERE id = $1
-	`, id).Scan(&ch.ID, &ch.Type, &ch.Name, &configBytes, &configEncrypted, &ch.Enabled, &ch.CreatedAt, &ch.UpdatedAt)
+	`, id).Scan(&ch.ID, &ch.Type, &ch.Name, &configBytes, &configEncrypted, &ch.Enabled, &userID, &orgID, &ch.CreatedAt, &ch.UpdatedAt)
 	if err != nil {
 		return NotificationChannel{}, err
+	}
+	if userID.Valid {
+		ch.UserID = &userID.String
+	}
+	if orgID.Valid {
+		ch.OrgID = &orgID.String
 	}
 	configJSON, err := s.decryptSecret(configEncrypted, string(configBytes), secretAAD("notification_channels", ch.ID, "config"))
 	if err != nil {
@@ -113,7 +127,7 @@ func (s *Store) GetNotificationChannel(ctx context.Context, id string) (Notifica
 
 func (s *Store) ListNotificationChannels(ctx context.Context) ([]NotificationChannel, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT id::text, type, name, config, COALESCE(config_encrypted, ''), enabled, created_at, updated_at
+		SELECT id::text, type, name, config, COALESCE(config_encrypted, ''), enabled, user_id::text, org_id::text, created_at, updated_at
 		FROM notification_channels ORDER BY name ASC
 	`)
 	if err != nil {
@@ -126,8 +140,15 @@ func (s *Store) ListNotificationChannels(ctx context.Context) ([]NotificationCha
 		var ch NotificationChannel
 		var configBytes []byte
 		var configEncrypted string
-		if err := rows.Scan(&ch.ID, &ch.Type, &ch.Name, &configBytes, &configEncrypted, &ch.Enabled, &ch.CreatedAt, &ch.UpdatedAt); err != nil {
+		var userID, orgID sql.NullString
+		if err := rows.Scan(&ch.ID, &ch.Type, &ch.Name, &configBytes, &configEncrypted, &ch.Enabled, &userID, &orgID, &ch.CreatedAt, &ch.UpdatedAt); err != nil {
 			return nil, err
+		}
+		if userID.Valid {
+			ch.UserID = &userID.String
+		}
+		if orgID.Valid {
+			ch.OrgID = &orgID.String
 		}
 		configJSON, err := s.decryptSecret(configEncrypted, string(configBytes), secretAAD("notification_channels", ch.ID, "config"))
 		if err != nil {
@@ -220,7 +241,7 @@ func (s *Store) ListNotificationEventSubscriptions(ctx context.Context, channelI
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, channel_id::text, event_type, COALESCE(template,''), last_sent_at, delivery_status, created_at, updated_at
 		FROM notification_event_subscriptions
-		WHERE ($1 = '' OR channel_id = $1)
+		WHERE ($1 = '' OR channel_id = NULLIF($1, '')::uuid)
 		ORDER BY event_type ASC
 	`, channelID)
 	if err != nil {
@@ -270,7 +291,7 @@ func (s *Store) ListNotificationLogs(ctx context.Context, channelID string, limi
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, channel_id::text, event_type, status, COALESCE(error,''), sent_at
 		FROM notification_logs
-		WHERE ($1 = '' OR channel_id = $1)
+		WHERE ($1 = '' OR channel_id = NULLIF($1, '')::uuid)
 		ORDER BY sent_at DESC
 		LIMIT $2 OFFSET $3
 	`, channelID, limit, offset)

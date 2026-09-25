@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"time"
 )
@@ -88,13 +87,12 @@ func (s *Store) GetAppStoreApp(ctx context.Context, key string) (*AppStoreApp, e
 }
 
 func (s *Store) UpsertAppStoreApp(ctx context.Context, a *AppStoreApp) error {
-	tagsJSON, err := json.Marshal(a.Tags)
-	if err != nil {
-		tagsJSON = []byte("[]")
-	}
-	_, err = s.db.Exec(ctx, `
+	// `tags` is a text[] column; bind the Go []string directly (pgx encodes it as
+	// a Postgres array). The previous $7::jsonb cast made every upsert fail with
+	// SQLSTATE 42804, so the app-store catalog never populated.
+	_, err := s.db.Exec(ctx, `
 		INSERT INTO app_store_apps (key, name, short_desc, description, icon, category, tags, version, compose_content, params, min_memory_mb, min_disk_mb, maintainer, source_url, created_at, updated_at)
-		VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW())
+		VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW(),NOW())
 		ON CONFLICT (key) DO UPDATE SET
 			name=EXCLUDED.name, short_desc=EXCLUDED.short_desc, description=EXCLUDED.description,
 			icon=EXCLUDED.icon, category=EXCLUDED.category, tags=EXCLUDED.tags,
@@ -102,7 +100,7 @@ func (s *Store) UpsertAppStoreApp(ctx context.Context, a *AppStoreApp) error {
 			params=EXCLUDED.params, min_memory_mb=EXCLUDED.min_memory_mb,
 			min_disk_mb=EXCLUDED.min_disk_mb, maintainer=EXCLUDED.maintainer,
 			source_url=EXCLUDED.source_url, updated_at=NOW()
-	`, a.Key, a.Name, a.ShortDesc, a.Description, a.Icon, a.Category, string(tagsJSON), a.Version, a.ComposeContent, a.Params, a.MinMemoryMB, a.MinDiskMB, a.Maintainer, a.SourceURL)
+	`, a.Key, a.Name, a.ShortDesc, a.Description, a.Icon, a.Category, a.Tags, a.Version, a.ComposeContent, a.Params, a.MinMemoryMB, a.MinDiskMB, a.Maintainer, a.SourceURL)
 	return err
 }
 

@@ -101,12 +101,14 @@ export function AdminLocations() {
 
   {modal !== null ? (
   <Modal title={modal === "create" ? "Create Location" : "Edit Location"} onClose={() => setModal(null)}>
+  <div className="space-y-4">
   <AdminFormSection title="Location Details">
   <Input label="Short code (e.g. US)" value={short} onChange={setShort} placeholder="US" mono required />
   <Input label="Description (e.g. United States)" value={long} onChange={setLong} placeholder="United States" required />
   </AdminFormSection>
-  {(short.trim() === "" || long.trim() === "") ? <p className="text-xs text-amber-300">Short code and description are required.</p> : null}
-  {formError ? <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{formError}</span></div> : null}
+  {(short.trim() === "" || long.trim() === "") ? <p className="text-xs text-slate-400">Short code and description are required.</p> : null}
+  {formError ? <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{formError}</span></div> : null}
+  </div>
  <ModalFooter
  onCancel={() => setModal(null)}
  onConfirm={() => {

@@ -86,6 +86,11 @@ export default function NewComposeStackPage() {
         description="Paste, upload, or select a template to deploy a Docker Compose stack."
         backAction={() => router.push("/admin/compose")}
         backLabel="Compose Stacks"
+        action={
+          <Btn tone="ghost" size="sm" onClick={() => router.push("/admin/apps/new")}>
+            Single-service app instead
+          </Btn>
+        }
       />
       <OfflineBanner onRetry={() => window.location.reload()} />
 

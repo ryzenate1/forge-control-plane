@@ -4,7 +4,6 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, Globe, Shield, Save, Trash2, ExternalLink, Plus, ArrowUpRight } from "lucide-react";
-import { fetchJSON, postJSON, putJSON, deleteJSON } from "@/lib/api/http";
 import {
   fetchDomainSecurityHeaders,
   createDomainSecurityHeaders,
@@ -479,13 +478,13 @@ function RedirectFormModal({ domainId, existing, onClose }: { domainId: string; 
   const error = (createMut.error ?? updateMut.error) as Error | null;
 
   return (
-    <Modal title={existing ? `Edit Redirect — PUT /domains/${domainId}/redirects/${existing.id}` : `Add Redirect — POST /domains/${domainId}/redirects`} onClose={onClose}>
+    <Modal title={existing ? "Edit Redirect" : "Add Redirect"} description={existing ? `PUT /domains/${domainId}/redirects/${existing.id}` : `POST /domains/${domainId}/redirects`} onClose={onClose}>
       <div className="space-y-4">
         <Input label="Source Path" value={sourcePath} onChange={setSourcePath} placeholder="/old/*" mono />
         <Input label="Target URL" value={targetUrl} onChange={setTargetUrl} placeholder="https://example.com/new" mono />
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="mb-1.5 block text-sm font-medium text-slate-300">Status Code</label>
+            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Status Code</label>
             <select value={statusCode} onChange={(e) => setStatusCode(e.target.value)} className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-sm text-slate-100">
               <option value="301">301 Permanent</option>
               <option value="302">302 Found</option>
@@ -499,7 +498,7 @@ function RedirectFormModal({ domainId, existing, onClose }: { domainId: string; 
           <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={regex} onChange={(e) => setRegex(e.target.checked)} className="accent-[var(--brand)]" /> Regex</label>
           <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={preservePath} onChange={(e) => setPreservePath(e.target.checked)} className="accent-[var(--brand)]" /> Preserve path</label>
         </div>
-        <p className="text-xs text-slate-500">Wires <code className="font-mono">createRedirect / updateRedirect</code> → admin proxy-domain handlers; server mirror <code className="font-mono">/servers/:id/proxy-domains/:domainId/redirects</code>.</p>
+        <p className="text-xs text-slate-400">Wires <code className="font-mono">createRedirect / updateRedirect</code> → admin proxy-domain handlers; server mirror <code className="font-mono">/servers/:id/proxy-domains/:domainId/redirects</code>.</p>
         {error && <p className="text-sm text-red-300">{error.message}</p>}
       </div>
       <ModalFooter onCancel={onClose} onConfirm={() => existing ? updateMut.mutate() : createMut.mutate()} disabled={!sourcePath.trim() || !targetUrl.trim() || isPending} confirmLabel={isPending ? "Saving…" : existing ? "Update" : "Create"} />

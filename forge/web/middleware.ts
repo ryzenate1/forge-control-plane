@@ -2,7 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 const SESSION_COOKIES = ["__Host-forge_session", "forge_session"];
 const PUBLIC_PATHS = new Set(["/", "/setup", "/forgot-password", "/reset-password", "/favicon.ico"]);
-const PROTECTED_PREFIXES = ["/servers", "/server", "/account", "/admin", "/organizations"];
+const PROTECTED_PREFIXES = ["/servers", "/server", "/account", "/admin", "/organizations", "/console"];
 const IS_DEV = process.env.NODE_ENV === "development";
 const CSP_HEADER = (nonce: string) => `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${IS_DEV ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`;
 const API_INTERNAL_URL = (process.env.API_INTERNAL_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");

@@ -552,13 +552,13 @@ export const AdminBadge = Pill;
 
 export function AdminIconButton({ label, children, onClick, tone = "neutral", disabled }: { label: string; children: React.ReactNode; onClick: () => void; tone?: "neutral" | "danger"; disabled?: boolean }) { return <button aria-label={label} className={cn("inline-grid h-9 w-9 place-items-center rounded-lg transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400", tone === "danger" ? "text-red-300 hover:bg-red-500/10" : "text-slate-400 hover:bg-white/[0.06] hover:text-slate-100")} disabled={disabled} onClick={onClick} title={label} type="button">{children}</button>; }
 
-export function AdminConfirmDialog({ title, description, confirmLabel = "Confirm", onCancel, onConfirm, loading = false, destructive = false, open = true }: { title: string; description: string; confirmLabel?: string; onCancel: () => void; onConfirm: () => void; loading?: boolean; destructive?: boolean; open?: boolean }) { return <Modal open={open} title={title} onClose={onCancel}><p className="text-sm leading-6 text-slate-400">{description}</p><div className="mt-5 flex flex-col-reverse gap-2 border-t border-white/[0.06] pt-4 sm:flex-row sm:justify-end"><Btn onClick={onCancel} tone="ghost">Cancel</Btn><Btn disabled={loading} onClick={onConfirm} tone={destructive ? "danger" : "primary"}>{confirmLabel}</Btn></div></Modal>; }
+export function AdminConfirmDialog({ title, description, confirmLabel = "Confirm", onCancel, onConfirm, loading = false, destructive = false, open = true }: { title: string; description: string; confirmLabel?: string; onCancel: () => void; onConfirm: () => void; loading?: boolean; destructive?: boolean; open?: boolean }) { return <Modal open={open} title={title} description={description} onClose={onCancel}><div className="-mx-6 -mb-5 mt-5 flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end"><Btn onClick={onCancel} tone="ghost">Cancel</Btn><Btn disabled={loading} onClick={onConfirm} tone={destructive ? "danger" : "primary"}>{confirmLabel}</Btn></div></Modal>; }
 
 export function ModalFooter({ onCancel, onConfirm, confirmLabel = "Save", disabled }: {
  onCancel: () => void; onConfirm: () => void; confirmLabel?: string; disabled?: boolean;
 }) {
  return (
- <div className="sticky bottom-0 z-10 mt-5 flex flex-col-reverse gap-2 border-t border-white/[0.06] bg-surface-card pt-4 sm:flex-row sm:justify-end">
+ <div className="sticky bottom-0 z-10 -mx-6 -mb-5 mt-5 flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end">
  <Btn onClick={onCancel} tone="ghost">Cancel</Btn>
  <Btn disabled={disabled} onClick={onConfirm}>{confirmLabel}</Btn>
  </div>

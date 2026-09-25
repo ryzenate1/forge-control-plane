@@ -2,11 +2,12 @@
 
 import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Database, Plus, RefreshCw, Server, Trash2 } from "lucide-react";
+import { AlertCircle, Box, CheckCircle2, Database, LayoutGrid, List, Network, Plus, RefreshCw, Search, Server, Trash2 } from "lucide-react";
 import { type ApiDatabaseHost, type CreateDatabaseHostInput, createDatabaseHost, deleteDatabaseHost, fetchDatabaseHosts, fetchNodes, fetchOrphanRemediations, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation, testDatabaseHostConnection, updateDatabaseHost } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminSelect, AdminFormSection, AdminLoadingState } from "./admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminSelect, AdminFormSection, AdminLoadingState, cn } from "./admin-ui";
+import { DbStatCards, type DbStat } from "../database/databases-overview";
 import { Pagination } from "@/components/ui/primitives";
 
 type FieldErrors = {
@@ -28,6 +29,12 @@ function validate(name: string, host: string, port: string, username: string, pa
   if (requirePassword && !password) errors.password = "Password is required to test or create a database host";
   if (maxDatabases.trim() && (!Number.isInteger(Number(maxDatabases)) || Number(maxDatabases) <= 0)) errors.maxDatabases = "Max databases must be a positive whole number";
   return errors;
+}
+
+function hostEngineLabel(engine?: string): string {
+  if (!engine) return "—";
+  const map: Record<string, string> = { postgresql: "PostgreSQL", mysql: "MySQL", mariadb: "MariaDB" };
+  return map[engine.toLowerCase()] ?? engine;
 }
 
 export function AdminDatabases() {
@@ -68,6 +75,48 @@ export function AdminDatabases() {
   const [testedConfiguration, setTestedConfiguration] = useState<string | null>(null);
   const [hostsPage, setHostsPage] = useState(1);
   const HOSTS_PAGE_SIZE = 10;
+  const [hostSearch, setHostSearch] = useState("");
+  const [hostEngineFilter, setHostEngineFilter] = useState("all");
+  const [hostView, setHostView] = useState<"table" | "cards">("table");
+  const [hostSort, setHostSort] = useState("name-asc");
+
+  const hostSelectCls = "h-10 cursor-pointer appearance-none rounded-lg border border-white/[0.08] bg-black/20 pl-3 pr-8 text-xs text-slate-200 outline-none";
+  const hostSelectWrap = "relative flex flex-col justify-center rounded-lg border border-white/[0.08] bg-black/20 px-3 py-1";
+
+  const hostEngines = useMemo(() => [...new Set(hosts.map((h) => h.engine))].sort(), [hosts]);
+  const hostStats: DbStat[] = useMemo(() => {
+    const loading = hostsQuery.isLoading;
+    const engines = new Set(hosts.map((h) => h.engine));
+    const totalDatabases = hosts.reduce((sum, h) => sum + (h.databases ?? h.maxDatabases ?? 0), 0);
+    const nodes = new Set(hosts.map((h) => h.nodeId ?? h.nodeName).filter((v): v is string => Boolean(v)));
+    return [
+      { key: "total", label: "Total Hosts", icon: Server, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300", value: loading ? "…" : hosts.length },
+      { key: "engines", label: "Engines", icon: Database, tile: "border-sky-500/25 bg-sky-500/10 text-sky-300", value: loading ? "…" : engines.size },
+      { key: "databases", label: "Databases", icon: Box, tile: "border-amber-500/25 bg-amber-500/10 text-amber-300", value: loading ? "…" : totalDatabases },
+      { key: "nodes", label: "Nodes", icon: Network, tile: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", value: loading ? "…" : nodes.size },
+    ];
+  }, [hosts, hostsQuery.isLoading]);
+  const filteredHosts = useMemo(() => {
+    const term = hostSearch.trim().toLowerCase();
+    return hosts.filter((h) => {
+      if (hostEngineFilter !== "all" && h.engine !== hostEngineFilter) return false;
+      if (!term) return true;
+      return `${h.name} ${h.host} ${h.engine}`.toLowerCase().includes(term);
+    });
+  }, [hosts, hostSearch, hostEngineFilter]);
+  const sortedHosts = useMemo(() => {
+    const list = [...filteredHosts];
+    switch (hostSort) {
+      case "name-desc": return list.sort((a, b) => b.name.localeCompare(a.name));
+      case "engine": return list.sort((a, b) => a.engine.localeCompare(b.engine) || a.name.localeCompare(b.name));
+      default: return list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }, [filteredHosts, hostSort]);
+  const hostPageCount = Math.max(1, Math.ceil(sortedHosts.length / HOSTS_PAGE_SIZE));
+  const safeHostsPage = Math.min(Math.max(hostsPage, 1), hostPageCount);
+  const visibleHosts = sortedHosts.slice((safeHostsPage - 1) * HOSTS_PAGE_SIZE, safeHostsPage * HOSTS_PAGE_SIZE);
+  const hostsRangeFrom = sortedHosts.length === 0 ? 0 : (safeHostsPage - 1) * HOSTS_PAGE_SIZE + 1;
+  const hostsRangeTo = Math.min(safeHostsPage * HOSTS_PAGE_SIZE, sortedHosts.length);
 
   const databaseHostInput = {
     name: hName.trim(), host: hHost.trim(), port: Number(hPort),
@@ -167,6 +216,8 @@ export function AdminDatabases() {
         <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Storage</span> — <code className="font-mono text-[11px]">Database Hosts</code> (this page) · <code className="font-mono">Mounts</code> · <code className="font-mono">Managed DBs</code> · <code className="font-mono">Backups</code>. Hosts store credentials encrypted; TLS <code className="font-mono">verify-full</code> is default. Test before save — <code className="font-mono">POST /database-hosts/:id/test</code>.
       </div>
 
+      <DbStatCards stats={hostStats} />
+
       <Card className="overflow-hidden">
         <CardHeader title="Configured hosts" icon={Database} />
         {hostsQuery.isLoading ? (
@@ -182,29 +233,124 @@ export function AdminDatabases() {
           <EmptyState icon={Database} message="No database hosts. Add one so servers can create databases." />
         ) : (
           <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
+            <div className="space-y-4 px-5 pb-5 pt-4">
+              <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
+                <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2">
+                  <Search size={13} className="shrink-0 text-slate-500" />
+                  <input
+                    type="text"
+                    value={hostSearch}
+                    onChange={(e) => { setHostSearch(e.target.value); setHostsPage(1); }}
+                    placeholder="Search hosts by name, host, engine…"
+                    aria-label="Search database hosts"
+                    className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600"
+                  />
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className={hostSelectWrap}>
+                    <span className="text-[10px] leading-3 text-slate-500">Engine</span>
+                    <select aria-label="Filter by engine" value={hostEngineFilter} onChange={(e) => { setHostEngineFilter(e.target.value); setHostsPage(1); }} className={hostSelectCls + " h-6 border-0 bg-transparent pl-0 text-xs"}>
+                      <option value="all">All</option>
+                      {hostEngines.map((e) => <option key={e} value={e}>{e}</option>)}
+                    </select>
+                  </label>
+                  <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1" role="group" aria-label="View mode">
+                    <button type="button" aria-label="Table view" aria-pressed={hostView === "table"} onClick={() => setHostView("table")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", hostView === "table" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
+                      <List size={14} /> Table
+                    </button>
+                    <button type="button" aria-label="Cards view" aria-pressed={hostView === "cards"} onClick={() => setHostView("cards")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", hostView === "cards" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
+                      <LayoutGrid size={14} /> Cards
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <h2 className="text-sm font-bold text-slate-100">Hosts ({sortedHosts.length})</h2>
+                <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-xs text-slate-300">
+                  <span className="text-[11px] text-slate-500">Sort by</span>
+                  <select aria-label="Sort database hosts" value={hostSort} onChange={(e) => setHostSort(e.target.value)} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+                    <option value="name-asc">Name (A → Z)</option>
+                    <option value="name-desc">Name (Z → A)</option>
+                    <option value="engine">Engine</option>
+                  </select>
+                </label>
+              </div>
+
+              {sortedHosts.length === 0 ? (
+                <EmptyState icon={Database} title="No matches" message="No database hosts match these filters." />
+              ) : hostView === "cards" ? (
+                <>
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {visibleHosts.map((host) => (
+                      <div key={host.id} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition hover:border-white/20">
+                        <div className="flex items-start gap-3">
+                          <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
+                            <Database size={18} />
+                          </span>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-slate-100" title={host.name}>{host.name}</p>
+                            <p className="font-mono text-[10px] text-slate-500">{host.id.slice(0, 8)}</p>
+                          </div>
+                        </div>
+                        <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-slate-400">
+                          <p className="truncate">{hostEngineLabel(host.engine)} · {host.host}:{host.port}</p>
+                          <p className="truncate">{host.databases != null ? `${host.databases} dbs` : "—"} · {host.nodeName ?? "—"}</p>
+                        </div>
+                        <div className="mt-3 flex items-center justify-end gap-1 border-t border-white/[0.06] pt-3">
+                          <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(host.id)} disabled={testMut.isPending}>{testMut.isPending && testMut.variables === host.id ? "Testing..." : "Test"}</Btn>
+                          <Btn size="sm" tone="ghost" onClick={() => openEdit(host)}>Edit</Btn>
+                          <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete database host "${host.name}"?`, description: `Databases provisioned through ${host.host}:${host.port} may be left in place; the panel host entry will be removed. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(host.id); })(); }} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-400">
+                    <span>Showing {hostsRangeFrom}–{hostsRangeTo} of {sortedHosts.length} hosts</span>
+                  </div>
+                  {hostPageCount > 1 ? (
+                    <Pagination page={safeHostsPage} pageCount={hostPageCount} onPageChange={setHostsPage} label="Database hosts pagination" />
+                  ) : null}
+                </>
+              ) : (
+                <>
+                  <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-[var(--line)] text-left text-xs text-slate-400 uppercase tracking-wider">
-                    <th className="px-4 py-3 font-semibold">Name</th>
-                    <th className="px-4 py-3 font-semibold">Host : Port</th>
-                    <th className="px-4 py-3 font-semibold">Engine</th>
-                    <th className="px-4 py-3 font-semibold">User</th>
-                    <th className="px-4 py-3 font-semibold">DBs</th>
-                    <th className="px-4 py-3 font-semibold">Node</th>
-                    <th className="px-4 py-3 font-semibold" />
+                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                    <th className="px-4 py-3 font-medium">Name</th>
+                    <th className="px-2 py-3 font-medium">Engine</th>
+                    <th className="px-2 py-3 font-medium">Status</th>
+                    <th className="px-2 py-3 font-medium">Host : Port</th>
+                    <th className="px-2 py-3 font-medium">Resources</th>
+                    <th className="px-2 py-3 font-medium">Node</th>
+                    <th className="px-2 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-[var(--line)]">
-                  {hosts.slice((hostsPage - 1) * HOSTS_PAGE_SIZE, hostsPage * HOSTS_PAGE_SIZE).map((host) => (
-                    <tr key={host.id} className="transition-colors hover:bg-[var(--surface)]">
-                      <td className="px-4 py-3 font-medium text-slate-200">{host.name}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{host.host}:{host.port}</td>
-                      <td className="px-4 py-3"><Pill tone="blue">{host.engine}</Pill></td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{host.username}</td>
-                      <td className="px-4 py-3"><Pill>{host.databases}</Pill></td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{host.nodeName ?? "-"}</td>
+                <tbody className="divide-y divide-white/[0.04]">
+                  {visibleHosts.map((host) => (
+                    <tr key={host.id} className="transition hover:bg-white/[0.02]">
                       <td className="px-4 py-3">
+                        <div className="flex items-center gap-2.5">
+                          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
+                            <Database size={16} className="h-4 w-4" />
+                          </span>
+                          <span className="min-w-0">
+                            <span className="block max-w-44 truncate text-xs font-bold text-slate-100" title={host.name}>{host.name}</span>
+                            <span className="block font-mono text-[10px] text-slate-500">{host.id.slice(0, 8)}</span>
+                          </span>
+                        </div>
+                      </td>
+                      <td className="px-2 py-3">
+                        <span className="block text-xs text-slate-200">{hostEngineLabel(host.engine)}</span>
+                        <span className="block font-mono text-[10px] text-slate-500">{host.username}</span>
+                      </td>
+                      <td className="px-2 py-3"><span className="text-slate-500">—</span></td>
+                      <td className="px-2 py-3 font-mono text-[11px] text-slate-300">{host.host}:{host.port}</td>
+                      <td className="px-2 py-3 text-[11px] text-slate-400">{host.databases != null ? `${host.databases} dbs` : "—"}</td>
+                      <td className="px-2 py-3 text-[11px] text-slate-400">{host.nodeName ?? "—"}</td>
+                      <td className="px-2 py-3">
                         <div className="flex items-center justify-end gap-1">
                           <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(host.id)} disabled={testMut.isPending}>{testMut.isPending && testMut.variables === host.id ? "Testing..." : "Test"}</Btn>
                           <Btn size="sm" tone="ghost" onClick={() => openEdit(host)}>Edit</Btn>
@@ -214,13 +360,18 @@ export function AdminDatabases() {
                     </tr>
                   ))}
                 </tbody>
-              </table>
+                    </table>
+                  </div>
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3 text-xs text-slate-400">
+                    <span>Showing {hostsRangeFrom}–{hostsRangeTo} of {sortedHosts.length} hosts</span>
+                  </div>
+                </div>
+                  {hostPageCount > 1 ? (
+                    <Pagination page={safeHostsPage} pageCount={hostPageCount} onPageChange={setHostsPage} label="Database hosts pagination" />
+                  ) : null}
+                </>
+              )}
             </div>
-            {hosts.length > HOSTS_PAGE_SIZE && (
-              <div className="p-4">
-                <Pagination page={hostsPage} pageCount={Math.ceil(hosts.length / HOSTS_PAGE_SIZE)} onPageChange={setHostsPage} label="Database hosts pagination" />
-              </div>
-            )}
           </>
         )}
       </Card>
@@ -311,36 +462,37 @@ export function AdminDatabases() {
 
       {modal ? (
         <Modal title={modal === "create" ? "Add Database Host" : "Edit Database Host"} onClose={() => setModal(null)} className="max-w-3xl">
+          <div className="space-y-4">
           <AdminFormSection title="Connection">
             <div className="grid gap-5 sm:grid-cols-2">
               <div>
                 <Input label="Display name" value={hName} onChange={setHName} placeholder="Local PostgreSQL" />
-                {fieldErrors.name ? <p className="mt-1 text-xs text-red-400">{fieldErrors.name}</p> : null}
+                {fieldErrors.name ? <p className="mt-1 text-sm text-red-300">{fieldErrors.name}</p> : null}
               </div>
               <AdminSelect label="Engine" value={hEngine} onChange={setHEngine} options={[{ value: "postgresql", label: "PostgreSQL" }, { value: "mysql", label: "MySQL" }]} />
               <div>
                 <Input label="Host" value={hHost} onChange={setHHost} placeholder="db.internal.example" mono />
-                {fieldErrors.host ? <p className="mt-1 text-xs text-red-400">{fieldErrors.host}</p> : <p className="mt-1 text-xs text-slate-400">Resolved by the panel API. In a container, 127.0.0.1 is the API container, not automatically the panel database.</p>}
+                {fieldErrors.host ? <p className="mt-1 text-sm text-red-300">{fieldErrors.host}</p> : <p className="mt-1 text-xs text-slate-400">Resolved by the panel API. In a container, 127.0.0.1 is the API container, not automatically the panel database.</p>}
               </div>
               <div>
                 <Input label="Port" value={hPort} onChange={setHPort} type="number" placeholder="5432" />
-                {fieldErrors.port ? <p className="mt-1 text-xs text-red-400">{fieldErrors.port}</p> : null}
+                {fieldErrors.port ? <p className="mt-1 text-sm text-red-300">{fieldErrors.port}</p> : null}
               </div>
               <div>
                 <Input label="Username" value={hUser} onChange={setHUser} placeholder="gamepanel" mono />
-                {fieldErrors.username ? <p className="mt-1 text-xs text-red-400">{fieldErrors.username}</p> : null}
+                {fieldErrors.username ? <p className="mt-1 text-sm text-red-300">{fieldErrors.username}</p> : null}
               </div>
               <div>
                 <Input label={modal === "create" ? "Password" : "Password (blank keeps current)"} value={hPass} onChange={setHPass} type="password" placeholder="" autoComplete="new-password" />
-                {fieldErrors.password ? <p className="mt-1 text-xs text-red-400">{fieldErrors.password}</p> : null}
+                {fieldErrors.password ? <p className="mt-1 text-sm text-red-300">{fieldErrors.password}</p> : null}
               </div>
               <AdminSelect label="Linked node (optional)" value={hNode} onChange={setHNode} placeholder="None" options={Array.isArray(nodes) ? nodes.map((n) => ({ value: n.id, label: n.name })) : []} />
               <div>
                 <Input label="Max databases (blank = unlimited)" value={hMax} onChange={setHMax} type="number" placeholder="unlimited" />
-                {fieldErrors.maxDatabases ? <p className="mt-1 text-xs text-red-400">{fieldErrors.maxDatabases}</p> : null}
+                {fieldErrors.maxDatabases ? <p className="mt-1 text-sm text-red-300">{fieldErrors.maxDatabases}</p> : null}
               </div>
               <AdminSelect label="TLS Mode" value={hTLSMode} onChange={setHTLSMode} options={[{ value: "disable", label: "Disable" }, { value: "required", label: "Require" }, { value: "verify-ca", label: "Verify CA" }, { value: "verify-full", label: "Verify Full" }]} />
-                {fieldErrors.tlsMode ? <p className="mt-1 text-xs text-red-400">{fieldErrors.tlsMode}</p> : <p className="mt-1 text-xs text-slate-400">Verify Full validates the server certificate and name. A custom CA is optional.</p>}
+                {fieldErrors.tlsMode ? <p className="mt-1 text-sm text-red-300">{fieldErrors.tlsMode}</p> : <p className="mt-1 text-xs text-slate-400">Verify Full validates the server certificate and name. A custom CA is optional.</p>}
               <Input label="TLS Server Name (SNI, optional)" value={hTLSServerName} onChange={setHTLSServerName} mono />
             </div>
           </AdminFormSection>
@@ -352,13 +504,13 @@ export function AdminDatabases() {
             </div>
           </AdminFormSection>
           {createMut.isError ? (
-            <div className="mt-5 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{createMut.error?.message || "An unexpected error occurred."}</span>
             </div>
           ) : null}
           {updateMut.isError ? (
-            <div className="mt-5 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+            <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">
               <AlertCircle size={14} className="mt-0.5 shrink-0" />
               <span>{updateMut.error?.message || "An unexpected error occurred."}</span>
             </div>
@@ -369,11 +521,12 @@ export function AdminDatabases() {
               <span>Database host {modal === "create" ? "created" : "updated"} successfully.</span>
             </div>
           ) : null}
-          <div className="mt-5 flex items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4">
+          <div className="flex items-center justify-between gap-3 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4">
             <p className="text-xs text-slate-400">Test the current settings successfully before saving.</p>
             <Btn tone="success" type="button" onClick={handleTest} disabled={testMut.isPending}>
               {testMut.isPending ? "Testing..." : "Test Connection"}
             </Btn>
+          </div>
           </div>
           <ModalFooter
             onCancel={() => setModal(null)}

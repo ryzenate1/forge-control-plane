@@ -782,9 +782,9 @@ export function ForgeDialog({
   }[maxWidth];
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/70 p-4 backdrop-blur-md sm:p-6">
       <div
-        className="fixed inset-0 bg-black/80 backdrop-blur-sm transition-opacity"
+        className="fixed inset-0 bg-black/70 backdrop-blur-md transition-opacity"
         onClick={onClose}
         aria-hidden="true"
       />
@@ -793,33 +793,33 @@ export function ForgeDialog({
         aria-modal="true"
         aria-labelledby="dialog-title"
         className={cn(
-          "relative w-full rounded-2xl border border-line-strong bg-surface-raised p-6 shadow-dialog space-y-4 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150",
+          "relative flex max-h-[88vh] w-full flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-dialog)]",
           maxW
         )}
       >
-        <div className="flex items-start justify-between gap-4">
-          <div>
-            <h2 id="dialog-title" className="text-base font-bold text-text">
+        <div className="flex items-start justify-between gap-4 border-b border-[var(--line)] bg-white/[0.015] px-6 pb-4 pt-5">
+          <div className="min-w-0">
+            <h2 id="dialog-title" className="text-[15px] font-bold tracking-tight text-[var(--text)]">
               {title}
             </h2>
             {description && (
-              <p className="mt-1 text-xs text-text-subtle leading-relaxed">{description}</p>
+              <p className="mt-1 text-[13px] leading-5 text-[var(--text-subtle)]">{description}</p>
             )}
           </div>
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg p-1 text-text-subtle hover:text-text hover:bg-white/[0.06] transition-colors"
+            className="ui-icon-button shrink-0"
             aria-label="Close dialog"
           >
             <X className="h-4 w-4" />
           </button>
         </div>
 
-        <div className="py-2 text-xs leading-relaxed text-text">{children}</div>
+        <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5 text-sm leading-6 text-[var(--text)]">{children}</div>
 
         {actions && (
-          <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-line">
+          <div className="flex items-center justify-end gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4">
             {actions}
           </div>
         )}

@@ -125,7 +125,7 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 	})
 
 	lb.Get("/groups/:id/next", requireRole("admin"), requireAdminScope("loadbalancer.read"), func(c *fiber.Ctx) error {
-		target, err := svc.NextTarget(c.Context(), c.Params("id"), c.IP())
+		target, err := svc.NextTarget(c.Context(), c.Params("id"), ExtractClientIP(c))
 		if err != nil {
 			return loadBalancerError(c, err)
 		}

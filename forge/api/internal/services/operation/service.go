@@ -3,6 +3,7 @@ package operation
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"runtime"
@@ -137,6 +138,17 @@ func (s *Service) RegisterHandler(opType OperationType, handler HandlerFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[opType] = handler
+}
+
+// HasHandler reports whether something is wired to run this operation kind.
+// Dispatch consults it so a caller is never handed an operation id for work no
+// worker will ever pick up: the row would sit queued, and only a worker reaching
+// it would reveal the gap, long after the 202 was returned.
+func (s *Service) HasHandler(opType OperationType) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.handlers[opType]
+	return ok
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -280,6 +292,11 @@ type powerPayload struct {
 	Signal string `json:"signal"`
 }
 
+// ErrNoOperationHandler means no code in this process runs the requested
+// operation kind. Dispatch refuses rather than accepting work that will never
+// happen.
+var ErrNoOperationHandler = errors.New("no handler registered for operation kind")
+
 func (s *Service) DispatchPower(ctx context.Context, serverID, signal string, idempotencyKey string) (*Operation, error) {
 	payload, _ := json.Marshal(powerPayload{Signal: signal})
 	id := uuid.NewString()
@@ -304,6 +321,9 @@ func (s *Service) DispatchPower(ctx context.Context, serverID, signal string, id
 		op.Kind = string(OpServerRestart)
 	case "kill":
 		op.Kind = string(OpServerKill)
+	}
+	if !s.HasHandler(OperationType(op.Kind)) {
+		return nil, fmt.Errorf("%w: %s", ErrNoOperationHandler, op.Kind)
 	}
 	if err := s.store.Create(ctx, op); err != nil {
 		return nil, err
@@ -342,6 +362,9 @@ func (s *Service) DispatchCompose(ctx context.Context, stackID string, action st
 		Input:        payload,
 		CreatedAt:    time.Now().UTC(),
 		UpdatedAt:    time.Now().UTC(),
+	}
+	if !s.HasHandler(opType) {
+		return nil, fmt.Errorf("%w: %s", ErrNoOperationHandler, opType)
 	}
 	if err := s.store.Create(ctx, op); err != nil {
 		return nil, err

@@ -183,3 +183,55 @@ func (s *Store) DeleteGitProviderToken(ctx context.Context, id string) error {
 	}
 	return nil
 }
+
+// UpdateGitProviderTokenRequest carries the mutable provider-token fields.
+// A nil pointer leaves the column untouched; a non-nil pointer (even empty)
+// overwrites it.
+type UpdateGitProviderTokenRequest struct {
+	ProviderName *string
+	Username     *string
+	BaseURL      *string
+	AvatarURL    *string
+}
+
+func (s *Store) UpdateGitProviderToken(ctx context.Context, id string, req UpdateGitProviderTokenRequest) (GitProviderToken, error) {
+	sets := []string{}
+	args := []any{}
+	argIdx := 1
+	if req.ProviderName != nil {
+		sets = append(sets, "provider_name = $"+intToStr(argIdx))
+		args = append(args, strings.TrimSpace(*req.ProviderName))
+		argIdx++
+	}
+	if req.Username != nil {
+		sets = append(sets, "username = $"+intToStr(argIdx))
+		args = append(args, strings.TrimSpace(*req.Username))
+		argIdx++
+	}
+	if req.BaseURL != nil {
+		sets = append(sets, "base_url = $"+intToStr(argIdx))
+		args = append(args, strings.TrimSpace(*req.BaseURL))
+		argIdx++
+	}
+	if req.AvatarURL != nil {
+		sets = append(sets, "avatar_url = $"+intToStr(argIdx))
+		args = append(args, strings.TrimSpace(*req.AvatarURL))
+		argIdx++
+	}
+	if len(sets) == 0 {
+		return s.GetGitProviderToken(ctx, id)
+	}
+	sets = append(sets, "updated_at = $"+intToStr(argIdx))
+	args = append(args, time.Now().UTC())
+	argIdx++
+	args = append(args, id)
+	query := "UPDATE git_provider_tokens SET " + strings.Join(sets, ", ") + " WHERE id = $" + intToStr(argIdx)
+	cmd, err := s.db.Exec(ctx, query, args...)
+	if err != nil {
+		return GitProviderToken{}, err
+	}
+	if cmd.RowsAffected() == 0 {
+		return GitProviderToken{}, errors.New("git provider token not found")
+	}
+	return s.GetGitProviderToken(ctx, id)
+}

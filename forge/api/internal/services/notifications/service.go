@@ -22,15 +22,18 @@ type Service struct {
 	slackService       *SlackService
 	webhookService     *WebhookService
 	alertService       *AlertService
-	notificationStore  store.Store
+	notificationStore  *store.Store
 	mu                 sync.RWMutex
 	channels           []store.NotificationChannel
 	eventSubscriptions map[string][]store.NotificationEventSubscription
 	deliverySlots      chan struct{}
 }
 
-// New creates a new notification service
-func New(logger *slog.Logger, repository Repository, s store.Store) *Service {
+// New creates a new notification service. The store is taken by pointer: store
+// is a struct carrying its own RWMutex, so passing it by value would hand this
+// service a private copy of that lock and a detached copy of its observer hook
+// state, while every real caller holds the shared instance.
+func New(logger *slog.Logger, repository Repository, s *store.Store) *Service {
 	svc := &Service{
 		logger:             logger,
 		repository:         repository,

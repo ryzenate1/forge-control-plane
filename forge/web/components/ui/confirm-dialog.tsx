@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { X } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 /**
@@ -131,15 +132,22 @@ export function ConfirmDialog({
         className="ui-dialog"
         onClick={(event) => event.stopPropagation()}
       >
-        <h2 id={titleId} className="text-lg font-semibold text-[var(--text)]">
-          {title}
-        </h2>
-        {description ? (
-          <p id={descriptionId} className="mt-1.5 text-sm leading-6 text-[var(--text-subtle)]">
-            {description}
-          </p>
-        ) : null}
-        <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+        <div className="ui-dialog-header">
+          <div className="min-w-0">
+            <h2 id={titleId} className="ui-dialog-title">
+              {title}
+            </h2>
+            {description ? (
+              <p id={descriptionId} className="ui-dialog-description">
+                {description}
+              </p>
+            ) : null}
+          </div>
+          <button aria-label="Close dialog" className="ui-icon-button shrink-0" onClick={onClose} type="button">
+            <X size={16} />
+          </button>
+        </div>
+        <div className="flex flex-col-reverse gap-2 border-t border-[var(--line)] bg-white/[0.015] px-6 py-4 sm:flex-row sm:justify-end">
           <button type="button" className="ui-button ui-button-secondary" onClick={onClose}>
             {cancelLabel}
           </button>
