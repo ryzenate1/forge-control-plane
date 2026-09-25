@@ -18,28 +18,66 @@ import (
 // getWebSocketAllowedOrigins returns the list of allowed WebSocket origins for CORS validation.
 // This implements the security fix identified in the comprehensive audit to prevent
 // WebSocket origin bypass attacks.
+//
+// The allowlist MERGES (in order):
+//  1. explicit API_WS_ALLOWED_ORIGINS entries,
+//  2. the configured panel URL (cfg.PanelURL / PANEL_URL / APP_URL env),
+//  3. the HTTP CORS allow-list (cfg.CORSConfig.AllowedOrigins / API_CORS_ALLOWED_ORIGINS),
+//  4. localhost dev defaults, only outside production.
+//
+// The wildcard "*" is stripped in production so a misconfigured env can never
+// open a cross-origin WS hole (fail closed).
 func getWebSocketAllowedOrigins(cfg Config) []string {
-	// Check for explicit environment variable configuration
-	if raw := os.Getenv("API_WS_ALLOWED_ORIGINS"); strings.TrimSpace(raw) != "" {
-		origins := []string{}
-		for _, origin := range strings.Split(raw, ",") {
-			if trimmed := strings.TrimSpace(origin); trimmed != "" {
-				origins = append(origins, trimmed)
-			}
+	isProd := strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")
+	origins := []string{}
+	seen := make(map[string]bool)
+	add := func(raw string) {
+		origin := strings.TrimSpace(raw)
+		if origin == "" {
+			return
 		}
-		if len(origins) > 0 {
-			return origins
+		if origin == "*" && isProd {
+			return
 		}
+		key := strings.ToLower(origin)
+		if seen[key] {
+			return
+		}
+		seen[key] = true
+		origins = append(origins, origin)
 	}
 
-	// Default to localhost origins for development
-	// In production, API_WS_ALLOWED_ORIGINS MUST be set explicitly
-	return []string{
-		"http://localhost:3000",
-		"http://127.0.0.1:3000",
-		"http://localhost:3002",
-		"http://127.0.0.1:3002",
+	// 1. Explicit WS origins from the environment.
+	for _, origin := range strings.Split(os.Getenv("API_WS_ALLOWED_ORIGINS"), ",") {
+		add(origin)
 	}
+
+	// 2. The panel URL is always an allowed (same-origin) WS caller.
+	add(cfg.PanelURL)
+	if panel := strings.TrimSpace(os.Getenv("PANEL_URL")); panel != "" {
+		add(panel)
+	} else if app := strings.TrimSpace(os.Getenv("APP_URL")); app != "" {
+		add(app)
+	}
+
+	// 3. Everything in the CORS allow-list may also open websockets.
+	for _, origin := range cfg.CORSConfig.AllowedOrigins {
+		add(origin)
+	}
+	for _, origin := range strings.Split(os.Getenv("API_CORS_ALLOWED_ORIGINS"), ",") {
+		add(origin)
+	}
+
+	// 4. Localhost dev defaults; in production the operator must configure
+	// explicit origins (fail closed — no wildcard fallback).
+	if !isProd {
+		add("http://localhost:3000")
+		add("http://127.0.0.1:3000")
+		add("http://localhost:3002")
+		add("http://127.0.0.1:3002")
+	}
+
+	return origins
 }
 
 func requireRealtimeServices(cfg Config) fiber.Handler {

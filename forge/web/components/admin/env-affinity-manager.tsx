@@ -1,10 +1,42 @@
 "use client";
 
 import { useState } from "react";
+import { CheckCircle2, CircleSlash, Sparkles, RefreshCw, Wand2, Map as MapIcon } from "lucide-react";
 import { OfflineBanner } from "@/components/shared/states-offline";
-import { AdminCard, AdminPageLayout } from "@/components/admin/admin-layout";
+import {
+  AdminPageHeader,
+  AdminPageLayout,
+  Btn,
+  Card,
+  CardHeader,
+  Input,
+  Pill,
+} from "@/components/admin/admin-ui";
 import * as api from "@/lib/api/envaffinity";
 import { sanitizeError } from "@/lib/sanitize";
+import { cn } from "@/lib/utils";
+
+function ConstraintChips({ items }: { items?: api.PlacementConstraint[] }) {
+  if (!items || items.length === 0) {
+    return <p className="text-xs text-[var(--text-subtle)]">No constraints — workload is unconstrained by environment.</p>;
+  }
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {items.map((c, i) => (
+        <span
+          key={i}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md border px-2 py-0.5 font-mono text-[11px]",
+            c.required ? "border-amber-500/30 bg-amber-500/10 text-amber-200" : "border-white/10 bg-white/[0.03] text-slate-300",
+          )}
+          title={c.required ? "required" : "preferred"}
+        >
+          {c.key} {c.operator} [{(c.values ?? []).join(", ")}]
+        </span>
+      ))}
+    </div>
+  );
+}
 
 export function EnvAffinityManager() {
   const [nodeId, setNodeId] = useState("");
@@ -12,115 +44,155 @@ export function EnvAffinityManager() {
   const [explain, setExplain] = useState<api.ExplainResult | null>(null);
   const [enriched, setEnriched] = useState<api.EnrichedPlacement | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [patched, setPatched] = useState<api.PatchResult | null>(null);
+  const [busy, setBusy] = useState<"explain" | "enrich" | "patch" | null>(null);
 
-  async function handleExplain() {
-    if (!nodeId.trim()) {
-      setError("nodeId required");
-      return;
-    }
+  async function run(kind: "explain" | "enrich" | "patch", fn: () => Promise<void>) {
     setError(null);
+    setBusy(kind);
     try {
-      const res = await api.explainPlacement(nodeId.trim(), { serverId: serverId.trim() || undefined });
-      setExplain(res);
+      await fn();
     } catch (e) {
-      setError(sanitizeError(e instanceof Error ? e.message : "Explain failed"));
+      setError(sanitizeError(e instanceof Error ? e.message : "Request failed"));
+    } finally {
+      setBusy(null);
     }
   }
 
-  async function handleEnrich() {
-    setError(null);
-    try {
-      const res = await api.enrichPlacement({ serverId: serverId.trim() || undefined });
-      setEnriched(res);
-    } catch (e) {
-      setError(sanitizeError(e instanceof Error ? e.message : "Enrich failed"));
-    }
-  }
+  const handleExplain = () =>
+    run("explain", async () => {
+      if (!nodeId.trim()) throw new Error("node id is required");
+      setExplain(await api.explainPlacement(nodeId.trim(), { serverId: serverId.trim() || undefined }));
+    });
 
-  async function handlePatch() {
-    setError(null);
-    try {
-      const res = await api.patchConstraints();
-      setSuccess(`Patched: ${JSON.stringify(res)}`);
-    } catch (e) {
-      setError(sanitizeError(e instanceof Error ? e.message : "Patch failed"));
-    }
-  }
+  const handleEnrich = () =>
+    run("enrich", async () => {
+      setEnriched(await api.enrichPlacement({ serverId: serverId.trim() || undefined }));
+    });
+
+  const handlePatch = () =>
+    run("patch", async () => {
+      setPatched(await api.patchConstraints());
+    });
 
   return (
-    <AdminPageLayout
-      title="Env Affinity"
-      description="Phase 6 placement env-affinity: nodes.labels (JSONB) + nodes.env_groups (migration 190) injected into placement.ConstraintContext. Servers with servers.env_affinity get hard env_group label constraints. Viewer: POST /placement/explain, Enricher: POST /placement/enrich, Patch: POST /placement/patch-constraints (needs PredictiveScorer, else 503)."
-      breadcrumbs={[{ label: "Admin", href: "/admin/env-affinity" }, { label: "Env Affinity" }]}
-    >
-      <OfflineBanner onRetry={() => { /* no single loader — individual actions retry */ }} />
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>env-affinity</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">placement</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
+    <AdminPageLayout>
+      <OfflineBanner onRetry={() => { /* per-action retry */ }} />
+      <AdminPageHeader
+        title="Placement & Env Affinity"
+        description="Debug how environments pin workloads to nodes. Explain why a node would or would not host a server, preview the constraints an env-affinity adds, and re-sync affinity rules into the scheduler."
+      />
+
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
-          <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
-        </div>
-      )}
-      {success && (
-        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.09] p-4 text-sm text-emerald-200">
-          <span>{success}</span> <button onClick={() => setSuccess(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
+          <span>{error}</span>
+          <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06]">Dismiss</button>
         </div>
       )}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <AdminCard title="Affinity Viewer" description="POST /placement/explain {nodeId, place: PlacementRequest} → ExplainResult walkthrough: why node won/lost.">
-          <div className="space-y-3">
-            <input value={nodeId} onChange={(e) => setNodeId(e.target.value)} placeholder="nodeId" className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm" />
-            <input value={serverId} onChange={(e) => setServerId(e.target.value)} placeholder="serverId (optional) or env hint" className="w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm" />
-            <button onClick={() => void handleExplain()} className="rounded bg-[var(--brand)] px-4 py-2 text-xs font-bold text-white">Explain Placement</button>
-            {explain && (
-              <div className="rounded-lg border border-[var(--line)] bg-surface p-3 text-xs">
-                <p className="font-bold">Node {explain.nodeId} · satisfies: {String(explain.satisfies)}</p>
-                {explain.reasons?.length ? (
-                  <ul className="mt-2 list-disc pl-5 text-[var(--text-subtle)]">
-                    {explain.reasons.map((r, i) => (
-                      <li key={i}>{r}</li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-[var(--text-subtle)]">No reasons.</p>
-                )}
-                <pre className="mt-2 max-h-40 overflow-auto rounded bg-[var(--surface-input)] p-2 font-mono text-[11px]">{JSON.stringify(explain.constraints ?? explain, null, 2)}</pre>
-              </div>
-            )}
-          </div>
-        </AdminCard>
+        <Card>
+          <CardHeader title="Affinity viewer" icon={MapIcon} />
+          <div className="space-y-3 p-4">
+            <Input label="Node" value={nodeId} onChange={setNodeId} placeholder="node id to evaluate" mono />
+            <Input label="Server (optional)" value={serverId} onChange={setServerId} placeholder="server id whose env affinity is applied" mono />
+            <Btn tone="primary" loading={busy === "explain"} onClick={() => void handleExplain()}>
+              <Sparkles size={14} /> Explain placement
+            </Btn>
 
-        <AdminCard title="Enricher & Patch" description="POST /placement/enrich resolves env_group hard constraint from server env_affinity or WithEnv hint. POST /placement/patch-constraints re-syncs affinity rules into PredictiveScorer.">
-          <div className="space-y-3">
-            <div className="flex gap-2">
-              <input value={serverId} onChange={(e) => setServerId(e.target.value)} placeholder="serverId for enrich" className="flex-1 rounded border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm" />
-              <button onClick={() => void handleEnrich()} className="rounded bg-[var(--brand)] px-4 py-2 text-xs font-bold text-white">Enrich</button>
-            </div>
-            {enriched && (
-              <div className="rounded-lg border border-[var(--line)] bg-surface p-3 text-xs">
-                <p className="font-bold">EnvGroup: {enriched.envGroup || "—"}</p>
-                <p className="text-[var(--text-subtle)]">Constraints: {enriched.constraints.length ? JSON.stringify(enriched.constraints) : "none (no env pinning)"}</p>
-                <pre className="mt-2 max-h-32 overflow-auto rounded bg-[var(--surface-input)] p-2 font-mono text-[11px]">{JSON.stringify(enriched, null, 2)}</pre>
+            {explain && (
+              <div className="mt-2 space-y-3 rounded-xl border border-[var(--line)] bg-[var(--surface-raised)] p-4">
+                <div className="flex items-center gap-2">
+                  {explain.isCandidate ? (
+                    <Pill tone="green"><CheckCircle2 size={12} /> eligible node</Pill>
+                  ) : (
+                    <Pill tone="red"><CircleSlash size={12} /> not a candidate</Pill>
+                  )}
+                  <span className="font-mono text-xs text-[var(--text-subtle)]">{explain.nodeId}</span>
+                  {explain.requestedEnv ? <Pill tone="blue">env: {explain.requestedEnv}</Pill> : null}
+                </div>
+
+                {(explain.nodeEnvGroups?.length || 0) > 0 && (
+                  <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                    <span className="text-[var(--text-subtle)]">Node advertises:</span>
+                    {explain.nodeEnvGroups.map((g) => (
+                      <span key={g} className="rounded bg-white/[0.06] px-1.5 py-0.5 font-mono text-[11px] text-slate-200">{g}</span>
+                    ))}
+                  </div>
+                )}
+
+                {explain.matchedLabels?.length ? (
+                  <div className="text-xs text-emerald-300">✓ {explain.matchedLabels.join("  ·  ")}</div>
+                ) : null}
+                {explain.missingLabels?.length ? (
+                  <div className="text-xs text-red-300">✗ {explain.missingLabels.join("  ·  ")}</div>
+                ) : null}
+
+                <div>
+                  <div className="mb-1 text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">Applied constraints</div>
+                  <ConstraintChips items={explain.constraints} />
+                </div>
+
+                {explain.ranking?.length ? (
+                  <div>
+                    <div className="mb-1 text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">Fleet ranking (top {Math.min(explain.ranking.length, 6)})</div>
+                    <ol className="space-y-1">
+                      {explain.ranking.slice(0, 6).map((r, i) => (
+                        <li key={r.nodeId} className="flex items-center gap-2 text-xs">
+                          <span className="w-4 text-right text-[var(--text-subtle)]">{i + 1}</span>
+                          <span className={cn("font-mono", r.nodeId === explain.nodeId ? "text-blue-300" : "text-slate-300")}>{r.nodeId}</span>
+                          <span className="text-[var(--text-subtle)]">{r.score.toFixed(0)}</span>
+                          {r.env ? <Pill tone="blue">{r.env}</Pill> : null}
+                        </li>
+                      ))}
+                    </ol>
+                  </div>
+                ) : null}
               </div>
             )}
-            <div className="pt-3 border-t border-[var(--line)]">
-              <p className="text-xs font-bold uppercase text-[var(--text-subtle)]">Patch Constraints</p>
-              <p className="text-xs text-[var(--text-subtle)]">Idempotent re-sync into PredictiveScorer. Requires scorer wired in main; otherwise 503.</p>
-              <button onClick={() => void handlePatch()} className="mt-2 rounded bg-[var(--brand)] px-4 py-2 text-xs font-bold text-white">Patch Placement Constraints</button>
+          </div>
+        </Card>
+
+        <Card>
+          <CardHeader title="Enrich & resync" icon={Wand2} />
+          <div className="space-y-4 p-4">
+            <div className="flex items-end gap-2">
+              <div className="flex-1">
+                <Input label="Server" value={serverId} onChange={setServerId} placeholder="server id to preview" mono />
+              </div>
+              <Btn tone="ghost" loading={busy === "enrich"} onClick={() => void handleEnrich()}>
+                <Sparkles size={14} /> Preview
+              </Btn>
             </div>
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs text-[var(--text-subtle)]">
-              <p className="font-bold text-[var(--text)]">How it works</p>
-              <p>NodeLabelIndex merges nodes.labels + env_groups → synthetic env_group label. Enrich adds required placement.Constraint{`{type:label, key:env_group, operator:in, values:[env]}`}. Check via placement.ConstraintChecker.</p>
+
+            {enriched && (
+              <div className="rounded-xl border border-[var(--line)] bg-[var(--surface-raised)] p-4 text-sm">
+                <div className="mb-2 flex items-center gap-2">
+                  <span className="text-xs uppercase tracking-widest text-[var(--text-subtle)]">Resolved env group</span>
+                  {enriched.envGroup ? <Pill tone="blue">{enriched.envGroup}</Pill> : <Pill tone="neutral">none</Pill>}
+                </div>
+                <ConstraintChips items={enriched.constraints as api.PlacementConstraint[]} />
+              </div>
+            )}
+
+            <div className="border-t border-[var(--line)] pt-4">
+              <div className="mb-1 text-sm font-semibold text-[var(--text)]">Resync affinity rules</div>
+              <p className="mb-2 text-xs text-[var(--text-subtle)]">
+                Rebuilds scheduler affinity rules from every server&rsquo;s pinned environment and the least-loaded node in each env group. Safe to re-run.
+              </p>
+              <Btn tone="primary" loading={busy === "patch"} onClick={() => void handlePatch()}>
+                <RefreshCw size={14} /> Patch placement constraints
+              </Btn>
+              {patched && (
+                <div className="mt-3 flex flex-wrap gap-3 rounded-xl border border-emerald-500/20 bg-emerald-500/[0.08] p-3 text-xs text-emerald-200">
+                  <span><strong>{patched.serversPinned}</strong> servers pinned</span>
+                  <span><strong>{patched.rulesRegistered}</strong> rules registered</span>
+                  {patched.envsMapped?.length ? <span>envs: {patched.envsMapped.join(", ")}</span> : null}
+                </div>
+              )}
             </div>
           </div>
-        </AdminCard>
+        </Card>
       </div>
     </AdminPageLayout>
   );

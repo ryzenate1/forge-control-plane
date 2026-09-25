@@ -260,8 +260,8 @@ export default function AdminMigrations() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Operations — Migrations & Recovery"
-        sub="OPERATIONS · Data mobility and resilience: live migration jobs (server movement between beacons with planning + execution) and recovery plans for failed beacons. Distinct from Deploy (releases) and Storage (backups)."
+        title="Migrations & Recovery"
+        sub="Live migration jobs for server movement between beacons and automated recovery plans for failed beacons."
         action={
           <div className="flex flex-wrap gap-2">
             <Btn onClick={() => setShowCreateMigration(true)}><Plus size={14} /> New Migration</Btn>

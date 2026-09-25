@@ -90,16 +90,8 @@ export function ForgefileManager() {
     <AdminPageLayout
       title="Forgefile (env-as-code)"
       description="Declarative forge.yaml — validate with checkKeys + apply via apphosting materialization. Max 256 KiB, unknown keys warned. Apply is idempotent upsert on project slug (version++)."
-      breadcrumbs={[{ label: "Admin", href: "/admin/forgefile" }, { label: "Forgefile" }]}
     >
       <OfflineBanner onRetry={() => void loadManifests()} />
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>forgefile</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">manifest</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
           <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>

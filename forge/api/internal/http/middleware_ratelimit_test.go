@@ -65,6 +65,10 @@ func TestGetRateLimitForEndpointCarriesFailClosedFlag(t *testing.T) {
 }
 
 func TestExtractClientIPUsesRightmostForwardedAddress(t *testing.T) {
+	// Default-deny (AUTH-003): X-Forwarded-For is only honored when the immediate
+	// peer is a configured trusted proxy. Mark the loopback peer as trusted so
+	// this test exercises the rightmost-XFF parsing it is named for.
+	t.Setenv("TRUSTED_PROXIES", "127.0.0.1")
 	app := fiber.New()
 	app.Get("/ip", func(c *fiber.Ctx) error { return c.SendString(ExtractClientIP(c)) })
 	req := httptest.NewRequest(http.MethodGet, "/ip", nil)

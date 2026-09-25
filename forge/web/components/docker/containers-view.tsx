@@ -12,6 +12,7 @@ import {
 } from "@/lib/api/docker";
 import { Btn, Card, EmptyState, Input, cn, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Pagination } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
 import { ContainerCreateModal } from "@/components/docker/container-create-modal";
 
 function formatDate(ts: string): string {
@@ -35,6 +36,7 @@ function stateTone(state: string): string {
 
 export function ContainersView() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [logContainer, setLogContainer] = useState<DockerContainerInfo | null>(null);
@@ -57,11 +59,13 @@ export function ContainersView() {
     mutationFn: ({ id, action, nodeId }: { id: string; action: "start" | "stop" | "restart" | "pause" | "unpause"; nodeId?: string }) =>
       operateContainer(id, action, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "containers"] }); },
+    onError: (err, { action }) => toast({ tone: "error", title: `Failed to ${action} container`, message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMut = useMutation({
     mutationFn: ({ id, nodeId }: { id: string; nodeId?: string }) => deleteContainer(id, true, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "containers"] }); setDeleteTarget(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete container", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const fetchStats = useCallback(async (id: string, nodeId?: string) => {

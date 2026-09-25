@@ -7,6 +7,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { SearchAddon } from "@xterm/addon-search";
 import { type ApiServer, connectServerWebSocket } from "@/lib/api";
 import { Send, Trash2 } from "lucide-react";
+import { terminalTheme } from "@/lib/design-tokens";
 import "@xterm/xterm/css/xterm.css";
 
 interface ServerConsoleProps {
@@ -14,27 +15,8 @@ interface ServerConsoleProps {
   server: ApiServer;
 }
 
-const TERMINAL_THEME = {
-  background: "#020617", // slate-950
-  foreground: "#f1f5f9", // slate-100
-  cursor: "#94a3b8",
-  black: "#0f172a",
-  red: "#ef4444",
-  green: "#22c55e",
-  yellow: "#eab308",
-  blue: "#3b82f6",
-  magenta: "#a855f7",
-  cyan: "#06b6d4",
-  white: "#cbd5e1",
-  brightBlack: "#475569",
-  brightRed: "#f87171",
-  brightGreen: "#4ade80",
-  brightYellow: "#facc15",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#c084fc",
-  brightCyan: "#22d3ee",
-  brightWhite: "#f8fafc",
-};
+// xterm needs literal colors (not a CSS context) — shared with app/admin/terminal
+const TERMINAL_THEME = terminalTheme;
 
 export function ServerConsole({ serverId, server }: ServerConsoleProps) {
   const terminalRef = useRef<HTMLDivElement>(null);

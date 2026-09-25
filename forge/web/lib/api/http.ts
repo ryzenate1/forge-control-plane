@@ -74,6 +74,22 @@ export function notifySessionExpired(): void {
   );
 }
 
+/**
+ * Opt-in retry policy for the canonical primitive. Disabled by default so a
+ * caller that has not asked for retries keeps the exact previous semantics
+ * (single attempt, {@link ApiError} on failure).
+ */
+export type ForgeRetryPolicy = {
+  /** Extra attempts after the first one. Defaults to 3. */
+  retries?: number;
+  /** Base backoff in ms, doubled per attempt. Defaults to 500. */
+  baseDelay?: number;
+  /** Upper bound for a single backoff sleep in ms. Defaults to 10000. */
+  maxDelay?: number;
+  /** HTTP statuses considered transient. Defaults to 408/429/5xx gateways. */
+  retryOnStatus?: number[];
+};
+
 export type ForgeRequestOptions = {
   /**
    * Suppress the 401 → `notifySessionExpired()` side effect. Used by credential
@@ -81,7 +97,55 @@ export type ForgeRequestOptions = {
    * must not be mistaken for an expired session.
    */
   suppressSessionExpired?: boolean;
+  /**
+   * Retry transient failures (network errors and {@link ForgeRetryPolicy.retryOnStatus}
+   * statuses) with exponential backoff. `true` uses the defaults; pass a policy
+   * to tune them. Aborted requests are never retried.
+   */
+  retry?: ForgeRetryPolicy | boolean;
+  /**
+   * `path` is already a fully resolved same-origin path (e.g. a Next.js route
+   * handler under `/api/*`) and must not be prefixed with the API base URL.
+   */
+  sameOrigin?: boolean;
 };
+
+const DEFAULT_RETRY_POLICY: Required<ForgeRetryPolicy> = {
+  retries: 3,
+  baseDelay: 500,
+  maxDelay: 10000,
+  retryOnStatus: [408, 429, 500, 502, 503, 504],
+};
+
+function resolveRetryPolicy(options: ForgeRequestOptions): Required<ForgeRetryPolicy> | null {
+  if (!options.retry) return null;
+  return { ...DEFAULT_RETRY_POLICY, ...(typeof options.retry === 'object' ? options.retry : {}) };
+}
+
+function resolveRequestUrl(path: string, options: ForgeRequestOptions): string {
+  if (options.sameOrigin || /^https?:\/\//i.test(path) || path.startsWith('//')) return path;
+  return `${API_BASE_URL}${path}`;
+}
+
+/** Backoff with jitter so parallel retries do not synchronize on the API. */
+function retryDelay(policy: Required<ForgeRetryPolicy>, attempt: number): number {
+  const delay = Math.min(policy.baseDelay * Math.pow(2, attempt), policy.maxDelay);
+  return delay + Math.random() * (policy.baseDelay > 0 ? 500 : 0);
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => { setTimeout(resolve, ms); });
+}
+
+/**
+ * Cancellation surfaces (AbortController, AbortSignal.timeout) must stay
+ * distinguishable from transport failures: callers such as the i18n loader gate
+ * on `err.name === "AbortError"`, so these are re-thrown untouched instead of
+ * being wrapped in an {@link ApiError}.
+ */
+function isCancellation(err: unknown): boolean {
+  return err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError');
+}
 
 /**
  * Shared request execution for every response shape. Applies CSRF signing,
@@ -97,13 +161,45 @@ async function sendRequest(
   init: RequestInit = {},
   options: ForgeRequestOptions = {},
 ): Promise<Response> {
+  const url = resolveRequestUrl(path, options);
+  const policy = resolveRetryPolicy(options);
+  const attempts = policy ? Math.max(1, policy.retries + 1) : 1;
+  let lastError: unknown;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      return await executeRequest(method, url, path, init, options);
+    } catch (err) {
+      if (isCancellation(err)) throw err;
+      lastError = err;
+      const status = err instanceof ApiError ? err.status : 0;
+      // Status 0 is a transport failure (offline, DNS, reset) — always transient
+      // when the caller asked for retries.
+      const retryable = policy !== null && attempt < attempts - 1 && (status === 0 || policy.retryOnStatus.includes(status));
+      if (!retryable) break;
+      await wait(retryDelay(policy as Required<ForgeRetryPolicy>, attempt));
+    }
+  }
+
+  throw lastError instanceof ApiError
+    ? lastError
+    : new ApiError(lastError instanceof Error ? lastError.message : 'Unknown error', 0);
+}
+
+async function executeRequest(
+  method: string,
+  url: string,
+  path: string,
+  init: RequestInit,
+  options: ForgeRequestOptions,
+): Promise<Response> {
   const headers: Record<string, string> = {
     Accept: 'application/json',
     ...(init.headers as Record<string, string> | undefined),
   };
   addCSRFToHeaders(headers, method);
   try {
-    const response = await fetch(`${API_BASE_URL}${path}`, {
+    const response = await fetch(url, {
       ...init,
       headers,
       credentials: init.credentials ?? 'include',
@@ -116,10 +212,22 @@ async function sendRequest(
     return response;
   } catch (err) {
     if (err instanceof ApiError) throw err;
+    if (isCancellation(err)) throw err;
     const message = err instanceof TypeError
       ? "Network error — check your connection and ensure the API server is running"
       : err instanceof Error ? err.message : "Unknown error";
     throw new ApiError(message, 0);
+  }
+}
+
+async function parseJSONBody<T>(response: Response, method: string, path: string): Promise<T> {
+  if (response.status === 204) return undefined as T;
+  const text = await response.text();
+  if (!text) return undefined as T;
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    throw new ApiError(`API ${method} ${path} returned invalid JSON`, 0);
   }
 }
 
@@ -131,14 +239,7 @@ export async function requestJSON<T>(
 ): Promise<T> {
   const method = init.method ?? 'GET';
   const response = await sendRequest(method, path, init, options);
-  if (response.status === 204) return undefined as T;
-  const text = await response.text();
-  if (!text) return undefined as T;
-  try {
-    return JSON.parse(text) as T;
-  } catch {
-    throw new ApiError(`API ${method} ${path} returned invalid JSON`, 0);
-  }
+  return parseJSONBody<T>(response, method, path);
 }
 
 export async function fetchJSON<T>(path: string, init?: RequestInit, options?: ForgeRequestOptions): Promise<T> {
@@ -168,6 +269,22 @@ export async function requestText(
 ): Promise<string> {
   const response = await sendRequest(init.method ?? 'GET', path, init, options);
   return response.text();
+}
+
+/**
+ * POST a {@link FormData} body (multipart file upload) and parse the JSON
+ * response. `Content-Type` is deliberately left unset so the browser can
+ * generate the multipart boundary; everything else (CSRF signing, cookie
+ * credentials, 401 session-expiry handling, error shaping, opt-in retry) is the
+ * same as {@link requestJSON}, so file uploads never need an ad-hoc `fetch`.
+ */
+export async function postMultipartJSON<T>(
+  path: string,
+  form: FormData,
+  options: ForgeRequestOptions = {},
+): Promise<T> {
+  const response = await sendRequest('POST', path, { method: 'POST', body: form }, options);
+  return parseJSONBody<T>(response, 'POST', path);
 }
 
 /**
@@ -282,10 +399,16 @@ export async function getErrorMessage(response: Response, prefix: string): Promi
   }
 }
 
+/**
+ * Reachability probe for the offline banner / setup screens. Uses the canonical
+ * {@link sendRequest} (with the 401 signal suppressed) so even this call does
+ * not bypass the single HTTP path; any non-ok or transport error is "not
+ * reachable".
+ */
 export async function checkApiReachable(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE_URL}/health`, { method: "GET", signal: AbortSignal.timeout(3000) });
-    return res.ok;
+    await sendRequest('GET', '/health', { signal: AbortSignal.timeout(3000) }, { suppressSessionExpired: true });
+    return true;
   } catch {
     return false;
   }

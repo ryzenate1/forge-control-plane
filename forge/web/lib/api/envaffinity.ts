@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON } from "./http";
+import { postJSON } from "./http";
 
 export type PlacementRequest = {
   serverId?: string;
@@ -14,11 +14,41 @@ export type EnrichedPlacement = {
   constraints: Array<{ type: string; key: string; operator: string; values: string[]; required: boolean }>;
 };
 
-export type ExplainResult = {
+export type PlacementConstraint = {
+  type: string;
+  key?: string;
+  operator: string;
+  values?: string[];
+  required?: boolean;
+};
+
+export type ExplainRanking = {
   nodeId: string;
-  satisfies: boolean;
+  score: number;
+  env?: string;
   reasons: string[];
-  constraints: unknown[];
+};
+
+// ExplainResult mirrors the Go envaffinity.ExplainResult returned by
+// POST /placement/explain (see forge/api/internal/services/envaffinity/explain.go).
+export type ExplainResult = {
+  id?: string;
+  nodeId: string;
+  requestedEnv?: string;
+  nodeEnvGroups: string[];
+  nodeLabels: Record<string, string>;
+  constraints: PlacementConstraint[];
+  matchedLabels: string[];
+  missingLabels: string[];
+  isCandidate: boolean;
+  ranking?: ExplainRanking[];
+};
+
+// PatchResult mirrors envaffinity.PatchResult from POST /placement/patch-constraints.
+export type PatchResult = {
+  serversPinned: number;
+  envsMapped: string[];
+  rulesRegistered: number;
 };
 
 function unwrap<T>(data: unknown): T {
@@ -38,7 +68,7 @@ export async function enrichPlacement(place: PlacementRequest): Promise<Enriched
   return unwrap<EnrichedPlacement>(res);
 }
 
-export async function patchConstraints(): Promise<unknown> {
-  const res = await postJSON<unknown | { data: unknown }>("/placement/patch-constraints", {});
-  return unwrap<unknown>(res);
+export async function patchConstraints(): Promise<PatchResult> {
+  const res = await postJSON<PatchResult | { data: PatchResult }>("/placement/patch-constraints", {});
+  return unwrap<PatchResult>(res);
 }

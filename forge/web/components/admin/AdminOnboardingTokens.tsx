@@ -99,7 +99,7 @@ export function AdminOnboardingTokens() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { if (selectedNodeId) void tokensQ.refetch(); void nodesQ.refetch(); }} />
       <SectionHeader
-        title={(t("admin.onboardingTokens.title", ["Onboarding Tokens"]) as string) ?? "Onboarding Tokens"}
+        title="Onboarding Tokens"
         sub="Node onboarding token lifecycle — issue, approve, reject, revoke (handlers_capabilities.go:235). 72h TTL max. State: pending → approved → consumed, or pending → rejected/revoked."
         action={
           <Btn size="sm" tone="ghost" onClick={() => { if (selectedNodeId) void tokensQ.refetch(); void nodesQ.refetch(); }}>
@@ -107,14 +107,6 @@ export function AdminOnboardingTokens() {
           </Btn>
         }
       />
-
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>onboarding</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">tokens</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">POST /onboarding-tokens · GET ?nodeId= · POST /:id/approve|reject|revoke</span>
-      </div>
 
       <div className="grid gap-6 lg:grid-cols-3">
         <Card className="border border-[var(--line)] bg-[var(--surface)] lg:col-span-1">

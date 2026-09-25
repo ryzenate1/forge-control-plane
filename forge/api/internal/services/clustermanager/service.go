@@ -802,7 +802,7 @@ func runtimeConfiguration(target store.ServerProvisionTarget) gpruntime.ServerCo
 		UUID: target.ServerID, Name: target.Name, Environment: environment, Invocation: target.StartupCommand,
 		DockerImage: target.Image, Egg: map[string]any{"id": target.EggID, "fileDenylist": denylist}, Config: config, Allocations: allocations, Mounts: mounts,
 		Build: map[string]any{"memoryLimit": target.MemoryMB, "swapMb": target.SwapMB, "cpuShares": target.CPUShares, "cpuLimit": target.CPULimit, "diskSpace": target.DiskMB, "ioWeight": target.IOWeight, "threads": target.Threads, "oomDisabled": target.OOMDisabled},
-		UID: int(target.ContainerUID), GID: int(target.ContainerGID),
+		UID:   int(target.ContainerUID), GID: int(target.ContainerGID),
 	}
 }
 

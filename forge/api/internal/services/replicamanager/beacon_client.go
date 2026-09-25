@@ -209,11 +209,37 @@ func (c *BeaconHTTPClient) VerifyInstance(ctx context.Context, nodeID, instanceI
 		c.recordFailure(nodeID)
 		return err
 	}
-	if _, err := c.daemonClient.Stats(ctx, node.BaseURL, token, instanceID); err != nil {
+	// From here the node has answered. What it says about the instance is an
+	// instance fact and must not be charged to the node's circuit breaker: an
+	// instance that exited on its own used to count as a node failure, and three
+	// crash loops on one healthy machine took that machine out of rotation.
+	state, err := c.daemonClient.ContainerState(ctx, node.BaseURL, token, instanceID)
+	if errors.Is(err, daemon.ErrContainerStateUnsupported) {
+		// An older Beacon exposes no lifecycle state. Telemetry presence is the
+		// best it can offer, reported as such rather than as a verified running
+		// instance.
+		if _, statsErr := c.daemonClient.Stats(ctx, node.BaseURL, token, instanceID); statsErr != nil {
+			c.recordSuccess(nodeID)
+			return fmt.Errorf("beacon exposes no container lifecycle state and instance stats failed: %w", statsErr)
+		}
+		c.recordSuccess(nodeID)
+		return nil
+	}
+	if err != nil {
 		c.recordFailure(nodeID)
-		return fmt.Errorf("query Beacon instance stats: %w", err)
+		return fmt.Errorf("query Beacon instance state: %w", err)
 	}
 	c.recordSuccess(nodeID)
+	if !state.Exists {
+		return fmt.Errorf("instance %s is not present on node %s", instanceID, nodeID)
+	}
+	if !state.Running {
+		status := state.Status
+		if status == "" {
+			status = "not running"
+		}
+		return fmt.Errorf("instance %s is %s on node %s", instanceID, status, nodeID)
+	}
 	return nil
 }
 

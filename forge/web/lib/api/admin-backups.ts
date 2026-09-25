@@ -1,4 +1,4 @@
-import { fetchJSON, getAuthHeaders, getCSRFToken, postJSON, patchJSON, deleteJSON, API_BASE_URL } from "./http";
+import { fetchJSON, postJSON, patchJSON, deleteJSON, requestBlob } from "./http";
 
 export interface BackupConfiguration {
   id: string;
@@ -163,16 +163,8 @@ export async function unlockBackupArtifact(id: string): Promise<void> {
   await postJSON(`/admin/backups/artifacts/${encodeURIComponent(id)}/unlock`);
 }
 
-export async function downloadBackupArtifact(id: string): Promise<Blob> {
-  const headers = new Headers(getAuthHeaders());
-  const csrfToken = getCSRFToken();
-  if (csrfToken) headers.set("X-CSRF-Token", csrfToken);
-  const response = await fetch(`${API_BASE_URL}/admin/backups/artifacts/${encodeURIComponent(id)}/download`, {
-    credentials: "include",
-    headers,
-  });
-  if (!response.ok) throw new Error("Failed to download backup artifact");
-  return response.blob();
+export function downloadBackupArtifact(id: string): Promise<Blob> {
+  return requestBlob(`/admin/backups/artifacts/${encodeURIComponent(id)}/download`, { method: "GET" });
 }
 
 export function fetchBackupRestores(): Promise<BackupRestore[]> {

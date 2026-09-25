@@ -60,12 +60,13 @@ export function BackupsView({ server }: { server?: ApiServer }) {
       setLockOnCreate(false);
       setShowAdvanced(false);
       setCurrentPage(1);
-    }
+    },
+    onError: (err) => toast({ tone: "error", title: "Failed to create backup", message: err instanceof Error ? err.message : "An error occurred" }),
   });
-  const restoreMutation = useMutation({ mutationFn: (backup: ApiBackup) => restoreBackup(server?.id ?? "", backup.name, false), onSuccess: invalidate });
-  const deleteMutation = useMutation({ mutationFn: (backup: ApiBackup) => deleteBackup(server?.id ?? "", backup.name), onSuccess: invalidate });
-  const lockBackupMutation = useMutation({ mutationFn: (backup: ApiBackup) => lockBackupApi(server?.id ?? "", backup.name), onSuccess: invalidate });
-  const unlockBackupMutation = useMutation({ mutationFn: (backup: ApiBackup) => unlockBackupApi(server?.id ?? "", backup.name), onSuccess: invalidate });
+  const restoreMutation = useMutation({ mutationFn: async (backup: ApiBackup) => { const result = await restoreBackup(server?.id ?? "", backup.name, false); if (!result.ok) throw new Error("The server reported the restore did not complete."); return result; }, onSuccess: invalidate, onError: (err) => toast({ tone: "error", title: "Failed to restore backup", message: err instanceof Error ? err.message : "An error occurred" }) });
+  const deleteMutation = useMutation({ mutationFn: (backup: ApiBackup) => deleteBackup(server?.id ?? "", backup.name), onSuccess: invalidate, onError: (err) => toast({ tone: "error", title: "Failed to delete backup", message: err instanceof Error ? err.message : "An error occurred" }) });
+  const lockBackupMutation = useMutation({ mutationFn: (backup: ApiBackup) => lockBackupApi(server?.id ?? "", backup.name), onSuccess: invalidate, onError: (err) => toast({ tone: "error", title: "Failed to lock backup", message: err instanceof Error ? err.message : "An error occurred" }) });
+  const unlockBackupMutation = useMutation({ mutationFn: (backup: ApiBackup) => unlockBackupApi(server?.id ?? "", backup.name), onSuccess: invalidate, onError: (err) => toast({ tone: "error", title: "Failed to unlock backup", message: err instanceof Error ? err.message : "An error occurred" }) });
   const list = backups.data?.data ?? [];
   const pagination = backups.data?.pagination;
   const limit = server?.backupLimit;
@@ -86,7 +87,7 @@ export function BackupsView({ server }: { server?: ApiServer }) {
   return (
     <div className="space-y-6">
       {renderConfirm()}
-      <div className="rounded-xl border border-white/[0.08] bg-[var(--surface-raised)] px-4 py-4 text-sm font-semibold text-[#94a3b8]">
+      <div className="rounded-xl border border-white/[0.08] bg-[var(--surface-raised)] px-4 py-4 text-sm font-semibold text-[var(--text-subtle)]">
         {backupsDisabled ? "Backups are disabled for this server." : typeof limit === "number" && limit > 0 ? `${pagination?.total ?? 0} of ${limit} backup slots used.` : `${pagination?.total ?? 0} backups created; no quota was provided by the API.`}
         {limitReached ? <span className="ml-2 text-red-300">Limit reached.</span> : null}
         {restoreMutation.isPending ? <span className="ml-2 text-amber-300">Restoring backup…</span> : null}
@@ -94,22 +95,22 @@ export function BackupsView({ server }: { server?: ApiServer }) {
       {backups.isError ? <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200">{errorText(backups.error, "Backups could not be loaded.")}</div> : null}
       {actionError ? <div className="rounded-xl border border-red-500/30 bg-red-500/10 p-4 text-sm text-red-200" role="alert">{errorText(actionError, "Backup action failed.")}</div> : null}
       <div className="space-y-3">
-        {backups.isLoading ? <div className="rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-sm font-semibold text-[#94a3b8]">Loading backups…</div> : null}
-        {!backups.isLoading && !backups.isError && list.length === 0 ? <div className="rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-sm font-semibold text-[#94a3b8]">No backups have been created for this server yet.</div> : null}
+        {backups.isLoading ? <div className="rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-sm font-semibold text-[var(--text-subtle)]">Loading backups…</div> : null}
+        {!backups.isLoading && !backups.isError && list.length === 0 ? <div className="rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-sm font-semibold text-[var(--text-subtle)]">No backups have been created for this server yet.</div> : null}
         {list.map((backup) => {
           const usable = isUsable(backup);
           const busy = restoreMutation.isPending || deleteMutation.isPending || lockBackupMutation.isPending || unlockBackupMutation.isPending;
           return (
-            <div className="grid gap-4 rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-[#94a3b8] sm:grid-cols-[36px_1fr_220px_160px] sm:items-center" key={backup.uuid ?? backup.name}>
+            <div className="grid gap-4 rounded-xl bg-[var(--surface-raised)] px-4 py-5 text-[var(--text-subtle)] sm:grid-cols-[36px_1fr_220px_160px] sm:items-center" key={backup.uuid ?? backup.name}>
               <Archive size={20} />
               <div>
                 <p className="text-base font-semibold text-slate-100">{backup.name}</p>
                 <p className="mt-1 text-xs"><span className="uppercase">{backup.status || "unknown"}</span> · {formatBackupBytes(backup.size ?? 0)}</p>
-                <p className="mt-1 break-all font-mono text-xs text-[#64748b]">{backup.checksum ? `Checksum: ${backup.checksum}` : "Checksum not available"}</p>
+                <p className="mt-1 break-all font-mono text-xs text-[var(--text-muted)]">{backup.checksum ? `Checksum: ${backup.checksum}` : "Checksum not available"}</p>
               </div>
               <div className="text-xs sm:text-right">
-                <p className="font-semibold text-slate-100">{formatDate(backup.createdAt, "Not completed")}</p><p className="uppercase text-[#64748b]">Created</p>
-                <p className="mt-1 font-semibold text-slate-300">{formatDate(backup.completedAt, "Not completed")}</p><p className="uppercase text-[#64748b]">Completed</p>
+                <p className="font-semibold text-slate-100">{formatDate(backup.createdAt, "Not completed")}</p><p className="uppercase text-[var(--text-muted)]">Created</p>
+                <p className="mt-1 font-semibold text-slate-300">{formatDate(backup.completedAt, "Not completed")}</p><p className="uppercase text-[var(--text-muted)]">Completed</p>
               </div>
               <div className="flex items-center gap-1 sm:justify-self-end">
                 <button aria-label={`Download ${backup.name}`} className="grid h-9 w-9 place-items-center rounded hover:bg-[var(--surface-raised)] disabled:opacity-40" disabled={!usable || !canDownload} onClick={() => void download(backup)} title={usable ? "Download" : "Available after completion"} type="button"><Download size={18} /></button>
@@ -144,10 +145,10 @@ export function BackupsView({ server }: { server?: ApiServer }) {
         })}
       </div>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-        <p className="text-sm font-semibold text-[#64748b]">Only completed backups can be downloaded, restored, or deleted. Locked backups cannot be deleted until unlocked.</p>
+        <p className="text-sm font-semibold text-[var(--text-muted)]">Only completed backups can be downloaded, restored, or deleted. Locked backups cannot be deleted until unlocked.</p>
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <button 
-            className="text-sm font-semibold text-[#64748b] hover:text-slate-100" 
+            className="text-sm font-semibold text-[var(--text-muted)] hover:text-slate-100" 
             onClick={() => setShowAdvanced(!showAdvanced)}
             type="button"
           >
@@ -158,7 +159,7 @@ export function BackupsView({ server }: { server?: ApiServer }) {
       </div>
       {pagination && pagination.total_pages > 1 && (
         <div className="flex items-center justify-between rounded-xl bg-[var(--surface-raised)] px-4 py-3">
-          <p className="text-sm font-semibold text-[#64748b]">Page {pagination.page} of {pagination.total_pages} ({pagination.total} total)</p>
+          <p className="text-sm font-semibold text-[var(--text-muted)]">Page {pagination.page} of {pagination.total_pages} ({pagination.total} total)</p>
           <div className="flex gap-2">
             <button 
               className="rounded-lg bg-[var(--surface)] px-3 py-2 text-sm font-semibold text-slate-100 hover:bg-[var(--surface-raised)] disabled:opacity-40"
@@ -200,11 +201,11 @@ export function BackupsView({ server }: { server?: ApiServer }) {
               onChange={(e) => setIgnoredFiles(e.target.value)}
               type="text"
             />
-            <p className="text-xs text-[#64748b] mt-1">Use .gitignore-style patterns to exclude files from backup</p>
+            <p className="text-xs text-[var(--text-muted)] mt-1">Use .gitignore-style patterns to exclude files from backup</p>
           </div>
           <div className="rounded-lg border border-white/[0.08] bg-[var(--surface)] px-3 py-3">
             <p className="text-sm font-semibold text-slate-100 mb-1">Storage Destination</p>
-            <p className="text-xs text-[#64748b]">Custom storage destinations (S3, GCS, Azure) are not supported yet. Backups currently use the default node-local storage.</p>
+            <p className="text-xs text-[var(--text-muted)]">Custom storage destinations (S3, GCS, Azure) are not supported yet. Backups currently use the default node-local storage.</p>
           </div>
           <div className="flex items-center gap-2">
             <input 

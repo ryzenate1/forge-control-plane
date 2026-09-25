@@ -184,7 +184,7 @@ type UpdateDNSProviderAccountRequest struct {
 }
 
 func (s *Store) ListDNSProviderAccounts(ctx context.Context, provider string) ([]DNSProviderAccount, error) {
-	query := `SELECT id::text, name, provider, credentials, created_at, updated_at FROM dns_provider_accounts`
+	query := `SELECT id::text, name, provider, COALESCE(credentials_encrypted,''), COALESCE(credentials::text,'{}'), created_at, updated_at FROM dns_provider_accounts`
 	args := []any{}
 	if provider != "" {
 		query += " WHERE provider = $1"
@@ -199,23 +199,52 @@ func (s *Store) ListDNSProviderAccounts(ctx context.Context, provider string) ([
 	var accounts []DNSProviderAccount
 	for rows.Next() {
 		var a DNSProviderAccount
-		if err := rows.Scan(&a.ID, &a.Name, &a.Provider, &a.Credentials, &a.CreatedAt, &a.UpdatedAt); err != nil {
+		var credentialsEncrypted, plainForDecrypt string
+		if err := rows.Scan(&a.ID, &a.Name, &a.Provider, &credentialsEncrypted, &plainForDecrypt, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			return nil, err
 		}
+		credentials, err := s.dnsProviderCredentials(a.ID, credentialsEncrypted, plainForDecrypt)
+		if err != nil {
+			return nil, err
+		}
+		a.Credentials = credentials
 		accounts = append(accounts, a)
 	}
 	return accounts, rows.Err()
 }
 
+// dnsProviderCredentials dual-reads a DNS provider account's credentials: the
+// secret-AAD envelope first, the legacy plaintext jsonb column as fallback.
+// An envelope that cannot be opened is an error, never a silent empty set.
+func (s *Store) dnsProviderCredentials(id string, envelope, plaintext string) (json.RawMessage, error) {
+	credentialsJSON, err := s.decryptSecret(envelope, plaintext, secretAAD("dns_provider_accounts", id, "credentials"))
+	if err != nil {
+		return nil, err
+	}
+	if credentialsJSON == "" {
+		credentialsJSON = "{}"
+	}
+	if !json.Valid([]byte(credentialsJSON)) {
+		return nil, fmt.Errorf("dns provider account %s contains invalid credentials JSON", id)
+	}
+	return json.RawMessage(credentialsJSON), nil
+}
+
 func (s *Store) GetDNSProviderAccount(ctx context.Context, id string) (DNSProviderAccount, error) {
 	var a DNSProviderAccount
+	var credentialsEncrypted, plainForDecrypt string
 	err := s.db.QueryRow(ctx, `
-		SELECT id::text, name, provider, credentials, created_at, updated_at
+		SELECT id::text, name, provider, COALESCE(credentials_encrypted,''), COALESCE(credentials::text,'{}'), created_at, updated_at
 		FROM dns_provider_accounts WHERE id::text = $1
-	`, id).Scan(&a.ID, &a.Name, &a.Provider, &a.Credentials, &a.CreatedAt, &a.UpdatedAt)
+	`, id).Scan(&a.ID, &a.Name, &a.Provider, &credentialsEncrypted, &plainForDecrypt, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return DNSProviderAccount{}, errors.New("dns provider account not found")
 	}
+	credentials, err := s.dnsProviderCredentials(a.ID, credentialsEncrypted, plainForDecrypt)
+	if err != nil {
+		return DNSProviderAccount{}, err
+	}
+	a.Credentials = credentials
 	return a, nil
 }
 
@@ -226,13 +255,25 @@ func (s *Store) CreateDNSProviderAccount(ctx context.Context, req CreateDNSProvi
 	id := uuid.NewString()
 	now := time.Now().UTC()
 	creds := req.Credentials
-	if creds == nil {
+	if len(creds) == 0 {
 		creds = json.RawMessage("{}")
 	}
+
+	// Credentials are secrets: encrypt into the envelope column and keep the
+	// plaintext jsonb column cleared (dual-write, migration 213).
+	var credentialsEncrypted string
+	if string(creds) != "{}" {
+		var err error
+		credentialsEncrypted, err = s.encryptSecret(string(creds), secretAAD("dns_provider_accounts", id, "credentials"))
+		if err != nil {
+			return DNSProviderAccount{}, err
+		}
+	}
+
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO dns_provider_accounts (id, name, provider, credentials, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6)
-	`, id, req.Name, req.Provider, creds, now, now)
+		INSERT INTO dns_provider_accounts (id, name, provider, credentials, credentials_encrypted, created_at, updated_at)
+		VALUES ($1, $2, $3, '{}'::jsonb, $4, $5, $6)
+	`, id, req.Name, req.Provider, credentialsEncrypted, now, now)
 	if err != nil {
 		return DNSProviderAccount{}, err
 	}
@@ -254,8 +295,20 @@ func (s *Store) UpdateDNSProviderAccount(ctx context.Context, id string, req Upd
 		args = append(args, *req.Provider)
 	}
 	if req.Credentials != nil {
-		updates = append(updates, "credentials = $"+itoa(len(args)+1))
-		args = append(args, *req.Credentials)
+		creds := string(*req.Credentials)
+		if creds == "" {
+			creds = "{}"
+		}
+		credentialsEncrypted := ""
+		if creds != "{}" {
+			encrypted, err := s.encryptSecret(creds, secretAAD("dns_provider_accounts", id, "credentials"))
+			if err != nil {
+				return DNSProviderAccount{}, err
+			}
+			credentialsEncrypted = encrypted
+		}
+		updates = append(updates, "credentials = '{}'::jsonb, credentials_encrypted = $"+itoa(len(args)+1))
+		args = append(args, credentialsEncrypted)
 	}
 	updates = append(updates, "updated_at = now()")
 	args = append(args, id)
@@ -265,7 +318,8 @@ func (s *Store) UpdateDNSProviderAccount(ctx context.Context, id string, req Upd
 	}
 
 	var allowedDNSProviderColumns = map[string]bool{
-		"name": true, "provider": true, "credentials": true, "updated_at": true,
+		"name": true, "provider": true, "credentials": true,
+		"credentials_encrypted": true, "updated_at": true,
 	}
 	for _, u := range updates {
 		col := strings.SplitN(u, " =", 2)[0]

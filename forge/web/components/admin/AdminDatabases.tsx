@@ -157,11 +157,11 @@ export function AdminDatabases() {
   const hasSuccessfulTest = testedConfiguration === configurationKey;
 
   return (
-    <div>
+    <div className="space-y-6">
       <SectionHeader
-        title="Storage — Database Hosts"
-        sub="INFRA · Storage: external MySQL/PostgreSQL hosts that provision per-workload databases. Distinct from the panel’s own metadata PostgreSQL (see Monitoring/Health). Hosts can be linked to a beacon for local provisioning."
-        action={<Btn onClick={openCreate}><Plus size={14} /> New Host</Btn>}
+        title="Database Hosts"
+        sub="External MySQL and PostgreSQL hosts that provision per-workload databases. Hosts can be linked to a beacon for local provisioning."
+        action={<Btn tone="primary" onClick={openCreate}><Plus size={14} /> New Host</Btn>}
       />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
         <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Storage</span> — <code className="font-mono text-[11px]">Database Hosts</code> (this page) · <code className="font-mono">Mounts</code> · <code className="font-mono">Managed DBs</code> · <code className="font-mono">Backups</code>. Hosts store credentials encrypted; TLS <code className="font-mono">verify-full</code> is default. Test before save — <code className="font-mono">POST /database-hosts/:id/test</code>.

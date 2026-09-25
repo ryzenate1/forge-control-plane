@@ -150,10 +150,10 @@ func TestProbeNodeDaemonSuccess(t *testing.T) {
 	ctx := context.Background()
 
 	returned := daemonSystemResponse{
-		NodeID:        "test-node",
 		Version:       "1.2.3",
 		OS:            "linux",
 		Architecture:  "x86_64",
+		KernelVersion: "6.8.0-forge",
 		CPUThreads:    8,
 		MemoryMB:      16384,
 		DockerStatus:  "ok",
@@ -194,6 +194,9 @@ func TestProbeNodeDaemonSuccess(t *testing.T) {
 	if info.MemoryMB != 16384 {
 		t.Fatalf("memoryMb = %d, want %d", info.MemoryMB, 16384)
 	}
+	if info.KernelVersion != "6.8.0-forge" {
+		t.Fatalf("kernelVersion = %q, want %q", info.KernelVersion, "6.8.0-forge")
+	}
 	if !info.DockerAvailable {
 		t.Fatal("expected DockerAvailable=true")
 	}
@@ -203,8 +206,8 @@ func TestProbeNodeDaemonSuccess(t *testing.T) {
 	if len(info.Capabilities) != 2 || info.Capabilities[0] != "docker" {
 		t.Fatalf("capabilities = %v, want [docker backup]", info.Capabilities)
 	}
-	if info.UptimeSeconds != 3600 {
-		t.Fatalf("uptimeSeconds = %d, want %d", info.UptimeSeconds, 3600)
+	if info.DaemonUptimeSeconds != 3600 {
+		t.Fatalf("daemonUptimeSeconds = %d, want %d", info.DaemonUptimeSeconds, 3600)
 	}
 }
 
@@ -334,7 +337,6 @@ func TestProbeNodeDaemonEmptyDockerStatus(t *testing.T) {
 	ctx := context.Background()
 
 	returned := daemonSystemResponse{
-		NodeID:       "test-node",
 		Version:      "1.2.3",
 		OS:           "linux",
 		Architecture: "x86_64",
@@ -364,14 +366,18 @@ func TestProbeNodeDaemonEmptyDockerStatus(t *testing.T) {
 	}
 }
 
+// daemonSystemResponse mirrors the beacon's real /api/system wire shape, field
+// names and all. It previously used the panel's own camelCase names, which made
+// the probe look like it decoded uptime and CPU threads correctly while a real
+// node's snake_case payload silently produced zeros.
 type daemonSystemResponse struct {
-	NodeID        string   `json:"nodeId"`
 	Version       string   `json:"version,omitempty"`
 	OS            string   `json:"os,omitempty"`
 	Architecture  string   `json:"architecture,omitempty"`
-	CPUThreads    int      `json:"cpuThreads,omitempty"`
+	KernelVersion string   `json:"kernelVersion,omitempty"`
+	CPUThreads    int      `json:"cpu_threads,omitempty"`
 	MemoryMB      uint64   `json:"memoryMb,omitempty"`
 	DockerStatus  string   `json:"dockerStatus,omitempty"`
 	Capabilities  []string `json:"capabilities,omitempty"`
-	UptimeSeconds int64    `json:"uptimeSeconds,omitempty"`
+	UptimeSeconds int64    `json:"uptime_seconds,omitempty"`
 }

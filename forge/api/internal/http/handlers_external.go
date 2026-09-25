@@ -36,6 +36,7 @@ func registerExternalLookupRoutes(protected fiber.Router, cfg Config) {
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "server not found")
 		}
-		return c.JSON(server)
+		// Safe DTO: never serialize transferRunToken or other secrets.
+		return c.JSON(server.ToDTO())
 	})
 }

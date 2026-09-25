@@ -232,9 +232,15 @@ export function AdminMounts() {
       const templateIdsToDetach = currentTemplateIds.filter((id) => !eTemplateIds.includes(id));
       await Promise.all([
         nodeIdsToAttach.length > 0 ? attachNodesToMount(selectedMountId!, nodeIdsToAttach) : Promise.resolve(),
-        ...nodeIdsToDetach.map((id) => detachNodeFromMount(selectedMountId!, id)),
+        ...nodeIdsToDetach.map(async (id) => {
+          const detached = await detachNodeFromMount(selectedMountId!, id);
+          if (!detached.ok) throw new Error("The server reported the node detach from mount did not complete.");
+        }),
         templateIdsToAttach.length > 0 ? attachEggsToMount(selectedMountId!, templateIdsToAttach) : Promise.resolve(),
-        ...templateIdsToDetach.map((id) => detachEggFromMount(selectedMountId!, id)),
+        ...templateIdsToDetach.map(async (id) => {
+          const detached = await detachEggFromMount(selectedMountId!, id);
+          if (!detached.ok) throw new Error("The server reported the egg detach from mount did not complete.");
+        }),
       ]);
       return mount;
     },
@@ -243,7 +249,11 @@ export function AdminMounts() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: deleteMount,
+    mutationFn: async (id: string) => {
+      const result = await deleteMount(id);
+      if (!result.ok) throw new Error("The server reported the mount was not deleted.");
+      return result;
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["mounts"] }); setSelectedMountId(null); toast({ tone: "success", title: "Mount deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Failed to delete mount", message: e.message }),
   });
@@ -255,7 +265,11 @@ export function AdminMounts() {
   });
 
   const detachEggMut = useMutation({
-    mutationFn: (eggId: string) => detachEggFromMount(selectedMountId!, eggId),
+    mutationFn: async (eggId: string) => {
+      const result = await detachEggFromMount(selectedMountId!, eggId);
+      if (!result.ok) throw new Error("The server reported the egg detach from mount did not complete.");
+      return result;
+    },
     onSuccess: (_, eggId) => { qc.invalidateQueries({ queryKey: ["mounts"] }); setETemplateIds((ids) => ids.filter((id) => id !== eggId)); setSavedETemplateIds((ids) => ids.filter((id) => id !== eggId)); },
     onError: (e: Error) => toast({ tone: "error", title: "Failed to detach egg", message: e.message }),
   });
@@ -267,7 +281,11 @@ export function AdminMounts() {
   });
 
   const detachNodeMut = useMutation({
-    mutationFn: (nodeId: string) => detachNodeFromMount(selectedMountId!, nodeId),
+    mutationFn: async (nodeId: string) => {
+      const result = await detachNodeFromMount(selectedMountId!, nodeId);
+      if (!result.ok) throw new Error("The server reported the node detach from mount did not complete.");
+      return result;
+    },
     onSuccess: (_, nodeId) => { qc.invalidateQueries({ queryKey: ["mounts"] }); setENodeIds((ids) => ids.filter((id) => id !== nodeId)); setSavedENodeIds((ids) => ids.filter((id) => id !== nodeId)); },
     onError: (e: Error) => toast({ tone: "error", title: "Failed to detach node", message: e.message }),
   });
@@ -526,11 +544,11 @@ export function AdminMounts() {
   }
 
   return (
-    <div>
+    <div className="space-y-6">
       <SectionHeader
-        title="Storage — Mounts"
-        sub="INFRA · Storage: shared host volumes mounted into workloads. Mounts attach to beacons and templates (eggs) with eligibility — eligible servers inherit the mount automatically."
-        action={<Btn onClick={() => { setShowCreate(true); setCNodeIds([]); setCTemplateIds([]); setCErrors({}); }}><Plus size={14} /> New Mount</Btn>}
+        title="Storage Mounts"
+        sub="Shared host volumes mounted into workloads. Mounts attach to beacons and templates with automatic inheritance for eligible servers."
+        action={<Btn tone="primary" onClick={() => { setShowCreate(true); setCNodeIds([]); setCTemplateIds([]); setCErrors({}); }}><Plus size={14} /> New Mount</Btn>}
       />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
         <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Storage</span> — <code className="font-mono text-[11px]">Mounts</code> (this page) · <code className="font-mono">Volumes</code> · <code className="font-mono">Database Hosts</code> · <code className="font-mono">Backups</code> + providers. Mounts are <code className="font-mono">source → target</code> host paths with <code className="font-mono">nodeIds/templateIds</code> eligibility. See <code className="font-mono">/admin/databases</code> for DB hosts and <code className="font-mono">/admin/backups</code> for retention.

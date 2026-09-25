@@ -8,6 +8,7 @@ import { Dialog } from "@/components/ui/primitives";
 import { fetchOrganizations, fetchProjects, fetchEnvironments, createEnvironment, deleteEnvVar, fetchEnvVarRevisions, type EnvVarRevision } from "@/lib/api/tenancy";
 import { fetchEnvVars, createEnvVar, type EnvVarResponse } from "@/lib/api/env-vars";
 import { useToast } from "@/components/ui/toast";
+import { environmentColorChoices } from "@/lib/design-tokens";
 
 export default function AdminEnvironmentsPage() {
   const queryClient = useQueryClient();
@@ -15,7 +16,7 @@ export default function AdminEnvironmentsPage() {
   const [selectedOrg, setSelectedOrg] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
   const [envName, setEnvName] = useState("");
-  const [envColor, setEnvColor] = useState("#6366f1");
+  const [envColor, setEnvColor] = useState<string>(environmentColorChoices[0]);
   const [envProtected, setEnvProtected] = useState(false);
 
   const [selectedEnv, setSelectedEnv] = useState("");
@@ -26,7 +27,8 @@ export default function AdminEnvironmentsPage() {
   const [revisions, setRevisions] = useState<EnvVarRevision[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
 
-  const colors = ["#6366f1", "#22c55e", "#f59e0b", "#ef4444", "#8b5cf6", "#06b6d4", "#ec4899", "#64748b"];
+  // Persisted data values — centralised in lib/design-tokens (environmentColorChoices)
+  const colors = environmentColorChoices;
 
   const orgsQuery = useQuery({
     queryKey: ["organizations"],

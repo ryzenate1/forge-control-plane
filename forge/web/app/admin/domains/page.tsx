@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { Globe, Plus, Trash2, ShieldCheck, ShieldAlert, RotateCw, Network } from "lucide-react";
 import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
 import { checkDNS as checkDNSApi } from "@/lib/api/domains";
@@ -41,6 +42,7 @@ type DNSResult = {
 export default function AdminDomainsPage() {
   const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [serverFilter, setServerFilter] = useState("");
   const [showAddModal, setShowAddModal] = useState(false);
@@ -83,6 +85,7 @@ export default function AdminDomainsPage() {
       setShowAddModal(false);
       setAddForm({ serverId: "", domain: "" });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to add domain", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMutation = useMutation({
@@ -91,6 +94,7 @@ export default function AdminDomainsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete domain", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const verifyMutation = useMutation({
@@ -98,6 +102,7 @@ export default function AdminDomainsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
     },
+    onError: (err) => toast({ tone: "error", title: "Verification failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const checkDNSMutation = useMutation({
@@ -113,13 +118,21 @@ export default function AdminDomainsPage() {
         error: result.message,
       });
     },
+    onError: (err, data) => setDnsResult({
+      domain: data.domain,
+      resolved: false,
+      ips: [],
+      expectedIp: data.expectedIp,
+      match: false,
+      error: err instanceof Error ? err.message : "DNS check failed",
+    }),
   });
 
   return (
     <AdminPageLayout>
       <SectionHeader
         title="Domain Management"
-        sub="Manage custom domains for game servers. Verify ownership via HTTP challenge. DNS providers wired via lib/api/dns.ts (createProvider, verifyProvider, setDefault, deleteProvider) — see ACME & Proxy Domains."
+        sub="Custom domains with DNS verification and TLS status. Related settings live in the same section: DNS Providers, Certificates, ACME, and Security Headers."
         action={
           <div className="flex gap-2">
             <Link href="/admin/dns"><Btn tone="ghost" className="border border-[var(--brand)]/20 hover:bg-[var(--brand)]/10"><ShieldCheck size={12} /> DNS Providers</Btn></Link>

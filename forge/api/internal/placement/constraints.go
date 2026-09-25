@@ -73,7 +73,7 @@ func (c *ConstraintChecker) CheckSoft(candidate Candidate, constraints []Constra
 	// Averaged rather than summed: ten copies of the same preference are still
 	// one preference. Summing let the number of constraints, rather than their
 	// strength, decide the placement.
-	return (float64(satisfied)/float64(evaluated))*kSoftWeight-
+	return (float64(satisfied)/float64(evaluated))*kSoftWeight -
 		(float64(missed)/float64(evaluated))*kSoftPenalty, reasons
 }
 

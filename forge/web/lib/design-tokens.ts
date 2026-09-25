@@ -77,6 +77,83 @@ export const radius = {
   full: "var(--radius-full)",
 } as const;
 
+/**
+ * Chart / SVG palette.
+ *
+ * SVG presentation attributes (`fill`, `stroke`, `stopColor`) and canvas/terminal
+ * config objects are *not* CSS contexts — `var(--token)` does not resolve there,
+ * so every chart series color has to come from a literal. This is the single
+ * sanctioned place for those literals; components must import from here instead
+ * of writing hex inline (see the `bg-[#...]` scan in test/design-system.test.tsx).
+ * Each mirror below names the CSS token it tracks where one exists.
+ */
+export const chart = {
+  /** Axis labels/ticks — mirrors `--text-muted`. */
+  axis: "#64748b",
+  /** Stronger axis stroke (admin overview charts). */
+  axisStrong: "#475569",
+  /** Plot chrome (tooltip / crosshair panel) — mirrors the dark canvas family. */
+  panel: "#0f172a",
+  /** Series ramp used by the server resource charts. */
+  cpu: "#3b82f6",
+  memory: "#10b981",
+  disk: "#f59e0b",
+  networkIn: "#8b5cf6",
+  networkOut: "#06b6d4",
+  /** Broader categorical ramp (admin monitoring / overview multi-series charts). */
+  sky: "#38bdf8",
+  blue: "#0ea5e9",
+  violet: "#a855f7",
+  orange: "#f97316",
+  lightOrange: "#fb923c",
+  lightCyan: "#22d3ee",
+  lightEmerald: "#34d399",
+  lightViolet: "#c084fc",
+  indigo: "#6366f1",
+  /** Status hex mirrors for SVG attributes. */
+  success: "#10b981",
+  warning: "#f59e0b",
+  dangerBright: "#ef4444",
+  dangerSoft: "#f87171",
+  critical: "#f43f5e",
+  onColor: "#ffffff",
+} as const;
+
+/** Categorical swatches offered by the environment colour picker (persisted data values). */
+export const environmentColorChoices = [
+  "#6366f1",
+  "#22c55e",
+  "#f59e0b",
+  "#ef4444",
+  "#8b5cf6",
+  "#06b6d4",
+  "#ec4899",
+  "#64748b",
+] as const;
+
+/** Shared xterm theme (server console + admin terminal) — xterm needs literals. */
+export const terminalTheme = {
+  background: "#020617",
+  foreground: "#f1f5f9",
+  cursor: "#94a3b8",
+  black: "#0f172a",
+  red: "#ef4444",
+  green: "#22c55e",
+  yellow: "#eab308",
+  blue: "#3b82f6",
+  magenta: "#a855f7",
+  cyan: "#06b6d4",
+  white: "#cbd5e1",
+  brightBlack: "#475569",
+  brightRed: "#f87171",
+  brightGreen: "#4ade80",
+  brightYellow: "#facc15",
+  brightBlue: "#60a5fa",
+  brightMagenta: "#c084fc",
+  brightCyan: "#22d3ee",
+  brightWhite: "#f8fafc",
+} as const;
+
 /** 10 semantic token groups (matches globals.css:5 `:root` — brand/canvas/line/text/status + nav/surface-hover/brand-subtle + shadow/radius). */
 export const tokens = {
   brand,

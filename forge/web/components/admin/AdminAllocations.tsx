@@ -73,13 +73,21 @@ export function AdminAllocations() {
   });
 
   const editMut = useMutation({
-    mutationFn: ({ id, alias }: { id: string; alias: string }) => setAdminAllocationAlias(id, alias),
+    mutationFn: async ({ id, alias }: { id: string; alias: string }) => {
+      const result = await setAdminAllocationAlias(id, alias);
+      if (!result.ok) throw new Error("The server reported the allocation alias was not updated.");
+      return result;
+    },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["allocations"] }); setEditing(null); setEditError(null); toast({ tone: "success", title: "Allocation alias updated" }); },
     onError: (error: Error) => { const message = error.message || "Unknown error"; setEditError(message); toast({ tone: "error", title: "Failed to update allocation alias", message }); },
   });
 
   const bulkDeleteMut = useMutation({
-    mutationFn: (ids: string[]) => deleteAllocations(ids),
+    mutationFn: async (ids: string[]) => {
+      const result = await deleteAllocations(ids);
+      if (!result.ok) throw new Error("The server reported the allocations were not deleted.");
+      return result;
+    },
     onSuccess: (_, ids) => { void qc.invalidateQueries({ queryKey: ["allocations"] }); setSelectedIds((current) => current.filter((id) => !ids.includes(id))); setDeleteError(null); toast({ tone: "success", title: `${ids.length} allocation${ids.length === 1 ? "" : "s"} deleted` }); },
     onError: (error: Error) => { const message = error.message || "Unknown error"; setDeleteError(message); toast({ tone: "error", title: "Failed to delete allocations", message }); },
   });

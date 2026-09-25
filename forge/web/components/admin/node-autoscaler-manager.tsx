@@ -132,16 +132,8 @@ export function NodeAutoscalerManager() {
     <AdminPageLayout
       title="Node Autoscaler"
       description="Cluster-level node provisioning — distinct from the service autoscaler (which scales replicas). Policies evaluate fleet CPU/memory and provision cloud instances via the cloud manager (suggest + explicit confirm)."
-      breadcrumbs={[{ label: "Admin", href: "/admin/node-autoscaler" }, { label: "Node Autoscaler" }]}
     >
       <OfflineBanner onRetry={() => void loadPolicies()} />
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>node-autoscaler</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">policies</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
           <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>

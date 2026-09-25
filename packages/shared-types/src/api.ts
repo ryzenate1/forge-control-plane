@@ -104,7 +104,6 @@ export type ApiServer = {
   transferTargetNodeId?: string;
   transferState?: string;
   transferError?: string;
-  transferRunToken?: string;
   createdAt?: string;
   dockerImage?: string;
   startupCommand?: string;
@@ -1580,14 +1579,31 @@ export type ApiServerConfiguration = {
 };
 
 export type ApiNodeSystemInformation = {
+  nodeId: string;
+  /**
+   * Whether the node answered the probe. A failed probe returns false with
+   * `error` set rather than an empty object, so "unreachable" and "reachable
+   * but reporting nothing" stay distinguishable.
+   */
+  online: boolean;
   version: string;
   os: string;
   architecture: string;
+  kernelVersion?: string;
   cpuThreads: number;
+  memoryMb?: number;
   dockerAvailable: boolean;
   dockerStatus: string;
-  kernelVersion?: string;
+  capabilities?: string[];
+  /**
+   * Uptime of the node agent process, not of the machine. The panel shows the
+   * two apart because a restarted agent and a freshly booted host look the
+   * same if only one number is reported.
+   */
+  daemonUptimeSeconds?: number;
   uptime?: number;
+  fetchedAt?: string;
+  error?: string;
 };
 
 export type ApiRegionCluster = {

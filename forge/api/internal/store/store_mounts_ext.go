@@ -367,9 +367,9 @@ func validateMountPath(value, field string) error {
 	}
 	if field == "source" {
 		// Allowlist mode: if MOUNTS_ALLOWED_PREFIX is set, only sources under those prefixes are allowed.
-		if prefixes := mountsAllowedPrefixes(); len(prefixes) > 0 {
+		if allowedPrefixes := mountsAllowedPrefixes(); len(allowedPrefixes) > 0 {
 			allowed := false
-			for _, prefix := range prefixes {
+			for _, prefix := range allowedPrefixes {
 				if value == prefix || strings.HasPrefix(value, prefix+"/") {
 					allowed = true
 					break

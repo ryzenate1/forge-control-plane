@@ -567,7 +567,7 @@ describe("AdminServers page", () => {
 
     expect(await screen.findByText("alpha-mc")).toBeInTheDocument();
     expect(screen.getByText("beta-mc")).toBeInTheDocument();
-    expect(screen.getByText("Servers")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Servers", level: 1 })).toBeInTheDocument();
   });
 
   it("filters servers by search query", async () => {
@@ -578,7 +578,7 @@ describe("AdminServers page", () => {
     renderWithQuery(<AdminServers />);
 
     await screen.findByText("alpha-mc");
-    const search = screen.getByPlaceholderText("Search Servers");
+    const search = screen.getByPlaceholderText(/Search servers by name/);
     await userEvent.type(search, "beta");
     expect(screen.queryByText("alpha-mc")).not.toBeInTheDocument();
     expect(screen.getByText("beta-mc")).toBeInTheDocument();
@@ -594,12 +594,47 @@ describe("AdminServers page", () => {
     installServersFetch([]);
     renderWithQuery(<AdminServers />);
     await screen.findByText(/No servers/);
-    await userEvent.click(screen.getByRole("button", { name: /Create New/ }));
+    await userEvent.click(screen.getByRole("button", { name: /Create Server/ }));
     // dialog title — scope inside dialog: heading + button share the same label so use getAll
     const dialog = screen.getByRole("dialog");
     expect(within(dialog).getAllByText("Create Server").length).toBeGreaterThanOrEqual(1);
     const nameInput = screen.getByPlaceholderText("My Game Server");
     await userEvent.type(nameInput, "my-server");
     expect(nameInput).toHaveValue("my-server");
+  });
+
+  it("renders KPI counts, filters by status, and paginates", async () => {
+    installServersFetch([
+      { id: "s1", name: "alpha-mc", status: "running", desiredState: "running", memoryMb: 1024, diskMb: 5120, createdAt: "2025-09-20T14:22:00Z", updatedAt: "2025-09-23T09:14:00Z", generation: 1 },
+      { id: "s2", name: "beta-mc", status: "stopped", desiredState: "stopped", memoryMb: 2048, diskMb: 10240, createdAt: "2025-09-21T10:00:00Z", generation: 0 },
+      { id: "s3", name: "gamma-mc", status: "crashed", memoryMb: 512, diskMb: 1024, createdAt: "2025-09-22T10:00:00Z", generation: 0 },
+    ]);
+    renderWithQuery(<AdminServers />);
+
+    expect(await screen.findByText("alpha-mc")).toBeInTheDocument();
+    expect(screen.getByText("Total Servers")).toBeInTheDocument();
+    expect(screen.getByText(/1 running.*1 stopped.*1 error/)).toBeInTheDocument();
+    expect(screen.getByText("Manual stop")).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText("Filter by status"), "running");
+    expect(screen.queryByText("beta-mc")).not.toBeInTheDocument();
+    expect(screen.getByText("alpha-mc")).toBeInTheDocument();
+    expect(screen.getByText(/1 of 3 servers/)).toBeInTheDocument();
+  });
+
+  it("switches to grid view and selects rows for bulk actions", async () => {
+    installServersFetch([
+      { id: "s1", name: "alpha-mc", status: "stopped", desiredState: "stopped", generation: 0 },
+      { id: "s2", name: "beta-mc", status: "stopped", desiredState: "stopped", generation: 0 },
+    ]);
+    renderWithQuery(<AdminServers />);
+
+    await screen.findByText("alpha-mc");
+    await userEvent.click(screen.getByRole("button", { name: "Grid view" }));
+    expect(screen.getByRole("button", { name: "Grid view" })).toHaveAttribute("aria-pressed", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: "List view" }));
+    await userEvent.click(screen.getByLabelText("Select alpha-mc"));
+    expect(screen.getByText("1 selected")).toBeInTheDocument();
   });
 });

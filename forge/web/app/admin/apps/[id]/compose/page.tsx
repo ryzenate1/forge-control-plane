@@ -73,15 +73,13 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Btn tone="ghost" size="sm" onClick={() => router.push(`/admin/apps/${id}`)}>
-          <ArrowLeft size={14} />
-        </Btn>
-        <SectionHeader
-          title={app?.name ? `${app.name} - Compose Stack` : "Compose Stack"}
-          sub="Multi-service Docker Compose management"
-        />
-      </div>
+      <SectionHeader
+        title={app?.name ? `${app.name} · Compose Stack` : "Compose Stack"}
+        sub="Multi-service Docker Compose management"
+        backAction={() => router.push(`/admin/apps/${id}`)}
+        backLabel={app?.name ?? "App"}
+        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Compose`}
+      />
 
       <div className="flex flex-wrap gap-3">
         {app?.status === "running" && (

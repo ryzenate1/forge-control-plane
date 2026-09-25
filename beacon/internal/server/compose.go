@@ -30,6 +30,17 @@ type composeStack struct {
 	dir    string
 }
 
+// count reports how many stacks this node currently tracks, so the capability
+// report can state a real number instead of always reporting zero.
+func (cs *composeStack) count() int {
+	if cs == nil {
+		return 0
+	}
+	cs.mu.RLock()
+	defer cs.mu.RUnlock()
+	return len(cs.stacks)
+}
+
 func newComposeStackManager(dataDir string) *composeStack {
 	dir := filepath.Join(filepath.Dir(dataDir), "compose")
 	_ = os.MkdirAll(dir, 0o750)

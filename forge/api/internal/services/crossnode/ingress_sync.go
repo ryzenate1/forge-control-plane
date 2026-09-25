@@ -110,17 +110,41 @@ func (is *IngressSynchronizer) Stop() {
 
 func (is *IngressSynchronizer) Sync(ctx context.Context) error {
 	is.mu.RLock()
-	rules := make([]*trafficmanager.RoutingRule, 0, len(is.rules))
+	totalRules := len(is.rules)
+	rules := make([]*trafficmanager.RoutingRule, 0, totalRules)
+	disabledRules := 0
 	for _, rule := range is.rules {
-		if rule.Enabled {
-			rules = append(rules, rule)
+		if !rule.Enabled {
+			disabledRules++
+			continue
 		}
+		// Work on a copy: the merge below rewrites the chosen healthy backend on the
+		// primary rule, and mutating the shared pointer outside the write lock would
+		// break the single-writer guarantee (and race with concurrent readers).
+		copied := *rule
+		rules = append(rules, &copied)
 	}
 	policies := make(map[string]*trafficmanager.TrafficPolicy, len(is.policies))
 	for k, v := range is.policies {
 		policies[k] = v
 	}
 	is.mu.RUnlock()
+
+	// F-NET-01 no-wipe guard (a): empty sync source. An empty push replaces the
+	// whole gateway document and would drop every live route (including the
+	// gamepanel-domains server and its ACME certificates), so this is a no-op.
+	if totalRules == 0 {
+		slog.Info("ingress sync skipping empty rule set — no-op to protect gateway config")
+		return nil
+	}
+	// F-NET-01 no-wipe guard (b): every configured rule is disabled. The desired
+	// state is not verifiably healthy, so treat a disabled-only set as empty
+	// instead of withdrawing all live routes.
+	if len(rules) == 0 {
+		slog.Info("ingress sync skipping disabled-only rule set — no-op to protect gateway config",
+			"totalRules", totalRules, "disabledRules", disabledRules)
+		return nil
+	}
 
 	groups := GroupRulesByRoute(rules)
 	var mergedRules []*trafficmanager.RoutingRule
@@ -163,6 +187,15 @@ func (is *IngressSynchronizer) Sync(ctx context.Context) error {
 		}
 	}
 
+	// F-NET-01 no-wipe guard (c): rules exist but no backend survived the health
+	// filter. Pushing zero routes would wipe the live set, so skip this cycle;
+	// that is a deliberate no-op, not a sync error.
+	if len(mergedRules) == 0 {
+		slog.Warn("ingress sync found no healthy backends — skipping gateway update to avoid wiping live routes",
+			"groups", len(groups), "rules", len(rules))
+		return nil
+	}
+
 	if err := is.adapter.UpdateRoutes(ctx, mergedRules, policies); err != nil {
 		is.mu.Lock()
 		is.errCount++
@@ -178,6 +211,7 @@ func (is *IngressSynchronizer) Sync(ctx context.Context) error {
 	}
 	is.lastSync = time.Now()
 	is.syncCount++
+	syncCount := is.syncCount
 	is.mu.Unlock()
 
 	if is.publisher != nil {
@@ -189,7 +223,7 @@ func (is *IngressSynchronizer) Sync(ctx context.Context) error {
 			map[string]any{
 				"routes":    len(mergedRules),
 				"groups":    len(groups),
-				"syncCount": is.syncCount,
+				"syncCount": syncCount,
 			},
 		))
 	}
@@ -274,6 +308,29 @@ func (is *IngressSynchronizer) Stats() IngressSyncStats {
 		ErrCount:      is.errCount,
 		Running:       is.running,
 	}
+}
+
+// CurrentRules returns a snapshot of the routing rules the synchronizer most
+// recently applied, for the admin ingress view.
+func (is *IngressSynchronizer) CurrentRules() []*trafficmanager.RoutingRule {
+	is.mu.RLock()
+	defer is.mu.RUnlock()
+	out := make([]*trafficmanager.RoutingRule, 0, len(is.rules))
+	for _, r := range is.rules {
+		out = append(out, r)
+	}
+	return out
+}
+
+// CurrentPolicies returns a snapshot of the traffic policies keyed by group id.
+func (is *IngressSynchronizer) CurrentPolicies() map[string]*trafficmanager.TrafficPolicy {
+	is.mu.RLock()
+	defer is.mu.RUnlock()
+	out := make(map[string]*trafficmanager.TrafficPolicy, len(is.policies))
+	for k, v := range is.policies {
+		out[k] = v
+	}
+	return out
 }
 
 type IngressSyncStats struct {

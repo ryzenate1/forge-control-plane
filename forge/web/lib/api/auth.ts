@@ -81,6 +81,25 @@ export async function fetchCurrentUser(): Promise<ApiUser | null> {
   }
 }
 
+/**
+ * Verify a raw API bearer token by calling `/auth/me` with it explicitly.
+ * Used by the admin API-key screen right after a key is created, so a 401 here
+ * means "that token is not valid" rather than "this browser session expired" —
+ * the session-expiry signal is therefore suppressed.
+ */
+export async function verifyBearerToken(token: string): Promise<ApiUser> {
+  try {
+    return await requestJSON<ApiUser>(
+      '/auth/me',
+      { headers: { Authorization: `Bearer ${token}` } },
+      { suppressSessionExpired: true },
+    );
+  } catch (err) {
+    if (err instanceof ApiError) throw new Error(`Token verification failed with ${err.status}: ${err.message}`);
+    throw err;
+  }
+}
+
 export async function refreshSession(): Promise<void> {
   try {
     await requestJSON<void>('/auth/session/refresh', { method: 'POST' });

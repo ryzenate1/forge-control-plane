@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/components/ui/toast';
 import { Activity, AlertTriangle, BarChart3, Plus, Play, Trash2, Zap } from 'lucide-react';
 import { fetchJSON, postJSON, putJSON, deleteJSON } from '@/lib/api';
 import {
@@ -55,6 +56,7 @@ const defaultForm = {
 export default function AdminAutoscalerPage() {
   const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<ScalingPolicy | null>(null);
@@ -81,6 +83,7 @@ export default function AdminAutoscalerPage() {
       setShowCreate(false);
       setForm(defaultForm);
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to create policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const updateMutation = useMutation({
@@ -90,18 +93,21 @@ export default function AdminAutoscalerPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policies'] });
       setEditingPolicy(null);
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to update policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/autoscaler/policies/${encodeURIComponent(id)}`),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policies'] }),
+    onError: (err) => toast({ tone: 'error', title: 'Failed to delete policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const evaluateMutation = useMutation({
     mutationFn: (serverId: string) => postJSON(`/admin/autoscaler/evaluate/${encodeURIComponent(serverId)}`),
     onSuccess: () =>
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'metrics'] }),
+    onError: (err) => toast({ tone: 'error', title: 'Failed to evaluate autoscaler', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const filtered = policies.filter(

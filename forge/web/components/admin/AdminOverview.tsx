@@ -53,6 +53,7 @@ import {
 } from "@/lib/api";
 import { fetchApps, type ApiApp } from "@/lib/api/apps";
 import { ApiError } from "@/lib/api/http";
+import { chart } from "@/lib/design-tokens";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import {
   AdminPageLayout,
@@ -660,7 +661,7 @@ export function AdminOverview() {
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[8, 14, 10, 15, 12, 16, 12]} color="#38bdf8" />
+              <MiniSparkline data={[8, 14, 10, 15, 12, 16, 12]} color={chart.sky} />
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-sky-500/40 via-sky-400/80 to-transparent" />
@@ -698,7 +699,7 @@ export function AdminOverview() {
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[24, 28, 26, 32, 30, 27, 28]} color="#c084fc" />
+              <MiniSparkline data={[24, 28, 26, 32, 30, 27, 28]} color={chart.lightViolet} />
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-purple-500/40 via-purple-400/80 to-transparent" />
@@ -736,7 +737,7 @@ export function AdminOverview() {
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[31, 32, 33, 33, 34, 33, 34]} color="#fb923c" />
+              <MiniSparkline data={[31, 32, 33, 33, 34, 33, 34]} color={chart.lightOrange} />
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-orange-500/40 via-orange-400/80 to-transparent" />
@@ -884,31 +885,31 @@ export function AdminOverview() {
                     <AreaChart data={TREND_24H_DATA} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#0ea5e9" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#0ea5e9" stopOpacity={0} />
+                          <stop offset="5%" stopColor={chart.blue} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={chart.blue} stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="memGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                          <stop offset="5%" stopColor={chart.violet} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={chart.violet} stopOpacity={0} />
                         </linearGradient>
                         <linearGradient id="storageGrad" x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="5%" stopColor="#f97316" stopOpacity={0.3} />
-                          <stop offset="95%" stopColor="#f97316" stopOpacity={0} />
+                          <stop offset="5%" stopColor={chart.orange} stopOpacity={0.3} />
+                          <stop offset="95%" stopColor={chart.orange} stopOpacity={0} />
                         </linearGradient>
                       </defs>
-                      <XAxis dataKey="time" stroke="#475569" fontSize={10} tickLine={false} />
-                      <YAxis stroke="#475569" fontSize={10} tickLine={false} domain={[0, 100]} unit="%" />
+                      <XAxis dataKey="time" stroke={chart.axisStrong} fontSize={10} tickLine={false} />
+                      <YAxis stroke={chart.axisStrong} fontSize={10} tickLine={false} domain={[0, 100]} unit="%" />
                       <Tooltip
                         contentStyle={{
-                          backgroundColor: "#0f172a",
+                          backgroundColor: chart.panel,
                           borderColor: "rgba(255,255,255,0.1)",
                           borderRadius: "8px",
                           fontSize: "11px",
                         }}
                       />
-                      <Area type="monotone" dataKey="cpu" stroke="#0ea5e9" strokeWidth={2} fill="url(#cpuGrad)" />
-                      <Area type="monotone" dataKey="memory" stroke="#a855f7" strokeWidth={2} fill="url(#memGrad)" />
-                      <Area type="monotone" dataKey="storage" stroke="#f97316" strokeWidth={2} fill="url(#storageGrad)" />
+                      <Area type="monotone" dataKey="cpu" stroke={chart.blue} strokeWidth={2} fill="url(#cpuGrad)" />
+                      <Area type="monotone" dataKey="memory" stroke={chart.violet} strokeWidth={2} fill="url(#memGrad)" />
+                      <Area type="monotone" dataKey="storage" stroke={chart.orange} strokeWidth={2} fill="url(#storageGrad)" />
                     </AreaChart>
                   </ResponsiveContainer>
                 </div>

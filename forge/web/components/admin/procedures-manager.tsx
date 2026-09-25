@@ -164,16 +164,8 @@ export function ProceduresManager() {
     <AdminPageLayout
       title="Procedures"
       description="2384L procedure service: multi-step runbooks with approval gates, cron scheduling, retry/rollback, and audit logging. Routes under /procedures (+ /procedures/executions/*)."
-      breadcrumbs={[{ label: "Admin", href: "/admin/procedures" }, { label: "Procedures" }]}
     >
       <OfflineBanner onRetry={() => void load()} />
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>procedures</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">runbooks</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
           <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>

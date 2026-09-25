@@ -2,6 +2,7 @@
 
 import { useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import {
   Activity, ArrowLeft, CheckCircle, GitCommit, Layers, RefreshCw,
@@ -39,6 +40,7 @@ export default function AdminDeploymentDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const id = params.id as string;
 
   const depQuery = useQuery({
@@ -56,6 +58,7 @@ export default function AdminDeploymentDetailPage() {
       onSuccess: () => {
         queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id] });
       },
+      onError: (err) => toast({ tone: "error", title: "Rollback failed", message: err instanceof Error ? err.message : "An error occurred" }),
     });
 
   const completeMutation = useMutation({
@@ -63,6 +66,7 @@ export default function AdminDeploymentDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to complete deployment", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const cancelMutation = useMutation({
@@ -70,6 +74,7 @@ export default function AdminDeploymentDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to cancel deployment", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const dep = depQuery.data;
@@ -89,39 +94,35 @@ export default function AdminDeploymentDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <Btn tone="ghost" onClick={() => router.push("/admin/deployments")}>
-          <ArrowLeft size={14} /> Back
-        </Btn>
-        <div className="flex-1">
-          <SectionHeader
-            title={`Deployment: ${dep.id.slice(0, 8)}...`}
-            sub={`Server ${dep.serverId} — ${dep.strategy.replace("_", "-")} strategy`}
-            action={
-              <div className="flex gap-2">
-                <Btn tone="ghost" onClick={() => router.push(`/admin/deployments/${id}/revisions`)}>
-                  <GitCommit size={14} /> Revisions
-                </Btn>
-                {canRollback && (
-                  <Btn tone="warning" onClick={() => rollbackMutation.mutate()} disabled={rollbackMutation.isPending}>
-                    <RotateCcw size={14} /> Rollback
-                  </Btn>
-                )}
-                {canComplete && (
-                  <Btn tone="success" onClick={() => completeMutation.mutate()} disabled={completeMutation.isPending}>
-                    <CheckCircle size={14} /> Complete
-                  </Btn>
-                )}
-                {canCancel && (
-                  <Btn tone="danger" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
-                    <XOctagon size={14} /> Cancel
-                  </Btn>
-                )}
-              </div>
-            }
-          />
-        </div>
-      </div>
+      <SectionHeader
+        title={`Deployment: ${dep.id.slice(0, 8)}...`}
+        sub={`Server ${dep.serverId} — ${dep.strategy.replace("_", "-")} strategy`}
+        backAction={() => router.push("/admin/deployments")}
+        backLabel="Deployments"
+        breadcrumb={`Deploy / Deployments / ${dep.id.slice(0, 8)}`}
+        action={
+          <div className="flex gap-2">
+            <Btn tone="ghost" onClick={() => router.push(`/admin/deployments/${id}/revisions`)}>
+              <GitCommit size={14} /> Revisions
+            </Btn>
+            {canRollback && (
+              <Btn tone="warning" onClick={() => rollbackMutation.mutate()} disabled={rollbackMutation.isPending}>
+                <RotateCcw size={14} /> Rollback
+              </Btn>
+            )}
+            {canComplete && (
+              <Btn tone="success" onClick={() => completeMutation.mutate()} disabled={completeMutation.isPending}>
+                <CheckCircle size={14} /> Complete
+              </Btn>
+            )}
+            {canCancel && (
+              <Btn tone="danger" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
+                <XOctagon size={14} /> Cancel
+              </Btn>
+            )}
+          </div>
+        }
+      />
 
       <div className="grid gap-4 md:grid-cols-3">
         <Card className="p-4">

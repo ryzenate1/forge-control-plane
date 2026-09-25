@@ -5,8 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
-  AlertTriangle, Ban, Box, Cpu, Database, ExternalLink, HardDrive, Info,
-  KeyRound, Layers, Network, Plus, RefreshCw, Server, Trash2, Zap,
+  AlertTriangle, Ban, Box, ChevronDown, ChevronLeft, ChevronRight, Cpu, Database, ExternalLink, HardDrive, Info,
+  KeyRound, Layers, LayoutGrid, List, MoreVertical, Network, Play, Plus, RefreshCw, Search, Server, Square, Trash2, Zap,
 } from "lucide-react";
 import {
   type ApiServer, type ApiNode, type ApiAllocation, type ApiEgg,
@@ -16,7 +16,9 @@ import {
   assignServerAllocation, assignServerMount, fetchServerAllocations, removeServerMount, searchUsers, createServer, createServerDatabase,
   rotateServerDatabasePasswordByBody, deleteServerDatabaseWithSuffix, setPrimaryServerAllocation, unassignServerAllocation, updateServerStartupVariable,
   cancelServerTransfer, deleteServer, fetchServerTransferStatus, suspendServer, transferServer, unsuspendServer, reinstallServer, updateServer,
+  sendPowerSignal,
 } from "@/lib/api";
+import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea, cn } from "./admin-ui";
 
 type ServerTab = "about" | "details" | "build" | "startup" | "allocations" | "database" | "mounts" | "manage" | "delete";
@@ -57,59 +59,336 @@ export function AdminServers() {
   const mountsQuery = useQuery({ queryKey: ["mounts"], queryFn: fetchMounts });
   const mounts = useMemo(() => Array.isArray(mountsQuery.data) ? mountsQuery.data : [], [mountsQuery.data]);
   const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [nodeFilter, setNodeFilter] = useState("");
+  const [templateFilter, setTemplateFilter] = useState("");
+  const [sort, setSort] = useState("name-asc");
+  const [view, setView] = useState<"list" | "grid">("list");
+  const [page, setPage] = useState(1);
+  const [pageSize, setPageSize] = useState(20);
+  const [selected, setSelected] = useState<string[]>([]);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [bulkPending, setBulkPending] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
   const [tab, setTab] = useState<ServerTab>("about");
+  const { toast } = useToast();
 
-  const filtered = servers.filter((s) => !search || s.name.toLowerCase().includes(search.toLowerCase()));
+  const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
+  const allocationById = useMemo(() => new Map(allocations.map((a) => [a.id, a])), [allocations]);
+  const eggByName = useMemo(() => new Map(eggs.map((e) => [e.name, e])), [eggs]);
+  const templateNames = useMemo(() => [...new Set(servers.map((s) => s.template).filter((t): t is string => Boolean(t)))].sort(), [servers]);
+
+  const statusOf = (s: ApiServer): "running" | "stopped" | "error" | "suspended" | "installing" | "other" => {
+    if (s.suspended) return "suspended";
+    if (s.status === "crashed") return "error";
+    if (s.status === "running") return "running";
+    if (s.status === "installing" || s.status === "starting") return "installing";
+    if (s.status === "stopped" || s.status === "offline") return "stopped";
+    return "other";
+  };
+
+  const runningCount = servers.filter((s) => statusOf(s) === "running").length;
+  const stoppedCount = servers.filter((s) => statusOf(s) === "stopped").length;
+  const errorCount = servers.filter((s) => statusOf(s) === "error").length;
+  const pct = (n: number) => (servers.length > 0 ? `${Math.round((n / servers.length) * 100)}% of total` : "0% of total");
+
+  function resetPage(update: () => void) {
+    setPage(1);
+    update();
+  }
+
+  const filtered = useMemo(() => {
+    const term = search.trim().toLowerCase();
+    return servers.filter((s) => {
+      if (statusFilter !== "all" && statusOf(s) !== statusFilter) return false;
+      if (nodeFilter && s.nodeId !== nodeFilter) return false;
+      if (templateFilter && s.template !== templateFilter) return false;
+      if (!term) return true;
+      const nodeName = (s.nodeId && nodeById.get(s.nodeId)?.name) ?? s.node ?? "";
+      return [s.name, s.id, s.uuid ?? "", nodeName, s.owner ?? s.ownerEmail ?? "", s.template ?? ""]
+        .join(" ").toLowerCase().includes(term);
+    });
+  }, [servers, search, statusFilter, nodeFilter, templateFilter, nodeById]);
+
+  const sorted = useMemo(() => {
+    const list = [...filtered];
+    const created = (s: ApiServer) => (s.createdAt ? new Date(s.createdAt).getTime() : 0);
+    switch (sort) {
+      case "name-desc": return list.sort((a, b) => b.name.localeCompare(a.name));
+      case "status": return list.sort((a, b) => statusOf(a).localeCompare(statusOf(b)) || a.name.localeCompare(b.name));
+      case "newest": return list.sort((a, b) => created(b) - created(a));
+      case "oldest": return list.sort((a, b) => created(a) - created(b));
+      case "node": return list.sort((a, b) => (a.node ?? "").localeCompare(b.node ?? "") || a.name.localeCompare(b.name));
+      default: return list.sort((a, b) => a.name.localeCompare(b.name));
+    }
+  }, [filtered, sort]);
+
+  const totalPages = Math.max(1, Math.ceil(sorted.length / pageSize));
+  const currentPage = Math.min(page, totalPages);
+  const visible = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
+  const hasActiveFilters = Boolean(search.trim() || statusFilter !== "all" || nodeFilter || templateFilter);
+
+  function clearFilters() {
+    setSearch("");
+    setStatusFilter("all");
+    setNodeFilter("");
+    setTemplateFilter("");
+    setPage(1);
+  }
+
+  async function handleRefresh() {
+    setIsRefreshing(true);
+    await Promise.allSettled([serversQuery.refetch(), nodesQuery.refetch()]);
+    setTimeout(() => setIsRefreshing(false), 500);
+  }
+
+  function toggleSelect(id: string) {
+    setSelected((prev) => (prev.includes(id) ? prev.filter((v) => v !== id) : [...prev, id]));
+  }
+
+  function toggleSelectPage() {
+    const ids = visible.map((s) => s.id);
+    setSelected((prev) => (ids.every((id) => prev.includes(id)) ? prev.filter((id) => !ids.includes(id)) : [...new Set([...prev, ...ids])]));
+  }
+
+  async function bulkPower(signal: "start" | "stop" | "restart") {
+    if (selected.length === 0) return;
+    setBulkPending(signal);
+    const settled = await Promise.allSettled(selected.map((id) => sendPowerSignal(id, signal)));
+    const failed = settled.filter((r) => r.status === "rejected").length;
+    if (failed > 0) toast({ tone: "error", title: "Bulk action incomplete", message: `${failed} of ${selected.length} servers failed to ${signal}.` });
+    await serversQuery.refetch();
+    setSelected([]);
+    setBulkPending(null);
+  }
+
+  function openDetails(id: string) {
+    setSelectedServerId(id);
+    setTab("about");
+  }
 
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Servers"
-        sub="All game server instances across the cluster."
+        title={
+          <span className="flex items-center gap-2">
+            <span>Servers</span>
+            <PageInfoDisclosure
+              title="Game servers"
+              eyebrow="Architecture & Semantics"
+              description="Game server workloads running across your Forge infrastructure. Counts, filters and exports reflect live API data."
+              sections={[
+                {
+                  title: "Where data comes from",
+                  icon: Layers,
+                  content:
+                    "Servers, nodes, allocations and eggs load from /servers, /nodes, /allocations and /eggs. Status pills derive from desired vs actual state; resource usage needs live workload telemetry, so configured limits are shown with used values left blank.",
+                },
+                {
+                  title: "Filtering & paging",
+                  icon: Info,
+                  content:
+                    "Search, status, node and template filters plus sorting apply over the full loaded dataset, then paginate locally. Bulk power actions send one request per selected server.",
+                },
+              ]}
+            />
+          </span>
+        }
+        sub="Game server workloads running across your Forge infrastructure."
         action={
           <Btn tone="primary" onClick={() => setShowCreate(true)}>
-            <Plus size={14} /> Create New
+            <Plus size={14} /> Create Server
           </Btn>
         }
       />
-      <Card>
-        <div className="flex items-center gap-3 p-4">
-          <Input placeholder="Search Servers" value={search} onChange={setSearch} />
+
+      <div className="grid grid-cols-2 gap-4 xl:grid-cols-4">
+        {[
+          { label: "Total Servers", value: servers.length, sub: `${runningCount} running • ${stoppedCount} stopped • ${errorCount} error`, icon: Box, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300" },
+          { label: "Running", value: runningCount, sub: pct(runningCount), icon: Play, tile: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300" },
+          { label: "Stopped", value: stoppedCount, sub: pct(stoppedCount), icon: Square, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300" },
+          { label: "Error", value: errorCount, sub: pct(errorCount), icon: AlertTriangle, tile: "border-red-500/25 bg-red-500/10 text-red-300" },
+        ].map((kpi) => (
+          <div key={kpi.label} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm">
+            <div className="flex items-center gap-2">
+              <span className={cn("grid h-7 w-7 place-items-center rounded-lg border", kpi.tile)}>
+                <kpi.icon size={14} />
+              </span>
+              <span className="text-xs font-semibold text-slate-200">{kpi.label}</span>
+            </div>
+            <p className="mt-2.5 font-mono text-3xl font-bold tracking-tight text-slate-100">
+              {isLoading ? "…" : kpi.value}
+            </p>
+            <p className="mt-1 text-[11px] text-slate-500">{kpi.sub}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="flex flex-col gap-2 rounded-xl border border-white/[0.07] bg-white/[0.015] p-3 xl:flex-row xl:items-center">
+        <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2">
+          <Search size={13} className="shrink-0 text-slate-500" />
+          <input
+            type="text"
+            value={search}
+            onChange={(e) => resetPage(() => setSearch(e.target.value))}
+            placeholder="Search servers by name, UUID, or node…"
+            aria-label="Search servers"
+            className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600"
+          />
+        </label>
+        <div className="flex flex-wrap items-center gap-2">
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-500">Status</span>
+            <select aria-label="Filter by status" value={statusFilter} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+              <option value="all">All</option>
+              <option value="running">Running</option>
+              <option value="stopped">Stopped</option>
+              <option value="error">Error</option>
+              <option value="suspended">Suspended</option>
+              <option value="installing">Installing</option>
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-500">Node</span>
+            <select aria-label="Filter by node" value={nodeFilter} onChange={(e) => resetPage(() => setNodeFilter(e.target.value))} className="max-w-36 cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+              <option value="">All</option>
+              {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
+            </select>
+          </label>
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-500">Game / Template</span>
+            <select aria-label="Filter by template" value={templateFilter} onChange={(e) => resetPage(() => setTemplateFilter(e.target.value))} className="max-w-40 cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+              <option value="">All</option>
+              {templateNames.map((t) => <option key={t} value={t}>{t}</option>)}
+            </select>
+          </label>
+          <button
+            type="button"
+            aria-label="Refresh servers"
+            onClick={handleRefresh}
+            className="grid h-9 w-9 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.02] text-slate-400 transition hover:border-white/20 hover:text-white"
+          >
+            <RefreshCw size={14} className={isRefreshing ? "animate-spin text-sky-400" : ""} />
+          </button>
+          <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2 text-xs text-slate-300">
+            <span className="text-[11px] text-slate-500">Sort by</span>
+            <select aria-label="Sort servers" value={sort} onChange={(e) => setSort(e.target.value)} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+              <option value="name-asc">Name (A → Z)</option>
+              <option value="name-desc">Name (Z → A)</option>
+              <option value="status">Status</option>
+              <option value="newest">Newest</option>
+              <option value="oldest">Oldest</option>
+              <option value="node">Node</option>
+            </select>
+          </label>
+          <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1" role="group" aria-label="View mode">
+            <button type="button" aria-label="List view" aria-pressed={view === "list"} onClick={() => setView("list")} className={cn("rounded-md p-1.5 transition", view === "list" ? "bg-white/[0.08] text-white" : "text-slate-500 hover:text-slate-300")}>
+              <List size={14} />
+            </button>
+            <button type="button" aria-label="Grid view" aria-pressed={view === "grid"} onClick={() => setView("grid")} className={cn("rounded-md p-1.5 transition", view === "grid" ? "bg-white/[0.08] text-white" : "text-slate-500 hover:text-slate-300")}>
+              <LayoutGrid size={14} />
+            </button>
+          </div>
+          {hasActiveFilters && (
+            <button type="button" onClick={clearFilters} className="rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-400 transition hover:text-white">
+              Clear
+            </button>
+          )}
         </div>
+      </div>
+
+      {selected.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-sky-500/25 bg-sky-500/[0.06] px-4 py-2.5 text-xs">
+          <span className="font-semibold text-sky-200">{selected.length} selected</span>
+          {(["start", "stop", "restart"] as const).map((signal) => (
+            <button
+              key={signal}
+              type="button"
+              disabled={bulkPending !== null}
+              onClick={() => { void bulkPower(signal); }}
+              className="rounded-lg border border-white/15 px-2.5 py-1 font-semibold capitalize text-slate-200 transition hover:bg-white/[0.06] disabled:opacity-40"
+            >
+              {bulkPending === signal ? "…" : signal}
+            </button>
+          ))}
+          <button type="button" onClick={() => setSelected([])} className="ml-auto font-semibold text-slate-400 hover:text-white">Clear</button>
+        </div>
+      )}
+
+      <Card>
         {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading servers…</div>
+          <div className="space-y-0 divide-y divide-white/[0.04]" role="status" aria-label="Loading servers">
+            {Array.from({ length: 5 }, (_, i) => (
+              <div key={i} className="flex gap-4 px-4 py-4">
+                <div className="h-9 w-9 animate-pulse rounded-lg bg-white/[0.06]" />
+                <div className="h-4 w-40 animate-pulse rounded bg-white/[0.06]" />
+                <div className="h-4 w-24 animate-pulse rounded bg-white/[0.06]" />
+                <div className="h-4 flex-1 animate-pulse rounded bg-white/[0.06]" />
+              </div>
+            ))}
+          </div>
         ) : isError ? (
           <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load servers: {error?.message ?? "Unknown error"}</span><Btn size="sm" tone="ghost" onClick={() => void refetch()}>Retry</Btn></div></div>
-        ) : filtered.length === 0 ? (
-          <EmptyState icon={Layers} message="No servers yet." />
+        ) : sorted.length === 0 ? (
+          <EmptyState
+            icon={Layers}
+            title={hasActiveFilters ? "No matches" : "No servers yet"}
+            message={hasActiveFilters ? "No servers match these filters." : "Create your first game server to get started."}
+          />
+        ) : view === "grid" ? (
+          <div className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-3">
+            {visible.map((s) => <ServerGridCard key={s.id} server={s} node={s.nodeId ? nodeById.get(s.nodeId) : undefined} allocation={primaryAllocationFor(s, allocations, allocationById)} egg={s.template ? eggByName.get(s.template) : undefined} selected={selected.includes(s.id)} onToggle={() => toggleSelect(s.id)} onOpen={() => openDetails(s.id)} />)}
+          </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                  <th className="px-4 py-3">Name</th>
-                  <th className="px-4 py-3">UUID</th>
-                  <th className="px-4 py-3">Owner</th>
-                  <th className="px-4 py-3">Node</th>
-                  <th className="px-4 py-3">Connection</th>
-                  <th className="px-4 py-3">Status</th>
+                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                  <th className="w-8 px-3 py-3"><input type="checkbox" aria-label="Select all servers on this page" checked={visible.length > 0 && visible.every((s) => selected.includes(s.id))} onChange={toggleSelectPage} className="h-3.5 w-3.5 accent-red-500" /></th>
+                  <th className="px-2 py-3 font-medium">Server</th>
+                  <th className="px-2 py-3 font-medium">Status</th>
+                  <th className="px-2 py-3 font-medium">Node</th>
+                  <th className="px-2 py-3 font-medium">Resources</th>
+                  <th className="px-2 py-3 font-medium">Game / Template</th>
+                  <th className="px-2 py-3 font-medium">Created</th>
+                  <th className="px-2 py-3 font-medium">Updated</th>
+                  <th className="px-2 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody>
-                {filtered.map((s) => (
-                  <tr key={s.id} className="border-b border-white/[0.04] transition hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-semibold"><button type="button" className="text-left hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={() => { setSelectedServerId(s.id); setTab("about"); }}>{s.name}</button></td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400">{s.id.slice(0, 8)}…</td>
-                    <td className="px-4 py-3 text-slate-400">{s.owner ?? "—"}</td>
-                    <td className="px-4 py-3 text-slate-400">{s.node ?? "—"}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{s.allocation ?? "—"}</td>
-                    <td className="px-4 py-3"><ServerStatusBadge server={s} /></td>
-                  </tr>
+              <tbody className="divide-y divide-white/[0.04]">
+                {visible.map((s) => (
+                  <ServerRow
+                    key={s.id}
+                    server={s}
+                    node={s.nodeId ? nodeById.get(s.nodeId) : undefined}
+                    allocation={primaryAllocationFor(s, allocations, allocationById)}
+                    egg={s.template ? eggByName.get(s.template) : undefined}
+                    selected={selected.includes(s.id)}
+                    onToggle={() => toggleSelect(s.id)}
+                    onOpen={() => openDetails(s.id)}
+                  />
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+        {!isLoading && !isError && sorted.length > 0 && (
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3 text-xs text-slate-400">
+            <span>{sorted.length} of {servers.length} servers{hasActiveFilters ? " (filtered)" : ""}</span>
+            <div className="flex items-center gap-2">
+              <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40"><ChevronLeft size={13} /></button>
+              <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
+              <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40"><ChevronRight size={13} /></button>
+              <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
+                <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
+                  <option value={10}>10 / page</option>
+                  <option value={20}>20 / page</option>
+                  <option value={50}>50 / page</option>
+                </select>
+                <ChevronDown size={12} className="text-slate-500" />
+              </label>
+            </div>
           </div>
         )}
       </Card>
@@ -140,6 +419,206 @@ export function AdminServers() {
           />
         </Modal>
       )}
+    </div>
+  );
+}
+
+function primaryAllocationFor(server: ApiServer, allocations: ApiAllocation[], byId: Map<string, ApiAllocation>): ApiAllocation | undefined {
+  const direct = (server.primaryAllocationId && byId.get(server.primaryAllocationId))
+    ?? (server.allocationId && byId.get(server.allocationId));
+  if (direct) return direct;
+  return allocations.find((a) => a.isPrimary || a.primary);
+}
+
+function statusSubtext(server: ApiServer): string {
+  if (server.suspended) return "Suspended by admin";
+  if (server.status === "crashed") return server.transferError ?? "Crashed";
+  if (server.status === "installing" || server.status === "starting") return "Installing…";
+  if (server.status === "running") return "Running";
+  if (server.status === "stopped" || server.status === "offline") {
+    return server.desiredState === "running" ? "Start requested" : "Manual stop";
+  }
+  return server.transferring ? "Transferring…" : (server.status || "Unknown");
+}
+
+function statusPillTone(server: ApiServer): "green" | "red" | "yellow" | "neutral" {
+  if (server.suspended || server.status === "crashed") return "red";
+  if (server.status === "running") return "green";
+  if (server.status === "installing" || server.status === "starting") return "yellow";
+  return "neutral";
+}
+
+function formatDateTime(iso?: string): { date: string; time: string } {  if (!iso) return { date: "—", time: "" };
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { date: "—", time: "" };
+  return {
+    date: d.toLocaleDateString("en-GB", { day: "2-digit", month: "short", year: "numeric" }),
+    time: d.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true }),
+  };
+}
+
+function shortImage(image?: string): string {
+  if (!image) return "—";
+  const noTag = image.split("@")[0];
+  const parts = noTag.split("/");
+  return parts[parts.length - 1] || image;
+}
+
+function RowMenu({ server, onOpen }: { server: ApiServer; onOpen: () => void }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        aria-label={`Actions for ${server.name}`}
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+        className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] text-slate-400 transition hover:border-white/20 hover:text-white"
+      >
+        <MoreVertical size={15} />
+      </button>
+      {open && (
+        <>
+          <button type="button" aria-label="Close menu" className="fixed inset-0 z-10 cursor-default" onClick={() => setOpen(false)} />
+          <div className="absolute right-0 z-20 mt-1 w-44 overflow-hidden rounded-lg border border-white/10 bg-[var(--surface-raised)] shadow-xl">
+            {[
+              { label: "Open overview", href: `/server/${server.id}` },
+              { label: "Open console", href: `/server/${server.id}/console` },
+              { label: "Manage", action: onOpen },
+            ].map((item) => (
+              item.href ? (
+                <a key={item.label} href={item.href} className="block px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/[0.06]">
+                  {item.label}
+                </a>
+              ) : (
+                <button key={item.label} type="button" onClick={() => { setOpen(false); item.action?.(); }} className="block w-full px-3 py-2 text-left text-xs text-slate-200 transition hover:bg-white/[0.06]">
+                  {item.label}
+                </button>
+              )
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function ServerRow({ server, node, allocation, egg, selected, onToggle, onOpen }: {
+  server: ApiServer;
+  node?: ApiNode;
+  allocation?: ApiAllocation;
+  egg?: ApiEgg;
+  selected: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+}) {
+  const created = formatDateTime(server.createdAt);
+  // updatedAt is not part of the typed contract yet — read defensively so the
+  // column fills in if/when the API starts sending it, without faking a value.
+  const updated = formatDateTime((server as unknown as { updatedAt?: string }).updatedAt);
+  const nodeIp = node?.fqdn ?? (allocation ? allocation.ip : undefined) ?? "—";
+  const gameName = egg?.nestName ?? server.template ?? "—";
+  const gameSub = egg ? egg.name : shortImage(server.dockerImage);
+  const canStart = server.status !== "running";
+  return (
+    <tr className={cn("transition hover:bg-white/[0.02]", selected && "bg-sky-500/[0.04]")}>
+      <td className="px-3 py-3"><input type="checkbox" aria-label={`Select ${server.name}`} checked={selected} onChange={onToggle} className="h-3.5 w-3.5 accent-red-500" /></td>
+      <td className="px-2 py-3">
+        <div className="flex items-center gap-2.5">
+          <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
+            <Box size={16} />
+          </span>
+          <span className="min-w-0">
+            <button type="button" onClick={onOpen} className="block max-w-44 truncate text-left text-xs font-bold text-slate-100 hover:text-white" title={server.name}>
+              {server.name}
+            </button>
+            <span className="block font-mono text-[10px] text-slate-500">{server.id.slice(0, 8)}…</span>
+          </span>
+        </div>
+      </td>
+      <td className="px-2 py-3">
+        <Pill tone={statusPillTone(server)}>{server.suspended ? "Suspended" : server.status}</Pill>
+        <span className="mt-1 block text-[10px] text-slate-500">{statusSubtext(server)}</span>
+      </td>
+      <td className="px-2 py-3">
+        <span className="block max-w-36 truncate text-xs text-slate-200" title={node?.name ?? server.node}>{node?.name ?? server.node ?? "—"}</span>
+        <span className="block font-mono text-[10px] text-slate-500">{nodeIp}</span>
+      </td>
+      <td className="px-2 py-3 font-mono text-[11px] text-slate-300">
+        <span className="block">— / {typeof server.memoryMb === "number" ? `${server.memoryMb.toLocaleString()} MiB` : "—"}</span>
+        <span className="block">— / {typeof server.diskMb === "number" ? `${server.diskMb.toLocaleString()} MiB` : "—"}</span>
+      </td>
+      <td className="px-2 py-3">
+        <div className="flex items-center gap-2">
+          <span className="grid h-7 w-7 shrink-0 place-items-center rounded-md border border-white/[0.08] bg-white/[0.03] text-slate-400">
+            <Box size={13} />
+          </span>
+          <span className="min-w-0">
+            <span className="block max-w-32 truncate text-xs text-slate-200" title={gameName}>{gameName}</span>
+            <span className="block max-w-32 truncate text-[10px] text-slate-500" title={gameSub}>{gameSub}</span>
+          </span>
+        </div>
+      </td>
+      <td className="px-2 py-3 text-[11px] text-slate-300">
+        <span className="block whitespace-nowrap">{created.date}</span>
+        <span className="block whitespace-nowrap text-slate-500">{created.time}</span>
+      </td>
+      <td className="px-2 py-3 text-[11px] text-slate-300">
+        <span className="block whitespace-nowrap">{updated.date}</span>
+        <span className="block whitespace-nowrap text-slate-500">{updated.time}</span>
+      </td>
+      <td className="px-2 py-3">
+        <div className="flex items-center justify-end gap-1.5">
+          <a
+            href={canStart ? `/server/${server.id}/console` : `/server/${server.id}`}
+            aria-label={canStart ? `Start ${server.name}` : `Open ${server.name}`}
+            title={canStart ? `Start ${server.name}` : `Open ${server.name}`}
+            className="grid h-8 w-8 place-items-center rounded-lg border border-white/[0.08] text-slate-300 transition hover:border-white/20 hover:text-white"
+          >
+            <Play size={14} />
+          </a>
+          <RowMenu server={server} onOpen={onOpen} />
+        </div>
+      </td>
+    </tr>
+  );
+}
+
+function ServerGridCard({ server, node, allocation, egg, selected, onToggle, onOpen }: {
+  server: ApiServer;
+  node?: ApiNode;
+  allocation?: ApiAllocation;
+  egg?: ApiEgg;
+  selected: boolean;
+  onToggle: () => void;
+  onOpen: () => void;
+}) {
+  const created = formatDateTime(server.createdAt);
+  const nodeIp = node?.fqdn ?? (allocation ? allocation.ip : undefined) ?? "—";
+  return (
+    <div className={cn("rounded-xl border bg-[var(--surface)] p-4 shadow-sm transition hover:border-white/20", selected ? "border-sky-500/40" : "border-white/[0.08]")}>
+      <div className="flex items-start gap-3">
+        <input type="checkbox" aria-label={`Select ${server.name}`} checked={selected} onChange={onToggle} className="mt-1 h-3.5 w-3.5 shrink-0 accent-red-500" />
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
+          <Box size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <button type="button" onClick={onOpen} className="block max-w-full truncate text-left text-sm font-bold text-slate-100 hover:text-white" title={server.name}>
+            {server.name}
+          </button>
+          <p className="font-mono text-[10px] text-slate-500">{server.id.slice(0, 8)}… · {created.date}</p>
+        </div>
+        <RowMenu server={server} onOpen={onOpen} />
+      </div>
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <Pill tone={statusPillTone(server)}>{server.suspended ? "Suspended" : server.status}</Pill>
+        <span className="text-[11px] text-slate-500">{statusSubtext(server)}</span>
+      </div>
+      <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-slate-400">
+        <p className="truncate">Node: <span className="text-slate-200">{node?.name ?? server.node ?? "—"}</span> · {nodeIp}</p>
+        <p>Mem: <span className="text-slate-200">— / {typeof server.memoryMb === "number" ? `${server.memoryMb.toLocaleString()} MiB` : "—"}</span></p>
+        <p className="truncate">Game: <span className="text-slate-200">{egg?.nestName ?? server.template ?? "—"}</span></p>
+      </div>
     </div>
   );
 }
@@ -330,13 +809,6 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
   );
 }
 
-function ServerStatusBadge({ server }: { server: ApiServer }) {
-  if (server.suspended) return <Pill tone="red">Suspended</Pill>;
-  if (server.status === "installing") return <Pill tone="yellow">Installing</Pill>;
-  if (server.status === "running") return <Pill tone="green">Active</Pill>;
-  return <Pill tone="neutral">{server.status}</Pill>;
-}
-
 function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations, mounts, onClose }: {
   serverId: string; tab: ServerTab; setTab: (t: ServerTab) => void;
   users: ApiUser[]; nodes: ApiNode[]; allocations: ApiAllocation[];
@@ -347,8 +819,8 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
   const { data: server, isLoading } = useQuery({ queryKey: ["server", serverId], queryFn: () => fetchServer(serverId) });
   const deleteMut = useMutation({ mutationFn: () => deleteServer(serverId, false), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete server" }) });
   const forceDeleteMut = useMutation({ mutationFn: () => deleteServer(serverId, true), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Force delete failed", message: error instanceof Error ? error.message : "Could not force delete server" }) });
-  const suspendMut = useMutation({ mutationFn: () => suspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
-  const unsuspendMut = useMutation({ mutationFn: () => unsuspendServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
+  const suspendMut = useMutation({ mutationFn: async () => { const result = await suspendServer(serverId); if (!result.ok) throw new Error("The server reported the suspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
+  const unsuspendMut = useMutation({ mutationFn: async () => { const result = await unsuspendServer(serverId); if (!result.ok) throw new Error("The server reported the unsuspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
   const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
 
   if (isLoading || !server) return <div className="p-8 text-center text-sm text-slate-500">Loading…</div>;
@@ -360,7 +832,7 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
           <h2 className="text-lg font-bold text-white">{server.name}</h2>
           <p className="text-xs text-slate-400">{server.description ?? ""}</p>
         </div>
-        <a className="flex items-center gap-1 text-xs text-sky-400 hover:underline" href={`/server/${server.id}`} target="_blank" rel="noreferrer">
+        <a className="flex items-center gap-1 text-xs text-sky-400 hover:underline" href={`/server/${server.id}/console`} target="_blank" rel="noreferrer">
           Open console <ExternalLink size={12} />
         </a>
       </div>
@@ -878,7 +1350,7 @@ function ServerManageTab({ server, reinstallMut, suspendMut, unsuspendMut, nodes
   const [primaryAllocationId, setPrimaryAllocationId] = useState("");
   const targetAllocations = allocations.filter((allocation) => allocation.node === targetNodeId && !allocation.server);
   const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId, primaryAllocationId || undefined), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Transfer failed", message: error instanceof Error ? error.message : "Could not transfer server" }) });
-  const cancelMut = useMutation({ mutationFn: () => cancelServerTransfer(server.id), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }) });
+  const cancelMut = useMutation({ mutationFn: async () => { const result = await cancelServerTransfer(server.id); if (!result.ok) throw new Error("The server reported the transfer was not cancelled."); return result; }, onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }) });
   const transfer = transferQuery.data;
   return (
     <div className="grid gap-4 md:grid-cols-2">

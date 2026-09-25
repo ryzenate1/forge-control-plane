@@ -72,11 +72,11 @@ export function AdminEndpoints() {
   });
 
   return (
-    <div>
+    <div className="space-y-6">
       <SectionHeader
-        title="Networking — Endpoints"
-        sub="INFRA · Networking primary view: logical groupings over beacons. Endpoint inventory is the networking control surface — see also Domains, Traffic, Load Balancer, and advanced Discovery/Gateways/Cross-Node under Infra → Networking."
-        action={<Btn onClick={() => { setName(""); setDescription(""); setEpType("docker"); setConnMode("direct"); setUrl(""); setFormError(null); setModal("create"); }}><Plus size={14} /> New Endpoint</Btn>}
+        title="Endpoints"
+        sub="Logical endpoint inventory and beacon groupings for traffic routing and network ingress."
+        action={<Btn tone="primary" onClick={() => { setName(""); setDescription(""); setEpType("docker"); setConnMode("direct"); setUrl(""); setFormError(null); setModal("create"); }}><Plus size={14} /> New Endpoint</Btn>}
       />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
         <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Networking</span> primary: <code className="font-mono text-[11px]">Endpoints</code> · <code className="font-mono">Domains</code> · <code className="font-mono">Services/Traffic/LB</code> — plus <span className="font-semibold">Advanced</span> <code className="font-mono">Discovery/Gateways/Cross-Node/DNS/ACME/Certs/Firewall/mTLS</code>. Chain: Domains → DNS → Cert/TLS → Route → Workload. This inventory groups beacons for routing — for per-beacon detail see <code className="font-mono">/admin/nodes/[id]</code>.

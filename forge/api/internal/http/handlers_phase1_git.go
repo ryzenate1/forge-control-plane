@@ -34,7 +34,9 @@ func Phase1GitOAuthAuthorize(bridge *phase1git.Bridge) fiber.Handler {
 		}
 		pt, err := parseProvider1(c.Params("provider"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			// An unsupported provider is a semantic validation failure of the
+			// request body/params → 422 per the normalized status codes.
+			return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 		}
 		if !bridge.ProviderConfigured(pt) {
 			return fiber.NewError(fiber.StatusBadRequest, "oauth is not configured for this provider")

@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
+import { chart } from "@/lib/design-tokens";
 import { getSystemInfo } from "@/lib/api/monitoring";
 
 export function SystemHealthGauge() {
@@ -38,9 +39,9 @@ export function SystemHealthGauge() {
   const unacknowledged = data?.unacknowledgedAlerts ?? 0;
 
   const getColor = () => {
-    if (healthScore >= 90) return { stroke: "#10b981", text: "text-emerald-400", label: "Healthy" };
-    if (healthScore >= 70) return { stroke: "#f59e0b", text: "text-amber-400", label: "Degraded" };
-    return { stroke: "#ef4444", text: "text-red-400", label: "Critical" };
+    if (healthScore >= 90) return { stroke: chart.success, text: "text-emerald-400", label: "Healthy" };
+    if (healthScore >= 70) return { stroke: chart.warning, text: "text-amber-400", label: "Degraded" };
+    return { stroke: chart.dangerBright, text: "text-red-400", label: "Critical" };
   };
 
   const color = getColor();

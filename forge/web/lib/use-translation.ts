@@ -3,8 +3,20 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { DEFAULT_I18N_CONFIG, type Locale } from "@forge/shared-types";
 import defaultMessages from "../../../lang/en.json";
+import { requestJSON } from "./api/http";
 
 type Messages = Record<string, unknown>;
+
+/**
+ * Locale bundles are served by the panel's own Next.js route handler (not the Go
+ * API), so `sameOrigin` keeps the canonical client from prefixing the path with
+ * the API base URL. The 401 session-expiry signal is suppressed: a failed
+ * translation load is a cosmetic fallback (English), never a reason to log the
+ * user out.
+ */
+function loadLocaleMessages(target: Locale, signal: AbortSignal): Promise<Messages> {
+  return requestJSON<Messages>(`/api/i18n/${target}`, { signal }, { sameOrigin: true, suppressSessionExpired: true });
+}
 
 function resolveNested(obj: unknown, path: string): unknown {
   return path.split(".").reduce<unknown>((acc, key) => {
@@ -56,25 +68,18 @@ export function useTranslation() {
     }
     const controller = new AbortController();
     setLoading(true);
-    fetch(`/api/i18n/${locale}`, { signal: controller.signal })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load locale: ${locale}`);
-        return res.json();
-      })
+    loadLocaleMessages(locale, controller.signal)
       .then((data) => {
         const nextMessages = data as Messages;
         translationCache.set(locale, nextMessages);
         setMessages(nextMessages);
       })
-      .catch(async (err) => {
-        if (err?.name === "AbortError") return;
+      .catch(async () => {
+        if (controller.signal.aborted) return;
         try {
-          const res = await fetch("/api/i18n/en", { signal: controller.signal });
-          if (!res.ok) throw new Error("Fallback fetch failed");
-          const data = await res.json();
+          const data = await loadLocaleMessages("en", controller.signal);
           if (!controller.signal.aborted) setMessages(data as Messages);
-        } catch (fallbackErr) {
-          if ((fallbackErr as Error)?.name === "AbortError") return;
+        } catch {
           if (!controller.signal.aborted) setMessages((prev) => prev ?? {});
         }
       })
@@ -91,6 +96,9 @@ export function useTranslation() {
       // UI never renders "undefined".
       const value = typeof localized === "string" ? localized : resolveNested(defaultMessages, key);
       if (typeof value !== "string") {
+        if (Array.isArray(args) && typeof args[0] === "string") {
+          return args[0];
+        }
         if (process.env.NODE_ENV === "development" && !warnedMissingKeys.has(key)) {
           warnedMissingKeys.add(key);
           console.warn(`[i18n] Missing translation key in lang/en.json: "${key}"`);
@@ -119,15 +127,14 @@ export function useTranslation() {
     preloadAbortRef.current?.abort();
     const controller = new AbortController();
     preloadAbortRef.current = controller;
-    fetch(`/api/i18n/${localeToPreload}`, { signal: controller.signal })
-      .then((res) => res.json())
+    loadLocaleMessages(localeToPreload, controller.signal)
       .then((data) => {
         if (!controller.signal.aborted) {
           translationCache.set(localeToPreload, data as Messages);
         }
       })
-      .catch((err) => {
-        if (err?.name === "AbortError") return;
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
         console.warn("[i18n] preloadLocale failed:", err);
       });
   }, [locale, translationCache]);

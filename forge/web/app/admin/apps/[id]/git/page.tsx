@@ -89,28 +89,27 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Btn tone="ghost" size="sm" onClick={() => router.push(`/admin/apps/${id}`)}>
-          <ArrowLeft size={14} />
-        </Btn>
-        <SectionHeader
-          title={app?.name ? `${app.name} - Git Source` : "Git Source"}
-          sub="Repository configuration and deployment triggers"
-        />
-      </div>
-
-      <div className="flex flex-wrap gap-3">
-        <Btn tone="primary" onClick={() => triggerMut.mutate()} disabled={triggerMut.isPending}>
-          <RefreshCw size={14} className={triggerMut.isPending ? "animate-spin" : ""} />
-          {triggerMut.isPending ? "Building..." : "Trigger Build"}
-        </Btn>
-        {triggerMut.isPending && (
-          <span className="flex items-center gap-2 text-xs text-slate-400">
-            <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
-            Build in progress...
-          </span>
-        )}
-      </div>
+      <SectionHeader
+        title={app?.name ? `${app.name} · Git Source` : "Git Source"}
+        sub="Repository configuration and deployment triggers"
+        backAction={() => router.push(`/admin/apps/${id}`)}
+        backLabel={app?.name ?? "App"}
+        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Git`}
+        action={
+          <div className="flex items-center gap-3">
+            {triggerMut.isPending && (
+              <span className="flex items-center gap-2 text-xs text-slate-400">
+                <span className="h-2 w-2 animate-pulse rounded-full bg-blue-500" />
+                Build in progress...
+              </span>
+            )}
+            <Btn tone="primary" onClick={() => triggerMut.mutate()} disabled={triggerMut.isPending}>
+              <RefreshCw size={14} className={triggerMut.isPending ? "animate-spin" : ""} />
+              {triggerMut.isPending ? "Building..." : "Trigger Build"}
+            </Btn>
+          </div>
+        }
+      />
 
       <div className="grid gap-6 lg:grid-cols-2">
         <Card>

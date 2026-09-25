@@ -71,11 +71,11 @@ export function AdminNodes() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Beacons"
-        sub="Where workloads run — beacons are machines that host your workloads. Each beacon runs the agent and reports heartbeat, capacity, runtime and capabilities. (Legacy table: nodes)"
+        title="Nodes"
+        sub="Daemon hosts that run workloads across your infrastructure. Each node runs the Beacon agent and reports health, capacity, runtime and capabilities."
         action={
           <Btn tone="primary" onClick={() => setShowCreate(true)}>
-            <Plus size={14} /> Create Beacon
+            <Plus size={14} /> Create Node
           </Btn>
         }
       />
@@ -235,7 +235,11 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const deleteMut = useMutation({
-    mutationFn: () => deleteNode(nodeId),
+    mutationFn: async () => {
+      const result = await deleteNode(nodeId);
+      if (!result.ok) throw new Error("The server reported the node was not deleted.");
+      return result;
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["nodes"] }); onClose(); },
     onError: (e: Error) => toast({ tone: "error", title: "Failed to delete node", message: e.message }),
   });

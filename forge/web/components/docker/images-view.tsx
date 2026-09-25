@@ -6,6 +6,7 @@ import { Trash2, RefreshCw, Download } from "lucide-react";
 import { listImages, pullImage, deleteImage, type DockerImage } from "@/lib/api/docker";
 import { Btn, Card, EmptyState, Input, Modal, ModalFooter, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Alert, Pagination } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
 
 function formatSize(bytes: number): string {
   if (!bytes) return "0B";
@@ -24,6 +25,7 @@ function formatCreated(ts: number): string {
 
 export function ImagesView() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [showPull, setShowPull] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DockerImage | null>(null);
@@ -46,6 +48,7 @@ export function ImagesView() {
   const deleteMut = useMutation({
     mutationFn: ({ id, nodeId }: { id: string; nodeId: string }) => deleteImage(id, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "images"] }); setDeleteTarget(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete image", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const filtered = useMemo(

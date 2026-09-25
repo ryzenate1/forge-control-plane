@@ -265,7 +265,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 
 		return c.JSON(fiber.Map{
-			"data": servers,
+			"data": store.ServersToDTO(servers),
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
 					"current":       page,
@@ -301,7 +301,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 			server.Permissions = subuser.Permissions
 		}
-		return c.JSON(server)
+		// Safe DTO: never serialize transferRunToken or other secrets.
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id", mutationLimiter, func(c *fiber.Ctx) error {
@@ -372,7 +373,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				return respondInternalError(c, err)
 			}
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	// Dedicated description endpoint.
@@ -394,7 +395,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	// Server reload: re-reads the server definition from disk on the daemon
@@ -504,9 +505,38 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		var actorEmail string
 		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorEmail = claims.Email
-			actorID = &claims.Sub
+		var claims tokenClaims
+		if uc, ok := c.Locals("user").(tokenClaims); ok {
+			claims = uc
+			actorEmail = uc.Email
+			actorID = &uc.Sub
+		}
+		// GH-18/SE-01: prevent privilege escalation via subuser permission grants.
+		// Only the server owner or an admin may grant the wildcard "*"; any other
+		// actor may only grant permissions they themselves hold.
+		serverForGrant, serverErr := cfg.Store.GetServer(ctx, c.Params("id"))
+		isPriv := claims.Role == RoleAdmin || (serverErr == nil && claims.Sub == serverForGrant.OwnerID)
+		for _, p := range req.Permissions {
+			if strings.TrimSpace(p) == "*" && !isPriv {
+				return fiber.NewError(fiber.StatusForbidden, "forbidden: only server owner or admin can grant wildcard permission")
+			}
+		}
+		if !isPriv {
+			actorSet := map[string]bool{}
+			if actorSub, subErr := cfg.Store.GetServerSubuser(ctx, c.Params("id"), claims.Sub); subErr == nil {
+				for _, ap := range actorSub.Permissions {
+					actorSet[strings.TrimSpace(ap)] = true
+				}
+			}
+			for _, p := range req.Permissions {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				if !actorSet[p] {
+					return fiber.NewError(fiber.StatusForbidden, "forbidden: cannot grant permission not held by actor: "+p)
+				}
+			}
 		}
 		subuser, err := cfg.Store.UpsertServerSubuser(ctx, c.Params("id"), store.UpsertServerSubuserRequest{
 			Email:       req.Email,
@@ -538,8 +568,37 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusNotFound, "subuser not found")
 		}
 		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
+		var claims tokenClaims
+		if u, ok := c.Locals("user").(tokenClaims); ok {
+			claims = u
+			actorID = &u.Sub
+		}
+		// GH-18/SE-01: prevent privilege escalation via subuser permission grants.
+		// Only the server owner or an admin may grant the wildcard "*"; any other
+		// actor may only grant permissions they themselves hold.
+		serverForGrant, serverErr := cfg.Store.GetServer(ctx, c.Params("id"))
+		isPriv := claims.Role == RoleAdmin || (serverErr == nil && claims.Sub == serverForGrant.OwnerID)
+		for _, p := range req.Permissions {
+			if strings.TrimSpace(p) == "*" && !isPriv {
+				return fiber.NewError(fiber.StatusForbidden, "forbidden: only server owner or admin can grant wildcard permission")
+			}
+		}
+		if !isPriv {
+			actorSet := map[string]bool{}
+			if actorSub, subErr := cfg.Store.GetServerSubuser(ctx, c.Params("id"), claims.Sub); subErr == nil {
+				for _, ap := range actorSub.Permissions {
+					actorSet[strings.TrimSpace(ap)] = true
+				}
+			}
+			for _, p := range req.Permissions {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				if !actorSet[p] {
+					return fiber.NewError(fiber.StatusForbidden, "forbidden: cannot grant permission not held by actor: "+p)
+				}
+			}
 		}
 		subuser, err := cfg.Store.UpsertServerSubuser(ctx, c.Params("id"), store.UpsertServerSubuserRequest{
 			Email:       existing.Email,
@@ -812,7 +871,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				"node_id":      server.Node,
 			})
 		}
-		return c.Status(fiber.StatusCreated).JSON(server)
+		return c.Status(fiber.StatusCreated).JSON(server.ToDTO())
 	})
 
 	protected.Post("/servers/:id/power", mutationLimiter, func(c *fiber.Ctx) error {
@@ -1446,7 +1505,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/startup/image", requireServerPermission(cfg, store.PermStartupDockerImage), func(c *fiber.Ctx) error {
@@ -1472,7 +1531,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Get("/servers/:id/databases", requireServerPermission(cfg, store.PermDatabaseRead), func(c *fiber.Ctx) error {
@@ -3172,7 +3231,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/build", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
@@ -3208,7 +3267,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/startup", mutationLimiter, requireServerPermission(cfg, store.PermStartupUpdate), func(c *fiber.Ctx) error {
@@ -3237,7 +3296,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil && (req.DockerImage != nil || req.StartupCommand != nil) {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Post("/servers/:id/settings/rename", mutationLimiter, requireServerPermission(cfg, store.PermSettingsRename), func(c *fiber.Ctx) error {
@@ -3265,7 +3324,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Get("/servers/:id/flags", requireServerAccess(cfg), func(c *fiber.Ctx) error {

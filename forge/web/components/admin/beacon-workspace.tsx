@@ -236,7 +236,7 @@ export function BeaconWorkspace() {
                 ["Kernel", sys?.kernelVersion ?? "—"],
                 ["Daemon version", sys?.version ?? "—"],
                 ["Docker", sys ? `${sys.dockerAvailable ? "Available" : "Unavailable"}${sys.dockerStatus ? ` · ${sys.dockerStatus}` : ""}` : "—"],
-                ["Uptime", fmtUptime(sys?.uptime)],
+                ["Uptime", fmtUptime(sys?.daemonUptimeSeconds ?? sys?.uptime)],
                 ["CPU threads", sys?.cpuThreads != null ? String(sys.cpuThreads) : node.cpuCores != null ? String(node.cpuCores) : "—"],
                 ["Memory limit", fmtMiB(node.memoryMb)],
                 ["Disk limit", fmtMiB(node.diskMb)],

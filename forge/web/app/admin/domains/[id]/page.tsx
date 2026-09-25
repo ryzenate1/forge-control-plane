@@ -58,6 +58,7 @@ export default function AdminDomainDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
   const id = decodeURIComponent(params.id as string);
 
   const domainQuery = useQuery({
@@ -343,7 +344,7 @@ export default function AdminDomainDetailPage() {
               <Save size={14} /> {saveMutation.isPending ? "Saving…" : existing ? "Update headers" : "Create headers"}
             </Btn>
             {existing && (
-              <Btn tone="danger" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
+              <Btn tone="danger" disabled={deleteMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: "Delete security-header override?", description: "This domain will fall back to the global security-header defaults. This cannot be undone.", danger: true, confirmLabel: "Delete override" })) deleteMutation.mutate(); })(); }}>
                 <Trash2 size={14} /> Delete override
               </Btn>
             )}
@@ -363,6 +364,8 @@ export default function AdminDomainDetailPage() {
       </Card>
 
       <RedirectsSection domainId={id} />
+
+      {renderConfirm()}
 
       <Card className="p-4">
         <h4 className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Wiring notes</h4>

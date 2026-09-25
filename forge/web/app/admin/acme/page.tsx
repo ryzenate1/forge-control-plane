@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Shield, Plus, Trash2 } from "lucide-react";
-import { listAcmeAccounts, createAcmeAccount, deleteAcmeAccount, getAcmeAccount, updateAcmeAccount, listDNSAccounts, createDNSAccount, deleteDNSAccount } from "@/lib/api/acme";
+import { listAcmeAccounts, createAcmeAccount, deleteAcmeAccount, listDNSAccounts } from "@/lib/api/acme";
 import { AdminPageLayout, SectionHeader, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, Pill, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -34,7 +34,7 @@ export default function AdminAcmePage() {
     <AdminPageLayout>
       <SectionHeader
         title="ACME / Let's Encrypt"
-        sub="Manage ACME accounts (POST /acme/accounts) and DNS provider accounts for DNS-01 challenges. Wires lib/api/acme.ts — previously orphaned 9 funcs."
+        sub="ACME accounts for automatic TLS issuance, plus DNS accounts for DNS-01 challenges."
         action={<Btn tone="primary" onClick={() => setShowCreate(true)}><Plus size={12} /> New ACME Account</Btn>}
       />
       <Card>
@@ -61,28 +61,28 @@ export default function AdminAcmePage() {
             </div>
           )}
         <div className="border-t border-white/[0.06] bg-white/[0.015] px-4 py-2 text-[11px] text-slate-400">
-          Wires <code className="font-mono">listAcmeAccounts</code> (<code>GET /acme/accounts</code>), <code>createAcmeAccount</code>, <code>getAcmeAccount</code>, <code>updateAcmeAccount</code>, <code>deleteAcmeAccount</code>. Also exposes DNS provider accounts below.
+          DNS provider accounts for DNS-01 challenges are listed below.
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="DNS Provider Accounts — wires createDNSAccount / listDNSAccounts" icon={Shield} />
+        <CardHeader title="DNS Provider Accounts" icon={Shield} />
         {dnsQuery.isLoading ? <div className="p-4 text-sm text-slate-400">Loading…</div>
           : dnsQuery.isError ? <div className="p-4 text-sm text-amber-300">{dnsQuery.error instanceof Error ? dnsQuery.error.message : "failed"}</div>
           : (
             <div className="p-4">
-              {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-slate-400">No DNS accounts. Wire via <code className="font-mono">createDNSAccount</code> (<code>POST /acme/dns-accounts</code>).</p>
+              {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-slate-400">No DNS accounts yet. Add one from DNS Providers.</p>
                 : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-white/[0.06] px-3 py-2 text-xs flex justify-between"><span className="font-mono text-slate-200">{d.name} · {d.provider}</span><span className="text-slate-400">{new Date(d.createdAt).toLocaleDateString()}</span></div>)}</div>}
             </div>
           )}
       </Card>
 
       {showCreate && (
-        <Modal title="Create ACME Account — wires createAcmeAccount" onClose={() => setShowCreate(false)}>
+        <Modal title="Create ACME Account" onClose={() => setShowCreate(false)}>
           <div className="grid gap-4">
             <Input label="Email *" value={email} onChange={setEmail} placeholder="admin@example.com" />
             <Input label="CA URL (optional)" value={caUrl} onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" />
-            <p className="text-xs text-slate-400">POST <code className="font-mono">/acme/accounts</code> with email + optional caUrl/privateKey.</p>
+            <p className="text-xs text-slate-400">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>
           </div>
           <ModalFooter onCancel={() => setShowCreate(false)} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create"} disabled={!email || createMut.isPending} />
         </Modal>

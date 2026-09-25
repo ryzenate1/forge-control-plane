@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { Activity } from "lucide-react";
 import { getNodeMetrics, type MetricPeriod, type NodeMetrics } from "@/lib/api/monitoring";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
+import { chart } from "@/lib/design-tokens";
 import { SpinnerPage } from "@/components/shared";
 
 interface ServerMemoryChartProps {
@@ -94,14 +95,14 @@ export function ServerMemoryChart({ nodeId, height = 300, period = "1h" }: Serve
             <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
               <defs>
                 <linearGradient id="memGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
+                  <stop offset="5%" stopColor={chart.memory} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={chart.memory} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="timestamp"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => new Date(v).toLocaleTimeString()}
@@ -109,7 +110,7 @@ export function ServerMemoryChart({ nodeId, height = 300, period = "1h" }: Serve
               <YAxis
                 yAxisId="percent"
                 orientation="left"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => `${v}%`}
@@ -119,7 +120,7 @@ export function ServerMemoryChart({ nodeId, height = 300, period = "1h" }: Serve
               <YAxis
                 yAxisId="mb"
                 orientation="right"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => formatBytes(v)}
@@ -130,11 +131,11 @@ export function ServerMemoryChart({ nodeId, height = 300, period = "1h" }: Serve
                 yAxisId="percent"
                 type="monotone"
                 dataKey="usedPercent"
-                stroke="#10b981"
+                stroke={chart.memory}
                 strokeWidth={2}
                 fill="url(#memGradient)"
                 dot={false}
-                activeDot={{ r: 4, fill: "#10b981" }}
+                activeDot={{ r: 4, fill: chart.memory }}
                 name="Used %"
               />
             </AreaChart>

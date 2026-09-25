@@ -8,29 +8,11 @@ import { API_BASE_URL, checkApiReachable } from "@/lib/api/http";
 import { Card, CardHeader, Btn, AdminToolbar, AdminLoadingState, AdminPageLayout, AdminPageHeader } from "@/components/admin/admin-ui";
 import { NodeSelect } from "@/components/admin/node-select";
 import { cn } from "@/lib/utils";
+import { terminalTheme } from "@/lib/design-tokens";
 import "@xterm/xterm/css/xterm.css";
 
-const TERMINAL_THEME = {
-  background: "#020617",
-  foreground: "#f1f5f9",
-  cursor: "#94a3b8",
-  black: "#0f172a",
-  red: "#ef4444",
-  green: "#22c55e",
-  yellow: "#eab308",
-  blue: "#3b82f6",
-  magenta: "#a855f7",
-  cyan: "#06b6d4",
-  white: "#cbd5e1",
-  brightBlack: "#475569",
-  brightRed: "#f87171",
-  brightGreen: "#4ade80",
-  brightYellow: "#facc15",
-  brightBlue: "#60a5fa",
-  brightMagenta: "#c084fc",
-  brightCyan: "#22d3ee",
-  brightWhite: "#f8fafc",
-};
+// xterm needs literal colors (not a CSS context) — shared with components/server/console
+const TERMINAL_THEME = terminalTheme;
 
 const TERMINAL_MAX_RETRIES = 15;
 
@@ -284,7 +266,7 @@ export default function AdminTerminalPage() {
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader title="Host Terminal" description="Interactive shell on the host system" />
+      <AdminPageHeader title="Terminal" description="Interactive shell on the host system" />
       <Card>
         <CardHeader
           title="Terminal"

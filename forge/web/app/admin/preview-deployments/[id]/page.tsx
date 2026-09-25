@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import {
   ExternalLink, GitPullRequest, Globe, Play, Trash2,
@@ -36,6 +37,7 @@ export default function AdminPreviewDeploymentDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const id = params.id as string;
 
   const query = useQuery({
@@ -46,11 +48,13 @@ export default function AdminPreviewDeploymentDetailPage() {
   const deployMutation = useMutation({
     mutationFn: () => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/deploy`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments", id] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to deploy preview", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const cleanupMutation = useMutation({
     mutationFn: () => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/cleanup`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments", id] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to clean up preview", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const p = query.data;

@@ -5,16 +5,17 @@ import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Activity, Cpu, HardDrive, Network } from "lucide-react";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
+import { chart } from "@/lib/design-tokens";
 import { getNodeMetrics, type NodeMetrics } from "@/lib/api/monitoring";
 
 type MetricKey = "cpuPercent" | "memoryPercent" | "diskPercent" | "networkRxBytes";
 type Period = "5m" | "15m" | "1h" | "6h" | "24h";
 
 const METRICS: { key: MetricKey; label: string; color: string; icon: typeof Cpu }[] = [
-  { key: "cpuPercent", label: "CPU %", color: "#3b82f6", icon: Cpu },
-  { key: "memoryPercent", label: "Memory %", color: "#10b981", icon: Activity },
-  { key: "diskPercent", label: "Disk %", color: "#f59e0b", icon: HardDrive },
-  { key: "networkRxBytes", label: "Network RX", color: "#8b5cf6", icon: Network },
+  { key: "cpuPercent", label: "CPU %", color: chart.cpu, icon: Cpu },
+  { key: "memoryPercent", label: "Memory %", color: chart.memory, icon: Activity },
+  { key: "diskPercent", label: "Disk %", color: chart.disk, icon: HardDrive },
+  { key: "networkRxBytes", label: "Network RX", color: chart.networkIn, icon: Network },
 ];
 
 const PERIODS: { value: Period; label: string }[] = [
@@ -150,13 +151,13 @@ export function MetricsChart() {
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
                 <XAxis
                   dataKey="timestamp"
-                  tick={{ fill: "#64748b", fontSize: 11 }}
+                  tick={{ fill: chart.axis, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) => new Date(v).toLocaleTimeString()}
                 />
                 <YAxis
-                  tick={{ fill: "#64748b", fontSize: 11 }}
+                  tick={{ fill: chart.axis, fontSize: 11 }}
                   tickLine={false}
                   axisLine={false}
                   tickFormatter={(v) => formatValue(selectedMetric, v)}

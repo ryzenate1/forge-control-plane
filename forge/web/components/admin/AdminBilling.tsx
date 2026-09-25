@@ -12,7 +12,6 @@ import {
   updateBillingSettings,
   type BillingPlan,
 } from "@/lib/api/billing";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { OfflineBanner } from "@/components/shared/states-offline";
@@ -31,8 +30,8 @@ import {
   Textarea,
 } from "./admin-ui";
 
+
 export function AdminBilling() {
-  const t = useT();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirm, renderConfirm] = useConfirm();
@@ -43,7 +42,11 @@ export function AdminBilling() {
   const plans = useMemo(() => plansQ.data ?? [], [plansQ.data]);
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteBillingPlan(id),
+    mutationFn: async (id: string) => {
+      const result = await deleteBillingPlan(id);
+      if (!result.ok) throw new Error("The server reported the billing plan was not deleted.");
+      return result;
+    },
     onSuccess: () => {
       void qc.invalidateQueries({ queryKey: ["admin-billing-plans"] });
       toast({ tone: "success", title: "Plan deleted" });
@@ -55,8 +58,8 @@ export function AdminBilling() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => void plansQ.refetch()} />
       <SectionHeader
-        title={(t("admin.billing.title", ["Billing"]) as string) ?? "Billing"}
-        sub="Billing plans, org quotas and usage metering — /billing/plans, /billing/settings, /billing/org/:id/quota (phase7_registrar.go:29). HMAC webhook receiver at POST /billing/webhook."
+        title="Billing"
+        sub="Sell tiers, assign plans to organizations, and meter usage. Webhook deliveries from your payment processor are HMAC-verified and recorded idempotently."
         action={
           <div className="flex gap-2">
             <Btn size="sm" tone="ghost" onClick={() => void plansQ.refetch()}>
@@ -69,17 +72,9 @@ export function AdminBilling() {
         }
       />
 
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>billing</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">plans</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
-
       {/* Plans */}
       <Card className="border border-[var(--line)] bg-[var(--surface)]">
-        <CardHeader title={`Plans — GET /billing/plans · ${plans.length}`} icon={CreditCard} />
+        <CardHeader title={`Plans · ${plans.length}`} icon={CreditCard} />
         {plansQ.isLoading ? (
           <AdminLoadingState label="Loading billing plans…" />
         ) : plansQ.isError ? (
@@ -103,10 +98,7 @@ export function AdminBilling() {
                   </div>
                   {plan.trialDays ? <div className="text-xs text-[var(--text-subtle)]">{plan.trialDays} trial days</div> : null}
                 </div>
-                <div className="mt-3 rounded-lg border border-[var(--line)] bg-black/20 p-2">
-                  <div className="text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">Entitlements</div>
-                  <pre className="mt-1 max-h-24 overflow-auto font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(plan.entitlements, null, 2)}</pre>
-                </div>
+                <EntitlementsView raw={plan.entitlements} />
                 <div className="mt-3 flex gap-2">
                   <Btn size="sm" tone="ghost" onClick={() => setEditing(plan)}>
                     <Save size={12} /> Edit
@@ -131,12 +123,7 @@ export function AdminBilling() {
           </div>
         )}
         <div className="border-t border-[var(--line)] p-3 text-xs leading-5 text-[var(--text-subtle)]">
-          Admin: <code className="rounded bg-white/[0.06] px-1 font-mono text-[11px]">POST /billing/plans</code> ·{" "}
-          <code className="font-mono text-[11px]">PUT /billing/plans/:id</code> ·{" "}
-          <code className="font-mono text-[11px]">DELETE /billing/plans/:id</code> · Org:{" "}
-          <code className="font-mono text-[11px]">GET /billing/org/:orgID/quota</code> ·{" "}
-          <code className="font-mono text-[11px]">GET /billing/org/:orgID/usage</code> ·{" "}
-          <code className="font-mono text-[11px]">POST /billing/usage</code>
+          Plans define per-organization quotas (servers, memory, storage, environments, nodes). Assign a plan from an organization&rsquo;s billing view; usage is metered against these limits.
         </div>
       </Card>
 
@@ -148,6 +135,32 @@ export function AdminBilling() {
 
       {renderConfirm()}
     </AdminPageLayout>
+  );
+}
+
+// Renders a plan's entitlements document as compact key/value chips, falling
+// back to raw JSON when the payload is not a flat object.
+function EntitlementsView({ raw }: { raw: unknown }) {
+  const obj = raw && typeof raw === "object" && !Array.isArray(raw) ? (raw as Record<string, unknown>) : null;
+  const label = (k: string) => k.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+  const fmt = (v: unknown) => (Array.isArray(v) ? `${v.length} items` : typeof v === "number" ? v.toLocaleString() : String(v));
+  return (
+    <div className="mt-3">
+      <div className="text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">Entitlements</div>
+      {obj ? (
+        <div className="mt-1.5 flex flex-wrap gap-1.5">
+          {Object.keys(obj).length === 0 && <span className="text-[11px] text-[var(--text-subtle)]">No limits (unlimited)</span>}
+          {Object.entries(obj).map(([k, v]) => (
+            <span key={k} className="inline-flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface-raised)] px-2 py-0.5 text-[11px]">
+              <span className="text-[var(--text-subtle)]">{label(k)}</span>
+              <span className="font-semibold text-[var(--text)]">{fmt(v)}</span>
+            </span>
+          ))}
+        </div>
+      ) : (
+        <pre className="mt-1 max-h-24 overflow-auto rounded-lg border border-[var(--line)] bg-black/20 p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(raw, null, 2)}</pre>
+      )}
+    </div>
   );
 }
 
@@ -196,7 +209,7 @@ function BillingSettingsCard() {
 
   return (
     <Card className="border border-[var(--line)] bg-[var(--surface)]">
-      <CardHeader title="Settings — GET /billing/settings · HMAC webhook" icon={Shield} action={q.data ? <Pill tone={q.data.hasWebhookSecret ? "green" : "yellow"}>{q.data.hasWebhookSecret ? "secret set" : "no secret"}</Pill> : null} />
+      <CardHeader title="Webhook & security" icon={Shield} action={q.data ? <Pill tone={q.data.hasWebhookSecret ? "green" : "yellow"}>{q.data.hasWebhookSecret ? "secret set" : "no secret"}</Pill> : null} />
       {q.isLoading ? <AdminLoadingState label="Loading billing settings…" /> : q.isError ? <div className="p-4"><AdminErrorState message={(q.error as Error).message} retry={() => void q.refetch()} /></div> : q.data ? (
         <div className="space-y-4 p-4">
           <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 p-3 text-sm leading-6 text-amber-200">

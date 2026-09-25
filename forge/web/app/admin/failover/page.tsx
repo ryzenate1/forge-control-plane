@@ -155,7 +155,7 @@ export default function AdminFailoverPage() {
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Failover Policies"
+        title="Failover"
         description="Configure threshold-based recovery actions for node failures."
         action={<Btn tone="primary" onClick={() => setShowCreate(true)}><Plus size={14} /> Create Policy</Btn>}
       />

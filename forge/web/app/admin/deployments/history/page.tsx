@@ -62,11 +62,9 @@ export default function AdminDeploymentHistoryPage() {
       <SectionHeader
         title="Deployment History"
         sub="Historical record of all deployments across the cluster."
-        action={
-          <Btn tone="ghost" onClick={() => router.push("/admin/deployments")}>
-            <ArrowLeft size={14} /> Back to Deployments
-          </Btn>
-        }
+        backAction={() => router.push("/admin/deployments")}
+        backLabel="Deployments"
+        breadcrumb="Deploy / Deployments / History"
       />
 
       <Card>

@@ -41,14 +41,36 @@ type NodeSystemInformation struct {
 	Version         string   `json:"version,omitempty"`
 	OS              string   `json:"os,omitempty"`
 	Architecture    string   `json:"architecture,omitempty"`
+	KernelVersion   string   `json:"kernelVersion,omitempty"`
 	CPUThreads      int      `json:"cpuThreads,omitempty"`
 	MemoryMB        uint64   `json:"memoryMb,omitempty"`
 	DockerStatus    string   `json:"dockerStatus,omitempty"`
 	DockerAvailable bool     `json:"dockerAvailable"`
 	Capabilities    []string `json:"capabilities,omitempty"`
-	UptimeSeconds   int64    `json:"uptimeSeconds,omitempty"`
-	FetchedAt       string   `json:"fetchedAt"`
-	Error           string   `json:"error,omitempty"`
+	// DaemonUptimeSeconds is the node agent's own process uptime. It is not the
+	// machine's uptime, and the two are deliberately named apart: a node that
+	// restarted Beacon a minute ago looks identical to a machine that booted a
+	// minute ago if only one number is shown.
+	DaemonUptimeSeconds int64  `json:"daemonUptimeSeconds,omitempty"`
+	FetchedAt           string `json:"fetchedAt"`
+	Error               string `json:"error,omitempty"`
+}
+
+// beaconSystemInfo is the wire shape of the beacon's /api/system payload. It is
+// decoded separately because the node names some fields in snake_case; reading
+// it straight into the panel-facing struct left fields like uptime silently
+// zero, so the panel reported "no uptime" for a node that had reported it.
+type beaconSystemInfo struct {
+	Version       string   `json:"version"`
+	OS            string   `json:"os"`
+	Architecture  string   `json:"architecture"`
+	KernelVersion string   `json:"kernelVersion"`
+	CPUThreads    int      `json:"cpu_threads"`
+	MemoryMB      uint64   `json:"memoryMb"`
+	GoVersion     string   `json:"go_version"`
+	UptimeSeconds int64    `json:"uptime_seconds"`
+	DockerStatus  string   `json:"dockerStatus"`
+	Capabilities  []string `json:"capabilities"`
 }
 
 // ProbeNode fetches the system information from the node's beacon and returns
@@ -128,11 +150,21 @@ func (s *Service) ProbeNode(ctx context.Context, nodeID string) (NodeSystemInfor
 		info.Error = fmt.Sprintf("daemon returned %d: %s", res.StatusCode, strings.TrimSpace(string(body)))
 		return info, nil
 	}
-	if err := json.NewDecoder(res.Body).Decode(&info); err != nil {
+	var payload beaconSystemInfo
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		info.Online = false
 		info.Error = "invalid JSON from daemon: " + err.Error()
 		return info, nil
 	}
+	info.Version = payload.Version
+	info.OS = payload.OS
+	info.Architecture = payload.Architecture
+	info.KernelVersion = payload.KernelVersion
+	info.CPUThreads = payload.CPUThreads
+	info.MemoryMB = payload.MemoryMB
+	info.DockerStatus = payload.DockerStatus
+	info.Capabilities = payload.Capabilities
+	info.DaemonUptimeSeconds = payload.UptimeSeconds
 	info.NodeID = nodeID
 	info.Online = true
 	info.FetchedAt = time.Now().UTC().Format(time.RFC3339)

@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowLeft, ChevronRight, Copy, Cpu, Download, FileCode, Plus, Settings, Tag, Terminal, Trash2,
+  ArrowLeft, Copy, Cpu, Download, FileCode, Plus, Settings, Tag, Terminal, Trash2,
 } from "lucide-react";
 import { type ApiEgg, fetchNest, fetchEggs, createEgg, updateEgg, deleteEgg } from "@/lib/api";
 import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea } from "@/components/admin/admin-ui";
@@ -194,26 +194,18 @@ export default function NestEggsPage() {
 
   return (
     <AdminPageLayout>
-      <nav className="flex items-center gap-1.5 text-xs text-slate-500">
-        <button onClick={() => router.push("/admin/nests")} className="transition hover:text-slate-300" type="button">Nests</button>
-        <ChevronRight size={12} className="text-slate-600" />
-        <span className="text-slate-300">{nest?.name ?? "Nest"}</span>
-        <ChevronRight size={12} className="text-slate-600" />
-        <span className="text-slate-400">Eggs</span>
-      </nav>
-
       <SectionHeader
+        breadcrumb={`Build / Service Definitions / ${nest?.name ?? "Nest"} / Eggs`}
         title={nest ? `Eggs: ${nest.name}` : "Eggs"}
         sub="Service definitions that define game server behavior."
+        backAction={() => router.push("/admin/nests")}
+        backLabel="Nests"
         action={
           <div className="flex flex-wrap items-center gap-2">
-            <Btn tone="ghost" onClick={() => router.push("/admin/nests")}>
-              <ArrowLeft size={14} /> Back to Nests
-            </Btn>
             <Btn tone="subtle" onClick={() => router.push(`/admin/templates?nestId=${nestId}`)}>
               Browse Templates →
             </Btn>
-            <Btn onClick={openEggCreate}><Plus size={14} /> New Egg</Btn>
+            <Btn tone="primary" onClick={openEggCreate}><Plus size={14} /> New Egg</Btn>
           </div>
         }
       />

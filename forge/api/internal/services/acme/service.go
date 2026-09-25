@@ -57,7 +57,18 @@ type Service struct {
 	mu             sync.RWMutex
 	cancel         context.CancelFunc
 	httpSolverAddr string
+	gateway        GatewayCertInstaller
 }
+
+// GatewayCertInstaller installs an issued certificate into the live reverse
+// proxy so HTTPS actually serves it. Without it, issuance only persists a DB row
+// and the gateway never receives the material (the historical cert→gateway gap).
+type GatewayCertInstaller interface {
+	InstallCertificate(ctx context.Context, certPEM, keyPEM string, domains []string) error
+}
+
+// SetGateway wires the reverse proxy that receives issued/renewed certificates.
+func (s *Service) SetGateway(g GatewayCertInstaller) { s.gateway = g }
 
 type httpChallenger struct {
 	mu    sync.RWMutex
@@ -271,6 +282,15 @@ func (s *Service) IssueCertificate(ctx context.Context, req IssueCertificateRequ
 	})
 	if err != nil {
 		return store.Certificate{}, err
+	}
+
+	// Install into the live gateway so HTTPS actually serves the issued cert.
+	// Best-effort: a delivery failure is logged, not fatal to issuance (the cert
+	// is validly obtained and persisted, and auto-renew/re-sync can retry).
+	if s.gateway != nil {
+		if gerr := s.gateway.InstallCertificate(ctx, certPEM, keyPEM, req.Domains); gerr != nil {
+			s.logger.Warn("certificate issued but not installed into gateway", "domains", req.Domains, "error", gerr.Error())
+		}
 	}
 
 	return cert, nil

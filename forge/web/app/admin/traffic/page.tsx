@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import {
   GanttChart, Globe, Plus, RefreshCw, Shield, ShieldCheck,
   ShieldOff, SlidersHorizontal, Trash2, Zap,
@@ -49,6 +50,7 @@ const defaultPolicyForm = {
 export default function AdminTrafficPage() {
   const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [tab, setTab] = useState<Tab>("routes");
   const [search, setSearch] = useState("");
   const [showCreateRoute, setShowCreateRoute] = useState(false);
@@ -87,6 +89,7 @@ export default function AdminTrafficPage() {
       setShowCreateRoute(false);
       setRouteForm(defaultRouteForm);
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to create route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updateRouteMutation = useMutation({
@@ -96,11 +99,13 @@ export default function AdminTrafficPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] });
       setEditingRoute(null);
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to update route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteRouteMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/traffic/rules/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
@@ -118,11 +123,13 @@ export default function AdminTrafficPage() {
       setPolicyForm(defaultPolicyForm);
       setPolicyConfigError(null);
     },
+    onError: (err) => { if (err instanceof Error && err.message === "Invalid JSON config") return; toast({ tone: "error", title: "Failed to create policy", message: err instanceof Error ? err.message : "An error occurred" }); },
   });
 
   const deletePolicyMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/traffic/policies/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete policy", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updatePolicyMutation = useMutation({
@@ -138,11 +145,13 @@ export default function AdminTrafficPage() {
       setPolicyForm(defaultPolicyForm);
       setPolicyConfigError(null);
     },
+    onError: (err) => { if (err instanceof Error && err.message === "Invalid JSON config") return; toast({ tone: "error", title: "Failed to update policy", message: err instanceof Error ? err.message : "An error occurred" }); },
   });
 
   const syncRoutesMutation = useMutation({
     mutationFn: () => postJSON("/admin/traffic/sync"),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] }),
+    onError: (err) => toast({ tone: "error", title: "Route sync failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const tabs: Array<{ id: Tab; label: string }> = [
@@ -153,7 +162,7 @@ export default function AdminTrafficPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Traffic Management"
+        title="Traffic Policies"
         sub="Route rules and traffic policies for the API gateway."
         action={
           <Btn tone="ghost" onClick={() => syncRoutesMutation.mutate()} disabled={syncRoutesMutation.isPending}>

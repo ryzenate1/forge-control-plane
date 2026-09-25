@@ -348,6 +348,15 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return c.SendStream(reader)
 	})
 
+	// Re-hash a stored artifact against its recorded digest so an operator can
+	// confirm integrity independently of the auto-check on creation.
+	adminBackups.Post("/artifacts/:id/verify", mutationLimiter, func(c *fiber.Ctx) error {
+		if err := adminSvc.VerifyBackupArtifact(c.UserContext(), c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		return c.JSON(fiber.Map{"ok": true, "verified": true})
+	})
+
 	adminBackups.Get("/restores", func(c *fiber.Ctx) error {
 		restores, _, err := adminSvc.ListRestores(c.UserContext(), backup.RestoreFilter{
 			Page: c.QueryInt("page", 1), PerPage: c.QueryInt("perPage", 200),

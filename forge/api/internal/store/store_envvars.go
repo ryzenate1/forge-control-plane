@@ -208,7 +208,10 @@ func (s *Store) UpdateEnvironmentVariable(ctx context.Context, id string, req Up
 	stored := existing.ValueEncrypted
 	if req.Value != "" {
 		// Re-encrypt with the same canonical AAD Resolve reads with (row id + key).
-		enc, encErr := s.encryptSecret(req.Value, secretAAD("environment_variables", id, existing.Key))
+		// existing.ID is used rather than the caller-supplied id: Postgres normalises
+		// uuid text (case, braces), and Resolve recomputes the AAD from id::text, so
+		// only the DB-returned form is guaranteed byte-identical at read time.
+		enc, encErr := s.encryptSecret(req.Value, secretAAD("environment_variables", existing.ID, existing.Key))
 		if encErr != nil {
 			if !errors.Is(encErr, ErrSecretEncryptionUnavailable) {
 				return EnvironmentVariable{}, encErr

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { AdminCard, AdminPageLayout } from "@/components/admin/admin-layout";
 import * as api from "@/lib/api/zerodowntime";
@@ -107,7 +107,7 @@ export function ZerodowntimeManager() {
         api.getHealthCheckResults(serverId.trim(), release.id).catch(() => [] as api.HealthCheckResult[]),
       ]);
       setEvents(ev);
-      setHealthResults(hr);
+      setHealthResults([...hr].sort((a, b) => new Date(b.checkTimestamp).getTime() - new Date(a.checkTimestamp).getTime()));
     } catch (e) {
       setError(sanitizeError(e instanceof Error ? e.message : "Load details failed"));
     }
@@ -115,25 +115,12 @@ export function ZerodowntimeManager() {
 
   // Auto-load when serverId changes? No, explicit.
 
-  useEffect(() => {
-    // keep healthResults sorted
-    setHealthResults((prev) => [...prev].sort((a, b) => new Date(b.checkTimestamp).getTime() - new Date(a.checkTimestamp).getTime()));
-  }, [selected]);
-
   return (
     <AdminPageLayout
       title="Zero-Downtime Deployments"
       description="522L service: CreateRelease → DeployRelease → RunHealthChecks (ticker + thresholds, 2m max) → PromoteRelease / RollbackRelease. Health checks hit allocation IP:port + path. Requires server + allocation."
-      breadcrumbs={[{ label: "Admin", href: "/admin/zerodowntime" }, { label: "Zero-Downtime" }]}
     >
       <OfflineBanner onRetry={() => { if (serverId.trim()) void loadReleases(); }} />
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>zerodowntime</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">releases</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
       {error && (
         <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
           <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>

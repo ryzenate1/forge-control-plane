@@ -66,7 +66,7 @@ export function AdminCapabilities() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { void capsQ.refetch(); void nodesQ.refetch(); }} />
       <SectionHeader
-        title={(t("admin.capabilities.title", ["Capabilities"]) as string) ?? "Capabilities"}
+        title="Capabilities"
         sub="Global node capability inventory and drift delta — GET /capabilities, GET /capabilities/:nodeId/delta, POST /capabilities/:nodeId/probe (handlers_capabilities.go:15)"
         action={
           <div className="flex gap-2">
@@ -79,14 +79,6 @@ export function AdminCapabilities() {
           </div>
         }
       />
-
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>capabilities</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">inventory</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
 
       <AdminTabs tabs={tabs} active={tab} onChange={(id) => setTab(id as Tab)} />
 

@@ -763,7 +763,7 @@ export default function BackupManagementPage() {
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Backup & Recovery"
+        title="Backups"
         description="Manage backup configurations, jobs, artifacts, and restore operations"
         action={
           <Btn tone="ghost" onClick={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} disabled={loading}>

@@ -68,7 +68,7 @@ export function AdminSftp() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { void globalQ.refetch(); void nodesQ.refetch(); void allNodesQ.refetch(); }} />
       <SectionHeader
-        title={(t("admin.sftp.title", ["SFTP"]) as string) ?? "SFTP"}
+        title="SFTP"
         sub="Global and per-node SFTP configuration — GET+PUT /admin/sftp/settings, GET+PUT /admin/nodes/:nodeId/sftp, GET /admin/sftp/nodes (handlers_sftp.go:9)"
         action={
           <Btn size="sm" tone="ghost" onClick={() => { void globalQ.refetch(); void nodesQ.refetch(); void allNodesQ.refetch(); }}>
@@ -76,14 +76,6 @@ export function AdminSftp() {
           </Btn>
         }
       />
-
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>sftp</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">settings</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
 
       {/* Global */}
       <Card className="border border-[var(--line)] bg-[var(--surface)]">

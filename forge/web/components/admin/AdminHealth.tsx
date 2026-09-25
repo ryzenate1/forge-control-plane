@@ -38,6 +38,7 @@ import {
   type ApiHealthCheck,
 } from "@/lib/api";
 import { Btn, EmptyState, Pill, cn } from "./admin-ui";
+import { LiveHealthChecks } from "./LiveHealthChecks";
 
 type MonitorSection =
   | "infrastructure"
@@ -509,6 +510,8 @@ export function AdminHealth({
           </button>
         </div>
       </div>
+
+      <LiveHealthChecks />
 
       {queryErrors.length > 0 && (
         <div className="space-y-2">

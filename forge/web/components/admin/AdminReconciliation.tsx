@@ -234,10 +234,10 @@ export function AdminReconciliation() {
   const eventRows = events.data ?? [];
 
   return (
-    <div>
+    <div className="space-y-6">
       <AdminPageHeader
-        title="Operations — Reconciliation"
-        description="OPERATIONS · Data integrity: detect drift between desired and observed state, review diffs, and reconcile. Part of Data & Recovery alongside Migrations and Backups."
+        title="Reconciliation Center"
+        description="Detect drift between desired and observed state, review diffs, and reconcile resources across the cluster."
         action={
           <div className="flex flex-wrap items-center gap-2">
             <select

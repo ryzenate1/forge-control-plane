@@ -20,6 +20,7 @@
   --border-strong: rgba(148, 163, 184, 0.25);
   --text: #f1f5f9;
   --text-subtle: #94a3b8;
+  --text-muted: #64748b;
   --focus: #fb7185;
   --success: #059669;
   --success-subtle: rgba(5, 150, 105, 0.15);
@@ -58,6 +59,7 @@
   --border-strong: rgba(15, 23, 42, 0.24);
   --text: #0f172a;
   --text-subtle: #475569;
+  --text-muted: #64748b;
   --focus: #dc2626;
   --success: #059669;
   --success-subtle: rgba(5, 150, 105, 0.15);
@@ -89,7 +91,7 @@ button, input, select, textarea { font: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 a { text-underline-offset: 3px; }
-::selection { background: rgba(220, 38, 38, .38); color: white; }
+::selection { background: color-mix(in srgb, var(--brand) 38%, transparent); color: white; }
 :focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
 
@@ -161,4 +163,4 @@ a { text-underline-offset: 3px; }
 
 ::-webkit-scrollbar { width: 8px; height: 8px; }
 ::-webkit-scrollbar-track { background: var(--canvas); }
-::-webkit-scrollbar-thumb { border: 2px solid var(--canvas); border-radius: 999px; background: rgba(148,163,184,.25); }
+::-webkit-scrollbar-thumb { border: 2px solid var(--canvas); border-radius: 999px; background: color-mix(in srgb, var(--text-subtle) 25%, transparent); }

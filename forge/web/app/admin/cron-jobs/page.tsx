@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { ChevronDown, ChevronRight, Clock, Play, Plus, RefreshCw, Terminal, ToggleLeft, ToggleRight, Trash2 } from "lucide-react";
 import { Btn, Card, CardHeader, EmptyState, Modal, ModalFooter, Pill, SectionHeader, Textarea, AdminFormSection, AdminFormField, AdminSelect, AdminPageLayout } from "@/components/admin/admin-ui";
 import { Switch } from "@/components/ui/primitives";
@@ -58,13 +59,16 @@ function CronForm({ job, onClose }: { job?: CronJob; onClose: () => void }) {
   const [errors, setErrors] = useState<Record<string, string>>({});
 
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const createMut = useMutation({
     mutationFn: (input: CreateCronJobInput) => createCronJob(input),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["cron-jobs"] }); onClose(); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create cron job", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const updateMut = useMutation({
     mutationFn: (input: CreateCronJobInput) => job ? updateCronJob(job.id, input) : Promise.reject(),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["cron-jobs"] }); onClose(); },
+    onError: (err) => toast({ tone: "error", title: "Failed to update cron job", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   function validate(): Record<string, string> {
@@ -331,6 +335,7 @@ export default function AdminCronJobs() {
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
 
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: jobsData, isLoading } = useQuery({
     queryKey: ["cron-jobs"],
@@ -342,16 +347,19 @@ export default function AdminCronJobs() {
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteCronJob(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["cron-jobs"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete cron job", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const toggleMut = useMutation({
     mutationFn: (id: string) => toggleCronJob(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["cron-jobs"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to toggle cron job", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const triggerMut = useMutation({
     mutationFn: (id: string) => triggerCronJob(id),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["cron-executions", selectedJobId] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to trigger cron job", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   return (

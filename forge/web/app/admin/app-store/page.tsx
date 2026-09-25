@@ -12,12 +12,25 @@ import {
 } from "@/components/shared";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { Pagination } from "@/components/ui/primitives";
-import { AdminLoadingState, EmptyState } from "@/components/admin/admin-ui";
+import { AdminLoadingState, EmptyState, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import * as appStoreApi from "@/lib/api/app-store";
 import type { AppStoreApp, AppStoreInstall, InstallRequest } from "@/lib/api/app-store";
+import { ApiError } from "@/lib/api/http";
 import { safeExternalUrl } from "@/lib/safe-url";
+
+/**
+ * Retry policy for app-store mutations. The API client no longer retries inline
+ * (see lib/api/app-store.ts), so react-query owns it here: transient failures
+ * only (network/408/429/5xx), because re-sending a request the API rejected with
+ * 4xx would just repeat the same validation error and burn rate-limit budget.
+ */
+function retryTransientMutation(failureCount: number, error: unknown): boolean {
+  const status = error instanceof ApiError ? error.status : 0;
+  const transient = status === 0 || status === 408 || status === 429 || status >= 500;
+  return transient && failureCount < 2;
+}
 
 const categories = [
   { key: "", label: "All" },
@@ -79,6 +92,7 @@ export default function AppStorePage() {
 
   const installMut = useMutation({
     mutationFn: (req: InstallRequest) => appStoreApi.installApp(req),
+    retry: retryTransientMutation,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-store"] });
       setShowInstallForm(false);
@@ -90,6 +104,7 @@ export default function AppStorePage() {
 
   const uninstallMut = useMutation({
     mutationFn: ({ id, force }: { id: string; force: boolean }) => appStoreApi.uninstallApp(id, force),
+    retry: retryTransientMutation,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-store"] });
       setShowUninstallConfirm(null);
@@ -101,6 +116,7 @@ export default function AppStorePage() {
 
   const upgradeMut = useMutation({
     mutationFn: (id: string) => appStoreApi.upgradeApp(id),
+    retry: retryTransientMutation,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-store"] });
       setUpgradeTarget(null);
@@ -201,37 +217,36 @@ export default function AppStorePage() {
   return (
     <div className="space-y-6">
       <OfflineBanner onRetry={refreshData} />
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-white">App Store</h1>
-          <p className="text-sm text-slate-300">Browse, install, and manage pre-built applications</p>
-        </div>
-        <div className="flex gap-2">
-          <button
-            onClick={() => { setView("browse"); setSelectedApp(null); setAppsPage(1); }}
-            className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
-          >
-            <Grid3X3 className="mr-1.5 inline-block h-4 w-4" />
-            Browse
-          </button>
-          <button
-            onClick={() => { setView("installed"); setSelectedApp(null); setInstallsPage(1); }}
-            className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
-          >
-            <Package className="mr-1.5 inline-block h-4 w-4" />
-            Installed ({installs.length})
-          </button>
-          <button
-            onClick={refreshData}
-            disabled={appsQuery.isFetching || installsQuery.isFetching}
-            className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.08] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            title="Refresh data"
-          >
-            <RefreshCw className={`h-4 w-4 ${appsQuery.isFetching || installsQuery.isFetching ? 'animate-spin' : ''}`} />
-          </button>
-        </div>
-      </div>
+      <SectionHeader
+        title="App Store"
+        sub="Browse, install, and manage pre-built applications."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              onClick={() => { setView("browse"); setSelectedApp(null); setAppsPage(1); }}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+            >
+              <Grid3X3 className="mr-1.5 inline-block h-4 w-4" />
+              Browse
+            </button>
+            <button
+              onClick={() => { setView("installed"); setSelectedApp(null); setInstallsPage(1); }}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+            >
+              <Package className="mr-1.5 inline-block h-4 w-4" />
+              Installed ({installs.length})
+            </button>
+            <button
+              onClick={refreshData}
+              disabled={appsQuery.isFetching || installsQuery.isFetching}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.08] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Refresh data"
+            >
+              <RefreshCw className={`h-4 w-4 ${appsQuery.isFetching || installsQuery.isFetching ? 'animate-spin' : ''}`} />
+            </button>
+          </div>
+        }
+      />
 
       {view === "detail" && selectedApp && (
         <AppDetailView

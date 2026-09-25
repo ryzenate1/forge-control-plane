@@ -1,6 +1,7 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import { useState, useMemo } from "react";
 import {
@@ -44,6 +45,7 @@ export default function DeploymentRevisionsPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const id = params.id as string;
   const [showDiff, setShowDiff] = useState(false);
   const [diffFrom, setDiffFrom] = useState("");
@@ -62,6 +64,7 @@ export default function DeploymentRevisionsPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id, "revisions"] });
       queryClient.invalidateQueries({ queryKey: ["admin", "deployments", id] });
     },
+    onError: (err) => toast({ tone: "error", title: "Rollback failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const revisions = useMemo(() => revsQuery.data ?? [], [revsQuery.data]);
@@ -77,12 +80,13 @@ export default function DeploymentRevisionsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-4">
-        <Btn tone="ghost" onClick={() => router.push(`/admin/deployments/${id}`)}>
-          <ArrowLeft size={14} /> Back to Deployment
-        </Btn>
-        <SectionHeader title="Revision History" sub="View, compare, and roll back deployment revisions." />
-      </div>
+      <SectionHeader
+        title="Revision History"
+        sub="View, compare, and roll back deployment revisions."
+        backAction={() => router.push(`/admin/deployments/${id}`)}
+        backLabel="Deployment"
+        breadcrumb={`Deploy / Deployments / ${id.slice(0, 8)} / Revisions`}
+      />
 
       {activeRevision && (
         <Card className="p-4">

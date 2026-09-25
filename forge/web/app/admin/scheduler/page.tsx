@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import {
   Activity, BarChart3, Cpu, GanttChart, HardDrive, Network, Plus, Trash2, Zap, Server, Settings2,
 } from "lucide-react";
@@ -112,6 +113,7 @@ const defaultConstraintBackendForm = {
 export default function AdminSchedulerPage() {
   const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [tab, setTab] = useState<"scores" | "affinity" | "constraints">("scores");
   const [showCreateAffinity, setShowCreateAffinity] = useState(false);
   const [affinityForm, setAffinityForm] = useState(defaultAffinityForm);
@@ -193,15 +195,18 @@ export default function AdminSchedulerPage() {
       setShowCreateAffinity(false);
       setAffinityForm(defaultAffinityForm);
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to create affinity rule", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteAffinityMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/scheduler/predictive/affinity-rules/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "scheduler", "affinity"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete affinity rule", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const deleteAntiAffinityMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/scheduler/predictive/anti-affinity-rules/${encodeURIComponent(id)}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "scheduler", "anti-affinity"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete anti-affinity rule", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const createConstraintMutation = useMutation({
@@ -260,6 +265,7 @@ export default function AdminSchedulerPage() {
       throw new Error("No constraint target");
     },
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "scheduler", "constraints"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete constraint", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const ingestMetricsMutation = useMutation({
@@ -312,7 +318,7 @@ export default function AdminSchedulerPage() {
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Scheduler Configuration"
+        title="Scheduler"
         description="Predictive scoring, affinity rules, and constraint-based placement configuration."
       />
       <OfflineBanner onRetry={() => window.location.reload()} />

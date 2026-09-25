@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import {
   ArrowLeft, Plus, Pencil, Trash2, Layers,
 } from "lucide-react";
-import { Btn, Card, CardHeader, Input, SectionHeader, Pill, cn, Modal } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, Input, SectionHeader, Pill, cn, Modal } from "@/components/admin/admin-ui";
 import { type AppType, type AppTemplate, type AppPort } from "@/lib/api/apps";
 import { DEFAULT_APP_TEMPLATES, loadUserTemplates, saveUserTemplates, getAllTemplates } from "@/lib/app-templates-data";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -143,19 +143,19 @@ export default function AppTemplatesPage() {
   const isDefault = (id: string) => DEFAULT_APP_TEMPLATES.some((t) => t.id === id);
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 px-1 sm:px-0">
-      <div className="flex items-center justify-between gap-4">
-        <div className="flex items-center gap-3">
-          <Btn tone="ghost" size="sm" onClick={() => router.push("/admin/apps")}>
-            <ArrowLeft size={14} />
+    <AdminPageLayout>
+      <SectionHeader
+        title="App Templates"
+        sub="Application deployment templates for the Create Application wizard"
+        backAction={() => router.push("/admin/apps")}
+        backLabel="Apps"
+        action={
+          <Btn tone="primary" onClick={openCreate}>
+            <Plus size={14} />
+            New Template
           </Btn>
-          <SectionHeader title="App Templates" sub="Manage templates for the Create Application wizard" />
-        </div>
-        <Btn tone="primary" onClick={openCreate}>
-          <Plus size={14} />
-          New Template
-        </Btn>
-      </div>
+        }
+      />
 
       <Card>
         <CardHeader title={`${templates.length} templates`} icon={Layers} />
@@ -286,6 +286,6 @@ export default function AppTemplatesPage() {
         </Modal>
       )}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

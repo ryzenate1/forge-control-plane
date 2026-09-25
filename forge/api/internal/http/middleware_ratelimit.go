@@ -88,13 +88,19 @@ func (m *memRateLimiter) cleanup() {
 	}
 }
 
-// ExtractClientIP uses proxy headers only when the direct peer is a local or
-// private reverse proxy. It takes the right-most forwarded value so a caller-
-// supplied left-most X-Forwarded-For entry cannot rotate rate-limit keys.
+// ExtractClientIP resolves the caller IP with a default-deny trust model: an
+// X-Forwarded-For / X-Real-IP header is honored ONLY when the immediate peer is
+// inside the explicitly configured TRUSTED_PROXIES CIDR / single-IP set. When no
+// trusted proxies are configured the direct peer IP is returned. It takes the
+// right-most forwarded value so a caller-supplied left-most XFF entry cannot
+// rotate rate-limit keys.
 func ExtractClientIP(c *fiber.Ctx) string {
 	peer := strings.TrimSpace(c.IP())
 	peerIP := net.ParseIP(peer)
-	if peerIP == nil || !(peerIP.IsLoopback() || peerIP.IsPrivate() || peerIP.IsUnspecified()) {
+	// Default-deny: private/loopback status alone is never sufficient to trust
+	// proxy headers. isTrustedProxy keeps the "metric" slog.Warn and sync.Once
+	// de-dupe for the unconfigured case.
+	if peerIP == nil || !isTrustedProxy(peerIP) {
 		return peer
 	}
 	xff := c.Get("X-Forwarded-For")

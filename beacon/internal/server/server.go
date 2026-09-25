@@ -70,6 +70,7 @@ type Server struct {
 	hostFileRootsMu   sync.RWMutex
 	token             string
 	metricsToken      string
+	sftpEnabled       bool
 	version           string
 	started           time.Time
 	backups           backup.BackupInterface
@@ -125,6 +126,22 @@ func (s *Server) SetTokenGenerator(g *tokens.Generator) {
 
 func (s *Server) SetMetricsToken(token string) {
 	s.metricsToken = strings.TrimSpace(token)
+}
+
+// SetSFTPEnabled records whether the daemon actually brought up an SFTP
+// listener. The capability report used to claim SFTP unconditionally, so a node
+// whose host key failed to unlock told the panel it offered file access it did
+// not have. It is the daemon's job to say so once the listener is running.
+func (s *Server) SetSFTPEnabled(enabled bool) {
+	if s == nil {
+		return
+	}
+	s.sftpEnabled = enabled
+}
+
+// SFTPEnabled reports the recorded listener state.
+func (s *Server) SFTPEnabled() bool {
+	return s != nil && s.sftpEnabled
 }
 
 // SetAllowedMounts configures the host paths that panel-supplied mounts may
@@ -694,6 +711,12 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeMetric("game_panel_daemon_uptime_seconds", "Daemon process uptime.", "gauge", formatFloat(time.Since(process.StartTime).Seconds()))
+	// Host uptime is reported separately and only when it could be read. Omitting
+	// the series is different from reporting 0, which a scraper would read as a
+	// machine that booted this instant.
+	if hostUptime := hostUptimeSeconds(); hostUptime >= 0 {
+		writeMetric("game_panel_host_uptime_seconds", "Wall time since the host booted.", "gauge", formatInt64(hostUptime))
+	}
 	runtimeEnabled := "0"
 	if runtimeAvailable(s.runtime) {
 		runtimeEnabled = "1"
@@ -710,6 +733,29 @@ func (s *Server) metrics(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
 		defer cancel()
 		for _, serverID := range s.manager.ServerIDs() {
+			// Lifecycle is reported first and independently of telemetry. A stopped
+			// container produces no stats, so a stats-only scrape made "exited",
+			// "never created" and "the runtime did not answer" indistinguishable from
+			// a workload that simply has no metrics.
+			inspection, inspectErr := s.runtime.Inspect(ctx, serverID)
+			if inspectErr == nil {
+				_, _ = fmt.Fprintf(w, "# HELP game_panel_daemon_container_state Container lifecycle: 2 running, 1 present but not running, 0 absent.\n")
+				_, _ = fmt.Fprintf(w, "# TYPE game_panel_daemon_container_state gauge\n")
+				state := 0
+				switch {
+				case !inspection.Exists:
+					state = 0
+				case inspection.Running:
+					state = 2
+				default:
+					state = 1
+				}
+				_, _ = fmt.Fprintf(w, "game_panel_daemon_container_state{server_id=%q} %d\n", serverID, state)
+				if !inspection.Running {
+					// Nothing to measure; the state series already says what this is.
+					continue
+				}
+			}
 			stats, err := s.runtime.Stats(ctx, serverID)
 			if err != nil {
 				continue
@@ -1409,11 +1455,20 @@ func (s *Server) stats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	stats, err := s.runtime.Stats(r.Context(), serverID)
-	if err != nil && inspection.Exists && inspection.Running {
-		// A running workload that cannot report metrics is a real error; a
-		// stopped one legitimately has none.
-		http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
-		return
+	if err != nil {
+		if status := runtimeErrorStatus(err, 0); status == http.StatusNotFound {
+			// The metrics call authoritatively reports the container is gone. A
+			// zeroed "exists" reading would be a stale, dishonest success; the
+			// missing resource must surface as 404 regardless of the earlier inspect.
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		if inspection.Exists && inspection.Running {
+			// A running workload that cannot report metrics is a real error; a
+			// stopped one legitimately has none.
+			http.Error(w, err.Error(), runtimeErrorStatus(err, http.StatusConflict))
+			return
+		}
 	}
 	writeJSON(w, http.StatusOK, statsResponse{
 		Stats:     stats,
@@ -3077,23 +3132,31 @@ func safeBackupName(name string) bool {
 // the suffix is appended here so restore/delete/download work for both forms.
 // Path traversal and absolute paths are always rejected.
 func normalizeBackupName(name string) (string, bool) {
-	if name == "" || len(name) > 128 || strings.Contains(name, "..") ||
-		strings.HasPrefix(name, "/") || strings.ContainsAny(name, `/\`) {
+	trimmed := strings.TrimSpace(name)
+	if trimmed == "" {
 		return "", false
 	}
-	for _, char := range name {
+	// A backup name becomes an archive filename on the node: reject traversal
+	// sequences, hidden-file names, and any character outside a conservative
+	// charset so the value can never escape the backups directory.
+	if strings.Contains(trimmed, "..") || strings.HasPrefix(trimmed, ".") {
+		return "", false
+	}
+	for _, char := range trimmed {
 		if (char >= 'a' && char <= 'z') || (char >= 'A' && char <= 'Z') || (char >= '0' && char <= '9') || char == '-' || char == '_' || char == '.' {
 			continue
 		}
 		return "", false
 	}
-	if !strings.HasSuffix(name, ".zip") {
-		name += ".zip"
+	// Canonical form carries a .zip suffix, but only when it still fits the
+	// length cap; a stem already at the cap is accepted without forcing it.
+	if !strings.HasSuffix(trimmed, ".zip") && len(trimmed)+len(".zip") <= 100 {
+		trimmed += ".zip"
 	}
-	if len(name) > 128 {
+	if len(trimmed) > 100 {
 		return "", false
 	}
-	return name, true
+	return trimmed, true
 }
 
 func randomHex(size int) (string, error) {
@@ -3110,6 +3173,12 @@ func formatFloat(value float64) string {
 
 func formatInt(value int) string {
 	return strconv.Itoa(value)
+}
+
+// formatInt64 renders a value that may legitimately be negative, unlike
+// formatInt/formatUint which serve counters and byte gauges.
+func formatInt64(value int64) string {
+	return strconv.FormatInt(value, 10)
 }
 
 func formatUint(value uint64) string {

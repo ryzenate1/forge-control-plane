@@ -22,9 +22,18 @@ func isMonacoRoute(path string) bool {
 
 func SecurityHeaders(env string) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		scriptSrc := "'self'"
+		// Fresh, cryptographically-random nonce for every response. Exposed via
+		// c.Locals("cspNonce", nonce) so handlers/templates can stamp inline
+		// scripts, and mirrored in X-CSP-Nonce. No static/fallback nonce and no
+		// 'strict-dynamic'.
+		nonce := generateCSPNonce()
+		c.Locals("cspNonce", nonce)
+		c.Set("X-CSP-Nonce", nonce)
+		nonceSrc := "'nonce-" + nonce + "'"
+
+		scriptSrc := "'self' " + nonceSrc
 		if isMonacoRoute(c.Path()) {
-			scriptSrc = "'self' 'unsafe-eval'"
+			scriptSrc = "'self' 'unsafe-eval' " + nonceSrc
 		}
 		c.Set("Content-Security-Policy",
 			"default-src 'self'; "+
@@ -44,11 +53,12 @@ func SecurityHeaders(env string) fiber.Handler {
 		c.Set("Permissions-Policy",
 			"geolocation=(), microphone=(), camera=(), payment=(), usb=(), magnetometer=(), gyroscope=()")
 
-		hsts := "max-age=31536000; includeSubDomains"
-		if env == "" || env == "production" {
-			hsts += "; preload"
+		// HSTS is only safe over HTTPS: sending it in development would poison
+		// localhost. Emit it exclusively in production, matching the signal
+		// server.go/config already consults (APP_ENV == "production").
+		if strings.EqualFold(strings.TrimSpace(env), "production") {
+			c.Set("Strict-Transport-Security", "max-age=31536000; includeSubDomains; preload")
 		}
-		c.Set("Strict-Transport-Security", hsts)
 
 		return c.Next()
 	}

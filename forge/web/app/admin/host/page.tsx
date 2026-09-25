@@ -95,7 +95,8 @@ function InfoTab({ nodeId }: { nodeId: string }) {
         <div className="space-y-3">
           <StatRow label="CPU Model" value={data.cpuModel} />
           <StatRow label="CPU Cores" value={String(data.cpuCores)} />
-          <StatRow label="Uptime" value={fmtUptime(data.uptimeSeconds)} />
+          <StatRow label="Host Uptime" value={fmtUptime(data.uptimeSeconds)} />
+          <StatRow label="Beacon Uptime" value={fmtUptime(data.daemonUptimeSeconds)} />
           <StatRow label="Time" value={new Date(data.time).toLocaleString()} />
         </div>
       </div>
@@ -300,7 +301,13 @@ function StatRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-function fmtUptime(seconds: number) {
+function fmtUptime(seconds: number | undefined) {
+  // A node reports an unreadable uptime as a negative value or omits it, which
+  // is not the same as a machine that has been up for zero seconds. Showing
+  // "0m" or "-1m" there would be a made-up reading.
+  if (seconds === undefined || seconds === null || !Number.isFinite(seconds) || seconds < 0) {
+    return "Not reported";
+  }
   const d = Math.floor(seconds / 86400);
   const h = Math.floor((seconds % 86400) / 3600);
   const m = Math.floor((seconds % 3600) / 60);

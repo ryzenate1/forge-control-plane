@@ -44,6 +44,7 @@ import (
 	"gamepanel/forge/internal/services/deployment"
 	dnssvc "gamepanel/forge/internal/services/dns"
 	"gamepanel/forge/internal/services/domains"
+	drainsvc "gamepanel/forge/internal/services/drain"
 	envaffinitysvc "gamepanel/forge/internal/services/envaffinity"
 	"gamepanel/forge/internal/services/environments"
 	envvarsvc "gamepanel/forge/internal/services/envvars"
@@ -52,6 +53,7 @@ import (
 	gitsvc "gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
+	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
 	"gamepanel/forge/internal/services/heartbeatmonitor"
 	"gamepanel/forge/internal/services/i18n"
 	installersvc "gamepanel/forge/internal/services/installer"
@@ -65,6 +67,7 @@ import (
 	enhancednotifsvc "gamepanel/forge/internal/services/notifications"
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
+	"gamepanel/forge/internal/services/pipeline"
 	"gamepanel/forge/internal/services/plugins"
 	proceduresvc "gamepanel/forge/internal/services/procedure"
 	processsvc "gamepanel/forge/internal/services/process"
@@ -154,6 +157,7 @@ type Config struct {
 	LoadBalancer               *loadbalancer.Service
 	FailoverSvc                *failover.Service
 	TrafficManager             *trafficmanager.Service
+	CaddyTLS                   *trafficmanager.CaddyTLSManager
 	DomainService              *domains.Service
 	DNSService                 *dnssvc.Service
 	DBContainerService         *dbprovisioner.DBContainerService
@@ -177,8 +181,12 @@ type Config struct {
 	AppHostingService *apphostingsvc.Service
 
 	ProcedureService *proceduresvc.Service
-	ReplicaManager   *replicamanager.Manager
-	AppStoreService  *appstoresvc.Service
+
+	// PipelineService drives multi-stage CI/CD pipelines (definitions, runs,
+	// logs, artifacts, manual approvals). Previously unwired to any route.
+	PipelineService *pipeline.Service
+	ReplicaManager  *replicamanager.Manager
+	AppStoreService *appstoresvc.Service
 
 	AlertService                *alerting.Service
 	NotificationService         *notificationsvc.Service
@@ -193,10 +201,16 @@ type Config struct {
 	// Orphan-wiring additions: services that previously lived behind internal
 	// callers only and now back admin endpoints (see handlers_billing.go and
 	// handlers_placement.go). All are nil-safe: routes are registered only when
-	// the field is populated in main. Drain is intentionally not wired here: its
-	// ledger service overlaps the drain routes already owned by clustermembership.
+	// the field is populated in main.
 	BillingService   *billingsvc.Service
 	PlacementService *envaffinitysvc.EnvAffinity
+	// DrainLedger is the durable drain-progress recorder. It reads only; the
+	// begin/cancel orchestration stays owned by clustermembership, so there is
+	// no route collision.
+	DrainLedger *drainsvc.Service
+	// HealthCheckRunner is the live target-health prober already started in
+	// main; exposed read-only for the admin health dashboard.
+	HealthCheckRunner *healthchecksvc.Service
 
 	// Cross-node routing services
 	ServiceDiscovery    *servicediscovery.Service
@@ -946,6 +960,12 @@ func NewServer(cfg Config) *fiber.App {
 		app.Use(StructuredLogger(cfg.Logger))
 	}
 
+	// HTTP RED metrics (rate/errors/duration). Mounted here so the collector
+	// observes every request and /metrics can emit http_requests_total /
+	// http_request_duration_seconds without a second instrumentation path.
+	httpMetrics := NewMetricsCollector()
+	app.Use(MetricsMiddleware(httpMetrics))
+
 	registerSwaggerRoutes(app, cfg.AppEnv)
 
 	registerWellKnownVerifyRoute(app, cfg.DomainService)
@@ -1387,6 +1407,9 @@ func NewServer(cfg Config) *fiber.App {
 				{"game_panel_api_heartbeat_monitor_nodes_unavailable_total", "Cumulative nodes marked unavailable.", hb.NodesUnavailableTotal},
 			})
 		}
+
+		// HTTP request RED metrics recorded by MetricsMiddleware.
+		body.WriteString(httpMetrics.FormatPrometheus())
 
 		c.Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 		return c.SendString(body.String())
@@ -2213,6 +2236,33 @@ func NewServer(cfg Config) *fiber.App {
 	}
 	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store), sessMw, requireTwoFactorAuthentication(cfg), csrfMiddleware(LoadSessionCookieConfig()), methodLimiter)
 
+	// Log every successful mutating request into the activity feed. Runs after
+	// auth so the actor is known; the read endpoints (/admin/activity) depend on
+	// this, otherwise the feed is permanently empty.
+	protected.Use(func(c *fiber.Ctx) error {
+		herr := c.Next()
+		if cfg.ActivityService == nil || c.Method() == fiber.MethodGet || herr != nil {
+			return herr
+		}
+		if c.Response().StatusCode() >= 400 {
+			return herr
+		}
+		var actorID, actorEmail string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID, actorEmail = claims.Sub, claims.Email
+		}
+		routePath := ""
+		if r := c.Route(); r != nil {
+			routePath = r.Path
+		}
+		_ = cfg.ActivityService.NewEvent("http:"+c.Method()+" "+routePath).
+			Actor(actorID, actorEmail, "user").
+			IP(c.IP()).
+			Description(c.Method()+" "+c.OriginalURL()).
+			Save(c.Context(), cfg.ActivityService)
+		return herr
+	})
+
 	// Social authentication: the canonical protected router now exists, so mount
 	// the public (v1) and protected/admin social routes on it.
 	registerSocialAuthRoutes(v1, protected, cfg, mutationLimiter, authLimiter)
@@ -2411,6 +2461,7 @@ func NewServer(cfg Config) *fiber.App {
 	// App hosting routes (Application → Service model)
 	registerAppHostingRoutes(protected, cfg, cfg.AppHostingService, mutationLimiter)
 	registerProcedureRoutes(protected, cfg, cfg.ProcedureService, mutationLimiter)
+	registerPipelineRoutes(protected, cfg.PipelineService, mutationLimiter)
 
 	// Portainer-inspired container/image/network/volume administration
 	registerPortainerRoutes(protected, cfg, mutationLimiter, adminIPAccess)
@@ -2452,6 +2503,8 @@ func NewServer(cfg Config) *fiber.App {
 	registerBillingRoutes(protected, cfg, mutationLimiter)
 	registerBillingWebhookRoute(v1, cfg, mutationLimiter)
 	registerPlacementRoutes(protected, cfg, cfg.PlacementService, mutationLimiter)
+	registerDrainRoutes(protected, cfg, cfg.DrainLedger)
+	registerHealthCheckRoutes(protected, cfg, cfg.HealthCheckRunner)
 
 	// Cross-node routing and service discovery routes
 	registerServiceDiscoveryRoutes(protected, cfg, cfg.ServiceDiscovery, adminIPAccess, mutationLimiter)

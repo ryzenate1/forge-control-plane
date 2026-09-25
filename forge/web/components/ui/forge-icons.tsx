@@ -1,4 +1,8 @@
 import type { FC, SVGProps } from "react";
+import { chart } from "@/lib/design-tokens";
+
+// SVG fill/stroke attributes are not a CSS context, so `var(--token)` cannot be
+// used here — every colour below comes from the shared chart/SVG palette.
 
 export type IconProps = SVGProps<SVGSVGElement> & {
   size?: number | string;
@@ -18,13 +22,13 @@ export const ForgeLogoIcon: FC<IconProps> = ({ size = 20, className, ...props })
   >
     <path
       d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z"
-      fill="#ef4444"
+      fill={chart.dangerBright}
     />
     <path
       d="M12 5.5L13.8 10.2L18.5 12L13.8 13.8L12 18.5L10.2 13.8L5.5 12L10.2 10.2L12 5.5Z"
-      fill="#f87171"
+      fill={chart.dangerSoft}
     />
-    <circle cx="12" cy="12" r="2" fill="#ffffff" />
+    <circle cx="12" cy="12" r="2" fill={chart.onColor} />
   </svg>
 );
 
@@ -356,17 +360,17 @@ export const CpuKpiChipIcon: FC<IconProps> = ({ size = 18, className, ...props }
     className={className}
     {...props}
   >
-    <rect x="4" y="4" width="16" height="16" rx="3" stroke="#0ea5e9" strokeWidth="1.8" />
-    <rect x="8" y="8" width="8" height="8" rx="1.5" fill="#0ea5e9" fillOpacity="0.25" stroke="#0ea5e9" strokeWidth="1.5" />
+    <rect x="4" y="4" width="16" height="16" rx="3" stroke={chart.blue} strokeWidth="1.8" />
+    <rect x="8" y="8" width="8" height="8" rx="1.5" fill={chart.blue} fillOpacity="0.25" stroke={chart.blue} strokeWidth="1.5" />
     {/* Pins */}
-    <line x1="9" y1="1" x2="9" y2="4" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="15" y1="1" x2="15" y2="4" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="9" y1="20" x2="9" y2="23" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="15" y1="20" x2="15" y2="23" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="1" y1="9" x2="4" y2="9" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="1" y1="15" x2="4" y2="15" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="20" y1="9" x2="23" y2="9" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
-    <line x1="20" y1="15" x2="23" y2="15" stroke="#0ea5e9" strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="9" y1="1" x2="9" y2="4" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="15" y1="1" x2="15" y2="4" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="9" y1="20" x2="9" y2="23" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="15" y1="20" x2="15" y2="23" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="1" y1="9" x2="4" y2="9" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="1" y1="15" x2="4" y2="15" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="20" y1="9" x2="23" y2="9" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
+    <line x1="20" y1="15" x2="23" y2="15" stroke={chart.blue} strokeWidth="1.5" strokeLinecap="round" />
   </svg>
 );
 
@@ -382,18 +386,18 @@ export const MemoryRamStickIcon: FC<IconProps> = ({ size = 18, className, ...pro
     {...props}
   >
     {/* Stick body */}
-    <rect x="2" y="7" width="20" height="10" rx="1.5" stroke="#a855f7" strokeWidth="1.8" />
+    <rect x="2" y="7" width="20" height="10" rx="1.5" stroke={chart.violet} strokeWidth="1.8" />
     {/* 3 Memory chip dies */}
-    <rect x="4.5" y="9.5" width="3.5" height="5" rx="0.5" fill="#a855f7" fillOpacity="0.4" />
-    <rect x="10.25" y="9.5" width="3.5" height="5" rx="0.5" fill="#a855f7" fillOpacity="0.4" />
-    <rect x="16" y="9.5" width="3.5" height="5" rx="0.5" fill="#a855f7" fillOpacity="0.4" />
+    <rect x="4.5" y="9.5" width="3.5" height="5" rx="0.5" fill={chart.violet} fillOpacity="0.4" />
+    <rect x="10.25" y="9.5" width="3.5" height="5" rx="0.5" fill={chart.violet} fillOpacity="0.4" />
+    <rect x="16" y="9.5" width="3.5" height="5" rx="0.5" fill={chart.violet} fillOpacity="0.4" />
     {/* Gold contact fingers along bottom */}
-    <line x1="4" y1="17" x2="4" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
-    <line x1="6.5" y1="17" x2="6.5" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
-    <line x1="9" y1="17" x2="9" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
-    <line x1="15" y1="17" x2="15" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
-    <line x1="17.5" y1="17" x2="17.5" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
-    <line x1="20" y1="17" x2="20" y2="19.5" stroke="#a855f7" strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="4" y1="17" x2="4" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="6.5" y1="17" x2="6.5" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="9" y1="17" x2="9" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="15" y1="17" x2="15" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="17.5" y1="17" x2="17.5" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
+    <line x1="20" y1="17" x2="20" y2="19.5" stroke={chart.violet} strokeWidth="1.2" strokeLinecap="round" />
   </svg>
 );
 
@@ -408,9 +412,9 @@ export const StoragePlattersIcon: FC<IconProps> = ({ size = 18, className, ...pr
     className={className}
     {...props}
   >
-    <ellipse cx="12" cy="6" rx="8" ry="3" stroke="#f97316" strokeWidth="1.8" />
-    <path d="M4 6V12C4 13.66 7.58 15 12 15C16.42 15 20 13.66 20 12V6" stroke="#f97316" strokeWidth="1.8" />
-    <path d="M4 12V18C4 19.66 7.58 21 12 21C16.42 21 20 19.66 20 18V12" stroke="#f97316" strokeWidth="1.8" />
+    <ellipse cx="12" cy="6" rx="8" ry="3" stroke={chart.orange} strokeWidth="1.8" />
+    <path d="M4 6V12C4 13.66 7.58 15 12 15C16.42 15 20 13.66 20 12V6" stroke={chart.orange} strokeWidth="1.8" />
+    <path d="M4 12V18C4 19.66 7.58 21 12 21C16.42 21 20 19.66 20 18V12" stroke={chart.orange} strokeWidth="1.8" />
   </svg>
 );
 
@@ -427,9 +431,9 @@ export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...prop
   >
     <defs>
       <linearGradient id="planetGrad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
-        <stop stopColor="#10b981" />
-        <stop offset="0.5" stopColor="#0ea5e9" />
-        <stop offset="1" stopColor="#6366f1" />
+        <stop stopColor={chart.success} />
+        <stop offset="0.5" stopColor={chart.blue} />
+        <stop offset="1" stopColor={chart.indigo} />
       </linearGradient>
     </defs>
     <circle cx="12" cy="12" r="7" fill="url(#planetGrad)" />
@@ -439,7 +443,7 @@ export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...prop
       rx="11"
       ry="3.5"
       transform="rotate(-25 12 12)"
-      stroke="#38bdf8"
+      stroke={chart.sky}
       strokeWidth="1.5"
       strokeDasharray="20 4 6 4"
     />
@@ -457,11 +461,11 @@ export const SystemHealthOperationalIcon: FC<IconProps> = ({ size = 28, classNam
     className={className}
     {...props}
   >
-    <circle cx="16" cy="16" r="14" stroke="#10b981" strokeWidth="2.5" strokeOpacity="0.4" />
-    <circle cx="16" cy="16" r="10" fill="#10b981" />
+    <circle cx="16" cy="16" r="14" stroke={chart.success} strokeWidth="2.5" strokeOpacity="0.4" />
+    <circle cx="16" cy="16" r="10" fill={chart.success} />
     <path
       d="M12 16.5L14.5 19L20 13.5"
-      stroke="#ffffff"
+      stroke={chart.onColor}
       strokeWidth="2.5"
       strokeLinecap="round"
       strokeLinejoin="round"
@@ -480,10 +484,10 @@ export const SystemHealthAlertIcon: FC<IconProps> = ({ size = 28, className, ...
     className={className}
     {...props}
   >
-    <circle cx="16" cy="16" r="14" stroke="#f43f5e" strokeWidth="2.5" strokeOpacity="0.4" />
-    <circle cx="16" cy="16" r="10" fill="#f43f5e" />
-    <path d="M16 11V17" stroke="#ffffff" strokeWidth="2.2" strokeLinecap="round" />
-    <circle cx="16" cy="20.5" r="1.2" fill="#ffffff" />
+    <circle cx="16" cy="16" r="14" stroke={chart.critical} strokeWidth="2.5" strokeOpacity="0.4" />
+    <circle cx="16" cy="16" r="10" fill={chart.critical} />
+    <path d="M16 11V17" stroke={chart.onColor} strokeWidth="2.2" strokeLinecap="round" />
+    <circle cx="16" cy="20.5" r="1.2" fill={chart.onColor} />
   </svg>
 );
 

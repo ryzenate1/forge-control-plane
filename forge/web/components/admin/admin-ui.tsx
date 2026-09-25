@@ -6,7 +6,10 @@
 
 import { ArrowLeft, LoaderCircle, LockKeyhole, X, type LucideIcon } from "lucide-react";
 import { useRef } from "react";
+import { usePathname } from "next/navigation";
 import { Button, Dialog, EmptyState as SharedEmptyState, Input as SharedInput, Select as SharedSelect, Textarea as SharedTextarea } from "@/components/ui/primitives";
+import { findAdminPageGroup } from "./admin-registry";
+import { chart } from "@/lib/design-tokens";
 import { cn } from "@/lib/utils";
 
 export * from "@/components/ui/forge-primitives";
@@ -29,7 +32,7 @@ export function Pill({ children, tone = "neutral", className }: { children: Reac
 
 export function MiniSparkline({
   data,
-  color = "#0ea5e9",
+  color = chart.blue,
   className,
 }: {
   data: number[];
@@ -131,14 +134,130 @@ export function SubsystemHealthMeter({
   );
 }
 
-export function SectionHeader({ title, sub, action }: { title: React.ReactNode; sub?: string; action?: React.ReactNode }) {
+export interface SectionHeaderProps {
+  title: React.ReactNode;
+  sub?: string;
+  action?: React.ReactNode;
+  breadcrumb?: React.ReactNode;
+  hideBreadcrumb?: boolean;
+  hideLiveBadge?: boolean;
+  backAction?: () => void;
+  backLabel?: string;
+  className?: string;
+}
+
+export function SectionHeader({
+  title,
+  sub,
+  action,
+  breadcrumb,
+  hideBreadcrumb,
+  hideLiveBadge,
+  backAction,
+  backLabel,
+  className,
+}: SectionHeaderProps) {
+  const pathname = usePathname() || "";
+  const groupMatch = findAdminPageGroup(pathname);
+
+  // Determine breadcrumb content
+  let breadcrumbContent: React.ReactNode = null;
+  if (!hideBreadcrumb) {
+    if (breadcrumb) {
+      if (typeof breadcrumb === "string") {
+        const parts = breadcrumb.split("/").map((s) => s.trim()).filter(Boolean);
+        breadcrumbContent = (
+          <div className="flex items-center gap-2">
+            {parts.map((part, index) => {
+              const isLast = index === parts.length - 1;
+              return (
+                <span key={index} className="flex items-center gap-2">
+                  {index > 0 && <span aria-hidden="true" className="text-slate-600 select-none after:content-['/']" />}
+                  <span className={cn(isLast ? "font-semibold text-slate-200" : "text-slate-400")}>
+                    {part}
+                  </span>
+                </span>
+              );
+            })}
+          </div>
+        );
+      } else {
+        breadcrumbContent = breadcrumb;
+      }
+    } else if (groupMatch) {
+      breadcrumbContent = (
+        <div className="flex items-center gap-2">
+          <span>{groupMatch.groupTitle}</span>
+          <span aria-hidden="true" className="text-slate-600 select-none after:content-['/']" />
+          <span className="font-semibold text-slate-200">
+            {groupMatch.pageLabel}
+          </span>
+        </div>
+      );
+    } else if (pathname.startsWith("/admin")) {
+      const parts = pathname.split("/").filter(Boolean);
+      const lastPart = parts[parts.length - 1] ?? "Admin";
+      const label = lastPart.charAt(0).toUpperCase() + lastPart.slice(1);
+      breadcrumbContent = (
+        <div className="flex items-center gap-2">
+          <span>Admin</span>
+          <span aria-hidden="true" className="text-slate-600 select-none after:content-['/']" />
+          <span className="font-semibold text-slate-200">{label}</span>
+        </div>
+      );
+    }
+  }
+
   return (
-    <div className="relative mb-6 flex flex-col gap-4 border-b border-[var(--line)] pb-5 sm:flex-row sm:items-center sm:justify-between">
-      <div className="min-w-0">
-        <h1 className="text-[clamp(1.35rem,2vw,1.75rem)] font-bold tracking-tight text-slate-100">{title}</h1>
-        {sub ? <p className="mt-1 max-w-3xl text-xs sm:text-sm text-slate-400 leading-relaxed">{sub}</p> : null}
+    <div className={cn("space-y-3 mb-6", className)}>
+      {breadcrumbContent ? (
+        <div className="flex items-center justify-between text-xs text-slate-400">
+          <div className="flex items-center gap-3">
+            {backAction ? (
+              <button
+                type="button"
+                onClick={backAction}
+                className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-400 hover:text-slate-200 transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] rounded pr-3 border-r border-[var(--line)]"
+              >
+                <ArrowLeft size={13} />
+                <span>{backLabel ?? "Back"}</span>
+              </button>
+            ) : null}
+            {breadcrumbContent}
+          </div>
+          {!hideLiveBadge && (
+            <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500 shrink-0">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+                <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+              </span>
+              <span>Live · updated just now</span>
+            </div>
+          )}
+        </div>
+      ) : backAction ? (
+        <div className="flex items-center text-xs text-slate-400">
+          <AdminBackButton label={backLabel} onClick={backAction} />
+        </div>
+      ) : null}
+
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
+        <div className="min-w-0">
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
+            {title}
+          </h1>
+          {sub ? (
+            <p className="mt-1 text-xs sm:text-sm text-slate-400 leading-relaxed max-w-3xl">
+              {sub}
+            </p>
+          ) : null}
+        </div>
+        {action ? (
+          <div className="flex shrink-0 flex-wrap items-center gap-2 sm:self-center">
+            {action}
+          </div>
+        ) : null}
       </div>
-      {action ? <div className="flex shrink-0 flex-wrap items-center gap-2">{action}</div> : null}
     </div>
   );
 }
@@ -153,8 +272,40 @@ export function AdminBackButton({ onClick, label = "Back" }: { onClick: () => vo
  return <button className="inline-flex items-center gap-1.5 text-sm font-medium text-slate-400 transition hover:text-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400" onClick={onClick} type="button"><ArrowLeft size={15} />{label}</button>;
 }
 
-export function AdminPageHeader({ title, description, action, backAction, backLabel, breadcrumb }: { title: string; description?: string; action?: React.ReactNode; backAction?: () => void; backLabel?: string; breadcrumb?: string }) {
- return <div>{(backAction || breadcrumb) ? <div className="mb-3 flex flex-wrap items-center gap-3 text-xs text-slate-500">{backAction ? <AdminBackButton label={backLabel} onClick={backAction} /> : null}{breadcrumb ? <span>{breadcrumb}</span> : null}</div> : null}<SectionHeader title={title} sub={description} action={action} /></div>;
+export function AdminPageHeader({
+  title,
+  description,
+  action,
+  backAction,
+  backLabel,
+  breadcrumb,
+  hideBreadcrumb,
+  hideLiveBadge,
+  className,
+}: {
+  title: string;
+  description?: string;
+  action?: React.ReactNode;
+  backAction?: () => void;
+  backLabel?: string;
+  breadcrumb?: string;
+  hideBreadcrumb?: boolean;
+  hideLiveBadge?: boolean;
+  className?: string;
+}) {
+  return (
+    <SectionHeader
+      title={title}
+      sub={description}
+      action={action}
+      backAction={backAction}
+      backLabel={backLabel}
+      breadcrumb={breadcrumb}
+      hideBreadcrumb={hideBreadcrumb}
+      hideLiveBadge={hideLiveBadge}
+      className={className}
+    />
+  );
 }
 
 export function AdminSection({ children, title, description, action, className }: { children: React.ReactNode; title?: string; description?: string; action?: React.ReactNode; className?: string }) {

@@ -1,6 +1,8 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
+import { AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
 import {
   ArrowLeft,
   Bug,
@@ -90,25 +92,19 @@ function DemoRow({ label, children }: { label: string; children: React.ReactNode
 }
 
 export default function StatesDemoPage() {
+  const router = useRouter();
   const [showOffline, setShowOffline] = useState(false);
   const [showRateLimit, setShowRateLimit] = useState(false);
 
   return (
-    <div className="space-y-8">
-      <div className="flex items-center gap-4">
-        <Link
-          className="grid h-9 w-9 place-items-center rounded-lg border border-white/10 text-slate-400 hover:bg-white/[0.06]"
-          href="/admin"
-        >
-          <ArrowLeft size={16} />
-        </Link>
-        <div>
-          <h1 className="text-xl font-bold text-slate-100">State Components Demo</h1>
-          <p className="text-sm text-slate-400">
-            QA review page for all loading, empty, error, and permission states
-          </p>
-        </div>
-      </div>
+    <AdminPageLayout className="space-y-8">
+      <SectionHeader
+        title="State Components Demo"
+        sub="QA review page for all loading, empty, error, and permission states"
+        backAction={() => router.push("/admin")}
+        backLabel="Admin"
+        breadcrumb="Platform / Dev / States"
+      />
 
       {/* ===== Loading States ===== */}
       <PanelCard title="Loading States" icon={Bug}>
@@ -438,7 +434,7 @@ export default function StatesDemoPage() {
           ) : null}
         </div>
       </PanelCard>
-    </div>
+    </AdminPageLayout>
   );
 }
 

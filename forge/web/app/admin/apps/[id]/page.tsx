@@ -73,15 +73,13 @@ function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) 
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Btn tone="ghost" size="sm" onClick={() => router.push("/admin/apps")}>
-          <ArrowLeft size={14} />
-        </Btn>
-        <SectionHeader
-          title={app.name}
-          sub={`${typeLabel(app.type)} - ${app.id.slice(0, 8)}...`}
-        />
-      </div>
+      <SectionHeader
+        title={app.name}
+        sub={`${typeLabel(app.type)} · ${app.id.slice(0, 8)}...`}
+        backAction={() => router.push("/admin/apps")}
+        backLabel="Apps"
+        breadcrumb={`Build / Apps / ${app.name}`}
+      />
 
       <div className="flex flex-wrap gap-4">
         {app.type === "compose" && (
@@ -143,12 +141,20 @@ function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const startMut = useMutation({
-    mutationFn: () => startApp(id),
+    mutationFn: async () => {
+      const result = await startApp(id);
+      if (!result.ok) throw new Error("The server reported the app did not start.");
+      return result;
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
     onError: (error) => toast({ tone: "error", title: "Start failed", message: error instanceof Error ? error.message : "Failed to start app" }),
   });
   const stopMut = useMutation({
-    mutationFn: () => stopApp(id),
+    mutationFn: async () => {
+      const result = await stopApp(id);
+      if (!result.ok) throw new Error("The server reported the app did not stop.");
+      return result;
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app", id] }),
     onError: (error) => toast({ tone: "error", title: "Stop failed", message: error instanceof Error ? error.message : "Failed to stop app" }),
   });
@@ -611,7 +617,11 @@ function DomainsTab({ appId }: { appId: string }) {
   const [enableTls, setEnableTls] = useState(false);
 
   const addMut = useMutation({
-    mutationFn: () => addAppDomain(appId, newDomain.trim(), enableTls),
+    mutationFn: async () => {
+      const result = await addAppDomain(appId, newDomain.trim(), enableTls);
+      if (!result.ok) throw new Error("The server reported the domain was not added.");
+      return result;
+    },
     onSuccess: () => {
       setNewDomain("");
       setEnableTls(false);
@@ -708,13 +718,21 @@ function BackupsTab({ appId }: { appId: string }) {
   const backups = useMemo(() => backupsRaw ?? [], [backupsRaw]);
 
   const createMut = useMutation({
-    mutationFn: () => createAppBackup(appId),
+    mutationFn: async () => {
+      const result = await createAppBackup(appId);
+      if (!result.ok) throw new Error("The server reported the backup was not created.");
+      return result;
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-backups", appId] }),
     onError: (error) => toast({ tone: "error", title: "Backup failed", message: error instanceof Error ? error.message : "Failed to create backup" }),
   });
 
   const restoreMut = useMutation({
-    mutationFn: (backupId: string) => restoreAppBackup(appId, backupId),
+    mutationFn: async (backupId: string) => {
+      const result = await restoreAppBackup(appId, backupId);
+      if (!result.ok) throw new Error("The server reported the backup restore did not complete.");
+      return result;
+    },
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["app-backups", appId] }),
     onError: (error) => toast({ tone: "error", title: "Restore failed", message: error instanceof Error ? error.message : "Failed to restore backup" }),
   });

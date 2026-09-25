@@ -36,12 +36,20 @@ export function DatabaseServicesView() {
   const filteredTemplates = templateFilter ? templates.filter((t) => t.type.toLowerCase().includes(templateFilter.toLowerCase()) || t.version.includes(templateFilter)) : templates;
 
   const restartMut = useMutation({
-    mutationFn: (id: string) => restartDatabaseService(id),
+    mutationFn: async (id: string) => {
+      const result = await restartDatabaseService(id);
+      if (!result.ok) throw new Error("The server reported the service restart did not complete.");
+      return result;
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["database-services"] }); toast({ tone: "success", title: "Service restart initiated — POST /admin/database-services/:id/restart" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Restart failed", message: e.message }),
   });
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteDatabaseService(id),
+    mutationFn: async (id: string) => {
+      const result = await deleteDatabaseService(id);
+      if (!result.ok) throw new Error("The server reported the database service was not deleted.");
+      return result;
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["database-services"] }); toast({ tone: "success", title: "Service deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
@@ -220,7 +228,11 @@ function TestConnectionModal({ onClose }: { onClose: () => void }) {
   const [databaseName, setDatabaseName] = useState("postgres");
 
   const mut = useMutation({
-    mutationFn: () => testConnection({ host, port: Number(port), engine, username, password, databaseName }),
+    mutationFn: async () => {
+      const result = await testConnection({ host, port: Number(port), engine, username, password, databaseName });
+      if (!result.ok) throw new Error(result.message || "The server reported the connection test did not succeed.");
+      return result;
+    },
     onSuccess: (res) => toast({ tone: "success", title: res.message || "Connection successful — POST /admin/database-services/test-connection" }),
     onError: (e: Error) => toast({ tone: "error", title: "Test failed", message: e.message }),
   });

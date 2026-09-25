@@ -20,6 +20,7 @@ import {
 } from "@/lib/api/notifications";
 import { AdminFormSection, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, Textarea } from "./admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { TableSkeleton } from "@/components/ui/loading-skeleton";
 
 const CHANNEL_ICONS: Record<NotificationChannelType, typeof Bell> = {
@@ -45,6 +46,7 @@ function channelIcon(type: NotificationChannelType) {
 
 export function AdminNotifications() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const [showCreate, setShowCreate] = useState(false);
   const [editId, setEditId] = useState<string | null>(null);
@@ -145,22 +147,26 @@ export function AdminNotifications() {
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteNotificationChannel(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-channels"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete channel", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const testMut = useMutation({
     mutationFn: (id: string) => testNotificationChannel(id),
+    onError: (err) => toast({ tone: "error", title: "Failed to send test notification", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const subscribeMut = useMutation({
     mutationFn: ({ channelId, eventType }: { channelId: string; eventType: string }) =>
       createSubscription(channelId, eventType),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-subs", detailId] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to subscribe to event", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const unsubscribeMut = useMutation({
     mutationFn: ({ channelId, subId }: { channelId: string; subId: string }) =>
       deleteSubscription(channelId, subId),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["notification-subs", detailId] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to unsubscribe from event", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   function renderConfigForm() {

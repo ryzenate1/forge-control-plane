@@ -1,7 +1,12 @@
 "use client";
 
-import { ApiError, getCSRFToken } from "./http";
+import { requestJSON, type ForgeRequestOptions, type ForgeRetryPolicy } from "./http";
 
+/**
+ * Retry knobs for the legacy retrying client. These are a 1:1 view onto the
+ * canonical {@link ForgeRetryPolicy} in `lib/api/http.ts` — kept under the
+ * historical names so existing call sites keep compiling.
+ */
 interface RetryConfig {
   maxRetries?: number;
   baseDelay?: number;
@@ -9,80 +14,44 @@ interface RetryConfig {
   retryOnStatus?: number[];
 }
 
-const DEFAULT_CONFIG: Required<RetryConfig> = {
-  maxRetries: 3,
-  baseDelay: 500,
-  maxDelay: 10000,
-  retryOnStatus: [408, 429, 500, 502, 503, 504],
-};
-
-function getDelay(attempt: number, baseDelay: number, maxDelay: number): number {
-  const delay = Math.min(baseDelay * Math.pow(2, attempt), maxDelay);
-  return delay + Math.random() * 500;
+function toRetryPolicy(config: RetryConfig): ForgeRetryPolicy {
+  const policy: ForgeRetryPolicy = {};
+  if (config.maxRetries !== undefined) policy.retries = config.maxRetries;
+  if (config.baseDelay !== undefined) policy.baseDelay = config.baseDelay;
+  if (config.maxDelay !== undefined) policy.maxDelay = config.maxDelay;
+  if (config.retryOnStatus !== undefined) policy.retryOnStatus = config.retryOnStatus;
+  return policy;
 }
 
-function addCSRFToOptions(options: RequestInit & { signal?: AbortSignal }): void {
-  const method = options.method ?? 'GET';
-  if (!['POST', 'PUT', 'PATCH', 'DELETE'].includes(method.toUpperCase())) return;
-  const csrfToken = getCSRFToken();
-  if (!csrfToken) return;
-  options.headers = { ...options.headers as Record<string, string>, 'X-CSRF-Token': csrfToken };
-}
-
+/**
+ * Retrying JSON request. This used to be a second, parallel HTTP client with its
+ * own `fetch` call, its own CSRF signing and its own error shaping — which meant
+ * a 401 here never reached `notifySessionExpired()`. It is now a thin wrapper
+ * over the canonical primitive, so CSRF, cookie credentials, 401 session-expiry
+ * signalling and error shaping are identical to `requestJSON`; only the retry
+ * policy is added. Aborted requests are still re-thrown as `AbortError`.
+ *
+ * Paths are API-relative (e.g. `/servers/123`) and are resolved against
+ * `API_BASE_URL`; absolute URLs are passed through untouched.
+ */
 export async function fetchWithRetry<T>(
   url: string,
   options: RequestInit & { signal?: AbortSignal } = {},
   config: RetryConfig = {},
 ): Promise<T> {
-  const { maxRetries, baseDelay, maxDelay, retryOnStatus } = { ...DEFAULT_CONFIG, ...config };
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      addCSRFToOptions(options);
-      const response = await fetch(url, { ...options });
-
-      if (!response.ok && retryOnStatus.includes(response.status) && attempt < maxRetries) {
-        const delay = getDelay(attempt, baseDelay, maxDelay);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-        continue;
-      }
-
-      if (!response.ok) {
-        const errorMessage = await getErrorMessage(response);
-        throw new ApiError(errorMessage, response.status);
-      }
-
-      if (response.status === 204) return undefined as T;
-      const text = await response.text();
-      return text ? (JSON.parse(text) as T) : (undefined as T);
-    } catch (error) {
-      if (error instanceof ApiError) throw error;
-      if (error instanceof DOMException && error.name === "AbortError") throw error;
-      lastError = error as Error;
-      if (attempt < maxRetries) {
-        const delay = getDelay(attempt, baseDelay, maxDelay);
-        await new Promise((resolve) => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError ?? new Error("Request failed");
+  const retry: ForgeRequestOptions["retry"] = toRetryPolicy(config);
+  return requestJSON<T>(url, options, { retry });
 }
 
-async function getErrorMessage(response: Response): Promise<string> {
-  try {
-    const error = await response.json();
-    return error.message || error.error || `Request failed with status ${response.status}`;
-  } catch {
-    return `Request failed with status ${response.status}`;
-  }
-}
-
+/**
+ * Request factory bound to an {@link AbortSignal}, built on the canonical
+ * primitive (see {@link fetchWithRetry}). The `path` argument of every method is
+ * API-relative and retries are opt-in per call via {@link RetryConfig}.
+ */
 export function createAbortableFetch(signal?: AbortSignal) {
   return {
     fetchJSON: <T>(path: string, config?: RetryConfig) => {
-      return fetchWithRetry<T>(path, { signal }, config);
+      return fetchWithRetry<T>(path, { method: 'GET', signal }, config);
     },
     postJSON: <T>(path: string, body?: unknown, config?: RetryConfig) => {
       return fetchWithRetry<T>(

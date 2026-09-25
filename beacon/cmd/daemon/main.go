@@ -348,7 +348,12 @@ func run() error {
 			HostKeyPassphrase:  sftpPassphrase,
 			Activity:           activity, Sessions: server,
 		}
+		// Run blocks until the daemon context is cancelled, so the listener is
+		// only advertised while it is actually up. A start failure clears the flag
+		// again rather than leaving a stale claim behind.
+		server.SetSFTPEnabled(true)
 		if err := sftpSrv.Run(daemonCtx); err != nil {
+			server.SetSFTPEnabled(false)
 			sftpErr <- err
 		}
 	}()

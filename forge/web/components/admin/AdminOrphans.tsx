@@ -6,7 +6,7 @@ import { AlertCircle, Database, RefreshCw, Server } from "lucide-react";
 import { fetchOrphanRemediations, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { Btn, Card, CardHeader, Pill, AdminSelect } from "./admin-ui";
+import { Btn, Card, CardHeader, Pill, AdminSelect, SectionHeader } from "./admin-ui";
 
 export function AdminOrphans() {
   const qc = useQueryClient();
@@ -27,20 +27,27 @@ export function AdminOrphans() {
   });
 
   return (
-    <div className="mx-auto w-full max-w-[1280px]">
-      <div className="border-b border-[var(--line)] pb-5">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Operations — Orphans</div>
-        <h1 className="mt-2 text-[30px] font-[650] tracking-[-0.03em] leading-none">Orphan Remediation</h1>
-        <p className="mt-2 max-w-[65ch] text-sm leading-5 text-[var(--text-subtle)]">
-          Force-deleted servers and databases that could not be removed remotely are tracked here. Resolve after manually confirming remote cleanup is complete.
-        </p>
-        <div className="mt-4 flex flex-wrap items-center gap-2">
-          <AdminSelect label="" value={status} onChange={(v) => setStatus(v as "pending" | "resolved")} options={[{ value: "pending", label: "Pending" }, { value: "resolved", label: "Resolved" }]} />
-          <Btn size="sm" tone="ghost" onClick={() => void q.refetch()} disabled={q.isFetching}>
-            <RefreshCw size={13} /> {q.isFetching ? "Refreshing…" : "Refresh"}
-          </Btn>
-        </div>
-      </div>
+    <div className="mx-auto w-full max-w-[1280px] space-y-6">
+      <SectionHeader
+        title="Orphan Remediation"
+        sub="Force-deleted servers and databases that could not be removed remotely are tracked here. Resolve after manually confirming remote cleanup is complete."
+        action={
+          <div className="flex flex-wrap items-center gap-2">
+            <AdminSelect
+              label=""
+              value={status}
+              onChange={(v) => setStatus(v as "pending" | "resolved")}
+              options={[
+                { value: "pending", label: "Pending" },
+                { value: "resolved", label: "Resolved" },
+              ]}
+            />
+            <Btn size="sm" tone="ghost" onClick={() => void q.refetch()} disabled={q.isFetching}>
+              <RefreshCw size={13} className={q.isFetching ? "animate-spin" : ""} /> {q.isFetching ? "Refreshing…" : "Refresh"}
+            </Btn>
+          </div>
+        }
+      />
 
       {q.isLoading ? (
         <div className="mt-6 rounded-xl border border-[var(--line)] p-8 text-center text-sm text-[var(--text-subtle)]">Loading remediation tasks…</div>

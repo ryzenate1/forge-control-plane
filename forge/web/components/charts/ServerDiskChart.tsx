@@ -5,6 +5,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { HardDrive } from "lucide-react";
 import { getNodeMetrics, type MetricPeriod, type NodeMetrics } from "@/lib/api/monitoring";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
+import { chart } from "@/lib/design-tokens";
 import { SpinnerPage } from "@/components/shared";
 
 interface ServerDiskChartProps {
@@ -94,14 +95,14 @@ export function ServerDiskChart({ nodeId, height = 300, period = "1h" }: ServerD
             <AreaChart data={chartData} margin={{ top: 5, right: 5, left: 0, bottom: 5 }}>
               <defs>
                 <linearGradient id="diskGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#f59e0b" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#f59e0b" stopOpacity={0} />
+                  <stop offset="5%" stopColor={chart.disk} stopOpacity={0.3} />
+                  <stop offset="95%" stopColor={chart.disk} stopOpacity={0} />
                 </linearGradient>
               </defs>
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="timestamp"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => new Date(v).toLocaleTimeString()}
@@ -109,7 +110,7 @@ export function ServerDiskChart({ nodeId, height = 300, period = "1h" }: ServerD
               <YAxis
                 yAxisId="percent"
                 orientation="left"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => `${v}%`}
@@ -119,7 +120,7 @@ export function ServerDiskChart({ nodeId, height = 300, period = "1h" }: ServerD
               <YAxis
                 yAxisId="mb"
                 orientation="right"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => formatMb(v)}
@@ -130,11 +131,11 @@ export function ServerDiskChart({ nodeId, height = 300, period = "1h" }: ServerD
                 yAxisId="percent"
                 type="monotone"
                 dataKey="usedPercent"
-                stroke="#f59e0b"
+                stroke={chart.disk}
                 strokeWidth={2}
                 fill="url(#diskGradient)"
                 dot={false}
-                activeDot={{ r: 4, fill: "#f59e0b" }}
+                activeDot={{ r: 4, fill: chart.disk }}
                 name="Used %"
               />
             </AreaChart>

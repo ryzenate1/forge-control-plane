@@ -25,6 +25,7 @@ import { fetchJSON } from "@/lib/api";
 import {
   AdminPageLayout,
   AdminTabs,
+  type AdminTab,
   Btn,
   Card,
   CardHeader,
@@ -76,6 +77,14 @@ type ProxyDomain = {
 };
 
 // Industrial Terminal graph — routers → services arrows
+function matchServiceName(domain: string | undefined, services: Array<{ name: string }>): string {
+  const needle = (domain || "").split(".")[0]?.trim().toLowerCase();
+  if (!needle) return "—";
+  return services.find((s) => s.name.toLowerCase() === needle)?.name
+    ?? services.find((s) => s.name.toLowerCase().includes(needle))?.name
+    ?? "—";
+}
+
 function GatewayTopology({ routers, services }: { routers: RoutingRule[]; services: TargetGroup[] }) {
   const routerCount = routers.length;
   const serviceCount = services.length;
@@ -284,7 +293,7 @@ export default function AdminGatewaysPage() {
   const domains = useMemo(() => domainsQuery.data ?? [], [domainsQuery.data]);
   const certs = useMemo(() => certsQuery.data ?? [], [certsQuery.data]);
 
-  const tabs: Array<{ id: GatewayTab; label: string; icon?: typeof Router }> = [
+  const tabs: Array<AdminTab & { id: GatewayTab }> = [
     { id: "routers", label: `Routers · ${routers.length}` },
     { id: "services", label: `Services · ${services.length}` },
     { id: "middlewares", label: "Middlewares" },
@@ -344,7 +353,7 @@ export default function AdminGatewaysPage() {
         </Btn>
       </div>
 
-      <AdminTabs tabs={tabs as unknown as Array<{ id: string; label: string }>} active={tab} onChange={(id) => setTab(id as GatewayTab)} />
+      <AdminTabs tabs={tabs} active={tab} onChange={(id) => setTab(id as GatewayTab)} />
 
       {tab === "routers" && (
         <Card>
@@ -393,7 +402,7 @@ export default function AdminGatewaysPage() {
                       <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1 text-xs text-[var(--text-subtle)]">
                           <ArrowRight size={12} className="text-[var(--brand)]" aria-hidden />
-                          {services.find((s) => s.name.toLowerCase().includes((r.domain || "").split(".")[0]))?.name ?? "—"}
+                          {matchServiceName(r.domain, services)}
                         </span>
                       </td>
                       <td className="px-4 py-3">

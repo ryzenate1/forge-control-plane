@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { Shield, Plus, Trash2, RotateCw, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
 import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
@@ -23,6 +24,7 @@ type Certificate = {
 
 export default function AdminCertificatesPage() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
@@ -48,16 +50,19 @@ export default function AdminCertificatesPage() {
       setShowUploadModal(false);
       setUploadForm({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to upload certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/certificates/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const renewMutation = useMutation({
     mutationFn: (id: string) => postJSON(`/certificates/${id}/renew`, {}),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to renew certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const issueMutation = useMutation({
@@ -76,6 +81,7 @@ export default function AdminCertificatesPage() {
       setShowIssueModal(false);
       setIssueForm({ domains: "", email: "", challengeType: "http-01", dnsProvider: "" });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to issue certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const isExpiring = (expiresAt: string) => {

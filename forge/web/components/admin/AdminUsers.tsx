@@ -175,13 +175,13 @@ export function AdminUsers() {
  setEServerLimit(user.serverLimit ?? 0);
  };
 
-  return (
-  <div>
-  <SectionHeader
-  title="Access — Users"
-  sub="ACCESS · Identity: all registered users on this panel. Distinct from Organizations/Projects tenancy and from Security (certs/mTLS). Users own workloads via env affinity."
-  action={<Btn onClick={() => setModal(true)}><Plus size={14} /> New User</Btn>}
-  />
+ return (
+    <div className="space-y-6">
+      <SectionHeader
+        title="Users"
+        sub="All registered user accounts, administrative privileges, and resource limits on this panel."
+        action={<Btn tone="primary" onClick={() => setModal(true)}><Plus size={14} /> New User</Btn>}
+      />
   <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
     <span className="font-semibold text-slate-300">ACCESS</span> · <span className="font-semibold text-slate-200">Identity</span> — <code className="font-mono text-[11px]">Users</code> (this page) · <code className="font-mono">Roles</code> · <code className="font-mono">OAuth Clients</code> · <code className="font-mono">SSO</code> vs <span className="font-semibold">Tenancy</span> <code className="font-mono">Organizations → Projects → Environments</code>. User limits (server/CPU/memory/disk) cap tenant allocation.
   </div>

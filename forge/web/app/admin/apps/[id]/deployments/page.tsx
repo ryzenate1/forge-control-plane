@@ -90,25 +90,25 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3">
-        <Btn tone="ghost" size="sm" onClick={() => router.push(`/admin/apps/${id}`)}>
-          <ArrowLeft size={14} />
-        </Btn>
-        <SectionHeader
-          title="Deployments"
-          sub={app ? `${app.name} - ${(Array.isArray(deployments) ? deployments : []).length} total` : "Loading..."}
-        />
-        <div className="ml-auto flex gap-2">
-          <Btn tone="ghost" size="sm" onClick={() => setShowCompare(!showCompare)}>
-            <Eye size={12} />
-            Compare Revisions
-          </Btn>
-          <Btn size="sm" onClick={() => deploymentsQuery.refetch()}>
-            <RefreshCw size={12} className={deploymentsQuery.isRefetching ? "animate-spin" : ""} />
-            Refresh
-          </Btn>
-        </div>
-      </div>
+      <SectionHeader
+        title="Deployments"
+        sub={app ? `${app.name} · ${(Array.isArray(deployments) ? deployments : []).length} total` : "Loading..."}
+        backAction={() => router.push(`/admin/apps/${id}`)}
+        backLabel={app?.name ?? "App"}
+        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Deployments`}
+        action={
+          <div className="flex items-center gap-2">
+            <Btn tone="ghost" size="sm" onClick={() => setShowCompare(!showCompare)}>
+              <Eye size={12} />
+              Compare Revisions
+            </Btn>
+            <Btn size="sm" onClick={() => deploymentsQuery.refetch()}>
+              <RefreshCw size={12} className={deploymentsQuery.isRefetching ? "animate-spin" : ""} />
+              Refresh
+            </Btn>
+          </div>
+        }
+      />
 
       {Array.isArray(inProgress) && inProgress.length > 0 && (
         <Card>

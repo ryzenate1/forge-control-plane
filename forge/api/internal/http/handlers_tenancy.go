@@ -741,7 +741,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
 		return c.JSON(fiber.Map{
-			"data": servers,
+			// Safe DTOs: never leak transferRunToken or secrets into console payloads.
+			"data": store.ServersToDTO(servers),
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
 					"current":  page,

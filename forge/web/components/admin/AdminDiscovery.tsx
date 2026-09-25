@@ -78,8 +78,8 @@ export function AdminDiscovery() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Networking — Service Discovery"
-        sub="INFRA · Networking advanced: service endpoints, network visibility, beacon liveness and private-network policy. Endpoints self-register via heartbeats and are reaped after 3m TTL."
+        title="Service Discovery"
+        sub="Service endpoints, network visibility, beacon liveness and private-network policy. Endpoints self-register via heartbeats and are reaped after 3m TTL."
         action={
           <Btn size="sm" tone="ghost" onClick={() => { qc.invalidateQueries({ queryKey: ["discovery-endpoints"] }); qc.invalidateQueries({ queryKey: ["discovery-visibility"] }); qc.invalidateQueries({ queryKey: ["discovery-reaper"] }); }}>
             <RefreshCw size={14} /> Refresh
@@ -392,6 +392,7 @@ function PolicyCard({ policy, onRefresh }: { policy: PolicyView | undefined; onR
 
 function ReachabilityCard() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [source, setSource] = useState("");
   const [target, setTarget] = useState("");
   const [svc, setSvc] = useState("");
@@ -402,6 +403,7 @@ function ReachabilityCard() {
   const sweepMut = useMutation({
     mutationFn: () => sweepReachability(),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["reachability"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to sweep reachability", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   return (
     <Card>

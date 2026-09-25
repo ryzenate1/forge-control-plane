@@ -34,7 +34,10 @@ export function useT(): TranslationContextType["t"] {
       const value = key.split(".").reduce<unknown>((current, segment) => (
         current && typeof current === "object" ? (current as Record<string, unknown>)[segment] : undefined
       ), defaultMessages);
-      if (typeof value !== "string") return key;
+      if (typeof value !== "string") {
+        if (Array.isArray(args) && typeof args[0] === "string") return args[0];
+        return key;
+      }
       if (Array.isArray(args)) return value.replace(/\{(\d+)\}/g, (_, index: string) => String(args[Number(index)] ?? `{${index}}`));
       return value.replace(/\{(\w+)\}/g, (_, name: string) => String(args?.[name] ?? `{${name}}`));
     };

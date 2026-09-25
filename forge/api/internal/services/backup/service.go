@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"sort"
 	"strings"
 	"sync"
@@ -895,12 +896,12 @@ func (s *Service) NextCronRun(policy store.BackupPolicy, from time.Time) (time.T
 
 func (s *Service) log(msg string, args ...any) {
 	if len(args) == 0 {
-		log.Printf("[backup] %s", msg)
+		slog.Info("[backup] " + msg)
 		return
 	}
-	pairs := make([]string, 0, len(args)/2)
+	attrs := make([]any, 0, len(args))
 	for i := 0; i+1 < len(args); i += 2 {
-		pairs = append(pairs, fmt.Sprintf("%v=%v", args[i], args[i+1]))
+		attrs = append(attrs, args[i], args[i+1])
 	}
-	log.Printf("[backup] %s (%s)", msg, strings.Join(pairs, ", "))
+	slog.Info("[backup] "+msg, attrs...)
 }

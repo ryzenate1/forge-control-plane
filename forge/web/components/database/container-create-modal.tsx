@@ -83,7 +83,7 @@ export function DBContainerCreateModal({ onClose, onCreated, defaultServerId }: 
                   <span className={cn("text-xs font-medium leading-tight", active ? "text-slate-100" : "text-slate-400 group-hover:text-slate-300")}>
                     {meta.label}
                   </span>
-                  {active && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-[var(--brand)] ring-2 ring-[#0d1117]" />}
+                  {active && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-[var(--brand)] ring-2 ring-[var(--surface-input)]" />}
                 </button>
               );
             })}

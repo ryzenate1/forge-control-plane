@@ -216,7 +216,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 			Architecture:     info.Architecture,
 			CPUThreads:       info.CPUThreads,
 			MemoryMB:         int64(info.MemoryMB),
-			UptimeSeconds:    info.UptimeSeconds,
+			UptimeSeconds:    info.DaemonUptimeSeconds,
 			RuntimeAvailable: info.DockerAvailable,
 			RuntimeStatus:    info.DockerStatus,
 			RawReport:        capabilitiesJSON,

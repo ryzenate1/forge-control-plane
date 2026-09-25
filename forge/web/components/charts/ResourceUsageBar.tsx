@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
+import { chart } from "@/lib/design-tokens";
 import { getNodeMetrics, type NodeMetrics } from "@/lib/api/monitoring";
 import { SpinnerPage } from "@/components/shared";
 
@@ -97,12 +98,12 @@ export function ResourceUsageBar({ height = 300 }: ResourceUsageBarProps) {
               <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.06)" />
               <XAxis
                 dataKey="name"
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
               />
               <YAxis
-                tick={{ fill: "#64748b", fontSize: 11 }}
+                tick={{ fill: chart.axis, fontSize: 11 }}
                 tickLine={false}
                 axisLine={false}
                 tickFormatter={(v) => `${v}%`}
@@ -110,9 +111,9 @@ export function ResourceUsageBar({ height = 300 }: ResourceUsageBarProps) {
                 width={45}
               />
               <Tooltip content={<ChartTooltip />} />
-              <Bar dataKey="cpu" fill="#3b82f6" radius={[2, 2, 0, 0]} maxBarSize={12} />
-              <Bar dataKey="memory" fill="#10b981" radius={[2, 2, 0, 0]} maxBarSize={12} />
-              <Bar dataKey="disk" fill="#f59e0b" radius={[2, 2, 0, 0]} maxBarSize={12} />
+              <Bar dataKey="cpu" fill={chart.cpu} radius={[2, 2, 0, 0]} maxBarSize={12} />
+              <Bar dataKey="memory" fill={chart.memory} radius={[2, 2, 0, 0]} maxBarSize={12} />
+              <Bar dataKey="disk" fill={chart.disk} radius={[2, 2, 0, 0]} maxBarSize={12} />
             </BarChart>
           </ResponsiveContainer>
         </div>

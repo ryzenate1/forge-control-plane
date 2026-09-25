@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Plus, ShieldCheck, ShieldAlert, Trash2, CheckCircle2, Star, RefreshCw } from "lucide-react";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminTabs, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminSelect } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminTabs, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminSelect } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
@@ -43,19 +43,31 @@ export default function AdminDNSPage() {
   });
 
   const verifyMut = useMutation({
-    mutationFn: (id: string) => verifyDNSProvider(id),
+    mutationFn: async (id: string) => {
+      const result = await verifyDNSProvider(id);
+      if (!result.ok) throw new Error("The server reported the provider verification did not complete.");
+      return result;
+    },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dns-configured"] }); toast({ tone: "success", title: "Provider verified" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Verify failed", message: e.message }),
   });
 
   const defaultMut = useMutation({
-    mutationFn: (id: string) => setDefaultDNSProvider(id),
+    mutationFn: async (id: string) => {
+      const result = await setDefaultDNSProvider(id);
+      if (!result.ok) throw new Error("The server reported the default provider was not set.");
+      return result;
+    },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dns-configured"] }); toast({ tone: "success", title: "Default provider set" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Set default failed", message: e.message }),
   });
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deleteDNSProvider(id),
+    mutationFn: async (id: string) => {
+      const result = await deleteDNSProvider(id);
+      if (!result.ok) throw new Error("The server reported the DNS provider was not deleted.");
+      return result;
+    },
     onSuccess: () => { void qc.invalidateQueries({ queryKey: ["dns-configured"] }); toast({ tone: "success", title: "Provider deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
@@ -63,21 +75,21 @@ export default function AdminDNSPage() {
   const selectedSupported = supported.find((s) => s.type === createForm.providerType);
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title="DNS Providers"
-        sub="Manage ACME DNS-01 providers via /dns/providers — createProvider, verifyProvider, setDefault, deleteProvider matching handlers_dns.go"
-        action={<Btn onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={14} /> Add Provider (POST /dns/providers)</Btn>}
+        sub="DNS providers used for automatic DNS-01 challenges. Verify a provider, then set a default for issuance."
+        action={<Btn onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={14} /> Add Provider</Btn>}
       />
 
       <AdminTabs tabs={[{ id: "configured", label: "Configured" }, { id: "supported", label: "Supported Types" }]} active={tab} onChange={(v) => setTab(v as typeof tab)} />
 
       {tab === "configured" && (
         <Card>
-          <CardHeader title={`Configured Providers — GET /dns/providers/configured`} icon={Globe} action={<Btn size="sm" tone="ghost" onClick={() => void configuredQuery.refetch()}><RefreshCw size={12} /> Refresh</Btn>} />
+          <CardHeader title="Configured Providers" icon={Globe} action={<Btn size="sm" tone="ghost" onClick={() => void configuredQuery.refetch()}><RefreshCw size={12} /> Refresh</Btn>} />
           {configuredQuery.isLoading ? <div className="p-8 text-center text-sm text-slate-400">Loading configured providers via fetchDnsProviders…</div>
             : configuredQuery.isError ? <div className="p-4"><div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">Failed: {(configuredQuery.error as Error).message} <Btn size="sm" tone="ghost" onClick={() => void configuredQuery.refetch()} className="ml-2">Retry</Btn></div></div>
-            : providers.length === 0 ? <EmptyState icon={Globe} message="No DNS providers configured. Use Add Provider to POST /dns/providers with {name, providerType, credentials}." />
+            : providers.length === 0 ? <EmptyState icon={Globe} message="No DNS providers configured. Add a provider to enable automatic DNS-01 challenges." />
             : (
               <AdminTable label="Configured DNS providers">
                 <AdminTHead><AdminTh>Name</AdminTh><AdminTh>Type</AdminTh><AdminTh>Default</AdminTh><AdminTh>Verified</AdminTh><AdminTh>Created</AdminTh><AdminTh></AdminTh></AdminTHead>
@@ -91,8 +103,8 @@ export default function AdminDNSPage() {
                       <AdminTd className="text-xs text-slate-400">{p.createdAt ? new Date(p.createdAt).toLocaleString() : "—"}</AdminTd>
                       <AdminTd>
                         <div className="flex justify-end gap-1.5">
-                          {!p.verified && <Btn size="sm" tone="ghost" disabled={verifyMut.isPending} onClick={() => verifyMut.mutate(p.id)} className="border border-[var(--brand)]/20"><CheckCircle2 size={12} /> Verify (POST /:id/verify)</Btn>}
-                          {!p.isDefault && <Btn size="sm" tone="ghost" disabled={defaultMut.isPending} onClick={() => defaultMut.mutate(p.id)}><Star size={12} /> Set Default (POST /:id/set-default)</Btn>}
+                          {!p.verified && <Btn size="sm" tone="ghost" disabled={verifyMut.isPending} onClick={() => verifyMut.mutate(p.id)} className="border border-[var(--brand)]/20"><CheckCircle2 size={12} /> Verify</Btn>}
+                          {!p.isDefault && <Btn size="sm" tone="ghost" disabled={defaultMut.isPending} onClick={() => defaultMut.mutate(p.id)}><Star size={12} /> Set Default</Btn>}
                           <Btn size="sm" tone="danger" disabled={deleteMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Delete DNS provider ${p.name}?`, description: "The provider and its encrypted credentials will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(p.id); })(); }}><Trash2 size={12} /></Btn>
                         </div>
                       </AdminTd>
@@ -106,7 +118,7 @@ export default function AdminDNSPage() {
 
       {tab === "supported" && (
         <Card>
-          <CardHeader title="Supported Provider Types — GET /dns/providers" icon={ShieldCheck} />
+          <CardHeader title="Supported Provider Types" icon={ShieldCheck} />
           {supportedQuery.isLoading ? <div className="p-8 text-center text-sm text-slate-400">Loading supported providers…</div>
             : supportedQuery.isError ? <div className="p-4 text-sm text-red-300">Failed: {(supportedQuery.error as Error).message}</div>
             : (
@@ -130,11 +142,11 @@ export default function AdminDNSPage() {
       )}
 
       {showCreate && (
-        <Modal title="Add DNS Provider — POST /dns/providers" onClose={() => setShowCreate(false)} wide>
+        <Modal title="Add DNS Provider" onClose={() => setShowCreate(false)} wide>
           <div className="space-y-4">
             <Input label="Name" value={createForm.name} onChange={(v) => setCreateForm({ ...createForm, name: v })} placeholder="My Cloudflare" />
             <AdminSelect label="Provider Type" value={createForm.providerType} onChange={(v) => setCreateForm({ ...createForm, providerType: v, creds: {} })} options={(supported ?? []).map((s) => ({ value: s.type, label: `${s.name} (${s.type})` }))} />
-            <p className="text-xs text-slate-400">POST body is {"{name, providerType, credentials}"} where credentials is a map of env vars (see supported types above). Wires <code className="font-mono">createProvider(name, providerType, credentials)</code>.</p>
+            <p className="text-xs text-slate-400">Credentials are stored encrypted and used only for DNS-01 challenges.</p>
             {selectedSupported ? (
               <div className="space-y-3 rounded-lg border border-white/[0.06] bg-[var(--surface)] p-4">
                 <h5 className="text-xs font-semibold uppercase tracking-widest text-slate-400">Credentials for {selectedSupported.name}</h5>
@@ -177,6 +189,6 @@ export default function AdminDNSPage() {
         </Modal>
       )}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

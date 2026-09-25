@@ -1,9 +1,10 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { Shield, ShieldCheck, ShieldX, RefreshCw, Trash2, Plus, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { fetchJSON, postJSON } from "@/lib/api";
-import { Card, CardHeader, EmptyState, StatsRow, Pill } from "@/components/admin/admin-ui";
+import { Card, CardHeader, EmptyState, StatsRow, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useState } from "react";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -26,6 +27,7 @@ type MTLSMigrationStatusResponse = { data: { caConfigured: boolean; nodesWithCer
 
 export default function AdminMTLSPage() {
   const [confirm, renderConfirm] = useConfirm();
+  const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showGenerateCA, setShowGenerateCA] = useState(false);
   const [caOrg, setCAOrg] = useState("GamePanel");
@@ -64,21 +66,23 @@ export default function AdminMTLSPage() {
   });
 
   const revokeMutation = useMutation({
-    mutationFn: (id: string) => postJSON<{ ok: boolean }>(`/mtls/certificates/${id}/revoke`),
+    mutationFn: async (id: string) => { const result = await postJSON<{ ok: boolean }>(`/mtls/certificates/${id}/revoke`); if (!result.ok) throw new Error("The server reported the revocation did not complete."); return result; },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mtls-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs-ca"] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to revoke certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const migrationMutation = useMutation({
-    mutationFn: () => postJSON<{ ok: boolean }>("/mtls/migration/run"),
+    mutationFn: async () => { const result = await postJSON<{ ok: boolean }>("/mtls/migration/run"); if (!result.ok) throw new Error("The server reported the migration did not complete."); return result; },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mtls-migration-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs"] });
     },
+    onError: (err) => toast({ tone: "error", title: "Migration failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const status = statusData?.data;
@@ -88,22 +92,20 @@ export default function AdminMTLSPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-slate-100">mTLS Certificate Management</h1>
-          <p className="text-sm text-slate-400 mt-1">
-            Mutual TLS authentication between the control plane and node agents
-          </p>
-        </div>
-        <button
-          onClick={() => setShowGenerateCA(true)}
-          className="flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] transition"
-          type="button"
-        >
-          <Plus className="h-4 w-4" />
-          Generate CA
-        </button>
-      </div>
+      <SectionHeader
+        title="mTLS Certificate Management"
+        sub="Mutual TLS authentication between the control plane and node agents."
+        action={
+          <button
+            onClick={() => setShowGenerateCA(true)}
+            className="flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] transition"
+            type="button"
+          >
+            <Plus className="h-4 w-4" />
+            Generate CA
+          </button>
+        }
+      />
 
       {showGenerateCA && (
         <Card>

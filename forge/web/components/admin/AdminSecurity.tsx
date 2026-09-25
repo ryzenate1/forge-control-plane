@@ -42,8 +42,8 @@ export function AdminSecurity() {
   return (
     <div className="space-y-6">
       <AdminPageHeader
-        title="Platform — Security Headers"
-        description="PLATFORM · Security — global middleware headers and per-domain overrides. Part of PLATFORM Security alongside certs/mTLS; distinct from INFRA Networking firewall and panel Settings security tab."
+        title="Security Headers"
+        description="Global middleware headers and per-domain overrides for HTTP responses."
       />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
         <span className="font-semibold text-slate-300">PLATFORM</span> · <span className="font-semibold text-slate-200">Security</span> — headers are the third leg: <code className="font-mono text-[11px]">Global</code> (middleware <code className="font-mono">middleware_security.go</code>) · <code className="font-mono">Per-domain</code> (<code className="font-mono">security_headers</code> table) · <code className="font-mono">Transport</code> (<code className="font-mono">/admin/certificates /mtls</code>). For panel-wide controls see <code className="font-mono">/admin/settings</code> → Security tab.
@@ -93,6 +93,17 @@ function DomainSecurityHeadersSection() {
     return <div className="p-6 text-center text-sm text-slate-500">Loading domains…</div>;
   }
 
+  if (domainsQuery.isError) {
+    return (
+      <div className="p-4">
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
+          <span>Could not load domains: {domainsQuery.error instanceof Error ? domainsQuery.error.message : "unknown error"}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void domainsQuery.refetch()}>Retry</Btn>
+        </div>
+      </div>
+    );
+  }
+
   if (domains.length === 0) {
     return (
       <div className="flex flex-col items-center gap-3 p-8 text-center">
@@ -116,12 +127,9 @@ function DomainSecurityHeadersSection() {
       </p>
       <DataTable
         label="Domains"
-        headers={["Domain", "HSTS", "CSP", "X-Frame-Options", "Actions"]}
+        headers={["Domain", "Actions"]}
         rows={domains.map((d) => ({
           Domain: d.domain,
-          HSTS: <Pill tone="green">Enabled</Pill>,
-          CSP: <Pill tone="green">Active</Pill>,
-          "X-Frame-Options": <Pill tone="blue">DENY</Pill>,
           Actions: (
             <Btn
               size="sm"

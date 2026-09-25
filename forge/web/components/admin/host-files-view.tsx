@@ -693,7 +693,7 @@ export function HostFilesView() {
 
       {createKind && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCreateKind(null)}>
-          <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label={`Create ${createKind}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-white">Create {createKind}</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={createName} onChange={(e) => setCreateName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitCreate(); if (e.key === "Escape") setCreateKind(null); }} placeholder={`${createKind} name`} />
             <div className="mt-4 flex justify-end gap-2">
@@ -705,7 +705,7 @@ export function HostFilesView() {
       )}
       {renameTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setRenameTarget(null)}>
-          <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label={`Rename ${renameTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-white">Rename &quot;{renameTarget.name}&quot;</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={renameName} onChange={(e) => setRenameName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitRename(); if (e.key === "Escape") setRenameTarget(null); }} placeholder="New name" />
             <div className="mt-4 flex justify-end gap-2">
@@ -717,7 +717,7 @@ export function HostFilesView() {
       )}
       {copyTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setCopyTarget(null)}>
-          <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label={`Copy ${copyTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-white">Copy &quot;{copyTarget.name}&quot;</h3>
             <input className="ui-input mt-3 w-full" autoFocus value={copyName} onChange={(e) => setCopyName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitCopy(); if (e.key === "Escape") setCopyTarget(null); }} placeholder="Copy name" />
             <div className="mt-4 flex justify-end gap-2">
@@ -729,7 +729,7 @@ export function HostFilesView() {
       )}
       {chmodTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setChmodTarget(null)}>
-          <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label={`Permissions for ${chmodTarget.name}`} className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-white">Permissions — {chmodTarget.name}</h3>
             <input className="ui-input mt-3 w-full font-mono" autoFocus value={chmodMode} onChange={(e) => setChmodMode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitChmod(); if (e.key === "Escape") setChmodTarget(null); }} placeholder="0644" inputMode="numeric" pattern="[0-7]{3,4}" />
             <p className="mt-2 text-xs text-[var(--text-subtle)]">Three or four octal digits (e.g. 0644, 0755).</p>
@@ -742,7 +742,7 @@ export function HostFilesView() {
       )}
       {bulkChmodOpen && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={() => setBulkChmodOpen(false)}>
-          <div className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
+          <div role="dialog" aria-modal="true" aria-label="Bulk permissions" className="w-full max-w-md rounded-xl border border-[var(--line)] bg-[var(--surface)] p-5" onClick={(e) => e.stopPropagation()}>
             <h3 className="text-sm font-semibold text-white">Permissions — {selected.length} selected</h3>
             <input className="ui-input mt-3 w-full font-mono" autoFocus value={bulkChmodMode} onChange={(e) => setBulkChmodMode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") submitBulkChmod(); if (e.key === "Escape") setBulkChmodOpen(false); }} placeholder="0644" inputMode="numeric" pattern="[0-7]{3,4}" />
             <p className="mt-2 text-xs text-[var(--text-subtle)]">Applied to every selected item (batch chmod loop – host has no batch endpoint yet).</p>

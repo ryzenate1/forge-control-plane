@@ -3,7 +3,9 @@ package trafficmanager
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log/slog"
@@ -15,6 +17,11 @@ import (
 	"gamepanel/forge/internal/store"
 )
 
+// CaddyTLSManager provisions TLS for proxy domains through the Caddy Admin
+// API. Every mutation is a partial, node-scoped sync (POST /config/<path> or
+// the documented /tls/* endpoints); the manager never replaces the whole
+// Caddy config, so operator-authored routes, servers and other apps survive
+// every operation.
 type CaddyTLSManager struct {
 	adminAddr string
 	client    *http.Client
@@ -31,67 +38,178 @@ func NewCaddyTLSManager(adminAddr string) *CaddyTLSManager {
 	}
 }
 
+// do performs one Admin API request and returns the status code and body.
+func (m *CaddyTLSManager) do(ctx context.Context, method, path string, body io.Reader) (int, []byte, error) {
+	req, err := newCaddyAdminRequest(ctx, method, m.adminAddr, path, body)
+	if err != nil {
+		return 0, nil, fmt.Errorf("caddy admin %s %s: %w", method, path, err)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := m.client.Do(req)
+	if err != nil {
+		return 0, nil, fmt.Errorf("caddy admin %s %s: %w", method, path, err)
+	}
+	defer resp.Body.Close()
+	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	return resp.StatusCode, respBody, nil
+}
+
+// postSync places a config node at path, failing on transport or HTTP errors.
+func (m *CaddyTLSManager) postSync(ctx context.Context, path string, payload any) error {
+	raw, err := json.Marshal(payload)
+	if err != nil {
+		return fmt.Errorf("marshal caddy config node: %w", err)
+	}
+	code, body, err := m.do(ctx, http.MethodPost, path, bytes.NewReader(raw))
+	if err != nil {
+		return err
+	}
+	if code >= 300 {
+		return fmt.Errorf("caddy rejected %s: HTTP %d - %s", path, code, strings.TrimSpace(string(body)))
+	}
+	return nil
+}
+
+// policyHasSubject reports whether an automation policy entry lists hostname.
+func policyHasSubject(policy map[string]any, hostname string) bool {
+	subs, ok := policy["subjects"].([]any)
+	if !ok {
+		return false
+	}
+	for _, s := range subs {
+		if str, _ := s.(string); strings.EqualFold(str, hostname) {
+			return true
+		}
+	}
+	return false
+}
+
+// ProvisionLetsEncrypt ensures an ACME automation policy for the domain
+// without touching the rest of the Caddy config. Caddy then obtains and
+// renews the certificate itself; the reverse-proxy route is owned by the
+// CaddyProxy (traffic manager), not by TLS provisioning.
 func (m *CaddyTLSManager) ProvisionLetsEncrypt(ctx context.Context, domain *store.ProxyDomain, email string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	addr := m.adminAddr
-	config := m.buildTLSConfig(domain, email)
-	body, err := json.Marshal(config)
+	if email == "" {
+		email = "admin@localhost"
+	}
+
+	policy := map[string]any{
+		"subjects": []string{domain.Hostname},
+		"issuers": []map[string]any{
+			{"module": "acme", "email": email},
+		},
+	}
+
+	code, body, err := m.do(ctx, http.MethodGet, "/config/apps/tls/automation", nil)
 	if err != nil {
-		return fmt.Errorf("marshal tls config: %w", err)
+		return err
+	}
+	var automation struct {
+		Policies []map[string]any `json:"policies"`
+	}
+	if code == http.StatusOK {
+		if err := json.Unmarshal(body, &automation); err != nil {
+			return fmt.Errorf("parse caddy tls automation: %w", err)
+		}
 	}
 
-	if err := m.validateConfig(ctx, addr, body); err != nil {
-		return fmt.Errorf("validate tls config: %w", err)
+	for i, p := range automation.Policies {
+		if policyHasSubject(p, domain.Hostname) {
+			if err := m.postSync(ctx, fmt.Sprintf("/config/apps/tls/automation/policies/%d", i), policy); err != nil {
+				return err
+			}
+			domain.HTTPS = true
+			domain.CertType = "letsencrypt"
+			slog.Info("caddy tls: acme policy updated", "domain", domain.Hostname)
+			return nil
+		}
 	}
 
-	if err := m.applyConfig(ctx, addr, config); err != nil {
-		return fmt.Errorf("apply tls config: %w", err)
+	if len(automation.Policies) > 0 {
+		// Trailing "-" appends to the array without disturbing existing entries.
+		if err := m.postSync(ctx, "/config/apps/tls/automation/policies/-", policy); err != nil {
+			return err
+		}
+	} else {
+		// No automation node yet (fresh Caddy or config without TLS section):
+		// create just that subtree.
+		if err := m.postSync(ctx, "/config/apps/tls/automation", map[string]any{"policies": []map[string]any{policy}}); err != nil {
+			return err
+		}
 	}
-
 	domain.HTTPS = true
 	domain.CertType = "letsencrypt"
+	slog.Info("caddy tls: acme policy issued", "domain", domain.Hostname)
 	return nil
 }
 
+// UploadCustomCert loads a manually provided certificate through Caddy's
+// documented manual-cert endpoint (POST /tls/certificates).
 func (m *CaddyTLSManager) UploadCustomCert(ctx context.Context, domain *store.ProxyDomain) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	addr := m.adminAddr
+	if strings.TrimSpace(domain.CertData) == "" || strings.TrimSpace(domain.CertKey) == "" {
+		return fmt.Errorf("custom certificate requires certificate and key data")
+	}
 
-	certPayload := map[string]any{
+	payload := map[string]any{
 		"certificate": domain.CertData,
 		"key":         domain.CertKey,
-		"domains":     []string{domain.Hostname},
 	}
-	body, err := json.Marshal(certPayload)
+	raw, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal cert payload: %w", err)
 	}
-
-	req, err := newCaddyAdminRequest(ctx, "POST", addr,
-		fmt.Sprintf("/tls/certificates/%s", domain.Hostname),
-		bytes.NewReader(body))
+	code, body, err := m.do(ctx, http.MethodPost, "/tls/certificates", bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("upload cert request: %w", err)
+		return err
 	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("upload cert api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("upload cert failed: HTTP %d - %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	if code >= 300 {
+		return fmt.Errorf("caddy rejected certificate upload: HTTP %d - %s", code, strings.TrimSpace(string(body)))
 	}
 
 	domain.HTTPS = true
 	domain.CertType = "custom"
+	slog.Info("caddy tls: custom certificate loaded", "domain", domain.Hostname)
+	return nil
+}
+
+// removeAutomationPolicy deletes the ACME automation policy for hostname, if
+// one exists. Caddy's Admin API has no per-host certificate delete: manually
+// loaded certificates stay in memory until the next config sync, which is why
+// removing the policy (so nothing re-obtains it) is the durable action.
+func (m *CaddyTLSManager) removeAutomationPolicy(ctx context.Context, hostname string) error {
+	code, body, err := m.do(ctx, http.MethodGet, "/config/apps/tls/automation", nil)
+	if err != nil {
+		return err
+	}
+	if code != http.StatusOK {
+		return nil // no automation node: nothing to remove
+	}
+	var automation struct {
+		Policies []map[string]any `json:"policies"`
+	}
+	if err := json.Unmarshal(body, &automation); err != nil {
+		return fmt.Errorf("parse caddy tls automation: %w", err)
+	}
+	for i, p := range automation.Policies {
+		if policyHasSubject(p, hostname) {
+			delCode, delBody, err := m.do(ctx, http.MethodDelete, fmt.Sprintf("/config/apps/tls/automation/policies/%d", i), nil)
+			if err != nil {
+				return err
+			}
+			if delCode >= 300 && delCode != http.StatusNotFound {
+				return fmt.Errorf("caddy rejected policy removal: HTTP %d - %s", delCode, strings.TrimSpace(string(delBody)))
+			}
+			return nil
+		}
+	}
 	return nil
 }
 
@@ -99,79 +217,118 @@ func (m *CaddyTLSManager) RemoveCert(ctx context.Context, hostname string) error
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	addr := m.adminAddr
-	req, err := newCaddyAdminRequest(ctx, "DELETE", addr,
-		fmt.Sprintf("/tls/certificates/%s", hostname), nil)
-	if err != nil {
-		return fmt.Errorf("remove cert request: %w", err)
+	if err := m.removeAutomationPolicy(ctx, hostname); err != nil {
+		return err
 	}
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("remove cert api: %w", err)
-	}
-	_, _ = io.Copy(io.Discard, resp.Body)
-	resp.Body.Close()
+	slog.Info("caddy tls: automation policy removed", "domain", hostname)
 	return nil
 }
 
+// RenewCert triggers Caddy's async renewal endpoint and waits for the
+// operation to complete. A failure at any step is returned, never swallowed.
 func (m *CaddyTLSManager) RenewCert(ctx context.Context, hostname string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	addr := m.adminAddr
-	req, err := newCaddyAdminRequest(ctx, "POST", addr,
-		fmt.Sprintf("/tls/certificates/%s/renew", hostname), nil)
+	raw, _ := json.Marshal(map[string]any{"domains": []string{hostname}})
+	code, body, err := m.do(ctx, http.MethodPost, "/tls/renew-certificate", bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("renew cert request: %w", err)
+		return err
+	}
+	if code >= 300 {
+		return fmt.Errorf("caddy renew request failed: HTTP %d - %s", code, strings.TrimSpace(string(body)))
 	}
 
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("renew cert api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("renew cert failed: HTTP %d - %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
+	// The endpoint returns a UUID to poll while the async issuance runs.
+	var uuid string
+	if err := json.Unmarshal(body, &uuid); err != nil || uuid == "" {
+		// Older Caddy versions renew synchronously; treat a non-UUID 2xx as done.
+		slog.Info("caddy tls: renewal requested", "domain", hostname)
+		return nil
 	}
 
-	return nil
+	deadline := time.Now().Add(2 * time.Minute)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(2 * time.Second):
+		}
+		status, statusBody, err := m.do(ctx, http.MethodGet, "/tls/certificate/"+uuid, nil)
+		if err != nil {
+			return err
+		}
+		switch {
+		case status == http.StatusAccepted:
+			continue // still working
+		case status == http.StatusOK:
+			_ = statusBody
+			slog.Info("caddy tls: certificate renewed", "domain", hostname)
+			return nil
+		default:
+			return fmt.Errorf("caddy renewal failed: HTTP %d - %s", status, strings.TrimSpace(string(statusBody)))
+		}
+	}
+	return fmt.Errorf("caddy renewal for %s did not complete within 2 minutes", hostname)
 }
 
+// CertStatus inspects the live certificate bundle Caddy reports and finds the
+// leaf certificate covering hostname. Unknown is reported as HasCert=false —
+// never a fabricated status.
 func (m *CaddyTLSManager) CertStatus(ctx context.Context, hostname string) (*CertStatusResult, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	addr := m.adminAddr
-	req, err := newCaddyAdminRequest(ctx, "GET", addr,
-		fmt.Sprintf("/tls/certificates/%s", hostname), nil)
+	code, body, err := m.do(ctx, http.MethodGet, "/tls/certificates", nil)
 	if err != nil {
-		return nil, fmt.Errorf("cert status request: %w", err)
+		return nil, err
 	}
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("cert status api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
+	if code == http.StatusNotFound || len(bytes.TrimSpace(body)) == 0 {
 		return &CertStatusResult{HasCert: false}, nil
 	}
-
-	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
-	if err != nil {
-		return nil, fmt.Errorf("read cert status: %w", err)
+	if code >= 300 {
+		return nil, fmt.Errorf("caddy certificate listing failed: HTTP %d - %s", code, strings.TrimSpace(string(body)))
 	}
 
-	var result CertStatusResult
-	result.HasCert = true
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, fmt.Errorf("parse cert status: %w", err)
+	rest := body
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, parseErr := x509.ParseCertificate(block.Bytes)
+		if parseErr != nil {
+			continue
+		}
+		if !certCoversHost(cert, hostname) {
+			continue
+		}
+		return &CertStatusResult{
+			HasCert:   true,
+			Issuer:    cert.Issuer.CommonName,
+			Subject:   cert.Subject.CommonName,
+			NotBefore: cert.NotBefore,
+			NotAfter:  cert.NotAfter,
+			DNSNames:  cert.DNSNames,
+		}, nil
 	}
-	return &result, nil
+	return &CertStatusResult{HasCert: false}, nil
+}
+
+func certCoversHost(cert *x509.Certificate, hostname string) bool {
+	for _, name := range cert.DNSNames {
+		if strings.EqualFold(name, hostname) {
+			return true
+		}
+		if strings.HasPrefix(name, "*.") && strings.HasSuffix(hostname, name[1:]) {
+			return true
+		}
+	}
+	return strings.EqualFold(cert.Subject.CommonName, hostname)
 }
 
 type CertStatusResult struct {
@@ -181,100 +338,4 @@ type CertStatusResult struct {
 	NotBefore time.Time `json:"notBefore,omitempty"`
 	NotAfter  time.Time `json:"notAfter,omitempty"`
 	DNSNames  []string  `json:"dnsNames,omitempty"`
-}
-
-func (m *CaddyTLSManager) buildTLSConfig(domain *store.ProxyDomain, email string) map[string]any {
-	config := map[string]any{
-		"apps": map[string]any{
-			"http": map[string]any{
-				"servers": map[string]any{
-					"gamepanel-domains": map[string]any{
-						"listen": []string{":443"},
-						"routes": []map[string]any{
-							{
-								"match": []map[string]any{
-									{
-										"host": []string{domain.Hostname},
-									},
-								},
-								"handle": []map[string]any{
-									{
-										"handler": "reverse_proxy",
-										"upstreams": []map[string]any{
-											{
-												"dial": fmt.Sprintf("127.0.0.1:%d", domain.Port),
-											},
-										},
-									},
-								},
-							},
-						},
-						"tls_connection_policies": []map[string]any{
-							{
-								"match": map[string]any{
-									"sni": []string{domain.Hostname},
-								},
-							},
-						},
-					},
-				},
-			},
-			"tls": map[string]any{
-				"automation": map[string]any{
-					"policies": []map[string]any{
-						{
-							"subjects": []string{domain.Hostname},
-							"issuer": map[string]any{
-								"module": "acme",
-								"email":  email,
-							},
-						},
-					},
-				},
-			},
-		},
-	}
-	return config
-}
-
-func (m *CaddyTLSManager) validateConfig(ctx context.Context, addr string, configJSON []byte) error {
-	_ = ctx
-	_ = addr
-	var config map[string]any
-	if err := json.Unmarshal(configJSON, &config); err != nil {
-		return fmt.Errorf("config is not valid JSON: %w", err)
-	}
-	if len(config) == 0 {
-		return fmt.Errorf("config is empty")
-	}
-	return nil
-}
-
-func (m *CaddyTLSManager) applyConfig(ctx context.Context, addr string, config map[string]any) error {
-	body, err := json.Marshal(config)
-	if err != nil {
-		return fmt.Errorf("marshal apply config: %w", err)
-	}
-
-	req, err := newCaddyAdminRequest(ctx, "POST", addr,
-		"/config/",
-		bytes.NewReader(body))
-	if err != nil {
-		return fmt.Errorf("apply request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := m.client.Do(req)
-	if err != nil {
-		return fmt.Errorf("apply api: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 300 {
-		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return fmt.Errorf("apply failed: HTTP %d - %s", resp.StatusCode, strings.TrimSpace(string(respBody)))
-	}
-
-	slog.Info("caddy tls config applied")
-	return nil
 }

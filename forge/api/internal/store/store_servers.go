@@ -369,29 +369,11 @@ func (s *Store) UpdateServerTransferState(ctx context.Context, serverID, state s
 	return err
 }
 
-func (s *Store) SetServerSuspension(ctx context.Context, serverID string, suspended bool) error {
-	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET suspended = $1 WHERE id = $2`, suspended, serverID)
-	if err != nil {
-		return err
-	}
-	if commandTag.RowsAffected() == 0 {
-		return errors.New("server not found")
-	}
-	return nil
-}
-
-func (s *Store) CompareAndSetServerSuspension(ctx context.Context, serverID string, expected, suspended bool) (bool, error) {
-	commandTag, err := s.db.Exec(ctx, `
-		UPDATE servers
-		SET suspended = $3
-		WHERE id = $1 AND suspended = $2
-	`, serverID, expected, suspended)
-	if err != nil {
-		return false, err
-	}
-	return commandTag.RowsAffected() == 1, nil
-}
-
+// SetServerSuspended is the only suspension write. Suspension is not a column
+// update: it has to stop the workload too, so it is reached through the cluster
+// manager. The flag-only variants that used to sit here let a caller mark a
+// running server suspended and leave it running, which is why they are gone
+// rather than kept as a tempting shortcut.
 func (s *Store) SetServerSuspended(ctx context.Context, serverID string, suspended bool, actorID *string) error {
 	commandTag, err := s.db.Exec(ctx, `UPDATE servers SET suspended = $1 WHERE id = $2`, suspended, serverID)
 	if err != nil {

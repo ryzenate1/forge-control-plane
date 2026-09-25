@@ -131,6 +131,7 @@ func (q *OperationQueue) loadJournal() error {
 		return fmt.Errorf("load command journal: %w", err)
 	}
 	defer rows.Close()
+	var resumed []*Operation
 	for rows.Next() {
 		var op Operation
 		var typ, status string
@@ -154,19 +155,38 @@ func (q *OperationQueue) loadJournal() error {
 		if ack.Valid {
 			op.Acknowledged = ack.Bool
 		}
-		if op.Status == StatusRunning {
+		wasRunning := op.Status == StatusRunning
+		if wasRunning {
 			op.Status = StatusPending
 			op.StartedAt = time.Time{}
 			op.Error = ""
 			// Preserve progress and result data for resumption after restart
 			// op.Progress, op.ProgressPct, and op.ResultData remain unchanged
-			_ = q.persist(&op)
 		}
 		copyOp := op
 		q.operations[op.ID] = &copyOp
 		q.serverOps[op.ServerID] = append(q.serverOps[op.ServerID], op.ID)
+		if wasRunning {
+			resumed = append(resumed, &copyOp)
+		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	// Release the read cursor/connection BEFORE writing the reset rows back.
+	// Calling q.persist while `rows` is open deadlocks the single-connection
+	// SQLite pool used by the beacon journal (the write waits for a connection
+	// the unfinished read still holds). Close is idempotent; the deferred call
+	// above is a no-op afterward.
+	if err := rows.Close(); err != nil {
+		return err
+	}
+	for _, op := range resumed {
+		if err := q.persist(op); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (q *OperationQueue) Start(ctx context.Context) {

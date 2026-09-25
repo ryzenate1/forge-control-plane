@@ -35,13 +35,104 @@ type Store interface {
 type Service struct {
 	store      Store
 	tenancySvc *tenancy.Service
+	deployer   StackDeployer
 }
 
-func New(st Store, ts *tenancy.Service) *Service {
-	return &Service{
+// New builds the application-hosting service. The stack deployer is optional so
+// that existing callers (and unit tests driving the store only) keep compiling;
+// without it TriggerDeploy fails closed instead of recording an unexecuted
+// deployment. cmd/api/main.go injects the compose lifecycle service.
+func New(st Store, ts *tenancy.Service, deployers ...StackDeployer) *Service {
+	svc := &Service{
 		store:      st,
 		tenancySvc: ts,
 	}
+	for _, deployer := range deployers {
+		if deployer != nil {
+			svc.deployer = deployer
+			break
+		}
+	}
+	return svc
+}
+
+// ---- Deploy execution ----
+
+// StackDeployRequest describes one compose-stack materialisation of an
+// application. It carries plain fields so this package does not depend on the
+// compose service's own request types.
+type StackDeployRequest struct {
+	UserID        string
+	Name          string
+	NodeID        string
+	ComposeYAML   string
+	EnvVars       map[string]string
+	MemoryMB      int64
+	CPUShares     int64
+	DiskMB        int64
+	EnvironmentID string
+}
+
+// StackUpdateRequest is the in-place update of an already deployed stack.
+type StackUpdateRequest struct {
+	ComposeYAML string
+	EnvVars     map[string]string
+	MemoryMB    int64
+	CPUShares   int64
+	DiskMB      int64
+}
+
+// DeployedStack is the subset of stack state a deploy reports back.
+type DeployedStack struct {
+	ID     string
+	Status string
+	Error  string
+}
+
+// StackDeployer runs the real deployment. The compose lifecycle service
+// satisfies it through the adapter wired in cmd/api/main.go.
+type StackDeployer interface {
+	DeployStack(ctx context.Context, req StackDeployRequest) (DeployedStack, error)
+	UpdateStack(ctx context.Context, stackID string, req StackUpdateRequest) (DeployedStack, error)
+}
+
+// DeploymentStatusStore is the optional store capability TriggerDeploy uses to
+// reconcile the deployment row with the outcome of the real deploy.
+// *store.Store implements it.
+type DeploymentStatusStore interface {
+	UpdateDeploymentStatus(ctx context.Context, id string, status string, errMsg string) error
+}
+
+// ServerStore is the optional store capability that resolves the server an
+// application is bound to: its owner owns the compose stack and its node runs
+// it. *store.Store implements it.
+type ServerStore interface {
+	GetServer(ctx context.Context, id string) (store.Server, error)
+}
+
+// appSourceSpec is the subset of applications.source_config the deploy path
+// reads. The compose editor screen stores the document under "content" (the
+// creation form uses "composeContent") and TriggerDeploy remembers the deployed
+// stack id under "stackId" so the next deploy updates that stack in place
+// instead of leaking a second one.
+type appSourceSpec struct {
+	Content        string            `json:"content"`
+	ComposeContent string            `json:"composeContent"`
+	StackID        string            `json:"stackId"`
+	NodeID         string            `json:"nodeId"`
+	UserID         string            `json:"userId"`
+	Image          string            `json:"image"`
+	MemoryMB       int64             `json:"memoryMb"`
+	CPUShares      int64             `json:"cpuShares"`
+	DiskMB         int64             `json:"diskMb"`
+	EnvVars        map[string]string `json:"envVars"`
+}
+
+func (s appSourceSpec) composeDocument() string {
+	if strings.TrimSpace(s.Content) != "" {
+		return s.Content
+	}
+	return s.ComposeContent
 }
 
 type CreateAppRequest struct {

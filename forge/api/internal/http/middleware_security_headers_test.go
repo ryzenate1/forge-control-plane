@@ -2,6 +2,7 @@ package http
 
 import (
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/gofiber/fiber/v2"
@@ -27,12 +28,11 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 	}
 
 	headers := map[string]string{
-		"X-Content-Type-Options":  "nosniff",
-		"X-Frame-Options":         "DENY",
-		"X-XSS-Protection":        "1; mode=block",
-		"Referrer-Policy":         "strict-origin-when-cross-origin",
-		"Permissions-Policy":      "geolocation=(), microphone=(), camera=()",
-		"Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ws: wss:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'",
+		"X-Content-Type-Options": "nosniff",
+		"X-Frame-Options":        "DENY",
+		"X-XSS-Protection":       "1; mode=block",
+		"Referrer-Policy":        "strict-origin-when-cross-origin",
+		"Permissions-Policy":     "geolocation=(), microphone=(), camera=()",
 	}
 
 	for header, expected := range headers {
@@ -40,6 +40,19 @@ func TestSecurityHeadersMiddleware_Default(t *testing.T) {
 		if got != expected {
 			t.Errorf("header %s: expected %q, got %q", header, expected, got)
 		}
+	}
+
+	// CSP now carries a fresh per-response nonce (SEC-018). Assert the static
+	// base is present and a nonce was injected, with no strict-dynamic/fallback.
+	csp := resp.Header.Get("Content-Security-Policy")
+	if !strings.Contains(csp, "default-src 'self'") || !strings.Contains(csp, "script-src") {
+		t.Errorf("CSP base missing, got %q", csp)
+	}
+	if !strings.Contains(csp, "'nonce-") {
+		t.Errorf("CSP must contain a per-response nonce, got %q", csp)
+	}
+	if strings.Contains(csp, "strict-dynamic") {
+		t.Errorf("CSP must not emit strict-dynamic, got %q", csp)
 	}
 
 	hsts := resp.Header.Get("Strict-Transport-Security")
@@ -65,8 +78,8 @@ func TestSecurityHeadersMiddleware_CustomCSP(t *testing.T) {
 	}
 
 	got := resp.Header.Get("Content-Security-Policy")
-	if got != cfg.CSPValue {
-		t.Errorf("expected CSP %q, got %q", cfg.CSPValue, got)
+	if !strings.Contains(got, cfg.CSPValue[:strings.Index(cfg.CSPValue, "script-src")]) || !strings.Contains(got, "cdn.example.com") || !strings.Contains(got, "'nonce-") {
+		t.Errorf("expected CSP to keep %q base and inject a nonce, got %q", cfg.CSPValue, got)
 	}
 }
 

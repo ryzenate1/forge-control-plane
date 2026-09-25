@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Minus, Plus, Play, RotateCcw, Terminal, History, Upload } from "lucide-react";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
+import { useToast } from "@/components/ui/toast";
 import { fetchProcesses, scaleProcess, runOneOffTask, fetchOneOffTasks, fetchScalingHistory, parseProcfile, setProcesses } from "@/lib/api/servers";
 import type { ProcessType, OneOffTask, ProcessScalingEvent, ProcfileEntry } from "@/lib/api/types";
 
@@ -156,12 +157,14 @@ function ProcessesInner({
   setShowTasks: (v: boolean) => void;
 }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const processesQ = useQuery({ queryKey: ["processes", serverId], queryFn: () => fetchProcesses(serverId) });
   const tasksQ = useQuery({ queryKey: ["one-off-tasks", serverId], queryFn: () => fetchOneOffTasks(serverId), enabled: showTasks });
   const historyQ = useQuery({ queryKey: ["scaling-history", serverId], queryFn: () => fetchScalingHistory(serverId), enabled: showHistory });
   const scaleMut = useMutation({
     mutationFn: ({ pt, qty }: { pt: string; qty: number }) => scaleProcess(serverId, pt, qty),
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["processes", serverId] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to scale process", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const processes = processesQ.data ?? [];

@@ -27,30 +27,28 @@ export type DrainState = {
 };
 
 export async function fetchDrainStates(): Promise<DrainState[]> {
+  // Durable ledger: every node that has ever been drained, newest first.
   const res = await fetchJSON<{ data: DrainState[] }>("/nodes/drain");
   return res.data ?? [];
 }
 
 export async function fetchDrainState(nodeId: string): Promise<DrainState | null> {
-  const res = await fetchJSON<{ data: DrainState | null }>(`/nodes/${encodeURIComponent(nodeId)}/drain`);
-  // API returns { data: null } when no drain recorded (phase6DrainRoutes returns nil → {data:null})
+  // Ledger per-node progress. Separate from clustermembership's lightweight
+  // GET /nodes/:id/drain status, so the durable step-by-step record survives
+  // restarts. Returns { data: null } when no drain has ever been recorded.
+  const res = await fetchJSON<{ data: DrainState | null }>(`/nodes/${encodeURIComponent(nodeId)}/drain/progress`);
   return (res as unknown as { data: DrainState | null }).data ?? null;
 }
 
-export async function beginDrain(
-  nodeId: string,
-  opts?: { desiredFinal?: boolean; planId?: string },
-): Promise<DrainState> {
-  const res = await postJSON<{ data: DrainState }>(`/nodes/${encodeURIComponent(nodeId)}/drain`, {
-    desiredFinal: opts?.desiredFinal ?? false,
-    planId: opts?.planId ?? "",
-  });
-  return res.data;
+export async function beginDrain(nodeId: string): Promise<{ status: string }> {
+  // Orchestration lives in clustermembership: it sets the node draining, withdraws
+  // gateway targets and runs the evacuation plan. The durable ledger records
+  // progress asynchronously from the emitted events — poll fetchDrainState().
+  return postJSON<{ status: string }>(`/nodes/${encodeURIComponent(nodeId)}/drain`);
 }
 
-export async function cancelDrain(nodeId: string): Promise<DrainState> {
-  const res = await postJSON<{ data: DrainState }>(`/nodes/${encodeURIComponent(nodeId)}/undrain`);
-  return res.data;
+export async function cancelDrain(nodeId: string): Promise<{ status: string }> {
+  return postJSON<{ status: string }>(`/nodes/${encodeURIComponent(nodeId)}/drain/cancel`);
 }
 
 // Evacuation planner preview — lightweight re-export for the center

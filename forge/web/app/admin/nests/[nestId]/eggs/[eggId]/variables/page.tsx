@@ -2,10 +2,10 @@
 
 import { useParams, useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowLeft, ChevronRight, Container, FileCode, Terminal } from "lucide-react";
+import { ArrowLeft, Container, FileCode, Terminal } from "lucide-react";
 import { fetchEgg, fetchNest } from "@/lib/api";
 import { AdminEggVariables } from "@/components/admin/AdminEggVariables";
-import { AdminPageLayout, Btn, Card, cn } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, SectionHeader, cn } from "@/components/admin/admin-ui";
 
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -69,19 +69,13 @@ export default function EggVariablesPage() {
 
   return (
     <AdminPageLayout>
-      {/* Navigation — breadcrumb with readable names */}
-      <nav className="flex items-center gap-1.5 text-xs text-slate-500">
-        <button onClick={() => router.push("/admin/nests")} className="transition hover:text-slate-300" type="button">Nests</button>
-        <ChevronRight size={12} className="text-slate-600" />
-        <button onClick={() => router.push(`/admin/nests/${nestId}/eggs`)} className="transition hover:text-slate-300" type="button">
-          {nest?.name ?? "Nest"}
-        </button>
-        <ChevronRight size={12} className="text-slate-600" />
-        <span className="text-slate-300">{egg.name}</span>
-        <ChevronRight size={12} className="text-slate-600" />
-        <span className="text-slate-400">Variables</span>
-      </nav>
-
+      <SectionHeader
+        breadcrumb={`Build / Service Definitions / ${nestQuery.data?.name ?? "Nest"} / Eggs / ${egg.name}`}
+        title={`Egg: ${egg.name}`}
+        sub="Service definition details and environment variable schema."
+        backAction={() => router.push(`/admin/nests/${nestId}/eggs`)}
+        backLabel="Eggs"
+      />
       {/* Egg summary card */}
       <Card className="p-5 sm:p-6">
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">

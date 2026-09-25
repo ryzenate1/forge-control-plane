@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import {
   Box, Container, FileText, GitBranch, Layers, Plus,
@@ -16,6 +17,7 @@ import { APP_TYPE_ICONS } from "@/lib/app-type-icons";
 export default function AdminAppsPage() {
   const router = useRouter();
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState<string>("");
   const [deleteTarget, setDeleteTarget] = useState<ApiApp | null>(null);
@@ -29,14 +31,17 @@ export default function AdminAppsPage() {
   const startMut = useMutation({
     mutationFn: startApp,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to start app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const stopMut = useMutation({
     mutationFn: stopApp,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to stop app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const restartMut = useMutation({
     mutationFn: restartApp,
     onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to restart app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const deleteMut = useMutation({
     mutationFn: deleteApp,

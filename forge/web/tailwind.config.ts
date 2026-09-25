@@ -39,6 +39,7 @@ const config: Config = {
         text: {
           DEFAULT: "var(--text)",
           subtle: "var(--text-subtle)",
+          muted: "var(--text-muted)",
           focus: "var(--focus)",
         },
         brand: {

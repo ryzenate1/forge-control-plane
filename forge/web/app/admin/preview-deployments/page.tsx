@@ -2,6 +2,7 @@
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
 import {
   ExternalLink, GitPullRequest, Play, Trash2,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const statusConfig: Record<string, { tone: "green" | "yellow" | "red" | "blue" |
 
 export default function AdminPreviewDeploymentsPage() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<string>("");
 
   const previewsQuery = useQuery({
@@ -53,11 +55,13 @@ export default function AdminPreviewDeploymentsPage() {
   const deployMutation = useMutation({
     mutationFn: (id: string) => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/deploy`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to deploy preview", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const cleanupMutation = useMutation({
     mutationFn: (id: string) => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/cleanup`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to clean up preview", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const previews = useMemo(() => previewsQuery.data ?? [], [previewsQuery.data]);

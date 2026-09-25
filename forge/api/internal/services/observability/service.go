@@ -12,12 +12,20 @@ import (
 )
 
 type Service struct {
-	store   *store.Store
-	metrics *MetricsHistory
+	store       *store.Store
+	metrics     *MetricsHistory
+	onNodeMetric func(store.NodeMetric)
 }
 
 func New(store *store.Store) *Service {
 	return &Service{store: store, metrics: NewMetricsHistory(60)}
+}
+
+// SetNodeMetricHook registers a callback invoked after each node metric is
+// persisted. This is how alert evaluation piggybacks on collection without
+// importing the alerting package.
+func (s *Service) SetNodeMetricHook(fn func(store.NodeMetric)) {
+	s.onNodeMetric = fn
 }
 
 func (s *Service) StartMetricsCollection(ctx context.Context, interval time.Duration) {
@@ -113,6 +121,25 @@ func (s *Service) collectNodeMetrics(ctx context.Context) {
 		}
 		if _, err := s.store.CreateNodeMetric(ctx, req); err != nil {
 			slog.Error("failed to record node metric", "nodeId", node.ID, "error", err)
+		} else if s.onNodeMetric != nil {
+			s.onNodeMetric(store.NodeMetric{
+				NodeID:           req.NodeID,
+				CPUPercent:       req.CPUPercent,
+				MemoryPercent:    req.MemoryPercent,
+				DiskPercent:      req.DiskPercent,
+				MemoryUsedMB:     req.MemoryUsedMB,
+				MemoryTotalMB:    req.MemoryTotalMB,
+				DiskUsedMB:       req.DiskUsedMB,
+				DiskTotalMB:      req.DiskTotalMB,
+				CPULoad1m:        req.CPULoad1m,
+				CPULoad5m:        req.CPULoad5m,
+				CPULoad15m:       req.CPULoad15m,
+				NetworkRxBytes:   req.NetworkRxBytes,
+				NetworkTxBytes:   req.NetworkTxBytes,
+				ContainerRunning: req.ContainerRunning,
+				ContainerTotal:   req.ContainerTotal,
+				ObservedAt:       req.ObservedAt,
+			})
 		}
 	}
 	n := len(nodes)

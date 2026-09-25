@@ -72,14 +72,17 @@ export function AdminNestsEggs() {
  const createNestMut = useMutation({
  mutationFn: () => createNest({ name: nestName.trim(), description: nestDesc.trim() }),
  onSuccess: () => { qc.invalidateQueries({ queryKey: ["nests"] }); setNestModal(null); setNestName(""); setNestDesc(""); },
+ onError: (err) => toast({ tone: "error", title: "Failed to create nest", message: err instanceof Error ? err.message : "An error occurred" }),
  });
  const updateNestMut = useMutation({
  mutationFn: (id: string) => updateNest(id, { name: nestName.trim(), description: nestDesc.trim() }),
  onSuccess: () => { qc.invalidateQueries({ queryKey: ["nests"] }); setNestModal(null); },
+ onError: (err) => toast({ tone: "error", title: "Failed to update nest", message: err instanceof Error ? err.message : "An error occurred" }),
  });
  const deleteNestMut = useMutation({
  mutationFn: (id: string) => deleteNest(id),
  onSuccess: () => { qc.invalidateQueries({ queryKey: ["nests"] }); if (selectedNest) setSelectedNest(null); },
+ onError: (err) => toast({ tone: "error", title: "Failed to delete nest", message: err instanceof Error ? err.message : "An error occurred" }),
  });
    const createEggMut = useMutation({
     mutationFn: (importData?: Parameters<typeof createEgg>[0]) => createEgg(importData || {
@@ -94,6 +97,7 @@ export function AdminNestsEggs() {
       installEntrypoint: eggInstallEntry.trim(),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", selectedNest?.id] }); qc.invalidateQueries({ queryKey: ["nests"] }); setEggModal(null); resetEggForm(); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
  const updateEggMut = useMutation({
  mutationFn: (id: string) => updateEgg(id, {
@@ -107,10 +111,12 @@ export function AdminNestsEggs() {
  installEntrypoint: eggInstallEntry.trim(),
  }),
   onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", selectedNest?.id] }); qc.invalidateQueries({ queryKey: ["nests"] }); setEggModal(null); },
+  onError: (err) => toast({ tone: "error", title: "Failed to update egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const deleteEggMut = useMutation({
   mutationFn: deleteEgg,
   onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", selectedNest?.id] }); qc.invalidateQueries({ queryKey: ["nests"] }); },
+  onError: (err) => toast({ tone: "error", title: "Failed to delete egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const cloneEggMut = useMutation({
  mutationFn: (egg: ApiEgg) => {
@@ -128,6 +134,7 @@ export function AdminNestsEggs() {
    });
  }, 
   onSuccess: () => { qc.invalidateQueries({ queryKey: ["eggs", selectedNest?.id] }); qc.invalidateQueries({ queryKey: ["nests"] }); },
+  onError: (err) => toast({ tone: "error", title: "Failed to clone egg", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
  const exportEgg = (egg: ApiEgg) => {

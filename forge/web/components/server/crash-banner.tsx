@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { sendPowerSignal } from "@/lib/api";
 import { fetchServerCrashHistory, resetServerCrashState } from "@/lib/api/servers";
 import { useServerContext } from "./server-context";
+import { useToast } from "@/components/ui/toast";
 
 interface CrashBannerProps {
   serverId: string;
@@ -13,6 +14,7 @@ interface CrashBannerProps {
 export function CrashBanner({ serverId }: CrashBannerProps) {
   const { refreshServer } = useServerContext();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: crashes, isLoading } = useQuery({
     queryKey: ["crash-history", serverId],
@@ -21,15 +23,21 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
   });
 
   const resetMutation = useMutation({
-    mutationFn: () => resetServerCrashState(serverId),
+    mutationFn: async () => {
+      const result = await resetServerCrashState(serverId);
+      if (!result.ok) throw new Error("The server reported the crash state reset did not complete.");
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["crash-history", serverId] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to reset crash state", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const restartMutation = useMutation({
     mutationFn: () => sendPowerSignal(serverId, "start"),
     onSuccess: () => void refreshServer(),
+    onError: (err) => toast({ tone: "error", title: "Failed to start server", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   if (isLoading || !Array.isArray(crashes) || crashes.length === 0) return null;

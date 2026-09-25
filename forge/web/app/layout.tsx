@@ -3,6 +3,7 @@ import { cookies, headers } from "next/headers";
 import { Providers } from "@/components/providers";
 import { themeScript } from "@/components/theme-provider";
 import { display, mono, sans } from "./fonts";
+import { canvas } from "@/lib/design-tokens";
 import "./globals.css";
 
 export const metadata: Metadata = {
@@ -21,7 +22,9 @@ export const metadata: Metadata = {
 };
 
 export const viewport: Viewport = {
-  themeColor: "#0a0e16",
+  // Metadata is serialised before any stylesheet exists, so it must be a literal —
+  // canvas.hexDark keeps it tied to the --canvas token.
+  themeColor: canvas.hexDark,
 };
 
 const rtlLocales = new Set(["ar", "he", "fa", "ur", "yi"]);

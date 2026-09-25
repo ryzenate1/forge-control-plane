@@ -2,15 +2,16 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown, HelpCircle, CheckCircle2, Clock } from "lucide-react";
+import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown, CheckCircle2, Clock, User } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { fetchCurrentUser, logout, fetchHealthStatus, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
 import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
 import { useT } from "@/components/TranslationProvider";
-import { adminPagesForRole, findAdminPage, ADMIN_ALIAS_ROUTES } from "./admin-registry";
+import { adminPagesForRole, adminSidebarGroups, findAdminPage, ADMIN_ALIAS_ROUTES } from "./admin-registry";
 import {
   ForgeLogoIcon,
   PlanetDefaultIcon,
@@ -108,34 +109,33 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [navSearch, setNavSearch] = useState("");
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({});
-  const [contextDropdownOpen, setContextDropdownOpen] = useState(false);
+  const [expandedMore, setExpandedMore] = useState<Record<string, boolean>>({});
   const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [projectMenuOpen, setProjectMenuOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement>(null);
   const closeButtonRef = useRef<HTMLButtonElement>(null);
-  const contextMenuRef = useRef<HTMLDivElement>(null);
   const notificationsRef = useRef<HTMLDivElement>(null);
   const userMenuRef = useRef<HTMLDivElement>(null);
   const projectMenuRef = useRef<HTMLDivElement>(null);
 
-  useDismissOnOutside(contextMenuRef, contextDropdownOpen, () => setContextDropdownOpen(false));
   useDismissOnOutside(notificationsRef, notificationsOpen, () => setNotificationsOpen(false));
   useDismissOnOutside(userMenuRef, userMenuOpen, () => setUserMenuOpen(false));
   useDismissOnOutside(projectMenuRef, projectMenuOpen, () => setProjectMenuOpen(false));
 
   const navGroups = useMemo(() => {
-    const rawGroups = adminPagesForRole(user?.role);
+    const rawGroups = adminSidebarGroups(user?.role);
     if (!navSearch.trim()) return rawGroups;
     const query = navSearch.toLowerCase().trim();
+    const matches = (label: string, description: string, href: string) =>
+      `${label} ${description} ${href}`.toLowerCase().includes(query);
     return rawGroups
       .map((group) => ({
         ...group,
-        items: group.items.filter(
-          (item) => `${item.label} ${item.description} ${item.href}`.toLowerCase().includes(query)
-        ),
+        items: group.items.filter((item) => matches(item.label, item.description, item.href)),
+        secondaryItems: group.secondaryItems.filter((item) => matches(item.label, item.description, item.href)),
       }))
-      .filter((group) => group.items.length > 0);
+      .filter((group) => group.items.length > 0 || group.secondaryItems.length > 0);
   }, [navSearch, user?.role]);
 
   const currentPage = findAdminPage(resolvedPath);
@@ -149,7 +149,6 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     setMobileOpen(false);
-    setContextDropdownOpen(false);
     setNotificationsOpen(false);
     setUserMenuOpen(false);
     setProjectMenuOpen(false);
@@ -182,6 +181,16 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
 
   const toggleGroup = (title: string) => setCollapsedGroups((current) => ({ ...current, [title]: !current[title] }));
   const isGroupCollapsed = (title: string) => Boolean(collapsedGroups[title] && !navSearch.trim());
+  const toggleMore = (title: string) => setExpandedMore((current) => ({ ...current, [title]: !current[title] }));
+  const isMoreExpanded = (title: string) => Boolean(expandedMore[title] || navSearch.trim());
+
+  const navItemClass = (active: boolean) =>
+    cn(
+      "flex w-full items-center gap-2.5 rounded-md border-l-2 px-2.5 py-1.5 text-xs font-medium transition-colors text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
+      active
+        ? "border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)] font-semibold"
+        : "border-transparent text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]"
+    );
 
   const handleLogout = async () => {
     try {
@@ -252,69 +261,25 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           >
             <Menu size={19} />
           </button>
-          <button
+          <Link
             className="text-base font-bold text-[var(--text)] tracking-tight hover:text-[var(--brand)] transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] flex items-center gap-2.5"
-            onClick={() => router.push("/admin/overview")}
-            type="button"
+            href="/admin/overview"
           >
             <ForgeLogoIcon size={24} className="shrink-0" />
             <div className="flex flex-col text-left">
               <span className="leading-tight font-extrabold text-xs tracking-wider uppercase text-slate-100">{companyName || "Forge"}</span>
               <span className="text-[8px] font-mono tracking-widest text-slate-500 uppercase">Infrastructure Control Plane</span>
             </div>
-          </button>
+          </Link>
 
-          {/* Context Selector Dropdown Pill */}
-          <div ref={contextMenuRef} className="hidden lg:relative lg:flex items-center ml-2">
-            <button
-              type="button"
-              onClick={() => setContextDropdownOpen(!contextDropdownOpen)}
-              className="rounded-lg border border-white/[0.08] bg-white/[0.03] px-2.5 py-1 text-xs font-medium text-slate-300 flex items-center gap-1.5 hover:bg-white/[0.06] hover:border-white/[0.15] transition cursor-pointer"
-            >
-              <span>{activeGroup ? activeGroup.title : "Command"}</span>
-              <ChevronDown size={11} className={cn("text-slate-400 transition-transform", contextDropdownOpen && "rotate-180")} />
-            </button>
-
-            {contextDropdownOpen && (
-              <div className="absolute top-full left-0 mt-1.5 w-52 rounded-xl border border-white/[0.1] bg-[var(--surface-raised)] p-1.5 shadow-2xl z-50 divide-y divide-white/[0.06]">
-                <div className="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-slate-500">Navigation Context</div>
-                <div className="py-1 space-y-0.5 max-h-72 overflow-y-auto scrollbar-thin">
-                  {navGroups.map((g) => (
-                    <button
-                      key={g.title}
-                      type="button"
-                      onClick={() => {
-                        setContextDropdownOpen(false);
-                        if (g.items[0]) router.push(g.items[0].href);
-                      }}
-                      className={cn(
-                        "flex items-center justify-between w-full px-2 py-1.5 rounded-lg text-xs font-medium text-left transition",
-                        activeGroup?.title === g.title
-                          ? "bg-[var(--brand)]/15 text-[var(--brand)] font-semibold"
-                          : "text-slate-300 hover:bg-white/[0.05] hover:text-white"
-                      )}
-                    >
-                      <span>{g.title}</span>
-                      <span className="font-mono text-[10px] opacity-60">{g.items.length}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* Breadcrumbs */}
+          {/* Breadcrumbs — group is plain text (groups have no landing page) */}
           {currentPage && (
             <div className="hidden sm:flex items-center gap-2 pl-3 border-l border-[var(--line)] text-xs font-mono">
               {activeGroup && (
                 <>
-                  <button
-                    type="button"
-                    onClick={() => router.push(activeGroup.items[0]?.href || "/admin/overview")}
-                    className="text-[var(--text-muted)] hover:text-slate-200 transition"
-                  >
+                  <span className="text-[var(--text-muted)]">
                     {activeGroup.title}
-                  </button>
+                  </span>
                   <span className="text-[var(--text-muted)]">/</span>
                 </>
               )}
@@ -419,20 +384,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
             )}
           </div>
 
-          {/* Health Diagnostics / Help */}
+          {/* Platform Settings — single entry point (user menu links to Account instead) */}
           <button
             type="button"
-            aria-label="Health and documentation"
-            onClick={() => router.push("/admin/health")}
-            className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors cursor-pointer"
-          >
-            <HelpCircle size={15} />
-          </button>
-
-          {/* Admin Settings */}
-          <button
-            type="button"
-            aria-label="Admin settings"
+            aria-label="Platform settings"
             onClick={() => router.push("/admin/settings")}
             className="rounded-lg p-2 text-slate-400 hover:bg-white/[0.06] hover:text-white transition-colors cursor-pointer"
           >
@@ -467,11 +422,19 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                 <div className="py-1 space-y-0.5">
                   <button
                     type="button"
+                    onClick={() => { setUserMenuOpen(false); router.push("/account"); }}
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06] hover:text-white"
+                  >
+                    <User size={13} />
+                    <span>Account</span>
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => { setUserMenuOpen(false); router.push("/admin/settings"); }}
                     className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-slate-300 hover:bg-white/[0.06] hover:text-white"
                   >
                     <SettingsCogIcon size={13} />
-                    <span>Account Settings</span>
+                    <span>Platform Settings</span>
                   </button>
                   <button
                     type="button"
@@ -532,7 +495,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
           </div>
 
           <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-3 scrollbar-thin">
-            {navGroups.map((group) => (
+            {navGroups.map((group) => {
+              const searching = Boolean(navSearch.trim());
+              const showSecondary = searching || isMoreExpanded(group.title);
+              return (
               <div key={group.title} className="space-y-0.5">
                 <button
                   type="button"
@@ -541,10 +507,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                   aria-expanded={!isGroupCollapsed(group.title)}
                 >
                   <span>
-                    {tOr(group.titleKey, group.title)}{" "}
-                    <span className="ml-1 font-mono text-[10px] text-[var(--text-muted)] opacity-70">
-                      {group.items.length}
-                    </span>
+                    {tOr(group.titleKey, group.title)}
                   </span>
                   <ChevronDown
                     size={12}
@@ -561,28 +524,65 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                       const Icon = item.icon;
                       const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
                       return (
-                        <button
+                        <Link
                           key={item.href}
                           aria-current={active ? "page" : undefined}
-                          className={cn(
-                            "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors text-left motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
-                            active
-                              ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)] font-semibold"
-                              : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]"
-                          )}
-                          onClick={() => router.push(item.href)}
-                          type="button"
+                          className={navItemClass(active)}
+                          href={item.href}
                         >
                           <Icon size={14} className="shrink-0" />
                           <span className="truncate">{tOr(item.labelKey, item.label)}</span>
                           <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
-                        </button>
+                        </Link>
                       );
                     })}
+                    {group.secondaryItems.length > 0 && !showSecondary ? (
+                      <button
+                        type="button"
+                        onClick={() => toggleMore(group.title)}
+                        aria-expanded={false}
+                        className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text)]"
+                      >
+                        <ChevronDown size={12} className="-rotate-90" />
+                        More ({group.secondaryItems.length})
+                      </button>
+                    ) : null}
+                    {group.secondaryItems.length > 0 && showSecondary ? (
+                      <>
+                        {!searching ? (
+                          <button
+                            type="button"
+                            onClick={() => toggleMore(group.title)}
+                            aria-expanded={true}
+                            className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)] hover:bg-white/[0.04] hover:text-[var(--text)]"
+                          >
+                            <ChevronDown size={12} />
+                            Less
+                          </button>
+                        ) : null}
+                        {group.secondaryItems.map((item) => {
+                          const Icon = item.icon;
+                          const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
+                          return (
+                            <Link
+                              key={item.href}
+                              aria-current={active ? "page" : undefined}
+                              className={navItemClass(active)}
+                              href={item.href}
+                            >
+                              <Icon size={14} className="shrink-0" />
+                              <span className="truncate">{tOr(item.labelKey, item.label)}</span>
+                              <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
+                            </Link>
+                          );
+                        })}
+                      </>
+                    ) : null}
                   </div>
                 )}
               </div>
-            ))}
+              );
+            })}
           </nav>
 
           <div className="shrink-0 border-t border-[var(--line)] px-2.5 pt-2.5 pb-10 sm:pb-3 space-y-1.5">
@@ -699,7 +699,10 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
               </div>
             </div>
             <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-3">
-              {navGroups.map((group) => (
+              {navGroups.map((group) => {
+                const searching = Boolean(navSearch.trim());
+                const showSecondary = searching || isMoreExpanded(group.title);
+                return (
                 <div key={group.title} className="space-y-0.5">
                   <button
                     type="button"
@@ -708,10 +711,7 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                     aria-expanded={!isGroupCollapsed(group.title)}
                   >
                     <span>
-                      {tOr(group.titleKey, group.title)}{" "}
-                      <span className="ml-1 font-mono text-[10px] text-[var(--text-muted)]">
-                        {group.items.length}
-                      </span>
+                      {tOr(group.titleKey, group.title)}
                     </span>
                     <ChevronDown
                       size={12}
@@ -723,32 +723,38 @@ export function AdminShell({ children }: { children: React.ReactNode }) {
                   </button>
                   {!isGroupCollapsed(group.title) && (
                     <div className="space-y-0.5 pt-0.5">
-                      {group.items.map((item) => {
+                      {[...group.items, ...(showSecondary ? group.secondaryItems : [])].map((item) => {
                         const Icon = item.icon;
                         const active = resolvedPath === item.href || resolvedPath.startsWith(`${item.href}/`);
                         return (
-                          <button
+                          <Link
                             key={item.href}
                             aria-current={active ? "page" : undefined}
-                            className={cn(
-                              "flex w-full items-center gap-2.5 rounded-md px-2.5 py-1.5 text-left text-xs font-medium motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
-                              active
-                                ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 text-[var(--brand)] font-semibold"
-                                : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]"
-                            )}
-                            onClick={() => router.push(item.href)}
-                            type="button"
+                            className={navItemClass(active)}
+                            href={item.href}
+                            onClick={() => setMobileOpen(false)}
                           >
                             <Icon size={14} className="shrink-0" />
                             <span className="truncate">{tOr(item.labelKey, item.label)}</span>
                             <NavStateLaneBadge hasPending={item.hasPendingGenerations} />
-                          </button>
+                          </Link>
                         );
                       })}
+                      {group.secondaryItems.length > 0 && !showSecondary ? (
+                        <button
+                          type="button"
+                          onClick={() => toggleMore(group.title)}
+                          className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)]"
+                        >
+                          <ChevronDown size={12} className="-rotate-90" />
+                          More ({group.secondaryItems.length})
+                        </button>
+                      ) : null}
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </nav>
           </aside>
         </div>

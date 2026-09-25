@@ -58,7 +58,7 @@ type ServerState struct {
 	// server files. Power operations and installs are refused while it is held:
 	// starting a workload from half-restored files, or letting an install run
 	// over a restore, corrupts both.
-	Restoring   bool
+	Restoring    bool
 	RestoreState string
 	// DetectCleanExitAsCrash matches Wings' config of the same name: when
 	// false (the recommended default), an exit code of 0 is treated as a

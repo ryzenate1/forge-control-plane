@@ -61,6 +61,8 @@ import (
 	"gamepanel/forge/internal/services/deployment"
 	dnssvc "gamepanel/forge/internal/services/dns"
 	"gamepanel/forge/internal/services/domains"
+	drainsvc "gamepanel/forge/internal/services/drain"
+	envaffinitysvc "gamepanel/forge/internal/services/envaffinity"
 	"gamepanel/forge/internal/services/environments"
 	envvarsvc "gamepanel/forge/internal/services/envvars"
 	"gamepanel/forge/internal/services/evacuationplanner"
@@ -83,6 +85,7 @@ import (
 	notification "gamepanel/forge/internal/services/notification"
 	"gamepanel/forge/internal/services/observability"
 	operationsvc "gamepanel/forge/internal/services/operation"
+	pipelinesvc "gamepanel/forge/internal/services/pipeline"
 	"gamepanel/forge/internal/services/plugins"
 	previewenv "gamepanel/forge/internal/services/previewenv"
 	proceduresvc "gamepanel/forge/internal/services/procedure"
@@ -288,6 +291,7 @@ func run() error {
 		failSvc           *failover.Service
 		crashDetector     *crashdetector.Detector
 		tmSvc             *trafficmanager.Service
+		caddyTLS          *trafficmanager.CaddyTLSManager
 		predictiveScorer  *scheduler.PredictiveScorer
 		constraintSched   *scheduler.ConstraintScheduler
 		healthCheckRunner *healthchecksvc.Service
@@ -297,10 +301,13 @@ func run() error {
 		procedureSvc      *proceduresvc.Service
 		apphostingSvc     *apphostingsvc.Service
 		endpointSvc       *environments.Service
+		pipelineSvc       *pipelinesvc.Service
 		alertSvc          *alerting.Service
 		notifSvc          *notification.Service
 		installerSvc      *installersvc.Service
 		billingSvc        *billingsvc.Service
+		drainLedger       *drainsvc.Service
+		placementSvc      *envaffinitysvc.EnvAffinity
 		fenceSvc          *fencing.Service
 		membershipSvc     *clustermembership.Service
 		nodeAutoSvc       *nodeautoscale.Service
@@ -360,6 +367,7 @@ func run() error {
 		placeEngine = placement.NewEngine(placement.NewScorer(placement.StrategyLeastLoaded), placement.NewConstraintChecker())
 
 		predictiveScorer = scheduler.NewPredictiveScorer(predictiveStore{db})
+		predictiveScorer.LoadRules(appCtx)
 		constraintSched = scheduler.NewConstraintScheduler(db)
 
 		resMgr = reservations.New(db, outboxPub)
@@ -1058,10 +1066,14 @@ func run() error {
 			return fmt.Errorf("create dns service: %w", err)
 		}
 		caddyProxy := trafficmanager.NewCaddyReverseProxy(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
+		caddyTLS = trafficmanager.NewCaddyTLSManager(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
 		acmeSvc = acmesvc.New(db, slogLogger)
 		dnsSvc.RegisterWithAcme(func(name string, factory func(providerName string, credentials map[string]string) (challenge.Provider, error)) {
 			acmeSvc.RegisterDNSProvider(name, factory)
 		})
+		// Route issued ACME certificates into the live Caddy gateway so HTTPS
+		// actually serves them; previously issuance persisted a DB row only.
+		acmeSvc.SetGateway(caddyGatewayCertInstaller{proxy: caddyProxy})
 		discoverySvc = servicediscovery.New(db, servicediscovery.NewEndpointStore(db.GetDB()), outboxPub)
 		crossNodeResolver = crossnode.NewResolver(resolutionStoreAdapter{db})
 		crossNodeResolver.SetServiceDiscovery(discoverySvc)
@@ -1078,9 +1090,27 @@ func run() error {
 		buildSvc = buildsvc.NewService(db, daemonClient, slogLogger)
 		tenancySvc = tenancy.New(db)
 		procedureSvc = proceduresvc.New(db, outboxPub, slogLogger, db)
-		apphostingSvc = apphostingsvc.New(db, tenancySvc)
+		apphostingSvc = apphostingsvc.New(db, tenancySvc, composeStackDeployer{lifecycle: composeLifecycle})
 		endpointSvc = environments.New(db)
+		if psvc, perr := pipelinesvc.New(pipelinesvc.Options{
+			Store:          pipelinesvc.NewStore(db.GetDB()),
+			SharedStore:    db,
+			Daemon:         daemonClient,
+			BuildService:   buildSvc,
+			ComposeService: composeLifecycle,
+			DeployService:  deploySvc,
+			Logger:         slogLogger,
+			DataDir:        env("PIPELINE_DATA_DIR", "./data/pipelines"),
+		}); perr != nil {
+			return fmt.Errorf("create pipeline service: %w", perr)
+		} else {
+			pipelineSvc = psvc
+			pipelineSvc.Start(appCtx)
+		}
 		alertSvc = alerting.New(db, alerting.DefaultThresholds, slogLogger)
+		obs.SetNodeMetricHook(func(m store.NodeMetric) {
+			_ = alertSvc.CheckNodeThresholds(appCtx, m)
+		})
 		notifSvc = notification.New(db, slogLogger)
 		if err := notifSvc.RefreshChannels(appCtx); err != nil {
 			slogLogger.Warn("failed to refresh notification channels", slog.String("error", err.Error()))
@@ -1102,6 +1132,20 @@ func run() error {
 		cleanupSvc.Start(appCtx)
 		billingSvc = billingsvc.New(db)
 		billingSvc.StartReaper(appCtx)
+		drainLedger = drainsvc.New(db, slogLogger)
+		placementSvc = envaffinitysvc.New(db, slogLogger).WithPredictiveScorer(predictiveScorer)
+		// Mirror membership/evacuation drain events into the durable ledger so
+		// drain progress survives restarts. The ledger records only; the
+		// orchestration stays owned by clustermembership.
+		drainLedgerSub := drainLedger.Subscriber()
+		for _, et := range []events.EventType{
+			events.EventNodeDrainingStarted,
+			events.EventEvacuationPlanCreated,
+			events.EventEvacuationPlanFailed,
+			events.EventNodeDrainingCompleted,
+		} {
+			eventRegistry.Subscribe(et, drainLedgerSub)
+		}
 		dbContainerSvc = dbprovisioner.NewDBContainerService(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"))
 		dbSvcProv = services.NewDatabaseServiceProvisioner(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"), masterKeyring)
 		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewNoopStorage())
@@ -1110,13 +1154,13 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeRecovered, tmSvc)
 		tmSvc.Start(appCtx)
 		previewDeploySvc = previewenv.New(db, previewenv.Options{
-			Publisher:  outboxPub,
-			Logger:     slogLogger,
-			PanelURL:   panelURL,
-			GitService: gitSvc,
+			Publisher:   outboxPub,
+			Logger:      slogLogger,
+			PanelURL:    panelURL,
+			GitService:  gitSvc,
 			AcmeService: acmeSvc,
-			TrafficMgr: tmSvc,
-			DomainSvc:  domainSvc,
+			TrafficMgr:  tmSvc,
+			DomainSvc:   domainSvc,
 		})
 		previewDeploySvc.StartReaper(appCtx, 5*time.Minute)
 		eventRegistry.Subscribe(events.EventNodeOffline, lbSvc)
@@ -1462,6 +1506,7 @@ func run() error {
 		LoadBalancer:               lbSvc,
 		FailoverSvc:                failSvc,
 		TrafficManager:             tmSvc,
+		CaddyTLS:                   caddyTLS,
 		PredictiveScorer:           predictiveScorer,
 		ConstraintScheduler:        constraintSched,
 		BackupSvc:                  bkSvc,
@@ -1482,10 +1527,14 @@ func run() error {
 		ProcedureService:           procedureSvc,
 		AppHostingService:          apphostingSvc,
 		EndpointService:            endpointSvc,
+		PipelineService:            pipelineSvc,
 		AlertService:               alertSvc,
 		NotificationService:        notifSvc,
 		InstallerService:           installerSvc,
 		BillingService:             billingSvc,
+		DrainLedger:                drainLedger,
+		PlacementService:           placementSvc,
+		HealthCheckRunner:          healthCheckRunner,
 		ClusterMembershipService:   membershipSvc,
 		CleanupService:             cleanupSvc,
 		ReplicaManager:             replicaMgr,
@@ -1682,6 +1731,17 @@ func healthcheck(target string) error {
 // (Job.ServerID) or operation (Operation.ResourceID) already carries it; the
 // backup jobs additionally carry the parameters the HTTP endpoints take in their
 // request body.
+// caddyGatewayCertInstaller adapts the Caddy reverse proxy to the acme
+// GatewayCertInstaller contract so issued/renewed certificates reach the live
+// gateway (acme must not import trafficmanager directly).
+type caddyGatewayCertInstaller struct {
+	proxy *trafficmanager.CaddyReverseProxy
+}
+
+func (a caddyGatewayCertInstaller) InstallCertificate(ctx context.Context, certPEM, keyPEM string, domains []string) error {
+	return a.proxy.SetCertificate(ctx, trafficmanager.CertConfig{Certificate: certPEM, PrivateKey: keyPEM, Domains: domains})
+}
+
 type serverInstallPayload struct {
 	ServerID  string `json:"serverId,omitempty"`
 	Reinstall bool   `json:"reinstall,omitempty"`
@@ -1998,4 +2058,56 @@ func (r *domainNodeResolver) ResolveServerTarget(ctx context.Context, serverID s
 		port = 8080
 	}
 	return host, port, nil
+}
+
+// composeStackDeployer adapts the compose lifecycle service to app-hosting's
+// StackDeployer contract: it performs the real release of a stack onto a node and
+// reports the state that node observed. A release that did not happen returns an
+// error, never a zero-value DeployedStack with a nil error.
+type composeStackDeployer struct {
+	lifecycle *composesvc.Service
+}
+
+func (d composeStackDeployer) DeployStack(ctx context.Context, req apphostingsvc.StackDeployRequest) (apphostingsvc.DeployedStack, error) {
+	if d.lifecycle == nil {
+		return apphostingsvc.DeployedStack{}, errors.New("compose lifecycle service is not configured")
+	}
+	stack, err := d.lifecycle.DeployComposeStack(ctx, composesvc.DeployComposeRequest{
+		UserID:        req.UserID,
+		Name:          req.Name,
+		NodeID:        req.NodeID,
+		ComposeYAML:   req.ComposeYAML,
+		EnvVars:       req.EnvVars,
+		MemoryMB:      req.MemoryMB,
+		CPUShares:     req.CPUShares,
+		DiskMB:        req.DiskMB,
+		EnvironmentID: req.EnvironmentID,
+	})
+	if err != nil {
+		return apphostingsvc.DeployedStack{}, err
+	}
+	if stack == nil {
+		return apphostingsvc.DeployedStack{}, errors.New("compose deploy reported success without a stack")
+	}
+	return apphostingsvc.DeployedStack{ID: stack.ID, Status: string(stack.Status), Error: stack.Error}, nil
+}
+
+func (d composeStackDeployer) UpdateStack(ctx context.Context, stackID string, req apphostingsvc.StackUpdateRequest) (apphostingsvc.DeployedStack, error) {
+	if d.lifecycle == nil {
+		return apphostingsvc.DeployedStack{}, errors.New("compose lifecycle service is not configured")
+	}
+	stack, err := d.lifecycle.UpdateComposeStack(ctx, stackID, composesvc.UpdateComposeRequest{
+		ComposeYAML: req.ComposeYAML,
+		EnvVars:     req.EnvVars,
+		MemoryMB:    req.MemoryMB,
+		CPUShares:   req.CPUShares,
+		DiskMB:      req.DiskMB,
+	})
+	if err != nil {
+		return apphostingsvc.DeployedStack{}, err
+	}
+	if stack == nil {
+		return apphostingsvc.DeployedStack{}, errors.New("compose update reported success without a stack")
+	}
+	return apphostingsvc.DeployedStack{ID: stack.ID, Status: string(stack.Status), Error: stack.Error}, nil
 }

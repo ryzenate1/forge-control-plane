@@ -53,7 +53,7 @@ export function AdminCleanup() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => void inspectQ.refetch()} />
       <SectionHeader
-        title={(t("admin.cleanup.title", ["Cleanup"]) as string) ?? "Cleanup"}
+        title="Cleanup"
         sub="Garbage collection — Inspect & Run cleanup for stale resources (handlers_cleanup.go:8). Stale placement reservations and orphaned allocations without a server."
         action={
           <div className="flex gap-2">
@@ -81,14 +81,6 @@ export function AdminCleanup() {
           </div>
         }
       />
-
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>cleanup</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">inspect → run</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">handlers_cleanup.go · POST /cleanup/run · GET /cleanup/inspect</span>
-      </div>
 
       {inspectQ.isLoading ? (
         <Card className="border border-[var(--line)] bg-[var(--surface)] p-6">

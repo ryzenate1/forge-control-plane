@@ -107,8 +107,8 @@ export default function AdminCloudPage() {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title="Infra — Cloud"
-        sub="INFRA · Cloud: provision provider instances and bootstrap them as beacons automatically. Links cloud compute to Forge placement — provisioned instances appear as linked panel nodes."
+        title="Cloud Instances"
+        sub="Provision cloud provider instances and bootstrap them as beacons automatically. Links cloud compute to Forge placement."
         action={<Btn tone="primary" onClick={() => setShowProvision(true)}><Plus size={14} /> Provision Instance</Btn>}
       />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">

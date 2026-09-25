@@ -72,6 +72,22 @@ func registerProxyDomainRoutes(protected fiber.Router, cfg Config, adminIPAccess
 			RateLimitBurst:   req.RateLimitBurst,
 		}
 
+		// Provision TLS before persisting the row: a domain that claims a
+		// certificate must actually have one configured in the gateway, or the
+		// request fails rather than recording a false completion.
+		if cfg.CaddyTLS != nil {
+			switch req.CertType {
+			case "letsencrypt":
+				if err := cfg.CaddyTLS.ProvisionLetsEncrypt(c.Context(), &domain, ""); err != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "tls provisioning failed: "+err.Error())
+				}
+			case "custom":
+				if err := cfg.CaddyTLS.UploadCustomCert(c.Context(), &domain); err != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "certificate upload failed: "+err.Error())
+				}
+			}
+		}
+
 		result, err := cfg.Store.CreateProxyDomain(c.Context(), domain)
 		if err != nil {
 			return respondInternalError(c, err)
@@ -187,6 +203,24 @@ func registerProxyDomainRoutes(protected fiber.Router, cfg Config, adminIPAccess
 			existing.RateLimitBurst = *req.RateLimitBurst
 		}
 
+		if cfg.CaddyTLS != nil && req.CertType != nil {
+			switch existing.CertType {
+			case "letsencrypt":
+				if err := cfg.CaddyTLS.ProvisionLetsEncrypt(c.Context(), existing, ""); err != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "tls provisioning failed: "+err.Error())
+				}
+			case "custom":
+				if err := cfg.CaddyTLS.UploadCustomCert(c.Context(), existing); err != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "certificate upload failed: "+err.Error())
+				}
+			case "none":
+				if err := cfg.CaddyTLS.RemoveCert(c.Context(), existing.Hostname); err != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "tls removal failed: "+err.Error())
+				}
+				existing.HTTPS = false
+			}
+		}
+
 		if err := cfg.Store.UpdateProxyDomain(c.Context(), *existing); err != nil {
 			return respondInternalError(c, err)
 		}
@@ -194,6 +228,13 @@ func registerProxyDomainRoutes(protected fiber.Router, cfg Config, adminIPAccess
 	})
 
 	domains.Delete("/:id", mutationLimiter, requireRole("admin"), requireAdminScope("domains.write"), func(c *fiber.Ctx) error {
+		if cfg.CaddyTLS != nil {
+			if d, err := cfg.Store.GetProxyDomain(c.Context(), c.Params("id")); err == nil && d != nil && d.CertType == "letsencrypt" {
+				if rmErr := cfg.CaddyTLS.RemoveCert(c.Context(), d.Hostname); rmErr != nil {
+					return fiber.NewError(fiber.StatusBadGateway, "tls removal failed: "+rmErr.Error())
+				}
+			}
+		}
 		if err := cfg.Store.DeleteProxyDomain(c.Context(), c.Params("id")); err != nil {
 			return respondInternalError(c, err)
 		}

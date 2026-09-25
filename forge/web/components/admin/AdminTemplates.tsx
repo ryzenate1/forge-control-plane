@@ -127,6 +127,7 @@ export function AdminTemplates() {
       qc.invalidateQueries({ queryKey: ["templates"] });
       closeModal();
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to create template", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updateMut = useMutation({
@@ -169,6 +170,7 @@ export function AdminTemplates() {
       qc.invalidateQueries({ queryKey: ["templates"] });
       closeModal();
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to update template", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMut = useMutation({
@@ -177,6 +179,7 @@ export function AdminTemplates() {
       qc.invalidateQueries({ queryKey: ["templates"] });
       setDeletingId(null);
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete template", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const confirmDelete = (id: string) => {

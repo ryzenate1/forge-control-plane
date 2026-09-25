@@ -68,10 +68,10 @@ export function AdminCatalog() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { void catalogQ.refetch(); void retentionQ.refetch(); }} />
       <SectionHeader
-        title={(t("admin.catalog.title", ["Catalog"]) as string) ?? "Catalog"}
+        title="Service Catalog"
         sub="One-click service catalog and provisioning — GET /catalog, GET /catalog/:key, POST /admin/catalog/provision (phase3_registrar.go:22). Categories: database, cache, queue, storage."
         action={
-          <div className="flex gap-2">
+          <div className="flex items-center gap-2">
             <Btn size="sm" tone="ghost" onClick={() => { void catalogQ.refetch(); void retentionQ.refetch(); }}>
               <RefreshCw size={14} /> Refresh
             </Btn>
@@ -81,14 +81,6 @@ export function AdminCatalog() {
           </div>
         }
       />
-
-      <div className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
-        <span className="h-2 w-2 rounded-full bg-[var(--brand)]" />
-        <span>catalog</span>
-        <span className="text-[var(--text-subtle)]">::</span>
-        <span className="text-[var(--brand)]">entries</span>
-        <span className="ml-auto hidden sm:inline uppercase tracking-widest text-[var(--text-subtle)]">var(--brand) var(--canvas) var(--surface) var(--line)</span>
-      </div>
 
       <Card className="border border-[var(--line)] bg-[var(--surface)]">
         <CardHeader title={`Entries — GET /catalog · ${filtered.length} of ${entries.length}`} icon={Library} action={<div className="flex items-center gap-2"><Search size={12} className="text-[var(--text-subtle)]" /><Input value={search} onChange={(v) => { setSearch(v); setPage(0); }} placeholder="Search key, name, category…" /></div>} />

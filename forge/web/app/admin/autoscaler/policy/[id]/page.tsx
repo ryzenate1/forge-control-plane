@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useToast } from '@/components/ui/toast';
 import { useParams, useRouter } from 'next/navigation';
 import { ArrowLeft, BarChart3, Play, Trash2, Zap } from 'lucide-react';
 import { fetchJSON, putJSON, postJSON, deleteJSON } from '@/lib/api';
@@ -48,6 +49,7 @@ export default function AdminPolicyDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const id = params.id as string;
 
   const [editing, setEditing] = useState(false);
@@ -75,11 +77,13 @@ export default function AdminPolicyDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policy', id] });
       setEditing(false);
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to update policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteJSON(`/admin/autoscaler/policies/${encodeURIComponent(id)}`),
     onSuccess: () => router.push('/admin/autoscaler'),
+    onError: (err) => toast({ tone: 'error', title: 'Failed to delete policy', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   const evaluateMutation = useMutation({
@@ -88,6 +92,7 @@ export default function AdminPolicyDetailPage() {
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'policy', id] });
       queryClient.invalidateQueries({ queryKey: ['admin', 'autoscaler', 'metrics'] });
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to evaluate autoscaler', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   if (policyQuery.isLoading) {
@@ -100,36 +105,32 @@ export default function AdminPolicyDetailPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-start gap-4">
-        <Btn tone="ghost" onClick={() => router.push('/admin/autoscaler')}>
-          <ArrowLeft size={14} /> Back
-        </Btn>
-        <div className="flex-1">
-          <SectionHeader
-            title={`Policy: ${policy.serverId}`}
-            sub={`Created ${new Date(policy.createdAt).toLocaleDateString()}`}
-            action={
-              <div className="flex gap-2">
-                <Btn
-                  tone="warning"
-                  onClick={() => evaluateMutation.mutate(policy.serverId)}
-                  disabled={evaluateMutation.isPending}
-                >
-                  <Play size={14} /> Evaluate Now
-                </Btn>
-                <Btn
-                  tone="danger"
-                  onClick={() => {
-                    void (async () => { if (await confirm({ title: "Delete this autoscale policy?", description: "Automatic scaling for this node will stop. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(); })();
-                  }}
-                >
-                  <Trash2 size={14} /> Delete
-                </Btn>
-              </div>
-            }
-          />
-        </div>
-      </div>
+      <SectionHeader
+        title={`Policy: ${policy.serverId}`}
+        sub={`Created ${new Date(policy.createdAt).toLocaleDateString()}`}
+        backAction={() => router.push('/admin/autoscaler')}
+        backLabel="Auto-Scaler"
+        breadcrumb={`Automation / Auto-Scaler / Policy ${policy.serverId}`}
+        action={
+          <div className="flex gap-2">
+            <Btn
+              tone="warning"
+              onClick={() => evaluateMutation.mutate(policy.serverId)}
+              disabled={evaluateMutation.isPending}
+            >
+              <Play size={14} /> Evaluate Now
+            </Btn>
+            <Btn
+              tone="danger"
+              onClick={() => {
+                void (async () => { if (await confirm({ title: "Delete this autoscale policy?", description: "Automatic scaling for this node will stop. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(); })();
+              }}
+            >
+              <Trash2 size={14} /> Delete
+            </Btn>
+          </div>
+        }
+      />
 
       <div className="grid gap-4 md:grid-cols-2">
         <Card>

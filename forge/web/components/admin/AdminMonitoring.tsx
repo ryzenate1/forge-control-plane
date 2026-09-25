@@ -48,6 +48,10 @@ import {
   ActivityWaveIcon,
 } from "@/components/ui/forge-icons";
 import type { ApiNode } from "@forge/shared-types";
+import { chart } from "@/lib/design-tokens";
+
+/** Compare-mode series ramp (SVG attributes can't resolve var(--*) — see lib/design-tokens). */
+const MONITOR_SERIES = [chart.sky, chart.violet, chart.lightOrange, chart.lightCyan, chart.lightEmerald];
 
 const PERIODS: { value: MetricPeriod; label: string; short: string }[] = [
   { value: "1h", label: "1 hour", short: "1 hour" },
@@ -165,7 +169,7 @@ function MainChartTooltip({
       </p>
       {payload.map((entry) => (
         <p key={entry.name} className="text-xs font-semibold text-slate-200">
-          <span style={{ color: entry.color ?? "#38bdf8" }}>●</span> {entry.name}: {Number(entry.value).toFixed(1)}%
+          <span style={{ color: entry.color ?? chart.sky }}>●</span> {entry.name}: {Number(entry.value).toFixed(1)}%
         </p>
       ))}
     </div>
@@ -389,10 +393,10 @@ export function AdminMonitoring() {
   }, [history, period]);
 
   const kpiCards = [
-    { key: "cpu" as MetricKey, title: "CPU", icon: CpuKpiChipIcon, color: "#38bdf8", delta: "fleet avg" },
-    { key: "memory" as MetricKey, title: "MEMORY", icon: MemoryRamStickIcon, color: "#a855f7", delta: "configured" },
-    { key: "disk" as MetricKey, title: "STORAGE", icon: HardDrive, color: "#fb923c", delta: "allocated" },
-    { key: "network" as MetricKey, title: "NETWORK", icon: Network, color: "#22d3ee", delta: "traffic" },
+    { key: "cpu" as MetricKey, title: "CPU", icon: CpuKpiChipIcon, color: chart.sky, delta: "fleet avg" },
+    { key: "memory" as MetricKey, title: "MEMORY", icon: MemoryRamStickIcon, color: chart.violet, delta: "configured" },
+    { key: "disk" as MetricKey, title: "STORAGE", icon: HardDrive, color: chart.lightOrange, delta: "allocated" },
+    { key: "network" as MetricKey, title: "NETWORK", icon: Network, color: chart.lightCyan, delta: "traffic" },
   ];
 
   return (
@@ -704,8 +708,8 @@ export function AdminMonitoring() {
                 <ResponsiveContainer width="100%" height="100%">
                   <AreaChart data={[]} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
                     <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
-                    <XAxis dataKey="iso" tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} />
-                    <YAxis tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
+                    <XAxis dataKey="iso" tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} />
+                    <YAxis tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
                   </AreaChart>
                 </ResponsiveContainer>
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
@@ -720,21 +724,21 @@ export function AdminMonitoring() {
                   <defs>
                     {compareSeries.map(([id], i) => (
                       <linearGradient key={id} id={`cmp-${i}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="5%" stopColor={["#38bdf8", "#a855f7", "#fb923c", "#22d3ee", "#34d399"][i % 5]} stopOpacity={0.3} />
-                        <stop offset="95%" stopColor={["#38bdf8", "#a855f7", "#fb923c", "#22d3ee", "#34d399"][i % 5]} stopOpacity={0} />
+                        <stop offset="5%" stopColor={MONITOR_SERIES[i % 5]} stopOpacity={0.3} />
+                        <stop offset="95%" stopColor={MONITOR_SERIES[i % 5]} stopOpacity={0} />
                       </linearGradient>
                     ))}
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                   <XAxis
                     dataKey="iso"
-                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    tick={{ fill: chart.axis, fontSize: 10 }}
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(v: string) => new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     minTickGap={48}
                   />
-                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
+                  <YAxis tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
                   <Tooltip content={<MainChartTooltip />} />
                   {compareSeries.map(([id], i) => (
                     <Area
@@ -743,7 +747,7 @@ export function AdminMonitoring() {
                       dataKey={metric}
                       data={compareSeries[i][1].map((p) => ({ iso: p.iso, [metric]: p.value }))}
                       name={nodeById.get(id)?.name ?? id.slice(0, 8)}
-                      stroke={["#38bdf8", "#a855f7", "#fb923c", "#22d3ee", "#34d399"][i % 5]}
+                      stroke={MONITOR_SERIES[i % 5]}
                       strokeWidth={2}
                       fill={`url(#cmp-${i})`}
                       dot={false}
@@ -756,30 +760,30 @@ export function AdminMonitoring() {
                 <AreaChart data={series} margin={{ top: 5, right: 5, left: -10, bottom: 0 }}>
                   <defs>
                     <linearGradient id="mainCpu" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#ef4444" stopOpacity={0.35} />
-                      <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                      <stop offset="5%" stopColor={chart.dangerBright} stopOpacity={0.35} />
+                      <stop offset="95%" stopColor={chart.dangerBright} stopOpacity={0} />
                     </linearGradient>
                     <linearGradient id="mainMem" x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor="#a855f7" stopOpacity={0.3} />
-                      <stop offset="95%" stopColor="#a855f7" stopOpacity={0} />
+                      <stop offset="5%" stopColor={chart.violet} stopOpacity={0.3} />
+                      <stop offset="95%" stopColor={chart.violet} stopOpacity={0} />
                     </linearGradient>
                   </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.07)" vertical={false} />
                   <XAxis
                     dataKey="iso"
-                    tick={{ fill: "#64748b", fontSize: 10 }}
+                    tick={{ fill: chart.axis, fontSize: 10 }}
                     tickLine={false}
                     axisLine={false}
                     tickFormatter={(v: string) => new Date(v).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
                     minTickGap={48}
                   />
-                  <YAxis tick={{ fill: "#64748b", fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
+                  <YAxis tick={{ fill: chart.axis, fontSize: 10 }} tickLine={false} axisLine={false} domain={[0, 100]} unit="%" width={44} />
                   <Tooltip content={<MainChartTooltip />} />
                   <Area
                     type="monotone"
                     dataKey={metric}
                     name={METRIC_TABS.find((t) => t.value === metric)?.label ?? metric}
-                    stroke={metric === "cpu" ? "#ef4444" : metric === "memory" ? "#a855f7" : metric === "disk" ? "#fb923c" : "#22d3ee"}
+                    stroke={metric === "cpu" ? chart.dangerBright : metric === "memory" ? chart.violet : metric === "disk" ? chart.lightOrange : chart.lightCyan}
                     strokeWidth={2}
                     fill={metric === "cpu" ? "url(#mainCpu)" : "url(#mainMem)"}
                     dot={false}

@@ -620,6 +620,25 @@ func (p *CaddyReverseProxy) updateRoutesAtomic(ctx context.Context, rules []*Rou
 	}
 
 	routes := p.buildRoutes(rules, policies)
+
+	// F-NET-01 no-wipe guard: an empty desired route set (no rules at all, or only
+	// disabled/withdrawn ones) must never replace a populated live gamepanel
+	// server. POST /config/ is a full document replace, so it would drop every
+	// proxied domain and its ACME-managed TLS. Refuse to apply unless the live
+	// state can be verified as already holding no gamepanel routes.
+	if len(routes) == 0 {
+		liveRoutes, err := p.liveGamePanelRouteCount(ctx, addr)
+		if err != nil {
+			return fmt.Errorf("no-wipe guard: cannot verify live gateway routes: %w", err)
+		}
+		if liveRoutes > 0 {
+			return fmt.Errorf("no-wipe guard: refusing to apply empty route set over %d live gamepanel route(s)", liveRoutes)
+		}
+		slog.Info("caddy: empty desired route set and no live gamepanel routes; skipping apply",
+			"rules", len(rules))
+		return nil
+	}
+
 	serverConfig := p.buildServerConfig(routes, policies)
 
 	body, err := json.Marshal(serverConfig)
@@ -645,6 +664,40 @@ func (p *CaddyReverseProxy) updateRoutesAtomic(ctx context.Context, rules []*Rou
 	}
 
 	return nil
+}
+
+// liveGamePanelRouteCount reports how many routes the running Caddy config holds in
+// the gamepanel server. A read/parse failure is returned as an error so callers fail
+// closed instead of assuming the gateway is already empty.
+func (p *CaddyReverseProxy) liveGamePanelRouteCount(ctx context.Context, addr string) (int, error) {
+	configJSON, err := p.getRunningConfig(ctx, addr)
+	if err != nil {
+		return 0, err
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(configJSON, &cfg); err != nil {
+		return 0, fmt.Errorf("parse running config: %w", err)
+	}
+
+	apps, _ := cfg["apps"].(map[string]any)
+	if apps == nil {
+		return 0, nil
+	}
+	httpCfg, _ := apps["http"].(map[string]any)
+	if httpCfg == nil {
+		return 0, nil
+	}
+	servers, _ := httpCfg["servers"].(map[string]any)
+	if servers == nil {
+		return 0, nil
+	}
+	srv, _ := servers["gamepanel"].(map[string]any)
+	if srv == nil {
+		return 0, nil
+	}
+	routes, _ := srv["routes"].([]any)
+	return len(routes), nil
 }
 
 func (p *CaddyReverseProxy) buildServerConfig(routes []map[string]any, policies map[string]*TrafficPolicy) map[string]any {

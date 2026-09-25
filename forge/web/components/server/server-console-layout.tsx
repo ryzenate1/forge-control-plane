@@ -78,7 +78,7 @@ function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsol
     return <div className="grid min-h-screen place-items-center bg-[var(--canvas)] p-6 text-slate-200"><div className="max-w-md rounded-xl border border-red-500/30 bg-red-500/10 p-6 text-center" role="alert"><AlertCircle className="mx-auto text-red-300" /><h1 className="mt-3 text-lg font-bold">Unable to load server</h1><p className="mt-2 text-sm text-red-100">{error ?? "Server not found."}</p><button className="mt-4 inline-flex items-center gap-2 rounded-lg bg-red-600 px-4 py-2 text-sm font-bold text-white hover:bg-red-500" onClick={() => void load()} type="button"><RefreshCw size={15} /> Try again</button></div></div>;
   }
 
-  const activeTab = activeTabProp ?? (pathname.split("/").at(-1) === serverId ? "console" : pathname.split("/").at(-1) as ServerTab);
+  const activeTab = activeTabProp ?? (pathname.split("/").at(-1) === serverId ? "overview" : pathname.split("/").at(-1) as ServerTab);
 
   const access: ServerAccess = {
     user,

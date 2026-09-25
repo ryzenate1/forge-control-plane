@@ -413,7 +413,8 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
-		return c.JSON(servers)
+		// Safe DTOs: never leak transferRunToken or secrets.
+		return c.JSON(store.ServersToDTO(servers))
 	})
 
 	protected.Get("/nodes/:id/health", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
@@ -1594,7 +1595,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 			TemplateIDs:   req.TemplateIDs,
 		}, actorID)
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			msg := err.Error()
+			// Surface the allowlist knob so admins can fix rejected sources.
+			if strings.Contains(strings.ToLower(msg), "mount") && !strings.Contains(msg, "MOUNTS_ALLOWED_PREFIX") {
+				msg = fmt.Sprintf("%s (allowed host prefix: set MOUNTS_ALLOWED_PREFIX on the panel to permit mount sources)", msg)
+			}
+			return fiber.NewError(fiber.StatusBadRequest, msg)
 		}
 		return c.Status(fiber.StatusCreated).JSON(mount)
 	})

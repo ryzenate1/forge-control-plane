@@ -89,11 +89,11 @@ type DatabaseCapability struct {
 }
 
 func (s *Server) collectCapabilities() CapabilityReport {
-	var mem stdruntime.MemStats
-	stdruntime.ReadMemStats(&mem)
-
 	runtimeStatus := "unknown"
-	runtimeProvider := ""
+	runtimeProvider := s.runtimeProvider()
+	if runtimeProvider == "unknown" {
+		runtimeProvider = ""
+	}
 	// A wired runtime is not necessarily a usable one: mock mode installs
 	// UnavailableRuntime, which answers every workload call with an error. The
 	// capability report has to say "not available" rather than advertise a
@@ -119,13 +119,27 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		buildStatus = "ok"
 	}
 
+	composeEnabled := s.composeStacks != nil
+	var stackCount int
+	if composeEnabled {
+		stackCount = s.composeStacks.count()
+	}
+	transferEnabled := s.transferProtocol != nil
+	backupsEnabled := s.backups != nil
+	gatewayEnabled := s.consoles != nil
+	databaseEnabled := rtAvailable
+
+	// Every status below is derived from something this process actually wired
+	// up. They used to be a row of literal "ok" values, which told the panel the
+	// node could compose, back up, serve databases and open consoles whether it
+	// could or not.
 	capabilities := []CapabilityEntry{
 		{Type: CapabilityRuntime, Status: runtimeStatus},
 		{Type: CapabilityBuild, Status: buildStatus},
-		{Type: CapabilityCompose, Status: "ok"},
-		{Type: CapabilityStorage, Status: "ok"},
-		{Type: CapabilityGateway, Status: "ok"},
-		{Type: CapabilityDatabase, Status: "ok"},
+		{Type: CapabilityCompose, Status: capabilityStatus(composeEnabled)},
+		{Type: CapabilityStorage, Status: capabilityStatus(backupsEnabled || transferEnabled)},
+		{Type: CapabilityGateway, Status: capabilityStatus(gatewayEnabled || s.SFTPEnabled())},
+		{Type: CapabilityDatabase, Status: capabilityStatus(databaseEnabled)},
 	}
 
 	buildInfo := &BuildCapability{
@@ -133,33 +147,30 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		NixpacksEnabled:    nixpacksEnabled,
 	}
 
-	var composeEnabled bool
-	var stackCount int
-	if s.composeStacks != nil {
-		composeEnabled = true
-	}
 	composeInfo := &ComposeCapability{
 		ComposeEnabled: composeEnabled,
 		StackCount:     stackCount,
 	}
 
 	storageInfo := &StorageCapability{
-		TransferEnabled: s.transferProtocol != nil,
+		TransferEnabled: transferEnabled,
 	}
-	if s.backups != nil {
+	if backupsEnabled {
 		storageInfo.LocalBackups = true
 		storageInfo.BackupAdapters = append(storageInfo.BackupAdapters, "local")
 	}
 
 	gatewayInfo := &GatewayCapability{
-		SFTPEnabled:      true,
-		WebSocketEnabled: true,
-		ConsoleEnabled:   s.runtime != nil && s.consoles != nil,
+		SFTPEnabled:      s.SFTPEnabled(),
+		WebSocketEnabled: gatewayEnabled,
+		ConsoleEnabled:   gatewayEnabled,
 	}
 
 	databaseInfo := &DatabaseCapability{
-		ProvisioningEnabled: rtAvailable,
-		SupportedEngines:    []string{"mysql", "postgresql"},
+		ProvisioningEnabled: databaseEnabled,
+	}
+	if databaseEnabled {
+		databaseInfo.SupportedEngines = []string{"mysql", "postgresql"}
 	}
 
 	return CapabilityReport{
@@ -167,7 +178,7 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		OS:            stdruntime.GOOS,
 		Architecture:  stdruntime.GOARCH,
 		CPUThreads:    stdruntime.NumCPU(),
-		MemoryMB:      mem.Alloc / (1024 * 1024),
+		MemoryMB:      totalSystemMemoryMB(),
 		UptimeSeconds: int64(time.Since(s.started).Seconds()),
 		Capabilities:  capabilities,
 		RuntimeInfo:   &RuntimeCapability{DockerAvailable: rtAvailable, DockerStatus: runtimeStatus, RuntimeProvider: runtimeProvider},
@@ -178,6 +189,57 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		DatabaseInfo:  databaseInfo,
 		FetchedAt:     time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// capabilityStatus names a subsystem's real wiring instead of a hardcoded "ok".
+func capabilityStatus(enabled bool) string {
+	if enabled {
+		return "ok"
+	}
+	return "unavailable"
+}
+
+// systemCapabilities lists what this daemon can actually do, read from the same
+// wiring as the capability report. File and stats routes are served by this
+// process whenever it is up, so they are always present; everything else has to
+// earn its place. A node with no usable runtime no longer advertises docker,
+// and one with no backups adapter no longer advertises backups.
+func (s *Server) systemCapabilities() []string {
+	report := s.collectCapabilities()
+	capabilities := []string{"files", "stats"}
+	if report.RuntimeInfo != nil && report.RuntimeInfo.DockerAvailable {
+		if provider := report.RuntimeInfo.RuntimeProvider; provider != "" {
+			capabilities = append(capabilities, provider)
+		} else {
+			capabilities = append(capabilities, "docker")
+		}
+	}
+	if report.BuildInfo != nil && (report.BuildInfo.DockerBuildEnabled || report.BuildInfo.NixpacksEnabled) {
+		capabilities = append(capabilities, "build")
+	}
+	if report.ComposeInfo != nil && report.ComposeInfo.ComposeEnabled {
+		capabilities = append(capabilities, "compose")
+	}
+	if report.StorageInfo != nil {
+		if len(report.StorageInfo.BackupAdapters) > 0 {
+			capabilities = append(capabilities, "backups")
+		}
+		if report.StorageInfo.TransferEnabled {
+			capabilities = append(capabilities, "transfers")
+		}
+	}
+	if report.GatewayInfo != nil {
+		if report.GatewayInfo.SFTPEnabled {
+			capabilities = append(capabilities, "sftp")
+		}
+		if report.GatewayInfo.ConsoleEnabled {
+			capabilities = append(capabilities, "console")
+		}
+	}
+	if report.DatabaseInfo != nil && report.DatabaseInfo.ProvisioningEnabled {
+		capabilities = append(capabilities, "database")
+	}
+	return capabilities
 }
 
 func (s *Server) handleGetCapabilities(w http.ResponseWriter, r *http.Request) {

@@ -63,7 +63,11 @@ export function TransferView({ server }: { server: ApiServer }) {
   });
 
   const cancelMut = useMutation({
-    mutationFn: () => cancelServerTransfer(server.id),
+    mutationFn: async () => {
+      const result = await cancelServerTransfer(server.id);
+      if (!result.ok) throw new Error("The server reported the transfer was not cancelled.");
+      return result;
+    },
     onSuccess: () => {
       setCancelConfirmOpen(false);
       void transferStatusQuery.refetch();

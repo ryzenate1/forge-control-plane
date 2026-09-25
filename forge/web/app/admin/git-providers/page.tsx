@@ -5,6 +5,7 @@ import Image from "next/image";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { listGitProviders, connectGitProvider, disconnectGitProvider } from "@/lib/api/source-deployments";
+import { SectionHeader } from "@/components/admin/admin-ui";
 import { Plus, Trash2, Globe, Key } from "lucide-react";
 
 const providerIcons: Record<string, string> = {
@@ -71,19 +72,19 @@ export default function GitProvidersPage() {
   });
 
   return (
-    <div className="p-6 max-w-4xl mx-auto">
-      <div className="flex items-center justify-between mb-6">
-        <div>
-          <h1 className="text-2xl font-bold">Git Providers</h1>
-          <p className="text-sm opacity-70">Connect your git hosting providers</p>
-        </div>
-        <button
-          onClick={() => setShowConnect(!showConnect)}
-          className="inline-flex items-center gap-2 rounded-lg border border-red-500/70 bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-red-950/40 transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-50"
-        >
-          <Plus className="w-4 h-4" /> Connect Provider
-        </button>
-      </div>
+    <div className="p-6 max-w-4xl mx-auto space-y-6">
+      <SectionHeader
+        title="Git Providers"
+        sub="Connect your git hosting providers"
+        action={
+          <button
+            onClick={() => setShowConnect(!showConnect)}
+            className="inline-flex items-center gap-2 rounded-lg border border-red-500/70 bg-red-600 px-4 py-2 text-sm font-semibold text-white shadow-sm shadow-red-950/40 transition-colors hover:bg-red-500 disabled:pointer-events-none disabled:opacity-50"
+          >
+            <Plus className="w-4 h-4" /> Connect Provider
+          </button>
+        }
+      />
 
       {showConnect && (
         <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 mb-6 shadow-xl shadow-black/10">

@@ -93,7 +93,11 @@ export function ManagedDatabaseView() {
   });
 
   const deleteMut = useMutation({
-    mutationFn: ({ id, force }: { id: string; force?: boolean }) => deleteManagedDatabase(id, force),
+    mutationFn: async ({ id, force }: { id: string; force?: boolean }) => {
+      const result = await deleteManagedDatabase(id, force);
+      if (!result.ok) throw new Error("The server reported the database was not deleted.");
+      return result;
+    },
     onSuccess: () => { setSelected(null); invalidate(); toast({ tone: "success", title: "Database deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Deletion failed", message: e.message }),
   });

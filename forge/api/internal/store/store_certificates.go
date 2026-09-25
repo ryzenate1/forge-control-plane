@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -91,10 +92,24 @@ func (s *Store) CreateCertificate(ctx context.Context, req CreateCertificateRequ
 		req.ChallengeType = "http-01"
 	}
 
+	// DNS provider credentials are secrets: store them in the envelope column and
+	// clear the plaintext jsonb column (dual-write, migration 213).
+	var dnsCredentialsEncrypted string
+	if len(req.DNSCredentials) > 0 {
+		credsJSON, marshalErr := json.Marshal(req.DNSCredentials)
+		if marshalErr != nil {
+			return Certificate{}, fmt.Errorf("encode dns credentials: %w", marshalErr)
+		}
+		dnsCredentialsEncrypted, err = s.encryptSecret(string(credsJSON), secretAAD("certificates", id, "dns_credentials"))
+		if err != nil {
+			return Certificate{}, err
+		}
+	}
+
 	_, err = s.db.Exec(ctx, `
-		INSERT INTO certificates (id, domains, issuer, certificate, private_key_encrypted, expires_at, auto_renew, provider, challenge_type, dns_provider, dns_credentials, wildcard, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-	`, id, req.Domains, req.Issuer, req.Certificate, encryptedKey, req.ExpiresAt, req.AutoRenew, req.Provider, req.ChallengeType, req.DNSProvider, req.DNSCredentials, req.Wildcard, now, now)
+		INSERT INTO certificates (id, domains, issuer, certificate, private_key_encrypted, expires_at, auto_renew, provider, challenge_type, dns_provider, dns_credentials, dns_credentials_encrypted, wildcard, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, '{}'::jsonb, $11, $12, $13, $14)
+	`, id, req.Domains, req.Issuer, req.Certificate, encryptedKey, req.ExpiresAt, req.AutoRenew, req.Provider, req.ChallengeType, req.DNSProvider, dnsCredentialsEncrypted, req.Wildcard, now, now)
 	if err != nil {
 		return Certificate{}, err
 	}
@@ -109,15 +124,18 @@ func (s *Store) CreateCertificate(ctx context.Context, req CreateCertificateRequ
 func (s *Store) GetCertificate(ctx context.Context, id string) (Certificate, error) {
 	var cert Certificate
 	var keyEncrypted string
+	var dnsEncrypted string
+	var plainForDecrypt string
 
 	err := s.db.QueryRow(ctx, `
 		SELECT id::text, domains, COALESCE(issuer,''), COALESCE(certificate,''), COALESCE(private_key_encrypted,''),
 		       expires_at, auto_renew, COALESCE(provider,''), COALESCE(challenge_type,'http-01'), COALESCE(wildcard,false),
-		       COALESCE(dns_provider,''), COALESCE(dns_credentials,'{}'::jsonb), created_at, updated_at
+		       COALESCE(dns_provider,''), COALESCE(dns_credentials_encrypted,''), COALESCE(dns_credentials::text,'{}'),
+		       created_at, updated_at
 		FROM certificates WHERE id::text = $1
 	`, id).Scan(&cert.ID, &cert.Domains, &cert.Issuer, &cert.Certificate, &keyEncrypted,
 		&cert.ExpiresAt, &cert.AutoRenew, &cert.Provider, &cert.ChallengeType, &cert.Wildcard,
-		&cert.DNSProvider, &cert.DNSCredentials, &cert.CreatedAt, &cert.UpdatedAt)
+		&cert.DNSProvider, &dnsEncrypted, &plainForDecrypt, &cert.CreatedAt, &cert.UpdatedAt)
 	if err != nil {
 		return Certificate{}, errors.New("certificate not found")
 	}
@@ -126,6 +144,24 @@ func (s *Store) GetCertificate(ctx context.Context, id string) (Certificate, err
 		decrypted, decErr := s.decryptSecret(keyEncrypted, "", secretAAD("certificates", cert.ID, "private_key"))
 		if decErr == nil {
 			cert.PrivateKey = decrypted
+		}
+	}
+
+	// Dual-read DNS credentials: envelope first, legacy plaintext column as the
+	// fallback (pre-migration rows). A stored envelope we cannot open is an error,
+	// never a silently-empty credential set.
+	cert.DNSCredentials = nil
+	dnsJSON, decErr := s.decryptSecret(dnsEncrypted, plainForDecrypt, secretAAD("certificates", cert.ID, "dns_credentials"))
+	if decErr != nil {
+		return Certificate{}, fmt.Errorf("certificate dns credentials: %w", decErr)
+	}
+	if dnsJSON != "" && dnsJSON != "{}" {
+		creds := map[string]string{}
+		if err := json.Unmarshal([]byte(dnsJSON), &creds); err != nil {
+			return Certificate{}, fmt.Errorf("decode certificate dns credentials: %w", err)
+		}
+		if len(creds) > 0 {
+			cert.DNSCredentials = creds
 		}
 	}
 

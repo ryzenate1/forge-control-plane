@@ -4,7 +4,14 @@ export interface HostInfo {
   hostname: string;
   os: string;
   kernel: string;
+  /**
+   * Wall time since the machine booted. Distinct from `daemonUptimeSeconds`:
+   * a host that has run for weeks and a Beacon restarted seconds ago report
+   * different numbers, and only showing one hides which happened.
+   */
   uptimeSeconds: number;
+  /** Time since the Beacon process started. Absent on older nodes. */
+  daemonUptimeSeconds?: number;
   cpuModel: string;
   cpuCores: number;
   arch: string;

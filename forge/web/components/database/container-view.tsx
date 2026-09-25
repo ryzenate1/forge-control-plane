@@ -25,19 +25,31 @@ export function DBContainerView() {
   const invalidate = () => qc.invalidateQueries({ queryKey: ["db-containers"] });
 
   const restartMut = useMutation({
-    mutationFn: (id: string) => restartDBContainer(id),
+    mutationFn: async (id: string) => {
+      const result = await restartDBContainer(id);
+      if (!result.ok) throw new Error("The server reported the container restart did not complete.");
+      return result;
+    },
     onSuccess: () => { invalidate(); toast({ tone: "success", title: "Container restart initiated" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Restart failed", message: e.message }),
   });
 
   const backupMut = useMutation({
-    mutationFn: (id: string) => backupDBContainer(id),
+    mutationFn: async (id: string) => {
+      const result = await backupDBContainer(id);
+      if (!result.ok) throw new Error("The server reported the backup did not complete.");
+      return result;
+    },
     onSuccess: () => { invalidate(); toast({ tone: "success", title: "Backup initiated" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Backup failed", message: e.message }),
   });
 
   const deleteMut = useMutation({
-    mutationFn: (id: string) => deprovisionDBContainer(id),
+    mutationFn: async (id: string) => {
+      const result = await deprovisionDBContainer(id);
+      if (!result.ok) throw new Error("The server reported the container was not deprovisioned.");
+      return result;
+    },
     onSuccess: () => { invalidate(); toast({ tone: "success", title: "Container deprovisioned" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Deletion failed", message: e.message }),
   });

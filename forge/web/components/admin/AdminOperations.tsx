@@ -187,8 +187,8 @@ export function AdminOperations() {
 
   const startEvacuationDisabled = !executorAvailable || executeEvacuationMut.isPending;
 
-  return <div>
-    <AdminPageHeader title="Operations — Evacuation & Migration Ops" description="OPERATIONS · Control-plane operations: preview evacuation capacity, save explicit plans, then start or recover workloads safely. Distinct from Migrations & Recovery (tenant data movement) under Data & Recovery." />
+  return <div className="space-y-6">
+    <AdminPageHeader title="Operations" description="Control-plane operations: preview evacuation capacity, save explicit plans, then start or recover workloads safely." />
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
       <span className="font-semibold text-slate-300">OPERATIONS</span> · <span className="font-semibold text-slate-200">Operations</span> — evacuation & migration execution with capacity preview vs <code className="font-mono text-[11px]">Migrations & Recovery</code> at <code className="font-mono">/admin/migrations</code> and <code className="font-mono">Reconciliation</code> at <code className="font-mono">/admin/reconciliation</code>. Uses <code className="font-mono">POST /evacuations</code> + executor planning; planning-only when runtime unavailable.
     </div>

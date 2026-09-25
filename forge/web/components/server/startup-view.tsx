@@ -7,6 +7,7 @@ import { type ApiServer, type ServerStartupVariable, fetchServerStartup, updateS
 import { hasServerPermission, useOptionalServerContext } from "./server-context";
 import { errorMessage } from "@/lib/utils";
 import { CardSkeleton } from "@/components/ui/loading-skeleton";
+import { useToast } from "@/components/ui/toast";
 
 function rules(variable: ServerStartupVariable) { return (variable.rules || "").split("|").map((rule: string) => rule.trim()).filter(Boolean); }
 function validate(variable: ServerStartupVariable, value: string) {
@@ -28,12 +29,13 @@ export function StartupView({ server }: { server?: ApiServer }) {
   const canUpdate = hasServerPermission(access, "startup.update");
   const canUpdateImage = hasServerPermission(access, "startup.docker-image");
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [commandDraft, setCommandDraft] = useState(server?.startupCommand ?? "");
   const [saved, setSaved] = useState("");
   const query = useQuery({ queryKey: ["server-startup", server?.id], queryFn: () => fetchServerStartup(server?.id ?? ""), enabled: Boolean(server?.id) });
   const update = useMutation({ mutationFn: ({ key, value }: { key: string; value: string }) => updateServerStartupVariable(server?.id ?? "", key, value), onSuccess: (_, input) => { setDrafts((current) => { const next = { ...current }; delete next[input.key]; return next; }); setSaved(input.key); void qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); }, onError: () => setSaved("") });
-  const configUpdate = useMutation({ mutationFn: (input: { startupCommand?: string; dockerImage?: string }) => updateServer(server?.id ?? "", input), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); await context?.refreshServer(); } });
+  const configUpdate = useMutation({ mutationFn: (input: { startupCommand?: string; dockerImage?: string }) => updateServer(server?.id ?? "", input), onSuccess: async () => { await qc.invalidateQueries({ queryKey: ["server-startup", server?.id] }); await context?.refreshServer(); }, onError: (err) => toast({ tone: "error", title: "Failed to save startup configuration", message: err instanceof Error ? err.message : "An error occurred" }) });
   const startup = query.data;
   const images = useMemo(() => Object.entries(startup?.docker_images ?? {}) as Array<[string, string]>, [startup?.docker_images]);
   useEffect(() => { setCommandDraft(server?.startupCommand ?? startup?.raw_startup_command ?? ""); }, [server?.startupCommand, startup?.raw_startup_command]);

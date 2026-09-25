@@ -1,4 +1,4 @@
-import { API_BASE_URL, getCSRFToken } from './http';
+import { requestJSON, type ForgeRequestOptions } from './http';
 
 export type AppStoreApp = {
   id: string;
@@ -48,61 +48,26 @@ export type InstallRequest = {
   diskMb: number;
 };
 
-async function apiFetch<T>(path: string, options?: RequestInit): Promise<T> {
-  const method = options?.method ?? 'GET';
-  const headers: Record<string, string> = { Accept: 'application/json', ...options?.headers as Record<string, string> };
-  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
-    const csrf = getCSRFToken();
-    if (csrf) headers['X-CSRF-Token'] = csrf;
+/**
+ * App-store requests. This used to be a third private HTTP client (own `fetch`,
+ * own CSRF header, own retry/backoff loop, own error strings); it is now a thin
+ * wrapper over the canonical primitive so CSRF, cookie credentials, the 401
+ * session-expiry signal and {@link ApiError} shaping are handled in exactly one
+ * place. Retry/backoff intentionally moved to the react-query `retry` option at
+ * the call sites — a client-side retry loop hidden behind an API function
+ * double-retries against the server's rate limiter and is invisible to the
+ * components that own the request lifecycle.
+ *
+ * The Go handlers wrap every payload in `{"data": ...}`, so the envelope is
+ * unwrapped here to keep the exported function signatures unchanged.
+ */
+async function apiFetch<T>(path: string, init: RequestInit = {}, options: ForgeRequestOptions = {}): Promise<T> {
+  const body = await requestJSON<T | { data?: T }>(path, init, options);
+  if (body && typeof body === 'object' && !Array.isArray(body) && 'data' in body) {
+    const unwrapped = (body as { data?: T }).data;
+    if (unwrapped !== undefined) return unwrapped;
   }
-
-  // Rate limiting retry configuration
-  const maxRetries = 3;
-  const baseDelay = 1000; // 1 second
-    let lastError: Error = new Error("Unknown error");
-
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      const res = await fetch(`${API_BASE_URL}${path}`, {
-        credentials: "include",
-        ...options,
-        headers,
-      });
-
-      if (!res.ok) {
-        const err = await res.text();
-
-        // Handle rate limiting (429) with retry
-        if (res.status === 429) {
-          const retryAfterHeader = res.headers.get('Retry-After');
-          const retryAfter = retryAfterHeader ? parseInt(retryAfterHeader) : 5; // Default 5 seconds
-          const delay = Math.min(retryAfter * 1000, 30000); // Max 30 seconds
-
-          if (attempt < maxRetries) {
-            await new Promise(resolve => setTimeout(resolve, delay));
-            continue; // Retry the request
-          }
-
-          throw new Error(`API ${method} ${path}: ${res.status} ${err}`);
-        }
-
-        throw new Error(`API ${method} ${path}: ${res.status} ${err}`);
-      }
-
-      const body = await res.json();
-      return body?.data ?? body;
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-
-      // For network errors, retry with exponential backoff
-      if (attempt < maxRetries) {
-        const delay = baseDelay * Math.pow(2, attempt); // Exponential backoff
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
-    }
-  }
-
-  throw lastError;
+  return body as T;
 }
 
 export async function listApps(category?: string, search?: string): Promise<AppStoreApp[]> {
@@ -125,9 +90,10 @@ export async function installApp(req: InstallRequest): Promise<AppStoreInstall> 
   });
 }
 
+/** Uninstall returns the plain `{"data":"ok"}` acknowledgement. */
 export async function uninstallApp(id: string, force?: boolean): Promise<{ data: string }> {
   const qs = force ? "?force=true" : "";
-  return apiFetch<{ data: string }>(`/app-store/${encodeURIComponent(id)}/uninstall${qs}`, {
+  return requestJSON<{ data: string }>(`/app-store/${encodeURIComponent(id)}/uninstall${qs}`, {
     method: "POST",
   });
 }
@@ -143,7 +109,7 @@ export async function upgradeApp(id: string): Promise<AppStoreInstall> {
 }
 
 export async function syncRegistry(registryUrl?: string): Promise<{ data: string }> {
-  return apiFetch<{ data: string }>("/app-store/sync", {
+  return requestJSON<{ data: string }>("/app-store/sync", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ registryUrl }),

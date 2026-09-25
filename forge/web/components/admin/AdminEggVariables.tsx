@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import { type ApiEgg, type ApiEggVariable, fetchEggVariables, createEggVariable, updateEggVariable, deleteEggVariable, reorderEggVariables } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useToast } from "@/components/ui/toast";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, cn } from "./admin-ui";
 
 function VariableCard({
@@ -100,6 +101,7 @@ function VariableCard({
 
 export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const varsQuery = useQuery({
     queryKey: ["egg-variables", egg.id],
@@ -154,6 +156,7 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
       rules: varRules.trim(),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }); setModal(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create variable", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updateMut = useMutation({
@@ -167,16 +170,19 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
       rules: varRules.trim(),
     }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }); setModal(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to update variable", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteEggVariable(egg.id, id),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const reorderMut = useMutation({
     mutationFn: (ids: string[]) => reorderEggVariables(egg.id, ids),
     onSuccess: () => qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }),
+    onError: (err) => toast({ tone: "error", title: "Failed to reorder variables", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
@@ -196,7 +202,8 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
   return (
     <div className="space-y-6">
       <SectionHeader
-        title={`Variables: ${egg.name}`}
+        hideBreadcrumb
+        title="Environment Variables"
         sub="Environment variables for this egg. Presented to users when creating or managing servers."
       />
 

@@ -6,6 +6,7 @@ import { Trash2, RefreshCw, Plus, Eraser } from "lucide-react";
 import { listVolumes, createVolume, deleteVolume, pruneVolumes, type DockerVolume } from "@/lib/api/docker";
 import { Btn, Card, EmptyState, Input, Modal, ModalFooter, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Alert, Pagination } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
 
 function formatDate(ts: string): string {
   if (!ts) return "";
@@ -18,6 +19,7 @@ function formatDate(ts: string): string {
 
 export function VolumesView() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DockerVolume | null>(null);
@@ -42,11 +44,13 @@ export function VolumesView() {
   const deleteMut = useMutation({
     mutationFn: ({ id, nodeId }: { id: string; nodeId: string }) => deleteVolume(id, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "volumes"] }); setDeleteTarget(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete volume", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const pruneMut = useMutation({
     mutationFn: () => pruneVolumes(),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "volumes"] }); setShowPruneConfirm(false); },
+    onError: (err) => toast({ tone: "error", title: "Failed to prune unused volumes", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const filtered = useMemo(

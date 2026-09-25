@@ -5,7 +5,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Database, Plus, Trash2, RotateCcw, Archive, Eye,
 } from "lucide-react";
-import { AdminTabs, AdminSelect, AdminFormSection, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { AdminPageLayout, AdminTabs, AdminSelect, AdminFormSection, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import {
   listDatabaseServices,
@@ -50,13 +50,28 @@ export default function AdminDatabaseServicesPage() {
   const [detailId, setDetailId] = useState<string | null>(null);
 
   return (
-    <div>
-      <div className="mb-6">
-        <AdminTabs active={activeTab} label="Database service sections" onChange={(id) => setActiveTab(id as Tab)} tabs={([
-          { key: "services" as Tab, label: "Database Services" },
-          { key: "templates" as Tab, label: "Service Templates" },
-        ]).map((tab) => ({ id: tab.key, label: tab.label }))} />
-      </div>
+    <AdminPageLayout>
+      <SectionHeader
+        title="Database Services"
+        sub="Provisioned managed database containers and reusable service templates."
+        action={
+          activeTab === "services" ? (
+            <Btn tone="primary" onClick={() => setShowProvision(true)}><Plus size={14} /> Provision</Btn>
+          ) : (
+            <Btn tone="primary" onClick={() => setShowTemplate(true)}><Plus size={14} /> Add Template</Btn>
+          )
+        }
+      />
+
+      <AdminTabs
+        active={activeTab}
+        label="Database service sections"
+        onChange={(id) => setActiveTab(id as Tab)}
+        tabs={[
+          { id: "services", label: "Database Services" },
+          { id: "templates", label: "Service Templates" },
+        ]}
+      />
 
       {activeTab === "services" ? (
         <ServicesTab
@@ -74,7 +89,7 @@ export default function AdminDatabaseServicesPage() {
           onClose={() => setShowTemplate(false)}
         />
       )}
-    </div>
+    </AdminPageLayout>
   );
 }
 
@@ -114,12 +129,7 @@ function ServicesTab({
   });
 
   return (
-    <div>
-      <SectionHeader
-        title="Database Services"
-        sub="Provisioned managed database containers"
-        action={<Btn onClick={onProvision}><Plus size={14} /> Provision</Btn>}
-      />
+    <div className="space-y-6">
 
       <Card>
         <CardHeader title="Services" icon={Database} />
@@ -296,7 +306,11 @@ function DetailModal({ serviceId, onClose }: { serviceId: string; onClose: () =>
   });
 
   const revokeCredMut = useMutation({
-    mutationFn: (credId: string) => revokeServiceCredential(serviceId, credId),
+    mutationFn: async (credId: string) => {
+      const result = await revokeServiceCredential(serviceId, credId);
+      if (!result.ok) throw new Error("The server reported the service credential was not revoked.");
+      return result;
+    },
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["service-credentials", serviceId] }); toast({ tone: "success", title: "Credential revoked" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Revoke failed", message: e.message }),
   });
@@ -484,12 +498,7 @@ function TemplatesTab({ showCreate, onShowCreate, onClose }: { showCreate: boole
   });
 
   return (
-    <div>
-      <SectionHeader
-        title="Service Templates"
-        sub="Pre-configured database service definitions"
-        action={<Btn onClick={onShowCreate}><Plus size={14} /> Add Template</Btn>}
-      />
+    <div className="space-y-6">
 
       <Card>
         <CardHeader title="Templates" icon={Database} />

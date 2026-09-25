@@ -6,9 +6,11 @@ import { Trash2, RefreshCw, Plus } from "lucide-react";
 import { listNetworks, createNetwork, deleteNetwork, type DockerNetwork } from "@/lib/api/docker";
 import { Btn, Card, EmptyState, Input, Modal, ModalFooter, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Alert, Pagination } from "@/components/ui/primitives";
+import { useToast } from "@/components/ui/toast";
 
 export function NetworksView() {
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DockerNetwork | null>(null);
@@ -32,6 +34,7 @@ export function NetworksView() {
   const deleteMut = useMutation({
     mutationFn: ({ id, nodeId }: { id: string; nodeId: string }) => deleteNetwork(id, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "networks"] }); setDeleteTarget(null); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete network", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const filtered = useMemo(

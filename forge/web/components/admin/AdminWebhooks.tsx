@@ -250,13 +250,13 @@ export function AdminWebhooks() {
                   <div className="flex items-center gap-2.5 mb-2">
                     {discordAvatarUrl ? <span aria-label="Webhook avatar preview" className="h-6 w-6 rounded-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${discordAvatarUrl})` }} /> : <div className="h-6 w-6 rounded-full bg-[#5865f2]" />}
                     <span className="text-sm font-medium text-white leading-none">{discordUsername || "Webhook"}</span>
-                    <span className="text-xs text-[#949ba4]">Today at 12:00</span>
+                    <span className="text-xs text-[var(--text-subtle)]">Today at 12:00</span>
                   </div>
-                  {discordContent && <p className="text-sm leading-relaxed text-[#dbdee1]">{discordContent}</p>}
+                  {discordContent && <p className="text-sm leading-relaxed text-[var(--text)]">{discordContent}</p>}
                   <div className="mt-2 rounded-lg border-l-[4px] border-l-[#5865f2] bg-[var(--surface-raised)] p-3">
-                    <p className="text-sm font-semibold text-[#dbdee1]">Event Notification</p>
-                    <p className="text-xs text-[#949ba4] mt-1">This is a preview of how the webhook will appear in Discord.</p>
-                    {events.length > 0 && <p className="text-xs text-[#949ba4] mt-1">Triggered on: {events.join(", ")}</p>}
+                    <p className="text-sm font-semibold text-[var(--text)]">Event Notification</p>
+                    <p className="text-xs text-[var(--text-subtle)] mt-1">This is a preview of how the webhook will appear in Discord.</p>
+                    {events.length > 0 && <p className="text-xs text-[var(--text-subtle)] mt-1">Triggered on: {events.join(", ")}</p>}
                   </div>
                 </div>
               </AdminFormSection>

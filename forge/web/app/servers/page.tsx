@@ -214,7 +214,7 @@ export default function ServersPage() {
                 >
                   {/* Status bar indicator */}
                   <div className="pointer-events-none absolute right-0 top-0 bottom-0 w-1 rounded-r-xl opacity-50 group-hover:opacity-75 transition-opacity" style={{
-                    backgroundColor: server.suspended ? "#f43f5e" : server.status === "running" ? "#10b981" : server.status === "installing" ? "#f59e0b" : "#64748b"
+                    backgroundColor: server.suspended ? "var(--danger)" : server.status === "running" ? "var(--success)" : server.status === "installing" ? "var(--warning)" : "var(--text-muted)"
                   }} />
 
                   <div className="flex items-start justify-between gap-3 mb-3">

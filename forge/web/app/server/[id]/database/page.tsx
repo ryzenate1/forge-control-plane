@@ -75,7 +75,11 @@ function ServerDatabaseView({ serverId }: { serverId: string }) {
   });
 
   const unlinkMut = useMutation({
-    mutationFn: (svcId: string) => unlinkDatabaseServiceFromServer(serverId, svcId),
+    mutationFn: async (svcId: string) => {
+      const result = await unlinkDatabaseServiceFromServer(serverId, svcId);
+      if (!result.ok) throw new Error("The server reported the database service was not unlinked.");
+      return result;
+    },
     onSuccess: () => { invalidate(); toast({ tone: "success", title: "Service unlinked" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Unlink failed", message: e.message }),
   });
@@ -211,7 +215,11 @@ function LinkServiceModal({ serverId, linkedIds, onClose, onLinked }: {
   const available = (availableQuery.data ?? []).filter((s) => !linkedIds.includes(s.id));
 
   const linkMut = useMutation({
-    mutationFn: () => linkDatabaseServiceToServer(serverId, selectedId),
+    mutationFn: async () => {
+      const result = await linkDatabaseServiceToServer(serverId, selectedId);
+      if (!result.ok) throw new Error("The server reported the database service was not linked.");
+      return result;
+    },
     onSuccess: () => { onLinked(); onClose(); toast({ tone: "success", title: "Service linked" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Link failed", message: e.message }),
   });

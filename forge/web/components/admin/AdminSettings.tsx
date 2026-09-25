@@ -94,7 +94,7 @@ export function AdminSettings() {
   const [tab, setTab] = useState<Tab>("general");
   return (
     <div className="space-y-6">
-      <SectionHeader title="Platform — Settings" sub="PLATFORM · Settings is the panel control surface: branding, security, monitoring, orchestration, mail, backups and advanced runtime. Distinct from Infra/Networking/Storage and from Security headers under Networking." />
+      <SectionHeader title="Platform Settings" sub="Panel control surface: branding, security, monitoring, orchestration, mail, backups and advanced runtime." />
       <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
         <span className="font-semibold text-slate-300">PLATFORM</span> · <span className="font-semibold text-slate-200">Settings</span> — global panel configuration. For per-domain networking security see <code className="font-mono text-[11px]">/admin/security</code> (headers) and <code className="font-mono">/admin/certificates /mtls</code> (TLS); for identity see <code className="font-mono">/admin/users /roles</code>. Writes via <code className="font-mono">PUT /admin/settings</code> + <code className="font-mono">PATCH /admin/settings/mail</code> + <code className="font-mono">/advanced</code>.
       </div>
