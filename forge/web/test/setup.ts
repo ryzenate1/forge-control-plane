@@ -5,5 +5,9 @@ import { cleanup } from "@testing-library/react";
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
-  window.localStorage.clear();
+  try {
+    window.localStorage?.clear();
+  } catch {
+    // jsdom without url may not expose localStorage
+  }
 });
