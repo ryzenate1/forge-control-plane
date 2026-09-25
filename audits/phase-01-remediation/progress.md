@@ -1,0 +1,25 @@
+# Phase 1 Remediation — Progress
+
+- [x] Wave 0: truth establishment (git state, concurrent-writer detection, baseline tests)
+- [x] Wave 1.1: deployment false completion (RuntimeExecutor + fail-closed + verify steps)
+- [x] Wave 1.3: empty/invalid image admission rejection (both layers)
+- [~] Wave 1.2: node-health validation — status gate done; heartbeat-freshness deferred w/ ARCH03
+- [x] Wave 2.4: compose restart wired (existing chain, no second engine)
+- [x] Wave 2.5: compose redeploy atomicity (in-place update w/ rollback+health)
+- [x] Wave 3: Docker admin create/delete/prune handlers implemented + registered
+- [x] Wave 4.1–4.3: lease renewal verified existing; retry accounting fixed; reaper heartbeat added
+- [x] Wave 4.5: single-writer enforcement (dead DispatchCompose removed)
+- [ ] Wave 4.4: durable periodic scheduler (periodic.go already dispatches via durable queue — verify missed-run policy) → follow-up
+- [x] Wave 5.1: restart attempt decay
+- [x] Wave 5.2: plan dedupe semantics verified + pinned by test
+- [x] Wave 5.3: event-before-verify fixed (F-26); generation fencing partially covered by existing NoDoubleReservation — full transactional coupling deferred
+- [ ] Wave 6: preview dedup — DEFERRED (concurrent writer owns files)
+- [x] Wave 7: start/stop/restart/scale semantics (restart real power cycle; scale refuses without placement)
+- [~] Wave 8: safe deletion — reservation cancel/orphan sweep deferred; delete-during-deploy guard follow-up
+- [ ] Wave 9: env var unification — DEFERRED (active writer collision)
+- [x] Wave 10: build system honesty (admission + cache/platform wiring)
+- [~] Wave 11: git — buildType honesty done; OAuth decision + credential hardening + SHA fetch deferred
+- [ ] Wave 12: revision unification — deferred (cross-phase model decision)
+- [x] Wave 13.1–13.5 partial: nav dup already fixed; create-form truthful; back-href; tab URL persistence; dead CTA; metrics queryKey invalidated
+- [x] Wave 15: regression tests for every fixed finding
+- [x] Wave 17: re-audit classification (finding-status.md)
