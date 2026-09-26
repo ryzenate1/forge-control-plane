@@ -29,6 +29,11 @@ const (
 
 type CheckType string
 
+// maxHealthCheckConcurrency bounds how many target checks run at once within a
+// single pass. Each check opens a socket and a DB write, so the ceiling keeps a
+// large fleet of targets from exhausting file descriptors or the pool.
+const maxHealthCheckConcurrency = 64
+
 const (
 	CheckTypeTCP  CheckType = "tcp"
 	CheckTypeHTTP CheckType = "http"
@@ -143,6 +148,9 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	go func() {
+		// Backstop for the one-off startup load; the recurring passes are guarded
+		// individually by runOnceSafe so a panic in a single tick does not kill the
+		// runner and leave health permanently stale.
 		defer func() {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
@@ -151,7 +159,7 @@ func (s *Service) Start(ctx context.Context) {
 			}
 		}()
 		s.loadExistingStates(ctx)
-		s.runOnce(ctx)
+		s.runOnceSafe(ctx)
 		ticker := time.NewTicker(s.config.Interval)
 		defer ticker.Stop()
 		for {
@@ -159,10 +167,24 @@ func (s *Service) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				s.runOnce(ctx)
+				s.runOnceSafe(ctx)
 			}
 		}
 	}()
+}
+
+// runOnceSafe runs a single health-check pass, recovering from a panic so a
+// failure in one target's check cannot terminate the runner goroutine and
+// silently stop all subsequent checks across every target group.
+func (s *Service) runOnceSafe(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			slog.Error("health check runner panic recovered", "panic", r, "stack", string(buf[:n]))
+		}
+	}()
+	s.runOnce(ctx)
 }
 
 func (s *Service) Stop() {
@@ -250,7 +272,13 @@ func (s *Service) runOnce(ctx context.Context) {
 	checkCtx, cancel := context.WithTimeout(ctx, checkTimeout)
 	defer cancel()
 
+	// Bound concurrent checks: a pass fans out one goroutine per target across
+	// every group, so without a ceiling thousands of targets would each open a
+	// socket and a DB write at once and exhaust file descriptors and the
+	// connection pool. The semaphore caps in-flight checks; acquiring also
+	// respects cancellation so a shutdown mid-pass stops launching new checks.
 	var wg sync.WaitGroup
+	sem := make(chan struct{}, maxHealthCheckConcurrency)
 	for _, g := range groups {
 		var cfg HealthCheckConfig
 		if len(g.HealthCheck) == 0 {
@@ -276,9 +304,16 @@ func (s *Service) runOnce(ctx context.Context) {
 			continue
 		}
 		for _, t := range targets {
+			select {
+			case sem <- struct{}{}:
+			case <-checkCtx.Done():
+				wg.Wait()
+				return
+			}
 			wg.Add(1)
 			go func(target store.TargetRow, groupID string, hc HealthCheckConfig, protocol string) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				s.checkTarget(checkCtx, target, groupID, hc, protocol)
 			}(t, g.ID, cfg, g.Protocol)
 		}

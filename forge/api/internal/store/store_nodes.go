@@ -1006,6 +1006,12 @@ func (s *Store) RemoteServerConfigurations(ctx context.Context, nodeID string) (
 		}
 		target.StartupCommand = resolveStartupCommand(target.StartupCommand, target.Environment)
 
+		// Resolve private-registry credentials for the image so reconcile/recreate
+		// on this node can pull non-Docker-Hub images (best-effort, never blocks).
+		if auth, err := s.registryAuthForImage(ctx, info.image); err == nil {
+			target.RegistryAuth = auth
+		}
+
 		allocs := allocsByServer[info.serverID]
 		if info.primaryAllocID.Valid {
 			sort.Slice(allocs, func(i, j int) bool {

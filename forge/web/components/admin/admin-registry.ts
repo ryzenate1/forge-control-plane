@@ -56,8 +56,10 @@ export type AdminNavGroup = { title: string; titleKey: string; items: AdminNavEn
 /**
  * Consolidated IA — 7 goal-oriented groups (was 11).
  *
- * OVERVIEW (4) · WORKLOADS (12) · DELIVERY (8) · INFRASTRUCTURE (17)
- * NETWORK & SECURITY (14) · OPERATIONS (15) · ORGANIZATION & SETTINGS (16) = 86 hrefs.
+ * OVERVIEW (4) · WORKLOADS (12) · DELIVERY (9) · INFRASTRUCTURE (17)
+ * NETWORK & SECURITY (14) · OPERATIONS (16) · ORGANIZATION & SETTINGS (16) = 88 hrefs.
+ * Counts are a current census, not an invariant — recount the `href:` entries per
+ * group before trusting them after a nav change.
  *
  * All hrefs retained for compat; legacy paths map via ADMIN_ALIAS_ROUTES.
  * Database Services is intentionally NOT a second nav item — it lives as a
@@ -92,6 +94,7 @@ export const adminPageRegistry: AdminNavGroup[] = [
   { title: "Delivery", titleKey: "admin.navGroup.delivery", items: [
     { label: "Deployments", labelKey: "admin.nav.deployments", href: "/admin/deployments", icon: RocketLaunchIcon, requiredRole: "admin", capability: "available", description: "Blue-green and rolling deployments", descriptionKey: "admin.navDesc.deployments" },
     { label: "Compose Stacks", labelKey: "admin.nav.compose", href: "/admin/compose", icon: ComposeSheetsIcon, requiredRole: "admin", capability: "available", description: "Docker Compose stacks and imports", descriptionKey: "admin.navDesc.compose" },
+    { label: "Stack Templates", labelKey: "admin.nav.stackTemplates", href: "/admin/compose-templates", icon: TemplateSheetIcon, requiredRole: "admin", capability: "available", description: "Reusable parameterized compose stack templates", descriptionKey: "admin.navDesc.stackTemplates" },
     { label: "Pipelines", labelKey: "admin.nav.pipelines", href: "/admin/pipelines", icon: PipelineFlowIcon, requiredRole: "admin", capability: "available", description: "CI/CD pipelines and delivery workflows", descriptionKey: "admin.navDesc.pipelines" },
     { label: "Git Integrations", labelKey: "admin.nav.gitConnections", href: "/admin/git", icon: GitBranchTreeIcon, requiredRole: "admin", capability: "available", description: "Git credentials, providers, and sources", descriptionKey: "admin.navDesc.gitConnections" },
     { label: "Preview Deployments", labelKey: "admin.nav.previewDeployments", href: "/admin/preview-deployments", icon: Eye, requiredRole: "admin", capability: "available", description: "Pull-request preview environments", descriptionKey: "admin.navDesc.previewDeployments", secondary: true },

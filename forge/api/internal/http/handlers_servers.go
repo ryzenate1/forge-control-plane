@@ -20,6 +20,7 @@ import (
 
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/domain"
+	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/services/activity"
 	"gamepanel/forge/internal/services/clustermanager"
 	"gamepanel/forge/internal/services/migration"
@@ -787,6 +788,13 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		if req.TemplateID == "" || (req.RegionID == "" && req.Region == "" && req.NodeID == "" && req.RequiredNode == "") {
 			return fiber.NewError(fiber.StatusBadRequest, "templateId, and regionId or nodeId are required")
+		}
+		// Reject an unknown engine before placement runs. Left to the scheduler it
+		// comes back as "no nodes satisfy placement constraints" — a capacity story
+		// about a request that was simply malformed, which sends the operator to
+		// inspect nodes instead of the typo in their payload.
+		if err := gpruntime.ValidateProvider(req.RuntimeProvider); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		if req.OwnerID == "" {
 			if claims, ok := c.Locals("user").(tokenClaims); ok {

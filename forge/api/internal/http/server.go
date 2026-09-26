@@ -20,15 +20,13 @@ import (
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/events"
 	"gamepanel/forge/internal/eventstore"
+	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/services"
 	acmesvc "gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/services/activity"
 	alerting "gamepanel/forge/internal/services/alerting"
 	apphostingsvc "gamepanel/forge/internal/services/apphosting"
 	appstoresvc "gamepanel/forge/internal/services/appstore"
-	catalogsvc "gamepanel/forge/internal/services/catalog"
-	"gamepanel/forge/internal/services/forgefile"
-	"gamepanel/forge/internal/services/onboarding"
 	"gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
@@ -36,10 +34,12 @@ import (
 	billingsvc "gamepanel/forge/internal/services/billing"
 	"gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
+	catalogsvc "gamepanel/forge/internal/services/catalog"
 	cleanupsvc "gamepanel/forge/internal/services/cleanup"
 	"gamepanel/forge/internal/services/clustermanager"
 	"gamepanel/forge/internal/services/clustermembership"
 	composesvc "gamepanel/forge/internal/services/compose"
+	composetemplatessvc "gamepanel/forge/internal/services/composetemplates"
 	"gamepanel/forge/internal/services/crashdetector"
 	cronjobsvc "gamepanel/forge/internal/services/cronjob"
 	"gamepanel/forge/internal/services/crossnode"
@@ -55,6 +55,7 @@ import (
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
 	fencingsvc "gamepanel/forge/internal/services/fencing"
+	"gamepanel/forge/internal/services/forgefile"
 	gitsvc "gamepanel/forge/internal/services/git"
 	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
@@ -70,10 +71,11 @@ import (
 	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
+	nomadsvc "gamepanel/forge/internal/services/nomad"
 	notificationsvc "gamepanel/forge/internal/services/notification"
 	enhancednotifsvc "gamepanel/forge/internal/services/notifications"
-	nomadsvc "gamepanel/forge/internal/services/nomad"
 	"gamepanel/forge/internal/services/observability"
+	"gamepanel/forge/internal/services/onboarding"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	"gamepanel/forge/internal/services/pipeline"
 	"gamepanel/forge/internal/services/plugins"
@@ -153,14 +155,20 @@ type Config struct {
 	QueueService         *queue.Service
 	OperationService     *operationsvc.Service
 	RuntimeRegistry      *runtimesvc.Registry
+	// WorkloadRuntime is the runtime dispatcher the create-workload surface
+	// reports from. It is the authority on which engines can actually be
+	// dispatched to; offering a runtime with no adapter behind it would put a
+	// control in the UI that cannot do its job. Nil-safe: the endpoint degrades
+	// to reporting only what the provider allow-list allows.
+	WorkloadRuntime *gpruntime.MultiRuntimeAdapter
 	// IncusService drives container/VM hosts (runtime=incus) over the Incus
 	// REST API; NomadService fronts a Nomad workload orchestrator control plane.
 	// Both are nil-safe — routes return 503 when unset.
-	IncusService *incussvc.Service
-	NomadService *nomadsvc.Service
-	WebAuthnService      *webauthn.Service
-	EventRelay           *eventstore.Relay
-	EventRegistry        *events.Registry
+	IncusService    *incussvc.Service
+	NomadService    *nomadsvc.Service
+	WebAuthnService *webauthn.Service
+	EventRelay      *eventstore.Relay
+	EventRegistry   *events.Registry
 
 	BackupSvc                  *backup.Service
 	AutoScaler                 *autoscaler.Service
@@ -186,6 +194,7 @@ type Config struct {
 	GitDeployMgmtService       *gitsvc.DeploymentManagementService
 	GitProviderService         *gitprovider.Service
 	ComposeService             *composesvc.Service
+	ComposeTemplateService     *composetemplatessvc.Service
 	BuildService               *build.Service
 	BuildpackService           *buildpacksvc.Service
 	InstallerService           *installersvc.Service
@@ -205,11 +214,11 @@ type Config struct {
 
 	// PipelineService drives multi-stage CI/CD pipelines (definitions, runs,
 	// logs, artifacts, manual approvals). Previously unwired to any route.
-	PipelineService *pipeline.Service
-	ReplicaManager  *replicamanager.Manager
-	AppStoreService *appstoresvc.Service
-	CatalogService  *catalogsvc.Service
-	ForgefileSvc    *forgefile.Service
+	PipelineService   *pipeline.Service
+	ReplicaManager    *replicamanager.Manager
+	AppStoreService   *appstoresvc.Service
+	CatalogService    *catalogsvc.Service
+	ForgefileSvc      *forgefile.Service
 	OnboardingService *onboarding.Service
 
 	AlertService                *alerting.Service
@@ -2286,6 +2295,11 @@ func NewServer(cfg Config) *fiber.App {
 	// (cluster-wide activity, backup lifecycle, archive completion, transfer state).
 	registerRemoteExtras(remote, cfg)
 
+	// Node-reported container lifecycle feed. Mounted here, on the guarded
+	// /api/remote group, so it can never carry a weaker middleware chain than the
+	// rest of the node-facing API.
+	registerDockerEventIngest(remote, cfg)
+
 	// Setup wizard routes (public, gated to "no admin exists" server-side)
 	registerSetupRoutes(v1, cfg, authLimiter)
 
@@ -2491,6 +2505,11 @@ func NewServer(cfg Config) *fiber.App {
 	// Register fixed plugin subroutes before admin's /admin/plugins/:id route.
 	// Otherwise paths such as /discover are parsed as a plugin identifier.
 	registerPluginRoutes(protected, cfg)
+	registerApiKeyRoutes(protected, cfg, mutationLimiter)
+	registerNestRoutes(protected, cfg, mutationLimiter)
+	registerLocationRoutes(protected, cfg, mutationLimiter)
+	registerRegionRoutes(protected, cfg, mutationLimiter)
+	registerTemplateRoutes(protected, cfg, mutationLimiter)
 	registerAdminRoutes(protected, cfg, nodeRegistry, clusterManager, evacuationPlanner, migrationService, reservationManager, recoveryCoordinator, mutationLimiter, adminIPAccess)
 	registerServerRoutes(protected, cfg, runner, clusterManager, mutationLimiter, adminIPAccess)
 	registerSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)
@@ -2542,6 +2561,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerDNSRoutes(protected, cfg, cfg.DNSService, mutationLimiter)
 	registerMaintenanceRoutes(protected, cfg, mutationLimiter)
 	registerComposeRoutes(protected, cfg, mutationLimiter)
+	registerComposeTemplateRoutes(protected, cfg, mutationLimiter)
 	registerDBContainerRoutes(protected, cfg, mutationLimiter)
 	registerDatabaseServiceRoutes(protected, cfg, mutationLimiter)
 	registerDBDiagnosticRoutes(protected, cfg)

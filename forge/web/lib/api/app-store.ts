@@ -1,4 +1,4 @@
-import { requestJSON, type ForgeRequestOptions } from './http';
+import { requestJSON, postJSON, type ForgeRequestOptions } from './http';
 
 export type AppStoreApp = {
   id: string;
@@ -114,4 +114,21 @@ export async function syncRegistry(registryUrl?: string): Promise<{ data: string
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ registryUrl }),
   });
+}
+
+export type SyncBundledResult = {
+  imported: number;
+  updated: number;
+  skipped: number;
+};
+
+/**
+ * Re-seed the catalog from the embedded Coolify template library. The Go
+ * handler wraps the counts in the standard `{"data": ...}` envelope, which is
+ * unwrapped here so callers get the counts directly.
+ */
+export async function syncBundledTemplates(): Promise<SyncBundledResult> {
+  const body = await postJSON<{ data?: SyncBundledResult } & Partial<SyncBundledResult>>("/admin/app-store/sync-bundled");
+  if (body && typeof body === "object" && body.data) return body.data;
+  return body as SyncBundledResult;
 }

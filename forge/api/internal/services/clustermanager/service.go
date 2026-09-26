@@ -762,12 +762,22 @@ func runtimeCreateRequest(target store.ServerProvisionTarget) gpruntime.CreateSe
 	for _, mount := range target.Mounts {
 		mounts = append(mounts, gpruntime.Mount{Source: mount.Source, Target: mount.Target, ReadOnly: mount.ReadOnly})
 	}
+	var registryAuth *gpruntime.RegistryAuth
+	if target.RegistryAuth != nil {
+		registryAuth = &gpruntime.RegistryAuth{
+			Username:      target.RegistryAuth.Username,
+			Password:      target.RegistryAuth.Password,
+			IdentityToken: target.RegistryAuth.IdentityToken,
+			ServerAddress: target.RegistryAuth.ServerAddress,
+		}
+	}
 	return gpruntime.CreateServerRequest{
 		ServerID: target.ServerID, Name: target.Name, Image: target.Image, Command: command, Env: env,
 		Ports: ports, Mounts: mounts, MemoryMB: target.MemoryMB, SwapMB: target.SwapMB,
 		CPUShares: target.CPUShares, CPULimit: target.CPULimit, DiskMB: target.DiskMB,
 		IOWeight: target.IOWeight, Threads: target.Threads, OOMDisabled: target.OOMDisabled,
 		UID: int(target.ContainerUID), GID: int(target.ContainerGID),
+		RegistryAuth: registryAuth,
 	}
 }
 

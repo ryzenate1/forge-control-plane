@@ -124,6 +124,18 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 		}
 		return c.JSON(fiber.Map{"data": "sync initiated"})
 	})
+
+	// Re-seed the catalog from the embedded Coolify template library. Mounted on
+	// an explicit admin path (matching the /admin/app-store-templates precedent
+	// above) so the console route is unambiguous; guarded by the same admin role
+	// and mutation limiter as the rest of the app-store surface.
+	protected.Post("/admin/app-store/sync-bundled", requireRole("admin"), mutationLimiter, func(c *fiber.Ctx) error {
+		res, err := svc.SeedBundledTemplates(c.Context())
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.JSON(fiber.Map{"data": res})
+	})
 }
 
 // validateRegistryURL guards the app-store sync target against SSRF and

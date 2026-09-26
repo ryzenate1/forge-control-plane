@@ -5,10 +5,11 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft, Cloud, Cpu, Database, FileText,
-  Globe, HardDrive, History, KeyRound, Power,
+  Globe, HardDrive, History, KeyRound, MoveRight, Power,
   RefreshCw, RotateCcw, Settings, Square, Terminal,
   Wrench, XCircle,
 } from "lucide-react";
+import { DomainRedirectsPanel } from "@/components/app/domain-redirects-panel";
 import { useToast } from "@/components/ui/toast";
 import {
   fetchApp, fetchAppDeployments, fetchAppLogs, fetchAppDomains, fetchAppBackups,
@@ -24,7 +25,7 @@ import { DeployStatusBadge, LogViewer, ResourceGauge, EnvVarEditor, PortMapper, 
 import { formatDate, formatBytes } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-type TabId = "overview" | "deployments" | "configuration" | "logs" | "console" | "domains" | "backups";
+type TabId = "overview" | "deployments" | "configuration" | "logs" | "console" | "domains" | "redirects" | "backups";
 
 const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: "overview", label: "Overview", icon: Cpu },
@@ -33,6 +34,7 @@ const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: "logs", label: "Logs", icon: FileText },
   { id: "console", label: "Console", icon: Terminal },
   { id: "domains", label: "Domains", icon: Globe },
+  { id: "redirects", label: "Redirects", icon: MoveRight },
   { id: "backups", label: "Backups", icon: Database },
 ];
 
@@ -120,6 +122,7 @@ function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) 
       {tab === "logs" && <LogsTab appId={id} />}
       {tab === "console" && <ConsoleTab app={app} />}
       {tab === "domains" && <DomainsTab appId={id} />}
+      {tab === "redirects" && <DomainRedirectsPanel appId={id} />}
       {tab === "backups" && <BackupsTab appId={id} />}
     </div>
   );

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,11 +27,14 @@ import (
 // notifications engine as `docker.event.<type>`, and serves a filtered,
 // paginated timeline on GET /api/v1/admin/docker/events.
 //
-// Both surfaces are mounted from the phase-hook registrar, so the feature adds
-// no routes to NewServer: the admin timeline hangs off the authenticated
-// /api/v1 group, and the node-facing ingest is attached under /api/remote with
-// the same guard chain NewServer builds for that prefix (API IP allowlist,
-// mTLS, node bearer+HMAC).
+// Both surfaces are mounted by NewServer: the admin timeline hangs off the
+// authenticated /api/v1 group through the phase-hook registrar, and the
+// node-facing ingest is attached to the real /api/remote group next to the
+// other daemon routes. Attaching to that group — rather than rebuilding the
+// guard chain here — is what keeps the ingest under exactly the same API IP
+// allowlist, mTLS and node bearer+HMAC authentication as every other
+// node-facing endpoint; a hand-copied middleware list can only ever drift
+// weaker than the original.
 
 const dockerEventsPriority = 230
 
@@ -81,74 +83,19 @@ func registerDockerEventRoutes(v1 fiber.Router, protected fiber.Router, cfg *Con
 	admin := protected.Group("/admin/docker", requireRole("admin"))
 	admin.Get("/events", listAdminDockerEvents(conf))
 
-	if err := registerDockerEventIngest(v1, conf); err != nil {
-		return err
-	}
-
 	startDockerEventRetention(conf)
 	return nil
 }
 
-// registerDockerEventIngest mounts the node-facing batch endpoint under the
-// /api/remote prefix. NewServer builds that group before the phase hooks run, so
-// a registrar cannot reach the *fiber.Group itself; instead the identical guard
-// chain is assembled here from the same Config and attached to the app through
-// the v1 router. Fiber registers each group's routes with their own middleware
-// list, so a separate /api/remote/docker group neither shadows nor reorders the
-// existing /api/remote/servers/... routes.
-func registerDockerEventIngest(v1 fiber.Router, cfg Config) error {
-	if v1 == nil || v1.App() == nil {
-		return errors.New("docker event ingest: no application router")
-	}
-	if cfg.NodeRegistry == nil {
-		// Without the registry a bearer token cannot be resolved to a node at all,
-		// and remoteNodeMiddleware would panic on the first report. The timeline is
-		// still useful for whatever is already stored, so this is a warning and not
-		// a registrar failure.
-		logDockerEventIngestSkipped(cfg)
-		return nil
-	}
-
-	guards := make([]fiber.Handler, 0, 3)
-	// The IP guard is only instantiated when it has something to say:
-	// APIIPAccessConfig logs a "not configured" warning and NewServer already
-	// emitted exactly one for the real /api/remote group, so calling it again
-	// unconditionally would duplicate the message on every boot.
-	if strings.TrimSpace(os.Getenv("API_IP_ALLOW")) != "" || strings.TrimSpace(os.Getenv("API_IP_DENY")) != "" {
-		guards = append(guards, IPAccessControl(APIIPAccessConfig(cfg)))
-	}
-	guards = append(guards, MTLSAuthMiddleware(dockerEventsMTLSConfig(cfg)))
-	guards = append(guards, remoteNodeMiddleware(cfg, cfg.NodeRegistry))
-
-	remote := v1.App().Group("/api/remote/docker", guards...)
-	remote.Post("/events", ingestDockerEvents(cfg))
-	return nil
-}
-
-// dockerEventsMTLSConfig mirrors the mTLS settings NewServer applies to
-// /api/remote, so a deployment that requires client certificates on the
-// node-facing prefix cannot have its event reports arrive through a side door.
-func dockerEventsMTLSConfig(cfg Config) MTLSAuthConfig {
-	mtlsCfg := MTLSAuthConfig{
-		Enabled:    cfg.MTLSEnabled,
-		CACertPath: cfg.MTLSCACertPath,
-		CertPath:   cfg.MTLSCertPath,
-		KeyPath:    cfg.MTLSKeyPath,
-		DevBypass:  cfg.MTLSDevBypass,
-	}
-	if cfg.Store != nil {
-		mtlsCfg.RevocationLookup = cfg.Store.IsMTLSCertificateRevoked
-	}
-	return mtlsCfg
-}
-
-func logDockerEventIngestSkipped(cfg Config) {
-	const message = "docker event ingest not mounted: node registry service is unavailable"
-	if cfg.Logger != nil {
-		cfg.Logger.Warn(message)
+// registerDockerEventIngest mounts the node-facing batch endpoint on the
+// /api/remote group built by NewServer, which already carries the API IP
+// allowlist, mTLS and node bearer+HMAC guards. Fiber groups inherit their
+// parent's middleware, so the subgroup cannot be reached without them.
+func registerDockerEventIngest(remote fiber.Router, cfg Config) {
+	if remote == nil || cfg.Store == nil {
 		return
 	}
-	slog.Warn(message)
+	remote.Group("/docker").Post("/events", ingestDockerEvents(cfg))
 }
 
 // dockerEventPayload is one event as Beacon reports it, mirroring
@@ -268,10 +215,9 @@ func dockerEventFromPayload(node store.Node, now time.Time, index int, payload d
 // parseDockerEventTime turns the reported timestamp into a usable instant.
 //
 // A missing or unparseable value falls back to ingest time rather than failing
-// the batch: the event is real and worth keeping, only its age is unknown. A
-// timestamp more than a minute ahead of the panel is clamped, because a skewed
-// node clock must not push the feed's newest entry ahead of everything else or
-// put it outside the retention window.
+// the batch: the event is real and worth keeping, only its age is unknown. The
+// result is clamped at both ends, because a node clock is untrusted input that
+// decides where a row sits in a time-ordered, time-pruned table.
 func parseDockerEventTime(raw string, now time.Time) time.Time {
 	value := strings.TrimSpace(raw)
 	if value == "" {
@@ -282,21 +228,32 @@ func parseDockerEventTime(raw string, now time.Time) time.Time {
 		if err != nil {
 			continue
 		}
-		utc := parsed.UTC()
-		if utc.After(now.Add(time.Minute)) {
-			return now
-		}
-		return utc
+		return clampDockerEventTime(parsed.UTC(), now)
 	}
 	// Docker also exposes its event clock as a millisecond epoch; accept a bare
 	// integer as seconds or milliseconds.
 	if asInt, err := strconv.ParseInt(value, 10, 64); err == nil {
 		if asInt > 1e12 {
-			return time.UnixMilli(asInt).UTC()
+			return clampDockerEventTime(time.UnixMilli(asInt).UTC(), now)
 		}
-		return time.Unix(asInt, 0).UTC()
+		return clampDockerEventTime(time.Unix(asInt, 0).UTC(), now)
 	}
 	return now
+}
+
+// dockerEventClockFloor is the oldest ingested timestamp the panel believes.
+// A node whose clock was never set reports 1970, and a row that old sits both
+// past the retention window and past the existence of this feed: the hourly
+// prune would delete it before anyone could read it, and it would sort the
+// timeline as if the cluster had been broken since the epoch. Such a value is
+// a broken clock, not an old event, so it is stored as "just ingested".
+var dockerEventClockFloor = time.Date(2000, time.January, 1, 0, 0, 0, 0, time.UTC)
+
+func clampDockerEventTime(parsed time.Time, now time.Time) time.Time {
+	if parsed.After(now.Add(time.Minute)) || parsed.Before(dockerEventClockFloor) {
+		return now
+	}
+	return parsed
 }
 
 // sanitizeActorAttributes bounds untrusted telemetry before it reaches a jsonb

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/store"
 
@@ -16,17 +17,116 @@ import (
 )
 
 func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nodeprobe.Service) {
-	// GET /workload-kinds — reports available runtime providers and their
-	// operational status so the UI can render honest create-workload forms.
+	// GET /workload-kinds — reports every runtime Forge models, derived from the
+	// live wiring rather than a fixed list, so the create-workload form can tell
+	// "not an engine we have" from "no adapter registered" from "registered but
+	// no node runs it". Every unavailable answer carries a reason.
 	protected.Get("/workload-kinds", func(c *fiber.Ctx) error {
-		kinds := []fiber.Map{
-			{"provider": "docker", "available": true, "experimental": false, "vmLifecycle": false, "description": "Containerized workloads via Docker Engine"},
-			{"provider": "podman", "available": true, "experimental": false, "vmLifecycle": false, "description": "Containerized workloads via Podman (Docker-API compatible)"},
-			{"provider": "kubernetes", "available": true, "experimental": false, "vmLifecycle": false, "description": "Pod-managed workloads on a Kubernetes cluster"},
-			{"provider": "containerd", "available": false, "experimental": false, "vmLifecycle": false, "description": "Requires containerd build tag in Beacon binary"},
-			{"provider": "firecracker", "available": false, "experimental": true, "vmLifecycle": true, "description": "MicroVM isolation; requires firecracker build tag + kernel/rootfs on node"},
-			{"provider": "lxc", "available": false, "experimental": true, "vmLifecycle": true, "description": "System containers via LXC/Incus; not yet implemented in Beacon"},
-			{"provider": "kvm", "available": false, "experimental": true, "vmLifecycle": true, "description": "Full virtualization via QEMU/KVM; not yet implemented in Beacon"},
+		// Which engines a node can actually serve. A Beacon runs exactly one
+		// runtime, so node reporting is the only honest placement signal.
+		type nodeRef struct {
+			ID       string `json:"id"`
+			Name     string `json:"name"`
+			State    string `json:"state"`
+			Eligible bool   `json:"eligible"`
+		}
+		nodesByProvider := map[string][]nodeRef{}
+		nodesRead := false
+		if cfg.Store != nil {
+			ctx, cancel := requestContext()
+			defer cancel()
+			if nodes, err := cfg.Store.ListNodes(ctx); err == nil {
+				nodesRead = true
+				for _, node := range nodes {
+					key := gpruntime.NormalizeProvider(node.RuntimeProvider)
+					if key == "" {
+						key = gpruntime.DockerProvider
+					}
+					nodesByProvider[key] = append(nodesByProvider[key], nodeRef{
+						ID:    node.ID,
+						Name:  node.Name,
+						State: node.ActualState,
+						// Draining and maintenance hosts are excluded from
+						// placement, so they must not make an engine look usable.
+						Eligible: node.ActualState == "online" && !node.Draining && !node.Maintenance,
+					})
+				}
+			}
+		}
+
+		// Which engines the dispatcher can actually route to.
+		registered := map[string]gpruntime.RegisteredProvider{}
+		if cfg.WorkloadRuntime != nil {
+			for _, rp := range cfg.WorkloadRuntime.Registered() {
+				registered[rp.Provider] = rp
+			}
+		}
+
+		type kindView struct {
+			Provider     string                 `json:"provider"`
+			Description  string                 `json:"description"`
+			Supported    bool                   `json:"supported"`
+			Experimental bool                   `json:"experimental"`
+			Registered   bool                   `json:"registered"`
+			Available    bool                   `json:"available"`
+			Reason       string                 `json:"reason,omitempty"`
+			Capabilities gpruntime.Capabilities `json:"capabilities"`
+			Nodes        []nodeRef              `json:"nodes"`
+		}
+
+		descriptions := map[string]string{
+			gpruntime.DockerProvider:      "Containerized workloads on Docker Engine",
+			gpruntime.ContainerdProvider:  "Containerized workloads on containerd",
+			gpruntime.PodmanProvider:      "Containerized workloads on Podman",
+			gpruntime.FirecrackerProvider: "MicroVM-isolated workloads via Firecracker",
+			gpruntime.KubernetesProvider:  "Pod-managed workloads on a Kubernetes cluster",
+			gpruntime.KVMProvider:         "Fully virtualized machines via QEMU/KVM",
+			gpruntime.LXCProvider:         "System containers via LXC or Incus",
+		}
+
+		kinds := make([]kindView, 0, len(gpruntime.AllProviders()))
+		for _, provider := range gpruntime.AllProviders() {
+			view := kindView{
+				Provider:     provider,
+				Description:  descriptions[provider],
+				Supported:    gpruntime.IsSupportedProvider(provider),
+				Experimental: gpruntime.IsExperimentalProvider(provider),
+				Nodes:        nodesByProvider[provider],
+			}
+			if view.Nodes == nil {
+				view.Nodes = []nodeRef{}
+			}
+			if rp, ok := registered[provider]; ok {
+				view.Registered = true
+				view.Capabilities = rp.Capabilities
+			}
+
+			eligible := 0
+			for _, node := range view.Nodes {
+				if node.Eligible {
+					eligible++
+				}
+			}
+
+			switch {
+			case !view.Supported:
+				view.Reason = "refused by the provider allow-list; set ENABLE_EXPERIMENTAL_RUNTIMES to opt in"
+			case !view.Registered:
+				view.Reason = "no adapter is wired into the runtime dispatcher"
+			case !nodesRead:
+				// Unknown is not "none": say the node inventory could not be read
+				// rather than reporting an engine as unavailable.
+				view.Reason = "node inventory unavailable, so placement cannot be determined"
+			case eligible == 0:
+				if len(view.Nodes) > 0 {
+					view.Reason = "only hosts running it are draining, in maintenance, or offline"
+				} else {
+					view.Reason = "no node reports this runtime"
+				}
+			default:
+				view.Available = true
+			}
+			kinds = append(kinds, view)
 		}
 		return c.JSON(fiber.Map{"data": kinds})
 	})

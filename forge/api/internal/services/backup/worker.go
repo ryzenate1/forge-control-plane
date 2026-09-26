@@ -13,10 +13,11 @@ import (
 )
 
 type Worker struct {
-	store  *store.Store
-	svc    *Service
-	daemon *daemon.Client
-	jobSvc *JobService
+	store     *store.Store
+	svc       *Service
+	daemon    *daemon.Client
+	jobSvc    *JobService
+	configSvc *ConfigService
 
 	mu       sync.RWMutex
 	running  bool
@@ -34,6 +35,12 @@ func NewWorker(store *store.Store, svc *Service, daemon *daemon.Client) *Worker 
 // re-execute them with backoff.
 func (w *Worker) SetJobService(jobSvc *JobService) {
 	w.jobSvc = jobSvc
+}
+
+// SetConfigService enables the worker to fire cron-scheduled admin backup
+// configurations on their due cadence (see ConfigService.RunDueConfigs).
+func (w *Worker) SetConfigService(configSvc *ConfigService) {
+	w.configSvc = configSvc
 }
 
 func (w *Worker) Stop() {
@@ -141,6 +148,10 @@ func (w *Worker) tick(ctx context.Context) {
 	}
 
 	w.pickupBackupJobs(ctx)
+
+	if w.configSvc != nil {
+		w.configSvc.RunDueConfigs(pollCtx)
+	}
 
 	w.recordError(nil)
 }

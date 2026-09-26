@@ -2,6 +2,7 @@ package appstore
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 
 	"gamepanel/forge/internal/store"
@@ -210,6 +211,88 @@ volumes:
 		Params: `{"TRAEFIK_VERSION":{"label":"Traefik Version","type":"string","default":"latest","description":"Traefik image tag"},"TRAEFIK_HTTP_PORT":{"label":"HTTP Port","type":"number","default":80,"description":"External HTTP port"},"TRAEFIK_HTTPS_PORT":{"label":"HTTPS Port","type":"number","default":443,"description":"External HTTPS port"},"TRAEFIK_DASHBOARD_PORT":{"label":"Dashboard Port","type":"number","default":8080,"description":"Dashboard UI port"}}`,
 		MinMemoryMB: 128, MinDiskMB: 256, Maintainer: "Forge Team", SourceURL: "https://hub.docker.com/_/traefik",
 	},
+}
+
+// SeedBundledResult reports how a bundled-template sync touched the catalog.
+type SeedBundledResult struct {
+	Imported int `json:"imported"`
+	Updated  int `json:"updated"`
+	Skipped  int `json:"skipped"`
+}
+
+// SeedBundledTemplates upserts every embedded Coolify compose template into the
+// app-store catalog, idempotently and keyed by template file name. It is safe
+// to call on every boot and from the admin sync endpoint.
+//
+// The existing hand-written seedApps set richer defaults (compose body,
+// parameter schema, resource minimums), so this never overwrites those: an
+// already-present key only has its description/icon/category refreshed when
+// they differ, while everything else on the row is preserved. Missing keys are
+// inserted as a full bundled record. Call it AFTER SeedDefaultApps so the
+// hand-written rows win on their shared keys (e.g. "portainer").
+func (s *Service) SeedBundledTemplates(ctx context.Context) (SeedBundledResult, error) {
+	var res SeedBundledResult
+
+	templates, err := LoadBundledTemplates()
+	if err != nil {
+		return res, err
+	}
+
+	existing, err := s.store.ListAppStoreApps(ctx, "", "")
+	if err != nil {
+		return res, fmt.Errorf("list existing app store apps: %w", err)
+	}
+	byKey := make(map[string]store.AppStoreApp, len(existing))
+	for _, a := range existing {
+		byKey[a.Key] = a
+	}
+
+	for _, t := range templates {
+		cur, ok := byKey[t.Key]
+		if !ok {
+			if err := s.store.UpsertAppStoreApp(ctx, bundledTemplateToApp(t)); err != nil {
+				slog.Warn("seed bundled template (insert)", "key", t.Key, "error", err)
+				continue
+			}
+			res.Imported++
+			continue
+		}
+
+		if cur.Description == t.Description && cur.Icon == t.Logo && cur.Category == t.Category {
+			res.Skipped++
+			continue
+		}
+		cur.Description = t.Description
+		cur.Icon = t.Logo
+		cur.Category = t.Category
+		if err := s.store.UpsertAppStoreApp(ctx, &cur); err != nil {
+			slog.Warn("seed bundled template (update)", "key", t.Key, "error", err)
+			continue
+		}
+		res.Updated++
+	}
+
+	slog.Info("seeded bundled app-store templates",
+		"imported", res.Imported, "updated", res.Updated, "skipped", res.Skipped)
+	return res, nil
+}
+
+// bundledTemplateToApp maps a parsed template to a full catalog record. The
+// compose body uses inline ${VAR:-default} interpolation, so no parameter
+// schema is generated here (Params stays nil).
+func bundledTemplateToApp(t BundledTemplate) *store.AppStoreApp {
+	return &store.AppStoreApp{
+		Key:            t.Key,
+		Name:           t.Name,
+		ShortDesc:      t.Slogan,
+		Description:    t.Description,
+		Icon:           t.Logo,
+		Category:       t.Category,
+		Tags:           t.Tags,
+		Version:        "latest",
+		ComposeContent: t.ComposeYAML,
+		Maintainer:     "Coolify (bundled)",
+	}
 }
 
 func (s *Service) SeedDefaultApps(ctx context.Context) error {

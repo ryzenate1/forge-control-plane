@@ -705,6 +705,10 @@ type ServerProvisionTarget struct {
 	Status            string
 	SkipScripts       bool
 	DockerLabels      map[string]string
+	// RegistryAuth carries the resolved private-registry credentials for Image.
+	// It is populated by the store on a best-effort basis so provision and
+	// reconcile can pull non-Docker-Hub images.
+	RegistryAuth *RegistryCredential
 }
 
 // ServerProvisionTargetDTO is a safe DTO for API responses (excludes NodeToken)
@@ -740,6 +744,20 @@ type ServerProvisionTargetDTO struct {
 	Status            string
 	SkipScripts       bool
 	DockerLabels      map[string]string
+	// RegistryAuth carries decrypted credentials for a private registry whose
+	// address prefixes Image. Resolved at provision time from docker_registries
+	// so Beacon can pull non-Docker-Hub images.
+	RegistryAuth *RegistryCredential
+}
+
+// RegistryCredential is a store-level representation of private-registry login
+// material, kept here so ServerProvisionTarget can carry it without importing
+// the runtime package (which imports store).
+type RegistryCredential struct {
+	Username      string
+	Password      string
+	IdentityToken string
+	ServerAddress string
 }
 
 // ToDTO converts ServerProvisionTarget to safe DTO

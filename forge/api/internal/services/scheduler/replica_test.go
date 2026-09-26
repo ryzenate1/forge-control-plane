@@ -88,9 +88,34 @@ func TestFilterByRuntimeProvider(t *testing.T) {
 			want:    2,
 		},
 		{
-			name: "no matching runtime falls back to all",
+			name: "no matching runtime excludes every node",
 			nodes: []store.Node{
 				{ID: "n1", RuntimeProvider: "containerd"},
+			},
+			runtime: "firecracker",
+			want:    0,
+		},
+		{
+			name: "unreported provider is treated as docker, not firecracker",
+			nodes: []store.Node{
+				{ID: "n1", RuntimeProvider: ""},
+			},
+			runtime: "firecracker",
+			want:    0,
+		},
+		{
+			name: "unreported provider satisfies a docker request",
+			nodes: []store.Node{
+				{ID: "n1", RuntimeProvider: ""},
+				{ID: "n2", RuntimeProvider: "containerd"},
+			},
+			runtime: "docker",
+			want:    1,
+		},
+		{
+			name: "matching is case-insensitive",
+			nodes: []store.Node{
+				{ID: "n1", RuntimeProvider: "Firecracker"},
 			},
 			runtime: "firecracker",
 			want:    1,

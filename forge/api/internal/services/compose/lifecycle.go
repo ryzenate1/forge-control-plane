@@ -235,6 +235,82 @@ func extractRestartCount(status string) int {
 	return 0
 }
 
+// composeImageSet extracts distinct image references from a docker-compose
+// YAML document. It walks the `services:` mapping (and any nested `build:`
+// blocks are ignored since those build locally) collecting every string value
+// under an `image` key at any depth, which covers both the shorthand and
+// long-form service layouts without pulling in a full compose parser.
+func composeImageSet(composeYAML string) []string {
+	seen := map[string]bool{}
+	var images []string
+	for _, raw := range strings.Split(composeYAML, "\n") {
+		line := strings.TrimSpace(raw)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		lower := strings.ToLower(line)
+		if !strings.HasPrefix(lower, "image:") {
+			continue
+		}
+		value := strings.TrimSpace(line[len("image:"):])
+		value = strings.Trim(value, "\"'")
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		images = append(images, value)
+	}
+	return images
+}
+
+// registryAuthsForComposeYAML resolves stored private-registry credentials for
+// every image referenced by the compose file, de-duplicated by server address.
+func (s *Service) registryAuthsForComposeYAML(ctx context.Context, composeYAML string) ([]*daemon.RegistryAuth, error) {
+	if s.store == nil {
+		return nil, nil
+	}
+	var out []*daemon.RegistryAuth
+	seenAddr := map[string]bool{}
+	for _, image := range composeImageSet(composeYAML) {
+		cred, err := s.store.RegistryAuthForImageRef(ctx, image)
+		if err != nil || cred == nil {
+			continue
+		}
+		if seenAddr[cred.ServerAddress] {
+			continue
+		}
+		seenAddr[cred.ServerAddress] = true
+		out = append(out, &daemon.RegistryAuth{
+			Username:      cred.Username,
+			Password:      cred.Password,
+			IdentityToken: cred.IdentityToken,
+			ServerAddress: cred.ServerAddress,
+		})
+	}
+	return out, nil
+}
+
+// mergeRegistryAuth concatenates two auth slices, dropping entries from b whose
+// server address already appears in a.
+func mergeRegistryAuth(a, b []*daemon.RegistryAuth) []*daemon.RegistryAuth {
+	seen := map[string]bool{}
+	merged := make([]*daemon.RegistryAuth, 0, len(a)+len(b))
+	for _, entry := range a {
+		if entry == nil {
+			continue
+		}
+		seen[entry.ServerAddress] = true
+		merged = append(merged, entry)
+	}
+	for _, entry := range b {
+		if entry == nil || seen[entry.ServerAddress] {
+			continue
+		}
+		merged = append(merged, entry)
+	}
+	return merged
+}
+
 func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeRequest) (*ComposeStack, error) {
 	if req.Name == "" || req.ComposeYAML == "" {
 		return nil, fmt.Errorf("name and composeYaml are required")
@@ -244,6 +320,13 @@ func (s *Service) DeployComposeStack(ctx context.Context, req DeployComposeReque
 	}
 	if req.UserID == "" {
 		return nil, fmt.Errorf("userId is required")
+	}
+
+	// Auto-resolve private-registry credentials for every non-Docker-Hub image
+	// referenced by the compose file. Callers may still pre-populate RegistryAuth;
+	// we merge without duplicating by server address.
+	if auths, err := s.registryAuthsForComposeYAML(ctx, req.ComposeYAML); err == nil && len(auths) > 0 {
+		req.RegistryAuth = mergeRegistryAuth(req.RegistryAuth, auths)
 	}
 
 	hash := computeHash(req.ComposeYAML)
@@ -426,6 +509,12 @@ func (s *Service) UpdateComposeStack(ctx context.Context, stackID string, req Up
 	newHash := computeHash(req.ComposeYAML)
 	if newHash == stack.ComposeHash && mapsEqual(stack.EnvVars, req.EnvVars) {
 		return stack, nil
+	}
+
+	// Resolve private-registry credentials for the (possibly changed) images so a
+	// redeploy of an updated compose file can still pull from private registries.
+	if auths, err := s.registryAuthsForComposeYAML(ctx, req.ComposeYAML); err == nil && len(auths) > 0 {
+		req.RegistryAuth = mergeRegistryAuth(req.RegistryAuth, auths)
 	}
 
 	rollbackHash := stack.ComposeHash

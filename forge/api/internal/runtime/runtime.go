@@ -287,3 +287,31 @@ func ValidateProvider(provider string) error {
 	}
 	return fmt.Errorf("%q: %w", NormalizeProvider(provider), ErrUnsupportedProvider)
 }
+
+// AllProviders is the canonical, ordered set of runtime providers Forge models.
+// It is a superset of IsSupportedProvider: engines that exist as adapters but
+// are gated or unwired still appear, so a reporting surface can say *why* each
+// one is or is not usable rather than silently omitting it.
+func AllProviders() []string {
+	return []string{
+		DockerProvider,
+		ContainerdProvider,
+		PodmanProvider,
+		FirecrackerProvider,
+		KubernetesProvider,
+		KVMProvider,
+		LXCProvider,
+	}
+}
+
+// IsExperimentalProvider reports whether a provider is behind the
+// ENABLE_EXPERIMENTAL_RUNTIMES opt-in. Kept adjacent to IsSupportedProvider so
+// the two views of the same rule cannot drift.
+func IsExperimentalProvider(provider string) bool {
+	switch NormalizeProvider(provider) {
+	case KVMProvider, LXCProvider:
+		return true
+	default:
+		return false
+	}
+}

@@ -24,6 +24,8 @@ type Service struct {
 	mu      sync.Mutex
 	entries map[string]cron.EntryID
 	logger  *slog.Logger
+	baseCtx context.Context
+	cancel  context.CancelFunc
 }
 
 func New(s *store.Store, logger *slog.Logger) (*Service, error) {
@@ -38,10 +40,14 @@ func New(s *store.Store, logger *slog.Logger) (*Service, error) {
 		cron:    cron.New(),
 		entries: make(map[string]cron.EntryID),
 		logger:  logger,
+		baseCtx: context.Background(),
 	}, nil
 }
 
 func (s *Service) Start(ctx context.Context) error {
+	s.mu.Lock()
+	s.baseCtx, s.cancel = context.WithCancel(ctx)
+	s.mu.Unlock()
 	jobs, err := s.store.ListEnabledCronJobs(ctx)
 	if err != nil {
 		return fmt.Errorf("load cron jobs: %w", err)
@@ -56,6 +62,12 @@ func (s *Service) Start(ctx context.Context) error {
 }
 
 func (s *Service) Stop() {
+	s.mu.Lock()
+	cancel := s.cancel
+	s.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
 	ctx := s.cron.Stop()
 	<-ctx.Done()
 }
@@ -69,8 +81,12 @@ func (s *Service) scheduleJob(ctx context.Context, job store.CronJob) error {
 	}
 
 	jobID := job.ID
+	base := s.baseCtx
+	if base == nil {
+		base = context.Background()
+	}
 	entryID, err := s.cron.AddFunc(job.Schedule, func() {
-		s.executeJob(context.Background(), jobID)
+		s.executeJob(base, jobID)
 	})
 	if err != nil {
 		return err
@@ -115,9 +131,9 @@ func (s *Service) executeJob(ctx context.Context, jobID string) {
 
 	switch job.Type {
 	case "shell":
-		exitCode, output, errStr = s.runShellCommand(job.Command, job.TimeoutSeconds)
+		exitCode, output, errStr = s.runShellCommand(ctx, job.Command, job.TimeoutSeconds)
 	default:
-		exitCode, output, errStr = s.runShellCommand(job.Command, job.TimeoutSeconds)
+		exitCode, output, errStr = s.runShellCommand(ctx, job.Command, job.TimeoutSeconds)
 	}
 
 	durationMs := int(time.Since(start).Milliseconds())
@@ -134,14 +150,21 @@ func (s *Service) executeJob(ctx context.Context, jobID string) {
 	if status == "failed" && job.RetryCount > 0 {
 		for i := 0; i < job.RetryCount; i++ {
 			s.logger.Info("retrying cron job", "id", jobID, "attempt", i+1)
-			time.Sleep(time.Duration(5*(i+1)) * time.Second)
+			// Wait between attempts on a cancellable timer rather than time.Sleep,
+			// so shutdown (which cancels ctx) stops the retry loop immediately
+			// instead of blocking the process on the remaining backoff.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(time.Duration(5*(i+1)) * time.Second):
+			}
 
 			retryExec, err := s.store.CreateCronJobExecution(ctx, jobID)
 			if err != nil {
 				continue
 			}
 			retryStart := time.Now()
-			exitCode, output, errStr = s.runShellCommand(job.Command, job.TimeoutSeconds)
+			exitCode, output, errStr = s.runShellCommand(ctx, job.Command, job.TimeoutSeconds)
 			retryDuration := int(time.Since(retryStart).Milliseconds())
 			retryStatus := "success"
 			if exitCode != 0 {
@@ -181,11 +204,11 @@ const defaultMaxCronTimeoutSeconds = 3600 // 1 hour
 //     reducing the blast radius if a command is compromised or malicious
 //     (e.g. it cannot read unrelated secrets present in the parent
 //     process's environment).
-func (s *Service) runShellCommand(command string, timeoutSeconds int) (int, string, string) {
+func (s *Service) runShellCommand(ctx context.Context, command string, timeoutSeconds int) (int, string, string) {
 	if timeoutSeconds <= 0 {
 		timeoutSeconds = defaultMaxCronTimeoutSeconds
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutSeconds)*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "sh", "-c", command)
@@ -203,6 +226,9 @@ func (s *Service) runShellCommand(command string, timeoutSeconds int) (int, stri
 		if ctx.Err() == context.DeadlineExceeded {
 			return -1, "", "command timed out"
 		}
+		if ctx.Err() == context.Canceled {
+			return -1, "", "command canceled during shutdown"
+		}
 		exitCode = 1
 	}
 
@@ -219,6 +245,10 @@ func (s *Service) TriggerNow(ctx context.Context, jobID string) (store.CronJobEx
 		return store.CronJobExecution{}, err
 	}
 
+	base := s.baseCtx
+	if base == nil {
+		base = context.Background()
+	}
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
@@ -227,7 +257,7 @@ func (s *Service) TriggerNow(ctx context.Context, jobID string) (store.CronJobEx
 				s.logger.Error("cron job trigger panic recovered", "job_id", jobID, "panic", r, "stack", string(buf[:n]))
 			}
 		}()
-		s.executeJob(context.Background(), jobID)
+		s.executeJob(base, jobID)
 	}()
 
 	return execution, nil

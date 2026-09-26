@@ -13,6 +13,7 @@ export * from './api/types';
 export * from './api/apps';
 export * from './api/app-store';
 export * from './api/compose';
+export * from './api/compose-templates';
 export * from './api/notifications';
 export * from './api/monitoring';
 export * from './api/acme';

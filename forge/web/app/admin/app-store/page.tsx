@@ -125,6 +125,20 @@ export default function AppStorePage() {
     onError: (err: Error) => toast({ title: err.message, tone: "error" }),
   });
 
+  const syncBundledMut = useMutation({
+    mutationFn: () => appStoreApi.syncBundledTemplates(),
+    retry: retryTransientMutation,
+    onSuccess: (res) => {
+      queryClient.invalidateQueries({ queryKey: ["app-store", "apps"] });
+      toast({
+        title: "Bundled templates synced",
+        message: `${res.imported} imported, ${res.updated} updated, ${res.skipped} skipped`,
+        tone: "success",
+      });
+    },
+    onError: (err: Error) => toast({ title: err.message, tone: "error" }),
+  });
+
   const handleAppClick = (app: AppStoreApp) => {
     setSelectedApp(app);
     setView("detail");
@@ -235,6 +249,15 @@ export default function AppStorePage() {
             >
               <Package className="mr-1.5 inline-block h-4 w-4" />
               Installed ({installs.length})
+            </button>
+            <button
+              onClick={() => syncBundledMut.mutate()}
+              disabled={syncBundledMut.isPending}
+              className="rounded-lg border border-white/10 bg-white/[0.04] px-4 py-2 text-sm font-medium text-slate-300 hover:bg-white/[0.08] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              title="Import the bundled Coolify template catalog"
+            >
+              <RefreshCw className={`mr-1.5 inline-block h-4 w-4 ${syncBundledMut.isPending ? 'animate-spin' : ''}`} />
+              Sync bundled
             </button>
             <button
               onClick={refreshData}

@@ -156,7 +156,7 @@ func TestRescheduleJobReschedules(t *testing.T) {
 
 func TestRunShellCommandEcho(t *testing.T) {
 	svc := newTestService(t)
-	exitCode, stdout, stderr := svc.runShellCommand("echo hello world", 5)
+	exitCode, stdout, stderr := svc.runShellCommand(context.Background(), "echo hello world", 5)
 
 	if exitCode != 0 {
 		t.Errorf("expected exit code 0, got %d", exitCode)
@@ -171,7 +171,7 @@ func TestRunShellCommandEcho(t *testing.T) {
 
 func TestRunShellCommandFailure(t *testing.T) {
 	svc := newTestService(t)
-	exitCode, _, _ := svc.runShellCommand("exit 42", 5)
+	exitCode, _, _ := svc.runShellCommand(context.Background(), "exit 42", 5)
 
 	if exitCode != 1 {
 		t.Errorf("expected exit code 1 (non-zero mapped to 1), got %d", exitCode)
@@ -180,7 +180,7 @@ func TestRunShellCommandFailure(t *testing.T) {
 
 func TestRunShellCommandTimeout(t *testing.T) {
 	svc := newTestService(t)
-	exitCode, _, stderr := svc.runShellCommand("sleep 10", 1)
+	exitCode, _, stderr := svc.runShellCommand(context.Background(), "sleep 10", 1)
 
 	if exitCode != -1 {
 		t.Errorf("expected exit code -1 for timeout, got %d", exitCode)

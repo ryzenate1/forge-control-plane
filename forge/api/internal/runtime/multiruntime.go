@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"sort"
 	"sync"
 
 	"gamepanel/forge/internal/daemon"
@@ -39,6 +40,36 @@ func (m *MultiRuntimeAdapter) GetRuntime(provider string) (Runtime, bool) {
 	defer m.mu.RUnlock()
 	runtime, ok := m.runtimes[NormalizeProvider(provider)]
 	return runtime, ok
+}
+
+// RegisteredProvider describes one adapter currently wired into the dispatcher.
+type RegisteredProvider struct {
+	Provider     string
+	Capabilities Capabilities
+	Migration    bool
+}
+
+// Registered lists the providers this control plane can actually dispatch to,
+// each with the capabilities its adapter advertises.
+//
+// The create-workload surface reads this rather than keeping its own list, so a
+// runtime can only be offered when an adapter is genuinely registered — a
+// hardcoded menu drifts away from the wiring and ends up advertising engines
+// that would fail the moment they were chosen.
+func (m *MultiRuntimeAdapter) Registered() []RegisteredProvider {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	out := make([]RegisteredProvider, 0, len(m.runtimes))
+	for name, rt := range m.runtimes {
+		out = append(out, RegisteredProvider{
+			Provider:     name,
+			Capabilities: rt.Capabilities(),
+			Migration:    rt.SupportsMigration(),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Provider < out[j].Provider })
+	return out
 }
 
 // resolveRuntime returns the runtime for a target, or an error.

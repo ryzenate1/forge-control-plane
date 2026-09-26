@@ -426,6 +426,45 @@ func (s *ConfigService) Execute(ctx context.Context, configID string, userID str
 	return s.jobService.Get(ctx, job.ID)
 }
 
+// RunDueConfigs executes every enabled, scheduled backup configuration whose
+// next_run_at is due and rolls its schedule forward. This is the missing driver
+// for admin BackupConfigurations: next_run_at was previously written but never
+// polled, so scheduled admin backups never fired on their own.
+func (s *ConfigService) RunDueConfigs(ctx context.Context) {
+	if s.store == nil || s.jobService == nil {
+		return
+	}
+	records, err := s.store.ListBackupConfigurations(ctx)
+	if err != nil {
+		s.logger.Errorf("scheduled backups: list configurations failed: %v", err)
+		return
+	}
+	now := time.Now().UTC()
+	for i := range records {
+		cfg := records[i]
+		if !cfg.Enabled || !cfg.IsScheduled || cfg.CronExpression == nil || *cfg.CronExpression == "" {
+			continue
+		}
+		if cfg.NextRunAt != nil && cfg.NextRunAt.After(now) {
+			continue // not yet due
+		}
+		if _, execErr := s.Execute(ctx, cfg.ID, "scheduler"); execErr != nil {
+			s.logger.Errorf("scheduled backups: execute config %s failed: %v", cfg.ID, execErr)
+		} else {
+			cfg.LastRunAt = &now
+		}
+		// Roll the schedule forward regardless of outcome so a failing config does
+		// not hot-loop every tick.
+		if next, nerr := s.calculateNextCronRun(*cfg.CronExpression); nerr == nil {
+			nextCopy := next
+			cfg.NextRunAt = &nextCopy
+			if uerr := s.store.UpdateBackupConfiguration(ctx, &cfg); uerr != nil {
+				s.logger.Warnf("scheduled backups: update next_run_at for %s failed: %v", cfg.ID, uerr)
+			}
+		}
+	}
+}
+
 // BackupConfigFilter represents filters for listing backup configurations
 type BackupConfigFilter struct {
 	Search     *string

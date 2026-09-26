@@ -162,6 +162,16 @@ func resolveDeploymentRollbackScope(c *fiber.Ctx, cfg Config, write bool) (deplo
 	}
 
 	if serverID := strings.TrimSpace(c.Params("serverId")); serverID != "" {
+		// Existence first: a path naming a server that is not there should read
+		// as "not found", not as the permission lookup's missing row, and not as
+		// the audit insert's foreign-key failure later on.
+		exists, gerr := deploymentRollbackServerExists(ctx, cfg, serverID)
+		if gerr != nil {
+			return deploymentRollbackScope{}, respondInternalError(c, fmt.Errorf("check server exists: %w", gerr))
+		}
+		if !exists {
+			return deploymentRollbackScope{}, fiber.NewError(fiber.StatusNotFound, "server not found")
+		}
 		allowed, aerr := cfg.Store.UserCanAccessServer(ctx, serverID, claims.Sub, claims.Role, permission)
 		if aerr != nil {
 			return deploymentRollbackScope{}, respondInternalError(c, fmt.Errorf("check server access: %w", aerr))
@@ -180,6 +190,17 @@ func deploymentRollbackForbidden(permission string) error {
 		return fiber.NewError(fiber.StatusForbidden, "server access is not assigned to this user")
 	}
 	return fiber.NewError(fiber.StatusForbidden, "missing server permission: "+permission)
+}
+
+// deploymentRollbackServerExists reports whether the workload a history request
+// names is actually a node in this panel.
+func deploymentRollbackServerExists(ctx context.Context, cfg Config, serverID string) (bool, error) {
+	var exists bool
+	if err := cfg.Store.DB().QueryRow(ctx,
+		`SELECT EXISTS(SELECT 1 FROM servers WHERE id = $1)`, serverID).Scan(&exists); err != nil {
+		return false, err
+	}
+	return exists, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -362,6 +383,7 @@ func listDeploymentVersionsHandler(cfg Config) fiber.Handler {
 					CreatedAt: rec.CreatedAt,
 				})
 			}
+			view.ApplicationID = scope.applicationID
 			data = append(data, view)
 		}
 
@@ -708,11 +730,21 @@ func rollbackDeploymentVersionHandler(cfg Config) fiber.Handler {
 		}
 
 		// Relabel the mirror row. StartRollout has already handed the row to its
-		// executor goroutine, which reads `strategy` to pick its step list — so
-		// this write is only race-free because both readings produce the same
-		// plan: recreate with health gating off is {init, provision, complete},
-		// and an unknown strategy (which is what 'rollback' is to the executor)
-		// falls through to exactly that same list.
+		// executor goroutine, which reads `strategy` in exactly two places, and
+		// this write lands somewhere around both of them:
+		//
+		//   - createSteps picks the step plan from it. Recreate with health
+		//     gating off is {init, provision, complete}, and an unrecognised
+		//     strategy (which is what 'rollback' is to the executor) falls
+		//     through to that identical default, so either reading runs the same
+		//     plan.
+		//   - executeInitStep only branches for blue-green/canary, so neither
+		//     reading takes that branch.
+		//
+		// The one visible consequence is that the revision the init step
+		// snapshots may describe itself as a "recreate rollout" rather than a
+		// "rollback rollout", depending on which order the two run in. The
+		// deployments row and the audit row below are the authoritative label.
 		if uerr := markDeploymentRollbackMirror(ctx, cfg, mirror.ID, rec.ID); uerr != nil {
 			return deploymentRollbackError(c, uerr)
 		}

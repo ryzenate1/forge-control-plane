@@ -7,11 +7,14 @@
 -- notifications engine can fan `docker.event.<type>` out to subscribed
 -- channels.
 --
--- Named 229_a (not 229 as planned) because 229_server_runtime_provider.sql
--- already occupies the bare 229 prefix and the duplicate-prefix validator in
--- internal/store/migration.go rejects a second file with the same numeric
--- prefix; the letter-suffix form is the repo's established escape hatch
--- (225_a, 226_a, 211_a/211_b).
+-- Named 229_a rather than the planned 229 because the bare 229 slot belongs to
+-- 229_server_runtime_provider.sql. migrationPrefix() in
+-- internal/store/migration.go treats a letter suffix as part of the prefix, so
+-- "229_a" and "229" are distinct and both validate — the established pattern in
+-- this directory (024_a/024, 225_a/225, 226_a/226, 228_a/228). Renaming the
+-- already-numbered file instead would have been worse than it sounds:
+-- schema_migrations.version stores the full filename, so a shipped migration
+-- that changes name is re-applied as if it were brand new.
 CREATE TABLE IF NOT EXISTS docker_events (
     id             BIGSERIAL PRIMARY KEY,
     node_id        UUID NOT NULL REFERENCES nodes(id) ON DELETE CASCADE,

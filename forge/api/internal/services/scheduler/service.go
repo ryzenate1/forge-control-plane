@@ -717,15 +717,29 @@ type instanceStatusWriter interface {
 	UpdateInstanceStatus(ctx context.Context, id, status string) (store.Instance, error)
 }
 
+// filterByRuntimeProvider keeps only the nodes that can actually run the
+// requested runtime. It is fail-closed: an empty result means no node supports
+// the runtime and the caller must reject the placement, not quietly fall back to
+// the whole node list. Returning every node here would let a firecracker
+// workload be scored onto a docker-only machine, which is the one thing runtime
+// compatibility exists to prevent.
+//
+// A node that reports no provider is inferred to be a docker node — docker is
+// the runtime Forge assumed before the field existed — so an unreported provider
+// satisfies a docker (or unconstrained) request but never an explicit
+// containerd/podman/firecracker requirement. Matching is case-insensitive to
+// agree with the replica engine's own runtime filter.
 func filterByRuntimeProvider(nodes []store.Node, runtime string) []store.Node {
-	var filtered []store.Node
+	runtime = strings.TrimSpace(runtime)
+	if runtime == "" {
+		return nodes
+	}
+	filtered := make([]store.Node, 0, len(nodes))
 	for _, n := range nodes {
-		if n.RuntimeProvider == "" || n.RuntimeProvider == runtime || runtime == "" {
+		provider := strings.TrimSpace(n.RuntimeProvider)
+		if strings.EqualFold(provider, runtime) || (provider == "" && strings.EqualFold(runtime, "docker")) {
 			filtered = append(filtered, n)
 		}
-	}
-	if len(filtered) == 0 {
-		return nodes
 	}
 	return filtered
 }

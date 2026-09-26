@@ -389,21 +389,23 @@ export function BeaconWorkspace() {
         <AdminSection title="Hardware & Virtualization">
           <div className="grid gap-4 lg:grid-cols-2">
             <Card className="p-5">
-              <h3 className="mb-3 text-sm font-semibold text-white">CPU</h3>
+              <h3 className="mb-3 text-sm font-semibold text-white">CPU &amp; Kernel</h3>
               <dl className="space-y-2 text-xs">
-                <div className="flex justify-between"><dt className="text-slate-400">Model</dt><dd className="font-mono text-slate-200">{sysQuery.data?.cpu_model ?? "—"}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-400">Cores / Threads</dt><dd className="font-mono text-slate-200">{sysQuery.data?.cpu_threads ?? "—"} threads</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Threads</dt><dd className="font-mono text-slate-200">{typeof sysQuery.data?.cpuThreads === "number" ? sysQuery.data.cpuThreads : "—"}</dd></div>
                 <div className="flex justify-between"><dt className="text-slate-400">Architecture</dt><dd className="font-mono text-slate-200">{sysQuery.data?.architecture ?? "—"}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-400">Kernel</dt><dd className="font-mono text-slate-200">{sysQuery.data?.kernel ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Kernel</dt><dd className="font-mono text-slate-200">{sysQuery.data?.kernelVersion ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">OS</dt><dd className="font-mono text-slate-200">{sysQuery.data?.os ?? "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Container engine</dt><dd className="font-mono text-slate-200">{sysQuery.data?.dockerStatus ?? "—"}</dd></div>
               </dl>
             </Card>
             <Card className="p-5">
-              <h3 className="mb-3 text-sm font-semibold text-white">Memory & Storage</h3>
+              <h3 className="mb-3 text-sm font-semibold text-white">Memory, Storage &amp; Uptime</h3>
               <dl className="space-y-2 text-xs">
-                <div className="flex justify-between"><dt className="text-slate-400">Total Memory</dt><dd className="font-mono text-slate-200">{fmtMiB(sysQuery.data?.memory_mb)}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-400">Disk Capacity</dt><dd className="font-mono text-slate-200">{fmtMiB(sysQuery.data?.disk_mb)}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-400">OS</dt><dd className="font-mono text-slate-200">{sysQuery.data?.os ?? "—"}</dd></div>
-                <div className="flex justify-between"><dt className="text-slate-400">Uptime</dt><dd className="font-mono text-slate-200">{fmtUptime(sysQuery.data?.uptime_seconds)}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Total Memory</dt><dd className="font-mono text-slate-200">{sysQuery.data?.memoryMb ? fmtMiB(sysQuery.data.memoryMb) : "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Total Disk</dt><dd className="font-mono text-slate-200">{capacity ? fmtMiB((capacity.available_disk ?? 0) + (capacity.allocated_disk ?? 0)) : "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Host Uptime</dt><dd className="font-mono text-slate-200">{sysQuery.data?.uptime ? fmtUptime(sysQuery.data.uptime) : "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Agent Uptime</dt><dd className="font-mono text-slate-200">{sysQuery.data?.daemonUptimeSeconds ? fmtUptime(sysQuery.data.daemonUptimeSeconds) : "—"}</dd></div>
+                <div className="flex justify-between"><dt className="text-slate-400">Beacon Version</dt><dd className="font-mono text-slate-200">{sysQuery.data?.version ?? "—"}</dd></div>
               </dl>
             </Card>
             <Card className="p-5 lg:col-span-2">

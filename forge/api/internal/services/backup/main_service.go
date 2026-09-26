@@ -66,6 +66,14 @@ func (s *MainService) JobService() *JobService {
 	return s.jobService
 }
 
+// ConfigService exposes the fully-wired backup configuration service so the
+// worker can drive cron-scheduled admin backups (Worker.SetConfigService ->
+// RunDueConfigs). The config service already holds a back-pointer to the job
+// service, so it is executable without further wiring.
+func (s *MainService) ConfigService() *ConfigService {
+	return s.configService
+}
+
 // SetBeaconClient sets the beacon client for all services
 func (s *MainService) SetBeaconClient(beaconClient BeaconClient) {
 	s.beaconClient = beaconClient

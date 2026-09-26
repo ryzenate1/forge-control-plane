@@ -106,13 +106,6 @@ func (s *Service) Start(ctx context.Context) {
 	}
 	ctx, s.cancel = context.WithCancel(ctx)
 	go func() {
-		defer func() {
-			if r := recover(); r != nil {
-				buf := make([]byte, 4096)
-				n := runtime.Stack(buf, false)
-				slog.Error("heartbeat monitor panic recovered", "panic", r, "stack", string(buf[:n]))
-			}
-		}()
 		ticker := time.NewTicker(s.config.Interval)
 		defer ticker.Stop()
 		for {
@@ -120,10 +113,24 @@ func (s *Service) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = s.EvaluateAll(ctx)
+				s.evaluateAllSafe(ctx)
 			}
 		}
 	}()
+}
+
+// evaluateAllSafe runs one evaluation sweep, recovering from a panic so a single
+// bad node's classification cannot terminate the monitor goroutine and silently
+// stop all future heartbeat evaluations (leaving every node's health stale).
+func (s *Service) evaluateAllSafe(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			slog.Error("heartbeat monitor panic recovered", "panic", r, "stack", string(buf[:n]))
+		}
+	}()
+	_ = s.EvaluateAll(ctx)
 }
 
 func (s *Service) Stop() {

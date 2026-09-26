@@ -44,9 +44,6 @@ import (
 	alerting "gamepanel/forge/internal/services/alerting"
 	apphostingsvc "gamepanel/forge/internal/services/apphosting"
 	appstoresvc "gamepanel/forge/internal/services/appstore"
-	catalogsvc "gamepanel/forge/internal/services/catalog"
-	"gamepanel/forge/internal/services/forgefile"
-	onboardingsvc "gamepanel/forge/internal/services/onboarding"
 	auditlogsvc "gamepanel/forge/internal/services/auditlog"
 	"gamepanel/forge/internal/services/autoscaler"
 	"gamepanel/forge/internal/services/backup"
@@ -54,10 +51,12 @@ import (
 	billingsvc "gamepanel/forge/internal/services/billing"
 	buildsvc "gamepanel/forge/internal/services/build"
 	buildpacksvc "gamepanel/forge/internal/services/buildpack"
+	catalogsvc "gamepanel/forge/internal/services/catalog"
 	cleanupsvc "gamepanel/forge/internal/services/cleanup"
 	"gamepanel/forge/internal/services/clustermanager"
 	"gamepanel/forge/internal/services/clustermembership"
 	composesvc "gamepanel/forge/internal/services/compose"
+	composetemplatessvc "gamepanel/forge/internal/services/composetemplates"
 	"gamepanel/forge/internal/services/crashdetector"
 	cronjobsvc "gamepanel/forge/internal/services/cronjob"
 	"gamepanel/forge/internal/services/crossnode"
@@ -73,6 +72,7 @@ import (
 	"gamepanel/forge/internal/services/evacuationplanner"
 	"gamepanel/forge/internal/services/failover"
 	fencing "gamepanel/forge/internal/services/fencing"
+	"gamepanel/forge/internal/services/forgefile"
 	gitsvc "gamepanel/forge/internal/services/git"
 	gitprovidersvc "gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
@@ -89,10 +89,11 @@ import (
 	"gamepanel/forge/internal/services/nodeautoscale"
 	"gamepanel/forge/internal/services/nodeprobe"
 	"gamepanel/forge/internal/services/noderegistry"
+	nomadsvc "gamepanel/forge/internal/services/nomad"
 	notification "gamepanel/forge/internal/services/notification"
 	notifs "gamepanel/forge/internal/services/notifications"
-	nomadsvc "gamepanel/forge/internal/services/nomad"
 	"gamepanel/forge/internal/services/observability"
+	onboardingsvc "gamepanel/forge/internal/services/onboarding"
 	operationsvc "gamepanel/forge/internal/services/operation"
 	pipelinesvc "gamepanel/forge/internal/services/pipeline"
 	"gamepanel/forge/internal/services/plugins"
@@ -266,93 +267,95 @@ func run() error {
 	// Build the service graph. All services are nil-safe when db == nil;
 	// handler nil-guards already handle the "no database" dev-mode case.
 	var (
-		nr                *noderegistry.Service
-		np                *nodeprobe.Service
-		cm                *clustermanager.Service
-		ep                *evacuationplanner.Service
-		mig               *migration.Service
-		resMgr            *reservations.Manager
-		rcv               *recoverysvc.Coordinator
-		rts               *recoverysvc.TokenService
-		hbm               *heartbeatmonitor.Service
-		obs               *observability.Service
-		rec               *reconciler.Service
-		dbProv            *dbprovisioner.Service
-		whSvc             *webhook.Service
-		mailWorker        *mailservice.Worker
-		mailTriggerSvc    *mailservice.TriggerService
-		actSvc            *activity.Service
-		auditLogSvc       auditlogsvc.AuditLogger
-		pluginSvc         *plugins.Service
-		queueSvc          *queue.Service
-		opSvc             *operationsvc.Service
-		runtimeRegistry   *runtimesvc.Registry
-		waSvc             *webauthn.Service
-		autoSvc           *autoscaler.Service
-		bkSvc             *backup.Service
-		bkWorker          *backup.Worker
-		dnsSvc            *dnssvc.Service
-		acmeSvc           *acmesvc.Service
-		domainSvc         *domains.Service
-		buildSvc          *buildsvc.Service
-		deploySvc         *deployment.Service
-		previewDeploySvc  *previewenv.Service
-		cloudMgr          *cloud.Manager
-		lbSvc             *loadbalancer.Service
-		failSvc           *failover.Service
-		crashDetector     *crashdetector.Detector
-		tmSvc             *trafficmanager.Service
-		caddyTLS          *trafficmanager.CaddyTLSManager
-		predictiveScorer  *scheduler.PredictiveScorer
-		constraintSched   *scheduler.ConstraintScheduler
-		healthCheckRunner *healthchecksvc.Service
-		tenancySvc        *tenancy.Service
-		dbContainerSvc    *dbprovisioner.DBContainerService
-		composeLifecycle  *composesvc.Service
-		procedureSvc      *proceduresvc.Service
-		apphostingSvc     *apphostingsvc.Service
-		endpointSvc       *environments.Service
-		pipelineSvc       *pipelinesvc.Service
-		alertSvc          *alerting.Service
-		notifSvc          *notification.Service
-		notifRouter       *notifs.Router
-		installerSvc      *installersvc.Service
-		billingSvc        *billingsvc.Service
-		drainLedger       *drainsvc.Service
-		placementSvc      *envaffinitysvc.EnvAffinity
-		fenceSvc          *fencing.Service
-		upgradeSvc        *upgradesvc.Service
-		membershipSvc     *clustermembership.Service
-		nodeAutoSvc       *nodeautoscale.Service
-		cleanupSvc        *cleanupsvc.Service
-		gitSvc            *gitsvc.Service
-		gitDeploySvc      *gitsvc.DeployService
-		gitProviderSvc    *gitprovidersvc.Service
-		gitOpsController  *composesvc.GitOpsController
-		sessionStore      *auth.PostgresSessionStore
-		replicaMgr        *replicamanager.Manager
-		discoverySvc      *servicediscovery.Service
-		crossNodeResolver *crossnode.Resolver
-		ingressSync       *crossnode.IngressSynchronizer
-		netbirdSvc        *netbirdsvc.Service
-		healthFilter      *crossnode.HealthFilter
-		appStoreSvc       *appstoresvc.Service
-		catalogSvc        *catalogsvc.Service
-		forgefileSvc      *forgefile.Service
-		onboardingSvc    *onboardingsvc.Service
-		cronJobSvc        *cronjobsvc.Service
-		scheduledTaskSvc  *scheduledtaskssvc.Service
-		gitDeployMgmtSvc  *gitsvc.DeploymentManagementService
-		zdSvc             *zerodowntime.Service
-		dbSvcProv         *services.DatabaseServiceProvisioner
-		dbBackupSvc       *dbbackupsvc.Service
-		backupEngineSvc   *backupenginesvc.Service
-		buildpackSvc      *buildpacksvc.Service
-		processSvc        *processsvc.Service
-		certSvc           *services.CertService
-		mtlsMigrator      *services.MTLSMigrator
-		mtlsCfg           forgecfg.MTLS
-		eventRegistry     *events.Registry
+		nr                 *noderegistry.Service
+		np                 *nodeprobe.Service
+		cm                 *clustermanager.Service
+		workloadRuntime    *gpruntime.MultiRuntimeAdapter
+		ep                 *evacuationplanner.Service
+		mig                *migration.Service
+		resMgr             *reservations.Manager
+		rcv                *recoverysvc.Coordinator
+		rts                *recoverysvc.TokenService
+		hbm                *heartbeatmonitor.Service
+		obs                *observability.Service
+		rec                *reconciler.Service
+		dbProv             *dbprovisioner.Service
+		whSvc              *webhook.Service
+		mailWorker         *mailservice.Worker
+		mailTriggerSvc     *mailservice.TriggerService
+		actSvc             *activity.Service
+		auditLogSvc        auditlogsvc.AuditLogger
+		pluginSvc          *plugins.Service
+		queueSvc           *queue.Service
+		opSvc              *operationsvc.Service
+		runtimeRegistry    *runtimesvc.Registry
+		waSvc              *webauthn.Service
+		autoSvc            *autoscaler.Service
+		bkSvc              *backup.Service
+		bkWorker           *backup.Worker
+		dnsSvc             *dnssvc.Service
+		acmeSvc            *acmesvc.Service
+		domainSvc          *domains.Service
+		buildSvc           *buildsvc.Service
+		deploySvc          *deployment.Service
+		previewDeploySvc   *previewenv.Service
+		cloudMgr           *cloud.Manager
+		lbSvc              *loadbalancer.Service
+		failSvc            *failover.Service
+		crashDetector      *crashdetector.Detector
+		tmSvc              *trafficmanager.Service
+		caddyTLS           *trafficmanager.CaddyTLSManager
+		predictiveScorer   *scheduler.PredictiveScorer
+		constraintSched    *scheduler.ConstraintScheduler
+		healthCheckRunner  *healthchecksvc.Service
+		tenancySvc         *tenancy.Service
+		dbContainerSvc     *dbprovisioner.DBContainerService
+		composeLifecycle   *composesvc.Service
+		composeTemplateSvc *composetemplatessvc.Service
+		procedureSvc       *proceduresvc.Service
+		apphostingSvc      *apphostingsvc.Service
+		endpointSvc        *environments.Service
+		pipelineSvc        *pipelinesvc.Service
+		alertSvc           *alerting.Service
+		notifSvc           *notification.Service
+		notifRouter        *notifs.Router
+		installerSvc       *installersvc.Service
+		billingSvc         *billingsvc.Service
+		drainLedger        *drainsvc.Service
+		placementSvc       *envaffinitysvc.EnvAffinity
+		fenceSvc           *fencing.Service
+		upgradeSvc         *upgradesvc.Service
+		membershipSvc      *clustermembership.Service
+		nodeAutoSvc        *nodeautoscale.Service
+		cleanupSvc         *cleanupsvc.Service
+		gitSvc             *gitsvc.Service
+		gitDeploySvc       *gitsvc.DeployService
+		gitProviderSvc     *gitprovidersvc.Service
+		gitOpsController   *composesvc.GitOpsController
+		sessionStore       *auth.PostgresSessionStore
+		replicaMgr         *replicamanager.Manager
+		discoverySvc       *servicediscovery.Service
+		crossNodeResolver  *crossnode.Resolver
+		ingressSync        *crossnode.IngressSynchronizer
+		netbirdSvc         *netbirdsvc.Service
+		healthFilter       *crossnode.HealthFilter
+		appStoreSvc        *appstoresvc.Service
+		catalogSvc         *catalogsvc.Service
+		forgefileSvc       *forgefile.Service
+		onboardingSvc      *onboardingsvc.Service
+		cronJobSvc         *cronjobsvc.Service
+		scheduledTaskSvc   *scheduledtaskssvc.Service
+		gitDeployMgmtSvc   *gitsvc.DeploymentManagementService
+		zdSvc              *zerodowntime.Service
+		dbSvcProv          *services.DatabaseServiceProvisioner
+		dbBackupSvc        *dbbackupsvc.Service
+		backupEngineSvc    *backupenginesvc.Service
+		buildpackSvc       *buildpacksvc.Service
+		processSvc         *processsvc.Service
+		certSvc            *services.CertService
+		mtlsMigrator       *services.MTLSMigrator
+		mtlsCfg            forgecfg.MTLS
+		eventRegistry      *events.Registry
 	)
 
 	appCtx, appCancel := context.WithCancel(context.Background())
@@ -410,6 +413,9 @@ func run() error {
 		multiRT.Register(gpruntime.LXCProvider, gpruntime.NewLXCAdapter(daemonClient))
 
 		cm = clustermanager.New(db, multiRT, sched, resMgr, outboxPub)
+		// The HTTP layer reports workload kinds from the same dispatcher that
+		// executes them, so the create menu cannot drift ahead of the wiring.
+		workloadRuntime = multiRT
 
 		// Dev/demo: the seeded demo server is inserted directly into the
 		// database, bypassing the normal create-provision flow, so its
@@ -509,6 +515,7 @@ func run() error {
 			return fmt.Errorf("create compose service: %w", err)
 		}
 		composeLifecycle.WithReservationManager(resMgr).WithScheduler(sched)
+		composeTemplateSvc = composetemplatessvc.New(db, composeLifecycle)
 		composeQH, err := composesvc.NewQueueHandler(composeLifecycle)
 		if err != nil {
 			return fmt.Errorf("create compose queue handler: %w", err)
@@ -848,6 +855,12 @@ func run() error {
 		if err := appStoreSvc.SeedDefaultApps(appCtx); err != nil {
 			slogLogger.Warn("seed app store catalog failed", slog.String("error", err.Error()))
 		}
+		// Upsert the embedded Coolify compose catalog (371 one-click services).
+		// Runs after the hand-written seed so shared keys keep their richer
+		// defaults; idempotent by key. Non-fatal to boot.
+		if _, err := appStoreSvc.SeedBundledTemplates(appCtx); err != nil {
+			slogLogger.Warn("seed bundled app-store templates failed", slog.String("error", err.Error()))
+		}
 
 		// One-click service catalog (postgres/redis/rabbitmq/…).
 		// Initialized after dbContainerSvc/composeLifecycle are ready (see below).
@@ -1108,6 +1121,9 @@ func run() error {
 		bkAdmin := backup.NewMainService(db, backup.NewSlogLogger(slogLogger))
 		bkAdmin.SetDaemonClient(daemonClient)
 		bkWorker.SetJobService(bkAdmin.JobService())
+		// Cron-scheduled admin backup configurations: give the worker the config
+		// service so RunDueConfigs fires due schedules each tick.
+		bkWorker.SetConfigService(bkAdmin.ConfigService())
 		// Restic / Kopia backup engines: repository registration, scheduled
 		// snapshots and restores. The service shells out to the restic/kopia CLI on
 		// the control-plane host or on a bound beacon node through the daemon.
@@ -1584,6 +1600,7 @@ func run() error {
 		QueueService:               queueSvc,
 		OperationService:           opSvc,
 		RuntimeRegistry:            runtimeRegistry,
+		WorkloadRuntime:            workloadRuntime,
 		IncusService:               incusSvc,
 		NomadService:               nomadSvc,
 		WebAuthnService:            waSvc,
@@ -1613,6 +1630,7 @@ func run() error {
 		GitDeployService:           gitDeploySvc,
 		GitProviderService:         gitProviderSvc,
 		ComposeService:             composeLifecycle,
+		ComposeTemplateService:     composeTemplateSvc,
 		DBContainerService:         dbContainerSvc,
 		DatabaseServiceProvisioner: dbSvcProv,
 		DBBackupService:            dbBackupSvc,

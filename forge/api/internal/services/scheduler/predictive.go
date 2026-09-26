@@ -196,10 +196,14 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	affinityRules := make([]AffinityRule, len(s.affinityRules))
+	copy(affinityRules, s.affinityRules)
+	antiAffinityRules := make([]AntiAffinityRule, len(s.antiAffinityRules))
+	copy(antiAffinityRules, s.antiAffinityRules)
+	s.mu.RUnlock()
 
 	var affinityScore float64
-	for _, rule := range s.affinityRules {
+	for _, rule := range affinityRules {
 		if matchesAffinity(rule, req, nodeID) {
 			affinityScore += rule.Weight
 		}
@@ -207,7 +211,7 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 
 	var antiAffinityScore float64
 	servers, _ := s.store.ListServersByNode(ctx, nodeID)
-	for _, rule := range s.antiAffinityRules {
+	for _, rule := range antiAffinityRules {
 		if matchesAntiAffinity(ctx, rule, req, nodeID, servers) {
 			antiAffinityScore += rule.Weight
 		}
