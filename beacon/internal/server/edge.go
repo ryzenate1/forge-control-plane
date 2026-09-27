@@ -97,7 +97,7 @@ func (a *EdgeAgent) Start(ctx context.Context) {
 	// so the agent stays honestly disconnected instead of reporting a fake
 	// "connected" state.
 	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	connected := a.tryReconnect(probeCtx)
+	nodeID, connected := a.verifyEdgeChannel(probeCtx)
 	cancel()
 	if !connected {
 		a.setState(EdgeStateDisconnected)
@@ -117,6 +117,7 @@ func (a *EdgeAgent) Start(ctx context.Context) {
 	if onConnect != nil {
 		onConnect()
 	}
+	log.Printf("[edge] edge channel connected to panel as node %s", nodeID)
 	heartbeat := time.NewTicker(a.hbInterval)
 	defer heartbeat.Stop()
 	offlineCheck := time.NewTicker(a.offlineTimeout / 2)
@@ -136,8 +137,10 @@ func (a *EdgeAgent) Start(ctx context.Context) {
 			}
 			return
 		case <-heartbeat.C:
-			// Real heartbeat: re-verify the edge connection is still alive.
-			if !a.tryReconnect(ctx) {
+			// Real heartbeat: re-verify the edge connection is still alive. A
+			// successful beat is deliberately silent — it is the expected case,
+			// and logging it once per interval buries the events that matter.
+			if _, ok := a.verifyEdgeChannel(ctx); !ok {
 				a.mu.Lock()
 				if !a.offlineDetected {
 					a.offlineDetected = true
@@ -209,7 +212,7 @@ func (a *EdgeAgent) reconnectLoop(ctx context.Context) {
 		case <-a.stopCh:
 			return
 		}
-		if a.tryReconnect(ctx) {
+		if nodeID, ok := a.verifyEdgeChannel(ctx); ok {
 			a.mu.Lock()
 			a.setStateLocked(EdgeStateConnected)
 			a.offlineDetected = false
@@ -220,6 +223,9 @@ func (a *EdgeAgent) reconnectLoop(ctx context.Context) {
 			if onConnect != nil {
 				onConnect()
 			}
+			// The one place "reconnected" is the truth: the channel had been
+			// lost and this loop got it back.
+			log.Printf("[edge] reconnected to panel as node %s after %d attempt(s)", nodeID, attempt)
 			return
 		}
 		backoff = time.Duration(float64(backoff) * a.backoffCfg.Factor)
@@ -245,50 +251,61 @@ type connectResponse struct {
 	Message   string `json:"message,omitempty"`
 }
 
-func (a *EdgeAgent) tryReconnect(ctx context.Context) bool {
+// verifyEdgeChannel does one round-trip to the panel's edge endpoint and
+// reports whether the channel is usable, returning the node id the panel
+// acknowledged.
+//
+// It serves three callers — the initial probe, each heartbeat, and the
+// reconnect loop — so it deliberately does not log success. It used to, with
+// the word "reconnected", which made a perfectly stable link print
+// "reconnected to panel" every 15 seconds and read exactly like a flapping
+// edge channel. Only the caller knows whether a successful round-trip is a
+// first connection, an uneventful heartbeat, or a genuine recovery, so only
+// the caller may name it. Failures are still logged here: the reason a
+// round-trip failed is this function's own knowledge and is lost above it.
+func (a *EdgeAgent) verifyEdgeChannel(ctx context.Context) (string, bool) {
 	req := connectRequest{
 		NodeID:  a.nodeID,
 		Version: a.beaconVersion,
 	}
 	body, err := json.Marshal(req)
 	if err != nil {
-		log.Printf("[edge] reconnect marshal error: %v", err)
-		return false
+		log.Printf("[edge] connect marshal error: %v", err)
+		return "", false
 	}
 	baseURL := normalizePanelBaseURL(a.panelURL)
 	endpoint, err := url.Parse(baseURL + "/api/edge/connect")
 	if err != nil || !secureEdgeURL(endpoint) {
-		log.Printf("[edge] reconnect URL is invalid or insecure")
-		return false
+		log.Printf("[edge] connect URL is invalid or insecure")
+		return "", false
 	}
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint.String(), bytes.NewReader(body))
 	if err != nil {
-		log.Printf("[edge] reconnect request error: %v", err)
-		return false
+		log.Printf("[edge] connect request error: %v", err)
+		return "", false
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 	httpReq.Header.Set("Authorization", "Bearer "+a.nodeToken)
 	resp, err := a.httpClient.Do(httpReq)
 	if err != nil {
-		log.Printf("[edge] reconnect http error: %v", err)
-		return false
+		log.Printf("[edge] connect http error: %v", err)
+		return "", false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[edge] reconnect rejected: status %d", resp.StatusCode)
-		return false
+		log.Printf("[edge] connect rejected: status %d", resp.StatusCode)
+		return "", false
 	}
 	var cr connectResponse
 	if err := json.NewDecoder(resp.Body).Decode(&cr); err != nil {
-		log.Printf("[edge] reconnect decode error: %v", err)
-		return false
+		log.Printf("[edge] connect decode error: %v", err)
+		return "", false
 	}
 	if !cr.Connected {
-		log.Printf("[edge] reconnect denied: %s", cr.Message)
-		return false
+		log.Printf("[edge] connect denied: %s", cr.Message)
+		return "", false
 	}
-	log.Printf("[edge] reconnected to panel as node %s", cr.NodeID)
-	return true
+	return cr.NodeID, true
 }
 
 func secureJitter(limit time.Duration) time.Duration {

@@ -179,7 +179,7 @@ func TestEdgeAgentStats(t *testing.T) {
 	}
 }
 
-func TestEdgeAgentTryReconnectSuccess(t *testing.T) {
+func TestEdgeAgentVerifyEdgeChannel(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/edge/connect" && r.Method == http.MethodPost {
 			var req connectRequest
@@ -198,27 +198,33 @@ func TestEdgeAgentTryReconnectSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	t.Run("valid token reconnects", func(t *testing.T) {
+	t.Run("valid token verifies and returns the acknowledged node id", func(t *testing.T) {
 		agent := NewEdgeAgent(server.URL, "valid-token", "node-1", "1.0.0")
 		agent.httpClient = server.Client()
-		if !agent.tryReconnect(context.Background()) {
-			t.Fatal("expected successful reconnect")
+		nodeID, ok := agent.verifyEdgeChannel(context.Background())
+		if !ok {
+			t.Fatal("expected the edge channel to verify")
+		}
+		// Callers log using this value, so an empty id on success would make
+		// the connect and reconnect lines name no node at all.
+		if nodeID != "node-1" {
+			t.Fatalf("expected node id %q, got %q", "node-1", nodeID)
 		}
 	})
 
 	t.Run("invalid token rejected", func(t *testing.T) {
 		agent := NewEdgeAgent(server.URL, "bad-token", "node-1", "1.0.0")
 		agent.httpClient = server.Client()
-		if agent.tryReconnect(context.Background()) {
-			t.Fatal("expected failed reconnect")
+		if _, ok := agent.verifyEdgeChannel(context.Background()); ok {
+			t.Fatal("expected verification to fail for an invalid token")
 		}
 	})
 
 	t.Run("unreachable server", func(t *testing.T) {
 		agent := NewEdgeAgent("http://localhost:19999", "token", "node-1", "1.0.0")
 		agent.httpClient = &http.Client{Timeout: 100 * time.Millisecond}
-		if agent.tryReconnect(context.Background()) {
-			t.Fatal("expected failed reconnect for unreachable server")
+		if _, ok := agent.verifyEdgeChannel(context.Background()); ok {
+			t.Fatal("expected verification to fail for an unreachable server")
 		}
 	})
 }
