@@ -4,6 +4,10 @@ import {
   ForgeApiClient,
   combineSignals,
   createApiClient,
+  isApiError,
+  unwrapData,
+  unwrapList,
+  unwrapSingleData,
 } from '../client';
 
 function jsonResponse(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
@@ -22,7 +26,10 @@ afterEach(() => {
 describe('request()', () => {
   it('sends JSON GETs and parses JSON bodies', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({ data: [{ id: 'n1' }] }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     const result = await client.listNodes();
 
@@ -35,7 +42,10 @@ describe('request()', () => {
 
   it('appends /api/v1 to a baseUrl that lacks it', async () => {
     const fetchMock = vi.fn(async () => jsonResponse({}));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
     await client.getHealth();
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
     expect(url).toBe('https://panel.example.com/api/v1/health');
@@ -45,10 +55,15 @@ describe('request()', () => {
     vi.useFakeTimers();
     const fetchMock = vi
       .fn()
-      .mockImplementationOnce(async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } }))
+      .mockImplementationOnce(
+        async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '0' } }),
+      )
       .mockImplementationOnce(async () => jsonResponse([{ id: '1' }]));
 
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
     const promise = client.listUsers();
     await vi.advanceTimersByTimeAsync(200);
 
@@ -57,8 +72,14 @@ describe('request()', () => {
   });
 
   it('throws ApiError with HTTP status for non-JSON error bodies', async () => {
-    const fetchMock = vi.fn(async () => new Response('<html>boom</html>', { status: 500, statusText: 'Internal Server Error' }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const fetchMock = vi.fn(
+      async () =>
+        new Response('<html>boom</html>', { status: 500, statusText: 'Internal Server Error' }),
+    );
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.getHealth()).rejects.toMatchObject({
       name: 'ApiError',
@@ -69,8 +90,13 @@ describe('request()', () => {
   });
 
   it('does not retry non-idempotent 429s', async () => {
-    const fetchMock = vi.fn(async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '1' } }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const fetchMock = vi.fn(
+      async () => new Response('rate limited', { status: 429, headers: { 'retry-after': '1' } }),
+    );
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.sendCommand('s1', 'say hi')).rejects.toMatchObject({ status: 429 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -98,7 +124,7 @@ describe('request()', () => {
         new Promise((_resolve, reject) => {
           calls++;
           init.signal!.addEventListener('abort', () => reject(init.signal!.reason));
-        })
+        }),
     );
     const client = new ForgeApiClient({
       baseUrl: 'https://panel.example.com/api/v1',
@@ -122,36 +148,52 @@ describe('request()', () => {
 
   it('returns {} for 204 responses', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.deleteServer('s1')).resolves.toEqual({});
   });
 
   it('guards against null/empty bodies on 200s', async () => {
     const fetchMock = vi.fn(async () => new Response('', { status: 200 }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.refreshSession()).resolves.toEqual({});
   });
 
   it('returns raw text for raw responses (readFile)', async () => {
     const fetchMock = vi.fn(async () => new Response('hello world', { status: 200 }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.readFile('s1', '/etc/config.yml')).resolves.toBe('hello world');
     const [url] = fetchMock.mock.calls[0] as unknown as [string];
-    expect(url).toBe('https://panel.example.com/api/v1/servers/s1/files/content?path=%2Fetc%2Fconfig.yml');
+    expect(url).toBe(
+      'https://panel.example.com/api/v1/servers/s1/files/content?path=%2Fetc%2Fconfig.yml',
+    );
   });
 
   it('sends raw string bodies for writeFile', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await client.writeFile('s1', '/a.txt', 'plain text');
     const [_url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(init.method).toBe('PUT');
     expect(init.body).toBe('plain text');
-    expect((init.headers as Record<string, string>)['Content-Type']).toBe('text/plain; charset=utf-8');
+    expect((init.headers as Record<string, string>)['Content-Type']).toBe(
+      'text/plain; charset=utf-8',
+    );
   });
 });
 
@@ -165,7 +207,9 @@ describe('CSRF cookie handling', () => {
   }
 
   it('sends X-CSRF-Token from the __Host-forge_csrf cookie on mutations', async () => {
-    (globalThis as Record<string, unknown>).document = { cookie: '__Host-forge_csrf=csrf-123; __Host-forge_session=abc' } as unknown as Document;
+    (globalThis as Record<string, unknown>).document = {
+      cookie: '__Host-forge_csrf=csrf-123; __Host-forge_session=abc',
+    } as unknown as Document;
     const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
     const client = makeClient(fetchMock as unknown as typeof fetch);
 
@@ -177,7 +221,9 @@ describe('CSRF cookie handling', () => {
   });
 
   it('also matches the dev-mode forge_csrf (non-__Host-) cookie', async () => {
-    (globalThis as Record<string, unknown>).document = { cookie: 'forge_csrf=dev-token; session=xyz' } as unknown as Document;
+    (globalThis as Record<string, unknown>).document = {
+      cookie: 'forge_csrf=dev-token; session=xyz',
+    } as unknown as Document;
     const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
     const client = makeClient(fetchMock as unknown as typeof fetch);
 
@@ -188,7 +234,9 @@ describe('CSRF cookie handling', () => {
   });
 
   it('does not attach CSRF headers on GETs', async () => {
-    (globalThis as Record<string, unknown>).document = { cookie: '__Host-forge_csrf=csrf-123' } as unknown as Document;
+    (globalThis as Record<string, unknown>).document = {
+      cookie: '__Host-forge_csrf=csrf-123',
+    } as unknown as Document;
     const fetchMock = vi.fn(async () => jsonResponse({}));
     const client = makeClient(fetchMock as unknown as typeof fetch);
 
@@ -242,19 +290,101 @@ describe('client surface', () => {
     expect(client).toBeInstanceOf(ForgeApiClient);
   });
 
-  it('ApiError carries status, statusText and data', () => {
+  it('ApiError carries status, statusText, data and 422 details', () => {
     const err = new ApiError(404, 'Not Found', { message: 'nope' });
-    expect(err.message).toContain('404');
+    expect(err.message).toBe('nope');
     expect(err.status).toBe(404);
     expect(err.statusText).toBe('Not Found');
     expect(err.data).toEqual({ message: 'nope' });
+
+    const fallback = new ApiError(500, 'Internal Server Error', '<html>boom</html>');
+    expect(fallback.message).toContain('boom');
+
+    const bare = new ApiError(503, 'Service Unavailable');
+    expect(bare.message).toContain('503');
+
+    const invalid = new ApiError(422, 'Unprocessable Entity', {
+      message: 'validation failed',
+      errors: { name: ['required'] },
+    });
+    expect(invalid.details).toEqual({ name: ['required'] });
+  });
+
+  it('isApiError narrows ApiError instances', () => {
+    expect(isApiError(new ApiError(500, 'x'))).toBe(true);
+    expect(isApiError(new Error('x'))).toBe(false);
+    expect(isApiError('nope')).toBe(false);
+  });
+
+  it('unwrapData accepts bare arrays and { data } envelopes', () => {
+    expect(unwrapData([{ id: 'a' }])).toEqual([{ id: 'a' }]);
+    expect(unwrapData({ data: [{ id: 'b' }] })).toEqual([{ id: 'b' }]);
+    expect(unwrapData(undefined)).toEqual([]);
+  });
+
+  it('unwrapList is the canonical list unwrapper (unwrapData is its alias)', () => {
+    expect(unwrapList([{ id: 'a' }])).toEqual([{ id: 'a' }]);
+    expect(unwrapList({ data: [{ id: 'b' }] })).toEqual([{ id: 'b' }]);
+    expect(unwrapList(undefined)).toEqual([]);
+  });
+
+  it('unwrapSingleData mirrors the web unwrapData for single objects', () => {
+    expect(unwrapSingleData({ data: { id: 'a' } })).toEqual({ id: 'a' });
+    expect(unwrapSingleData({ id: 'b' })).toEqual({ id: 'b' });
+    expect(unwrapSingleData(undefined)).toBeUndefined();
+  });
+
+  it('fires onUnauthorized on 401 responses', async () => {
+    const seen: ApiError[] = [];
+    const fetchMock = vi.fn(
+      async () => new Response('unauthorized', { status: 401, statusText: 'Unauthorized' }),
+    );
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+      onUnauthorized: (err) => seen.push(err),
+    });
+
+    await expect(client.getHealth()).rejects.toMatchObject({ status: 401 });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].status).toBe(401);
+  });
+
+  it('sends the idempotency key on mutations but not on GETs', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ ok: true }));
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+      idempotencyKey: 'key-123',
+    });
+
+    await client.deleteUser('u1');
+    const [, mutationInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect((mutationInit.headers as Record<string, string>)['Idempotency-Key']).toBe('key-123');
+
+    await client.getHealth();
+    const [, getInit] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect((getInit.headers as Record<string, string>)['Idempotency-Key']).toBeUndefined();
   });
 
   it('listServers unwraps the PaginatedEnvelope data array', async () => {
     const fetchMock = vi.fn(async () =>
-      jsonResponse({ data: [{ id: 's1', name: 'mc' }], meta: { pagination: { current: 1 } } })
+      jsonResponse({ data: [{ id: 's1', name: 'mc' }], meta: { pagination: { current: 1 } } }),
     );
-    const client = new ForgeApiClient({ baseUrl: 'https://panel.example.com/api/v1', fetch: fetchMock as unknown as typeof fetch });
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
+
+    await expect(client.listServers()).resolves.toEqual([{ id: 's1', name: 'mc' }]);
+  });
+
+  it('listServers also accepts a bare array body', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse([{ id: 's1', name: 'mc' }]));
+    const client = new ForgeApiClient({
+      baseUrl: 'https://panel.example.com/api/v1',
+      fetch: fetchMock as unknown as typeof fetch,
+    });
 
     await expect(client.listServers()).resolves.toEqual([{ id: 's1', name: 'mc' }]);
   });

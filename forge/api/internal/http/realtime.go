@@ -111,6 +111,81 @@ func requireRealtimeServices(cfg Config) fiber.Handler {
 	}
 }
 
+// wsSessionToken extracts the caller's session JWT from a WebSocket upgrade
+// request. Bearer takes precedence; the cookie name honors
+// LoadSessionCookieConfig so insecure (non-__Host-prefixed) deployments read
+// the cookie they actually set instead of the production name.
+func wsSessionToken(client *fiberws.Conn) string {
+	auth := client.Headers("Authorization")
+	if auth != "" && strings.HasPrefix(auth, "Bearer ") {
+		return strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
+	}
+	cfg := LoadSessionCookieConfig()
+	return client.Cookies(secureCookieName(sessionCookieName, cfg.Secure))
+}
+
+// validateWSOrigin is a defense-in-depth origin check for realtime upgrades.
+// fiberws.Config.Origins already gates the handshake; this second check keeps
+// the proxy fail-closed if the route config ever drifts. Empty origins belong
+// to non-browser clients and are accepted, matching the upgrader semantics.
+func validateWSOrigin(client *fiberws.Conn, cfg Config) error {
+	origin := strings.TrimSpace(client.Get("Origin"))
+	if origin == "" {
+		return nil
+	}
+	for _, allowed := range getWebSocketAllowedOrigins(cfg) {
+		if origin == allowed {
+			return nil
+		}
+	}
+	return fiber.NewError(fiber.StatusForbidden, "websocket origin is not allowed")
+}
+
+// checkRealtimeTwoFactor enforces the panel 2FA policy on realtime upgrades.
+// WS routes bypass the protected middleware chain (a browser WebSocket
+// handshake cannot carry CSRF headers and tickets are minted separately), so
+// the proxy must enforce the same policy requireTwoFactorAuthentication
+// applies to HTTP: fail closed when settings are unreadable, exempt nothing.
+func checkRealtimeTwoFactor(ctx context.Context, cfg Config, claims tokenClaims) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "realtime service requires postgres")
+	}
+	settings, err := cfg.Store.GetPanelSettings(ctx)
+	if err != nil {
+		settings = store.PanelSettings{Require2FA: "all"}
+	}
+	if settings.Require2FA == "" || settings.Require2FA == "none" {
+		return nil
+	}
+	user, err := cfg.Store.GetUserByID(ctx, claims.Sub)
+	if err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "user not found")
+	}
+	has2FA := userHasConfiguredTwoFactor(ctx, cfg, user)
+	switch settings.Require2FA {
+	case "admin":
+		if user.Role == RoleAdmin && !has2FA {
+			return fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required for admin accounts")
+		}
+	case "all":
+		if !has2FA {
+			return fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required")
+		}
+	}
+	return nil
+}
+
+// sessionLookupCtx bounds the session/revocation DB lookup off the upgrade
+// path. The websocket handler runs as func(*fiberws.Conn) with no request
+// context to inherit, so an unbounded Background call could hang the upgrade
+// forever; a 5s timeout fails closed instead. The proxy context below
+// (ctx/cancel) is scoped to the connection lifetime: it is cancelled when
+// either pump exits or the handler returns, so downstream dials and pumps
+// observe conn close rather than a detached Background.
+func sessionLookupCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
 func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*fiberws.Conn) {
 	return func(client *fiberws.Conn) {
 		defer client.Close()
@@ -120,12 +195,18 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 			return
 		}
 
+		if err := validateWSOrigin(client, cfg); err != nil {
+			_ = client.WriteJSON(map[string]any{"error": "websocket origin is not allowed"})
+			return
+		}
+
 		// Two auth modes: a long-lived JWT (legacy) or a short-lived WS ticket.
 		// Ticket takes precedence — we peek it to keep it single-use (consumed
 		// at the moment of successful upgrade, before any data flows).
 		var (
 			userID          string
 			userRole        string
+			current         tokenClaims
 			ticketToConsume string
 			ok              bool
 		)
@@ -143,13 +224,7 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 			}
 			// A ticket is tied to the authenticated user that issued it. The
 			// session cookie or bearer token provides current session/revocation validation.
-			var sessionToken string
-			auth := client.Headers("Authorization")
-			if auth != "" && strings.HasPrefix(auth, "Bearer ") {
-				sessionToken = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-			} else {
-				sessionToken = client.Cookies(sessionCookieName)
-			}
+			sessionToken := wsSessionToken(client)
 
 			if sessionToken == "" {
 				_ = client.WriteJSON(map[string]any{"error": "ticket requires session cookie or Authorization header"})
@@ -160,25 +235,22 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 				_ = client.WriteJSON(map[string]any{"error": "unauthorized"})
 				return
 			}
-			current, err := validateCurrentSession(context.Background(), cfg.Store, claims)
+			lookupCtx, lookupCancel := sessionLookupCtx()
+		validated, err := validateCurrentSession(lookupCtx, cfg.Store, claims)
+		lookupCancel()
 			if err != nil {
 				_ = client.WriteJSON(map[string]any{"error": "invalid or revoked session"})
 				return
 			}
-			if current.Sub != wsTicket.UserID {
+			if validated.Sub != wsTicket.UserID {
 				_ = client.WriteJSON(map[string]any{"error": "ticket identity mismatch"})
 				return
 			}
 			ticketToConsume = ticket
-			userID, userRole, ok = current.Sub, current.Role, true
+			current = validated
+			userID, userRole, ok = validated.Sub, validated.Role, true
 		} else {
-			var sessionToken string
-			auth := client.Headers("Authorization")
-			if auth != "" && strings.HasPrefix(auth, "Bearer ") {
-				sessionToken = strings.TrimSpace(strings.TrimPrefix(auth, "Bearer "))
-			} else {
-				sessionToken = client.Cookies(sessionCookieName)
-			}
+			sessionToken := wsSessionToken(client)
 			if sessionToken == "" {
 				_ = client.WriteJSON(map[string]any{"error": "unauthorized"})
 				return
@@ -188,15 +260,31 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 				_ = client.WriteJSON(map[string]any{"error": "unauthorized"})
 				return
 			}
-			current, err := validateCurrentSession(context.Background(), cfg.Store, claims)
+			lookupCtx, lookupCancel := sessionLookupCtx()
+		validated, err := validateCurrentSession(lookupCtx, cfg.Store, claims)
+		lookupCancel()
 			if err != nil {
 				_ = client.WriteJSON(map[string]any{"error": "unauthorized"})
 				return
 			}
-			userID, userRole, ok = current.Sub, current.Role, true
+			current = validated
+			userID, userRole, ok = validated.Sub, validated.Role, true
 		}
 		if !ok {
 			_ = client.WriteJSON(map[string]any{"error": "unauthorized"})
+			return
+		}
+
+		// Realtime upgrades skip the protected chain (no CSRF header fits in a
+		// browser WebSocket handshake), so the 2FA policy must be enforced
+		// here for both ticket and legacy-JWT modes. Tickets are minted behind
+		// requireTwoFactorAuthentication, but the session's 2FA posture can
+		// change within the ticket's 60s window — recheck, fail closed.
+		twoFactorCtx, twoFactorCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		twoFactorErr := checkRealtimeTwoFactor(twoFactorCtx, cfg, current)
+		twoFactorCancel()
+		if twoFactorErr != nil {
+			_ = client.WriteJSON(map[string]any{"error": "two-factor authentication is required"})
 			return
 		}
 
@@ -282,16 +370,44 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 		go pumpKeepalive(ctx, pingTicker.C, upstream, client)
 
 		errs := make(chan error, 2)
-		// Rate-limit upstream-bound messages (from client) to 10/s to prevent
-		// a compromised or malicious client from flooding the upstream daemon.
-		clientLimiter := rate.NewLimiter(rate.Limit(10), 20)
-		go pumpUpstreamToClient(ctx, upstream, client, errs)
-		go pumpClientToUpstream(ctx, client, upstream, clientLimiter, errs)
+		// Only interactive streams forward client input upstream. Console is
+		// the interactive stream; install is a read-only progress tap on the
+		// Beacon (see beacon installWS: it never reads a command), so it
+		// forwards only when the client explicitly opts into interactive mode.
+		// Every other stream (stats, logs, backup) is output-only: client
+		// frames are still read — to answer pings and observe closes — but
+		// discarded, never proxied to the daemon as commands.
+		if realtimeAllowUpstream(stream, client) {
+			// Rate-limit upstream-bound messages (from client) to 10/s to prevent
+			// a compromised or malicious client from flooding the upstream daemon.
+			clientLimiter := rate.NewLimiter(rate.Limit(10), 20)
+			go pumpUpstreamToClient(ctx, upstream, client, errs)
+			go pumpClientToUpstream(ctx, client, upstream, clientLimiter, errs)
+		} else {
+			go pumpUpstreamToClient(ctx, upstream, client, errs)
+			go pumpClientDiscard(ctx, client, errs)
+		}
 		<-errs
 		cancel()
 		_ = client.Close()
 		_ = upstream.Close()
 		<-errs
+	}
+}
+
+// realtimeAllowUpstream reports whether client frames on the given stream may
+// be proxied to the upstream daemon. Console is interactive; install forwards
+// only with an explicit interactive opt-in, because the Beacon's install
+// socket never reads commands and anything forwarded would be dead bytes at
+// best. All other streams are output-only.
+func realtimeAllowUpstream(stream string, client *fiberws.Conn) bool {
+	switch stream {
+	case "console":
+		return true
+	case "install":
+		return strings.EqualFold(strings.TrimSpace(client.Query("interactive")), "true")
+	default:
+		return false
 	}
 }
 
@@ -389,6 +505,25 @@ func pumpClientToUpstream(ctx context.Context, client *fiberws.Conn, upstream *g
 		}
 		_ = upstream.SetWriteDeadline(time.Now().Add(10 * time.Second))
 		if err := upstream.WriteMessage(messageType, payload); err != nil {
+			errs <- err
+			return
+		}
+	}
+}
+
+// pumpClientDiscard drains inbound client frames on output-only streams
+// without forwarding them. The reads still have to happen: they answer
+// pings (extending the read deadline) and surface normal closes, so a quiet
+// viewer is not torn down as dead. Anything the client sends is dropped —
+// stats, logs, backup and non-interactive install sockets carry streams,
+// never commands.
+func pumpClientDiscard(ctx context.Context, client *fiberws.Conn, errs chan<- error) {
+	for {
+		if ctx.Err() != nil {
+			errs <- ctx.Err()
+			return
+		}
+		if _, _, err := client.ReadMessage(); err != nil {
 			errs <- err
 			return
 		}

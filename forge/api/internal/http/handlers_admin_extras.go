@@ -21,7 +21,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 	// Returns: { data: [ { id, name_first, name_last, email, username, md5 } ] }
 	protected.Get("/admin/users/accounts.json", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
-			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0, "per_page": 50, "current_page": 1, "total_pages": 1, "links": fiber.Map{}}}})
+			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0, "per_page": 50, "current": 1, "total_records": 0, "current_page": 1, "total_pages": 1, "links": fiber.Map{}}}})
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -36,7 +36,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		}
 		users, total, err := cfg.Store.SearchUsers(ctx, filter, page, perPage)
 		if err != nil {
-			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0}}})
+			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0, "per_page": perPage, "current": page, "total_records": 0, "current_page": page, "total_pages": 1}}})
 		}
 		data := make([]fiber.Map, 0, len(users))
 		for _, u := range users {
@@ -55,12 +55,14 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 			"data": data,
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
-					"total":        total,
-					"count":        len(data),
-					"per_page":     perPage,
-					"current_page": page,
-					"total_pages":  totalPages,
-					"links":        fiber.Map{},
+					"total":         total,
+					"count":         len(data),
+					"per_page":      perPage,
+					"current":       page,
+					"total_records": total,
+					"current_page":  page,
+					"total_pages":   totalPages,
+					"links":         fiber.Map{},
 				},
 			},
 		})

@@ -1,16 +1,17 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Activity } from "lucide-react";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
 import { chart } from "@/lib/design-tokens";
-import { getSystemInfo } from "@/lib/api/monitoring";
+import { useMonitoringSummaryQuery, summaryIsTrustworthy, useNodesQuery, useServersQuery } from "@/lib/admin/telemetry";
 
 export function SystemHealthGauge() {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["system-health"],
-    queryFn: getSystemInfo,
-    refetchInterval: 30_000,
+  const { data, isLoading, isError } = useMonitoringSummaryQuery();
+  const nodesQuery = useNodesQuery();
+  const serversQuery = useServersQuery();
+  const trustworthy = summaryIsTrustworthy(data, {
+    nodeCount: nodesQuery.data?.length,
+    serverCount: serversQuery.data?.length,
   });
 
   if (isLoading) {
@@ -29,6 +30,15 @@ export function SystemHealthGauge() {
       <Card>
         <CardHeader title="System Health" icon={Activity} />
         <div className="p-4 text-sm text-red-400">Failed to load health data</div>
+      </Card>
+    );
+  }
+
+  if (!trustworthy) {
+    return (
+      <Card>
+        <CardHeader title="System Health" icon={Activity} />
+        <div className="p-6 text-center text-xs text-text-muted">Summary unavailable — observability not reporting.</div>
       </Card>
     );
   }

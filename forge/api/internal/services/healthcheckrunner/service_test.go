@@ -179,8 +179,18 @@ func TestHTTPHealthCheck_Success(t *testing.T) {
 	if state == nil {
 		t.Fatal("state should exist after check")
 	}
+	// One success is below the default healthy threshold of 3: a new target
+	// is suspected until it proves itself.
+	if state.Status != TargetStatusSuspected {
+		t.Fatalf("expected suspected after a single success, got %s", state.Status)
+	}
+
+	svc.runOnce(context.Background())
+	svc.runOnce(context.Background())
+
+	state = svc.GetTargetState("t-http")
 	if state.Status != TargetStatusHealthy {
-		t.Fatalf("expected healthy, got %s", state.Status)
+		t.Fatalf("expected healthy after 3 consecutive successes, got %s", state.Status)
 	}
 }
 
@@ -295,8 +305,16 @@ func TestHealthThreshold_HealthyToUnhealthyToHealthy_Recovery(t *testing.T) {
 
 	svc.runOnce(context.Background())
 	state := svc.GetTargetState("t-rec")
+	// A first-seen target starts suspected: one success is below the healthy
+	// threshold of 2, so health must be earned, not assumed.
+	if state == nil || state.Status != TargetStatusSuspected {
+		t.Fatalf("initial check should be suspected until the healthy threshold is met, got %v", state)
+	}
+
+	svc.runOnce(context.Background())
+	state = svc.GetTargetState("t-rec")
 	if state == nil || state.Status != TargetStatusHealthy {
-		t.Fatalf("initial check should be healthy, got %v", state)
+		t.Fatalf("second consecutive success should be healthy, got %v", state)
 	}
 
 	st.mu.Lock()

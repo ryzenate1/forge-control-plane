@@ -24,7 +24,6 @@ linters:
       locale: US
     gosec:
       excludes:
-        - G104
         - G304
   exclusions:
     rules:

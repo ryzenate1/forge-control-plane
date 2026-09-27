@@ -147,7 +147,7 @@ export function AdminCapabilities() {
 
 function CapabilityRow({ cap, selected, onSelect }: { cap: NodeCapability; selected: boolean; onSelect: () => void }) {
   return (
-    <tr className={`hover:bg-[var(--surface-hover)] motion-safe:transition-colors ${selected ? "bg-[var(--brand)]/5" : ""}`}>
+    <tr className={`hover:bg-[var(--surface-hover)] motion-safe:transition-colors ${selected ? "bg-[color-mix(in_srgb,var(--brand)_5%,transparent)]" : ""}`}>
       <td className="px-4 py-3">
         <div className="font-mono text-xs font-medium text-[var(--text)]">{cap.nodeId.slice(0, 12)}…</div>
         <div className="text-xs text-[var(--text-subtle)]">{cap.os} · {cap.architecture} · {cap.cpuThreads} threads · {cap.memoryMb} MiB</div>

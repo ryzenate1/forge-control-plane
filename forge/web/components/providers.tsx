@@ -1,10 +1,13 @@
 "use client";
 
-import { QueryClient, QueryClientProvider, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { usePathname, useRouter } from "next/navigation";
 import { type ReactNode, useEffect, useState } from "react";
-import { fetchCurrentUser, refreshSession, ApiError } from "@/lib/api";
+import { refreshSession } from "@/lib/api";
+import { useCurrentUser } from "@/lib/api/use-current-user";
+import { queryKeys } from "@/lib/api/query-keys";
 import { useServerStore } from "@/stores/use-server-store";
+import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { TenancyHydrator } from "@/lib/api/tenancy-hydrate";
 import { BrandingProvider } from "@/components/branding";
 import { Button } from "@/components/ui/primitives";
@@ -12,12 +15,13 @@ import { ToastProvider, useToast } from "@/components/ui/toast";
 import { ThemeProvider } from "@/components/theme-provider";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { TranslationProvider } from "@/components/TranslationProvider";
+import { isProtectedPath } from "@/lib/auth/protected-paths";
+import { ApiError } from "@/lib/api";
 
 const SESSION_KEEPALIVE_MS = 10 * 60 * 1000;
-const PROTECTED_PATH_PREFIXES = ["/servers", "/server", "/account", "/admin"];
 
 function requiresSession(pathname: string) {
-  return PROTECTED_PATH_PREFIXES.some((prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`));
+  return isProtectedPath(pathname);
 }
 
 function SessionLoader({ children }: { children: ReactNode }) {
@@ -26,23 +30,24 @@ function SessionLoader({ children }: { children: ReactNode }) {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const { currentUser, setCurrentUser } = useServerStore();
-  const sessionQuery = useQuery({
-    queryKey: ["current-user"],
-    queryFn: fetchCurrentUser,
-    retry: 1,
-    staleTime: SESSION_KEEPALIVE_MS,
-    refetchInterval: SESSION_KEEPALIVE_MS,
-    refetchOnWindowFocus: true,
-  });
+  const resetTenancy = useTenancyStore((s) => s.reset);
+  const resetServer = useServerStore((s) => s.reset);
+  const sessionQuery = useCurrentUser();
 
+  // Single session keepalive: one interval owns both the sliding refresh and
+  // the revalidation of the current-user query. The query itself does not set
+  // refetchInterval, so there is exactly one timer per mounted tree.
   useEffect(() => {
     if (!currentUser) return;
     let interval: ReturnType<typeof setInterval> | null = null;
+    const tick = () => {
+      void refreshSession()
+        .then(() => queryClient.invalidateQueries({ queryKey: queryKeys.session.currentUser() }))
+        .catch(() => undefined);
+    };
     const start = () => {
       if (interval !== null) return;
-      interval = setInterval(() => {
-        void refreshSession().catch(() => undefined);
-      }, SESSION_KEEPALIVE_MS);
+      interval = setInterval(tick, SESSION_KEEPALIVE_MS);
     };
     const stop = () => {
       if (interval !== null) {
@@ -60,11 +65,12 @@ function SessionLoader({ children }: { children: ReactNode }) {
       stop();
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [currentUser]);
+  }, [currentUser, queryClient]);
 
   useEffect(() => {
     const onSessionExpired = () => {
-      setCurrentUser(null);
+      resetServer();
+      resetTenancy();
       queryClient.removeQueries();
       if (requiresSession(pathname)) {
         toast({ tone: "error", title: "Session expired", message: "Sign in again to continue." });
@@ -73,12 +79,13 @@ function SessionLoader({ children }: { children: ReactNode }) {
     };
     window.addEventListener("forge:session-expired", onSessionExpired);
     return () => window.removeEventListener("forge:session-expired", onSessionExpired);
-  }, [pathname, queryClient, router, setCurrentUser, toast]);
+  }, [pathname, queryClient, router, resetServer, resetTenancy, toast]);
 
   useEffect(() => {
     if (sessionQuery.data === null) {
-      setCurrentUser(null);
-      queryClient.removeQueries({ queryKey: ["current-user"] });
+      resetServer();
+      resetTenancy();
+      queryClient.removeQueries({ queryKey: queryKeys.session.currentUser() });
       if (requiresSession(pathname)) {
         toast({ tone: "error", title: "Session expired", message: "Sign in again to continue." });
         router.replace(`/?reason=session-expired&next=${encodeURIComponent(pathname)}`);
@@ -86,7 +93,7 @@ function SessionLoader({ children }: { children: ReactNode }) {
       return;
     }
     if (sessionQuery.data && !currentUser) setCurrentUser(sessionQuery.data);
-  }, [currentUser, pathname, queryClient, router, sessionQuery.data, setCurrentUser, toast]);
+  }, [currentUser, pathname, queryClient, router, sessionQuery.data, setCurrentUser, resetServer, resetTenancy, toast]);
 
   return <>
     {sessionQuery.isFetching && !sessionQuery.data ? <div aria-label="Verifying session" className="fixed inset-x-0 top-0 z-[55] h-0.5 overflow-hidden bg-red-950"><div className="h-full w-1/2 animate-pulse bg-red-500" /></div> : null}

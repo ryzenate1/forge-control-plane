@@ -5,7 +5,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -15,11 +17,39 @@ type K3sScheduler struct {
 	config K3sConfig
 }
 
-func NewK3sScheduler(cfg K3sConfig) *K3sScheduler {
+// NewK3sScheduler refuses to build a scheduler without an explicit cluster
+// target: with neither kubeconfigPath nor kubeApi set, kubectl would silently
+// act on whatever ambient context the control-plane host happens to have —
+// a different cluster than the node asked for.
+func NewK3sScheduler(cfg K3sConfig) (*K3sScheduler, error) {
+	if strings.TrimSpace(cfg.KubeconfigPath) == "" && strings.TrimSpace(cfg.KubeAPI) == "" {
+		return nil, fmt.Errorf("k3s scheduler requires an explicit target: set kubeconfigPath or kubeApi instead of relying on the ambient kubectl context")
+	}
+	if path := strings.TrimSpace(cfg.KubeconfigPath); path != "" {
+		if _, err := os.Stat(path); err != nil {
+			return nil, fmt.Errorf("k3s kubeconfigPath %q is not readable: %w", path, err)
+		}
+		cfg.KubeconfigPath = path
+	}
 	if cfg.Namespace == "" {
 		cfg.Namespace = "default"
+	} else if err := validateResourceIdentifier("namespace", cfg.Namespace); err != nil {
+		return nil, err
 	}
-	return &K3sScheduler{config: cfg}
+	return &K3sScheduler{config: cfg}, nil
+}
+
+// validateResourceIdentifier rejects instead of rewrites: silently
+// sanitizing a caller-supplied name (e.g. "My App" → "my-app") would point
+// every later operation at a different resource than the one requested.
+func validateResourceIdentifier(kind, name string) error {
+	if strings.TrimSpace(name) == "" {
+		return fmt.Errorf("%s is required", kind)
+	}
+	if name != sanitizeName(name) {
+		return fmt.Errorf("%s %q is not a valid resource identifier: use lowercase letters, digits and single hyphens, at most 63 characters", kind, name)
+	}
+	return nil
 }
 
 func (s *K3sScheduler) Type() SchedulerType {
@@ -58,21 +88,33 @@ func (s *K3sScheduler) kubectlInput(ctx context.Context, input string, args ...s
 }
 
 func (s *K3sScheduler) Deploy(ctx context.Context, req DeployRequest) (DeployResponse, error) {
-	name := sanitizeName(req.Name)
+	name := req.Name
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return DeployResponse{}, err
+	}
 
-	deploymentYAML := s.buildDeployment(name, req)
+	deploymentYAML, err := s.buildDeployment(name, req)
+	if err != nil {
+		return DeployResponse{}, fmt.Errorf("build deployment manifest: %w", err)
+	}
 	if _, err := s.kubectlInput(ctx, deploymentYAML, "apply", "-f", "-"); err != nil {
 		return DeployResponse{}, fmt.Errorf("apply deployment: %w", err)
 	}
 
-	serviceYAML := s.buildService(name, req)
+	serviceYAML, err := s.buildService(name, req)
+	if err != nil {
+		return DeployResponse{}, fmt.Errorf("build service manifest: %w", err)
+	}
 	if _, err := s.kubectlInput(ctx, serviceYAML, "apply", "-f", "-"); err != nil {
 		return DeployResponse{}, fmt.Errorf("apply service: %w", err)
 	}
 
 	status, err := s.GetStatus(ctx, name)
 	if err != nil {
-		status = "unknown"
+		// The deployment was applied but its state could not be read back.
+		// Report pending — it exists and may still converge — never a
+		// success-shaped status for a state that was never observed.
+		status = "pending"
 	}
 
 	endpoints := make([]ServiceEndpoint, 0)
@@ -90,32 +132,100 @@ func (s *K3sScheduler) Deploy(ctx context.Context, req DeployRequest) (DeployRes
 	}, nil
 }
 
+// stoppedReplicasAnnotation records the replica count a deployment had before
+// Stop scaled it to zero, so Start restores what was actually running instead
+// of inventing a replica count.
+const stoppedReplicasAnnotation = "scheduler.forge/stopped-replicas"
+
+// getDeployment reads the deployment object once so Stop/Start act on state
+// observed from the platform, never on a guess.
+func (s *K3sScheduler) getDeployment(ctx context.Context, name string) (specReplicas *int64, annotations map[string]string, err error) {
+	out, err := s.kubectl(ctx, "get", "deployment", name, "-o", "json")
+	if err != nil {
+		return nil, nil, err
+	}
+	var dep struct {
+		Metadata struct {
+			Annotations map[string]string `json:"annotations"`
+		} `json:"metadata"`
+		Spec struct {
+			Replicas *int64 `json:"replicas"`
+		} `json:"spec"`
+	}
+	if err := json.Unmarshal([]byte(out), &dep); err != nil {
+		return nil, nil, fmt.Errorf("parse deployment %q: %w", name, err)
+	}
+	return dep.Spec.Replicas, dep.Metadata.Annotations, nil
+}
+
 func (s *K3sScheduler) Stop(ctx context.Context, name string) error {
-	name = sanitizeName(name)
-	_, err := s.kubectl(ctx, "scale", "deployment", name, "--replicas=0")
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return err
+	}
+	replicas, _, err := s.getDeployment(ctx, name)
+	if err != nil {
+		return fmt.Errorf("read deployment %q before stop: %w", name, err)
+	}
+	if replicas != nil && *replicas == 0 {
+		return nil // already stopped
+	}
+	if replicas == nil {
+		return fmt.Errorf("deployment %q does not report a replica count; refusing to stop it without recording how to start it again", name)
+	}
+	if _, err := s.kubectl(ctx, "annotate", "deployment", name,
+		fmt.Sprintf("%s=%d", stoppedReplicasAnnotation, *replicas), "--overwrite"); err != nil {
+		return fmt.Errorf("record pre-stop replica count for %q: %w", name, err)
+	}
+	_, err = s.kubectl(ctx, "scale", "deployment", name, "--replicas=0")
 	return err
 }
 
 func (s *K3sScheduler) Start(ctx context.Context, name string) error {
-	name = sanitizeName(name)
-	_, err := s.kubectl(ctx, "scale", "deployment", name, "--replicas=1")
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return err
+	}
+	replicas, annotations, err := s.getDeployment(ctx, name)
+	if err != nil {
+		return fmt.Errorf("read deployment %q before start: %w", name, err)
+	}
+	if replicas != nil && *replicas > 0 {
+		return nil // already running
+	}
+	prev, ok := annotations[stoppedReplicasAnnotation]
+	if !ok {
+		return fmt.Errorf("deployment %q is scaled to zero but has no %s annotation; refusing to guess a replica count to start it with", name, stoppedReplicasAnnotation)
+	}
+	target, err := strconv.ParseInt(strings.TrimSpace(prev), 10, 32)
+	if err != nil || target <= 0 {
+		return fmt.Errorf("deployment %q has an unusable %s annotation %q", name, stoppedReplicasAnnotation, prev)
+	}
+	_, err = s.kubectl(ctx, "scale", "deployment", name, fmt.Sprintf("--replicas=%d", target))
 	return err
 }
 
 func (s *K3sScheduler) Restart(ctx context.Context, name string) error {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return err
+	}
 	_, err := s.kubectl(ctx, "rollout", "restart", "deployment", name)
 	return err
 }
 
 func (s *K3sScheduler) Scale(ctx context.Context, req ScaleRequest) error {
-	name := sanitizeName(req.Name)
-	_, err := s.kubectl(ctx, "scale", "deployment", name, fmt.Sprintf("--replicas=%d", req.Replicas))
+	if err := validateResourceIdentifier("workload name", req.Name); err != nil {
+		return err
+	}
+	if req.Replicas < 0 {
+		return fmt.Errorf("replica count must not be negative, got %d", req.Replicas)
+	}
+	_, err := s.kubectl(ctx, "scale", "deployment", req.Name, fmt.Sprintf("--replicas=%d", req.Replicas))
 	return err
 }
 
 func (s *K3sScheduler) GetStatus(ctx context.Context, name string) (string, error) {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return "unknown", err
+	}
 	out, err := s.kubectl(ctx, "get", "deployment", name, "-o", "jsonpath={.status.conditions[?(@.type==\"Available\")].status}")
 	if err != nil {
 		return "unknown", err
@@ -127,12 +237,17 @@ func (s *K3sScheduler) GetStatus(ctx context.Context, name string) (string, erro
 	case "False":
 		return "degraded", nil
 	default:
-		return "unknown", nil
+		// An unrecognized or empty condition is not a success signal. Report
+		// pending so callers keep waiting instead of declaring victory over
+		// a state they never observed.
+		return "pending", nil
 	}
 }
 
 func (s *K3sScheduler) GetLogs(ctx context.Context, name string, tail int) ([]LogEntry, error) {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return nil, err
+	}
 	tailArg := fmt.Sprintf("--tail=%d", tail)
 	if tail <= 0 {
 		tailArg = "--tail=100"
@@ -153,7 +268,9 @@ func (s *K3sScheduler) GetLogs(ctx context.Context, name string, tail int) ([]Lo
 }
 
 func (s *K3sScheduler) GetEvents(ctx context.Context, name string) ([]Event, error) {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return nil, err
+	}
 	out, err := s.kubectl(ctx, "get", "events", "--field-selector", fmt.Sprintf("involvedObject.name=%s", name), "-o", "json")
 	if err != nil {
 		return nil, err
@@ -182,27 +299,40 @@ func (s *K3sScheduler) GetEvents(ctx context.Context, name string) ([]Event, err
 }
 
 func (s *K3sScheduler) GetResources(ctx context.Context, name string) (ResourceUsage, error) {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return ResourceUsage{}, err
+	}
 	out, err := s.kubectl(ctx, "top", "pod", "-l", fmt.Sprintf("app=%s", name), "--no-headers")
 	if err != nil {
 		return ResourceUsage{}, err
 	}
-	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
-	if len(lines) == 0 {
-		return ResourceUsage{}, nil
+	var first []string
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			first = fields
+			break
+		}
 	}
-	fields := strings.Fields(lines[0])
-	if len(fields) < 3 {
-		return ResourceUsage{}, nil
+	if first == nil {
+		return ResourceUsage{}, fmt.Errorf("metrics-server reported no pod usage for %q; resources are not available", name)
 	}
-	cpuStr := fields[1]
-	memStr := fields[2]
-	cpuPercent := parseCPUPercent(cpuStr)
-	memMB := parseMemoryMB(memStr)
-	return ResourceUsage{CPUPercent: cpuPercent, MemoryMB: memMB}, nil
+	if len(first) < 3 {
+		return ResourceUsage{}, fmt.Errorf("unexpected metrics-server output for %q: %q", name, strings.Join(first, " "))
+	}
+	cpuPercent, err := parseCPUPercent(first[1])
+	if err != nil {
+		return ResourceUsage{}, fmt.Errorf("parse CPU usage for %q: %w", name, err)
+	}
+	memMB, err := parseMemoryMB(first[2])
+	if err != nil {
+		return ResourceUsage{}, fmt.Errorf("parse memory usage for %q: %w", name, err)
+	}
+	// DiskMB stays nil: metrics-server does not report filesystem usage, and
+	// "not reported" must not be encoded as zero.
+	return ResourceUsage{CPUPercent: &cpuPercent, MemoryMB: &memMB}, nil
 }
 
-func (s *K3sScheduler) buildDeployment(name string, req DeployRequest) string {
+func (s *K3sScheduler) buildDeployment(name string, req DeployRequest) (string, error) {
 	replicas := req.Replicas
 	if replicas <= 0 {
 		replicas = 1
@@ -220,8 +350,10 @@ func (s *K3sScheduler) buildDeployment(name string, req DeployRequest) string {
 	}
 	mounts := make([]map[string]any, 0, len(req.Mounts))
 	volumes := make([]map[string]any, 0, len(req.Mounts))
-	for _, m := range req.Mounts {
-		volumeName := "vol-" + sanitizeName(m.Source)
+	for i, m := range req.Mounts {
+		// Indexed volume names keep two sources that collapse to the same
+		// sanitized form from aliasing onto one volume.
+		volumeName := fmt.Sprintf("vol-%d-%s", i, sanitizeName(m.Source))
 		mounts = append(mounts, map[string]any{
 			"mountPath": m.Target,
 			"name":      volumeName,
@@ -272,11 +404,14 @@ func (s *K3sScheduler) buildDeployment(name string, req DeployRequest) string {
 			},
 		},
 	}
-	data, _ := yaml.Marshal(manifest)
-	return string(data)
+	data, err := yaml.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
-func (s *K3sScheduler) buildService(name string, req DeployRequest) string {
+func (s *K3sScheduler) buildService(name string, req DeployRequest) (string, error) {
 	ports := make([]map[string]any, 0, len(req.Ports))
 	for _, p := range req.Ports {
 		port := map[string]any{
@@ -300,8 +435,11 @@ func (s *K3sScheduler) buildService(name string, req DeployRequest) string {
 			"ports":    ports,
 		},
 	}
-	data, _ := yaml.Marshal(manifest)
-	return string(data)
+	data, err := yaml.Marshal(manifest)
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
 }
 
 func sanitizeName(name string) string {
@@ -328,30 +466,64 @@ func sanitizeName(name string) string {
 	return s
 }
 
-func parseCPUPercent(s string) float64 {
+// parseCPUPercent converts a metrics-server CPU reading (nanocores "n",
+// millicores "m", or whole cores) into a percentage of one core. Unparseable
+// input is an error: silently returning 0 would report "idle" for a
+// measurement that was never read.
+func parseCPUPercent(s string) (float64, error) {
 	s = strings.TrimSpace(s)
-	if strings.HasSuffix(s, "m") {
-		milli := strings.TrimSuffix(s, "m")
-		var v float64
-		fmt.Sscanf(milli, "%f", &v)
-		return v / 1000.0 * 100
+	var cores float64
+	switch {
+	case strings.HasSuffix(s, "n"):
+		v, err := strconv.ParseFloat(strings.TrimSuffix(s, "n"), 64)
+		if err != nil {
+			return 0, fmt.Errorf("unparseable CPU measurement %q", s)
+		}
+		cores = v / 1e9
+	case strings.HasSuffix(s, "m"):
+		v, err := strconv.ParseFloat(strings.TrimSuffix(s, "m"), 64)
+		if err != nil {
+			return 0, fmt.Errorf("unparseable CPU measurement %q", s)
+		}
+		cores = v / 1000
+	default:
+		v, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return 0, fmt.Errorf("unparseable CPU measurement %q", s)
+		}
+		cores = v
 	}
-	var v float64
-	fmt.Sscanf(s, "%f", &v)
-	return v * 100
+	return cores * 100, nil
 }
 
-func parseMemoryMB(s string) int64 {
+// parseMemoryMB converts a metrics-server memory reading (Ki/Mi/Gi/Ti or a
+// bare byte count) into megabytes, erroring instead of reporting zero for
+// input it cannot read.
+func parseMemoryMB(s string) (int64, error) {
 	s = strings.TrimSpace(s)
-	var v float64
-	if strings.HasSuffix(s, "Mi") {
-		fmt.Sscanf(s, "%fMi", &v)
-		return int64(v)
+	var numStr string
+	var mbPerUnit float64
+	switch {
+	case strings.HasSuffix(s, "Ti"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "Ti"), 1024*1024
+	case strings.HasSuffix(s, "Gi"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "Gi"), 1024
+	case strings.HasSuffix(s, "Mi"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "Mi"), 1
+	case strings.HasSuffix(s, "Ki"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "Ki"), 1.0/1024
+	case strings.HasSuffix(s, "M"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "M"), 1
+	case strings.HasSuffix(s, "K"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "K"), 1.0/1024
+	case strings.HasSuffix(s, "G"):
+		numStr, mbPerUnit = strings.TrimSuffix(s, "G"), 1024
+	default:
+		numStr, mbPerUnit = s, 1.0/(1024*1024) // bare value is bytes
 	}
-	if strings.HasSuffix(s, "Ki") {
-		fmt.Sscanf(s, "%fKi", &v)
-		return int64(v / 1024)
+	v, err := strconv.ParseFloat(strings.TrimSpace(numStr), 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("unparseable memory measurement %q", s)
 	}
-	fmt.Sscanf(s, "%f", &v)
-	return int64(v)
+	return int64(v * mbPerUnit), nil
 }

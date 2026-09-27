@@ -10,6 +10,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
+	"os"
 	pathpkg "path"
 	"strconv"
 	"strings"
@@ -113,7 +115,28 @@ func (r *ContainerdRuntime) Create(ctx context.Context, req CreateRequest) error
 	if err := validateCreateRequest(req); err != nil {
 		return err
 	}
+	if err := validateContainerdLimits(req); err != nil {
+		return err
+	}
 	ctx = namespaces.WithNamespace(ctx, r.namespace)
+
+	name := containerName(req.ServerID)
+	// Idempotent by existence: creating a workload that already exists is a
+	// no-op (matching Docker Create). Configuration drift is not silently
+	// accepted as identical — the hash is recorded below so a future
+	// reconcile can detect it — but Create itself never disturbs a running
+	// container.
+	if existing, err := r.client.LoadContainer(ctx, name); err == nil {
+		if _, infoErr := existing.Info(ctx); infoErr == nil {
+			return nil
+		}
+		return nil
+	}
+
+	hash, err := createRequestHash(req)
+	if err != nil {
+		return err
+	}
 
 	image, err := r.client.GetImage(ctx, req.Image)
 	if err != nil {
@@ -128,10 +151,9 @@ func (r *ContainerdRuntime) Create(ctx context.Context, req CreateRequest) error
 		}
 	}
 
-	name := containerName(req.ServerID)
 	labels := map[string]string{
 		"modern-game-panel.server_id": req.ServerID,
-		configHashLabel:               "",
+		configHashLabel:               hash,
 	}
 
 	specOpts := []oci.SpecOpts{
@@ -141,6 +163,7 @@ func (r *ContainerdRuntime) Create(ctx context.Context, req CreateRequest) error
 		oci.WithNoNewPrivileges,
 		oci.WithRootFSReadonly(),
 	}
+	specOpts = append(specOpts, containerdResourceOpts(req)...)
 
 	if len(req.Command) > 0 {
 		specOpts = append(specOpts, oci.WithProcessArgs(req.Command...))
@@ -182,8 +205,13 @@ func (r *ContainerdRuntime) Install(ctx context.Context, req InstallRequest) (In
 	}
 	ctx = namespaces.WithNamespace(ctx, r.namespace)
 
+	// Installer images must be immutable. The default is digest-pinned;
+	// operators mirroring images must update the pin, not drop it.
 	if req.Image == "" {
-		req.Image = "alpine:3.21"
+		req.Image = containerdInstallerImage()
+	}
+	if !pinnedImagePattern.MatchString(req.Image) {
+		return InstallResult{}, fmt.Errorf("remote image %q is not digest-pinned; use name@sha256:<64 hex characters>", req.Image)
 	}
 	if req.Entrypoint == "" {
 		req.Entrypoint = "sh"
@@ -207,7 +235,7 @@ func (r *ContainerdRuntime) Install(ctx context.Context, req InstallRequest) (In
 	}
 
 	mounts := []specs.Mount{
-		{Type: "bind", Source: rootDir, Destination: "/mnt/server", Options: []string{"rbind", "rw"}},
+		{Type: "bind", Source: rootDir, Destination: "/mnt/server", Options: []string{"rbind", "rw", "nosuid", "nodev", "noexec"}},
 	}
 
 	container, err := r.client.NewContainer(ctx, name,
@@ -235,6 +263,19 @@ func (r *ContainerdRuntime) Install(ctx context.Context, req InstallRequest) (In
 		return InstallResult{}, fmt.Errorf("create task: %w", err)
 	}
 	defer task.Delete(ctx)
+	taskIO.task = task
+	// Register the IO before waiting so Logs can find it. Unknown is not
+	// zero: without this the Logs lookup below fails and the installer
+	// would return an empty log with a nil error.
+	installerKey := req.ServerID + "-installer"
+	r.mu.Lock()
+	r.taskIOs[installerKey] = taskIO
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.taskIOs, installerKey)
+		r.mu.Unlock()
+	}()
 
 	if err := task.Start(ctx); err != nil {
 		return InstallResult{}, fmt.Errorf("start task: %w", err)
@@ -254,9 +295,9 @@ func (r *ContainerdRuntime) Install(ctx context.Context, req InstallRequest) (In
 		return InstallResult{}, ctx.Err()
 	}
 
-	logsReader, err := r.Logs(ctx, req.ServerID+"-installer")
+	logsReader, err := r.Logs(ctx, installerKey)
 	if err != nil {
-		return InstallResult{ExitCode: int(statusCode)}, nil
+		return InstallResult{ExitCode: int(statusCode)}, fmt.Errorf("read installer logs: %w", err)
 	}
 	defer logsReader.Close()
 	var raw bytes.Buffer
@@ -376,6 +417,16 @@ func (r *ContainerdRuntime) Start(ctx context.Context, serverID string) error {
 }
 
 func (r *ContainerdRuntime) SendCommand(ctx context.Context, serverID, command string) error {
+	// Bound console input: an unbounded string becomes an unbounded exec
+	// payload inside the workload.
+	const maxContainerdCommandBytes = 4 * 1024
+	if len(command) > maxContainerdCommandBytes {
+		return fmt.Errorf("command exceeds %d byte limit", maxContainerdCommandBytes)
+	}
+	if strings.ContainsRune(command, '\x00') {
+		return errors.New("command contains invalid characters")
+	}
+	log.Printf("[runtime] containerd exec server=%q bytes=%d", serverID, len(command))
 	ctx = namespaces.WithNamespace(ctx, r.namespace)
 	name := containerName(serverID)
 
@@ -593,21 +644,25 @@ func (r *ContainerdRuntime) Stats(ctx context.Context, serverID string) (Stats, 
 	var cpuPercent float64
 	var memBytes, memLimit uint64
 
+	// Unknown is not zero: an unreadable or undecodable metric must surface
+	// as an error rather than a healthy-looking zero reading.
 	data := metric.Data
-	if data != nil && len(data.Value) > 0 {
-		var metricsData struct {
-			CPUUsage    uint64 `json:"cpu_usage"`
-			SystemUsage uint64 `json:"system_cpu"`
-			MemoryUsage uint64 `json:"memory_usage"`
-			MemoryLimit uint64 `json:"memory_limit"`
-		}
-		if err := json.Unmarshal(data.Value, &metricsData); err == nil {
-			memBytes = metricsData.MemoryUsage
-			memLimit = metricsData.MemoryLimit
-			if metricsData.SystemUsage > 0 {
-				cpuPercent = float64(metricsData.CPUUsage) / float64(metricsData.SystemUsage) * 100
-			}
-		}
+	if data == nil || len(data.Value) == 0 {
+		return Stats{}, errors.New("containerd metrics are unavailable")
+	}
+	var metricsData struct {
+		CPUUsage    uint64 `json:"cpu_usage"`
+		SystemUsage uint64 `json:"system_cpu"`
+		MemoryUsage uint64 `json:"memory_usage"`
+		MemoryLimit uint64 `json:"memory_limit"`
+	}
+	if err := json.Unmarshal(data.Value, &metricsData); err != nil {
+		return Stats{}, fmt.Errorf("decode containerd metrics: %w", err)
+	}
+	memBytes = metricsData.MemoryUsage
+	memLimit = metricsData.MemoryLimit
+	if metricsData.SystemUsage > 0 {
+		cpuPercent = float64(metricsData.CPUUsage) / float64(metricsData.SystemUsage) * 100
 	}
 
 	return Stats{
@@ -876,7 +931,7 @@ func containerdMounts(rootDir string, custom []Mount) ([]specs.Mount, error) {
 	}
 	mounts := []specs.Mount{{
 		Type: "bind", Source: root, Destination: serverContainerRoot,
-		Options: []string{"rbind", "rw", "nosuid", "nodev"},
+		Options: []string{"rbind", "rw", "nosuid", "nodev", "noexec"},
 	}}
 	for _, m := range custom {
 		if m.Source == "" || m.Target == "" {
@@ -890,9 +945,9 @@ func containerdMounts(rootDir string, custom []Mount) ([]specs.Mount, error) {
 		if !pathpkg.IsAbs(target) || target == "/" || target == serverContainerRoot {
 			return nil, fmt.Errorf("invalid container mount target %q", m.Target)
 		}
-		options := []string{"rbind", "rw", "nosuid", "nodev"}
+		options := []string{"rbind", "rw", "nosuid", "nodev", "noexec"}
 		if m.ReadOnly {
-			options = []string{"rbind", "ro", "nosuid", "nodev"}
+			options = []string{"rbind", "ro", "nosuid", "nodev", "noexec"}
 		}
 		mounts = append(mounts, specs.Mount{
 			Type:        "bind",
@@ -902,6 +957,74 @@ func containerdMounts(rootDir string, custom []Mount) ([]specs.Mount, error) {
 		})
 	}
 	return mounts, nil
+}
+
+// validateContainerdLimits rejects limits the OCI adapter cannot honour
+// instead of silently running an unconstrained container.
+func validateContainerdLimits(req CreateRequest) error {
+	if req.SwapMB > 0 && req.MemoryMB == 0 {
+		return errors.New("swap requires a positive memory limit")
+	}
+	if req.OOMKillDisabled {
+		return errors.New("containerd runtime cannot disable OOM kill; omit oomKillDisabled")
+	}
+	if req.CPUSet != "" {
+		for _, r := range req.CPUSet {
+			if (r < '0' || r > '9') && r != ',' && r != '-' {
+				return fmt.Errorf("invalid cpuSet %q", req.CPUSet)
+			}
+		}
+	}
+	if req.NetworkSubnet != "" || req.NetworkGateway != "" || req.NetworkIP != "" || len(req.DNS) > 0 {
+		return errors.New("containerd runtime does not manage Docker networks or DNS; omit networkSubnet/gateway/ip and dns")
+	}
+	return nil
+}
+
+// containerdResourceOpts maps every enforceable limit onto OCI spec options.
+// Callers must run validateContainerdLimits first so anything returned here
+// is honoured and nothing is silently dropped.
+func containerdResourceOpts(req CreateRequest) []oci.SpecOpts {
+	opts := []oci.SpecOpts{}
+	memory := req.MemoryMB * 1024 * 1024
+	if memory > 0 && req.MemoryOverhead > 0 {
+		memory = int64(float64(memory) * (1 + req.MemoryOverhead/100))
+	}
+	if memory > 0 {
+		opts = append(opts, oci.WithMemoryLimit(uint64(memory)))
+		swap := memory + req.SwapMB*1024*1024
+		opts = append(opts, oci.WithMemorySwap(swap))
+	}
+	if req.CPUPercent > 0 {
+		const period uint64 = 100000
+		quota := int64(period) * req.CPUPercent / 100
+		opts = append(opts, oci.WithCPUCFS(quota, period))
+	} else if req.CPUShares > 0 {
+		opts = append(opts, oci.WithCPUShares(uint64(req.CPUShares)))
+	}
+	if strings.TrimSpace(req.CPUSet) != "" {
+		opts = append(opts, oci.WithCPUs(req.CPUSet))
+	}
+	pids := req.PIDLimit
+	if pids == 0 {
+		pids = 256
+	}
+	opts = append(opts, oci.WithPidsLimit(pids))
+	if req.IOWeight != 0 {
+		weight := uint16(req.IOWeight)
+		opts = append(opts, oci.WithBlockIO(&specs.LinuxBlockIO{Weight: &weight}))
+	}
+	return opts
+}
+
+// containerdInstallerImage is the digest-pinned installer base. Override with
+// DAEMON_CONTAINERD_INSTALLER_IMAGE when mirroring; never replace the pin
+// with a mutable tag.
+func containerdInstallerImage() string {
+	if value := strings.TrimSpace(os.Getenv("DAEMON_CONTAINERD_INSTALLER_IMAGE")); value != "" {
+		return value
+	}
+	return "docker.io/library/alpine:3.21@sha256:21a3deaa0d32a8057914f36584b5288d2e5da9845c690f493846b7b90a70dbcd"
 }
 
 func signalToUnix(signal string) (unix.Signal, error) {

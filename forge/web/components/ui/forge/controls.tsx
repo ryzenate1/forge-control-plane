@@ -294,17 +294,26 @@ export function ForgeSwitch({
   className?: string;
   id?: string;
 }) {
+  const switchId = React.useId();
+  const labelId = `${switchId}-label`;
   const toggle = (
     <button
       aria-checked={checked}
+      aria-labelledby={label ? labelId : undefined}
       className={cn(
         "relative inline-flex h-5 w-9 shrink-0 items-center rounded-full border transition-colors duration-150",
         "disabled:pointer-events-none disabled:opacity-45",
         checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong"
       )}
       disabled={disabled}
-      id={id}
-      onClick={() => onChange(!checked)}
+      id={id ?? switchId}
+      onClick={(event) => {
+        // The labelled wrapper below also toggles on click, so a click on the
+        // switch itself must not bubble — otherwise onChange fires twice and
+        // the switch appears stuck.
+        event.stopPropagation();
+        onChange(!checked);
+      }}
       role="switch"
       type="button"
     >
@@ -322,12 +331,12 @@ export function ForgeSwitch({
   }
 
   return (
-    <label className={cn("flex cursor-pointer items-start gap-2.5", className)}>
+    <div className={cn("flex cursor-pointer items-start gap-2.5", className)} onClick={disabled ? undefined : () => onChange(!checked)} role="presentation">
       {toggle}
-      <span className="min-w-0 space-y-0.5">
+      <span className="min-w-0 space-y-0.5" id={label ? labelId : undefined}>
         {label ? <span className="block text-xs font-semibold text-text">{label}</span> : null}
         {description ? <span className="ui-hint block">{description}</span> : null}
       </span>
-    </label>
+    </div>
   );
 }

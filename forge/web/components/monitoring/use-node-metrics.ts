@@ -3,6 +3,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { getNodeMetrics, metricWindow, type MetricPeriod, type NodeMetrics } from "@/lib/api/monitoring";
+import { queryKeys } from "@/lib/api/query-keys";
 
 interface UseNodeMetricsOptions {
   nodeId?: string;
@@ -20,8 +21,9 @@ interface UseNodeMetricsOptions {
 export function useNodeMetricsQuery(options: UseNodeMetricsOptions = {}) {
   const { nodeId, period = "1h" } = options;
   const window = useMemo(() => metricWindow(period), [period]);
+  const scope = nodeId ?? "all";
   return useQuery<NodeMetrics[]>({
-    queryKey: ["node-metrics", nodeId ?? "all", period],
+    queryKey: queryKeys.monitoring.history(scope, period),
     queryFn: () => getNodeMetrics({ nodeId, period, limit: window.limit, since: window.since }),
     refetchInterval: options.refetchInterval ?? 30_000,
   });

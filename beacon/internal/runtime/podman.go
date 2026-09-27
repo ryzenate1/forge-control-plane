@@ -25,7 +25,7 @@ func NewPodmanRuntime(cfg PodmanConfig) (*PodmanRuntime, error) {
 
 	cli, err := client.NewClientWithOpts(
 		client.WithHost(cfg.URI),
-		client.WithAPIVersionNegotiation(),
+		client.WithVersion("1.43"),
 		client.WithHTTPClient(&http.Client{Timeout: 30 * time.Second}),
 	)
 	if err != nil {

@@ -195,7 +195,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(node)
 	})
 
-	protected.Get("/nodes/:id/configuration", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/configuration", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -208,7 +208,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(config)
 	})
 
-	protected.Get("/nodes/:id/deployment", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/deployment", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -305,7 +305,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/nodes/:id/rotate-token", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/:id/rotate-token", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -327,7 +327,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Deployable node ----
 
-	protected.Post("/nodes/deployable", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/deployable", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -443,7 +443,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(view)
 	})
 
-	protected.Get("/nodes/:id/evacuation-preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/nodes/:id/evacuation-preview", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -456,7 +456,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/nodes/:id/evacuation-plan", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/:id/evacuation-plan", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -533,7 +533,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		})
 	})
 
-	protected.Get("/evacuation-plans/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/evacuation-plans/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -546,7 +546,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/admin/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -566,7 +566,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.Status(fiber.StatusCreated).JSON(migration)
 	})
 
-	protected.Post("/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/migrations", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -586,7 +586,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.Status(fiber.StatusCreated).JSON(migration)
 	})
 
-	protected.Get("/migrations", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/migrations", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -599,7 +599,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migrations)
 	})
 
-	protected.Get("/admin/migrations", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/admin/migrations", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -612,7 +612,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migrations)
 	})
 
-	protected.Get("/migrations/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/migrations/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -625,7 +625,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migration)
 	})
 
-	protected.Patch("/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -638,7 +638,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(migration)
 	})
 
-	protected.Post("/admin/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/migrations/:id/cancel", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -904,7 +904,12 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 				DefaultValue: v.DefaultValue, UserViewable: v.UserViewable,
 				UserEditable: v.UserEditable, Rules: v.Rules, Sort: v.Sort,
 			}, actorID); err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, fmt.Sprintf("failed to import variable %s: %v", v.EnvVariable, err))
+				// The store error may carry SQL/driver internals; log it
+				// server-side and return a generic 500 so implementation
+				// details never leak to the client.
+				slog.Error("egg import: failed to create egg variable",
+					"eggId", egg.ID, "envVariable", v.EnvVariable, "error", err)
+				return respondInternalError(c, err)
 			}
 		}
 		return c.Status(fiber.StatusCreated).JSON(egg)
@@ -1581,7 +1586,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Patch("/templates/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/templates/:id", requireRole("admin"), requireAdminScope("nests.write"), func(c *fiber.Ctx) error {
 		var req CreateTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -1606,31 +1611,31 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 	})
 
 	// ---- Plugins ----
-	protected.Get("/admin/plugins", requireRole("admin"), ListPlugins(cfg))
-	protected.Get("/admin/plugins/:id", requireRole("admin"), GetPlugin(cfg))
-	protected.Post("/admin/plugins/import/file", requireRole("admin"), ImportPluginFromFile(cfg))
-	protected.Post("/admin/plugins/import/url", requireRole("admin"), ImportPluginFromURL(cfg))
-	protected.Post("/admin/plugins/install", requireRole("admin"), InstallPlugin(cfg))
-	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), UninstallPlugin(cfg))
-	protected.Post("/admin/plugins/:id/enable", requireRole("admin"), EnablePlugin(cfg))
-	protected.Post("/admin/plugins/:id/disable", requireRole("admin"), DisablePlugin(cfg))
-	protected.Patch("/admin/plugins/:id", requireRole("admin"), UpdatePlugin(cfg))
-	protected.Delete("/admin/plugins/:id", requireRole("admin"), DeletePlugin(cfg))
+	protected.Get("/admin/plugins", requireRole("admin"), requireAdminScope("plugins.read"), ListPlugins(cfg))
+	protected.Get("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.read"), GetPlugin(cfg))
+	protected.Post("/admin/plugins/import/file", requireRole("admin"), requireAdminScope("plugins.write"), ImportPluginFromFile(cfg))
+	protected.Post("/admin/plugins/import/url", requireRole("admin"), requireAdminScope("plugins.write"), ImportPluginFromURL(cfg))
+	protected.Post("/admin/plugins/install", requireRole("admin"), requireAdminScope("plugins.write"), InstallPlugin(cfg))
+	protected.Post("/admin/plugins/:id/uninstall", requireRole("admin"), requireAdminScope("plugins.delete"), UninstallPlugin(cfg))
+	protected.Post("/admin/plugins/:id/enable", requireRole("admin"), requireAdminScope("plugins.write"), EnablePlugin(cfg))
+	protected.Post("/admin/plugins/:id/disable", requireRole("admin"), requireAdminScope("plugins.write"), DisablePlugin(cfg))
+	protected.Patch("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.write"), UpdatePlugin(cfg))
+	protected.Delete("/admin/plugins/:id", requireRole("admin"), requireAdminScope("plugins.delete"), DeletePlugin(cfg))
 
 	// ---- Roles ----
-	protected.Get("/admin/roles", requireRole("admin"), ListRoles(cfg))
-	protected.Get("/admin/roles/:id", requireRole("admin"), GetRole(cfg))
-	protected.Post("/admin/roles", requireRole("admin"), CreateRole(cfg))
-	protected.Patch("/admin/roles/:id", requireRole("admin"), UpdateRole(cfg))
-	protected.Delete("/admin/roles/:id", requireRole("admin"), DeleteRole(cfg))
-	protected.Get("/admin/users/:id/roles", requireRole("admin"), ListUserRoles(cfg))
-	protected.Patch("/admin/users/:id/roles/assign", requireRole("admin"), AssignRolesToUser(cfg))
-	protected.Patch("/admin/users/:id/roles/remove", requireRole("admin"), RemoveRolesFromUser(cfg))
+	protected.Get("/admin/roles", requireRole("admin"), requireAdminScope("roles.read"), ListRoles(cfg))
+	protected.Get("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.read"), GetRole(cfg))
+	protected.Post("/admin/roles", requireRole("admin"), requireAdminScope("roles.write"), CreateRole(cfg))
+	protected.Patch("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.write"), UpdateRole(cfg))
+	protected.Delete("/admin/roles/:id", requireRole("admin"), requireAdminScope("roles.delete"), DeleteRole(cfg))
+	protected.Get("/admin/users/:id/roles", requireRole("admin"), requireAdminScope("users.read"), ListUserRoles(cfg))
+	protected.Patch("/admin/users/:id/roles/assign", requireRole("admin"), requireAdminScope("users.write"), AssignRolesToUser(cfg))
+	protected.Patch("/admin/users/:id/roles/remove", requireRole("admin"), requireAdminScope("users.write"), RemoveRolesFromUser(cfg))
 
 	// ---- OAuth2 admin routes ----
-	protected.Get("/admin/oauth-clients", requireRole("admin"), AdminListOAuthClients(cfg))
-	protected.Post("/admin/oauth-clients", requireRole("admin"), AdminCreateOAuthClient(cfg))
-	protected.Delete("/admin/oauth-clients/:id", requireRole("admin"), AdminDeleteOAuthClient(cfg))
+	protected.Get("/admin/oauth-clients", requireRole("admin"), requireAdminScope("users.read"), AdminListOAuthClients(cfg))
+	protected.Post("/admin/oauth-clients", requireRole("admin"), requireAdminScope("users.write"), AdminCreateOAuthClient(cfg))
+	protected.Delete("/admin/oauth-clients/:id", requireRole("admin"), requireAdminScope("users.delete"), AdminDeleteOAuthClient(cfg))
 
 	// ---- Webhooks ----
 
@@ -1809,14 +1814,14 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Reconciler Orchestration ----
 
-	protected.Get("/reconciler/metrics", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/reconciler/metrics", requireRole("admin"), requireAdminScope("reconcile.read"), func(c *fiber.Ctx) error {
 		if cfg.Reconciler == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "reconciler service is not available")
 		}
 		return c.JSON(cfg.Reconciler.Metrics())
 	})
 
-	protected.Post("/reconciler/run", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/reconciler/run", requireRole("admin"), requireAdminScope("reconcile.write"), func(c *fiber.Ctx) error {
 		if cfg.Reconciler == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "reconciler service is not available")
 		}
@@ -1830,15 +1835,15 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Migration lifecycle ----
 
-	protected.Get("/migrations/executor", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/migrations/executor", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		available := migrationService != nil && migrationService.ExecutorAvailable()
 		return c.JSON(fiber.Map{"available": available})
 	})
 
-	protected.Post("/migrations/:id/prepare", requireRole("admin"), prepareMigrationRoute(migrationService))
-	protected.Post("/migrations/:id/execute", requireRole("admin"), executeMigrationRoute(migrationService))
+	protected.Post("/migrations/:id/prepare", requireRole("admin"), requireAdminScope("nodes.write"), prepareMigrationRoute(migrationService))
+	protected.Post("/migrations/:id/execute", requireRole("admin"), requireAdminScope("nodes.write"), executeMigrationRoute(migrationService))
 
-	protected.Post("/migrations/:id/cancel", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/migrations/:id/cancel", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if migrationService == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
 		}
@@ -1853,7 +1858,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 
 	// ---- Evacuation Orchestration ----
 
-	protected.Get("/evacuations/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/evacuations/:id", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if evacuationPlanner == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "evacuation planner service is not available")
 		}
@@ -1880,7 +1885,7 @@ func registerAdminRoutes(protected fiber.Router, cfg Config, nodeRegistry *noder
 		return c.JSON(plan)
 	})
 
-	protected.Post("/evacuations/preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/evacuations/preview", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if evacuationPlanner == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "evacuation planner service is not available")
 		}

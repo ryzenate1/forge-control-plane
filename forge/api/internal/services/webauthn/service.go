@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strings"
@@ -12,6 +14,13 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
+)
+
+// registrationSessionTTL / loginSessionTTL bound how long an issued challenge
+// stays redeemable.
+const (
+	registrationSessionTTL = 5 * time.Minute
+	loginSessionTTL        = 5 * time.Minute
 )
 
 type WebAuthnCredential struct {
@@ -47,12 +56,25 @@ type CredentialStore interface {
 	GetCredentials(ctx context.Context, userID string) ([]WebAuthnCredential, error)
 	SaveCredential(ctx context.Context, userID string, cred WebAuthnCredential) error
 	RemoveCredential(ctx context.Context, userID, credentialID string) error
+	// RecordCredentialUsage persists the signer counter and clone verdict after
+	// a successful assertion. Without it every login is checked against the
+	// count captured at registration, so authenticator-clone detection can
+	// never fire.
+	RecordCredentialUsage(ctx context.Context, userID, credentialRowID string, signCount uint32, cloneWarning bool, lastUsedAt time.Time) error
 }
 
 type SessionStore interface {
 	Save(ctx context.Context, key string, data []byte, expiry time.Duration) error
 	Get(ctx context.Context, key string) ([]byte, error)
 	Delete(ctx context.Context, key string) error
+}
+
+// SingleUseSessionStore is an optional SessionStore extension: implementations
+// that can atomically read-and-remove a session. When it is absent the service
+// falls back to Get+Delete, which still consumes the challenge before it is
+// verified but leaves a small concurrency window.
+type SingleUseSessionStore interface {
+	GetDelete(ctx context.Context, key string) ([]byte, error)
 }
 
 type Service struct {
@@ -79,16 +101,47 @@ func New(rpID, rpDisplayName, rpOrigin string, credStore CredentialStore, sessio
 	return &Service{wa: wa, credStore: credStore, sessionStore: sessionStore}, nil
 }
 
-func (s *Service) BeginRegistration(ctx context.Context, userID, userName, displayName string) (*protocol.CredentialCreation, string, error) {
-	user := &WebAuthnUser{ID: userID, Name: userName, DisplayName: displayName}
-	creds, _ := s.credStore.GetCredentials(ctx, userID)
+// consumeSession reads a ceremony session and removes it in one step so a
+// challenge can never be replayed, not even against a failed verification.
+func (s *Service) consumeSession(ctx context.Context, key string) ([]byte, error) {
+	if atomic, ok := s.sessionStore.(SingleUseSessionStore); ok {
+		return atomic.GetDelete(ctx, key)
+	}
+	data, err := s.sessionStore.Get(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	if delErr := s.sessionStore.Delete(ctx, key); delErr != nil {
+		return nil, fmt.Errorf("consume webauthn session: %w", delErr)
+	}
+	return data, nil
+}
+
+func toWebAuthnCredentials(creds []WebAuthnCredential) []webauthn.Credential {
+	out := make([]webauthn.Credential, 0, len(creds))
 	for _, c := range creds {
-		user.Credentials = append(user.Credentials, webauthn.Credential{
-			ID: c.CredentialID, PublicKey: c.PublicKey,
+		out = append(out, webauthn.Credential{
+			ID:              c.CredentialID,
+			PublicKey:       c.PublicKey,
 			AttestationType: c.AttestationType,
-			Authenticator:   webauthn.Authenticator{AAGUID: c.AAGUID, SignCount: c.SignCount},
+			Authenticator:   webauthn.Authenticator{AAGUID: c.AAGUID, SignCount: c.SignCount, CloneWarning: c.CloneWarning},
 		})
 	}
+	return out
+}
+
+func (s *Service) BeginRegistration(ctx context.Context, userID, userName, displayName string) (*protocol.CredentialCreation, string, error) {
+	if strings.TrimSpace(userID) == "" {
+		return nil, "", errors.New("webauthn registration requires a user id")
+	}
+	user := &WebAuthnUser{ID: userID, Name: userName, DisplayName: displayName}
+	creds, err := s.credStore.GetCredentials(ctx, userID)
+	if err != nil {
+		// A failed lookup would silently drop the exclude list and let the same
+		// authenticator be enrolled twice.
+		return nil, "", fmt.Errorf("list existing webauthn credentials: %w", err)
+	}
+	user.Credentials = toWebAuthnCredentials(creds)
 	creation, sessionData, err := s.wa.BeginRegistration(user)
 	if err != nil {
 		return nil, "", err
@@ -98,24 +151,35 @@ func (s *Service) BeginRegistration(ctx context.Context, userID, userName, displ
 	if err != nil {
 		return nil, "", err
 	}
-	if err := s.sessionStore.Save(ctx, "webauthn:reg:"+sessionID, data, 5*time.Minute); err != nil {
+	if err := s.sessionStore.Save(ctx, "webauthn:reg:"+sessionID, data, registrationSessionTTL); err != nil {
 		return nil, "", err
 	}
 	return creation, sessionID, nil
 }
 
 func (s *Service) FinishRegistration(ctx context.Context, sessionID, userID string, rawBody []byte) (*webauthn.Credential, error) {
-	data, err := s.sessionStore.Get(ctx, "webauthn:reg:"+sessionID)
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(userID) == "" {
+		return nil, errors.New("webauthn registration requires a session id and a user id")
+	}
+	if len(rawBody) == 0 {
+		return nil, errors.New("webauthn registration response is empty")
+	}
+	data, err := s.consumeSession(ctx, "webauthn:reg:"+sessionID)
 	if err != nil {
 		return nil, err
 	}
 	var sessionData webauthn.SessionData
 	if err := json.Unmarshal(data, &sessionData); err != nil {
-		return nil, err
+		return nil, errors.New("stored webauthn registration session is unreadable")
+	}
+	// The ceremony was begun for a specific user; a session id must not be
+	// usable to enrol a credential on someone else's account.
+	if len(sessionData.UserID) > 0 && !bytes.Equal(sessionData.UserID, []byte(userID)) {
+		return nil, errors.New("webauthn session does not belong to this user")
 	}
 	user := &WebAuthnUser{ID: userID}
 
-	httpReq, err := http.NewRequest("POST", "/", io.NopCloser(bytes.NewReader(rawBody)))
+	httpReq, err := newAssertionRequest(rawBody)
 	if err != nil {
 		return nil, err
 	}
@@ -124,18 +188,26 @@ func (s *Service) FinishRegistration(ctx context.Context, sessionID, userID stri
 	if err != nil {
 		return nil, err
 	}
+	now := time.Now().UTC()
 	if err := s.credStore.SaveCredential(ctx, userID, WebAuthnCredential{
 		ID: uuid.NewString(), UserID: userID, CredentialID: credential.ID,
 		PublicKey: credential.PublicKey, AttestationType: credential.AttestationType,
 		AAGUID: credential.Authenticator.AAGUID, SignCount: credential.Authenticator.SignCount,
-		Name: "Security Key", CreatedAt: time.Now().UTC(), LastUsedAt: time.Now().UTC(),
+		Name: "Security Key", CreatedAt: now, LastUsedAt: now,
 	}); err != nil {
 		return nil, err
 	}
-	if err := s.sessionStore.Delete(ctx, "webauthn:reg:"+sessionID); err != nil {
+	return credential, nil
+}
+
+func newAssertionRequest(rawBody []byte) (*http.Request, error) {
+	httpReq, err := http.NewRequest("POST", "/", io.NopCloser(bytes.NewReader(rawBody)))
+	if err != nil {
 		return nil, err
 	}
-	return credential, nil
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.ContentLength = int64(len(rawBody))
+	return httpReq, nil
 }
 
 func (s *Service) BeginLogin(ctx context.Context) (*protocol.CredentialAssertion, string, error) {
@@ -148,32 +220,44 @@ func (s *Service) BeginLogin(ctx context.Context) (*protocol.CredentialAssertion
 	if err != nil {
 		return nil, "", err
 	}
-	if err := s.sessionStore.Save(ctx, "webauthn:login:"+sessionID, data, 5*time.Minute); err != nil {
+	if err := s.sessionStore.Save(ctx, "webauthn:login:"+sessionID, data, loginSessionTTL); err != nil {
 		return nil, "", err
 	}
 	return assertion, sessionID, nil
 }
 
 func (s *Service) FinishLogin(ctx context.Context, sessionID, userID string, rawBody []byte) (*webauthn.Credential, error) {
-	data, err := s.sessionStore.Get(ctx, "webauthn:login:"+sessionID)
+	if strings.TrimSpace(sessionID) == "" || strings.TrimSpace(userID) == "" {
+		return nil, errors.New("webauthn login requires a session id and a user id")
+	}
+	if len(rawBody) == 0 {
+		return nil, errors.New("webauthn login response is empty")
+	}
+	data, err := s.consumeSession(ctx, "webauthn:login:"+sessionID)
 	if err != nil {
 		return nil, err
 	}
 	var sessionData webauthn.SessionData
 	if err := json.Unmarshal(data, &sessionData); err != nil {
-		return nil, err
+		return nil, errors.New("stored webauthn login session is unreadable")
+	}
+	if len(sessionData.UserID) > 0 && !bytes.Equal(sessionData.UserID, []byte(userID)) {
+		return nil, errors.New("webauthn session does not belong to this user")
 	}
 
-	creds, _ := s.credStore.GetCredentials(ctx, userID)
-	user := &WebAuthnUser{ID: userID}
-	for _, c := range creds {
-		user.Credentials = append(user.Credentials, webauthn.Credential{
-			ID: c.CredentialID, PublicKey: c.PublicKey,
-			Authenticator: webauthn.Authenticator{SignCount: c.SignCount},
-		})
+	stored, err := s.credStore.GetCredentials(ctx, userID)
+	if err != nil {
+		// Never treat a failed credential lookup as "no credentials": the
+		// assertion below would then be rejected for the wrong reason and the
+		// real outage would be hidden.
+		return nil, fmt.Errorf("list webauthn credentials: %w", err)
 	}
+	if len(stored) == 0 {
+		return nil, errors.New("user has no registered webauthn credentials")
+	}
+	user := &WebAuthnUser{ID: userID, Credentials: toWebAuthnCredentials(stored)}
 
-	httpReq, err := http.NewRequest("POST", "/", io.NopCloser(bytes.NewReader(rawBody)))
+	httpReq, err := newAssertionRequest(rawBody)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +266,22 @@ func (s *Service) FinishLogin(ctx context.Context, sessionID, userID string, raw
 	if err != nil {
 		return nil, err
 	}
-	if err := s.sessionStore.Delete(ctx, "webauthn:login:"+sessionID); err != nil {
-		return nil, err
+
+	// Persist the ratcheted sign count and clone verdict for the credential that
+	// actually signed, otherwise clone detection never advances.
+	rowID := ""
+	for _, c := range stored {
+		if bytes.Equal(c.CredentialID, credential.ID) {
+			rowID = c.ID
+			break
+		}
+	}
+	if rowID == "" {
+		return nil, errors.New("verified webauthn credential is no longer stored")
+	}
+	if err := s.credStore.RecordCredentialUsage(ctx, userID, rowID,
+		credential.Authenticator.SignCount, credential.Authenticator.CloneWarning, time.Now().UTC()); err != nil {
+		return nil, fmt.Errorf("record webauthn credential usage: %w", err)
 	}
 	return credential, nil
 }

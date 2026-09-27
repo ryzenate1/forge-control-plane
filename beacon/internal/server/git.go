@@ -512,6 +512,19 @@ func (s *Server) handleGitBuild(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "workspaceId and imageTag are required"})
 		return
 	}
+	if err := validateImageTags([]string{req.ImageTag}); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid imageTag: " + err.Error()})
+		return
+	}
+	buildArgs := make([]string, 0, len(req.BuildArgs))
+	for k, v := range req.BuildArgs {
+		entry := k + "=" + v
+		buildArgs = append(buildArgs, entry)
+	}
+	if err := validateBuildArgs(buildArgs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid buildArg: " + err.Error()})
+		return
+	}
 
 	cloneBase := filepath.Join(s.dataDir, gitCloneDir)
 	sourceDir := filepath.Join(cloneBase, req.WorkspaceID)

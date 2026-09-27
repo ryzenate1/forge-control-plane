@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Activity, Cpu, HardDrive, Network } from "lucide-react";
 import { Card, CardHeader, SectionHeader } from "@/components/admin/admin-ui";
 import { getNodeMetrics } from "@/lib/api/monitoring";
+import { queryKeys } from "@/lib/api/query-keys";
 
 function miniBar(pct: number, color: string) {
   return (
@@ -35,7 +36,7 @@ function MetricCardSkeleton() {
 
 export function SystemMetrics() {
   const { data: metrics, isLoading, isError } = useQuery({
-    queryKey: ["node-metrics"],
+    queryKey: queryKeys.monitoring.latest(),
     queryFn: () => getNodeMetrics({ period: "5m", limit: 30, since: new Date(Date.now() - 5 * 60 * 1000).toISOString() }),
     refetchInterval: 15_000,
   });

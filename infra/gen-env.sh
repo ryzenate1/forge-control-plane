@@ -100,10 +100,14 @@ POSTGRES_PASSWORD="$PG_PASSWORD"
 POSTGRES_DB="$PG_DB"
 POSTGRES_USER="$PG_USER"
 : "${REDIS_PASSWORD:=$(rand_base64)}"
-DATABASE_URL="postgres://${PG_USER}:${POSTGRES_PASSWORD}@postgres:5432/${PG_DB}?sslmode=require"
+# URL-encode the password: base64 output contains +/= which are meaningful in
+# a URL (a raw '+' becomes a space, '/' splits the path). quote_plus keeps
+# DATABASE_URL parseable for any generated secret.
+PG_PASSWORD_ENC="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))' "$POSTGRES_PASSWORD")"
+DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD_ENC}@postgres:5432/${PG_DB}?sslmode=require"
 
 API_AUTH_SECRET="$(rand_base64)"
-APP_KEY="$(rand_base64)"
+APP_KEY="base64:$(rand_base64)"
 FORGE_MASTER_KEY="$(rand_base64)"
 CRYPTO_KEY="$(rand_base64)"
 NODE_ID="$(make_uuid)"
@@ -134,6 +138,13 @@ fi
 
 # ---- Write Output File -----------------------------------------------------
 mkdir -p "$(dirname "$OUTPUT")"
+# Never silently clobber an existing env file — keep a timestamped backup so
+# a re-run cannot destroy the only copy of production secrets.
+if [ -f "$OUTPUT" ]; then
+    cp -p "$OUTPUT" "${OUTPUT}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$OUTPUT" "${OUTPUT}.bak"
+    echo "Backed up existing $OUTPUT to ${OUTPUT}.bak"
+fi
 cat > "$OUTPUT" <<ENV
 # =====================================================================
 # GamePanel Production Environment

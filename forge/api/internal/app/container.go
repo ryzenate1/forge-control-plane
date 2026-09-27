@@ -71,9 +71,11 @@ type Container struct {
 	MTLSCfg forgecfg.MTLS
 }
 
-// ServicesBundle mirrors the var block in main.go:250. It is kept as a
-// typed bundle so vet can catch wiring mistakes as we migrate. Fields
-// are pointers and nil when DB is absent (dev mode).
+// ServicesBundle is a legacy staging placeholder. The canonical 60-var
+// service graph lives in cmd/api/main.go:250 and is injected into the HTTP
+// layer via http.Config; nothing in production constructs this bundle.
+// It is retained (empty) so staged-migration callers keep compiling while
+// InitServices/BuildHTTP document the boundary instead of failing closed.
 type ServicesBundle struct {
 	// Core placement & lifecycle (populated first)
 	// Keep minimal for stage 1; full 60-var list lands in stage 3.
@@ -205,22 +207,26 @@ func (c *Container) InitStores(_ context.Context) error {
 	return nil
 }
 
-// InitServices builds the 60-var service graph from main.go:250. No-op
-// when DB is nil. Each service nil-guards for dev mode already.
+// InitServices is a documented no-op staging hook. The real service graph is
+// built in cmd/api/main.go (placement, scheduler, heartbeatmonitor, compose
+// lifecycle, acme, previewenv, etc.) and injected via http.Config, so this
+// container must not fail closed in production when a DB is present.
+// Layering boundary: handlers -> services (owned by main) -> store.
 func (c *Container) InitServices(ctx context.Context) error {
 	if c.DB == nil {
 		return nil
 	}
 	_ = ctx
-	// Stage 3 will migrate: resMgr, hbm, rec, ep, mig, fenceSvc, rcv, rts, obs, nr, np, dbProv, whSvc, mailWorker, pluginSvc, actSvc, queueSvc, opSvc, apphostingSvc, composeLifecycle, gitSvc, appStoreSvc, etc.
+	// Stage 3 wiring lives in cmd/api/main.go; nothing to do here.
 	return nil
 }
 
-// BuildHTTP assembles the HTTP server (server.go:95 Config, server.go:845 NewServer)
-// from the staged services. Returns an error when required services are missing
-// in production.
+// BuildHTTP is a documented no-op staging hook. The HTTP server is assembled
+// in cmd/api/main.go via http.Config + http.NewServer, not from this
+// container, so returning an error here would break the production path that
+// never calls it. Kept so staged-migration callers keep compiling.
 func (c *Container) BuildHTTP(_ context.Context) error {
-	// Stage 4 will construct http.Config 76 fields and call http.NewServer.
+	// Stage 4 wiring lives in cmd/api/main.go; nothing to do here.
 	return nil
 }
 
@@ -268,7 +274,9 @@ func parseBool(s string) (bool, error) {
 	}
 }
 
-// demoSeedEnabled mirrors main.go:demoSeedEnabled semantics.
+// demoSeedEnabled mirrors main.go:demoSeedEnabled semantics. Seeding demo
+// data in production is rejected outright: demo rows would pollute prod and
+// the seed path is never audited for prod safety.
 func demoSeedEnabled(appEnv, flag string) (bool, error) {
 	v := strings.ToLower(strings.TrimSpace(flag))
 	if v == "" {
@@ -278,8 +286,9 @@ func demoSeedEnabled(appEnv, flag string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("API_SEED_DEMO must be a boolean: %w", err)
 	}
-	// Only allow demo seed outside production; production guard is in caller.
-	_ = appEnv
+	if b && strings.EqualFold(strings.TrimSpace(appEnv), "production") {
+		return false, errors.New("API_SEED_DEMO must not be enabled in production")
+	}
 	return b, nil
 }
 

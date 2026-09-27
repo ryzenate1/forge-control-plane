@@ -1,3 +1,13 @@
+/**
+ * Runtime providers a template can deploy to. Mirrors the Forge
+ * `ValidateProvider` set (`forge/api/internal/runtime`): `docker`,
+ * `containerd` and `podman` are fully supported, `firecracker` and
+ * `kubernetes` are supported adapters, and `kvm`/`lxc` are gated behind
+ * `ENABLE_EXPERIMENTAL_RUNTIMES`.
+ */
+export type GameTemplatePlatform =
+  'docker' | 'containerd' | 'podman' | 'firecracker' | 'kubernetes' | 'kvm' | 'lxc';
+
 export interface GameTemplatePort {
   port: number;
   protocol: 'tcp' | 'udp';
@@ -57,7 +67,7 @@ export interface GameTemplate {
   env: GameTemplateVariable[];
   resources: GameTemplateResources;
   install_script: GameTemplateInstallScript;
-  supported_platforms: ('docker' | 'podman')[];
+  supported_platforms: GameTemplatePlatform[];
   categories: string[];
   file_denylist?: string[];
   features?: string[];

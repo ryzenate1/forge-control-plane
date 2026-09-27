@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -56,7 +57,7 @@ export function TransferView({ server }: { server: ApiServer }) {
     onSuccess: () => {
       setStartConfirmOpen(false);
       void transferStatusQuery.refetch();
-      void qc.invalidateQueries({ queryKey: ["server", server.id] });
+      void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) });
     },
     onError: (error) =>
       toast({ tone: "error", title: "Transfer failed", message: error instanceof Error ? error.message : "Could not transfer server" }),
@@ -71,16 +72,15 @@ export function TransferView({ server }: { server: ApiServer }) {
     onSuccess: () => {
       setCancelConfirmOpen(false);
       void transferStatusQuery.refetch();
-      void qc.invalidateQueries({ queryKey: ["server", server.id] });
+      void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) });
     },
     onError: (error) =>
       toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }),
   });
 
   const isTransferring = server.transferring;
-  const phase = server.transferState ?? null;
-  const errorMessage = server.transferError ?? null;
-  const progress = transfer?.progress ?? null;
+  const phase = transfer?.state ?? server.transferState ?? null;
+  const errorMessage = transfer?.error ?? server.transferError ?? null;
 
   const phaseLabel = phase
     ? phase.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase())
@@ -105,21 +105,6 @@ export function TransferView({ server }: { server: ApiServer }) {
                 ) : null}
               </div>
             </div>
-
-            {progress !== null && (
-              <div>
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Progress</span>
-                  <span className="font-mono">{Math.round(progress)}%</span>
-                </div>
-                <div className="mt-1 h-2 overflow-hidden rounded-full bg-white/[0.06]">
-                  <div
-                    className="h-full rounded-full bg-emerald-500 transition-all"
-                    style={{ width: `${Math.min(100, Math.max(0, progress))}%` }}
-                  />
-                </div>
-              </div>
-            )}
 
             {errorMessage ? (
               <p className="ui-alert ui-alert-error" role="alert">

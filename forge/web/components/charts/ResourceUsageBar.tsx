@@ -1,10 +1,10 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { Bar, BarChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
 import { chart } from "@/lib/design-tokens";
-import { getNodeMetrics, type NodeMetrics } from "@/lib/api/monitoring";
+import { useLatestNodeMetricsQuery } from "@/lib/admin/telemetry";
+import type { NodeMetrics } from "@/lib/api/monitoring";
 import { SpinnerPage } from "@/components/shared";
 
 interface ResourceUsageBarProps {
@@ -31,11 +31,7 @@ function ChartTooltip({ active, payload }: { active?: boolean; payload?: Array<{
 }
 
 export function ResourceUsageBar({ height = 300 }: ResourceUsageBarProps) {
-  const { data, isLoading, isError } = useQuery({
-    queryKey: ["resource-bar"],
-    queryFn: () => getNodeMetrics(),
-    refetchInterval: 30_000,
-  });
+  const { data, isLoading, isError } = useLatestNodeMetricsQuery();
 
   if (isLoading) {
     return (

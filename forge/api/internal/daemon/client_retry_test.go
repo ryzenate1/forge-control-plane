@@ -11,15 +11,17 @@ import (
 	"time"
 )
 
-// NOTE: The retry round tripper used to gate retries on request idempotency
-// (isIdempotentMethod + X-Forge-Command-ID/Idempotency-Key opt-in for POST).
-// That gating was removed from production code: every request is now retried
-// on transport errors and retryable statuses, with the HMAC signature
-// re-generated per attempt via the resign callback. Likewise, validateNodeURL
-// now keys plain-HTTP acceptance off the client's loopback flag (set at
-// construction) rather than inspecting each request target, and command IDs
-// ride on the context (ContextWithCommandID) instead of CreateServer setting
-// headers. Tests below match that behavior.
+// NOTE: The retry round tripper gates retries on request idempotency.
+// GET and HEAD are always safe to replay. A mutating request is replayed
+// only when it carries an idempotency key the daemon can dedupe on
+// (Idempotency-Key, X-Idempotency-Key, or X-Forge-Command-ID): replaying a
+// keyless POST/PUT/DELETE after a transport blip would execute the command
+// twice. The HMAC signature is re-generated per attempt via the resign
+// callback. Likewise, validateNodeURL keys plain-HTTP acceptance off the
+// client's loopback flag (set at construction) rather than inspecting each
+// request target, and command IDs ride on the context
+// (ContextWithCommandID) instead of CreateServer setting headers. Tests below
+// match that behavior.
 
 // countingTransport counts requests and can fail the first N attempts.
 type countingTransport struct {
@@ -56,8 +58,8 @@ func fastRequest(t *testing.T, method, target string) *http.Request {
 	return req
 }
 
-func TestRetryRoundTripper_RetriesAllMethodsOnTransportError(t *testing.T) {
-	for _, method := range []string{http.MethodGet, http.MethodHead, http.MethodPut, http.MethodDelete, http.MethodPost, http.MethodPatch} {
+func TestRetryRoundTripper_RetriesIdempotentMethodsOnTransportError(t *testing.T) {
+	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		t.Run(method, func(t *testing.T) {
 			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
 			rt := newTestRetryClient(base)
@@ -73,6 +75,57 @@ func TestRetryRoundTripper_RetriesAllMethodsOnTransportError(t *testing.T) {
 	}
 }
 
+func TestRetryRoundTripper_DoesNotRetryKeylessMutations(t *testing.T) {
+	for _, method := range []string{http.MethodPut, http.MethodDelete, http.MethodPost, http.MethodPatch} {
+		t.Run(method, func(t *testing.T) {
+			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
+			rt := newTestRetryClient(base)
+			_, err := rt.RoundTrip(fastRequest(t, method, "/ping"))
+			if err == nil {
+				t.Fatal("expected transport error to surface without retry")
+			}
+			if base.requests != 1 {
+				t.Fatalf("requests = %d, want 1 (no replay of a keyless mutation)", base.requests)
+			}
+		})
+	}
+}
+
+func TestRetryRoundTripper_RetriesMutationsWithIdempotencyKey(t *testing.T) {
+	for _, header := range []string{"Idempotency-Key", "X-Idempotency-Key", "X-Forge-Command-ID"} {
+		t.Run(header, func(t *testing.T) {
+			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
+			rt := newTestRetryClient(base)
+			req := fastRequest(t, http.MethodPost, "/servers/srv-1/power")
+			req.Header.Set(header, "test-key-1")
+			resp, err := rt.RoundTrip(req)
+			if err != nil {
+				t.Fatalf("expected retry to succeed, got %v", err)
+			}
+			resp.Body.Close()
+			if base.requests != 2 {
+				t.Fatalf("requests = %d, want 2 (initial + 1 retry)", base.requests)
+			}
+		})
+	}
+}
+
+func TestRetryRoundTripper_KeylessMutationStatusReturnedWithoutRetry(t *testing.T) {
+	base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
+	rt := newTestRetryClient(base)
+	resp, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/command"))
+	if err != nil {
+		t.Fatalf("expected the daemon response, got error %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", resp.StatusCode)
+	}
+	if base.requests != 1 {
+		t.Fatalf("requests = %d, want 1 (no replay of a keyless mutation)", base.requests)
+	}
+}
+
 func TestRetryRoundTripper_ResignsRetriedRequests(t *testing.T) {
 	var resignations int
 	base := &countingTransport{failures: 1, statusCode: http.StatusOK}
@@ -81,6 +134,7 @@ func TestRetryRoundTripper_ResignsRetriedRequests(t *testing.T) {
 		return nil
 	}}
 	req := fastRequest(t, http.MethodPost, "/servers/srv-1/power")
+	req.Header.Set("X-Forge-Command-ID", "power:srv-1:stop")
 	resp, err := rt.RoundTrip(req)
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got %v", err)
@@ -96,7 +150,11 @@ func TestRetryRoundTripper_ResignErrorAbortsRetry(t *testing.T) {
 	rt := &retryRoundTripper{base: base, resign: func(*http.Request, []byte) error {
 		return errors.New("signing failed")
 	}}
-	_, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/power"))
+	_, err := rt.RoundTrip(func() *http.Request {
+		req := fastRequest(t, http.MethodPost, "/power")
+		req.Header.Set("Idempotency-Key", "test-key-1")
+		return req
+	}())
 	if err == nil {
 		t.Fatal("expected resign error to surface")
 	}
@@ -118,10 +176,12 @@ func TestRetryRoundTripper_RetriesRetryableStatus(t *testing.T) {
 			t.Fatalf("requests = %d, want %d", base.requests, maxRetries+1)
 		}
 	})
-	t.Run("POST also retried on 503 (idempotency gating removed)", func(t *testing.T) {
+	t.Run("POST also retried on 503 when it carries an idempotency key", func(t *testing.T) {
 		base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
 		rt := newTestRetryClient(base)
-		resp, err := rt.RoundTrip(fastRequest(t, http.MethodPost, "/command"))
+		req := fastRequest(t, http.MethodPost, "/command")
+		req.Header.Set("X-Forge-Command-ID", "power:srv-1:stop")
+		resp, err := rt.RoundTrip(req)
 		if err == nil {
 			resp.Body.Close()
 			t.Fatal("expected exhaustion error after retry budget")

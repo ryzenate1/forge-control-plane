@@ -418,7 +418,7 @@ function RedirectsSection({ domainId }: { domainId: string }) {
 
   return (
     <Card>
-      <CardHeader title="Redirects — /domains/:domainId/redirects" icon={ArrowUpRight} action={<Btn size="sm" tone="primary" onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={12} /> Add Redirect</Btn>} />
+      <CardHeader title="Redirects — /domains/:domainId/redirects" icon={ArrowUpRight} action={<Btn size="sm" tone="primary" onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={12} /> Add Redirect</Btn>} />
       <div className="p-3 text-xs text-slate-400">Wired via <code className="font-mono">lib/api/redirects.ts</code> (also <code className="font-mono">lib/api/security.ts</code> re-export) — CRUD maps to admin handlers at <code className="font-mono">handlers_proxy_domains.go</code>. Server mirror at <code className="font-mono">/servers/:id/proxy-domains/:domainId/redirects</code>.</div>
       {redirectsQuery.isLoading ? <div className="p-6 text-center text-sm text-slate-400">Loading redirects via fetchRedirects…</div>
         : redirectsQuery.isError ? <div className="p-4"><div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">Could not load redirects: {(redirectsQuery.error as Error).message} <Btn size="sm" tone="ghost" onClick={() => void redirectsQuery.refetch()} className="ml-2">Retry</Btn></div></div>

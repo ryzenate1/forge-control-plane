@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, requestText, requestBlob, requestVoid } from './http';
+import { fetchJSON, postJSON, requestText, requestBlob, requestVoid, ApiError } from './http';
 
 export interface FileEntry {
   name: string;
@@ -76,12 +76,50 @@ export async function downloadFile(path: string, nodeId?: string): Promise<Blob>
  * Client-side pull of an ARBITRARY external URL (used by the host file manager
  * when no dedicated beacon pull endpoint exists). This deliberately does NOT go
  * through the API primitive: the target is a third-party origin, so we must not
- * prepend `API_BASE_URL`, attach cookies or sign CSRF.
+ * prepend the API base URL, attach cookies or sign CSRF.
+ *
+ * A default 30s timeout applies when the caller provides no signal; pass
+ * `{ signal }` to cancel with your own controller or `{ timeoutMs: false }`
+ * to opt out. Failures surface as {@link ApiError} (status 0 for transport
+ * errors) so callers handle them like every other API failure.
  */
-export async function pullRemoteFile(url: string): Promise<Blob> {
-  const response = await fetch(url);
+export async function pullRemoteFile(
+  url: string,
+  options?: { signal?: AbortSignal; timeoutMs?: number | false },
+): Promise<Blob> {
+  const timeoutMs = options?.timeoutMs === false
+    ? null
+    : typeof options?.timeoutMs === 'number' && options.timeoutMs > 0
+      ? options.timeoutMs
+      : 30000;
+  let signal: AbortSignal | undefined = options?.signal;
+  if (timeoutMs != null) {
+    try {
+      const timeoutSignal = AbortSignal.timeout(timeoutMs);
+      signal = signal
+        ? (typeof AbortSignal.any === 'function' ? AbortSignal.any([signal, timeoutSignal]) : signal)
+        : timeoutSignal;
+    } catch {
+      // Keep the caller signal when timeout construction fails.
+    }
+  }
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      ...(signal ? { signal } : {}),
+      credentials: 'omit',
+    });
+  } catch (err) {
+    if (err instanceof Error && (err.name === 'AbortError' || err.name === 'TimeoutError')) throw err;
+    throw new ApiError(
+      err instanceof TypeError
+        ? `Network error fetching ${url} — check your connection`
+        : err instanceof Error ? err.message : `Fetch failed: ${url}`,
+      0,
+    );
+  }
   if (!response.ok) {
-    throw new Error(`Fetch failed: ${response.status}`);
+    throw new ApiError(`Fetch failed: ${response.status}`, response.status);
   }
   return response.blob();
 }

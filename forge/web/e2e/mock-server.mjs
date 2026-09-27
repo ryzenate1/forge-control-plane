@@ -24,8 +24,10 @@ function handle(req, res) {
   }
 
   if (path.endsWith('/auth/me')) {
-    // If cookie contains a session, return admin user
-    if (cookie.includes('forge_session')) {
+    // Session cookie is the hardened __Host- prefix in production; accept the
+    // bare name only as the local-dev fallback (mirrors middleware.ts).
+    const session = cookie.match(/(?:^|;\s*)__Host-forge_session=([^;]+)/) ?? cookie.match(/(?:^|;\s*)forge_session=([^;]+)/);
+    if (session) {
       json(res, 200, { id: 'admin-1', email: 'admin@example.com', role: 'admin', username: 'admin' });
     } else {
       json(res, 401, { error: 'unauthorized' });
@@ -37,7 +39,13 @@ function handle(req, res) {
     let body = '';
     req.on('data', (chunk) => (body += chunk));
     req.on('end', () => {
-      json(res, 200, { complete: true, token: 'test-token', user: { id: 'u1', email: 'admin@example.com', role: 'admin' } });
+      const payload = JSON.stringify({ complete: true, token: 'test-token', user: { id: 'u1', email: 'admin@example.com', role: 'admin' } });
+      res.writeHead(200, {
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(payload),
+        'Set-Cookie': '__Host-forge_session=test-session; Path=/; Secure; HttpOnly; SameSite=Strict',
+      });
+      res.end(payload);
     });
     return;
   }

@@ -7,6 +7,7 @@ import { Activity, Cpu, HardDrive, Network } from "lucide-react";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
 import { chart } from "@/lib/design-tokens";
 import { getNodeMetrics, type NodeMetrics } from "@/lib/api/monitoring";
+import { queryKeys } from "@/lib/api/query-keys";
 
 type MetricKey = "cpuPercent" | "memoryPercent" | "diskPercent" | "networkRxBytes";
 type Period = "5m" | "15m" | "1h" | "6h" | "24h";
@@ -71,7 +72,7 @@ export function MetricsChart() {
   const metric = METRICS.find((m) => m.key === selectedMetric)!;
 
   const { data, isLoading, error } = useQuery({
-    queryKey: ["metrics-chart", selectedPeriod],
+    queryKey: queryKeys.monitoring.history("all", selectedPeriod),
     queryFn: () => {
       const window = periodWindow(selectedPeriod);
       return getNodeMetrics({ period: selectedPeriod, limit: window.limit, since: window.since });

@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -16,7 +17,6 @@ import {
   fetchEvacuationPlan,
   fetchMigrationExecutorStatus,
   fetchMigrations,
-  fetchNodes,
   fetchRecoveryPlan,
   fetchRecoveryPlans,
   fetchServers,
@@ -90,7 +90,7 @@ export function AdminOperations() {
   const qc = useQueryClient();
   const migrations = useQuery({ queryKey: ["migrations"], queryFn: fetchMigrations, refetchInterval: 10_000 });
   const recoveries = useQuery({ queryKey: ["recovery"], queryFn: fetchRecoveryPlans, refetchInterval: 10_000 });
-  const nodes = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodes = useNodesQuery();
   const servers = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
   const executorStatus = useQuery({ queryKey: ["migrations-executor"], queryFn: fetchMigrationExecutorStatus, staleTime: 30_000 });
   const executorAvailable = executorStatus.data?.available === true;

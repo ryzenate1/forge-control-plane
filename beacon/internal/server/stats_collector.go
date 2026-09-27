@@ -61,9 +61,23 @@ func (sc *StatsCollector) Collect(ctx context.Context, serverID string) (*Server
 			UptimeSeconds: time.Since(sc.startTime).Seconds(),
 		}
 	} else {
+		// Lifecycle first: per-workload StartedAt is the uptime basis, and an
+		// inspect failure is reported instead of zero telemetry.
+		inspection, err := sc.runtime.Inspect(ctx, serverID)
+		if err != nil {
+			return nil, err
+		}
 		stats, err := sc.runtime.Stats(ctx, serverID)
 		if err != nil {
 			return nil, err
+		}
+		uptime := time.Since(sc.startTime).Seconds()
+		if !inspection.StartedAt.IsZero() {
+			if delta := time.Since(inspection.StartedAt).Seconds(); delta >= 0 {
+				uptime = delta
+			} else {
+				uptime = 0
+			}
 		}
 		ss = ServerStats{
 			Timestamp:     time.Now(),
@@ -71,7 +85,7 @@ func (sc *StatsCollector) Collect(ctx context.Context, serverID string) (*Server
 			MemoryMB:      float64(stats.MemoryBytes) / (1024 * 1024),
 			NetworkRxMB:   float64(stats.NetworkRxBytes) / (1024 * 1024),
 			NetworkTxMB:   float64(stats.NetworkTxBytes) / (1024 * 1024),
-			UptimeSeconds: time.Since(sc.startTime).Seconds(),
+			UptimeSeconds: uptime,
 		}
 	}
 

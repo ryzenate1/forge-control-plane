@@ -131,12 +131,8 @@ func registerWebAuthnRoutes(public fiber.Router, protected fiber.Router, cfg Con
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
 
-		csrfToken, err := generateCSRFToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
-		}
 		expires := tokenExpiry(cfg)
-		setSessionCookies(c, token, csrfToken, expires)
+		setSessionCookies(c, token, deriveSessionCSRFToken(cfg.AuthSecret, token), expires)
 
 		return c.JSON(fiber.Map{
 			"complete": true,

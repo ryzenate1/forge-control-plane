@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,7 +12,6 @@ import {
   executeMigration,
   fetchMigrationExecutorStatus,
   fetchMigrations,
-  fetchNodes,
   fetchRecoveryPlans,
   fetchServers,
   startRecoveryPlan,
@@ -83,7 +83,7 @@ function CreateMigrationModal({ open, onClose }: { open: boolean; onClose: () =>
   const { toast } = useToast();
   const qc = useQueryClient();
   const servers = useQuery({ queryKey: ["servers"], queryFn: fetchServers });
-  const nodes = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodes = useNodesQuery();
 
   const [serverId, setServerId] = useState("");
   const [targetNodeId, setTargetNodeId] = useState("");
@@ -144,7 +144,7 @@ function CreateMigrationModal({ open, onClose }: { open: boolean; onClose: () =>
 function CreateRecoveryPlanModal({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { toast } = useToast();
   const qc = useQueryClient();
-  const nodes = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodes = useNodesQuery();
 
   const [nodeId, setNodeId] = useState("");
   const [reason, setReason] = useState("");

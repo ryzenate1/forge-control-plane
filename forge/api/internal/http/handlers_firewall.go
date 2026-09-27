@@ -7,7 +7,7 @@ import (
 func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
 	fw := protected.Group("/host/firewall")
 
-	fw.Get("/status", requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Get("/status", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -24,7 +24,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(status)
 	})
 
-	fw.Post("/enable", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Post("/enable", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -41,7 +41,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(result)
 	})
 
-	fw.Post("/disable", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Post("/disable", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -58,7 +58,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(result)
 	})
 
-	fw.Get("/rules", requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Get("/rules", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -75,7 +75,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(rules)
 	})
 
-	fw.Post("/rules", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Post("/rules", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -96,7 +96,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(rule)
 	})
 
-	fw.Delete("/rules/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Delete("/rules/:id", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -112,7 +112,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	fw.Put("/rules/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Put("/rules/:id", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -133,7 +133,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(rule)
 	})
 
-	fw.Post("/port", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Post("/port", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -154,7 +154,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(result)
 	})
 
-	fw.Get("/forward", requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Get("/forward", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -171,7 +171,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(forwards)
 	})
 
-	fw.Post("/forward", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Post("/forward", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -192,7 +192,7 @@ func registerFirewallRoutes(protected fiber.Router, cfg Config, mutationLimiter 
 		return c.JSON(pf)
 	})
 
-	fw.Delete("/forward/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	fw.Delete("/forward/:id", mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}

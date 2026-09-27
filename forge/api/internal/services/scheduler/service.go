@@ -128,6 +128,9 @@ func (s *Scheduler) PlaceServer(ctx context.Context, req domain.PlacementRequest
 	})
 
 	for _, scored := range scores {
+		if err := ctx.Err(); err != nil {
+			return domain.PlacementDecision{}, fmt.Errorf("placement cancelled: %w", err)
+		}
 		var reservation store.PlacementReservation
 		var err error
 		if !req.SkipReservation {
@@ -184,8 +187,22 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 	if err != nil {
 		return nil, err
 	}
+	// Request-scoped constraints (region/node keys) are enforced here at
+	// filter time; label and affinity constraints need a label index the
+	// scheduler does not carry, so they are deferred to the engine, which
+	// fails them closed with a recorded FilterReason.
+	requestConstraints := filterablePlacementConstraints(toPlacementConstraints(req.Constraints))
+	checker := placement.NewConstraintChecker()
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
+	}
 	filtered := make([]store.Node, 0, len(nodes))
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("node filtering cancelled: %w", err)
+		}
 		if !nodeRegionEnabled(node, regions) {
 			s.recordPlacementRejection()
 			continue
@@ -225,6 +242,14 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 			s.recordPlacementRejection()
 			continue
 		}
+		if len(requestConstraints) > 0 {
+			candidate := placement.Candidate{NodeID: node.ID, RegionID: regionIDOf(node)}
+			if err := checker.CheckHard(candidate, requestConstraints, constraintCtx); err != nil {
+				s.recordPlacementRejection()
+				slog.WarnContext(ctx, "scheduler: node excluded by request constraint", "nodeId", node.ID, "error", err)
+				continue
+			}
+		}
 		filtered = append(filtered, node)
 	}
 	if s.constraintScheduler != nil {
@@ -260,21 +285,20 @@ func (s *Scheduler) ScoreNodes(ctx context.Context, req domain.PlacementRequest,
 	req = normalizeRequest(req)
 	workload := toWorkloadRequest(req)
 
-	allServers, err := s.store.ListServers(ctx)
-	if err == nil {
-		serverNodeMap := make(map[string]string, len(allServers))
-		for _, sv := range allServers {
-			serverNodeMap[sv.ID] = sv.Node
-		}
-		workload.ConstraintCtx = placement.ConstraintContext{
-			ServerNodeMap: serverNodeMap,
-		}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+	} else {
+		workload.ConstraintCtx = constraintCtx
 	}
 
 	nodeMap := make(map[string]store.Node, len(nodes))
 	candidates := make([]placement.Candidate, 0, len(nodes))
 	var unreadable []string
 	for _, node := range nodes {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("node scoring cancelled: %w", err)
+		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
 			// Unknown capacity is not empty capacity. The node is excluded, which
@@ -339,6 +363,9 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 	if s.store == nil {
 		return nil, errors.New("scheduler not initialized")
 	}
+	req.RegionID = strings.TrimSpace(req.RegionID)
+	req.StorageLocality = canonicalStorageLocality(strings.TrimSpace(req.StorageLocality))
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
 	app, err := s.store.GetReplicaApp(ctx, req.AppID)
 	if err != nil {
 		return nil, fmt.Errorf("app not found: %w", err)
@@ -347,7 +374,15 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 	if err != nil {
 		return nil, err
 	}
-	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{RegionID: req.RegionID, CPU: req.CPU, MemoryMB: req.MemoryMB, DiskMB: req.DiskMB, RequiredNode: req.RequiredNode}, nodes)
+	filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{
+		RegionID:        req.RegionID,
+		CPU:             req.CPU,
+		MemoryMB:        req.MemoryMB,
+		DiskMB:          req.DiskMB,
+		RequiredNode:    req.RequiredNode,
+		StorageLocality: req.StorageLocality,
+		Constraints:     req.Constraints,
+	}, nodes)
 	if err != nil {
 		return nil, err
 	}
@@ -359,14 +394,28 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 		return nil, err
 	}
 	existingNodeMap := make(map[string]int)
+	existingUsage := make(map[string]placement.ResourceUsage)
 	for _, inst := range existing {
 		if inst.Status != "removing" && inst.Status != "failed" {
 			existingNodeMap[inst.NodeID]++
+			usage := existingUsage[inst.NodeID]
+			usage.CPU += inst.CPU
+			usage.MemoryMB += inst.MemoryMB
+			usage.DiskMB += inst.DiskMB
+			existingUsage[inst.NodeID] = usage
 		}
+	}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
 	}
 
 	candidates := make([]placement.Candidate, 0, len(filtered))
 	for _, node := range filtered {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("replica placement cancelled: %w", err)
+		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
 			// The node is left out of this placement, which is the safe direction,
@@ -381,6 +430,9 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 
 	replicas := make([]placement.ReplicaSpec, req.ReplicaCount)
 	for i := 0; i < req.ReplicaCount; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("replica placement cancelled: %w", err)
+		}
 		runtime := app.RuntimeProvider
 		if req.RuntimeFilter != "" {
 			runtime = req.RuntimeFilter
@@ -401,7 +453,11 @@ func (s *Scheduler) PlaceReplicas(ctx context.Context, req domain.PlaceReplicasR
 		RequiredNode:    req.RequiredNode,
 		PreferredNode:   req.PreferredNode,
 		RuntimeFilter:   req.RuntimeFilter,
+		StorageLocality: req.StorageLocality,
+		Constraints:     toPlacementConstraints(req.Constraints),
+		ConstraintCtx:   constraintCtx,
 		ExistingNodeMap: existingNodeMap,
+		ExistingUsage:   existingUsage,
 	}
 
 	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
@@ -441,6 +497,9 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 	if s.store == nil {
 		return nil, errors.New("scheduler not initialized")
 	}
+	req.RegionID = strings.TrimSpace(req.RegionID)
+	req.StorageLocality = canonicalStorageLocality(strings.TrimSpace(req.StorageLocality))
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
 	app, err := s.store.GetReplicaApp(ctx, req.AppID)
 	if err != nil {
 		return nil, fmt.Errorf("app not found: %w", err)
@@ -471,20 +530,41 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 		if err != nil {
 			return nil, err
 		}
-		filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{RegionID: "", CPU: app.CPU, MemoryMB: app.MemoryMB, DiskMB: app.DiskMB}, allNodes)
+		filtered, err := s.FilterNodes(ctx, domain.PlacementRequest{
+			RegionID:        req.RegionID,
+			CPU:             app.CPU,
+			MemoryMB:        app.MemoryMB,
+			DiskMB:          app.DiskMB,
+			StorageLocality: req.StorageLocality,
+			Constraints:     req.Constraints,
+		}, allNodes)
 		if err != nil {
 			return nil, err
 		}
 
 		existingNodeMap := make(map[string]int)
+		existingUsage := make(map[string]placement.ResourceUsage)
 		for _, inst := range current {
 			if inst.Status != "removing" && inst.Status != "failed" {
 				existingNodeMap[inst.NodeID]++
+				usage := existingUsage[inst.NodeID]
+				usage.CPU += inst.CPU
+				usage.MemoryMB += inst.MemoryMB
+				usage.DiskMB += inst.DiskMB
+				existingUsage[inst.NodeID] = usage
 			}
+		}
+		constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+		if err != nil {
+			slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+			constraintCtx = placement.ConstraintContext{}
 		}
 
 		candidates := make([]placement.Candidate, 0, len(filtered))
 		for _, node := range filtered {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("replica scale-up cancelled: %w", err)
+			}
 			snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 			if err != nil {
 				// Excluded — scale up onto the nodes Forge can actually read — but
@@ -499,6 +579,9 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 		startIdx := activeInstances
 		replicas := make([]placement.ReplicaSpec, extra)
 		for i := 0; i < extra; i++ {
+			if err := ctx.Err(); err != nil {
+				return nil, fmt.Errorf("replica scale-up cancelled: %w", err)
+			}
 			replicas[i] = placement.ReplicaSpec{
 				Index:           startIdx + i,
 				CPU:             app.CPU,
@@ -511,7 +594,12 @@ func (s *Scheduler) ScaleReplicas(ctx context.Context, req domain.ScaleRequest) 
 		placementReq := placement.ReplicaPlacementRequest{
 			AppID:           req.AppID,
 			Replicas:        replicas,
+			RegionID:        req.RegionID,
+			StorageLocality: req.StorageLocality,
+			Constraints:     toPlacementConstraints(req.Constraints),
+			ConstraintCtx:   constraintCtx,
 			ExistingNodeMap: existingNodeMap,
+			ExistingUsage:   existingUsage,
 		}
 		result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
 		if err != nil {
@@ -624,15 +712,30 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 		return nil, fmt.Errorf("list instances of app %s for placement: %w", app.ID, err)
 	}
 	existingNodeMap := make(map[string]int)
+	existingUsage := make(map[string]placement.ResourceUsage)
 	for _, e := range existing {
 		if e.Status != "removing" && e.Status != "failed" {
 			existingNodeMap[e.NodeID]++
+			usage := existingUsage[e.NodeID]
+			usage.CPU += e.CPU
+			usage.MemoryMB += e.MemoryMB
+			usage.DiskMB += e.DiskMB
+			existingUsage[e.NodeID] = usage
 		}
+	}
+	constraintCtx, err := s.serverNodeConstraintCtx(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "scheduler: server map unavailable, affinity constraints fail closed", "error", err)
+		constraintCtx = placement.ConstraintContext{}
 	}
 
 	candidates := make([]placement.Candidate, 0, len(filtered))
 	var unreadable []string
 	for _, node := range filtered {
+		if err := ctx.Err(); err != nil {
+			restoreInstance(ctx, s.store, inst.ID)
+			return nil, fmt.Errorf("replacement placement cancelled: %w", err)
+		}
 		snapshot, err := s.store.NodeCapacitySnapshot(ctx, node.ID)
 		if err != nil {
 			s.recordPlacementRejection()
@@ -658,7 +761,9 @@ func (s *Scheduler) ReplaceFailedInstance(ctx context.Context, req domain.Replac
 	placementReq := placement.ReplicaPlacementRequest{
 		AppID:           app.ID,
 		Replicas:        replicas,
+		ConstraintCtx:   constraintCtx,
 		ExistingNodeMap: existingNodeMap,
+		ExistingUsage:   existingUsage,
 	}
 	result, err := s.engine.PlaceReplicas(ctx, candidates, placementReq)
 	if err != nil {
@@ -794,6 +899,7 @@ func toWorkloadRequest(req domain.PlacementRequest) placement.WorkloadRequest {
 		RequiredNode:    req.RequiredNode,
 		RegionID:        req.RegionID,
 		StorageLocality: req.StorageLocality,
+		Constraints:     toPlacementConstraints(req.Constraints),
 	}
 }
 
@@ -804,6 +910,7 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	req.AllocationID = strings.TrimSpace(req.AllocationID)
 	req.RuntimeProvider = strings.TrimSpace(req.RuntimeProvider)
 	req.StorageLocality = canonicalStorageLocality(req.StorageLocality)
+	req.Constraints = normalizePlacementConstraints(req.Constraints)
 	if req.CPU == 0 {
 		req.CPU = req.CPUShares
 	}
@@ -819,9 +926,37 @@ func normalizeRequest(req domain.PlacementRequest) domain.PlacementRequest {
 	return req
 }
 
+// normalizePlacementConstraints trims constraint fields so equivalent
+// spellings compare equal downstream. Unknown types and operators are kept —
+// they are rejected loudly at evaluation time, not silently dropped here.
+func normalizePlacementConstraints(in []domain.PlacementConstraint) []domain.PlacementConstraint {
+	if in == nil {
+		return nil
+	}
+	out := make([]domain.PlacementConstraint, 0, len(in))
+	for _, c := range in {
+		c.Type = domain.PlacementConstraintType(strings.ToLower(strings.TrimSpace(string(c.Type))))
+		c.Key = strings.ToLower(strings.TrimSpace(c.Key))
+		c.Operator = strings.ToLower(strings.TrimSpace(c.Operator))
+		c.Value = strings.TrimSpace(c.Value)
+		if c.Key == "" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func HasCapacity(total, available, requested int) bool {
-	if requested <= 0 || total <= 0 {
+	if requested <= 0 {
 		return true
+	}
+	// An unknown or unreported total is not infinite capacity. A node that
+	// reports no total cannot be shown to fit the request, so it is not a
+	// candidate; callers distinguish this from a shortfall via the snapshot
+	// path, which logs the unreadable node separately.
+	if total <= 0 {
+		return false
 	}
 	return available >= requested
 }
@@ -859,4 +994,121 @@ func nodeRegionEnabled(node store.Node, regions []store.Region) bool {
 		}
 	}
 	return false
+}
+
+func regionIDOf(node store.Node) string {
+	if node.RegionID != nil {
+		return *node.RegionID
+	}
+	return ""
+}
+
+// serverNodeConstraintCtx builds the affinity context the engine needs: which
+// node each server runs on. An unreadable server list is not silently treated
+// as "no affinity anywhere" — the caller logs it and proceeds with an empty
+// map, under which unknown affinity targets fail closed in the checker.
+func (s *Scheduler) serverNodeConstraintCtx(ctx context.Context) (placement.ConstraintContext, error) {
+	allServers, err := s.store.ListServers(ctx)
+	if err != nil {
+		return placement.ConstraintContext{}, err
+	}
+	serverNodeMap := make(map[string]string, len(allServers))
+	for _, sv := range allServers {
+		serverNodeMap[sv.ID] = sv.Node
+	}
+	return placement.ConstraintContext{ServerNodeMap: serverNodeMap}, nil
+}
+
+// toPlacementConstraints translates domain-level request constraints into the
+// engine's constraint vocabulary. Required and preferred map directly;
+// forbidden inverts into a required exclusion (there is no "must not" flag in
+// the engine, but "required not-in" means exactly that).
+func toPlacementConstraints(in []domain.PlacementConstraint) []placement.Constraint {
+	out := make([]placement.Constraint, 0, len(in))
+	for _, c := range in {
+		key := strings.ToLower(strings.TrimSpace(c.Key))
+		op := strings.ToLower(strings.TrimSpace(c.Operator))
+		pc := placement.Constraint{
+			Key:      key,
+			Values:   splitConstraintValues(c.Value),
+			Required: c.Type != domain.PlacementConstraintPreferred,
+		}
+		switch key {
+		case "region":
+			pc.Type = placement.ConstraintRegion
+		case "node_id", "node":
+			pc.Type = placement.ConstraintNode
+		default:
+			pc.Type = placement.ConstraintLabel
+		}
+		if c.Type == domain.PlacementConstraintForbidden {
+			pc.Operator = invertConstraintOperator(op)
+		} else {
+			pc.Operator = normalizeConstraintOperator(op)
+		}
+		out = append(out, pc)
+	}
+	return out
+}
+
+// filterablePlacementConstraints keeps the constraints the scheduler can
+// evaluate from node rows alone (region and node identity). Label and
+// affinity constraints need a label index or server map the filter loop does
+// not carry, so they are left for the engine, which records exclusions as
+// FilterReasons instead of silently dropping them here.
+func filterablePlacementConstraints(in []placement.Constraint) []placement.Constraint {
+	out := make([]placement.Constraint, 0, len(in))
+	for _, c := range in {
+		if c.Type == placement.ConstraintRegion || c.Type == placement.ConstraintNode {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+func splitConstraintValues(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, p := range parts {
+		if trimmed := strings.TrimSpace(p); trimmed != "" {
+			out = append(out, trimmed)
+		}
+	}
+	return out
+}
+
+// normalizeConstraintOperator maps the scheduler's operator spellings onto the
+// engine's. The engine's region/node/label checks understand "in", "not-in",
+// "exists" and "not-exists"; anything else is rejected by the checker rather
+// than guessed at here.
+func normalizeConstraintOperator(op string) string {
+	switch op {
+	case "eq", "in", "":
+		return "in"
+	case "neq", "notin", "not-in":
+		return "not-in"
+	case "exists":
+		return "exists"
+	case "not-exists", "notexists":
+		return "not-exists"
+	default:
+		return op
+	}
+}
+
+// invertConstraintOperator turns a match operator into the exclusion that a
+// forbidden constraint requires.
+func invertConstraintOperator(op string) string {
+	switch op {
+	case "eq", "in", "":
+		return "not-in"
+	case "neq", "notin", "not-in":
+		return "in"
+	case "exists":
+		return "not-exists"
+	case "not-exists", "notexists":
+		return "exists"
+	default:
+		return op
+	}
 }

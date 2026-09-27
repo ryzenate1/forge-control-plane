@@ -1,11 +1,12 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, EggOff, HardDrive, Link2Off, Plus, Save, Trash2, Server, Search } from "lucide-react";
 import {
   attachEggsToMount, attachNodesToMount, createMount, deleteMount, detachEggFromMount, detachNodeFromMount,
-  fetchEggs, fetchMounts, fetchNests, fetchNodes, fetchMountServers, assignServerToMount, unassignServerFromMount,
+  fetchEggs, fetchMounts, fetchNests, fetchMountServers, assignServerToMount, unassignServerFromMount,
   fetchServers, updateMount, type ApiEgg, type ApiMount, type ApiNode, type ApiServer,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
@@ -143,7 +144,7 @@ function AttachedServersTab({ mountId }: { mountId: string }) {
               : (
                 <div className="max-h-64 space-y-2 overflow-y-auto">
                   {available.slice(0, 50).map((s) => (
-                    <label key={s.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm ${selectedServerId===s.id ? "border-[var(--brand)]/50 bg-[var(--brand)]/10" : "border-white/10 bg-white/[0.02]"}`}>
+                    <label key={s.id} className={`flex cursor-pointer items-center gap-3 rounded-lg border p-3 text-sm ${selectedServerId===s.id ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]" : "border-white/10 bg-white/[0.02]"}`}>
                       <input type="radio" name="attach-server" checked={selectedServerId===s.id} onChange={() => setSelectedServerId(s.id)} className="accent-[var(--brand)]" />
                       <span className="font-medium text-slate-200">{s.name}</span>
                       <span className="ml-auto font-mono text-xs text-slate-400">{s.id.slice(0, 8)}</span>
@@ -168,7 +169,7 @@ export function AdminMounts() {
   const [confirm, renderConfirm] = useConfirm();
   const mountsQuery = useQuery({ queryKey: ["mounts"], queryFn: fetchMounts });
   const mounts = useMemo(() => mountsQuery.data ?? [], [mountsQuery.data]);
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const nestsQuery = useQuery({ queryKey: ["nests"], queryFn: fetchNests });
 
@@ -402,7 +403,7 @@ export function AdminMounts() {
               <Btn tone="danger" size="sm" onClick={() => { void (async () => { if (await confirm({ title: `Delete mount ${selected.name}?`, description: "The mount definition will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(selected.id); })(); }} disabled={deleteMut.isPending}>
                 <Trash2 size={12} /> Delete
               </Btn>
-              <Btn onClick={handleUpdate} disabled={updateMut.isPending} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white">
+              <Btn onClick={handleUpdate} disabled={updateMut.isPending} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
                 <Save size={12} /> {updateMut.isPending ? "Saving..." : "Save"}
               </Btn>
             </div>

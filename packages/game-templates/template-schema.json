@@ -102,8 +102,9 @@
       }
     },
     "supported_platforms": {
+      "description": "Runtime providers this template can deploy to. Mirrors the Forge ValidateProvider set; kvm/lxc require ENABLE_EXPERIMENTAL_RUNTIMES.",
       "type": "array",
-      "items": { "type": "string", "enum": ["docker", "podman"] }
+      "items": { "type": "string", "enum": ["docker", "containerd", "podman", "firecracker", "kubernetes", "kvm", "lxc"] }
     },
     "categories": {
       "type": "array",

@@ -61,7 +61,7 @@ function Breadcrumbs({ directory, onOpen }: { directory: string; onOpen: (path: 
         const path = "/" + parts.slice(0, index + 1).join("/");
         return (
           <span className="flex shrink-0 items-center gap-1" key={path}>
-            <ChevronRight className="shrink-0 text-[var(--text-subtle)]/60" size={14} />
+            <ChevronRight className="shrink-0 text-[color-mix(in_srgb,var(--text-subtle)_60%,transparent)]" size={14} />
             <button
               className="max-w-[140px] truncate text-[var(--text-subtle)] transition-colors hover:text-white sm:max-w-[240px]"
               onClick={() => onOpen(path)}
@@ -266,7 +266,7 @@ export function ContainerFilesView({
       {renderConfirm()}
       {dragging ? (
         <div aria-live="assertive" className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="status">
-          <div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-[var(--brand)]/60 bg-[var(--surface-raised)]/90 px-16 py-12 text-center shadow-2xl">
+          <div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-[color-mix(in_srgb,var(--brand)_60%,transparent)] bg-[color-mix(in_srgb,var(--surface-raised)_90%,transparent)] px-16 py-12 text-center shadow-2xl">
             <Upload className="h-10 w-10 text-[var(--brand)]" />
             <p className="text-lg font-bold text-[var(--text)]">Drop files to upload into {directory}</p>
           </div>
@@ -398,7 +398,7 @@ export function ContainerFilesView({
               {editing ? (
                 <div className="flex shrink-0 items-center gap-2">
                   <button className={btn} onClick={() => { setEditing(null); setContent(""); setLoaded(false); setDirty(false); }} type="button">Close</button>
-                  <button className={cn(btn, "border-[var(--brand)]/30 bg-[var(--brand-subtle)] text-white")} disabled={!loaded || !dirty || busy} onClick={saveFile} type="button">
+                  <button className={cn(btn, "border-[color-mix(in_srgb,var(--brand)_30%,transparent)] bg-[var(--brand-subtle)] text-white")} disabled={!loaded || !dirty || busy} onClick={saveFile} type="button">
                     <Save size={14} />Save
                   </button>
                 </div>

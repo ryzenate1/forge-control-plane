@@ -1,21 +1,21 @@
 package http
 
 import (
-	"crypto"
-	"crypto/x509"
-	"encoding/pem"
-	"errors"
 	"fmt"
 	"strings"
-	"time"
 
-	"gamepanel/forge/internal/store"
+	"gamepanel/forge/internal/services/acme"
 
 	"github.com/gofiber/fiber/v2"
 )
 
-func registerCertificateRoutesExt(protected fiber.Router, cfg Config, adminIPAccess, mutationLimiter fiber.Handler) {
-	if cfg.Store == nil {
+// registerCertificateRoutesExt owns the operator-supplied certificate surface
+// (/upload, /:id/download, /:id/export). Layering: handler -> acme.Service ->
+// store. The guard matches registerCertificateRoutes (svc == nil): without the
+// service neither route set registers, so /cert and /certificates never
+// diverge into one live and one dead copy.
+func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.Service, adminIPAccess, mutationLimiter fiber.Handler) {
+	if svc == nil {
 		return
 	}
 

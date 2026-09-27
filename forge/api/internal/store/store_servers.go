@@ -26,6 +26,12 @@ func clampPageParams(page, perPage int) (int, int) {
 	return page, perPage
 }
 
+// ListServers is a full-table scan for background workers (scheduler,
+// reconciler, affinity) that genuinely need every server. It is NOT
+// paginated: HTTP handlers and any UI-facing path MUST use
+// ListServersPaginated or ListServersForUser instead, which clamp page size
+// and return totals. Adding callers of this method for request paths will
+// reintroduce unbounded result sets.
 func (s *Store) ListServers(ctx context.Context) ([]Server, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT s.id::text, s.name, COALESCE(s.description, ''), s.status, s.desired_state::text, s.actual_state::text, s.config_sync_pending, s.suspended, s.transferring, s.transfer_target_node_id::text, s.transfer_state, s.transfer_error, s.transfer_run_token::text, s.memory_mb, s.cpu_shares, s.disk_mb, n.name, u.email, e.name, COALESCE(s.runtime_provider, 'docker')

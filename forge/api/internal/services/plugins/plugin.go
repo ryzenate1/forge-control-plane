@@ -3,6 +3,7 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,17 @@ import (
 )
 
 var pluginNamePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\z`)
+
+// ErrPluginNotFound is returned when a plugin id does not resolve to a stored
+// plugin. Callers match on it instead of guessing from a generic store error.
+var ErrPluginNotFound = errors.New("plugin not found")
+
+// pluginHookTimeout bounds a single hook invocation so one wedged plugin cannot
+// hold up the whole hook chain.
+const pluginHookTimeout = 10 * time.Second
+
+// maxManifestBytes caps the manifest accepted from an install request.
+const maxManifestBytes = 1024 * 1024
 
 type PluginState string
 
@@ -95,11 +107,44 @@ func (s *Service) Get(ctx context.Context, id string) (*Plugin, error) {
 	return s.store.GetPlugin(ctx, id)
 }
 
+// mustGet resolves a plugin and fails loudly when it is absent. Repositories
+// disagree on whether "not found" is an error or a nil result, so both shapes
+// are normalised here rather than being allowed to read as a success.
+func (s *Service) mustGet(ctx context.Context, id string) (*Plugin, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, ErrPluginNotFound
+	}
+	plugin, err := s.store.GetPlugin(ctx, id)
+	if errors.Is(err, ErrPluginNotFound) {
+		return nil, ErrPluginNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up plugin: %w", err)
+	}
+	if plugin == nil {
+		return nil, ErrPluginNotFound
+	}
+	return plugin, nil
+}
+
+// findByName reports whether a name is already taken. A store failure is an
+// error, never "free to use".
+func (s *Service) findByName(ctx context.Context, name string) (*Plugin, error) {
+	existing, err := s.store.FindPluginByName(ctx, name)
+	if errors.Is(err, ErrPluginNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check existing plugin %q: %w", name, err)
+	}
+	return existing, nil
+}
+
 func (s *Service) Install(ctx context.Context, name, source, manifestJSON string) (*Plugin, error) {
 	if !pluginNamePattern.MatchString(name) {
 		return nil, fmt.Errorf("plugin name may only contain letters, numbers, dot, underscore, and hyphen")
 	}
-	if len(manifestJSON) > 1024*1024 {
+	if len(manifestJSON) > maxManifestBytes {
 		return nil, fmt.Errorf("plugin manifest exceeds 1 MiB")
 	}
 	var manifest PluginManifest
@@ -109,15 +154,34 @@ func (s *Service) Install(ctx context.Context, name, source, manifestJSON string
 	if manifest.Name != "" && manifest.Name != name {
 		return nil, fmt.Errorf("manifest name %q does not match plugin name %q", manifest.Name, name)
 	}
+	// A manifest that declares no version cannot participate in dependency or
+	// min/max range resolution, so reject it at the boundary.
+	if strings.TrimSpace(manifest.Version) == "" {
+		return nil, fmt.Errorf("manifest must declare a version")
+	}
+	if manifest.Settings != nil && !json.Valid(manifest.Settings) {
+		return nil, fmt.Errorf("manifest settings must be valid JSON")
+	}
 	if manifest.Entrypoint != "" {
 		cleanEntrypoint := filepath.Clean(manifest.Entrypoint)
 		if filepath.IsAbs(cleanEntrypoint) || cleanEntrypoint == ".." || strings.HasPrefix(cleanEntrypoint, ".."+string(filepath.Separator)) {
 			return nil, fmt.Errorf("plugin entrypoint must remain inside the plugin directory")
 		}
 	}
+	// Hook targets are resolved against the plugin directory later; keep them
+	// relative so a manifest cannot name an arbitrary host path.
+	for hook, target := range manifest.Hooks {
+		clean := filepath.Clean(target)
+		if target == "" || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("hook %q must reference a path inside the plugin directory", hook)
+		}
+	}
 
-	existing, err := s.store.FindPluginByName(ctx, name)
-	if err == nil && existing != nil {
+	existing, err := s.findByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
 		return nil, fmt.Errorf("plugin %q is already installed", name)
 	}
 
@@ -129,7 +193,10 @@ func (s *Service) Install(ctx context.Context, name, source, manifestJSON string
 		if err := os.MkdirAll(pluginDir, 0755); err != nil {
 			return nil, fmt.Errorf("create plugin directory: %w", err)
 		}
-		manifestData, _ := json.MarshalIndent(manifest, "", "  ")
+		manifestData, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("encode manifest: %w", err)
+		}
 		if err := os.WriteFile(filepath.Join(pluginDir, "manifest.json"), manifestData, 0644); err != nil {
 			return nil, fmt.Errorf("write manifest: %w", err)
 		}
@@ -154,9 +221,15 @@ func (s *Service) Install(ctx context.Context, name, source, manifestJSON string
 }
 
 func (s *Service) Uninstall(ctx context.Context, id string) error {
-	plugin, err := s.store.GetPlugin(ctx, id)
+	plugin, err := s.mustGet(ctx, id)
 	if err != nil {
 		return err
+	}
+
+	// Remove the row first: if the directory removal fails the plugin is still
+	// installed and visible, rather than a ghost record pointing at nothing.
+	if err := s.store.DeletePlugin(ctx, id); err != nil {
+		return fmt.Errorf("delete plugin record: %w", err)
 	}
 
 	if s.pluginsDir != "" {
@@ -169,18 +242,32 @@ func (s *Service) Uninstall(ctx context.Context, id string) error {
 		}
 	}
 
-	return s.store.DeletePlugin(ctx, id)
+	return nil
 }
 
 func (s *Service) Enable(ctx context.Context, id string) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
 	return s.store.UpdatePluginState(ctx, id, PluginStateEnabled, "")
 }
 
 func (s *Service) Disable(ctx context.Context, id string) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
 	return s.store.UpdatePluginState(ctx, id, PluginStateDisabled, "")
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, id string, settings json.RawMessage) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
+	// Reject anything that is not valid JSON rather than coercing it into a
+	// jsonb column and reporting success.
+	if len(settings) == 0 || !json.Valid(settings) {
+		return fmt.Errorf("plugin settings must be valid JSON")
+	}
 	return s.store.UpdatePluginSettings(ctx, id, settings)
 }
 

@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, deleteJSON } from "./http";
+import { fetchJSON, postJSON, deleteJSON, unwrapList, unwrapData } from "./http";
 
 export type DiscoveryEndpointStatus = "healthy" | "unhealthy" | "unknown" | "draining";
 export type DiscoveryProtocol = "tcp" | "udp";
@@ -113,29 +113,25 @@ function queryFromFilter(f: DiscoveryFilter = {}): string {
 // ---- Services / Endpoints ----
 
 export function fetchDiscoveryServices(): Promise<DiscoveryEndpointSet[]> {
-  return fetchJSON<{ data: DiscoveryEndpointSet[] }>("/admin/service-discovery/services").then(
-    r => (r as unknown as { data: DiscoveryEndpointSet[] }).data ?? (r as unknown as DiscoveryEndpointSet[]),
-  );
+  return fetchJSON<{ data: DiscoveryEndpointSet[] } | DiscoveryEndpointSet[]>("/admin/service-discovery/services").then(unwrapList);
 }
 
 export function fetchDiscoveryEndpoints(filter?: DiscoveryFilter): Promise<DiscoveryEndpoint[]> {
-  return fetchJSON<{ data: DiscoveryEndpoint[] }>(
+  return fetchJSON<{ data: DiscoveryEndpoint[] } | DiscoveryEndpoint[]>(
     `/admin/service-discovery/endpoints${queryFromFilter(filter)}`,
-  ).then(r => (r as unknown as { data: DiscoveryEndpoint[] }).data ?? (r as unknown as DiscoveryEndpoint[]));
+  ).then(unwrapList);
 }
 
 export function fetchDiscoveryEndpoint(id: string): Promise<DiscoveryEndpoint> {
-  return fetchJSON<{ data: DiscoveryEndpoint }>(
+  return fetchJSON<{ data: DiscoveryEndpoint } | DiscoveryEndpoint>(
     `/admin/service-discovery/endpoints/${encodeURIComponent(id)}`,
-  ).then(r => (r as unknown as { data: DiscoveryEndpoint }).data ?? (r as unknown as DiscoveryEndpoint));
+  ).then(unwrapData);
 }
 
 export function registerDiscoveryEndpoint(
   input: Partial<DiscoveryEndpoint> & { serviceName: string; nodeId: string; address: string; port: number },
 ): Promise<DiscoveryEndpoint> {
-  return postJSON<{ data: DiscoveryEndpoint }>("/admin/service-discovery/endpoints", input).then(
-    r => (r as unknown as { data: DiscoveryEndpoint }).data ?? (r as unknown as DiscoveryEndpoint),
-  );
+  return postJSON<{ data: DiscoveryEndpoint } | DiscoveryEndpoint>("/admin/service-discovery/endpoints", input).then(unwrapData);
 }
 
 export function deleteDiscoveryEndpoint(id: string): Promise<void> {
@@ -153,23 +149,19 @@ export function heartbeatDiscoveryEndpoint(id: string): Promise<void> {
 export function resolveDiscoveryService(service: string, tenantId?: string): Promise<DiscoveryEndpoint[]> {
   const q = new URLSearchParams({ service });
   if (tenantId) q.set("tenant_id", tenantId);
-  return fetchJSON<{ data: DiscoveryEndpoint[] }>(`/admin/service-discovery/resolve?${q.toString()}`).then(
-    r => (r as unknown as { data: DiscoveryEndpoint[] }).data ?? (r as unknown as DiscoveryEndpoint[]),
-  );
+  return fetchJSON<{ data: DiscoveryEndpoint[] } | DiscoveryEndpoint[]>(`/admin/service-discovery/resolve?${q.toString()}`).then(unwrapList);
 }
 
 // ---- Visibility / Reachability ----
 
 export function fetchNetworkVisibility(): Promise<NetworkVisibilityView> {
-  return fetchJSON<{ data: NetworkVisibilityView }>("/admin/service-discovery/network/visibility").then(
-    r => (r as unknown as { data: NetworkVisibilityView }).data ?? (r as unknown as NetworkVisibilityView),
-  );
+  return fetchJSON<{ data: NetworkVisibilityView } | NetworkVisibilityView>("/admin/service-discovery/network/visibility").then(unwrapData);
 }
 
 export function fetchNodeNetworkView(nodeId: string): Promise<NodeNetworkView> {
-  return fetchJSON<{ data: NodeNetworkView }>(
+  return fetchJSON<{ data: NodeNetworkView } | NodeNetworkView>(
     `/admin/service-discovery/network/nodes/${encodeURIComponent(nodeId)}`,
-  ).then(r => (r as unknown as { data: NodeNetworkView }).data ?? (r as unknown as NodeNetworkView));
+  ).then(unwrapData);
 }
 
 export function verifyReachability(input: {
@@ -177,52 +169,35 @@ export function verifyReachability(input: {
   targetNodeId: string;
   serviceName: string;
 }): Promise<ReachabilityResult> {
-  return postJSON<{ data: ReachabilityResult }>("/admin/service-discovery/reachability/verify", input).then(
-    r => (r as unknown as { data: ReachabilityResult }).data ?? (r as unknown as ReachabilityResult),
-  );
+  return postJSON<{ data: ReachabilityResult } | ReachabilityResult>("/admin/service-discovery/reachability/verify", input).then(unwrapData);
 }
 
 export function sweepReachability(): Promise<ReachabilityResult[]> {
-  return postJSON<{ data: ReachabilityResult[] }>("/admin/service-discovery/reachability/sweep", {}).then(
-    r => (r as unknown as { data: ReachabilityResult[] }).data ?? (r as unknown as ReachabilityResult[]),
-  );
+  return postJSON<{ data: ReachabilityResult[] } | ReachabilityResult[]>("/admin/service-discovery/reachability/sweep", {}).then(unwrapList);
 }
 
 export function fetchReaperStats(): Promise<ReaperStats> {
-  return fetchJSON<{ data: ReaperStats }>("/admin/service-discovery/reaper/stats").then(r => {
-    const data = (r as unknown as { data: ReaperStats }).data ?? (r as unknown as ReaperStats);
-    return data as ReaperStats;
-  });
+  return fetchJSON<{ data: ReaperStats } | ReaperStats>("/admin/service-discovery/reaper/stats").then(unwrapData);
 }
 
 // ---- Policy (PrivateNetworkPolicy) ----
 
 export function fetchDiscoveryPolicy(): Promise<PolicyView> {
-  return fetchJSON<{ data: PolicyView }>("/admin/service-discovery/policy").then(
-    r => (r as unknown as { data: PolicyView }).data ?? (r as unknown as PolicyView),
-  );
+  return fetchJSON<{ data: PolicyView } | PolicyView>("/admin/service-discovery/policy").then(unwrapData);
 }
 
 export function addPrivateCIDR(cidr: string): Promise<PolicyView> {
-  return postJSON<{ data: PolicyView }>("/admin/service-discovery/policy/cidrs", { cidr }).then(
-    r => (r as unknown as { data: PolicyView }).data ?? (r as unknown as PolicyView),
-  );
+  return postJSON<{ data: PolicyView } | PolicyView>("/admin/service-discovery/policy/cidrs", { cidr }).then(unwrapData);
 }
 
 export function removePrivateCIDR(cidr: string): Promise<PolicyView> {
-  return deleteJSON<{ data: PolicyView }>(`/admin/service-discovery/policy/cidrs/${encodeURIComponent(cidr)}`).then(
-    r => (r as unknown as { data: PolicyView }).data ?? (r as unknown as PolicyView),
-  );
+  return deleteJSON<{ data: PolicyView } | PolicyView>(`/admin/service-discovery/policy/cidrs/${encodeURIComponent(cidr)}`).then(unwrapData);
 }
 
 export function allowPolicyPort(serviceName: string, port: number): Promise<PolicyView> {
-  return postJSON<{ data: PolicyView }>("/admin/service-discovery/policy/ports/allow", { serviceName, port }).then(
-    r => (r as unknown as { data: PolicyView }).data ?? (r as unknown as PolicyView),
-  );
+  return postJSON<{ data: PolicyView } | PolicyView>("/admin/service-discovery/policy/ports/allow", { serviceName, port }).then(unwrapData);
 }
 
 export function revokePolicyPort(serviceName: string, port: number): Promise<PolicyView> {
-  return postJSON<{ data: PolicyView }>("/admin/service-discovery/policy/ports/revoke", { serviceName, port }).then(
-    r => (r as unknown as { data: PolicyView }).data ?? (r as unknown as PolicyView),
-  );
+  return postJSON<{ data: PolicyView } | PolicyView>("/admin/service-discovery/policy/ports/revoke", { serviceName, port }).then(unwrapData);
 }

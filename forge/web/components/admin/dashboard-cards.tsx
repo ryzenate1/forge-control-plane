@@ -76,7 +76,7 @@ export function DashActionButton({ label, icon: Icon, onClick, disabled, pending
   const cls = cn(
     "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40",
     tone === "brand"
-      ? "border-[var(--brand)]/40 bg-[var(--brand)]/[0.07] text-slate-100 hover:border-[var(--brand)]/60 hover:bg-[var(--brand)]/[0.12]"
+      ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] text-slate-100 hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_12%,transparent)]"
       : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"
   );
   const inner = <><Icon size={12} />{pending ? "…" : label}</>;
@@ -244,7 +244,7 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
               className={cn(
                 "group flex items-center gap-2.5 rounded-xl border p-3 transition hover:bg-white/[0.05]",
                 highlight
-                  ? "border-[var(--brand)]/40 bg-[var(--brand)]/[0.07] hover:border-[var(--brand)]/60"
+                  ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)]"
                   : "border-white/[0.07] bg-white/[0.02] hover:border-white/20"
               )}
             >

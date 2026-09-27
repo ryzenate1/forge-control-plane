@@ -69,7 +69,7 @@ func resolveNodeHostTarget(cfg Config, nodeID string) (*nodeHostTarget, error) {
 }
 
 func registerHostRoutes(protected fiber.Router, cfg Config) {
-	protected.Get("/host/info", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/host/info", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -86,7 +86,7 @@ func registerHostRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(info)
 	})
 
-	protected.Get("/host/disk", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/host/disk", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -103,7 +103,7 @@ func registerHostRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(disk)
 	})
 
-	protected.Get("/host/memory", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/host/memory", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -120,7 +120,7 @@ func registerHostRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(mem)
 	})
 
-	protected.Get("/host/network", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/host/network", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}
@@ -137,7 +137,7 @@ func registerHostRoutes(protected fiber.Router, cfg Config) {
 		return c.JSON(netIfaces)
 	})
 
-	protected.Get("/host/processes", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/host/processes", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Daemon == nil || cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client and store are required")
 		}

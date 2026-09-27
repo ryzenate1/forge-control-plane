@@ -166,8 +166,11 @@ show_changelog() {
     if [ "$ROLLBACK" = "true" ]; then
         warn "ROLLBACK MODE: Will revert to previous version if this upgrade fails"
     fi
+    if [ ! -t 0 ]; then
+        fail "Upgrade requires confirmation on a TTY. Re-run interactively or pipe 'y' explicitly."
+    fi
     printf "  Proceed with upgrade? [y/N]: "
-    read -r response
+    read -r response || response="n"
     case "${response:-n}" in [Yy]*) ;; *) echo "  Aborted."; exit 0 ;; esac
 }
 
@@ -183,39 +186,53 @@ create_backup() {
     fi
 
     mkdir -p "$BACKUP_DIR"
+    chmod 700 "$BACKUP_DIR" 2>/dev/null || true
     detail "Backup directory: $BACKUP_DIR"
 
     # Backup environment file
     cp "$ENV_FILE" "$BACKUP_DIR/.env.backup"
+    chmod 600 "$BACKUP_DIR/.env.backup" 2>/dev/null || true
     info "Environment backed up"
 
     # Backup compose files
     cp "$INFRA_DIR/compose.yml" "$BACKUP_DIR/compose.yml.backup" 2>/dev/null || true
     cp "$INFRA_DIR/compose.production.yml" "$BACKUP_DIR/compose.production.yml.backup" 2>/dev/null || true
+    chmod 600 "$BACKUP_DIR"/compose.*.backup 2>/dev/null || true
     info "Compose files backed up"
 
-    # Database dump
+    # Database dump — POSTGRES_USER/DB are read from the env file because the
+    # upgrade process does not export them.
     detail "Creating database dump..."
-    local db_url
+    local db_url pg_user pg_db
     db_url="$(grep '^DATABASE_URL=' "$ENV_FILE" | cut -d= -f2- || true)"
+    pg_user="$(grep '^POSTGRES_USER=' "$ENV_FILE" | cut -d= -f2- || true)"
+    pg_db="$(grep '^POSTGRES_DB=' "$ENV_FILE" | cut -d= -f2- || true)"
+    pg_user="${pg_user:-gamepanel}"
+    pg_db="${pg_db:-gamepanel}"
     if [ -n "$db_url" ] && have pg_dump; then
         detail "Using pg_dump for database backup"
         if pg_dump "${db_url%%\?*}" > "$BACKUP_DIR/database.sql" 2>/dev/null; then
+            chmod 600 "$BACKUP_DIR/database.sql" 2>/dev/null || true
             info "Database dump saved"
         else
             warn "Database dump failed. Attempting Docker-based backup..."
-            if docker compose -f "$INFRA_DIR/compose.yml" --env-file "$ENV_FILE" exec -T postgres pg_dump -U "${POSTGRES_USER:-gamepanel}" "${POSTGRES_DB:-gamepanel}" > "$BACKUP_DIR/database.sql" 2>/dev/null; then
+            if docker compose -f "$INFRA_DIR/compose.yml" --env-file "$ENV_FILE" exec -T postgres pg_dump -U "$pg_user" "$pg_db" > "$BACKUP_DIR/database.sql" 2>/dev/null; then
+                chmod 600 "$BACKUP_DIR/database.sql" 2>/dev/null || true
                 info "Database dump saved via Docker"
             else
                 warn "Database backup could not be created. Continue without DB backup?"
+                if [ ! -t 0 ]; then
+                    fail "Upgrade aborted (no TTY to confirm continuing without a DB backup)"
+                fi
                 printf "  Continue? [y/N]: "
-                read -r response
+                read -r response || response="n"
                 case "${response:-n}" in [Yy]*) ;; *) fail "Upgrade aborted" ;; esac
             fi
         fi
     elif have docker; then
         detail "Using Docker exec for database backup"
-        if docker compose -f "$INFRA_DIR/compose.yml" --env-file "$ENV_FILE" exec -T postgres pg_dump -U "${POSTGRES_USER:-gamepanel}" "${POSTGRES_DB:-gamepanel}" > "$BACKUP_DIR/database.sql" 2>/dev/null; then
+        if docker compose -f "$INFRA_DIR/compose.yml" --env-file "$ENV_FILE" exec -T postgres pg_dump -U "$pg_user" "$pg_db" > "$BACKUP_DIR/database.sql" 2>/dev/null; then
+            chmod 600 "$BACKUP_DIR/database.sql" 2>/dev/null || true
             info "Database dump saved via Docker"
         else
             warn "Database backup could not be created."
@@ -400,7 +417,9 @@ rollback() {
     fi
 
     detail "Stopping upgraded services..."
-    "${COMPOSE_CMD[@]}" down --remove-orphans --volumes 2>/dev/null || true
+    # Never pass --volumes here: volumes hold postgres/redis data and wiping
+    # them turns a failed upgrade into data loss.
+    "${COMPOSE_CMD[@]}" down --remove-orphans 2>/dev/null || true
 
     detail "Restoring environment backup..."
     if [ -f "$BACKUP_DIR/.env.backup" ]; then

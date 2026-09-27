@@ -32,6 +32,10 @@ func newSQLiteDriver(ctx context.Context, cfg DBConfig) (*sqliteDriver, error) {
 	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
 		return nil, fmt.Errorf("failed to set WAL mode: %w", err)
 	}
+	// Belt and suspenders with the _foreign_keys=on DSN parameter (see
+	// DBConfig.DSN): the PRAGMA covers this handle, the DSN parameter covers
+	// every connection the driver opens afterwards. Foreign keys default to
+	// OFF in SQLite and must be enabled per connection.
 	if _, err := db.ExecContext(ctx, "PRAGMA foreign_keys=ON"); err != nil {
 		return nil, fmt.Errorf("failed to enable foreign keys: %w", err)
 	}

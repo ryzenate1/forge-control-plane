@@ -25,16 +25,17 @@ list_versions() {
   header "Available Backup Snapshots"
   if [ -d "$BACKUP_DIR" ]; then
     local files
-    files=$(find "$BACKUP_DIR" -maxdepth 1 -name 'gamepanel-*.dump' -type f 2>/dev/null | sort -r)
+    files=$(find "$BACKUP_DIR" -maxdepth 1 \( -name 'gamepanel-*.dump' -o -name 'gamepanel-*.dump.gz' \) -type f 2>/dev/null | sort -r)
     if [ -z "$files" ]; then
       warn "No database backups found in $BACKUP_DIR"
     else
       echo "$files" | while read -r f; do
-        local ts
-        ts=$(basename "$f" .dump | sed 's/gamepanel-//')
+        local base ts
+        base=$(basename "$f")
+        ts=$(printf '%s' "$base" | sed -e 's/^gamepanel-//' -e 's/\.dump\(\.gz\)\?$//')
         local size
         size=$(du -h "$f" | cut -f1)
-        echo "  $ts  ($size)"
+        echo "  $ts  ($size)  [$base]"
       done
     fi
   else
@@ -56,6 +57,10 @@ restore_database() {
   if [ ! -f "$backup_file" ]; then
     fail "Backup file not found: $backup_file"
   fi
+  case "$backup_file" in
+    *.dump|*.dump.gz) ;;
+    *) fail "Refusing to restore $backup_file: expected a gamepanel-*.dump or *.dump.gz archive" ;;
+  esac
 
   info "Restoring database from $(basename "$backup_file")..."
 
@@ -65,10 +70,27 @@ restore_database() {
     fail "PostgreSQL container is not running"
   fi
 
-  local db_name="${POSTGRES_DB:-gamepanel}"
-  local db_user="${POSTGRES_USER:-gamepanel}"
+  # Credentials come from infra/.env (never from the shell environment, which
+  # callers rarely export). PGPASSWORD is passed through `docker exec -e` so
+  # it never appears in the container's process list.
+  local env_file="$INFRA_DIR/.env"
+  local db_name db_user db_pass
+  db_name="$(grep '^POSTGRES_DB=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  db_user="$(grep '^POSTGRES_USER=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  db_pass="$(grep '^POSTGRES_PASSWORD=' "$env_file" 2>/dev/null | cut -d= -f2- || true)"
+  db_name="${db_name:-gamepanel}"
+  db_user="${db_user:-gamepanel}"
+  if [ -z "$db_pass" ]; then
+    fail "POSTGRES_PASSWORD not found in $env_file; refusing to restore without credentials"
+  fi
 
-  docker exec -i "$pg_container" pg_restore --clean --if-exists --dbname="postgres://${db_user}@localhost:5432/${db_name}" < "$backup_file" 2>&1 | sed 's/^/  /'
+  # postgres-backup.sh writes custom-format dumps, optionally gzip-compressed
+  # (*.dump.gz). pg_restore cannot read gzip, so decompress on the fly.
+  if [ "${backup_file%.gz}" != "$backup_file" ]; then
+    gzip -dc -- "$backup_file" | docker exec -i -e PGPASSWORD="$db_pass" "$pg_container" pg_restore --clean --if-exists --username="$db_user" --dbname="$db_name" 2>&1 | sed 's/^/  /'
+  else
+    docker exec -i -e PGPASSWORD="$db_pass" "$pg_container" pg_restore --clean --if-exists --username="$db_user" --dbname="$db_name" < "$backup_file" 2>&1 | sed 's/^/  /'
+  fi
   info "Database restore completed"
 }
 
@@ -76,16 +98,24 @@ rollback_images() {
   local target_tag=$1
   header "Rolling Back Docker Images to $target_tag"
 
-  local registry="${IMAGE_REGISTRY:-ghcr.io}"
-  local owner="${IMAGE_OWNER:-${GITHUB_REPOSITORY_OWNER:-gamepanel}}"
-
-  for service in forge-api forge-web beacon; do
-    local full_image="${registry}/${owner}/gamepanel/${service}:${target_tag}"
+  local registry="${IMAGE_REGISTRY:-ghcr.io/gamepanel}"
+  # Compose pins (see infra/compose.yml + gen-env.sh):
+  #   api    -> ghcr.io/gamepanel/forge-api:<tag>
+  #   web    -> ghcr.io/gamepanel/forge-web:<tag>
+  #   daemon -> ghcr.io/gamepanel/beacon:<tag>
+  local image repo
+  for image in "forge-api" "forge-web" "beacon"; do
+    repo="${registry}/${image}"
+    # Allow IMAGE_OWNER override for forks: ghcr.io/<owner>/<image>.
+    if [ -n "${IMAGE_OWNER:-${GITHUB_REPOSITORY_OWNER:-}}" ]; then
+      repo="ghcr.io/${IMAGE_OWNER:-${GITHUB_REPOSITORY_OWNER}}/${image}"
+    fi
+    local full_image="${repo}:${target_tag}"
     info "Pulling $full_image..."
     docker pull "$full_image" 2>&1 | sed 's/^/  /'
-    docker tag "$full_image" "infra-${service}:latest"
   done
   info "Images rolled back to $target_tag"
+  info "Re-run with TAG=$target_tag so compose pins match the pulled images."
 }
 
 verify_health() {

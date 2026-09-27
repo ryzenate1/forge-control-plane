@@ -108,6 +108,31 @@ func (s *Server) handleDockerfileBuild(w http.ResponseWriter, r *http.Request) {
 	dockerfile := req.Dockerfile
 	if dockerfile == "" {
 		dockerfile = filepath.Join(sourceDir, "Dockerfile")
+	} else if !filepath.IsAbs(dockerfile) {
+		dockerfile = filepath.Join(sourceDir, filepath.Clean(dockerfile))
+	}
+	safeDockerfile, safeErr := safePath(dockerfile, sourceDir)
+	if safeErr != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "dockerfile path escapes workspace: " + safeErr.Error()})
+		return
+	}
+	dockerfile = safeDockerfile
+
+	if err := validateBuildArgs(req.BuildArgs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid build arg: " + err.Error()})
+		return
+	}
+	if err := validateBuildArgs(req.SecretArgs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid secret arg: " + err.Error()})
+		return
+	}
+	if err := validateBuildLabels(req.Labels); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid label: " + err.Error()})
+		return
+	}
+	if err := validateImageTags(append(append([]string{}, req.Tags...), imageName)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image tag: " + err.Error()})
+		return
 	}
 
 	args := []string{"buildx", "build", "-f", dockerfile}
@@ -194,6 +219,15 @@ func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
 	imageName := req.ImageName
 	if imageName == "" {
 		imageName = fmt.Sprintf("forge/%s/build-%d", tid, time.Now().UnixNano())
+	}
+
+	if err := validateImageTags(append(append([]string{}, req.Tags...), imageName)); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid image tag: " + err.Error()})
+		return
+	}
+	if err := validateBuildArgs(req.BuildArgs); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid build arg: " + err.Error()})
+		return
 	}
 
 	args := []string{"nixpacks", "build", sourceDir, "--name", imageName}
@@ -421,6 +455,51 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID str
 	}()
 
 	return job
+}
+
+// validateBuildArgs rejects build/secret args that are not KEY=VALUE with a
+// safe name, or that smuggle newlines, null bytes, or shell metacharacters
+// into the docker CLI argv.
+func validateBuildArgs(args []string) error {
+	for _, arg := range args {
+		name, value, ok := strings.Cut(arg, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("entry %q must be KEY=VALUE", arg)
+		}
+		if strings.ContainsAny(arg, "\x00\r\n") {
+			return fmt.Errorf("entry %q contains disallowed characters", name)
+		}
+		for _, r := range name {
+			if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' && r != '.' && r != '-' {
+				return fmt.Errorf("invalid build arg name %q", name)
+			}
+		}
+		if strings.HasPrefix(strings.TrimSpace(value), "-") && strings.TrimSpace(value) != "" {
+			// Values that look like flags are passed as a single --build-arg
+			// token (never split), so this is defense-in-depth, not the
+			// primary barrier; still reject the ambiguous case.
+			return fmt.Errorf("build arg %q value must not look like a flag", name)
+		}
+	}
+	return nil
+}
+
+func validateBuildLabels(labels []string) error { return validateBuildArgs(labels) }
+
+// validateImageTags rejects image references that could escape the intended
+// repository (path traversal, absolute paths, shell metacharacters, or
+// whitespace). Tags are passed as single -t tokens, never through a shell.
+func validateImageTags(tags []string) error {
+	for _, tag := range tags {
+		value := strings.TrimSpace(tag)
+		if value == "" {
+			return fmt.Errorf("image tag must not be empty")
+		}
+		if len(value) > 256 || strings.ContainsAny(value, "\x00\r\n \t;|&$`'\"*?~#(){}[]!\\") || strings.Contains(value, "..") {
+			return fmt.Errorf("invalid image tag %q", tag)
+		}
+	}
+	return nil
 }
 
 func buildEnvironment(home string) []string {

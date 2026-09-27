@@ -65,43 +65,118 @@ export interface ApiClientConfig {
   useCookies?: boolean;
   /** Per-request timeout in milliseconds (default: 30000). */
   timeoutMs?: number;
+  /**
+   * Called once per 401 response (session expired / not authenticated).
+   * Mirrors the web client's `forge:session-expired` signal
+   * (`notifySessionExpired` in `forge/web/lib/api/http.ts`): the SDK has no
+   * router, so the host app supplies the redirect/clearing behaviour here.
+   */
+  onUnauthorized?: (err: ApiError) => void;
+  /**
+   * Default idempotency key for mutations. When set, every
+   * POST/PUT/PATCH/DELETE automatically carries an `Idempotency-Key` header
+   * unless the individual call supplies one. Mutations are never retried by
+   * default (see retry policy on `request`); an idempotency key is what makes
+   * an explicit retry safe.
+   */
+  idempotencyKey?: string;
 }
 
-/** Error thrown for non-2xx API responses. */
+/**
+ * Error thrown for non-2xx API responses.
+ *
+ * Shape mirrors the web client's `ApiError` (`forge/web/lib/api/http.ts`):
+ * `message` is human-readable, `status` is the HTTP status (0 when no
+ * response was received), `statusText` the reason phrase, `data` the parsed
+ * body, and `details` the structured validation errors of a 422 response
+ * (`{ errors }`, `{ details }` or `{ fields }` in the body, when present).
+ *
+ * Constructor order differs from the web client on purpose: the SDK keeps
+ * `(status, statusText, data, details)` for backward compatibility, while the
+ * web client uses `(message, status, details)`. Both derive `message` from the
+ * body (`message`/`error` keys, else raw text, else status line) and both
+ * extract `details` with the same `{ details }` → `{ errors }` → `{ fields }`
+ * precedence — see `ApiError.buildMessage` / `extractDetails` here and
+ * `getErrorMessage` / `readErrorDetails` in the web client.
+ */
 export class ApiError extends Error {
+  /** Structured validation errors from a 422 response body, when present. */
+  public details?: unknown;
+
   constructor(
     /** HTTP status code of the response (0 when no response was received). */
     public status: number,
     /** HTTP status text of the response. */
     public statusText: string,
     /** Parsed response body (JSON object, or raw text when the body was not JSON). */
-    public data?: unknown
+    public data?: unknown,
+    details?: unknown,
   ) {
-    super(`API Error ${status}: ${statusText}`);
+    super(ApiError.buildMessage(status, statusText, data));
     this.name = 'ApiError';
+    this.details = details ?? ApiError.extractDetails(data);
+  }
+
+  private static buildMessage(status: number, statusText: string, data: unknown): string {
+    if (data !== null && typeof data === 'object') {
+      const body = data as Record<string, unknown>;
+      const msg = body['message'] ?? body['error'];
+      if (typeof msg === 'string' && msg.length > 0) return msg;
+    }
+    if (typeof data === 'string' && data.length > 0) return data.slice(0, 300);
+    return `API Error ${status}: ${statusText}`;
+  }
+
+  /** Pull structured 422 validation details out of a parsed error body. */
+  private static extractDetails(data: unknown): unknown {
+    if (data !== null && typeof data === 'object') {
+      const body = data as Record<string, unknown>;
+      if (body['details'] !== undefined) return body['details'];
+      if (body['errors'] !== undefined) return body['errors'];
+      if (body['fields'] !== undefined) return body['fields'];
+    }
+    return undefined;
   }
 }
 
-/** Body accepted by `POST /setup` (initial panel setup). Only `email` and `password` are required. */
-export type SetupRequest = {
-  email: string;
-  password: string;
-  name?: string;
-  orgName?: string;
-  nodeName?: string;
-  nodeFqdn?: string;
-  smtpHost?: string;
-  smtpPort?: string;
-  smtpUser?: string;
-  smtpPass?: string;
-  smtpFrom?: string;
-  smtpEncryption?: string;
-  backupDriver?: string;
-  s3Bucket?: string;
-  s3Region?: string;
-  s3Endpoint?: string;
-  domainName?: string;
-};
+/** Type guard for `ApiError` (same contract as the web client's `isApiError`). */
+export function isApiError(err: unknown): err is ApiError {
+  return err instanceof ApiError || (err instanceof Error && err.name === 'ApiError');
+}
+
+/**
+ * Unwrap a list payload that may be a bare array or a `{ data: T[] }`
+ * envelope. List endpoints historically returned both shapes, so every SDK
+ * list accessor normalises through this helper instead of assuming one.
+ *
+ * Naming note: the web client (`forge/web/lib/api/http.ts`) spells this
+ * `unwrapList`, with `unwrapData` reserved for single-object `{ data: T }`
+ * envelopes. The SDK keeps `unwrapData` as a deprecated alias for backward
+ * compatibility — new code should call `unwrapList`.
+ */
+export function unwrapList<T>(value: T[] | { data?: T[] } | undefined | null): T[] {
+  if (Array.isArray(value)) return value;
+  return value?.data ?? [];
+}
+
+/** @deprecated Use `unwrapList` instead (matches the web client's naming). */
+export function unwrapData<T>(value: T[] | { data?: T[] } | undefined | null): T[] {
+  return unwrapList(value);
+}
+
+/**
+ * Unwrap a single-object payload that may be `{ data: T }` or a bare `T`.
+ * Same semantics as the web client's `unwrapData` (`forge/web/lib/api/http.ts`).
+ */
+export function unwrapSingleData<T>(value: { data: T } | T | undefined | null): T | undefined {
+  if (value !== null && typeof value === 'object' && 'data' in (value as Record<string, unknown>)) {
+    return (value as { data: T }).data;
+  }
+  return (value ?? undefined) as T | undefined;
+}
+
+/** Body accepted by `POST /setup` (initial panel setup). Alias of `ApiSetupRequest` from `@forge/shared-types` (only `email` and `password` are required). */
+export type SetupRequest = import('@forge/shared-types').ApiSetupRequest;
 
 /** Response of `POST /setup`. */
 export type SetupResponse = {
@@ -145,16 +220,8 @@ export type CreateNodeResult = {
   meta: { resource?: string };
 };
 
-/** Paginated response of `GET /servers/:id/backups`. */
-export type BackupListResponse = {
-  data: ApiBackup[];
-  pagination: {
-    page: number;
-    per_page: number;
-    total: number;
-    total_pages: number;
-  };
-};
+/** Paginated response of `GET /servers/:id/backups`. Canonical alias of `PaginatedResponse<ApiBackup>`. */
+export type BackupListResponse = PaginatedResponse<ApiBackup>;
 
 /** Generic `{ "ok": true }` body returned by several DELETE endpoints. */
 export type OkResponse = {
@@ -414,6 +481,8 @@ export class ForgeApiClient {
   private defaultHeaders: Record<string, string>;
   private useCookies: boolean;
   private timeoutMs: number;
+  private onUnauthorized?: (err: ApiError) => void;
+  private idempotencyKey?: string;
 
   constructor(config: ApiClientConfig) {
     this.baseUrl = normalizeBaseUrl(config.baseUrl);
@@ -423,6 +492,13 @@ export class ForgeApiClient {
     this.defaultHeaders = normalizeHeaders(config.headers);
     this.useCookies = config.useCookies ?? false;
     this.timeoutMs = config.timeoutMs ?? 30000;
+    this.onUnauthorized = config.onUnauthorized;
+    this.idempotencyKey = config.idempotencyKey;
+  }
+
+  /** Set (or clear, with `undefined`) the 401 hook. See `ApiClientConfig.onUnauthorized`. */
+  public setOnUnauthorized(handler: ((err: ApiError) => void) | undefined) {
+    this.onUnauthorized = handler;
   }
 
   /** Set (or clear, with `undefined`) the bearer token used for requests. */
@@ -435,10 +511,12 @@ export class ForgeApiClient {
     this.apiKey = apiKey;
   }
 
-  /** Read the CSRF token from the `__Host-forge_csrf` (or dev-mode `forge_csrf`) cookie. */
+  /** Read the CSRF token from the `__Host-forge_csrf` (or dev-mode `forge_csrf`) cookie. Same contract as `getCSRFToken` in `forge/web/lib/api/http.ts`: both names are anchored to a cookie boundary so `evil__Host-forge_csrf` can never match. */
   private getCSRFToken(): string | null {
     if (typeof document === 'undefined') return null;
-    const match = document.cookie.match(/(?:^|;\s*)(?:__Host-)?forge_csrf=([^;]+)/);
+    const match =
+      document.cookie.match(/(?:^|;\s*)__Host-forge_csrf=([^;]+)/) ??
+      document.cookie.match(/(?:^|;\s*)forge_csrf=([^;]+)/);
     return match ? decodeURIComponent(match[1]) : null;
   }
 
@@ -456,13 +534,29 @@ export class ForgeApiClient {
     }
   }
 
+  /**
+   * Core request pipeline.
+   *
+   * Retry policy: only idempotent `GET` requests are retried (up to 3 attempts
+   * on 429/502/503/504 with `Retry-After` support, plus transient transport
+   * failures). This is the same transient set the web client retries when
+   * called with `{ retry: true }` (`forge/web/lib/api/http.ts`), except the
+   * SDK retries GETs by default while the web client is opt-in per call.
+   * Mutations (`POST`/`PUT`/`PATCH`/`DELETE`) are executed exactly
+   * once: automatically retrying a non-idempotent write can double-apply it
+   * (duplicate server, double charge). To make a mutation safely retryable,
+   * pass an idempotency key — via `opts.idempotencyKey` or the client-level
+   * `ApiClientConfig.idempotencyKey` — which is sent as the `Idempotency-Key`
+   * header so the server can de-duplicate repeated submissions.
+   */
   private async request<T>(
     endpoint: string,
     options: RequestInit = {},
-    opts: { raw?: boolean } = {}
+    opts: { raw?: boolean; idempotencyKey?: string } = {},
   ): Promise<T> {
     const url = `${this.baseUrl}${endpoint.startsWith('/') ? endpoint : `/${endpoint}`}`;
     const method = (options.method ?? 'GET').toUpperCase();
+    const isMutation = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method);
 
     const headers: Record<string, string> = {
       Accept: 'application/json',
@@ -474,13 +568,22 @@ export class ForgeApiClient {
       headers['Content-Type'] = 'application/json';
     }
 
+    const idempotencyKey = opts.idempotencyKey ?? this.idempotencyKey;
+    if (
+      isMutation &&
+      idempotencyKey &&
+      !Object.keys(headers).some((k) => k.toLowerCase() === 'idempotency-key')
+    ) {
+      headers['Idempotency-Key'] = idempotencyKey;
+    }
+
     if (this.token) {
       headers['Authorization'] = `Bearer ${this.token}`;
     } else if (this.apiKey) {
       headers['X-API-Key'] = this.apiKey;
     }
 
-    if (this.useCookies && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    if (this.useCookies && isMutation) {
       const csrfToken = this.getCSRFToken();
       if (csrfToken) {
         headers['X-CSRF-Token'] = csrfToken;
@@ -517,12 +620,16 @@ export class ForgeApiClient {
         if (!response.ok) {
           if (isRetryable && RETRYABLE_STATUSES.includes(response.status)) {
             if (attempt < maxAttempts - 1) {
-              await new Promise((resolve) => setTimeout(resolve, retryDelayMs(response.headers.get('retry-after'), attempt)));
+              await new Promise((resolve) =>
+                setTimeout(resolve, retryDelayMs(response.headers.get('retry-after'), attempt)),
+              );
               continue;
             }
           }
           const data = await this.readErrorBody(response);
-          throw new ApiError(response.status, response.statusText, data);
+          const apiError = new ApiError(response.status, response.statusText, data);
+          if (response.status === 401) this.onUnauthorized?.(apiError);
+          throw apiError;
         }
 
         if (response.status === 204) {
@@ -562,9 +669,7 @@ export class ForgeApiClient {
       }
     }
 
-    throw lastError instanceof Error
-      ? lastError
-      : new ApiError(0, 'Unknown error');
+    throw lastError instanceof Error ? lastError : new ApiError(0, 'Unknown error');
   }
 
   // -------------------------------------------------------------------------
@@ -685,8 +790,8 @@ export class ForgeApiClient {
 
   /** List servers (paginated; unwraps the `data` array). `GET /servers`. */
   public async listServers(): Promise<ApiServer[]> {
-    const envelope = await this.request<PaginatedEnvelope<ApiServer>>('/servers');
-    return envelope.data ?? [];
+    const body = await this.request<PaginatedEnvelope<ApiServer> | ApiServer[]>('/servers');
+    return unwrapList(body);
   }
 
   /** Get a single server. `GET /servers/:id`. */
@@ -718,7 +823,10 @@ export class ForgeApiClient {
   }
 
   /** Send a power action (start/stop/restart/kill). `POST /servers/:id/power`. */
-  public async sendPowerAction(serverId: string, signal: 'start' | 'stop' | 'restart' | 'kill'): Promise<void> {
+  public async sendPowerAction(
+    serverId: string,
+    signal: 'start' | 'stop' | 'restart' | 'kill',
+  ): Promise<void> {
     return this.request<void>(`/servers/${serverId}/power`, {
       method: 'POST',
       body: JSON.stringify({ signal }),
@@ -744,21 +852,30 @@ export class ForgeApiClient {
 
   /** List files in a directory. `GET /servers/:id/files?path=`. */
   public async listFiles(serverId: string, path = '/'): Promise<ApiFileEntry[]> {
-    return this.request<ApiFileEntry[]>(`/servers/${serverId}/files?path=${encodeURIComponent(path)}`);
+    return this.request<ApiFileEntry[]>(
+      `/servers/${serverId}/files?path=${encodeURIComponent(path)}`,
+    );
   }
 
   /** Read a file's raw text content. `GET /servers/:id/files/content?path=`. */
   public async readFile(serverId: string, file: string): Promise<string> {
-    return this.request<string>(`/servers/${serverId}/files/content?path=${encodeURIComponent(file)}`, {}, { raw: true });
+    return this.request<string>(
+      `/servers/${serverId}/files/content?path=${encodeURIComponent(file)}`,
+      {},
+      { raw: true },
+    );
   }
 
   /** Write raw string content to a file. `PUT /servers/:id/files/content?path=`. */
   public async writeFile(serverId: string, file: string, content: string): Promise<void> {
-    return this.request<void>(`/servers/${serverId}/files/content?path=${encodeURIComponent(file)}`, {
-      method: 'PUT',
-      headers: { 'Content-Type': 'text/plain; charset=utf-8' },
-      body: content,
-    });
+    return this.request<void>(
+      `/servers/${serverId}/files/content?path=${encodeURIComponent(file)}`,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain; charset=utf-8' },
+        body: content,
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -767,8 +884,8 @@ export class ForgeApiClient {
 
   /** List nodes (paginated; unwraps the `data` array). `GET /nodes`. */
   public async listNodes(): Promise<ApiNode[]> {
-    const envelope = await this.request<PaginatedEnvelope<ApiNode>>('/nodes');
-    return envelope.data ?? [];
+    const body = await this.request<PaginatedEnvelope<ApiNode> | ApiNode[]>('/nodes');
+    return unwrapList(body);
   }
 
   /** Get a single node. `GET /nodes/:id`. */
@@ -870,7 +987,10 @@ export class ForgeApiClient {
   }
 
   /** Create a schedule on a server. `POST /servers/:id/schedules`. */
-  public async createSchedule(serverId: string, schedule: ScheduleCreateInput): Promise<ApiSchedule> {
+  public async createSchedule(
+    serverId: string,
+    schedule: ScheduleCreateInput,
+  ): Promise<ApiSchedule> {
     return this.request<ApiSchedule>(`/servers/${serverId}/schedules`, {
       method: 'POST',
       body: JSON.stringify(schedule),
@@ -878,7 +998,11 @@ export class ForgeApiClient {
   }
 
   /** Update a schedule. `PATCH /servers/:id/schedules/:scheduleId`. */
-  public async updateSchedule(serverId: string, scheduleId: string, schedule: ScheduleUpdateInput): Promise<ApiSchedule> {
+  public async updateSchedule(
+    serverId: string,
+    scheduleId: string,
+    schedule: ScheduleUpdateInput,
+  ): Promise<ApiSchedule> {
     return this.request<ApiSchedule>(`/servers/${serverId}/schedules/${scheduleId}`, {
       method: 'PATCH',
       body: JSON.stringify(schedule),
@@ -893,7 +1017,11 @@ export class ForgeApiClient {
   }
 
   /** Create a task on a schedule; the API only accepts `timeOffsetSeconds`. `POST /servers/:id/schedules/:scheduleId/tasks`. */
-  public async createScheduleTask(serverId: string, scheduleId: string, timeOffsetSeconds: number): Promise<ApiScheduleTask> {
+  public async createScheduleTask(
+    serverId: string,
+    scheduleId: string,
+    timeOffsetSeconds: number,
+  ): Promise<ApiScheduleTask> {
     return this.request<ApiScheduleTask>(`/servers/${serverId}/schedules/${scheduleId}/tasks`, {
       method: 'POST',
       body: JSON.stringify({ timeOffsetSeconds }),
@@ -910,7 +1038,10 @@ export class ForgeApiClient {
   }
 
   /** Create a backup; the API only accepts an optional `ignored` file list. `POST /servers/:id/backups`. */
-  public async createBackup(serverId: string, input?: Pick<BackupCreateInput, 'ignored'>): Promise<ApiBackup> {
+  public async createBackup(
+    serverId: string,
+    input?: Pick<BackupCreateInput, 'ignored'>,
+  ): Promise<ApiBackup> {
     return this.request<ApiBackup>(`/servers/${serverId}/backups`, {
       method: 'POST',
       body: JSON.stringify({ ignored: input?.ignored ?? [] }),
@@ -919,9 +1050,12 @@ export class ForgeApiClient {
 
   /** Delete a backup by its NAME (not uuid). `DELETE /servers/:id/backups/:backupName`. */
   public async deleteBackup(serverId: string, backupName: string): Promise<OkResponse> {
-    return this.request<OkResponse>(`/servers/${serverId}/backups/${encodeURIComponent(backupName)}`, {
-      method: 'DELETE',
-    });
+    return this.request<OkResponse>(
+      `/servers/${serverId}/backups/${encodeURIComponent(backupName)}`,
+      {
+        method: 'DELETE',
+      },
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -974,8 +1108,10 @@ export class ForgeApiClient {
 
   /** List pipeline definitions (admin). `GET /pipelines`. */
   public async listPipelines(): Promise<PipelineDefinition[]> {
-    const envelope = await this.request<PaginatedEnvelope<PipelineDefinition>>('/pipelines');
-    return envelope.data ?? [];
+    const body = await this.request<PaginatedEnvelope<PipelineDefinition> | PipelineDefinition[]>(
+      '/pipelines',
+    );
+    return unwrapList(body);
   }
 
   /** Get a single pipeline definition (admin). `GET /pipelines/:id`. */
@@ -1008,20 +1144,27 @@ export class ForgeApiClient {
   }
 
   /** List pipeline runs, optionally filtered (admin). `GET /pipeline-runs`. */
-  public async listPipelineRuns(opts?: { pipelineId?: string; status?: string }): Promise<PipelineRun[]> {
+  public async listPipelineRuns(opts?: {
+    pipelineId?: string;
+    status?: string;
+  }): Promise<PipelineRun[]> {
     const q = new URLSearchParams();
     if (opts?.pipelineId) q.set('pipelineId', opts.pipelineId);
     if (opts?.status) q.set('status', opts.status);
     const suffix = q.toString() ? `?${q.toString()}` : '';
-    const envelope = await this.request<PaginatedEnvelope<PipelineRun>>(`/pipeline-runs${suffix}`);
-    return envelope.data ?? [];
+    const body = await this.request<PaginatedEnvelope<PipelineRun> | PipelineRun[]>(
+      `/pipeline-runs${suffix}`,
+    );
+    return unwrapList(body);
   }
 
   /** Stream logs for a run after a cursor (admin). `GET /pipeline-runs/:id/logs`. */
   public async listPipelineRunLogs(runId: string, after = 0): Promise<PipelineLogEntry[]> {
     const suffix = after > 0 ? `?after=${after}` : '';
-    const envelope = await this.request<{ data: PipelineLogEntry[] }>(`/pipeline-runs/${runId}/logs${suffix}`);
-    return envelope.data ?? [];
+    const body = await this.request<{ data: PipelineLogEntry[] } | PipelineLogEntry[]>(
+      `/pipeline-runs/${runId}/logs${suffix}`,
+    );
+    return unwrapList(body);
   }
 
   /** Cancel a running pipeline (admin). `POST /pipeline-runs/:id/cancel`. */
@@ -1031,7 +1174,9 @@ export class ForgeApiClient {
 
   /** Retry a failed/cancelled run (admin). `POST /pipeline-runs/:id/retry`. */
   public async retryPipelineRun(runId: string): Promise<PipelineRun> {
-    const envelope = await this.request<{ data: PipelineRun }>(`/pipeline-runs/${runId}/retry`, { method: 'POST' });
+    const envelope = await this.request<{ data: PipelineRun }>(`/pipeline-runs/${runId}/retry`, {
+      method: 'POST',
+    });
     return envelope.data;
   }
 
@@ -1041,12 +1186,16 @@ export class ForgeApiClient {
 
   /** List billing plans (admin). `GET /billing/plans`. */
   public async listBillingPlans(): Promise<BillingPlan[]> {
-    const envelope = await this.request<{ data: BillingPlan[] }>('/billing/plans');
-    return envelope.data ?? [];
+    const body = await this.request<{ data: BillingPlan[] } | BillingPlan[]>('/billing/plans');
+    return unwrapList(body);
   }
 
   /** Assign an org to a billing plan (admin). `POST /billing/org/:orgId/plan`. */
-  public async setOrgBillingPlan(orgId: string, planCode: string, trial = false): Promise<OrgQuota> {
+  public async setOrgBillingPlan(
+    orgId: string,
+    planCode: string,
+    trial = false,
+  ): Promise<OrgQuota> {
     const envelope = await this.request<{ data: OrgQuota }>(`/billing/org/${orgId}/plan`, {
       method: 'POST',
       body: JSON.stringify({ planCode, trial }),
@@ -1056,7 +1205,9 @@ export class ForgeApiClient {
 
   /** Get an org's usage summary (admin). `GET /billing/org/:orgId/usage`. */
   public async getOrgUsage(orgId: string): Promise<BillingUsageSummary> {
-    const envelope = await this.request<{ data: BillingUsageSummary }>(`/billing/org/${orgId}/usage`);
+    const envelope = await this.request<{ data: BillingUsageSummary }>(
+      `/billing/org/${orgId}/usage`,
+    );
     return envelope.data;
   }
 
@@ -1065,7 +1216,10 @@ export class ForgeApiClient {
   // -------------------------------------------------------------------------
 
   /** Explain why a node would or would not host a workload. `POST /placement/explain`. */
-  public async explainPlacement(nodeId: string, place: PlacementRequest): Promise<PlacementExplainResult> {
+  public async explainPlacement(
+    nodeId: string,
+    place: PlacementRequest,
+  ): Promise<PlacementExplainResult> {
     const envelope = await this.request<{ data: PlacementExplainResult }>('/placement/explain', {
       method: 'POST',
       body: JSON.stringify({ nodeId, place }),
@@ -1079,13 +1233,17 @@ export class ForgeApiClient {
 
   /** Preview which servers would be fenced on a node. `GET /fencing/nodes/:id/preview`. */
   public async previewFence(nodeId: string): Promise<FencePreviewRow[]> {
-    const envelope = await this.request<{ data: FencePreviewRow[] }>(`/fencing/nodes/${nodeId}/preview`);
-    return envelope.data ?? [];
+    const body = await this.request<{ data: FencePreviewRow[] } | FencePreviewRow[]>(
+      `/fencing/nodes/${nodeId}/preview`,
+    );
+    return unwrapList(body);
   }
 
   /** Manually fence a node — bumps workload generations for all its servers. `POST /fencing/nodes/:id`. */
   public async fenceNode(nodeId: string): Promise<FenceResult> {
-    const envelope = await this.request<{ data: FenceResult }>(`/fencing/nodes/${nodeId}`, { method: 'POST' });
+    const envelope = await this.request<{ data: FenceResult }>(`/fencing/nodes/${nodeId}`, {
+      method: 'POST',
+    });
     return envelope.data;
   }
 
@@ -1095,14 +1253,18 @@ export class ForgeApiClient {
 
   /** Check component versions and upgradability. `GET /upgrade/versions`. */
   public async checkForUpgrades(): Promise<UpgradeVersionInfo[]> {
-    const envelope = await this.request<{ data: UpgradeVersionInfo[] }>('/upgrade/versions');
-    return envelope.data ?? [];
+    const body = await this.request<{ data: UpgradeVersionInfo[] } | UpgradeVersionInfo[]>(
+      '/upgrade/versions',
+    );
+    return unwrapList(body);
   }
 
   /** List upgrade plans (history). `GET /upgrade/plans`. */
   public async listUpgradePlans(limit = 50): Promise<UpgradePlan[]> {
-    const envelope = await this.request<{ data: UpgradePlan[] }>(`/upgrade/plans?limit=${limit}`);
-    return envelope.data ?? [];
+    const body = await this.request<{ data: UpgradePlan[] } | UpgradePlan[]>(
+      `/upgrade/plans?limit=${limit}`,
+    );
+    return unwrapList(body);
   }
 
   /** Create an upgrade plan. `POST /upgrade/plans`. */
@@ -1116,7 +1278,9 @@ export class ForgeApiClient {
 
   /** Execute an upgrade plan (backup → upgrade → verify → rollback-on-fail). `POST /upgrade/plans/:id/execute`. */
   public async executeUpgradePlan(id: string): Promise<UpgradeResult> {
-    const envelope = await this.request<{ data: UpgradeResult }>(`/upgrade/plans/${id}/execute`, { method: 'POST' });
+    const envelope = await this.request<{ data: UpgradeResult }>(`/upgrade/plans/${id}/execute`, {
+      method: 'POST',
+    });
     return envelope.data;
   }
 

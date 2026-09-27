@@ -5,6 +5,8 @@ import { Component, type ErrorInfo, type ReactNode } from "react";
 interface ErrorBoundaryProps {
   children: ReactNode;
   fallback?: ReactNode;
+  /** Remount the subtree when this changes — resets error state. */
+  resetKey?: string | number;
 }
 
 interface ErrorBoundaryState {
@@ -26,16 +28,28 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     console.error("[ErrorBoundary]", error, errorInfo);
   }
 
+  componentDidUpdate(prevProps: ErrorBoundaryProps) {
+    if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
+      this.setState({ hasError: false, error: null });
+    }
+    if (prevProps.children !== this.props.children && this.state.hasError) {
+      // A new subtree is not the same failure — allow a retry via remount.
+      this.setState({ hasError: false, error: null });
+    }
+  }
+
+  private retry = () => this.setState({ hasError: false, error: null });
+
   render() {
     if (this.state.hasError) {
       if (this.props.fallback) return this.props.fallback;
       return (
-        <div className="rounded-xl border border-red-500/20 bg-red-950/30 p-6 text-center" role="alert">
-          <h3 className="text-lg font-semibold text-red-200">Something went wrong</h3>
-          <p className="mt-2 text-sm text-red-300/70">{this.state.error?.message ?? "An unexpected error occurred."}</p>
+        <div className="rounded-xl border border-danger-line bg-danger-subtle p-6 text-center" role="alert">
+          <h3 className="text-lg font-semibold text-danger">Something went wrong</h3>
+          <p className="mt-2 text-sm text-text-subtle">{this.state.error?.message ?? "An unexpected error occurred."}</p>
           <button
-            className="mt-4 rounded-lg bg-red-600 px-4 py-2 text-sm font-semibold text-white hover:bg-red-500"
-            onClick={() => this.setState({ hasError: false, error: null })}
+            className="ui-button ui-button-danger mt-4"
+            onClick={this.retry}
             type="button"
           >
             Try Again

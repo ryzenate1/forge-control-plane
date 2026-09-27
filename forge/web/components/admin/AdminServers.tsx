@@ -1,4 +1,6 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,7 +13,7 @@ import {
 import {
   type ApiServer, type ApiNode, type ApiAllocation, type ApiEgg,
   type ApiUser, type ApiMount, type ApiRegion,
-  fetchServer, fetchServers, fetchNodes, fetchEggs, fetchAllocations, fetchUsers,
+  fetchServer, fetchServers, fetchEggs, fetchAllocations, fetchUsers,
   fetchTemplates, fetchRegions, fetchMounts, fetchServerMounts, fetchServerDatabases, fetchServerStartup,
   assignServerAllocation, assignServerMount, fetchServerActivity, fetchServerAllocations, fetchServerStats, removeServerMount, searchUsers, createServer, createServerDatabase,
   rotateServerDatabasePasswordByBody, deleteServerDatabaseWithSuffix, setPrimaryServerAllocation, unassignServerAllocation, updateServerStartupVariable,
@@ -46,7 +48,7 @@ export function AdminServers() {
   const refetch = serversQuery.refetch;
   const usersQuery = useQuery({ queryKey: ["users"], queryFn: fetchUsers });
   const users = useMemo(() => Array.isArray(usersQuery.data) ? usersQuery.data : [], [usersQuery.data]);
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => Array.isArray(nodesQuery.data) ? nodesQuery.data : [], [nodesQuery.data]);
   const allocsQuery = useQuery({ queryKey: ["allocations"], queryFn: fetchAllocations });
   const allocations = useMemo(() => Array.isArray(allocsQuery.data) ? allocsQuery.data : [], [allocsQuery.data]);
@@ -871,16 +873,16 @@ function ServerDetailContent({ serverId, tab, setTab, users, nodes, allocations,
 }) {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data: server, isLoading } = useQuery({ queryKey: ["server", serverId], queryFn: () => fetchServer(serverId) });
+  const { data: server, isLoading } = useQuery({ queryKey: queryKeys.servers.detail(serverId), queryFn: () => fetchServer(serverId) });
   const deleteMut = useMutation({ mutationFn: () => deleteServer(serverId, false), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete server" }) });
   const forceDeleteMut = useMutation({ mutationFn: () => deleteServer(serverId, true), onSuccess: () => { qc.invalidateQueries({ queryKey: ["servers"] }); onClose(); }, onError: (error) => toast({ tone: "error", title: "Force delete failed", message: error instanceof Error ? error.message : "Could not force delete server" }) });
-  const suspendMut = useMutation({ mutationFn: async () => { const result = await suspendServer(serverId); if (!result.ok) throw new Error("The server reported the suspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
-  const unsuspendMut = useMutation({ mutationFn: async () => { const result = await unsuspendServer(serverId); if (!result.ok) throw new Error("The server reported the unsuspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
-  const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: ["server", serverId] }), onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
+  const suspendMut = useMutation({ mutationFn: async () => { const result = await suspendServer(serverId); if (!result.ok) throw new Error("The server reported the suspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.servers.detail(serverId) }), onError: (error) => toast({ tone: "error", title: "Suspend failed", message: error instanceof Error ? error.message : "Could not suspend server" }) });
+  const unsuspendMut = useMutation({ mutationFn: async () => { const result = await unsuspendServer(serverId); if (!result.ok) throw new Error("The server reported the unsuspend action did not complete."); return result; }, onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.servers.detail(serverId) }), onError: (error) => toast({ tone: "error", title: "Unsuspend failed", message: error instanceof Error ? error.message : "Could not unsuspend server" }) });
+  const reinstallMut = useMutation({ mutationFn: () => reinstallServer(serverId), onSuccess: () => qc.invalidateQueries({ queryKey: queryKeys.servers.detail(serverId) }), onError: (error) => toast({ tone: "error", title: "Reinstall failed", message: error instanceof Error ? error.message : "Could not reinstall server" }) });
   const powerMut = useMutation({
     mutationFn: (signal: "start" | "stop" | "restart") => sendPowerSignal(serverId, signal),
     onSuccess: () => {
-      void qc.invalidateQueries({ queryKey: ["server", serverId] });
+      void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(serverId) });
       void qc.invalidateQueries({ queryKey: ["servers"] });
     },
     onError: (error) => toast({ tone: "error", title: "Power action failed", message: error instanceof Error ? error.message : "Could not change power state" }),
@@ -1208,7 +1210,7 @@ function ServerDetailsTab({ server, users }: { server: ApiServer; users: ApiUser
         diskMb: server.diskMb!,
       });
     },
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["server", server.id] }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
     onError: (error) => toast({ tone: "error", title: "Update failed", message: error instanceof Error ? error.message : "Could not update server details" }),
   });
   return (
@@ -1225,7 +1227,7 @@ function ServerDetailsTab({ server, users }: { server: ApiServer; users: ApiUser
                 <li key={u.id}>
                   <button
                     type="button"
-                    className={cn("w-full rounded px-2 py-1 text-left hover:bg-white/5", ownerId === u.id && "bg-[var(--brand)]/20")}
+                    className={cn("w-full rounded px-2 py-1 text-left hover:bg-white/5", ownerId === u.id && "bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]")}
                     onClick={() => { setOwnerId(u.id); setUserSearch(""); }}
                   >
                     {u.email} <span className="text-xs text-slate-400">({u.username})</span>
@@ -1273,7 +1275,7 @@ function ServerBuildTab({ server, users, allocations }: { server: ApiServer; use
         primaryAllocationId: allocationId || undefined,
       });
     },
-    onSuccess: () => { void qc.invalidateQueries({ queryKey: ["server", server.id] }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
+    onSuccess: () => { void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) }); void qc.invalidateQueries({ queryKey: ["servers"] }); },
     onError: (error) => toast({ tone: "error", title: "Build update failed", message: error instanceof Error ? error.message : "Could not update build configuration" }),
   });
   return (
@@ -1403,7 +1405,7 @@ function ServerAllocationsTab({ server, allocations }: { server: ApiServer; allo
   const assignedIds = new Set(assigned.map((allocation) => allocation.id));
   const available = allocations.filter((allocation) => !allocation.server && !assignedIds.has(allocation.id) && allocation.node === server.node);
   const [allocationId, setAllocationId] = useState("");
-  const refresh = () => { void qc.invalidateQueries({ queryKey: ["server-allocations", server.id] }); void qc.invalidateQueries({ queryKey: ["allocations"] }); void qc.invalidateQueries({ queryKey: ["server", server.id] }); };
+  const refresh = () => { void qc.invalidateQueries({ queryKey: ["server-allocations", server.id] }); void qc.invalidateQueries({ queryKey: ["allocations"] }); void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) }); };
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const assignMut = useMutation({ mutationFn: () => assignServerAllocation(server.id, allocationId), onSuccess: () => { setAllocationId(""); refresh(); }, onError: (error) => toast({ tone: "error", title: "Assign failed", message: error instanceof Error ? error.message : "Could not assign allocation" }) });
@@ -1503,7 +1505,7 @@ function ServerMountsTab({ server, mounts }: { server: ApiServer; mounts: ApiMou
   const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const refreshMountState = () => {
     void qc.invalidateQueries({ queryKey: ["server-mounts", serverId] });
-    void qc.invalidateQueries({ queryKey: ["server", serverId] });
+    void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(serverId) });
   };
   const attachMut = useMutation({
     mutationFn: (mountId: string) => assignServerMount(serverId, mountId),
@@ -1585,8 +1587,8 @@ function ServerManageTab({ server, reinstallMut, suspendMut, unsuspendMut, nodes
   const [targetNodeId, setTargetNodeId] = useState(server.transferTargetNodeId ?? "");
   const [primaryAllocationId, setPrimaryAllocationId] = useState("");
   const targetAllocations = allocations.filter((allocation) => allocation.node === targetNodeId && !allocation.server);
-  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId, primaryAllocationId || undefined), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Transfer failed", message: error instanceof Error ? error.message : "Could not transfer server" }) });
-  const cancelMut = useMutation({ mutationFn: async () => { const result = await cancelServerTransfer(server.id); if (!result.ok) throw new Error("The server reported the transfer was not cancelled."); return result; }, onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: ["server", server.id] }); }, onError: (error) => toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }) });
+  const transferMut = useMutation({ mutationFn: () => transferServer(server.id, targetNodeId, primaryAllocationId || undefined), onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) }); }, onError: (error) => toast({ tone: "error", title: "Transfer failed", message: error instanceof Error ? error.message : "Could not transfer server" }) });
+  const cancelMut = useMutation({ mutationFn: async () => { const result = await cancelServerTransfer(server.id); if (!result.ok) throw new Error("The server reported the transfer was not cancelled."); return result; }, onSuccess: () => { void transferQuery.refetch(); void qc.invalidateQueries({ queryKey: queryKeys.servers.detail(server.id) }); }, onError: (error) => toast({ tone: "error", title: "Cancel failed", message: error instanceof Error ? error.message : "Could not cancel transfer" }) });
   const transfer = transferQuery.data;
   return (
     <div className="grid gap-4 md:grid-cols-2">

@@ -3,7 +3,7 @@
 import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, MoreVertical, RefreshCw, Trash2, Lock, Unlock, Play, XCircle, RotateCcw, Download, Database, Server, AppWindow, Folder, RotateCw } from 'lucide-react';
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { ForgeDropdownMenu } from '@/components/ui/forge/overlay';
 import { AdminPageLayout, AdminPageHeader, AdminTabs, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, AdminLoadingState, AdminErrorState, Pill } from '@/components/admin/admin-ui';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
@@ -554,19 +554,15 @@ export default function BackupManagementPage() {
                   </AdminTd>
                   <AdminTd>{renderStatusPill(config.enabled ? 'enabled' : 'disabled')}</AdminTd>
                   <AdminTd>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Btn size="sm" tone="ghost"><MoreVertical size={14} /></Btn>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuItem onClick={() => executeConfigMut.mutate(config.id)}><Play className="mr-2 h-4 w-4" /> Execute Now</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => { setEditingConfig(config); setIsCreateConfigOpen(true); }}><Server className="mr-2 h-4 w-4" /> Edit</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => { void (async () => { if (await confirm({ title: `Delete backup configuration "${config.name}"?`, description: "Scheduled backups from this configuration will stop. Existing artifacts are kept. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteConfigMut.mutate(config.id); })(); }} className="text-red-500"><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <ForgeDropdownMenu
+                      label={`Actions for ${config.name}`}
+                      trigger={<MoreVertical size={14} />}
+                      items={[
+                        { id: "execute", label: "Execute Now", icon: <Play className="h-4 w-4" />, onSelect: () => executeConfigMut.mutate(config.id) },
+                        { id: "edit", label: "Edit", icon: <Server className="h-4 w-4" />, onSelect: () => { setEditingConfig(config); setIsCreateConfigOpen(true); } },
+                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup configuration "${config.name}"?`, description: "Scheduled backups from this configuration will stop. Existing artifacts are kept. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteConfigMut.mutate(config.id); })(); } },
+                      ]}
+                    />
                   </AdminTd>
                 </AdminTr>
               ))}
@@ -613,19 +609,14 @@ export default function BackupManagementPage() {
                   <AdminTd className="text-xs text-slate-400">{job.triggeredBy}</AdminTd>
                   <AdminTd className="text-xs text-slate-400">{formatDate(job.createdAt)}</AdminTd>
                   <AdminTd>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Btn size="sm" tone="ghost"><MoreVertical size={14} /></Btn>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        {job.status === 'running' && (
-                          <DropdownMenuItem onClick={() => cancelJobMut.mutate(job.id)}><XCircle className="mr-2 h-4 w-4" /> Cancel</DropdownMenuItem>
-                        )}
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => { void (async () => { if (await confirm({ title: `Delete backup job "${job.name}"?`, description: "The job record will be permanently removed.", danger: true, confirmLabel: "Delete" })) deleteJobMut.mutate(job.id); })(); }} className="text-red-500"><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <ForgeDropdownMenu
+                      label={`Actions for ${job.name}`}
+                      trigger={<MoreVertical size={14} />}
+                      items={[
+                        ...(job.status === 'running' ? [{ id: "cancel", label: "Cancel", icon: <XCircle className="h-4 w-4" />, onSelect: () => cancelJobMut.mutate(job.id) }] : []),
+                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup job "${job.name}"?`, description: "The job record will be permanently removed.", danger: true, confirmLabel: "Delete" })) deleteJobMut.mutate(job.id); })(); } },
+                      ]}
+                    />
                   </AdminTd>
                 </AdminTr>
               ))}
@@ -671,23 +662,18 @@ export default function BackupManagementPage() {
                   <AdminTd className="text-xs">{artifact.isVerified ? <Pill tone="green">Yes</Pill> : <Pill>No</Pill>}</AdminTd>
                   <AdminTd className="text-xs">{artifact.isLocked ? <Pill tone="yellow">Yes</Pill> : <Pill>No</Pill>}</AdminTd>
                   <AdminTd>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Btn size="sm" tone="ghost"><MoreVertical size={14} /></Btn>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuItem onClick={() => downloadArtifactMut.mutate({ id: artifact.id, name: artifact.name })}><Download className="mr-2 h-4 w-4" /> Download</DropdownMenuItem>
-                        {artifact.isLocked ? (
-                          <DropdownMenuItem onClick={() => unlockArtifactMut.mutate(artifact.id)}><Unlock className="mr-2 h-4 w-4" /> Unlock</DropdownMenuItem>
-                        ) : (
-                          <DropdownMenuItem onClick={() => lockArtifactMut.mutate(artifact.id)}><Lock className="mr-2 h-4 w-4" /> Lock</DropdownMenuItem>
-                        )}
-                        <DropdownMenuItem onClick={() => { setSelectedArtifact(artifact); setIsRestoreOpen(true); }}><RotateCcw className="mr-2 h-4 w-4" /> Restore</DropdownMenuItem>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => { void (async () => { if (await confirm({ title: `Delete backup artifact "${artifact.displayName || artifact.name}"?`, description: "The stored backup file will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteArtifactMut.mutate(artifact.id); })(); }} className="text-red-500"><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <ForgeDropdownMenu
+                      label={`Actions for ${artifact.displayName || artifact.name}`}
+                      trigger={<MoreVertical size={14} />}
+                      items={[
+                        { id: "download", label: "Download", icon: <Download className="h-4 w-4" />, onSelect: () => downloadArtifactMut.mutate({ id: artifact.id, name: artifact.name }) },
+                        ...(artifact.isLocked
+                          ? [{ id: "unlock", label: "Unlock", icon: <Unlock className="h-4 w-4" />, onSelect: () => unlockArtifactMut.mutate(artifact.id) }]
+                          : [{ id: "lock", label: "Lock", icon: <Lock className="h-4 w-4" />, onSelect: () => lockArtifactMut.mutate(artifact.id) }]),
+                        { id: "restore", label: "Restore", icon: <RotateCcw className="h-4 w-4" />, onSelect: () => { setSelectedArtifact(artifact); setIsRestoreOpen(true); } },
+                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup artifact "${artifact.displayName || artifact.name}"?`, description: "The stored backup file will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteArtifactMut.mutate(artifact.id); })(); } },
+                      ]}
+                    />
                   </AdminTd>
                 </AdminTr>
               ))}
@@ -731,16 +717,13 @@ export default function BackupManagementPage() {
                   <AdminTd className="text-xs text-slate-400">{restore.triggeredBy}</AdminTd>
                   <AdminTd className="text-xs text-slate-400">{formatDate(restore.createdAt)}</AdminTd>
                   <AdminTd>
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Btn size="sm" tone="ghost"><MoreVertical size={14} /></Btn>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="end">
-                        <DropdownMenuLabel>Actions</DropdownMenuLabel>
-                        <DropdownMenuSeparator />
-                        <DropdownMenuItem onClick={() => { void (async () => { if (await confirm({ title: `Delete restore record "${restore.name}"?`, description: "Only the record is removed; the artifact and restored resource are untouched.", danger: true, confirmLabel: "Delete" })) deleteRestoreMut.mutate(restore.id); })(); }} className="text-red-500"><Trash2 className="mr-2 h-4 w-4" /> Delete</DropdownMenuItem>
-                      </DropdownMenuContent>
-                    </DropdownMenu>
+                    <ForgeDropdownMenu
+                      label={`Actions for ${restore.name}`}
+                      trigger={<MoreVertical size={14} />}
+                      items={[
+                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete restore record "${restore.name}"?`, description: "Only the record is removed; the artifact and restored resource are untouched.", danger: true, confirmLabel: "Delete" })) deleteRestoreMut.mutate(restore.id); })(); } },
+                      ]}
+                    />
                   </AdminTd>
                 </AdminTr>
               ))}

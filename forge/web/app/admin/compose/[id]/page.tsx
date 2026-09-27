@@ -396,7 +396,7 @@ function ComposeStackDetailContent() {
             <select
               value={logService}
               onChange={(e) => setLogService(e.target.value)}
-              className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-2 py-1 text-xs text-slate-300 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+              className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-2 py-1 text-xs text-slate-300 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
             >
               <option value="">All services</option>
               {safeServices.map((s) => (
@@ -406,7 +406,7 @@ function ComposeStackDetailContent() {
             <select
               value={logTail}
               onChange={(e) => setLogTail(Number(e.target.value))}
-              className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-2 py-1 text-xs text-slate-300 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+              className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-2 py-1 text-xs text-slate-300 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
             >
               <option value={50}>50 lines</option>
               <option value={100}>100 lines</option>
@@ -437,7 +437,7 @@ function ComposeStackDetailContent() {
             value={editYaml}
             onChange={(e) => setEditYaml(e.target.value)}
             rows={20}
-            className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+            className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
             placeholder="services: ..."
           />
           <p className="text-xs text-slate-400">Wires <code className="font-mono">updateComposeStack</code> — PATCH /compose/:id with composeYaml</p>

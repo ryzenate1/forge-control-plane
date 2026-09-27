@@ -1,6 +1,8 @@
 package http
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -39,57 +41,40 @@ func listKubernetesNodes(c *fiber.Ctx, cfg Config) error {
 	return c.JSON(fiber.Map{"nodes": k8sNodes})
 }
 
+// resolveKubernetesDaemonTarget resolves the Beacon to proxy a Kubernetes
+// request to. The node must be named explicitly: an empty nodeId is a bad
+// request rather than an invitation to silently pick whichever node happens
+// to be a Kubernetes node, which would read (or scale) a cluster the caller
+// never asked about. Resolution is by node daemon credential, never by
+// grabbing the first server that happens to sit on the node.
 func resolveKubernetesDaemonTarget(c *fiber.Ctx, cfg Config) (string, string, error) {
-	nodeID := c.Query("nodeId")
+	nodeID := strings.TrimSpace(c.Query("nodeId"))
 	if nodeID == "" {
-		nodeID = c.Query("node_id")
+		nodeID = strings.TrimSpace(c.Query("node_id"))
+	}
+	if nodeID == "" {
+		return "", "", fiber.NewError(fiber.StatusBadRequest, "nodeId is required: specify which kubernetes node this request targets")
 	}
 	if cfg.Store == nil {
 		return "", "", fiber.NewError(fiber.StatusServiceUnavailable, "store unavailable")
 	}
 	ctx, cancel := requestContext()
 	defer cancel()
-	if nodeID != "" {
-		n, err := cfg.Store.GetNode(ctx, nodeID)
-		if err != nil {
-			return "", "", fiber.NewError(fiber.StatusNotFound, "node not found")
-		}
-		if n.RuntimeProvider != "kubernetes" && n.RuntimeProvider != "k8s" {
-			return "", "", fiber.NewError(fiber.StatusBadRequest, "node is not a kubernetes node (runtime="+n.RuntimeProvider+")")
-		}
-		if n.BaseURL != "" {
-			return n.BaseURL, "", nil
-		}
-		servers, err := cfg.Store.ListServersForNode(ctx, n.ID)
-		if err != nil || len(servers) == 0 {
-			return "", "", fiber.NewError(fiber.StatusBadGateway, "cannot resolve node daemon target: no servers on node")
-		}
-		target, err := cfg.Store.ServerControlTarget(ctx, servers[0].ID)
-		if err != nil {
-			return "", "", fiber.NewError(fiber.StatusBadGateway, "cannot resolve node daemon target: "+err.Error())
-		}
-		return target.NodeURL, target.NodeToken, nil
-	}
-	all, err := cfg.Store.ListNodes(ctx)
+	n, err := cfg.Store.GetNode(ctx, nodeID)
 	if err != nil {
-		return "", "", err
+		return "", "", fiber.NewError(fiber.StatusNotFound, "node not found")
 	}
-	for _, n := range all {
-		if n.RuntimeProvider == "kubernetes" || n.RuntimeProvider == "k8s" {
-			if n.BaseURL != "" {
-				return n.BaseURL, "", nil
-			}
-			servers, err := cfg.Store.ListServersForNode(ctx, n.ID)
-			if err != nil || len(servers) == 0 {
-				continue
-			}
-			target, err := cfg.Store.ServerControlTarget(ctx, servers[0].ID)
-			if err == nil {
-				return target.NodeURL, target.NodeToken, nil
-			}
-		}
+	if n.RuntimeProvider != "kubernetes" && n.RuntimeProvider != "k8s" {
+		return "", "", fiber.NewError(fiber.StatusBadRequest, "node is not a kubernetes node (runtime="+n.RuntimeProvider+")")
 	}
-	return "", "", fiber.NewError(fiber.StatusNotFound, "no kubernetes nodes available; add a node with runtime=kubernetes")
+	if strings.TrimSpace(n.BaseURL) == "" {
+		return "", "", fiber.NewError(fiber.StatusBadGateway, "node has no daemon base URL")
+	}
+	token, err := cfg.Store.GetNodeDaemonCredential(ctx, n.ID)
+	if err != nil {
+		return "", "", fiber.NewError(fiber.StatusBadGateway, "cannot resolve node daemon credential: "+err.Error())
+	}
+	return n.BaseURL, token, nil
 }
 
 func kubernetesPods(c *fiber.Ctx, cfg Config) error {

@@ -36,9 +36,9 @@ func RegisterPhase8(v1 fiber.Router, protected fiber.Router, cfg *Config) error 
 	}
 
 	admin := protected.Group("/admin", requireRole("admin"))
-	admin.Post("/branding/upload", brandingUploadHandler(cfg, false))
-	admin.Post("/settings/branding-upload", brandingUploadHandler(cfg, true))
-	admin.Get("/branding/file/:name", brandingFileHandler(cfg))
+	admin.Post("/branding/upload", requireAdminScope("settings.write"), brandingUploadHandler(cfg, false))
+	admin.Post("/settings/branding-upload", requireAdminScope("settings.write"), brandingUploadHandler(cfg, true))
+	admin.Get("/branding/file/:name", requireAdminScope("settings.read"), brandingFileHandler(cfg))
 
 	return nil
 }

@@ -340,9 +340,18 @@ func (s *Store) AssignAllocationToServer(ctx context.Context, serverID, allocati
 	if allocationNodeID != serverNodeID {
 		return errors.New("allocation does not belong to server node")
 	}
-	_, err := s.db.Exec(ctx, `UPDATE allocations SET server_id = $1 WHERE id = $2`, serverID, allocationID)
+	// The claim is guarded by the same predicates the pre-read checked so a
+	// concurrent assign cannot silently steal the allocation: the UPDATE is the
+	// atomic compare-and-set, not the read above it.
+	commandTag, err := s.db.Exec(ctx, `
+		UPDATE allocations SET server_id = $1, assigned_at = now()
+		WHERE id = $2 AND server_id IS NULL AND node_id = $3
+	`, serverID, allocationID, serverNodeID)
 	if err != nil {
 		return err
+	}
+	if commandTag.RowsAffected() == 0 {
+		return errors.New("allocation already assigned")
 	}
 	return s.AppendAudit(ctx, actorID, "allocation assigned", "server", &serverID, fmt.Sprintf(`{"allocationId":"%s"}`, allocationID))
 }

@@ -5,6 +5,7 @@ import { Clock, Server } from "lucide-react";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
 import { getNodeMetrics } from "@/lib/api/monitoring";
 import { fetchNodes } from "@/lib/api";
+import { queryKeys } from "@/lib/api/query-keys";
 
 function usageBar(pct: number, color: string) {
   return (
@@ -35,13 +36,13 @@ function NodeRowSkeleton() {
 
 export function NodeList({ onNodeSelect }: { onNodeSelect?: (nodeId: string) => void }) {
   const { data: metrics, isLoading, isError } = useQuery({
-    queryKey: ["node-metrics-list"],
+    queryKey: queryKeys.monitoring.latest(),
     queryFn: () => getNodeMetrics(),
     refetchInterval: 15_000,
   });
 
   const { data: registeredNodes } = useQuery({
-    queryKey: ["nodes-registered"],
+    queryKey: queryKeys.nodes.allLists(),
     queryFn: () => fetchNodes(),
     refetchInterval: 30_000,
     retry: false,

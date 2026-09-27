@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -1216,18 +1215,66 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
-	sort.Strings(names)
+	// Numeric-then-suffix order: bare "082" applies before "082_a", so the
+	// base table always exists before its suffixed companion alters it.
+	sortMigrationFiles(names)
 
 	if err := validateNoDuplicatePrefixes(names); err != nil {
 		return err
 	}
 
-	for _, name := range names {
-		var applied bool
-		if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE version = $1)`, name).Scan(&applied); err != nil {
-			return fmt.Errorf("check migration %s: %w", name, err)
+	// Load the full applied set once so no-op guard files (migrationAliases)
+	// whose canonical already applied can be recorded without executing.
+	// Canonicals themselves always execute when unrecorded: a guard row
+	// cannot prove the DDL ran, and every canonical is idempotent.
+	applied := make(map[string]struct{}, len(names))
+	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations`)
+	if err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+	for rows.Next() {
+		var v string
+		if err := rows.Scan(&v); err != nil {
+			rows.Close()
+			return fmt.Errorf("scan applied migration: %w", err)
 		}
-		if applied {
+		applied[v] = struct{}{}
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("list applied migrations: %w", err)
+	}
+
+	// Backfill guard rows for canonicals that already applied. Directional:
+	// a guard row proves nothing (guards are no-ops), so a missing canonical
+	// is always executed, never backfilled. INSERT ... ON CONFLICT DO NOTHING
+	// keeps this safe to re-run.
+	for _, pair := range migrationAliases {
+		guard, canonical := pair[0], pair[1]
+		if _, ok := applied[canonical]; ok {
+			if _, ok := applied[guard]; !ok {
+				if _, err := s.db.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, guard); err != nil {
+					return fmt.Errorf("backfill renamed migration %s: %w", guard, err)
+				}
+				applied[guard] = struct{}{}
+			}
+		}
+	}
+
+	for _, name := range names {
+		if _, ok := applied[name]; ok {
+			continue
+		}
+		// Guard skip: this file is a no-op whose canonical already applied,
+		// so record it without executing. Canonicals never skip via alias
+		// (see MigrationRunner.Run): every canonical is idempotent, so an
+		// old host re-applies harmlessly while a host that only recorded the
+		// guard still gets the DDL.
+		if isGuardFile(name) && canonicalApplied(name, applied) {
+			if _, err := s.db.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1) ON CONFLICT (version) DO NOTHING`, name); err != nil {
+				return fmt.Errorf("record migration %s: %w", name, err)
+			}
+			applied[name] = struct{}{}
 			continue
 		}
 
@@ -1252,12 +1299,18 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 		if err := tx.Commit(ctx); err != nil {
 			return fmt.Errorf("commit migration %s: %w", name, err)
 		}
+		applied[name] = struct{}{}
 	}
 	return nil
 }
 
 // Rollback reverts applied migrations to a target version by applying
-// .down.sql files from the rollbacks directory in reverse order.
+// .down.sql files from the rollbacks directory in reverse order of
+// application (applied_at DESC, version DESC as a tiebreak), not filename
+// order: filename order is not application order once renames, letter
+// suffixes, and backfills exist. A migration with no .down.sql file — or one
+// whose .down.sql carries the "-- non-reversible" marker — is refused loudly;
+// history is never deleted for something that was not actually undone.
 func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion string) error {
 	releaseLock, err := s.acquireMigrationLock(ctx)
 	if err != nil {
@@ -1274,7 +1327,7 @@ func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
-	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations WHERE version >= $1 ORDER BY version DESC`, targetVersion)
+	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations WHERE version >= $1 ORDER BY applied_at DESC, version DESC`, targetVersion)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
@@ -1297,9 +1350,12 @@ func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion
 		body, err := os.ReadFile(downFile)
 		if err != nil {
 			if os.IsNotExist(err) {
-				return fmt.Errorf("rollback file not found for %s: %w", v, err)
+				return fmt.Errorf("rollback file not found for %s: migration is non-reversible (no .down.sql); refusing to delete history for work that cannot be undone", v)
 			}
 			return fmt.Errorf("read rollback %s: %w", v, err)
+		}
+		if isNonReversibleRollback(body) {
+			return fmt.Errorf("rollback refused for %s: migration is explicitly marked non-reversible", v)
 		}
 
 		tx, err := s.db.Begin(ctx)
@@ -1321,6 +1377,26 @@ func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion
 		}
 	}
 	return nil
+}
+
+// isNonReversibleRollback reports whether a .down.sql file explicitly marks
+// its migration as non-reversible. Convention: a leading "-- non-reversible"
+// comment line. Rollback refuses these loudly instead of deleting
+// schema_migrations history for work it did not undo.
+func isNonReversibleRollback(body []byte) bool {
+	for _, line := range strings.Split(string(body), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "--") {
+			return false
+		}
+		if strings.Contains(strings.ToLower(trimmed), "non-reversible") {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Store) Seed(ctx context.Context) error {

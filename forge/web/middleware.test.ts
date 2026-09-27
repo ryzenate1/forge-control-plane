@@ -23,7 +23,9 @@ describe("middleware", () => {
   });
 
   describe("public paths", () => {
-    const publicPaths = ["/", "/setup", "/forgot-password", "/reset-password", "/favicon.ico"];
+    // /setup is covered separately below: it performs one setup-status fetch
+    // to decide whether the wizard is still relevant.
+    const publicPaths = ["/", "/forgot-password", "/reset-password", "/favicon.ico"];
 
     it.each(publicPaths)("never redirects %s and sets a CSP header with a nonce", async (path) => {
       const request = makeRequest(path);
@@ -35,6 +37,43 @@ describe("middleware", () => {
       expect(csp).toBeTruthy();
       expect(csp).toMatch(/'nonce-[a-f0-9]+'/);
       expect(global.fetch).not.toHaveBeenCalled();
+    });
+
+    describe("/setup", () => {
+      function mockSetupStatus(body: unknown, status = 200) {
+        (global.fetch as ReturnType<typeof vi.fn>).mockResolvedValueOnce(
+          new Response(typeof body === "string" ? body : JSON.stringify(body), { status }),
+        );
+      }
+
+      it("renders (no redirect) while setup is still required", async () => {
+        mockSetupStatus({ required: true, hasAdmin: false });
+        const response = await middleware(makeRequest("/setup"));
+
+        expect(response.headers.get("location")).toBeNull();
+        expect(response.headers.get("Content-Security-Policy")).toMatch(/'nonce-[a-f0-9]+'/);
+        expect(global.fetch).toHaveBeenCalledTimes(1);
+      });
+
+      it("redirects to / when setup is no longer required", async () => {
+        mockSetupStatus({ required: false, hasAdmin: true });
+        const response = await middleware(makeRequest("/setup"));
+
+        expect(response.status).toBe(307);
+        const location = new URL(response.headers.get("location")!);
+        expect(location.pathname).toBe("/");
+        expect(location.searchParams.get("setup")).toBe("complete");
+      });
+
+      it("renders (no redirect) when setup status cannot be determined", async () => {
+        (global.fetch as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("api down"));
+        const response = await middleware(makeRequest("/setup"));
+
+        // Fail open: an unreachable API must not brick first-run bootstrap.
+        // The setup page itself renders its own unreachable state.
+        expect(response.headers.get("location")).toBeNull();
+        expect(response.headers.get("Content-Security-Policy")).toBeTruthy();
+      });
     });
 
     it("does not redirect paths under /_next", async () => {

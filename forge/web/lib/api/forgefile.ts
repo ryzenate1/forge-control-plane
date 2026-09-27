@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON } from "./http";
+import { fetchJSON, postJSON, unwrapData, unwrapList } from "./http";
 
 export type ManifestProject = { name: string; slug: string };
 export type Manifest = {
@@ -30,13 +30,6 @@ export type ApplyResult = {
 
 export type ValidateResult = { valid: boolean; warnings: string[]; error?: string };
 
-function unwrap<T>(data: unknown): T {
-  if (data && typeof data === "object" && "data" in (data as Record<string, unknown>)) {
-    return (data as { data: T }).data;
-  }
-  return data as T;
-}
-
 export async function validateForgefile(content: string): Promise<ValidateResult> {
   try {
     const res = await postJSON<ValidateResult>("/forgefile/validate", { content });
@@ -55,8 +48,8 @@ export async function validateForgefile(content: string): Promise<ValidateResult
 }
 
 export async function applyForgefile(content: string): Promise<ApplyResult> {
-  const res = await postJSON<{ data: ApplyResult } & ApplyResult>("/forgefile/apply", { content });
-  return unwrap<ApplyResult>(res);
+  const res = await postJSON<{ data: ApplyResult } | ApplyResult>("/forgefile/apply", { content });
+  return unwrapData(res);
 }
 
 export async function listManifests(): Promise<string[]> {
@@ -64,17 +57,16 @@ export async function listManifests(): Promise<string[]> {
   if (Array.isArray(res)) return res;
   const obj = res as Record<string, unknown>;
   if (Array.isArray(obj.manifests)) return obj.manifests as string[];
-  if (obj.data && Array.isArray((obj.data as Record<string, unknown>).manifests)) {
+  if (obj.data && typeof obj.data === 'object' && Array.isArray((obj.data as Record<string, unknown>).manifests)) {
     return (obj.data as { manifests: string[] }).manifests;
   }
-  if (obj.data && Array.isArray(obj.data)) return obj.data as string[];
-  return unwrap<string[]>(res);
+  if (obj.data && Array.isArray(obj.data)) return unwrapList(obj.data as string[] | { data: string[] });
+  return [];
 }
 
 export async function getManifest(slug: string): Promise<{ slug: string; version: number; updatedAt: string; manifest: Manifest }> {
-  const res = await fetchJSON<{ slug: string; version: number; updatedAt: string; manifest: Manifest }>(`/forgefile/${encodeURIComponent(slug)}`);
+  type ManifestResult = { slug: string; version: number; updatedAt: string; manifest: Manifest };
+  const res = await fetchJSON<ManifestResult | { data: ManifestResult }>(`/forgefile/${encodeURIComponent(slug)}`);
   // Handler returns { data: ... } or flat — handle both
-  const maybeData = (res as unknown as { data: { slug: string; version: number; updatedAt: string; manifest: Manifest } }).data;
-  if (maybeData?.slug) return maybeData;
-  return unwrap<{ slug: string; version: number; updatedAt: string; manifest: Manifest }>(res);
+  return unwrapData(res);
 }

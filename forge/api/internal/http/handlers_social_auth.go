@@ -285,10 +285,7 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
-		csrfToken, err := generateCSRFToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
-		}
+		csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
 		expires := tokenExpiry(cfg)
 		setSessionCookies(c, token, csrfToken, expires)
 
@@ -342,10 +339,7 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
-		csrfToken, err := generateCSRFToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
-		}
+		csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
 		expires := tokenExpiry(cfg)
 		setSessionCookies(c, token, csrfToken, expires)
 
@@ -377,10 +371,7 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 	}
-	csrfToken, err := generateCSRFToken()
-	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
-	}
+	csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
 	expires := tokenExpiry(cfg)
 	setSessionCookies(c, token, csrfToken, expires)
 

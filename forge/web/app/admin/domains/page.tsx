@@ -135,12 +135,12 @@ export default function AdminDomainsPage() {
         sub="Custom domains with DNS verification and TLS status. Related settings live in the same section: DNS Providers, Certificates, ACME, and Security Headers."
         action={
           <div className="flex gap-2">
-            <Link href="/admin/dns"><Btn tone="ghost" className="border border-[var(--brand)]/20 hover:bg-[var(--brand)]/10"><ShieldCheck size={12} /> DNS Providers</Btn></Link>
-            <Link href="/admin/security"><Btn tone="ghost" className="border border-[var(--brand)]/20 hover:bg-[var(--brand)]/10">Security Headers</Btn></Link>
+            <Link href="/admin/dns"><Btn tone="ghost" className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"><ShieldCheck size={12} /> DNS Providers</Btn></Link>
+            <Link href="/admin/security"><Btn tone="ghost" className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]">Security Headers</Btn></Link>
             <Btn tone="ghost" onClick={() => setShowDNSModal(true)}>
               <Network size={14} /> Check DNS
             </Btn>
-            <Btn size="sm" tone="primary" onClick={() => setShowAddModal(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white">
+            <Btn size="sm" tone="primary" onClick={() => setShowAddModal(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
               <Plus size={12} /> Add Domain
             </Btn>
           </div>
@@ -237,7 +237,7 @@ export default function AdminDomainsPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Server</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={addForm.serverId}
                 onChange={(e) => setAddForm({ ...addForm, serverId: e.target.value })}
               >

@@ -54,3 +54,49 @@ ALTER TABLE egg_variables_new RENAME TO egg_variables;
 ALTER TABLE servers ADD COLUMN egg_id TEXT;
 UPDATE servers SET egg_id = template_id WHERE egg_id IS NULL;
 CREATE INDEX IF NOT EXISTS servers_egg_id_idx ON servers (egg_id);
+
+-- SQLite encoding of the servers_sync_egg_identifiers trigger in the canonical
+-- migration (which uses a plpgsql function + BEFORE trigger). SQLite cannot
+-- assign NEW.* in a trigger body, so the NULL-fill half is an AFTER trigger
+-- and the mismatch half is a BEFORE trigger with RAISE. Together they enforce
+-- exactly what PostgreSQL enforces: fill the missing side, abort when both
+-- are set but differ.
+PRAGMA recursive_triggers=OFF;
+
+DROP TRIGGER IF EXISTS servers_sync_egg_identifiers_fill_ins;
+CREATE TRIGGER servers_sync_egg_identifiers_fill_ins
+AFTER INSERT ON servers
+FOR EACH ROW WHEN (NEW.template_id IS NULL OR NEW.egg_id IS NULL)
+BEGIN
+    UPDATE servers
+    SET template_id = COALESCE(NEW.template_id, NEW.egg_id),
+        egg_id = COALESCE(NEW.egg_id, NEW.template_id)
+    WHERE id = NEW.id;
+END;
+
+DROP TRIGGER IF EXISTS servers_sync_egg_identifiers_fill_upd;
+CREATE TRIGGER servers_sync_egg_identifiers_fill_upd
+AFTER UPDATE OF egg_id, template_id ON servers
+FOR EACH ROW WHEN (NEW.template_id IS NULL OR NEW.egg_id IS NULL)
+BEGIN
+    UPDATE servers
+    SET template_id = COALESCE(NEW.template_id, NEW.egg_id),
+        egg_id = COALESCE(NEW.egg_id, NEW.template_id)
+    WHERE id = NEW.id;
+END;
+
+DROP TRIGGER IF EXISTS servers_sync_egg_identifiers_chk_ins;
+CREATE TRIGGER servers_sync_egg_identifiers_chk_ins
+BEFORE INSERT ON servers
+FOR EACH ROW WHEN (NEW.template_id IS NOT NULL AND NEW.egg_id IS NOT NULL AND NEW.egg_id IS NOT NEW.template_id)
+BEGIN
+    SELECT RAISE(ABORT, 'server egg_id and template_id must identify the same canonical egg');
+END;
+
+DROP TRIGGER IF EXISTS servers_sync_egg_identifiers_chk_upd;
+CREATE TRIGGER servers_sync_egg_identifiers_chk_upd
+BEFORE UPDATE OF egg_id, template_id ON servers
+FOR EACH ROW WHEN (NEW.template_id IS NOT NULL AND NEW.egg_id IS NOT NULL AND NEW.egg_id IS NOT NEW.template_id)
+BEGIN
+    SELECT RAISE(ABORT, 'server egg_id and template_id must identify the same canonical egg');
+END;

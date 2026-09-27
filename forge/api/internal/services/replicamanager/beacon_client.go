@@ -30,6 +30,24 @@ type nodeCircuitState struct {
 	openUntil   time.Time
 	lastHealthy time.Time
 	version     string
+	// preflightCacheHits counts dispatches that skipped the capability
+	// round-trip because a recent check was still within preflightHealthyTTL.
+	preflightCacheHits uint64
+}
+
+// PreflightCacheHits returns the number of preflight checks served from the
+// healthy cache, keyed by node ID. Exposed so health endpoints and tests can
+// observe how often the capability round-trip is skipped.
+func (c *BeaconHTTPClient) PreflightCacheHits() map[string]uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make(map[string]uint64, len(c.nodes))
+	for id, state := range c.nodes {
+		if state.preflightCacheHits > 0 {
+			out[id] = state.preflightCacheHits
+		}
+	}
+	return out
 }
 
 // NewBeaconHTTPClient creates a new BeaconHTTPClient that can dispatch commands
@@ -62,8 +80,19 @@ func (c *BeaconHTTPClient) DispatchCommand(ctx context.Context, nodeID string, c
 	if node.HeartbeatInterval > 0 && time.Duration(node.HeartbeatInterval*3)*time.Second > staleAfter {
 		staleAfter = time.Duration(node.HeartbeatInterval*3) * time.Second
 	}
-	if strings.EqualFold(node.HeartbeatState, "offline") ||
-		!node.LastHeartbeatAt.IsZero() && time.Since(node.LastHeartbeatAt) > staleAfter {
+	if strings.EqualFold(node.HeartbeatState, "offline") {
+		c.recordFailure(nodeID)
+		return fmt.Errorf("Beacon node %s is offline", nodeID)
+	}
+	// A node that has never reported a heartbeat has unknown health, and
+	// unknown is not healthy: it must not receive workloads until it checks
+	// in. (Previously a zero LastHeartbeatAt skipped the staleness check
+	// entirely and the node was treated as fresh.)
+	if node.LastHeartbeatAt.IsZero() {
+		c.recordFailure(nodeID)
+		return fmt.Errorf("Beacon node %s has never reported a heartbeat", nodeID)
+	}
+	if time.Since(node.LastHeartbeatAt) > staleAfter {
 		c.recordFailure(nodeID)
 		return fmt.Errorf("Beacon node %s heartbeat is stale or offline", nodeID)
 	}
@@ -88,10 +117,22 @@ func (c *BeaconHTTPClient) DispatchCommand(ctx context.Context, nodeID string, c
 		// Build CreateRequest from payload
 		// JSON numbers are decoded as float64 by json.Unmarshal, so we
 		// must accept both int and float64 to avoid silent zero values.
+		// A missing or mistyped field is a caller bug, not a zero value:
+		// extractInt reports ok=false so dispatch fails loudly instead of
+		// provisioning a container with 0 CPU/memory/disk.
 		instanceID, _ := payload["instanceId"].(string)
-		memoryMb := extractInt(payload, "memoryMb")
-		cpu := extractInt(payload, "cpu")
-		diskMb := extractInt(payload, "diskMb")
+		memoryMb, ok := extractInt(payload, "memoryMb")
+		if !ok {
+			return fmt.Errorf("start command payload is missing required field %q", "memoryMb")
+		}
+		cpu, ok := extractInt(payload, "cpu")
+		if !ok {
+			return fmt.Errorf("start command payload is missing required field %q", "cpu")
+		}
+		diskMb, ok := extractInt(payload, "diskMb")
+		if !ok {
+			return fmt.Errorf("start command payload is missing required field %q", "diskMb")
+		}
 		runtimeProvider, _ := payload["runtimeProvider"].(string)
 		createReq := daemon.CreateRequest{
 			ServerID:    instanceID,
@@ -137,6 +178,13 @@ func (c *BeaconHTTPClient) DispatchCommand(ctx context.Context, nodeID string, c
 	return nil
 }
 
+// preflightHealthyTTL bounds how long a successful capability check is trusted
+// without re-checking the node. A shorter window re-detects a dead node
+// sooner; a longer window spares the node a capability round-trip per
+// dispatch. 10s keeps dispatch latency low while ensuring a node that went
+// dark is re-probed on the next command batch.
+const preflightHealthyTTL = 10 * time.Second
+
 func (c *BeaconHTTPClient) preflight(ctx context.Context, nodeID, baseURL, token string) error {
 	now := time.Now()
 	c.mu.Lock()
@@ -145,7 +193,9 @@ func (c *BeaconHTTPClient) preflight(ctx context.Context, nodeID, baseURL, token
 		c.mu.Unlock()
 		return fmt.Errorf("circuit is open until %s", state.openUntil.UTC().Format(time.RFC3339))
 	}
-	if now.Sub(state.lastHealthy) < 15*time.Second && state.version != "" {
+	if now.Sub(state.lastHealthy) < preflightHealthyTTL && state.version != "" {
+		state.preflightCacheHits++
+		c.nodes[nodeID] = state
 		c.mu.Unlock()
 		return nil
 	}
@@ -264,22 +314,30 @@ func requireCompatibleBeacon(version string) error {
 
 // extractInt extracts an int value from a map that was decoded from JSON.
 // json.Unmarshal decodes all JSON numbers as float64, so a bare .(int) assertion
-// would fail and silently return 0. This helper accepts int, float64, and
-// json.Number to safely handle values from any decoding path.
-func extractInt(m map[string]any, key string) int {
+// would fail and silently return 0. This helper accepts int, int64, float64,
+// and json.Number to safely handle values from any decoding path.
+//
+// It returns ok=false when the key is missing or the value is not a number,
+// so callers can reject the payload instead of provisioning with a silent zero.
+func extractInt(m map[string]any, key string) (int, bool) {
 	v, ok := m[key]
 	if !ok {
-		return 0
+		return 0, false
 	}
 	switch val := v.(type) {
 	case int:
-		return val
+		return val, true
+	case int64:
+		return int(val), true
 	case float64:
-		return int(val)
+		return int(val), true
 	case json.Number:
-		n, _ := val.Int64()
-		return int(n)
+		n, err := val.Int64()
+		if err != nil {
+			return 0, false
+		}
+		return int(n), true
 	default:
-		return 0
+		return 0, false
 	}
 }

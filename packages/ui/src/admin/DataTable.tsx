@@ -1,13 +1,16 @@
 'use client';
 
-import { ReactNode, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 
 export interface Column<T> {
   key: string;
   header: string;
   render?: (item: T) => ReactNode;
   sortable?: boolean;
+  /** Searched by default; set to `false` to exclude a column from search. */
   searchable?: boolean;
+  /** Value used for search/sort when the cell is rendered custom. Defaults to `item[key]`. */
+  getValue?: (item: T) => unknown;
 }
 
 interface DataTableProps<T> {
@@ -19,9 +22,19 @@ interface DataTableProps<T> {
   emptyMessage?: string;
   pageSize?: number;
   searchable?: boolean;
+  /** Stable row key. Defaults to `item.id` when present, else the index. */
+  keyExtractor?: (item: T, index: number) => string;
 }
 
-export function DataTable<T extends Record<string, any>>({
+function cellText<T>(col: Column<T>, item: T): string {
+  const raw = col.getValue ? col.getValue(item) : (item as Record<string, unknown>)[col.key];
+  if (raw === null || raw === undefined) return '';
+  if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean')
+    return String(raw);
+  return '';
+}
+
+export function DataTable<T extends Record<string, unknown>>({
   columns,
   data,
   loading,
@@ -30,35 +43,40 @@ export function DataTable<T extends Record<string, any>>({
   emptyMessage = 'No data found',
   pageSize = 15,
   searchable = true,
+  keyExtractor,
 }: DataTableProps<T>) {
   const [search, setSearch] = useState('');
   const [sortKey, setSortKey] = useState<string | null>(null);
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
   const [page, setPage] = useState(1);
 
+  // Keep the page in range when the data set (or filter) shrinks.
+  useEffect(() => {
+    setPage((p) => Math.min(Math.max(p, 1), Math.max(1, Math.ceil(data.length / pageSize)) || 1));
+  }, [data.length, pageSize]);
+
   let filtered = data;
   if (search && searchable) {
     const lower = search.toLowerCase();
+    const searchableCols = columns.filter((col) => col.searchable !== false);
     filtered = data.filter((item) =>
-      columns.some((col) => {
-        if (!col.searchable) return false;
-        const val = item[col.key];
-        return val != null && String(val).toLowerCase().includes(lower);
-      })
+      searchableCols.some((col) => cellText(col, item).toLowerCase().includes(lower)),
     );
   }
 
   if (sortKey) {
+    const sortCol = columns.find((col) => col.key === sortKey);
     filtered = [...filtered].sort((a, b) => {
-      const aVal = a[sortKey] ?? '';
-      const bVal = b[sortKey] ?? '';
-      const cmp = String(aVal).localeCompare(String(bVal));
+      const aVal = sortCol ? cellText(sortCol, a) : '';
+      const bVal = sortCol ? cellText(sortCol, b) : '';
+      const cmp = aVal.localeCompare(bVal);
       return sortDir === 'asc' ? cmp : -cmp;
     });
   }
 
-  const totalPages = Math.ceil(filtered.length / pageSize);
-  const paged = filtered.slice((page - 1) * pageSize, page * pageSize);
+  const pageCount = Math.max(1, Math.ceil(filtered.length / pageSize));
+  const safePage = Math.min(Math.max(page, 1), pageCount);
+  const paged = filtered.slice((safePage - 1) * pageSize, safePage * pageSize);
 
   const handleSort = (key: string) => {
     if (sortKey === key) {
@@ -69,10 +87,16 @@ export function DataTable<T extends Record<string, any>>({
     }
   };
 
+  const rowKey = (item: T, index: number): string => {
+    if (keyExtractor) return keyExtractor(item, index);
+    const id = (item as Record<string, unknown>)['id'];
+    return typeof id === 'string' || typeof id === 'number' ? String(id) : `row-${index}`;
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600" />
+        <div className="h-8 w-8 animate-spin rounded-full border-b-2 border-brand" />
       </div>
     );
   }
@@ -85,53 +109,57 @@ export function DataTable<T extends Record<string, any>>({
             type="text"
             placeholder="Search..."
             value={search}
-            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
-            className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-800 text-sm w-64"
+            onChange={(e) => {
+              setSearch(e.target.value);
+              setPage(1);
+            }}
+            className="ui-input w-64"
           />
         </div>
       )}
-      <div className="overflow-x-auto rounded-lg border border-gray-200 dark:border-gray-700">
-        <table className="w-full text-sm">
-          <thead className="bg-gray-50 dark:bg-gray-800">
+      <div className="overflow-x-auto rounded-lg border border-line">
+        <table className="ui-table">
+          <thead>
             <tr>
               {columns.map((col) => (
                 <th
                   key={col.key}
-                  className="px-4 py-3 text-left font-medium text-gray-600 dark:text-gray-400 cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-700"
+                  className="ui-th"
                   onClick={() => col.sortable && handleSort(col.key)}
                 >
                   <div className="flex items-center gap-1">
                     {col.header}
-                    {sortKey === col.key && (
-                      <span>{sortDir === 'asc' ? '↑' : '↓'}</span>
-                    )}
+                    {sortKey === col.key && <span>{sortDir === 'asc' ? '↑' : '↓'}</span>}
                   </div>
                 </th>
               ))}
-              {actions && <th className="px-4 py-3 text-right">Actions</th>}
+              {actions && <th className="ui-th text-right">Actions</th>}
             </tr>
           </thead>
-          <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+          <tbody>
             {paged.length === 0 ? (
               <tr>
-                <td colSpan={columns.length + (actions ? 1 : 0)} className="px-4 py-8 text-center text-gray-500">
+                <td
+                  colSpan={columns.length + (actions ? 1 : 0)}
+                  className="ui-td text-center text-text-muted"
+                >
                   {emptyMessage}
                 </td>
               </tr>
             ) : (
               paged.map((item, i) => (
                 <tr
-                  key={item.id || i}
-                  className={`hover:bg-gray-50 dark:hover:bg-gray-800/50 ${onRowClick ? 'cursor-pointer' : ''}`}
+                  key={rowKey(item, i)}
+                  className={`ui-tr-interactive ${onRowClick ? 'cursor-pointer' : ''}`}
                   onClick={() => onRowClick?.(item)}
                 >
                   {columns.map((col) => (
-                    <td key={col.key} className="px-4 py-3 text-gray-900 dark:text-gray-100">
-                      {col.render ? col.render(item) : item[col.key]}
+                    <td key={col.key} className="ui-td">
+                      {col.render ? col.render(item) : cellText(col, item)}
                     </td>
                   ))}
                   {actions && (
-                    <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                    <td className="ui-td text-right" onClick={(e) => e.stopPropagation()}>
                       {actions(item)}
                     </td>
                   )}
@@ -141,23 +169,23 @@ export function DataTable<T extends Record<string, any>>({
           </tbody>
         </table>
       </div>
-      {totalPages > 1 && (
+      {pageCount > 1 && (
         <div className="flex items-center justify-between">
-          <span className="text-sm text-gray-500">
-            Page {page} of {totalPages}
+          <span className="text-sm text-text-muted">
+            Page {safePage} of {pageCount}
           </span>
           <div className="flex gap-2">
             <button
-              onClick={() => setPage(Math.max(1, page - 1))}
-              disabled={page <= 1}
-              className="px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 disabled:opacity-50"
+              onClick={() => setPage(Math.max(1, safePage - 1))}
+              disabled={safePage <= 1}
+              className="ui-button ui-button-secondary"
             >
               Previous
             </button>
             <button
-              onClick={() => setPage(Math.min(totalPages, page + 1))}
-              disabled={page >= totalPages}
-              className="px-3 py-1 text-sm rounded border border-gray-300 dark:border-gray-600 disabled:opacity-50"
+              onClick={() => setPage(Math.min(pageCount, safePage + 1))}
+              disabled={safePage >= pageCount}
+              className="ui-button ui-button-secondary"
             >
               Next
             </button>

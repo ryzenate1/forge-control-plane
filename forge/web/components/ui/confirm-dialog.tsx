@@ -94,6 +94,11 @@ export function useConfirm(): [(options: ConfirmOptions) => Promise<boolean>, ()
   const resolverRef = useRef<((confirmed: boolean) => void) | null>(null);
 
   const confirm = useCallback((next: ConfirmOptions) => {
+    // A second confirm() while one is pending rejects the first: only one
+    // pending confirmation is supported per hook instance, and leaving the
+    // earlier promise hanging would leak an unresolved await.
+    resolverRef.current?.(false);
+    resolverRef.current = null;
     setOptions(next);
     return new Promise<boolean>((resolve) => {
       resolverRef.current = resolve;

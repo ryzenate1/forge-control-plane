@@ -393,12 +393,6 @@ func (p *CaddyReverseProxy) SetUpstreamHealth(ctx context.Context, ruleID string
 	}
 	p.mu.Unlock()
 
-	if healthy {
-		slog.Info("caddy upstream marked healthy", "ruleID", ruleID, "target", targetDial)
-	} else {
-		slog.Warn("caddy upstream marked unhealthy", "ruleID", ruleID, "target", targetDial)
-	}
-
 	addr := p.adminAddr
 	if addr == "" {
 		addr = "localhost:2019"
@@ -406,8 +400,10 @@ func (p *CaddyReverseProxy) SetUpstreamHealth(ctx context.Context, ruleID string
 
 	configJSON, err := p.getRunningConfig(ctx, addr)
 	if err != nil {
-		slog.Warn("caddy not reachable for upstream health update", "error", err)
-		return nil
+		// Surface gateway reachability: the desired health state is kept in
+		// p.healthStatus above so a later probe retries, but the caller must
+		// see the failure instead of a silent success.
+		return fmt.Errorf("caddy admin unreachable for upstream health update rule %s target %s: %w", ruleID, targetDial, err)
 	}
 
 	var cfg map[string]any
@@ -420,7 +416,28 @@ func (p *CaddyReverseProxy) SetUpstreamHealth(ctx context.Context, ruleID string
 		return nil
 	}
 
-	return p.applyConfig(ctx, addr, cfg)
+	if err := p.applyConfig(ctx, addr, cfg); err != nil {
+		return fmt.Errorf("apply upstream health update rule %s target %s: %w", ruleID, targetDial, err)
+	}
+	// Log only after the gateway accepted the change; logging before the
+	// admin round-trip reported health transitions that never happened.
+	if healthy {
+		slog.Info("caddy upstream marked healthy", "ruleID", ruleID, "target", targetDial)
+	} else {
+		slog.Warn("caddy upstream marked unhealthy", "ruleID", ruleID, "target", targetDial)
+	}
+	return nil
+}
+
+// caddyRouteMatchesRule reports whether a running-config route belongs to the
+// given routing rule. Route IDs are "gamepanel-<ruleID>" or
+// "gamepanel-<ruleID>-group"; a substring match would also hit siblings such
+// as "abc" inside "abc-v2".
+func caddyRouteMatchesRule(routeID, ruleID string) bool {
+	if routeID == "gamepanel-"+ruleID || routeID == "gamepanel-"+ruleID+"-group" {
+		return true
+	}
+	return false
 }
 
 func (p *CaddyReverseProxy) modifyCaddyUpstream(cfg map[string]any, ruleID, targetDial string, healthy bool) bool {
@@ -454,7 +471,7 @@ func (p *CaddyReverseProxy) modifyCaddyUpstream(cfg map[string]any, ruleID, targ
 				continue
 			}
 			rid, _ := route["@id"].(string)
-			if rid == "" || !strings.Contains(rid, ruleID) {
+			if rid == "" || !caddyRouteMatchesRule(rid, ruleID) {
 				continue
 			}
 			if p.modifyUpstreamsInRoute(route, targetDial, healthy) {
@@ -484,6 +501,7 @@ func (p *CaddyReverseProxy) modifyUpstreamsInRoute(route map[string]any, targetD
 			continue
 		}
 		var newUpstreams []any
+		alreadyPresent := false
 		for _, uRaw := range upstreamsRaw {
 			u, _ := uRaw.(map[string]any)
 			if u == nil {
@@ -496,11 +514,17 @@ func (p *CaddyReverseProxy) modifyUpstreamsInRoute(route map[string]any, targetD
 					modified = true
 					continue
 				}
-			} else {
-				newUpstreams = append(newUpstreams, u)
+				// Healthy re-add must preserve the stored entry (weight and
+				// any other fields) and stay idempotent: record presence and
+				// keep the single existing entry instead of appending a bare
+				// {"dial": ...} duplicate on every flap.
+				alreadyPresent = true
+				newUpstreams = append(newUpstreams, uRaw)
+				continue
 			}
+			newUpstreams = append(newUpstreams, u)
 		}
-		if healthy {
+		if healthy && !alreadyPresent {
 			newUpstreams = append(newUpstreams, map[string]any{
 				"dial": targetDial,
 			})

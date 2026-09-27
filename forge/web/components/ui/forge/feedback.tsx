@@ -185,7 +185,7 @@ export function ForgeAlert({
   return (
     <div
       className={cn("ui-alert", alertClass[tone], className)}
-      role={tone === "danger" ? "alert" : "status"}
+      role={tone === "danger" || tone === "warn" ? "alert" : "status"}
       {...rest}
     >
       <span className="mt-px shrink-0">

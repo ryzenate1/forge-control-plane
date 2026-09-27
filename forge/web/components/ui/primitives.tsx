@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
-  forwardRef, useId, useState,
+  cloneElement, forwardRef, isValidElement, useId, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -22,10 +22,6 @@ export {
 export {
   TableHeader, TableBody, TableRow, TableHead, TableCell,
 } from "./table";
-export {
-  Dialog as DialogProvider, DialogTrigger, DialogContent, DialogHeader,
-  DialogTitle, DialogDescription, DialogFooter,
-} from "./dialog";
 
 const variantMap: Record<string, "default" | "destructive" | "secondary" | "ghost"> = {
   primary: "default", secondary: "secondary", danger: "destructive", ghost: "ghost",
@@ -45,10 +41,19 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
 });
 
 export function Field({ id, label, hint, error, children }: { id: string; label: string; hint?: ReactNode; error?: string; children: ReactNode }) {
+  const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
+  let wiredChildren = children;
+  if (describedBy && isValidElement(children)) {
+    const child = children as React.ReactElement<{ "aria-describedby"?: string; "aria-invalid"?: boolean | string }>;
+    wiredChildren = cloneElement(child, {
+      "aria-describedby": [child.props["aria-describedby"], describedBy].filter(Boolean).join(" ") || undefined,
+      "aria-invalid": error ? true : child.props["aria-invalid"],
+    });
+  }
   return (
     <div className="space-y-1.5">
       <label className="ui-label" htmlFor={id}>{label}</label>
-      {children}
+      {wiredChildren}
       {error ? <p className="ui-field-error" id={`${id}-error`} role="alert">{error}</p> : hint ? <p className="ui-hint" id={`${id}-hint`}>{hint}</p> : null}
     </div>
   );
@@ -166,13 +171,14 @@ export function SearchInput({ label = "Search", className, ...props }: InputHTML
 
 export function Switch({ checked, onCheckedChange, label, disabled = false }: { checked: boolean; onCheckedChange: (checked: boolean) => void; label: ReactNode; disabled?: boolean }) {
   const id = useId();
+  const labelId = `${id}-label`;
   return (
-    <label className={cn("inline-flex items-center gap-2.5 text-xs", disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer")} htmlFor={id}>
-      <span className="t-eyebrow text-text-subtle">{label}</span>
-      <button aria-checked={checked} aria-label={typeof label === "string" ? label : undefined} className={cn("relative h-5 w-9 rounded-full border transition-colors", checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong")} disabled={disabled} id={id} onClick={() => onCheckedChange(!checked)} role="switch" type="button">
+    <div className={cn("inline-flex items-center gap-2.5 text-xs", disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
+      <span className="t-eyebrow text-text-subtle" id={labelId}>{label}</span>
+      <button aria-checked={checked} aria-labelledby={labelId} className={cn("relative h-5 w-9 rounded-full border transition-colors", checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong")} disabled={disabled} id={id} onClick={() => onCheckedChange(!checked)} role="switch" type="button">
         <span className={cn("absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked && "translate-x-4")} />
       </button>
-    </label>
+    </div>
   );
 }
 

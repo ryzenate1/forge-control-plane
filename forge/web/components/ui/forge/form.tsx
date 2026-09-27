@@ -39,12 +39,24 @@ export function ForgeField({
   children,
   htmlFor,
 }: ForgeFieldProps) {
+  const fallbackId = React.useId();
+  const controlId = htmlFor ?? fallbackId;
+  const describedBy = error ? `${controlId}-error` : hint ? `${controlId}-hint` : undefined;
+  let wiredChildren = children;
+  if (describedBy && React.isValidElement(children)) {
+    const child = children as React.ReactElement<{ "aria-describedby"?: string; "aria-invalid"?: boolean | string; id?: string }>;
+    wiredChildren = React.cloneElement(child, {
+      id: child.props.id ?? controlId,
+      "aria-describedby": [child.props["aria-describedby"], describedBy].filter(Boolean).join(" ") || undefined,
+      "aria-invalid": error ? true : child.props["aria-invalid"],
+    });
+  }
   return (
     <div className={cn("space-y-1.5", className)}>
       {label || labelAction ? (
         <div className="flex items-baseline justify-between gap-2">
           {label ? (
-            <label className="ui-label" htmlFor={htmlFor}>
+            <label className="ui-label" htmlFor={controlId}>
               {label}
               {required ? (
                 <span aria-hidden="true" className="ml-0.5 text-danger">
@@ -58,11 +70,11 @@ export function ForgeField({
           {labelAction}
         </div>
       ) : null}
-      {children}
+      {wiredChildren}
       {error ? (
-        <p className="ui-field-error">{error}</p>
+        <p className="ui-field-error" id={`${controlId}-error`} role="alert">{error}</p>
       ) : hint ? (
-        <p className="ui-hint">{hint}</p>
+        <p className="ui-hint" id={`${controlId}-hint`}>{hint}</p>
       ) : null}
     </div>
   );

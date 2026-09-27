@@ -42,8 +42,13 @@ scrape_configs:
   - job_name: grafana
     static_configs:
       - targets: ["grafana:3000"]
-  - job_name: caddy
-    # Caddy exposes its admin API metrics on port 2019.
-    metrics_path: /metrics
-    static_configs:
-      - targets: ["caddy:2019"]
+  # Caddy admin API (127.0.0.1:2019) is loopback-only inside the caddy
+  # container by design (unauthenticated config API — see compose.yml
+  # CADDY_ADMIN). It is NOT reachable at caddy:2019 over the backend
+  # network, so no scrape job is defined here. To monitor Caddy, expose
+  # metrics through the prometheus `caddy` module sidecar or bind the admin
+  # API to the backend network with authentication, then re-add:
+  # - job_name: caddy
+  #   metrics_path: /metrics
+  #   static_configs:
+  #     - targets: ["caddy:2019"]

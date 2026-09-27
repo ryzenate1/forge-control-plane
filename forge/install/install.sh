@@ -250,20 +250,24 @@ check_docker() {
 
 check_docker_compose() {
     log_step "Checking Docker Compose installation"
-    
-    if ! command -v docker-compose &> /dev/null && ! docker compose version &> /dev/null; then
-        log_error "Docker Compose is not installed"
-        exit 1
-    fi
 
-    local compose_version
-    if command -v docker-compose &> /dev/null; then
-        compose_version=$(docker-compose --version | awk '{print $3}')
-    else
+    # Docker Compose v2 (`docker compose`) is required; v1 `docker-compose`
+    # is EOL. Accept v1 only as a legacy fallback warning.
+    if docker compose version &> /dev/null; then
+        local compose_version
         compose_version=$(docker compose version | awk '{print $4}')
+        log_info "Docker Compose version: $compose_version"
+        return
     fi
 
-    log_info "Docker Compose version: $compose_version"
+    if command -v docker-compose &> /dev/null; then
+        log_warn "Found legacy docker-compose v1 only; install the v2 plugin (docker-compose-plugin)"
+        log_info "Docker Compose version: $(docker-compose --version)"
+        return
+    fi
+
+    log_error "Docker Compose is not installed (need 'docker compose' v2)"
+    exit 1
 }
 
 check_resources() {
@@ -280,9 +284,9 @@ check_resources() {
     fi
     log_info "RAM: ${total_ram_mb}MB"
 
-    # Check disk space
+    # Check disk space (integer GB — df reports KiB; float output would break -lt)
     local disk_space_gb
-    disk_space_gb=$(df / --output=size | tail -1 | awk '{print $1 / 1024 / 1024}')
+    disk_space_gb=$(df / --output=size | tail -1 | awk '{printf "%d", $1 / 1024 / 1024}')
     
     if [[ $disk_space_gb -lt $MIN_DISK_GB ]]; then
         log_error "Insufficient disk space: ${disk_space_gb}GB (minimum: ${MIN_DISK_GB}GB)"
@@ -301,14 +305,32 @@ check_resources() {
     log_info "CPUs: $cpu_count"
 }
 
+# --- Port probe (ss || netstat || /dev/tcp fallback) ---
+port_in_use() {
+    local port=$1
+    if command -v ss >/dev/null 2>&1; then
+        ss -tln 2>/dev/null | grep -q ":${port} "
+        return $?
+    fi
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -tln 2>/dev/null | grep -q "[:.]${port} "
+        return $?
+    fi
+    # Bash /dev/tcp fallback — no external dependency.
+    (echo >"/dev/tcp/127.0.0.1/${port}") >/dev/null 2>&1
+}
+
 check_ports() {
     log_step "Checking required ports"
-    
-    local required_ports=(80 443 8080 9090 3000)
+
+    # Full stack footprint: edge (80/443), API (8080), beacon (9090),
+    # web (3000), postgres (5432), redis (6379), SFTP (2022), grafana
+    # (3001), prometheus (9091 host-mapped), alertmanager (9093 host-mapped).
+    local required_ports=(80 443 8080 9090 3000 5432 6379 2022 3001 9091 9093)
     local available=true
-    
+
     for port in "${required_ports[@]}"; do
-        if ss -tlnp | grep -q ":$port "; then
+        if port_in_use "$port"; then
             log_warn "Port $port is already in use"
             available=false
         fi
@@ -485,15 +507,17 @@ create_directories() {
 
 generate_configuration() {
     log_step "Generating configuration"
-    
-    # Generate .env file
-    cat > "$CONFIG_DIR/.env" << EOF
-# GamePanel Forge Configuration
-GAMEPANEL_FQDN=$FQDN
-GAMEPANEL_ADMIN_EMAIL=$ADMIN_EMAIL
-GAMEPANEL_ADMIN_PASSWORD=$ADMIN_PASSWORD
-GAMEPANEL_DB_PASSWORD=$DB_PASSWORD
 
+    # Secrets are shell-quoted with %q so values containing spaces, $, quotes
+    # or newlines survive a later `set -a; . /etc/gamepanel/.env` re-source.
+    # Never log or echo these values.
+    {
+        printf '# GamePanel Forge Configuration\n'
+        printf 'GAMEPANEL_FQDN=%q\n' "$FQDN"
+        printf 'GAMEPANEL_ADMIN_EMAIL=%q\n' "$ADMIN_EMAIL"
+        printf 'GAMEPANEL_ADMIN_PASSWORD=%q\n' "$ADMIN_PASSWORD"
+        printf 'GAMEPANEL_DB_PASSWORD=%q\n' "$DB_PASSWORD"
+        cat << 'STATIC'
 # Database Configuration
 DB_HOST=localhost
 DB_PORT=5432
@@ -505,10 +529,11 @@ DOCKER_REGISTRY=ghcr.io
 DOCKER_NETWORK=gamepanel_network
 
 # Application Configuration
-APP_URL=https://$FQDN
-APP_TIMEZONE=UTC
-APP_DEBUG=false
-EOF
+STATIC
+        printf 'APP_URL=%q\n' "https://$FQDN"
+        printf 'APP_TIMEZONE=%q\n' "UTC"
+        printf 'APP_DEBUG=%q\n' "false"
+    } > "$CONFIG_DIR/.env"
 
     chmod 600 "$CONFIG_DIR/.env"
     log_info "Configuration generated"
@@ -516,8 +541,18 @@ EOF
 
 generate_docker_compose() {
     log_step "Generating Docker Compose configuration"
-    
-    cat > "$INSTALL_DIR/docker-compose.yml" << 'EOF'
+
+    # Unquoted EOF: installer values (FQDN, DB_PASSWORD) are baked in at
+    # generate time. Secrets are double-quoted in YAML so special characters
+    # ($, :, #, spaces) do not break parsing; embedded double-quotes and
+    # backslashes are escaped first.
+    local db_pw_esc fqdn_esc
+    db_pw_esc=${DB_PASSWORD//\\/\\\\}
+    db_pw_esc=${db_pw_esc//\"/\\\"}
+    fqdn_esc=${FQDN//\\/\\\\}
+    fqdn_esc=${fqdn_esc//\"/\\\"}
+
+    cat > "$INSTALL_DIR/docker-compose.yml" << EOF
 version: '3.8'
 
 services:
@@ -550,7 +585,7 @@ services:
     environment:
       - POSTGRES_DB=gamepanel
       - POSTGRES_USER=gamepanel
-      - POSTGRES_PASSWORD=${DB_PASSWORD}
+      - POSTGRES_PASSWORD="$db_pw_esc"
       - TZ=UTC
     networks:
       - gamepanel_network
@@ -565,7 +600,7 @@ services:
       - gamepanel_data:/data
     environment:
       - API_URL=http://api:8080
-      - APP_URL=https://${FQDN}
+      - APP_URL=https://$fqdn_esc
       - TZ=UTC
     networks:
       - gamepanel_network
@@ -689,43 +724,59 @@ EOF
 
 start_services() {
     log_step "Starting services"
-    
+
     cd "$INSTALL_DIR"
-    
+
+    # Docker Compose v2 only (`docker compose`); the standalone
+    # `docker-compose` v1 binary is EOL and must not be used.
+    if ! docker compose version >/dev/null 2>&1; then
+        log_error "Docker Compose v2 is required (docker compose version)"
+        exit 1
+    fi
+
     # Pull the latest images
     log_info "Pulling Docker images..."
-    docker-compose pull
-    
+    docker compose pull
+
     # Start the services
     log_info "Starting containers..."
-    docker-compose up -d
-    
+    docker compose up -d
+
     # Wait for services to be healthy
     log_info "Waiting for services to start..."
     sleep 10
-    
+
     # Check service status
-    docker-compose ps
+    docker compose ps
 }
 
 verify_installation() {
     log_step "Verifying installation"
-    
-    # Check if containers are running
-    local container_count
-    container_count=$(docker ps --filter "name=gamepanel-*" --format "{{.Names}}" | wc -l)
-    
-    if [[ $container_count -lt 3 ]]; then
-        log_error "Not all containers are running"
-        docker-compose logs
+
+    # Assert all four expected containers by exact name — a bare count can
+    # pass while the wrong set is running.
+    local expected_containers=(gamepanel-api gamepanel-db gamepanel-web gamepanel-proxy)
+    local missing=0 name
+    for name in "${expected_containers[@]}"; do
+        if docker ps --filter "name=^${name}$" --format "{{.Names}}" | grep -qx "$name"; then
+            log_info "Container running: $name"
+        else
+            log_error "Container not running: $name"
+            missing=$((missing + 1))
+        fi
+    done
+
+    if [[ $missing -gt 0 ]]; then
+        log_error "$missing of ${#expected_containers[@]} expected containers are not running"
+        docker compose logs --tail=100
         exit 1
     fi
-    
+
     log_info "All containers are running"
-    
-    # Test API connectivity
+
+    # Test API connectivity (readiness, not just liveness)
     local api_health
-    api_health=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/health || echo "000")
+    api_health=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8080/api/v1/health/ready || echo "000")
     
     if [[ "$api_health" != "200" ]]; then
         log_warn "API health check failed (HTTP $api_health)"
@@ -766,11 +817,11 @@ show_summary() {
     echo "   Logs:       $LOG_DIR"
     echo ""
     echo "🔧 Management Commands:"
-    echo "   Start:      cd $INSTALL_DIR && docker-compose up -d"
-    echo "   Stop:       cd $INSTALL_DIR && docker-compose down"
-    echo "   Restart:    cd $INSTALL_DIR && docker-compose restart"
-    echo "   Logs:       cd $INSTALL_DIR && docker-compose logs -f"
-    echo "   Update:     cd $INSTALL_DIR && docker-compose pull && docker-compose up -d"
+    echo "   Start:      cd $INSTALL_DIR && docker compose up -d"
+    echo "   Stop:       cd $INSTALL_DIR && docker compose down"
+    echo "   Restart:    cd $INSTALL_DIR && docker compose restart"
+    echo "   Logs:       cd $INSTALL_DIR && docker compose logs -f"
+    echo "   Update:     cd $INSTALL_DIR && docker compose pull && docker compose up -d"
     echo ""
     echo "⚠️  Important Notes:"
     echo "   - SSL certificates are not automatically configured"

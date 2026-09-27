@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
   },
-  "startup": "./TerrariaServer.bin.x86_64 -port {{SERVER_PORT}} -maxplayers {{MAX_PLAYERS}} -world {{WORLD_NAME}}.wld -autocreate {{WORLD_SIZE}} -automigrate true -difficulty {{DIFFICULTY}} -worldname {{WORLD_NAME}} -motd \"{{MOTD}}\" -pass {{SERVER_PASSWORD}} -noupnp",
+  "startup": "./TerrariaServer.bin.x86_64 -port {{SERVER_PORT}} -maxplayers {{MAX_PLAYERS}} -world \"{{WORLD_NAME}}.wld\" -autocreate {{WORLD_SIZE}} -automigrate true -difficulty {{DIFFICULTY}} -worldname \"{{WORLD_NAME}}\" -motd \"{{MOTD}}\" -pass \"{{SERVER_PASSWORD}}\" -noupnp",
   "config": {
     "files": {},
     "startup": {
@@ -116,8 +116,15 @@
     "entrypoint": "bash",
     "script": "#!/bin/bash\n# Terraria SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Terraria dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 105600 validate +quit\n\ncd /mnt/server\n\n# Make server binary executable\nif [ -f TerrariaServer.bin.x86_64 ]; then\n    chmod +x TerrariaServer.bin.x86_64\nelif [ -f Linux/TerrariaServer.bin.x86_64 ]; then\n    cp Linux/TerrariaServer.bin.x86_64 .\n    chmod +x TerrariaServer.bin.x86_64\nfi\n\necho \"Terraria server installation complete\""
   },
-  "supported_platforms": ["docker", "podman"],
-  "categories": ["sandbox", "adventure", "survival"],
+  "supported_platforms": [
+    "docker",
+    "podman"
+  ],
+  "categories": [
+    "sandbox",
+    "adventure",
+    "survival"
+  ],
   "file_denylist": [],
   "features": []
 }

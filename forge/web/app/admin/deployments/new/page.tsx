@@ -79,7 +79,7 @@ export default function NewDeploymentPage() {
             <div className="sm:col-span-2">
               <label className="block text-sm font-medium text-slate-300 mb-1.5">Server</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={serverId}
                 onChange={(e) => setServerId(e.target.value)}
               >
@@ -102,7 +102,7 @@ export default function NewDeploymentPage() {
                       type="button"
                       className={`rounded-lg border p-4 text-left transition-colors ${
                         isActive
-                          ? "border-[var(--brand)]/60 bg-[var(--brand)]/[0.08]"
+                          ? "border-[color-mix(in_srgb,var(--brand)_60%,transparent)] bg-[color-mix(in_srgb,var(--brand)_8%,transparent)]"
                           : "border-white/[0.06] bg-[var(--surface-input)] hover:border-white/[0.12]"
                       }`}
                       onClick={() => setStrategy(s.key)}

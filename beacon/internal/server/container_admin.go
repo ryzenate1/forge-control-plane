@@ -9,10 +9,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"path"
 	"strings"
 	"time"
 
+	"gamepanel/beacon/internal/runtime"
 	"gamepanel/beacon/internal/tokens"
 
 	"github.com/docker/docker/api/types"
@@ -854,6 +856,25 @@ func (s *Server) handleContainerExec(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusForbidden, "invalid command argument")
 			return
 		}
+		// Fixed argv, no shell: reject shell metacharacters and option
+		// injection so allowlisted diagnostics cannot be turned into command
+		// substitution or flag smuggling.
+		if strings.ContainsAny(arg, ";|&$`'\"*?~#(){}[]!\\") {
+			writeError(w, http.StatusForbidden, "invalid command argument")
+			return
+		}
+		if strings.HasPrefix(arg, "-") {
+			writeError(w, http.StatusForbidden, "flag arguments are not allowed")
+			return
+		}
+		if len(arg) > 1024 {
+			writeError(w, http.StatusForbidden, "command argument too long")
+			return
+		}
+	}
+	if len(body.Cmd) > 16 {
+		writeError(w, http.StatusForbidden, "too many command arguments")
+		return
 	}
 
 	docker, err := s.adminDockerClient()
@@ -1043,7 +1064,12 @@ func (s *Server) adminDockerClient() (*client.Client, error) {
 	if s.runtime == nil {
 		return nil, errRuntimeUnavailable
 	}
-	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	// The admin channel must never be redirectable to an arbitrary TCP
+	// daemon: validate the endpoint with the same policy the runtime uses.
+	if err := runtime.ValidateDockerEndpoint(os.Getenv("DOCKER_HOST")); err != nil {
+		return nil, err
+	}
+	return client.NewClientWithOpts(client.FromEnv, client.WithVersion("1.43"))
 }
 
 // isPlatformNetwork checks if a network is a platform-managed network

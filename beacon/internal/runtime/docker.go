@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"os"
 	pathpkg "path"
@@ -76,6 +77,12 @@ func NewDockerRuntime() (*DockerRuntime, error) {
 	}, nil
 }
 
+// ValidateDockerEndpoint reports whether raw is an acceptable Docker engine
+// endpoint. Only the local platform default, Unix sockets, named pipes, and
+// the least-privilege socket proxy are accepted; arbitrary TCP daemons would
+// expose an unauthenticated Docker API and allow endpoint redirection.
+func ValidateDockerEndpoint(raw string) error { return validateDockerEndpoint(raw) }
+
 func validateDockerEndpoint(raw string) error {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -114,10 +121,36 @@ func (r *DockerRuntime) ensureImage(ctx context.Context, imageRef string, regist
 	if strings.TrimSpace(imageRef) == "" {
 		return errors.New("container image is required")
 	}
-	if _, _, err := r.client.ImageInspectWithRaw(ctx, imageRef); err == nil {
-		// Locally built images are accepted without a registry signature because
-		// no remote bytes are introduced. Every remote pull must be immutable.
-		return nil
+	if inspect, _, err := r.client.ImageInspectWithRaw(ctx, imageRef); err == nil {
+		// Even on a cache hit the reference must be digest-pinned unless the
+		// operator explicitly opts into mutable tags. A cached tag pull is
+		// still a mutable reference: without this check an attacker who can
+		// influence the tag (or a stale cache entry) bypasses immutability.
+		// Pinned references are additionally verified against the cached
+		// image's RepoDigests so a stale cache entry for a different digest
+		// cannot satisfy the request.
+		if pinnedImagePattern.MatchString(imageRef) {
+			want := imageRef[strings.LastIndex(imageRef, "@")+1:]
+			for _, repoDigest := range inspect.RepoDigests {
+				if strings.HasSuffix(repoDigest, "@"+want) || strings.HasSuffix(repoDigest, want) {
+					return nil
+				}
+			}
+			// Pinned but the local cache does not carry the requested digest:
+			// fall through to pull the exact digest below.
+		} else if r.allowUnpinnedImages {
+			return nil
+		} else if len(inspect.RepoDigests) > 0 {
+			// Cached image that was originally resolved to a registry digest.
+			// Still reject: the requested reference itself is mutable, so a
+			// future pull could resolve differently. Operators who need
+			// mutable tags must set DAEMON_ALLOW_UNPINNED_IMAGES=true.
+			return fmt.Errorf("remote image %q is not digest-pinned; use name@sha256:<64 hex characters>", imageRef)
+		} else {
+			// Locally built images carry no RepoDigests because no remote
+			// bytes were introduced; they are accepted without a pin.
+			return nil
+		}
 	} else if !errdefs.IsNotFound(err) {
 		return fmt.Errorf("inspect image %q: %w", imageRef, err)
 	}
@@ -240,7 +273,10 @@ func (r *DockerRuntime) reconcile(ctx context.Context, req CreateRequest) error 
 	_, err = createAndStart(req.IOWeight)
 	if err != nil && req.IOWeight > 0 && strings.Contains(err.Error(), "io.weight") {
 		// Some hosts (e.g. Docker Desktop on macOS) lack the io controller
-		// cgroup; retry once without the best-effort I/O weight limit.
+		// cgroup; retry once without the best-effort I/O weight limit. The
+		// fallback is logged so a silently-dropped limit cannot be mistaken
+		// for an enforced one.
+		log.Printf("[runtime] io.weight unsupported by host, retrying workload %q without it: %v", req.ServerID, err)
 		if _, err = createAndStart(0); err != nil {
 			return err
 		}
@@ -264,6 +300,13 @@ func (r *DockerRuntime) Install(ctx context.Context, req InstallRequest) (Instal
 	if req.Entrypoint == "" {
 		req.Entrypoint = "sh"
 	}
+	if err := validateInstallEnv(req.Env); err != nil {
+		return InstallResult{}, err
+	}
+	// Bound the install so a hung script cannot hold the worker forever.
+	installCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
+	defer cancel()
+	ctx = installCtx
 	if err := r.ensureExistingNetwork(ctx, r.defaultNetwork); err != nil {
 		return InstallResult{}, err
 	}
@@ -280,6 +323,10 @@ func (r *DockerRuntime) Install(ctx context.Context, req InstallRequest) (Instal
 			Cmd:        []string{req.Entrypoint, "-lc", req.Script},
 			Env:        req.Env,
 			WorkingDir: "/mnt/server",
+			// Installers run as an unprivileged user. Anything that
+			// legitimately needs root must do so through the image's own
+			// entrypoint, not through Beacon granting it.
+			User: "65534:65534",
 			Labels: map[string]string{
 				"modern-game-panel.server_id": req.ServerID,
 				"modern-game-panel.job":       "install",
@@ -287,16 +334,21 @@ func (r *DockerRuntime) Install(ctx context.Context, req InstallRequest) (Instal
 		},
 		&container.HostConfig{
 			Mounts: []mount.Mount{
-				{Type: mount.TypeBind, Source: rootDir, Target: "/mnt/server"},
+				{Type: mount.TypeBind, Source: rootDir, Target: "/mnt/server", ReadOnly: false, BindOptions: &mount.BindOptions{CreateMountpoint: false}},
 			},
-			NetworkMode:    container.NetworkMode(r.defaultNetwork),
+			NetworkMode: container.NetworkMode(r.defaultNetwork),
+			Resources: container.Resources{
+				Memory:     512 * 1024 * 1024,
+				MemorySwap: 512 * 1024 * 1024,
+				PidsLimit:  ptrInt64(256),
+			},
 			CapDrop:        []string{"ALL"},
 			Privileged:     false,
 			Init:           ptrBool(true),
 			ReadonlyRootfs: true,
 			SecurityOpt:    []string{"no-new-privileges:true"},
 			Tmpfs: map[string]string{
-				"/tmp": "rw,exec,size=64M",
+				"/tmp": "rw,noexec,nosuid,nodev,size=64M",
 			},
 		},
 		nil,
@@ -734,29 +786,68 @@ func validateRootDir(rootDir string) (string, error) {
 	return rootDir, nil
 }
 
+// canonicalMountSource cleans a host mount source exactly once and resolves it
+// through symlinks exactly once, so every caller shares the same canonical
+// form and a TOCTOU between two resolutions cannot smuggle in a different
+// directory.
+func canonicalMountSource(source string) (string, error) {
+	if !filepath.IsAbs(source) {
+		return "", errors.New("custom mount source must be absolute")
+	}
+	cleaned := filepath.Clean(source)
+	resolved, err := filepath.EvalSymlinks(cleaned)
+	if err != nil {
+		return "", fmt.Errorf("resolve custom mount source %q: %w", cleaned, err)
+	}
+	return resolved, nil
+}
+
+// validateInstallEnv rejects malformed or dangerous installer environment
+// entries before they reach the container config.
+func validateInstallEnv(env []string) error {
+	for _, entry := range env {
+		name, _, ok := strings.Cut(entry, "=")
+		if !ok || strings.TrimSpace(name) == "" {
+			return fmt.Errorf("invalid environment entry %q", entry)
+		}
+		if strings.ContainsAny(entry, "\x00\r\n") {
+			return fmt.Errorf("invalid environment entry %q", name)
+		}
+		for _, r := range name {
+			if (r < 'A' || r > 'Z') && (r < 'a' || r > 'z') && (r < '0' || r > '9') && r != '_' {
+				return fmt.Errorf("invalid environment name %q", name)
+			}
+		}
+	}
+	return nil
+}
+
 func buildContainerMounts(rootDir string, custom []Mount) ([]mount.Mount, error) {
 	rootDir, err := validateRootDir(rootDir)
 	if err != nil {
 		return nil, err
 	}
+	// Docker bind mounts inherit the host's mount flags, so Beacon requests a
+	// recursive read-only bind where asked and always runs workloads with a
+	// read-only rootfs, no-new-privileges, and dropped capabilities (see
+	// buildHostConfigWithSettings). The OCI runtimes (containerd) carry
+	// explicit nosuid,nodev,noexec bind options; Docker's Mount API exposes no
+	// equivalent flag, so the hardening here is a single canonicalization plus
+	// strict target confinement.
 	mounts := []mount.Mount{{
-		Type:   mount.TypeBind,
-		Source: rootDir,
-		Target: serverContainerRoot,
+		Type:        mount.TypeBind,
+		Source:      rootDir,
+		Target:      serverContainerRoot,
+		BindOptions: &mount.BindOptions{CreateMountpoint: false},
 	}}
 	for _, customMount := range custom {
 		if customMount.Source == "" || customMount.Target == "" {
 			continue
 		}
-		if !filepath.IsAbs(customMount.Source) {
-			return nil, errors.New("custom mount source must be absolute")
-		}
-		source := filepath.Clean(customMount.Source)
-		resolved, err := filepath.EvalSymlinks(source)
+		source, err := canonicalMountSource(customMount.Source)
 		if err != nil {
-			return nil, fmt.Errorf("resolve custom mount source %q: %w", source, err)
+			return nil, err
 		}
-		source = resolved
 		target := pathpkg.Clean(customMount.Target)
 		if !pathpkg.IsAbs(target) || target == "/" {
 			return nil, errors.New("custom mount target must be an absolute container path below /")
@@ -765,10 +856,11 @@ func buildContainerMounts(rootDir string, custom []Mount) ([]mount.Mount, error)
 			return nil, errors.New("custom mount cannot replace /home/container")
 		}
 		mounts = append(mounts, mount.Mount{
-			Type:     mount.TypeBind,
-			Source:   source,
-			Target:   target,
-			ReadOnly: customMount.ReadOnly,
+			Type:        mount.TypeBind,
+			Source:      source,
+			Target:      target,
+			ReadOnly:    customMount.ReadOnly,
+			BindOptions: &mount.BindOptions{CreateMountpoint: false, ReadOnlyForceRecursive: customMount.ReadOnly},
 		})
 	}
 	return mounts, nil

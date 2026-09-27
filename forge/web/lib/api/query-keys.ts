@@ -88,6 +88,16 @@ export const queryKeys = {
   reservations: { all: ["reservations"] as const },
   recovery: { all: ["recovery"] as const },
   users: { all: ["users"] as const },
+  apps: {
+    all: ["apps"] as const,
+    lists: () => [...queryKeys.apps.all] as const,
+    detail: (id: string) => [...queryKeys.apps.all, "detail", id] as const,
+    store: (category: string, search: string) => [...queryKeys.apps.all, "store", category, search] as const,
+  },
+  session: {
+    all: ["session"] as const,
+    currentUser: () => [...queryKeys.session.all, "currentUser"] as const,
+  },
 } as const;
 
 /**

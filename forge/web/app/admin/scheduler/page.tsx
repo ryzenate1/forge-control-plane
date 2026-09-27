@@ -612,7 +612,7 @@ export default function AdminSchedulerPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={affinityForm.type}
                 onChange={(e) => setAffinityForm({ ...affinityForm, type: e.target.value as "affinity" | "anti_affinity" })}
               >
@@ -676,7 +676,7 @@ export default function AdminSchedulerPage() {
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type (maps to key)</label>
                 <select
-                  className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                  className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                   value={constraintFormUI.type}
                   onChange={(e) => setConstraintFormUI({ ...constraintFormUI, type: e.target.value as ConstraintUI["type"] })}
                 >
@@ -690,7 +690,7 @@ export default function AdminSchedulerPage() {
               <div>
                 <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Operator</label>
                 <select
-                  className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                  className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                   value={constraintFormUI.operator}
                   onChange={(e) => setConstraintFormUI({ ...constraintFormUI, operator: e.target.value as ConstraintUI["operator"] })}
                 >

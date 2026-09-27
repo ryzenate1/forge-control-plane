@@ -22,7 +22,7 @@ import { statusTone } from "@/lib/api/status";
 import { StatusDot } from "@/components/ui/primitives";
 import { DbStatCards } from "./databases-overview";
 
-const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15";
+const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]";
 
 const engineVersions: Record<string, string[]> = {
   postgresql: ["13", "14", "15", "16"],

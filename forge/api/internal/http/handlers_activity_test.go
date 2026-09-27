@@ -43,6 +43,8 @@ func TestAdminActivityRoutesAreCanonicalAndProtected(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("user", tokenClaims{Role: "admin"})
+		c.Locals("apiScopes", []string{"*"})
+		c.Locals("scopedAuth", false)
 		return c.Next()
 	})
 	registerActivityRoutes(app, Config{ActivityService: activity.New(store)})
@@ -123,6 +125,8 @@ func TestAdminActivityQueryRejectsNonAdmin(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("user", tokenClaims{Role: "user"})
+		c.Locals("apiScopes", []string{})
+		c.Locals("scopedAuth", false)
 		return c.Next()
 	})
 	registerActivityRoutes(app, Config{ActivityService: activity.New(&fakeActivityStore{})})

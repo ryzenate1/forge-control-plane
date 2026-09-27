@@ -370,7 +370,13 @@ func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 	disk := resourceScore(capacity.TotalDisk, capacity.AvailableDisk)
 	heartbeat := heartbeatScore(node.LastSeenAt)
 	status := statusScore(node.ActualState)
-	total := (cpu + memory + disk + heartbeat + status) / 5
+	total := averageKnownScores(cpu, memory, disk, heartbeat, status)
+	if total < 0 {
+		// Nothing reported: do not fabricate a 30/50 "score" for a
+		// never-seen node. Unknown is recorded as -1 so dashboards can show
+		// "unknown" instead of a misleading mid-range health.
+		total = -1
+	}
 	_, _ = s.store.CreateNodeHealthHistory(ctx, store.CreateNodeHealthHistoryRequest{
 		NodeID:          node.ID,
 		ActualState:     node.ActualState,
@@ -393,7 +399,8 @@ func (s *Service) recordNodeHealth(ctx context.Context, node store.Node) {
 
 func resourceScore(total, available int) int {
 	if total <= 0 {
-		return 50
+		// Unknown capacity: excluded from averages, never a middling 50.
+		return -1
 	}
 	used := total - available
 	if used < 0 {
@@ -409,9 +416,27 @@ func resourceScore(total, available int) int {
 	return score
 }
 
+// averageKnownScores averages only reported (>= 0) components; unknown (-1)
+// is excluded, and fully-unknown totals stay -1.
+func averageKnownScores(scores ...int) int {
+	sum, count := 0, 0
+	for _, v := range scores {
+		if v < 0 {
+			continue
+		}
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return -1
+	}
+	return sum / count
+}
+
 func heartbeatScore(lastSeen *time.Time) int {
 	if lastSeen == nil {
-		return 0
+		// Never seen: unknown, not 0.
+		return -1
 	}
 	age := time.Since(*lastSeen)
 	switch {
@@ -432,8 +457,11 @@ func statusScore(status string) int {
 		return 100
 	case "degraded":
 		return 40
-	default:
+	case "offline":
 		return 0
+	default:
+		// Empty/unrecognised state is "not reported" (unknown), not offline.
+		return -1
 	}
 }
 

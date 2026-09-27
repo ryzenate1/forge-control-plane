@@ -105,9 +105,13 @@ func registerRegistryRoutes(protected fiber.Router, cfg Config, adminIPAccess, m
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	// Verify performs a real `docker login` on the first available node using the
-	// stored credential, so an operator knows the secret is valid before relying
-	// on it for pulls.
+	// Verify performs a real `docker login` using the stored credential, so an
+	// operator knows the secret is valid before relying on it for pulls.
+	// The target node must be named explicitly via ?node=<id>: verifying
+	// against whichever node happens to be listed first would silently bless
+	// (or condemn) a credential for the wrong machine. Without ?node=, every
+	// node is verified and a per-node report is returned; the request fails
+	// with 502 only when all nodes fail.
 	reg.Post("/:id/verify", mutationLimiter, requireAdminScope("settings.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -118,22 +122,57 @@ func registerRegistryRoutes(protected fiber.Router, cfg Config, adminIPAccess, m
 		if cfg.Daemon == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "daemon client unavailable")
 		}
-		nodes, nerr := cfg.Store.ListNodes(ctx)
-		if nerr != nil || len(nodes) == 0 {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "no nodes available to verify against")
-		}
-		nodeToken, terr := cfg.Store.GetNodeDaemonCredential(ctx, nodes[0].ID)
-		if terr != nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, terr.Error())
-		}
 		auth := daemon.RegistryAuth{
 			Username:      cred.Username,
 			Password:      cred.Credential,
 			ServerAddress: cred.ServerAddress,
 		}
-		if err := cfg.Daemon.LoginRegistry(ctx, nodes[0].BaseURL, nodeToken, auth); err != nil {
-			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"ok": false, "error": err.Error()})
+		if nodeID := c.Query("node"); nodeID != "" {
+			target, err := resolveSingleNodeTarget(cfg, nodeID)
+			if err != nil {
+				return err
+			}
+			if err := cfg.Daemon.LoginRegistry(ctx, target.NodeURL, target.NodeToken, auth); err != nil {
+				return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"ok": false, "nodeId": target.NodeID, "error": err.Error()})
+			}
+			return c.JSON(fiber.Map{"ok": true, "verified": true, "nodeId": target.NodeID})
 		}
-		return c.JSON(fiber.Map{"ok": true, "verified": true})
+		nodes, nerr := cfg.Store.ListNodes(ctx)
+		if nerr != nil || len(nodes) == 0 {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "no nodes available to verify against")
+		}
+		type nodeVerifyResult struct {
+			NodeID   string `json:"nodeId"`
+			NodeName string `json:"nodeName,omitempty"`
+			Ok       bool   `json:"ok"`
+			Error    string `json:"error,omitempty"`
+		}
+		results := make([]nodeVerifyResult, 0, len(nodes))
+		for _, n := range nodes {
+			if n.BaseURL == "" {
+				results = append(results, nodeVerifyResult{NodeID: n.ID, NodeName: n.Name, Error: "node has no base URL"})
+				continue
+			}
+			nodeToken, terr := cfg.Store.GetNodeDaemonCredential(ctx, n.ID)
+			if terr != nil {
+				results = append(results, nodeVerifyResult{NodeID: n.ID, NodeName: n.Name, Error: "node credential unavailable"})
+				continue
+			}
+			if err := cfg.Daemon.LoginRegistry(ctx, n.BaseURL, nodeToken, auth); err != nil {
+				results = append(results, nodeVerifyResult{NodeID: n.ID, NodeName: n.Name, Error: err.Error()})
+				continue
+			}
+			results = append(results, nodeVerifyResult{NodeID: n.ID, NodeName: n.Name, Ok: true})
+		}
+		okCount := 0
+		for _, r := range results {
+			if r.Ok {
+				okCount++
+			}
+		}
+		if okCount == 0 {
+			return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"ok": false, "results": results})
+		}
+		return c.JSON(fiber.Map{"ok": true, "verified": true, "results": results})
 	})
 }

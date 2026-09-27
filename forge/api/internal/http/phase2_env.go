@@ -31,13 +31,24 @@ func registerPhase2EnvironmentEngine(v1 fiber.Router, protected fiber.Router, cf
 		return nil
 	}
 
-	manifestSvc := envmanifest.New(cfg.Store)
-	manifestSvc.WithEnvVars(cfg.Store)
+	// Injected via Config (handlers -> services -> store); inline construction
+	// is the dev/test fallback when main has not populated the fields.
+	manifestSvc := cfg.EnvManifestService
+	if manifestSvc == nil {
+		manifestSvc = envmanifest.New(cfg.Store)
+		manifestSvc.WithEnvVars(cfg.Store)
+	}
 
-	groupsSvc := envgroups.New(cfg.Store)
+	groupsSvc := cfg.EnvGroupsService
+	if groupsSvc == nil {
+		groupsSvc = envgroups.New(cfg.Store)
+	}
 
-	domainOpts := domainsenv.OptionsFromEnv(nil)
-	domainSvc := domainsenv.New(cfg.Store, cfg.AcmeService, domainOpts, cfg.Logger)
+	domainSvc := cfg.DomainsEnvService
+	if domainSvc == nil {
+		domainOpts := domainsenv.OptionsFromEnv(nil)
+		domainSvc = domainsenv.New(cfg.Store, cfg.AcmeService, domainOpts, cfg.Logger)
+	}
 
 	// Reconciler: ensures wildcard CNAME + TLS intents for every environment.
 	if cfg.BackgroundContext != nil {
@@ -290,6 +301,9 @@ func phase2EnvAccess(c *fiber.Ctx, cfg *Config) (store.EnvContext, error) {
 	claims, ok := c.Locals("user").(tokenClaims)
 	if !ok {
 		return store.EnvContext{}, fiber.NewError(fiber.StatusUnauthorized, "missing session")
+	}
+	if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+		return store.EnvContext{}, fiber.NewError(fiber.StatusForbidden, "scoped credentials cannot access environment resources")
 	}
 	ctx, cancel := requestContext()
 	defer cancel()

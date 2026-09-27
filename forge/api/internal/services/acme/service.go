@@ -310,15 +310,51 @@ func (s *Service) IssueCertificate(ctx context.Context, req IssueCertificateRequ
 	}
 
 	// Install into the live gateway so HTTPS actually serves the issued cert.
-	// Best-effort: a delivery failure is logged, not fatal to issuance (the cert
-	// is validly obtained and persisted, and auto-renew/re-sync can retry).
-	if s.gateway != nil {
-		if gerr := s.gateway.InstallCertificate(ctx, certPEM, keyPEM, req.Domains); gerr != nil {
-			s.logger.Warn("certificate issued but not installed into gateway", "domains", req.Domains, "error", gerr.Error())
-		}
+	// This is not best-effort: a certificate the proxy never received leaves
+	// HTTPS serving the previous (possibly expiring) material, and reporting a
+	// plain success for it would be reporting work that was not performed. The
+	// row is already persisted, so the error names the certificate ID to retry
+	// delivery against instead of placing a second ACME order.
+	if err := s.deliverCertificate(ctx, certPEM, keyPEM, req.Domains, cert.ID, "issue"); err != nil {
+		return store.Certificate{}, fmt.Errorf("%w (certificate %s is stored; renew or re-install it rather than issuing again)", err, cert.ID)
 	}
 
-	return cert, nil
+	return redactCertificate(cert), nil
+}
+
+// deliverCertificate installs issued/renewed material into the live reverse
+// proxy and records the outcome in certificate_attempts so a delivery failure
+// outlives the log line. A nil gateway means delivery is not wired, which is a
+// configuration state, not a failure.
+func (s *Service) deliverCertificate(ctx context.Context, certPEM, keyPEM string, domains []string, certID, attemptType string) error {
+	if s.gateway == nil {
+		return nil
+	}
+	attempt, aerr := s.store.CreateCertificateAttempt(ctx, store.CreateCertificateAttemptRequest{
+		CertificateID: certID,
+		AttemptType:   attemptType,
+		Domains:       domains,
+	})
+	err := s.gateway.InstallCertificate(ctx, certPEM, keyPEM, domains)
+	if err != nil {
+		s.recordAttemptResult(ctx, attempt, aerr, "failed", err.Error())
+		return err
+	}
+	s.recordAttemptResult(ctx, attempt, aerr, "completed", "")
+	return nil
+}
+
+// recordAttemptResult persists an attempt outcome. A bookkeeping write failure is
+// logged but never replaces the caller's result — the issuance/delivery outcome
+// is the primary fact here.
+func (s *Service) recordAttemptResult(ctx context.Context, attempt store.CertificateAttempt, createErr error, status, msg string) {
+	if createErr != nil {
+		s.logger.Warn("acme: could not record certificate attempt", "status", status, "error", createErr)
+		return
+	}
+	if uerr := s.store.UpdateCertificateAttempt(ctx, attempt.ID, status, msg); uerr != nil {
+		s.logger.Warn("acme: could not finalise certificate attempt", "attemptId", attempt.ID, "status", status, "error", uerr)
+	}
 }
 
 func (s *Service) configureChallenge(client *lego.Client, challengeType, dnsProvider string, dnsCredentials map[string]string) error {
@@ -342,6 +378,12 @@ func (s *Service) configureChallenge(client *lego.Client, challengeType, dnsProv
 		client.Challenge.SetDNS01Provider(provider,
 			dns01.AddRecursiveNameservers([]string{"1.1.1.1:53", "8.8.8.8:53"}),
 		)
+	default:
+		// Falling through here would leave the client with no solver at all, so
+		// the CA rejects the order for an obscure reason. A stored row with an
+		// empty or unrecognised challenge type is a data problem, not something
+		// to silently paper over with a default.
+		return fmt.Errorf("unsupported challenge type %q: expected %s or %s", challengeType, ChallengeTypeHTTP01, ChallengeTypeDNS01)
 	}
 	return nil
 }
@@ -393,11 +435,128 @@ func (s *Service) RenewCertificate(ctx context.Context, certID string) (store.Ce
 		return store.Certificate{}, err
 	}
 
-	return updated, nil
+	// The renewed material has to reach the proxy or the rotation is invisible:
+	// the gateway keeps serving the certificate it already has, which is the one
+	// that was about to expire. Report a failed renewal rather than a success,
+	// exactly as issuance does.
+	if err := s.deliverCertificate(ctx, certPEM, keyPEM, cert.Domains, certID, "renew"); err != nil {
+		return store.Certificate{}, fmt.Errorf("certificate renewed but not installed into the gateway: %w", err)
+	}
+
+	return redactCertificate(updated), nil
 }
 
 func (s *Service) RevokeCertificate(ctx context.Context, certID string) error {
 	return s.store.DeleteCertificate(ctx, certID)
+}
+
+// ImportManualCertificate validates an operator-supplied PEM bundle and
+// persists it as a non-renewable manual certificate. Layering: handlers ->
+// acme.Service -> store; handlers never touch the certificates table here.
+func (s *Service) ImportManualCertificate(ctx context.Context, certPEM, keyPEM, chain string) (store.Certificate, error) {
+	if s == nil || s.store == nil {
+		return store.Certificate{}, errors.New("certificate store not initialized")
+	}
+	certData, err := parseManualCertificatePEM(certPEM)
+	if err != nil {
+		return store.Certificate{}, fmt.Errorf("invalid certificate: %w", err)
+	}
+	if err := checkManualKeyPair(certPEM, keyPEM); err != nil {
+		return store.Certificate{}, fmt.Errorf("key pair mismatch: %w", err)
+	}
+	domains := append([]string{}, certData.DNSNames...)
+	if len(domains) == 0 && certData.Subject.CommonName != "" {
+		domains = append(domains, certData.Subject.CommonName)
+	}
+	fullPEM := certPEM
+	if strings.TrimSpace(chain) != "" {
+		fullPEM = certPEM + "\n" + chain
+	}
+	return s.store.CreateCertificate(ctx, store.CreateCertificateRequest{
+		Domains:     domains,
+		Issuer:      certData.Issuer.String(),
+		Certificate: fullPEM,
+		PrivateKey:  keyPEM,
+		ExpiresAt:   certData.NotAfter,
+		AutoRenew:   false,
+		Provider:    ProviderManual,
+	})
+}
+
+// ExportCertificate returns the stored material for download/export after
+// verifying a private key is present. GetCertificate stays the read path.
+func (s *Service) ExportCertificate(ctx context.Context, certID string) (store.Certificate, error) {
+	if s == nil || s.store == nil {
+		return store.Certificate{}, errors.New("certificate store not initialized")
+	}
+	cert, err := s.store.GetCertificate(ctx, certID)
+	if err != nil {
+		return store.Certificate{}, err
+	}
+	if strings.TrimSpace(cert.PrivateKey) == "" {
+		return store.Certificate{}, errors.New("private key not available for export")
+	}
+	return cert, nil
+}
+
+func parseManualCertificatePEM(certPEM string) (*x509.Certificate, error) {
+	block, _ := pem.Decode([]byte(certPEM))
+	if block == nil || block.Type != "CERTIFICATE" {
+		return nil, errors.New("no valid PEM certificate found")
+	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("parse certificate: %w", err)
+	}
+	if time.Now().After(cert.NotAfter) {
+		return nil, errors.New("certificate has expired")
+	}
+	return cert, nil
+}
+
+func checkManualKeyPair(certPEM, keyPEM string) error {
+	certBlock, _ := pem.Decode([]byte(certPEM))
+	if certBlock == nil {
+		return errors.New("no certificate PEM data")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return err
+	}
+	keyBlock, _ := pem.Decode([]byte(keyPEM))
+	if keyBlock == nil {
+		return errors.New("no private key PEM data")
+	}
+	privKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		privKey, err = x509.ParsePKCS1PrivateKey(keyBlock.Bytes)
+		if err != nil {
+			privKey, err = x509.ParseECPrivateKey(keyBlock.Bytes)
+			if err != nil {
+				return fmt.Errorf("parse private key: %w", err)
+			}
+		}
+	}
+	certPubKey, ok := cert.PublicKey.(crypto.PublicKey)
+	if !ok {
+		return errors.New("invalid certificate public key type")
+	}
+	privPubKey, ok := privKey.(interface{ Public() crypto.PublicKey })
+	if !ok {
+		return errors.New("invalid private key type")
+	}
+	certPubKeyBytes, err := x509.MarshalPKIXPublicKey(certPubKey)
+	if err != nil {
+		return err
+	}
+	privPubKeyBytes, err := x509.MarshalPKIXPublicKey(privPubKey.Public())
+	if err != nil {
+		return err
+	}
+	if string(certPubKeyBytes) != string(privPubKeyBytes) {
+		return errors.New("certificate and private key do not match")
+	}
+	return nil
 }
 
 func (s *Service) GetCertificate(ctx context.Context, certID string) (store.Certificate, error) {
@@ -529,6 +688,9 @@ func (s *Service) renewWithRetry(ctx context.Context, cert store.Certificate, pr
 }
 
 func (s *Service) renewOnce(cert store.Certificate, privateKey crypto.PrivateKey) (*certificate.Resource, error) {
+	if len(cert.Domains) == 0 {
+		return nil, errors.New("certificate has no domains recorded")
+	}
 	certs := parseCertificateChain([]byte(cert.Certificate))
 	if len(certs) == 0 {
 		return nil, errors.New("no certificates found in stored cert")
@@ -539,6 +701,13 @@ func (s *Service) renewOnce(cert store.Certificate, privateKey crypto.PrivateKey
 	if err != nil {
 		return nil, fmt.Errorf("marshal private key: %w", err)
 	}
+	// lego's Renew re-parses Resource.Certificate with certcrypto.ParsePEMBundle
+	// and Resource.PrivateKey with certcrypto.ParsePEMPrivateKey. Both require
+	// PEM: ParsePEMBundle fails with "no certificates were found while parsing
+	// the bundle" on DER, and ParsePEMPrivateKey fails with "invalid PEM block".
+	// Passing x509Cert.Raw and the PKCS#8 DER here therefore made *every* renewal
+	// fail before a single ACME request was made, so no certificate ever rotated.
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
 	dirURL := defaultDirectoryURL
 	if cert.Provider == ProviderLetsEncryptStaging {
@@ -575,16 +744,32 @@ func (s *Service) renewOnce(cert store.Certificate, privateKey crypto.PrivateKey
 	}
 	myUser.registration = reg
 
+	// lego derives the SAN set from the PEM in Resource.Certificate (it re-parses
+	// the bundle and calls ExtractDomains on the leaf), so the stored PEM bundle
+	// is passed through verbatim and Resource.Domain only labels the order.
 	res, err := client.Certificate.Renew(certificate.Resource{
-		Domain:      cert.Domains[0],
-		Certificate: x509Cert.Raw,
-		PrivateKey:  keyDER,
+		Domain:      primaryDomain(cert, x509Cert),
+		Certificate: []byte(cert.Certificate),
+		PrivateKey:  keyPEM,
 	}, true, false, "")
 	if err != nil {
 		return nil, fmt.Errorf("acme renew: %w", err)
 	}
 
 	return res, nil
+}
+
+// primaryDomain returns the name to label a renewal order with: the first SAN of
+// the issued leaf when it has one, otherwise the CN, otherwise the first domain
+// recorded for the certificate.
+func primaryDomain(cert store.Certificate, leaf *x509.Certificate) string {
+	if len(leaf.DNSNames) > 0 {
+		return leaf.DNSNames[0]
+	}
+	if leaf.Subject.CommonName != "" {
+		return leaf.Subject.CommonName
+	}
+	return cert.Domains[0]
 }
 
 func parseCertificateChain(certPEM []byte) []*x509.Certificate {

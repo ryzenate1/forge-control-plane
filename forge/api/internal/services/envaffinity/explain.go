@@ -33,6 +33,12 @@ type ExplainResult struct {
 	MissingLabels   []string               `json:"missingLabels"`
 	IsCandidate     bool                   `json:"isCandidate"`
 	Ranking         []Ranking              `json:"ranking,omitempty"`
+	// FilteredOut names the candidates the engine excluded and why, and
+	// ScoreFailures names the ones that passed filtering but could not be
+	// scored. Without them a short ranking looks like those nodes were never
+	// considered.
+	FilteredOut   []placement.FilterReason `json:"filteredOut,omitempty"`
+	ScoreFailures []placement.ScoreFailure `json:"scoreFailures,omitempty"`
 }
 
 var errNodeNotFound = errors.New("node not found")
@@ -133,11 +139,16 @@ func (m *EnvAffinity) ExplainPlacement(ctx context.Context, nodeID string, req d
 
 	engine := placement.NewEngine(placement.NewScorer(placement.StrategyLeastLoaded),
 		placement.NewConstraintChecker())
-	results, err := engine.PlaceAll(ctx, candidates, workload)
+	// Explain through the engine's own explain path so filter exclusions and
+	// scoring failures are collected, not dropped: the viewer must show why a
+	// node lost, including the nodes that never made the ranking.
+	report, err := placement.ExplainPlacement(ctx, engine, candidates, workload)
 	if err != nil {
 		return result, err
 	}
-	for _, r := range results {
+	result.FilteredOut = report.FilteredOut
+	result.ScoreFailures = report.ScoreFailures
+	for _, r := range report.ScoredCandidates {
 		row := Ranking{NodeID: r.NodeID, Score: r.Score, Reasons: r.Reasons}
 		if env := envOf(enriched.Ctx.NodeLabels, r.NodeID); env != "" {
 			row.Env = env

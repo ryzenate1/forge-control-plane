@@ -35,7 +35,7 @@ func registerCrashDetectionRoutes(protected fiber.Router, cfg Config, detector *
 	})
 
 	// GET /admin/crash-detection/config - get current crash detection config
-	admin.Get("/crash-detection/config", func(c *fiber.Ctx) error {
+	admin.Get("/crash-detection/config", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		dc := crashdetector.DefaultConfig()
 		return c.JSON(fiber.Map{
 			"threshold":   dc.Threshold,

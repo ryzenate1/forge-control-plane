@@ -1,4 +1,4 @@
-import { ReactNode } from 'react';
+import type { ReactNode } from 'react';
 
 interface FormCardProps {
   title: string;
@@ -9,16 +9,14 @@ interface FormCardProps {
 
 export function FormCard({ title, description, children, actions }: FormCardProps) {
   return (
-    <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700">
-      <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-        <h3 className="text-lg font-semibold">{title}</h3>
-        {description && <p className="text-sm text-gray-500 mt-1">{description}</p>}
+    <div className="ui-card !p-0">
+      <div className="border-b border-line px-6 py-4">
+        <h3 className="t-section text-text">{title}</h3>
+        {description && <p className="t-meta mt-1">{description}</p>}
       </div>
-      <div className="px-6 py-4 space-y-4">{children}</div>
+      <div className="space-y-4 px-6 py-4">{children}</div>
       {actions && (
-        <div className="px-6 py-4 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
-          {actions}
-        </div>
+        <div className="flex justify-end gap-2 border-t border-line px-6 py-4">{actions}</div>
       )}
     </div>
   );

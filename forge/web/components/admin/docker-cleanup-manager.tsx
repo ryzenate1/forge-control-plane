@@ -1,10 +1,11 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Container, HardDrive, Layers, PlayCircle, Plus, RefreshCw, Trash2, Archive } from "lucide-react";
 
-import { fetchNodes } from "@/lib/api";
+import {  } from "@/lib/api";
 import {
   createPolicy,
   deletePolicy,
@@ -109,7 +110,7 @@ export function DockerCleanupManager() {
   const [limit, setLimit] = useState(1);
   const [policyModal, setPolicyModal] = useState<{ mode: "create" | "edit"; policy?: DockerCleanupPolicy } | null>(null);
 
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const nodeOptions = useMemo(
     () => nodes.map((n) => ({ value: n.id, label: n.name })),

@@ -1,5 +1,5 @@
 import { readFileSync, existsSync, promises as fsPromises } from "node:fs";
-import { resolve } from "node:path";
+import { resolve, join } from "node:path";
 
 type Messages = Record<string, unknown>;
 
@@ -28,28 +28,72 @@ function interpolate(str: string, args?: Record<string, string | number> | (stri
 
 const serverCache = new Map<string, Messages>();
 
+// `lang/` lives at the repo root. The web server's cwd varies (forge/web in
+// dev, /app in the Docker standalone runner which copies `lang/` next to the
+// server), so probe candidates instead of assuming `../../lang`.
+function findLocaleFile(locale: string): string | null {
+  if (!/^[a-z]{2}(-[A-Z]{2})?$/.test(locale)) return null;
+  const candidates = [
+    resolve(process.cwd(), "lang", `${locale}.json`),
+    resolve(process.cwd(), "..", "lang", `${locale}.json`),
+    resolve(process.cwd(), "..", "..", "lang", `${locale}.json`),
+    resolve(process.cwd(), "..", "..", "..", "lang", `${locale}.json`),
+    join("/app", "lang", `${locale}.json`),
+  ];
+  for (const filePath of candidates) {
+    try {
+      if (existsSync(filePath)) return filePath;
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function logMissingLocale(locale: string): void {
+  if (typeof console !== "undefined") {
+    console.error(`[i18n] locale "${locale}" not found (cwd=${process.cwd()}); returning null so callers fall back to English`);
+  }
+}
+
 export async function loadLocaleAsync(locale: string): Promise<Messages | null> {
   if (serverCache.has(locale)) return serverCache.get(locale)!;
-  const filePath = resolve(process.cwd(), "../../lang", `${locale}.json`);
-  if (!existsSync(filePath)) return null;
+  const filePath = findLocaleFile(locale);
+  if (!filePath) {
+    logMissingLocale(locale);
+    return null;
+  }
   try {
     const content = await fsPromises.readFile(filePath, "utf-8");
     const messages = JSON.parse(content) as Messages;
     serverCache.set(locale, messages);
     return messages;
-  } catch {
+  } catch (err) {
+    if (typeof console !== "undefined") {
+      console.error(`[i18n] failed to load locale "${locale}" from ${filePath}:`, err);
+    }
     return null;
   }
 }
 
 export function loadLocale(locale: string): Messages | null {
   if (serverCache.has(locale)) return serverCache.get(locale)!;
-  const filePath = resolve(process.cwd(), "../../lang", `${locale}.json`);
-  if (!existsSync(filePath)) return null;
-  const content = readFileSync(filePath, "utf-8");
-  const messages = JSON.parse(content) as Messages;
-  serverCache.set(locale, messages);
-  return messages;
+  const filePath = findLocaleFile(locale);
+  if (!filePath) {
+    logMissingLocale(locale);
+    return null;
+  }
+  try {
+    const content = readFileSync(filePath, "utf-8");
+    const messages = JSON.parse(content) as Messages;
+    serverCache.set(locale, messages);
+    return messages;
+  } catch (err) {
+    if (typeof console !== "undefined") {
+      console.error(`[i18n] failed to load locale "${locale}" from ${filePath}:`, err);
+    }
+    return null;
+  }
 }
 
 export function t(key: string, locale: string, args?: Record<string, string | number> | (string | number)[]): string {

@@ -18,19 +18,19 @@ func registerActivityRoutes(protected fiber.Router, cfg Config) {
 	// /account/activity is reserved for the current user's audit log, registered
 	// by registerAuthRoutes. Service activity is administrative and global.
 	admin := protected.Group("/admin", requireRole("admin"))
-	admin.Get("/activity", func(c *fiber.Ctx) error {
+	admin.Get("/activity", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
 		return handleQueryActivity(c, cfg)
 	})
-	admin.Get("/activity/stats", func(c *fiber.Ctx) error {
+	admin.Get("/activity/stats", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
 		return handleActivityStats(c, cfg)
 	})
-	admin.Get("/activity/export", func(c *fiber.Ctx) error {
+	admin.Get("/activity/export", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
@@ -89,8 +89,8 @@ func handleExportActivity(c *fiber.Ctx, cfg Config) error {
 	format := strings.ToLower(c.Query("format", "json"))
 
 	filter := activityFilterFromRequest(c)
-	if filter.Limit <= 0 || filter.Limit > 10000 {
-		filter.Limit = 10000
+	if filter.Limit <= 0 || filter.Limit > 1000 {
+		filter.Limit = 1000
 	}
 	filter.Offset = 0
 
@@ -198,8 +198,17 @@ func activityFilterFromRequest(c *fiber.Ctx) activity.ActivityFilter {
 	}
 	if v := c.Query("limit"); v != "" {
 		if limit, err := strconv.Atoi(v); err == nil {
+			if limit < 0 {
+				limit = 0
+			}
+			if limit > 1000 {
+				limit = 1000
+			}
 			filter.Limit = limit
 		}
+	}
+	if filter.Limit > 1000 {
+		filter.Limit = 1000
 	}
 	if v := c.Query("offset"); v != "" {
 		if offset, err := strconv.Atoi(v); err == nil {

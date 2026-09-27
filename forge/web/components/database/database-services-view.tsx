@@ -30,7 +30,7 @@ import { StatusDot } from "@/components/ui/primitives";
 import { formatBytes, formatDate } from "@/lib/utils";
 import { DbStatCards, type DbStat } from "./databases-overview";
 
-const selectCls = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15";
+const selectCls = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]";
 
 export function DatabaseServicesView() {
   const qc = useQueryClient();
@@ -389,7 +389,7 @@ function ProvisionModal({ onClose, onDone }: { onClose: () => void; onDone: () =
             <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Templates selector — pick to autofill version/image</p>
             <div className="flex flex-wrap gap-2">
               {templatesQ.data.map((t) => (
-                <button key={t.id} type="button" onClick={() => { setType(t.type); setVersion(t.version); }} className={`rounded-full border px-3 py-1 text-xs ${type===t.type && version===t.version ? "border-[var(--brand)] bg-[var(--brand)]/20 text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.06]"}`}>{t.type}:{t.version} → {t.dockerImage}</button>
+                <button key={t.id} type="button" onClick={() => { setType(t.type); setVersion(t.version); }} className={`rounded-full border px-3 py-1 text-xs ${type===t.type && version===t.version ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.06]"}`}>{t.type}:{t.version} → {t.dockerImage}</button>
               ))}
             </div>
           </div>

@@ -115,8 +115,10 @@ func TestHealth(t *testing.T) {
 
 	newTestHandler(t).ServeHTTP(rec, req)
 
-	if rec.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", rec.Code)
+	// With a nil test runtime the daemon must report unavailable (503),
+	// never a healthy 200. Unknown is not healthy.
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", rec.Code)
 	}
 }
 

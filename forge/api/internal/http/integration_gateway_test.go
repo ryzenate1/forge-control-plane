@@ -166,7 +166,10 @@ func TestIntegrationGateway_SingleWriter_HealthySync_CallsUpdate(t *testing.T) {
 	health := crossnode.NewHealthFilter(3, 30*time.Second)
 	syncer := crossnode.NewIngressSynchronizer(gw, resolver, health)
 
-	// Unknown host is treated as healthy (optimistic) — FilterHealthy passes it.
+	// Only backends with a recorded healthy result are routed; unknown hosts
+	// are excluded, never assumed.
+	health.RecordSuccess("10.0.0.10", 8080)
+	health.RecordSuccess("10.0.0.11", 8080)
 	syncer.SetRules([]*trafficmanager.RoutingRule{
 		{ID: "healthy-1", Domain: "app.example.com", Path: "/", TargetHost: "10.0.0.10", TargetPort: 8080, Enabled: true, Weight: 1},
 		{ID: "healthy-2", Domain: "app.example.com", Path: "/", TargetHost: "10.0.0.11", TargetPort: 8080, Enabled: true, Weight: 1},
@@ -207,6 +210,7 @@ func TestIntegrationGateway_SingleWriter_PartialHealthy_OnlyHealthyPushed(t *tes
 		{ID: "r-healthy", Domain: "svc.example.com", Path: "/", TargetHost: "good.internal", TargetPort: 8080, Enabled: true},
 		{ID: "r-unhealthy", Domain: "svc.example.com", Path: "/", TargetHost: "bad.internal", TargetPort: 8080, Enabled: true},
 	})
+	health.RecordSuccess("good.internal", 8080)
 	health.RecordFailure("bad.internal", 8080, "connection refused")
 
 	if err := syncer.Sync(context.Background()); err != nil {
@@ -232,6 +236,8 @@ func TestIntegrationGateway_SingleWriter_UpsertAndRemove(t *testing.T) {
 	health := crossnode.NewHealthFilter(2, 30*time.Second)
 	syncer := crossnode.NewIngressSynchronizer(gw, resolver, health)
 
+	health.RecordSuccess("10.0.0.1", 8080)
+	health.RecordSuccess("10.0.0.2", 9090)
 	initial := &trafficmanager.RoutingRule{ID: "rule-1", Domain: "a.example.com", Path: "/", TargetHost: "10.0.0.1", TargetPort: 8080, Enabled: true}
 	syncer.SetRules([]*trafficmanager.RoutingRule{initial})
 
@@ -294,6 +300,9 @@ func TestIntegrationGateway_SingleWriter_ConcurrentUpdates(t *testing.T) {
 	health := crossnode.NewHealthFilter(2, 30*time.Second)
 	syncer := crossnode.NewIngressSynchronizer(gw, resolver, health)
 
+	for i := 0; i < 5; i++ {
+		health.RecordSuccess("10.0.0.1", 8080+i)
+	}
 	syncer.SetRules([]*trafficmanager.RoutingRule{
 		{ID: "concurrent-base", Domain: "base.example.com", Path: "/", TargetHost: "10.0.0.1", TargetPort: 8080, Enabled: true},
 	})
@@ -367,6 +376,8 @@ func TestIntegrationGateway_RouteGenerationTracked(t *testing.T) {
 	health := crossnode.NewHealthFilter(2, 30*time.Second)
 	syncer := crossnode.NewIngressSynchronizer(gw, resolver, health)
 
+	health.RecordSuccess("10.0.0.1", 8080)
+	health.RecordSuccess("10.0.0.2", 8080)
 	syncer.SetRules([]*trafficmanager.RoutingRule{
 		{ID: "track-1", Domain: "track.example.com", Path: "/", TargetHost: "10.0.0.1", TargetPort: 8080, Enabled: true},
 		{ID: "track-2", Domain: "track2.example.com", Path: "/api", TargetHost: "10.0.0.2", TargetPort: 8080, Enabled: true},

@@ -191,8 +191,24 @@ func CreateMyOAuthClient(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		// Alias tolerance: callers may send id / server_id instead of
+		// serverId. All three bind the same server-scoped client, so all
+		// three must resolve to the same value or the request is rejected
+		// rather than silently picking one.
+		if err := normalizeOAuthServerAliases(c, &req); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
+		// A user must not mint a server-scoped client for a server they
+		// cannot access; otherwise any user could issue tokens for another
+		// user's server and bypass UserCanAccessServer.
+		if req.Scope == "server" && req.ServerID != nil && strings.TrimSpace(*req.ServerID) != "" {
+			allowed, err := cfg.Store.UserCanAccessServer(ctx, strings.TrimSpace(*req.ServerID), claims.Sub, claims.Role, "")
+			if err != nil || !allowed {
+				return fiber.NewError(fiber.StatusForbidden, "cannot create client for a server you cannot access")
+			}
+		}
 		res, err := cfg.Store.CreateOAuthClient(ctx, store.CreateOAuthClientRequest{
 			Name:          strings.TrimSpace(req.Name),
 			OwnerID:       claims.Sub,
@@ -267,6 +283,9 @@ func AdminCreateOAuthClient(cfg Config) fiber.Handler {
 		var req createOAuthClientRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if err := normalizeOAuthServerAliases(c, &req); err != nil {
+			return err
 		}
 		if strings.TrimSpace(req.OwnerID) == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "ownerId is required")
@@ -364,9 +383,46 @@ type createOAuthClientRequest struct {
 	Description   string     `json:"description"`
 	Scope         string     `json:"scope"` // "server" or "account"
 	ServerID      *string    `json:"serverId,omitempty"`
+	ServerIDSnake *string    `json:"server_id,omitempty"`
+	IDAlias       *string    `json:"id,omitempty"`
 	AllowedScopes []string   `json:"allowedScopes"`
 	ExpiresAt     *time.Time `json:"expiresAt"`
 	OwnerID       string     `json:"ownerId"` // admin-only; ignored on self-create
+}
+
+// normalizeOAuthServerAliases resolves the server binding from any of the
+// accepted aliases (serverId, server_id, id). When more than one alias is
+// present they must agree; otherwise the request is rejected rather than
+// silently picking one (ambiguous target must not resolve silently).
+func normalizeOAuthServerAliases(c *fiber.Ctx, req *createOAuthClientRequest) error {
+	candidates := []string{}
+	if req.ServerID != nil && strings.TrimSpace(*req.ServerID) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.ServerID))
+	}
+	if req.ServerIDSnake != nil && strings.TrimSpace(*req.ServerIDSnake) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.ServerIDSnake))
+	}
+	if req.IDAlias != nil && strings.TrimSpace(*req.IDAlias) != "" {
+		candidates = append(candidates, strings.TrimSpace(*req.IDAlias))
+	}
+	// Query aliases for form-style callers.
+	for _, q := range []string{c.Query("serverId"), c.Query("server_id"), c.Query("id")} {
+		if strings.TrimSpace(q) != "" {
+			candidates = append(candidates, strings.TrimSpace(q))
+		}
+	}
+	if len(candidates) == 0 {
+		req.ServerID = nil
+		return nil
+	}
+	first := candidates[0]
+	for _, cand := range candidates[1:] {
+		if cand != first {
+			return fiber.NewError(fiber.StatusBadRequest, "conflicting server identifiers: id, serverId and server_id must agree")
+		}
+	}
+	req.ServerID = &first
+	return nil
 }
 
 func parseBasicAuth(header string) (string, string, bool) {

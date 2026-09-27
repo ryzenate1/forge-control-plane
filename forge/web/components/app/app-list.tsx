@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useQuery } from "@tanstack/react-query";
 import { Plus, Server } from "lucide-react";
@@ -13,7 +14,7 @@ interface AppListProps {
 
 export function AppList({ onSelect, emptyAction }: AppListProps) {
   const query = useQuery({
-    queryKey: ["apps"],
+    queryKey: queryKeys.apps.lists(),
     queryFn: fetchApps,
   });
 

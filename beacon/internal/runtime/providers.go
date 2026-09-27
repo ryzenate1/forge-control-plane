@@ -26,13 +26,14 @@ var experimentalProviders = map[string]bool{
 	KVMProvider: true,
 }
 
-// supportedProviders are engines this Beacon build can actually run.
+// supportedProviders are engines this Beacon build can actually run. Entries
+// for optionally-compiled engines (containerd, firecracker) are registered by
+// the corresponding provider_*_enabled.go init functions so a default build
+// reports them as unsupported instead of advertising engines it cannot run.
 var supportedProviders = map[string]bool{
-	ProviderDocker:      true,
-	ProviderContainerd:  true,
-	ProviderPodman:      true,
-	ProviderFirecracker: true,
-	ProviderKubernetes:  true,
+	ProviderDocker:     true,
+	ProviderPodman:     true,
+	ProviderKubernetes: true,
 }
 
 // ExperimentalRuntimesEnabled reports whether the experimental engines are

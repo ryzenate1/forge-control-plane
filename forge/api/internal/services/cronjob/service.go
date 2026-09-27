@@ -235,8 +235,7 @@ func (s *Service) runShellCommand(ctx context.Context, command string, timeoutSe
 	return exitCode, strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String())
 }
 
-func (s *Service) TriggerNow(ctx context.Context, jobID string) (store.CronJobExecution, error) {
-	if s.store == nil {
+func (s *Service) TriggerNow(ctx context.Context, jobID string) (store.CronJobExecution, error) {	if s.store == nil {
 		return store.CronJobExecution{}, fmt.Errorf("store not initialized")
 	}
 
@@ -281,4 +280,105 @@ func (s *Service) NextRun(job store.CronJob) *time.Time {
 
 func (s *Service) GenerateExecutionID() string {
 	return uuid.NewString()
+}
+
+// ---------------------------------------------------------------------------
+// Persistence boundary: handlers -> Service -> store.
+//
+// Cron CRUD lives here so handlers never touch the store directly. Each
+// mutating call keeps the in-memory schedule in sync; a schedule failure is
+// reported but does not roll back the persisted row (the row is the source of
+// truth and Start() reconciles on boot).
+// ---------------------------------------------------------------------------
+
+func (s *Service) storeOrErr() (*store.Store, error) {
+	if s == nil || s.store == nil {
+		return nil, fmt.Errorf("cronjob store not initialized")
+	}
+	return s.store, nil
+}
+
+// ListJobs returns all cron jobs.
+func (s *Service) ListJobs(ctx context.Context) ([]store.CronJob, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListCronJobs(ctx)
+}
+
+// GetJob returns one cron job by id.
+func (s *Service) GetJob(ctx context.Context, id string) (store.CronJob, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	return st.GetCronJob(ctx, id)
+}
+
+// CreateJob persists a job and schedules it when enabled.
+func (s *Service) CreateJob(ctx context.Context, req store.CreateCronJobRequest) (store.CronJob, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	job, err := st.CreateCronJob(ctx, req)
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	if err := s.RescheduleJob(ctx, job); err != nil {
+		s.logger.Error("cron job created but scheduling failed", "id", job.ID, "error", err)
+	}
+	return job, nil
+}
+
+// UpdateJob persists changes and reschedules the job.
+func (s *Service) UpdateJob(ctx context.Context, id string, req store.UpdateCronJobRequest) (store.CronJob, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	job, err := st.UpdateCronJob(ctx, id, req)
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	if err := s.RescheduleJob(ctx, job); err != nil {
+		s.logger.Error("cron job updated but rescheduling failed", "id", job.ID, "error", err)
+	}
+	return job, nil
+}
+
+// DeleteJob unschedules then deletes the job.
+func (s *Service) DeleteJob(ctx context.Context, id string) error {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return err
+	}
+	s.removeJob(id)
+	return st.DeleteCronJob(ctx, id)
+}
+
+// ToggleJob flips the enabled flag and reschedules accordingly.
+func (s *Service) ToggleJob(ctx context.Context, id string) (store.CronJob, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	job, err := st.ToggleCronJob(ctx, id)
+	if err != nil {
+		return store.CronJob{}, err
+	}
+	if err := s.RescheduleJob(ctx, job); err != nil {
+		s.logger.Error("cron job toggled but rescheduling failed", "id", job.ID, "error", err)
+	}
+	return job, nil
+}
+
+// ListExecutions returns recent executions for a job.
+func (s *Service) ListExecutions(ctx context.Context, jobID string, limit int) ([]store.CronJobExecution, error) {
+	st, err := s.storeOrErr()
+	if err != nil {
+		return nil, err
+	}
+	return st.ListCronJobExecutions(ctx, jobID, limit)
 }

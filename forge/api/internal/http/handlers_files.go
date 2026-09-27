@@ -133,26 +133,14 @@ func registerHostTerminalRoute(protected fiber.Router, cfg Config) {
 		configureClientSocket(client)
 		configureUpstreamSocket(upstream)
 
-		// Ping keepalive — detects half-open connections.
-		pingTicker := time.NewTicker(30 * time.Second)
+		// Ping keepalive in BOTH directions — detects half-open connections and
+		// keeps the browser side alive through long idle output. A terminal
+		// viewer may legitimately send nothing for minutes; without a
+		// client-bound ping the browser side is torn down after one
+		// read-deadline interval of user inactivity.
+		pingTicker := time.NewTicker(realtimePingInterval)
 		defer pingTicker.Stop()
-		go func() {
-			defer func() {
-				if r := recover(); r != nil {
-					slog.Error("file proxy keepalive panicked", "panic", r)
-				}
-			}()
-			for {
-				select {
-				case <-pingTicker.C:
-					if err := upstream.WriteControl(gorilla.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
-						return
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
+		go pumpKeepalive(ctx, pingTicker.C, upstream, client)
 
 		errs := make(chan error, 2)
 		clientLimiter := rate.NewLimiter(rate.Limit(10), 20)

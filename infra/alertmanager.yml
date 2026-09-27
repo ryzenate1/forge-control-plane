@@ -19,11 +19,37 @@ route:
   group_interval: 5m
   repeat_interval: 1h
   receiver: "default"
+  routes:
+    # Severity fan-out: critical pages faster (own repeat interval), warnings
+    # stay on the default cadence. Both resolve to "default" until a real
+    # receiver is configured — see below.
+    - match:
+        severity: critical
+      receiver: "critical-default"
+      repeat_interval: 15m
+      continue: false
+    - match:
+        severity: warning
+      receiver: "default"
+      continue: false
 
 receivers:
   # Without any integrations this receiver acknowledges alerts and drops
   # them (with a log line) so the routing tree stays valid by default.
   - name: "default"
+  # Critical alerts land here so paging can be wired independently of the
+  # general default. Identical blackhole behaviour until re-pointed.
+  - name: "critical-default"
+
+  # REAL RECEIVERS — to actually deliver alerts, bake values in with
+  # scripts/gen-alertmanager.sh (env expansion is unsupported by this
+  # Alertmanager version) and point compose.yml at the generated file
+  # (infra/alertmanager/alertmanager.yml):
+  #   ALERTMANAGER_ADMIN_EMAIL=ops@example.com \
+  #   ALERTMANAGER_SMTP_HOST=smtp.example.com \
+  #   ALERTMANAGER_WEBHOOK_URL=https://hooks.example.com/alerts \
+  #   ./scripts/gen-alertmanager.sh
+  # Then set route receivers above to "admin-email"/"webhook".
 
   # Example SMTP receiver — uncomment and fill in:
   # - name: "admin-email"

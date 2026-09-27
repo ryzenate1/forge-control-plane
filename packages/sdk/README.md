@@ -87,16 +87,51 @@ const created = await client.createNode({ name: 'edge-1', fqdn: 'node1.example.c
 
 ### Errors
 
-Non-2xx responses throw an `ApiError`:
+Non-2xx responses throw an `ApiError` (same shape as the web client's
+`ApiError` in `forge/web/lib/api/http.ts`):
 
 ```typescript
+import { ForgeApiClient, ApiError, isApiError } from '@forge/sdk';
+
 try {
   await client.getServer('missing');
 } catch (err) {
-  if (err instanceof ApiError) {
+  if (isApiError(err)) {
     console.error(err.status, err.statusText, err.data);
+    // err.details carries structured 422 validation errors ({ errors } /
+    // { details } / { fields } from the response body) when present.
   }
 }
+```
+
+A 401 response additionally fires the `onUnauthorized` hook (the SDK
+equivalent of the web client's `forge:session-expired` signal), so the host
+app can clear auth state or redirect to login:
+
+```typescript
+const client = createApiClient({
+  baseUrl: 'https://panel.example.com',
+  onUnauthorized: () => window.location.assign('/login'),
+});
+```
+
+### Retry policy and idempotency
+
+Only idempotent `GET` requests are retried automatically (up to 3 attempts on
+429/502/503/504 with `Retry-After` support, plus transient transport
+failures). Mutations (`POST`/`PUT`/`PATCH`/`DELETE`) run exactly once:
+automatically retrying a non-idempotent write could apply it twice (duplicate
+server, double side effect).
+
+To make a mutation safely retryable, attach an idempotency key — per client
+or per call — which is sent as the `Idempotency-Key` header so the server can
+de-duplicate repeated submissions:
+
+```typescript
+const client = createApiClient({
+  baseUrl: 'https://panel.example.com',
+  idempotencyKey: crypto.randomUUID(), // default for all mutations
+});
 ```
 
 ## Development

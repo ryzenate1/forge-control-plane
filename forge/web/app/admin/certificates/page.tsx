@@ -220,7 +220,7 @@ export default function AdminCertificatesPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Certificate (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={uploadForm.certificate}
                 onChange={(e) => setUploadForm({ ...uploadForm, certificate: e.target.value })}
                 placeholder="-----BEGIN CERTIFICATE-----"
@@ -229,7 +229,7 @@ export default function AdminCertificatesPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Private Key (PEM)</label>
               <textarea
-                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-24 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={uploadForm.privateKey}
                 onChange={(e) => setUploadForm({ ...uploadForm, privateKey: e.target.value })}
                 placeholder="-----BEGIN PRIVATE KEY-----"

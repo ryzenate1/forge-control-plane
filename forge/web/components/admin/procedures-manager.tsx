@@ -194,7 +194,7 @@ export function ProceduresManager() {
                     key={p.id}
                     onClick={() => setSelected(p)}
                     aria-label={`Select procedure ${p.name}`}
-                    className={`w-full text-left rounded-lg border p-3 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] ${selected?.id === p.id ? "border-[var(--brand)] bg-[var(--brand)]/10" : "border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface-hover)]"}`}
+                    className={`w-full text-left rounded-lg border p-3 motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] ${selected?.id === p.id ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]" : "border-[var(--line)] bg-[var(--surface)] hover:bg-[var(--surface-hover)]"}`}
                   >
                     <p className="text-sm font-bold text-[var(--text)]">{p.name} {p.enabled ? "" : "(disabled)"}</p>
                     <p className="text-xs text-[var(--text-subtle)] truncate">{p.description || "—"} · {p.steps?.length ?? 0} steps {p.schedule ? `· cron ${p.schedule.cronExpression}` : ""}</p>

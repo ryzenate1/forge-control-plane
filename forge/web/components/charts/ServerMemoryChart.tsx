@@ -3,6 +3,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { Activity } from "lucide-react";
+import { queryKeys } from "@/lib/api/query-keys";
 import { getNodeMetrics, type MetricPeriod, type NodeMetrics } from "@/lib/api/monitoring";
 import { Card, CardHeader } from "@/components/admin/admin-ui";
 import { chart } from "@/lib/design-tokens";
@@ -41,7 +42,7 @@ function ChartTooltip({ active, payload, label }: { active?: boolean; payload?: 
 
 export function ServerMemoryChart({ nodeId, height = 300, period = "1h" }: ServerMemoryChartProps) {
   const { data, isLoading, isError } = useQuery({
-    queryKey: ["memory-chart", nodeId, period],
+    queryKey: queryKeys.monitoring.history(nodeId ?? "all", period),
     queryFn: () => getNodeMetrics({ nodeId, period }),
     refetchInterval: 30_000,
   });

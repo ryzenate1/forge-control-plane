@@ -69,9 +69,8 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue session token")
 		}
-		csrfToken, _ := generateCSRFToken()
 		expires := time.Unix(current.Exp, 0)
-		setSessionCookies(c, newToken, csrfToken, expires)
+		setSessionCookies(c, newToken, deriveSessionCSRFToken(cfg.AuthSecret, newToken), expires)
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
@@ -587,9 +586,8 @@ func handlePasswordChange(cfg Config) fiber.Handler {
 		if err == nil {
 			newToken, tokenErr := issueConfiguredToken(cfg, user)
 			if tokenErr == nil {
-				csrfToken, _ := generateCSRFToken()
 				expires := tokenExpiry(cfg)
-				setSessionCookies(c, newToken, csrfToken, expires)
+				setSessionCookies(c, newToken, deriveSessionCSRFToken(cfg.AuthSecret, newToken), expires)
 			}
 		}
 		_ = cfg.Store.AppendAudit(ctx, &claims.Sub, "account.password.changed", "user", &claims.Sub, "{}")

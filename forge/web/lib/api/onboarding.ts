@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON } from "./http";
+import { fetchJSON, postJSON, unwrapData, unwrapList } from "./http";
 
 export type OnboardingToken = {
   id: string;
@@ -21,29 +21,24 @@ export type CreateOnboardingTokenResult = {
 };
 
 export async function createOnboardingToken(input: { nodeId: string; ttlHours?: number }): Promise<CreateOnboardingTokenResult> {
-  const res = await postJSON<CreateOnboardingTokenResult | { data: CreateOnboardingTokenResult } & CreateOnboardingTokenResult>(
+  const res = await postJSON<CreateOnboardingTokenResult | { data: CreateOnboardingTokenResult }>(
     "/onboarding-tokens",
     { nodeId: input.nodeId, ttlHours: input.ttlHours ?? 24 },
   );
   // Handlers return { token, tokenId, nodeId, expiresAt, state } directly (201), not { data: ... }
-  const r = res as unknown as Record<string, unknown>;
-  if (r.token && r.tokenId) return res as CreateOnboardingTokenResult;
-  const maybeData = (res as { data: CreateOnboardingTokenResult }).data;
-  return maybeData ?? (res as CreateOnboardingTokenResult);
+  return unwrapData(res);
 }
 
 export async function listOnboardingTokens(nodeId: string): Promise<OnboardingToken[]> {
   const res = await fetchJSON<{ data: OnboardingToken[] } | OnboardingToken[]>(
     `/onboarding-tokens?nodeId=${encodeURIComponent(nodeId)}`,
   );
-  if (Array.isArray(res)) return res;
-  return (res as { data: OnboardingToken[] }).data ?? [];
+  return unwrapList(res);
 }
 
 export async function fetchOnboardingToken(tokenId: string): Promise<OnboardingToken> {
   const res = await fetchJSON<OnboardingToken | { data: OnboardingToken }>(`/onboarding-tokens/${encodeURIComponent(tokenId)}`);
-  const maybeData = (res as { data: OnboardingToken }).data;
-  return maybeData ?? (res as OnboardingToken);
+  return unwrapData(res);
 }
 
 export async function approveOnboardingToken(tokenId: string): Promise<{ approved: boolean }> {
@@ -106,16 +101,9 @@ export type LoadedSource = {
   files: string[];
 };
 
-function unwrap<T>(data: unknown): T {
-  if (data && typeof data === "object" && "data" in (data as Record<string, unknown>)) {
-    return (data as { data: T }).data;
-  }
-  return data as T;
-}
-
 export async function fetchOnboardingStatus(): Promise<StatusView> {
   const data = await fetchJSON<StatusView | { data: StatusView }>("/onboarding/status");
-  const status = unwrap<StatusView>(data);
+  const status = unwrapData(data);
   // Backend may serialize nil slices as null; normalize to arrays.
   return {
     ...status,
@@ -132,7 +120,7 @@ export async function getStatus(): Promise<StatusView> {
 export async function fetchRepos(providerId?: string): Promise<GitProviderRepo[]> {
   const qs = providerId ? `?providerId=${encodeURIComponent(providerId)}` : "";
   const data = await fetchJSON<{ data: GitProviderRepo[] } | GitProviderRepo[]>(`/onboarding/repos${qs}`);
-  return unwrap<GitProviderRepo[]>(data);
+  return unwrapList(data);
 }
 
 export async function listRepos(providerId?: string): Promise<GitProviderRepo[]> {
@@ -144,7 +132,7 @@ export async function fetchBranches(repo: string, providerId?: string): Promise<
   const data = await fetchJSON<{ data: GitProviderBranch[] } | GitProviderBranch[]>(
     `/onboarding/repos/${encodeURIComponent(repo)}/branches${qs}`,
   );
-  return unwrap<GitProviderBranch[]>(data);
+  return unwrapList(data);
 }
 
 export async function listBranches(repo: string, providerId?: string): Promise<GitProviderBranch[]> {
@@ -201,7 +189,7 @@ export async function deploy(payload: {
 
 export async function fetchLoadedSources(): Promise<LoadedSource[]> {
   const data = await fetchJSON<{ data: LoadedSource[] } | LoadedSource[]>("/ide/files");
-  return unwrap<LoadedSource[]>(data);
+  return unwrapList(data);
 }
 
 export async function listLoadedSources(): Promise<LoadedSource[]> {

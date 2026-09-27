@@ -232,7 +232,7 @@ export const colors = {
 
 export const type = {
   display: "Space Grotesk",
-  body: "IBM Plex Sans",
+  body: "Manrope",
   mono: "JetBrains Mono",
 } as const;
 

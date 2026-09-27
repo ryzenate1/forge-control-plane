@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
   },
-  "startup": "./game/cs2/bin/linuxsteamrt64/cs2 -dedicated -ip 0.0.0.0 -port {{SERVER_PORT}} -console -usercon +game_type {{GAME_TYPE}} +game_mode {{GAME_MODE}} +mapgroup {{MAP_GROUP}} +map {{MAP}} +sv_setsteamaccount {{STEAM_ACCOUNT}} +sv_password '{{SERVER_PASSWORD}}' +sv_lan 0 +exec {{SERVER_CFG}}",
+  "startup": "./game/cs2/bin/linuxsteamrt64/cs2 -dedicated -ip 0.0.0.0 -port {{SERVER_PORT}} -console -usercon +game_type {{GAME_TYPE}} +game_mode {{GAME_MODE}} +mapgroup \"{{MAP_GROUP}}\" +map \"{{MAP}}\" +sv_setsteamaccount \"{{STEAM_ACCOUNT}}\" +sv_password '{{SERVER_PASSWORD}}' +sv_lan 0 +exec \"{{SERVER_CFG}}\"",
   "config": {
     "files": {},
     "startup": {
@@ -83,11 +83,11 @@
     {
       "name": "Steam Account Token",
       "env_variable": "STEAM_ACCOUNT",
-      "description": "Steam game server login token from https://steamcommunity.com/dev/managegameservers.",
+      "description": "Game Server Login Token (GSLT) for public servers. May be left empty for LAN-only play.",
       "default_value": "",
       "user_viewable": false,
       "user_editable": true,
-      "rules": "required|string|max:64"
+      "rules": "nullable|string|max:64"
     },
     {
       "name": "Server Config",
@@ -113,8 +113,18 @@
     "entrypoint": "bash",
     "script": "#!/bin/bash\n# CS2 SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install CS2 dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 730 validate +quit\n\necho \"CS2 server installation complete\""
   },
-  "supported_platforms": ["docker", "podman"],
-  "categories": ["fps", "multiplayer", "competitive"],
+  "supported_platforms": [
+    "docker",
+    "podman"
+  ],
+  "categories": [
+    "fps",
+    "multiplayer",
+    "competitive"
+  ],
   "file_denylist": [],
-  "features": ["steamcmd", "pid_limit"]
+  "features": [
+    "steamcmd",
+    "pid_limit"
+  ]
 }

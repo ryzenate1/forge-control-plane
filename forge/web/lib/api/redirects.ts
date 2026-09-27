@@ -1,4 +1,4 @@
-import { deleteJSON, fetchJSON, postJSON, putJSON, requestJSON } from "./http";
+import { deleteJSON, fetchJSON, postJSON, putJSON, requestJSON, unwrapList, unwrapData } from "./http";
 
 export type RedirectRule = {
   id: string;
@@ -26,18 +26,15 @@ export type CreateRedirectInput = {
 
 // Admin scoped redirects (handlers_proxy_domains.go /domains/:domainId/redirects)
 export function fetchRedirects(domainId: string): Promise<RedirectRule[]> {
-  return fetchJSON<{ data: RedirectRule[] }>(`/domains/${encodeURIComponent(domainId)}/redirects`).then((r) => {
-    if (Array.isArray(r as unknown as RedirectRule[])) return r as unknown as RedirectRule[];
-    return (r as { data: RedirectRule[] }).data ?? [];
-  });
+  return fetchJSON<{ data: RedirectRule[] } | RedirectRule[]>(`/domains/${encodeURIComponent(domainId)}/redirects`).then(unwrapList);
 }
 
 export function createRedirect(domainId: string, input: CreateRedirectInput): Promise<RedirectRule> {
-  return postJSON<{ data: RedirectRule }>(`/domains/${encodeURIComponent(domainId)}/redirects`, { ...input, domainId }).then((r) => r.data);
+  return postJSON<{ data: RedirectRule } | RedirectRule>(`/domains/${encodeURIComponent(domainId)}/redirects`, { ...input, domainId }).then(unwrapData);
 }
 
 export function updateRedirect(domainId: string, redirectId: string, input: Partial<CreateRedirectInput>): Promise<RedirectRule> {
-  return putJSON<{ data: RedirectRule }>(`/domains/${encodeURIComponent(domainId)}/redirects/${encodeURIComponent(redirectId)}`, input).then((r) => r.data);
+  return putJSON<{ data: RedirectRule } | RedirectRule>(`/domains/${encodeURIComponent(domainId)}/redirects/${encodeURIComponent(redirectId)}`, input).then(unwrapData);
 }
 
 export function deleteRedirect(domainId: string, redirectId: string): Promise<void> {
@@ -201,12 +198,11 @@ const appRedirectsPath = (appId: string) => `/apps/${encodeURIComponent(appId)}/
 
 export async function fetchDomainRedirects(appId: string): Promise<DomainRedirect[]> {
   const response = await appScopedJSON<{ data?: DomainRedirect[] } | DomainRedirect[]>("GET", appRedirectsPath(appId));
-  if (Array.isArray(response)) return response;
-  return response.data ?? [];
+  return unwrapList(response);
 }
 
 export function createDomainRedirect(appId: string, input: CreateDomainRedirectInput): Promise<DomainRedirect> {
-  return appScopedJSON<{ data: DomainRedirect }>("POST", appRedirectsPath(appId), input).then((r) => r.data);
+  return appScopedJSON<{ data: DomainRedirect } | DomainRedirect>("POST", appRedirectsPath(appId), input).then(unwrapData);
 }
 
 export function updateDomainRedirect(
@@ -214,11 +210,11 @@ export function updateDomainRedirect(
   redirectId: string,
   input: UpdateDomainRedirectInput,
 ): Promise<DomainRedirect> {
-  return appScopedJSON<{ data: DomainRedirect }>(
+  return appScopedJSON<{ data: DomainRedirect } | DomainRedirect>(
     "PATCH",
     `${appRedirectsPath(appId)}/${encodeURIComponent(redirectId)}`,
     input,
-  ).then((r) => r.data);
+  ).then(unwrapData);
 }
 
 /** Resolves once the row is gone; the API answers 404 rather than 204 when nothing matched. */

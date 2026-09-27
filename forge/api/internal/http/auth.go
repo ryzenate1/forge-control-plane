@@ -452,11 +452,15 @@ func requireRole(roles ...string) fiber.Handler {
 		// role_rules enforcement for custom roles: deny rules block matching
 		// routes; when allow rules exist for the role, at least one must match
 		// (allow-list semantics). Built-in admin/user roles are unaffected.
+		// Fail closed: a custom role with no reachable rule store is denied
+		// rather than silently treated as unrestricted.
 		if claims.Role != RoleAdmin && claims.Role != RoleUser {
-			if st, ok := c.Locals("authStore").(*store.Store); ok && st != nil {
-				if err := enforceRoleRulesForRequest(c, st, claims.Role); err != nil {
-					return err
-				}
+			st, ok := c.Locals("authStore").(*store.Store)
+			if !ok || st == nil {
+				return fiber.NewError(fiber.StatusForbidden, "role rules are unavailable for this role")
+			}
+			if err := enforceRoleRulesForRequest(c, st, claims.Role); err != nil {
+				return err
 			}
 		}
 		return c.Next()
@@ -470,7 +474,12 @@ func enforceRoleRulesForRequest(c *fiber.Ctx, st *store.Store, roleKey string) e
 	ctx, cancel := requestContext()
 	defer cancel()
 	rules, err := st.ListRoleRulesByRoleKey(ctx, roleKey)
-	if err != nil || len(rules) == 0 {
+	if err != nil {
+		// Fail closed: a store error must deny, not silently grant. The
+		// message stays generic so rule internals never leak to the caller.
+		return fiber.NewError(fiber.StatusForbidden, "role rules are unavailable for this role")
+	}
+	if len(rules) == 0 {
 		return nil
 	}
 	path := c.Path()
@@ -585,25 +594,6 @@ func checkServerPermission(c *fiber.Ctx, cfg Config, permission string) error {
 		return fiber.NewError(fiber.StatusForbidden, "missing server permission: "+permission)
 	}
 	return nil
-}
-
-func tokenFromRequest(ctx context.Context, secret string, st *store.Store, header, queryToken string) (tokenClaims, error) {
-	if secret == "" || st == nil {
-		return tokenClaims{}, errors.New("authentication service is not configured")
-	}
-	var raw string
-	if strings.HasPrefix(header, "Bearer ") {
-		raw = strings.TrimSpace(strings.TrimPrefix(header, "Bearer "))
-	} else if queryToken != "" {
-		raw = strings.TrimSpace(queryToken)
-	} else {
-		return tokenClaims{}, errors.New("missing bearer token")
-	}
-	claims, err := parseToken(secret, raw)
-	if err != nil {
-		return tokenClaims{}, err
-	}
-	return validateCurrentSession(ctx, st, claims)
 }
 
 type confirmationClaims struct {

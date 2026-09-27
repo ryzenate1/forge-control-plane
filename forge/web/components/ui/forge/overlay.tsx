@@ -33,6 +33,26 @@ const FIELD_FOCUSABLE =
   'input:not([disabled]):not([readonly]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),textarea:not([disabled]):not([readonly]),select:not([disabled])';
 
 /** Escape-to-close, focus trap, focus restore and scroll lock for one overlay. */
+let overlayLockCount = 0;
+let overlayPrevOverflow = "";
+
+function lockBodyScroll() {
+  if (typeof document === "undefined") return;
+  if (overlayLockCount === 0) {
+    overlayPrevOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+  }
+  overlayLockCount += 1;
+}
+
+function unlockBodyScroll() {
+  if (typeof document === "undefined") return;
+  overlayLockCount = Math.max(0, overlayLockCount - 1);
+  if (overlayLockCount === 0) {
+    document.body.style.overflow = overlayPrevOverflow;
+  }
+}
+
 function useOverlayBehaviour(open: boolean, onClose: () => void) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const restoreRef = React.useRef<HTMLElement | null>(null);
@@ -59,8 +79,7 @@ function useOverlayBehaviour(open: boolean, onClose: () => void) {
     if (!open) return;
     restoreRef.current = document.activeElement as HTMLElement | null;
 
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
+    lockBodyScroll();
 
     const focusFirst = () => {
       const container = containerRef.current;
@@ -110,7 +129,7 @@ function useOverlayBehaviour(open: boolean, onClose: () => void) {
     return () => {
       cancelAnimationFrame(raf);
       document.removeEventListener("keydown", onKeyDown, true);
-      document.body.style.overflow = previousOverflow;
+      unlockBodyScroll();
       restoreRef.current?.focus?.();
     };
   }, [open]);
@@ -269,10 +288,15 @@ export function ForgeConfirmDialog({
   }, [open]);
 
   const phraseSatisfied = !confirmPhrase || typed.trim() === confirmPhrase;
+  // While the mutation is in flight the dialog must stay put: backdrop clicks
+  // are already blocked via `static`, and Escape must not dismiss either, or
+  // the operator can orphan a pending mutation and double-submit on retry.
+  const dismiss = loading ? () => undefined : onClose;
 
   return (
     <ForgeDialog
-      onClose={onClose}
+      hideClose={loading}
+      onClose={dismiss}
       open={open}
       size="sm"
       static={loading}
@@ -404,6 +428,7 @@ export function ForgeDrawer({
 /* -------------------------------------------------------------------------- */
 
 export type ForgeMenuItem = {
+  id?: string;
   label: React.ReactNode;
   onSelect: () => void;
   icon?: React.ReactNode;
@@ -418,7 +443,11 @@ export function ForgeDropdownMenu({
   label,
   className,
 }: {
-  /** The control that opens the menu. Rendered inside a button wrapper. */
+  /**
+   * The control that opens the menu. A bare node (icon, text) is wrapped in an
+   * icon button; an already-interactive element (a `<button>` or anything with
+   * its own `onClick`) is enhanced in place so controls are never nested.
+   */
   trigger: React.ReactNode;
   items: readonly ForgeMenuItem[];
   align?: "start" | "end";
@@ -427,55 +456,175 @@ export function ForgeDropdownMenu({
 }) {
   const [open, setOpen] = React.useState(false);
   const containerRef = React.useRef<HTMLDivElement>(null);
+  const menuId = React.useId();
+  const itemRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  const triggerRef = React.useRef<HTMLButtonElement>(null);
+
+  const focusItem = React.useCallback((index: number) => {
+    const enabled = items.map((item, i) => ({ item, i })).filter(({ item }) => !item.disabled);
+    if (enabled.length === 0) return;
+    const clamped = ((index % enabled.length) + enabled.length) % enabled.length;
+    itemRefs.current[enabled[clamped].i]?.focus();
+  }, [items]);
+
+  /** Last enabled item. `focusItem(items.length - 1)` is wrong when trailing
+   * items are disabled, because the index is modulo the *enabled* count. */
+  const focusLast = React.useCallback(() => {
+    const enabledCount = items.filter((item) => !item.disabled).length;
+    if (enabledCount === 0) return;
+    focusItem(enabledCount - 1);
+  }, [items, focusItem]);
+
+  const focusByOffset = React.useCallback((offset: 1 | -1) => {
+    const current = itemRefs.current.findIndex((el) => el === document.activeElement);
+    const enabledIndices = items.map((item, i) => ({ item, i })).filter(({ item }) => !item.disabled).map(({ i }) => i);
+    if (enabledIndices.length === 0) return;
+    const pos = enabledIndices.indexOf(current);
+    const next = pos === -1 ? (offset === 1 ? 0 : enabledIndices.length - 1) : (pos + offset + enabledIndices.length) % enabledIndices.length;
+    itemRefs.current[enabledIndices[next]]?.focus();
+  }, [items]);
 
   React.useEffect(() => {
     if (!open) return;
+    // Focus first enabled item on open (roving tabindex pattern).
+    const raf = requestAnimationFrame(() => focusItem(0));
     const onPointerDown = (event: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
         setOpen(false);
       }
     };
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     };
     document.addEventListener("mousedown", onPointerDown);
     document.addEventListener("keydown", onKeyDown);
     return () => {
+      cancelAnimationFrame(raf);
       document.removeEventListener("mousedown", onPointerDown);
       document.removeEventListener("keydown", onKeyDown);
     };
-  }, [open]);
+  }, [open, focusItem]);
+
+  const onMenuKeyDown = (event: React.KeyboardEvent) => {
+    switch (event.key) {
+      case "ArrowDown":
+        event.preventDefault();
+        focusByOffset(1);
+        break;
+      case "ArrowUp":
+        event.preventDefault();
+        focusByOffset(-1);
+        break;
+      case "Home":
+        event.preventDefault();
+        focusItem(0);
+        break;
+      case "End":
+        event.preventDefault();
+        focusLast();
+        break;
+      case "Tab":
+        setOpen(false);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const onTriggerKeyDown = (event: React.KeyboardEvent) => {
+    if (event.key === "ArrowDown" || event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      if (open) focusItem(0);
+      else setOpen(true);
+    } else if (event.key === "ArrowUp") {
+      event.preventDefault();
+      if (open) focusLast();
+      else setOpen(true);
+    }
+  };
+
+  const toggle = () => setOpen((current) => !current);
+
+  // The trigger is usually a bare icon, but call sites may pass a control of
+  // their own (a button, an avatar). Wrapping that in a second <button> would
+  // nest interactive elements, which is invalid HTML and breaks assistive
+  // tech — so an already-interactive trigger element is enhanced in place and
+  // only a bare node gets the button wrapper.
+  const triggerElement = React.isValidElement<{
+    onClick?: (e: React.MouseEvent) => void;
+    onKeyDown?: (e: React.KeyboardEvent) => void;
+  }>(trigger)
+    ? trigger
+    : null;
+  const triggerIsInteractive =
+    triggerElement !== null &&
+    (triggerElement.type === "button" ||
+      triggerElement.props.onClick !== undefined ||
+      (triggerElement.props as { role?: string }).role === "button");
+  const triggerNode = triggerElement !== null && triggerIsInteractive ? (
+    React.cloneElement(triggerElement, {
+      "aria-expanded": open,
+      "aria-haspopup": "menu",
+      "aria-label": (triggerElement.props as { "aria-label"?: string })["aria-label"] ?? label,
+      "aria-controls": menuId,
+      onClick: (event: React.MouseEvent) => {
+        triggerElement.props.onClick?.(event);
+        if (!event.defaultPrevented) toggle();
+      },
+      onKeyDown: (event: React.KeyboardEvent) => {
+        triggerElement.props.onKeyDown?.(event);
+        if (!event.defaultPrevented) onTriggerKeyDown(event);
+      },
+      ref: triggerRef,
+    } as Record<string, unknown>)
+  ) : (
+    <button
+      aria-expanded={open}
+      aria-haspopup="menu"
+      aria-label={label}
+      aria-controls={menuId}
+      className="ui-icon-button"
+      onClick={toggle}
+      onKeyDown={onTriggerKeyDown}
+      ref={triggerRef}
+      type="button"
+    >
+      {trigger}
+    </button>
+  );
 
   return (
     <div className={cn("relative", className)} ref={containerRef}>
-      <button
-        aria-expanded={open}
-        aria-haspopup="menu"
-        aria-label={label}
-        className="ui-icon-button"
-        onClick={() => setOpen((current) => !current)}
-        type="button"
-      >
-        {trigger}
-      </button>
+      {triggerNode}
       {open ? (
         <div
           className={cn(
             "ui-popover absolute top-[calc(100%+4px)] min-w-44",
             align === "end" ? "right-0" : "left-0"
           )}
+          id={menuId}
           role="menu"
+          aria-label={label}
+          aria-orientation="vertical"
+          onKeyDown={onMenuKeyDown}
         >
           {items.map((item, index) => (
             <button
               className={cn("ui-menu-item", item.tone === "danger" && "ui-menu-item-danger")}
               disabled={item.disabled}
-              key={index}
+              key={item.id ?? `${menuId}-${index}`}
               onClick={() => {
+                if (item.disabled) return;
                 setOpen(false);
                 item.onSelect();
+                triggerRef.current?.focus();
               }}
+              ref={(el) => { itemRefs.current[index] = el; }}
               role="menuitem"
+              tabIndex={-1}
               type="button"
             >
               {item.icon}
@@ -503,7 +652,8 @@ export type ForgeTabItem<T extends string> = {
 
 /**
  * Underlined tab bar with full arrow-key navigation (Left/Right/Home/End),
- * matching the WAI-ARIA tabs pattern.
+ * matching the WAI-ARIA tabs pattern. Arrow keys move both selection and
+ * focus (automatic activation), so keyboard and screen-reader state agree.
  */
 export function ForgeTabs<T extends string>({
   items,
@@ -518,6 +668,9 @@ export function ForgeTabs<T extends string>({
   label: string;
   className?: string;
 }) {
+  const listId = React.useId();
+  const tabRefs = React.useRef<Array<HTMLButtonElement | null>>([]);
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     const enabled = items.filter((item) => !item.disabled);
     if (enabled.length === 0) return;
@@ -529,20 +682,29 @@ export function ForgeTabs<T extends string>({
     else if (event.key === "End") next = enabled.length - 1;
     if (next === null) return;
     event.preventDefault();
-    onChange(enabled[next].value);
+    const nextValue = enabled[next].value;
+    onChange(nextValue);
+    // Move focus to the newly selected tab. Selection alone leaves focus on
+    // the old tab, so a second arrow press would compute from a stale index.
+    requestAnimationFrame(() => {
+      tabRefs.current[items.findIndex((item) => item.value === nextValue)]?.focus();
+    });
   };
 
   return (
     <div aria-label={label} className={cn("ui-tablist", className)} onKeyDown={onKeyDown} role="tablist">
-      {items.map((item) => {
+      {items.map((item, index) => {
         const selected = item.value === value;
         return (
           <button
+            aria-controls={`${listId}-panel`}
             aria-selected={selected}
             className="ui-tab"
             disabled={item.disabled}
+            id={`${listId}-tab-${item.value}`}
             key={item.value}
             onClick={() => onChange(item.value)}
+            ref={(el) => { tabRefs.current[index] = el; }}
             role="tab"
             tabIndex={selected ? 0 : -1}
             type="button"
@@ -593,6 +755,7 @@ export function ForgeCommandPalette({
   const [query, setQuery] = React.useState("");
   const [activeIndex, setActiveIndex] = React.useState(0);
   const listboxId = React.useId();
+  const activeItemRef = React.useRef<HTMLButtonElement>(null);
 
   React.useEffect(() => {
     if (!open) {
@@ -612,6 +775,11 @@ export function ForgeCommandPalette({
   }, [items, query]);
 
   React.useEffect(() => setActiveIndex(0), [query]);
+
+  // Keep the highlighted option in view while arrowing through a long list.
+  React.useEffect(() => {
+    activeItemRef.current?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, open]);
 
   if (!open) return null;
 
@@ -694,6 +862,7 @@ export function ForgeCommandPalette({
                         className={cn("ui-menu-item", index === activeIndex && "bg-overlay")}
                         onClick={() => run(item)}
                         onMouseEnter={() => setActiveIndex(index)}
+                        ref={index === activeIndex ? activeItemRef : undefined}
                         type="button"
                       >
                         {item.icon ? (

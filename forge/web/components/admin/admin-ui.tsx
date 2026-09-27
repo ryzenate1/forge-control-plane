@@ -481,7 +481,10 @@ export function AdminTr({ children, onClick, className }: { children?: React.Rea
       className={cn("ui-tr-interactive focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)]", className)}
       onClick={onClick}
       onKeyDown={(event) => {
-        if (event.key === "Enter") onClick();
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onClick();
+        }
       }}
       tabIndex={0}
     >
@@ -557,11 +560,12 @@ export function Separator({ className }: { className?: string }) {
   return <div className={cn("ui-separator", className)} role="separator" />;
 }
 
-export function DataTable({ headers, rows, label, className }: {
+export function DataTable({ headers, rows, label, className, rowKey }: {
   headers: string[];
   rows: Array<Record<string, React.ReactNode>>;
   label: string;
   className?: string;
+  rowKey?: (row: Record<string, React.ReactNode>, index: number) => string;
 }) {
   return (
     <AdminTable className={className} label={label}>
@@ -570,7 +574,7 @@ export function DataTable({ headers, rows, label, className }: {
       </AdminTHead>
       <AdminTBody>
         {rows.map((row, i) => (
-          <AdminTr key={i}>
+          <AdminTr key={rowKey ? rowKey(row, i) : `row-${i}`}>
             {headers.map((header) => <AdminTd key={header}>{row[header] ?? <span className="text-text-muted">—</span>}</AdminTd>)}
           </AdminTr>
         ))}

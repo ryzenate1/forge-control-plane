@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchCurrentUser } from '@/lib/api';
 import {
   fetchOrganization,
   fetchProjects,
@@ -27,6 +28,19 @@ export default function OrganizationDetailPage() {
   const params = useParams<{ slug: string }>();
   const router = useRouter();
   const [tab, setTab] = useState<'projects' | 'members' | 'servers'>('projects');
+
+  // Session guard — same contract as /servers: an explicit null means the
+  // session is gone (redirect to sign-in), while errors surface a retry.
+  const userQuery = useQuery({
+    queryKey: ['current-user'],
+    queryFn: fetchCurrentUser,
+    retry: 1,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (userQuery.data === null) router.replace(`/?reason=session-expired&next=${encodeURIComponent(`/organizations/${params.slug}`)}`);
+  }, [router.replace, userQuery.data, params.slug]);
 
   const orgQuery = useQuery({
     queryKey: ['organization', params.slug],
@@ -60,6 +74,25 @@ export default function OrganizationDetailPage() {
   };
 
   if (orgQuery.isPending) return <div className="mx-auto max-w-4xl px-4 py-8 text-gray-400">Loading...</div>;
+  if (userQuery.isPending || userQuery.data === undefined || userQuery.data === null) {
+    return <div className="mx-auto max-w-4xl px-4 py-8 text-gray-400">Loading...</div>;
+  }
+  if (userQuery.isError) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-4 px-4 py-8 text-center">
+        <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+          Session verification is unavailable. Retrying once the panel is reachable.
+        </div>
+        <button
+          onClick={() => void userQuery.refetch()}
+          disabled={userQuery.isFetching}
+          className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)] disabled:opacity-60"
+        >
+          {userQuery.isFetching ? "Retrying…" : "Retry"}
+        </button>
+      </div>
+    );
+  }
   if (orgQuery.isError) {
     return (
       <div className="mx-auto max-w-4xl space-y-4 px-4 py-8">
@@ -169,11 +202,11 @@ function ProjectsTab({ orgId }: { orgId: string }) {
       <form onSubmit={handleCreate} className="mb-6 flex gap-3">
         <input
           value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name"
-          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[var(--brand)]/50 focus:outline-none" required
+          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_50%,transparent)] focus:outline-none" required
         />
         <input
           value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description"
-          className="w-48 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[var(--brand)]/50 focus:outline-none"
+          className="w-48 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_50%,transparent)] focus:outline-none"
         />
         <button type="submit" disabled={createMut.isPending || !name.trim()} className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)] disabled:opacity-50">
           {createMut.isPending ? '...' : 'Add'}
@@ -245,7 +278,7 @@ function MembersTab({ orgId }: { orgId: string }) {
       <form onSubmit={handleAdd} className="mb-6 flex gap-3">
         <input
           value={userId} onChange={(e) => setUserId(e.target.value)} placeholder="User ID"
-          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[var(--brand)]/50 focus:outline-none" required
+          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_50%,transparent)] focus:outline-none" required
         />
         <select value={role} onChange={(e) => setRole(e.target.value)} className="rounded-lg border border-white/10 bg-black/30 px-3 py-2 text-sm text-white">
           <option value="member">Member</option>
@@ -285,7 +318,7 @@ function MembersTab({ orgId }: { orgId: string }) {
                 <span className="text-sm font-medium text-white">{m.email}</span>
                 <span className={`ml-3 inline-block rounded-full px-2 py-0.5 text-xs font-medium ${
                   m.role === 'owner' ? 'bg-yellow-500/20 text-yellow-400' :
-                  m.role === 'admin' ? 'bg-[var(--brand)]/20 text-[var(--brand)]' :
+                  m.role === 'admin' ? 'bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] text-[var(--brand)]' :
                   m.role === 'viewer' ? 'bg-gray-500/20 text-gray-400' :
                   'bg-blue-500/20 text-blue-400'
                 }`}>{m.role}</span>
@@ -330,7 +363,7 @@ function OrgServersTab({ orgId }: { orgId: string }) {
           value={searchInput}
           onChange={(e) => setSearchInput(e.target.value)}
           placeholder="Search servers..."
-          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[var(--brand)]/50 focus:outline-none"
+          className="flex-1 rounded-lg border border-white/10 bg-black/30 px-4 py-2 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_50%,transparent)] focus:outline-none"
         />
         <button type="submit" className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-medium text-white hover:bg-[var(--brand-hover)]">Search</button>
         {search && (
@@ -354,7 +387,7 @@ function OrgServersTab({ orgId }: { orgId: string }) {
               <Link
                 key={s.id}
                 href={`/server/${s.id}`}
-                className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3 transition hover:border-[var(--brand)]/30 hover:bg-white/[0.07]"
+                className="flex items-center justify-between rounded-lg border border-white/10 bg-white/5 px-4 py-3 transition hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] hover:bg-white/[0.07]"
               >
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">

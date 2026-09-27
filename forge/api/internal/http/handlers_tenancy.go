@@ -34,6 +34,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/organizations", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -71,6 +74,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Delete("/organizations/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -103,6 +109,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/organizations/:id/projects", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -137,6 +146,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Put("/projects/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -171,6 +183,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Delete("/projects/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -217,6 +232,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/projects/:id/envs", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -254,6 +272,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Put("/envs/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -293,6 +314,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Delete("/envs/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -331,6 +355,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/organizations/:id/members", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -365,6 +392,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Put("/organizations/:id/members/:userId", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -394,6 +424,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Delete("/organizations/:id/members/:userId", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -418,6 +451,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	// ---- Organizations PATCH ----
 
 	protected.Patch("/organizations/:id", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -456,6 +492,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	// ---- Invitations ----
 
 	protected.Post("/organizations/:id/invitations", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -527,6 +566,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	protected.Post("/tenancy/invitations/accept", acceptTenancyInvitation)
 
 	protected.Delete("/organizations/:id/invitations/:invId", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -556,6 +598,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Put("/organizations/:id/members/:userId/permissions", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -592,6 +637,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/environments/:id/env-vars", func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		if _, err := phase2EnvAccess(c, &cfg); err != nil {
 			return err
 		}
@@ -624,6 +672,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Put("/env-vars/:id", envVarAccess(cfg, envvarSvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -648,6 +699,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Delete("/env-vars/:id", envVarAccess(cfg, envvarSvc), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		actorID := ""
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = claims.Sub
@@ -696,6 +750,9 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 	})
 
 	protected.Post("/projects/:id/env-vars", projectEnvAccess(cfg), func(c *fiber.Ctx) error {
+		if err := rejectScopedTenancyWrites(c); err != nil {
+			return err
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
@@ -767,17 +824,58 @@ func tenancyOrgAccess(tenancySvc *tenancy.Service) fiber.Handler {
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
 		}
+		// Scoped credentials (API keys / OAuth) carry only servers.* scopes;
+		// tenancy has no delegated scope family, so they are rejected here
+		// rather than silently inheriting the caller's org membership.
+		if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+			return fiber.NewError(fiber.StatusForbidden, "scoped credentials cannot access organization resources")
+		}
 		if claims.Role == "admin" {
+			// Admins with scoped credentials were already rejected above;
+			// full sessions pass through.
 			return c.Next()
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		isMember, err := tenancySvc.UserIsOrgMember(ctx, c.Params("id"), claims.Sub)
+		// :slug routes (GET /organizations/:slug) carry the slug, not the id.
+		// Reading Params("id") there yields "" and would deny every member.
+		orgParam := c.Params("id")
+		if orgParam == "" {
+			orgParam = c.Params("slug")
+		}
+		if orgParam == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "organization identifier is required")
+		}
+		// When the identifier is a slug, resolve it to the org ID for the
+		// membership check; fail closed when it cannot be resolved.
+		orgID := orgParam
+		if org, err := tenancySvc.GetOrganization(ctx, orgParam); err == nil && org.ID != "" {
+			orgID = org.ID
+		}
+		isMember, err := tenancySvc.UserIsOrgMember(ctx, orgID, claims.Sub)
 		if err != nil || !isMember {
+			// Fall back to checking the raw param (covers ID-vs-slug stores
+			// where GetOrganization resolves differently than membership).
+			if orgID != orgParam {
+				if retry, rerr := tenancySvc.UserIsOrgMember(ctx, orgParam, claims.Sub); rerr == nil && retry {
+					return c.Next()
+				}
+			}
 			return fiber.NewError(fiber.StatusForbidden, "not a member of this organization")
 		}
 		return c.Next()
 	}
+}
+
+// rejectScopedTenancyWrites blocks API-key / OAuth credentials on mutating
+// tenancy routes. Tenancy mutations (create org/project/env, invite, role
+// changes) have no delegated scope family, so scoped creds must not drive
+// them even when the owner also holds a valid key.
+func rejectScopedTenancyWrites(c *fiber.Ctx) error {
+	if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+		return fiber.NewError(fiber.StatusForbidden, "scoped credentials cannot modify organization resources")
+	}
+	return nil
 }
 
 // projectEnvAccess guards project-scoped env-var routes: the :id identifies a
@@ -789,6 +887,9 @@ func projectEnvAccess(cfg Config) fiber.Handler {
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+			return fiber.NewError(fiber.StatusForbidden, "scoped credentials cannot access project resources")
 		}
 		if claims.Role == "admin" {
 			return c.Next()
@@ -827,6 +928,9 @@ func envVarAccess(cfg Config, envvarSvc *envvars.Service) fiber.Handler {
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+			return fiber.NewError(fiber.StatusForbidden, "scoped credentials cannot access env var resources")
 		}
 		if claims.Role == "admin" {
 			return c.Next()

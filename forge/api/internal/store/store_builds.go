@@ -6,36 +6,36 @@ import (
 )
 
 type BuildRecord struct {
-	ID                string     `json:"id"`
-	SourceID          string     `json:"sourceId"`
-	BuilderType       string     `json:"builderType"`
-	Status            string     `json:"status"`
-	BuildStage        string     `json:"buildStage"`
-	ImageRef          string     `json:"imageRef,omitempty"`
-	BuildLog          string     `json:"buildLog,omitempty"`
-	StartedAt         time.Time  `json:"startedAt"`
-	FinishedAt        *time.Time `json:"finishedAt,omitempty"`
-	ExitCode          *int       `json:"exitCode,omitempty"`
-	ErrorMessage      string     `json:"errorMessage,omitempty"`
-	PID               *int       `json:"pid,omitempty"`
+	ID           string     `json:"id"`
+	SourceID     string     `json:"sourceId"`
+	BuilderType  string     `json:"builderType"`
+	Status       string     `json:"status"`
+	BuildStage   string     `json:"buildStage"`
+	ImageRef     string     `json:"imageRef,omitempty"`
+	BuildLog     string     `json:"buildLog,omitempty"`
+	StartedAt    time.Time  `json:"startedAt"`
+	FinishedAt   *time.Time `json:"finishedAt,omitempty"`
+	ExitCode     *int       `json:"exitCode,omitempty"`
+	ErrorMessage string     `json:"errorMessage,omitempty"`
+	PID          *int       `json:"pid,omitempty"`
 
 	// Extended build pipeline fields
-	NodeID            string     `json:"nodeId,omitempty"`
-	WorkspaceID       string     `json:"workspaceId,omitempty"`
-	Registry          string     `json:"registry,omitempty"`
-	CacheFrom         []string   `json:"cacheFrom,omitempty"`
-	CacheTo           []string   `json:"cacheTo,omitempty"`
-	Platform          string     `json:"platform,omitempty"`
-	CommitSHA         string     `json:"commitSha,omitempty"`
-	CommitRef         string     `json:"commitRef,omitempty"`
-	Digest            string     `json:"digest,omitempty"`
-	RetryOf           string     `json:"retryOf,omitempty"`
-	RetryAttempt      int        `json:"retryAttempt,omitempty"`
-	TimedOut          bool       `json:"timedOut,omitempty"`
-	BuildTimeout      int        `json:"buildTimeoutSecs,omitempty"`
-	CredMasked        bool       `json:"credentialsMasked,omitempty"`
-	IdempotencyKey    string     `json:"idempotencyKey,omitempty"`
-	BeaconBuildID     string     `json:"beaconBuildId,omitempty"`
+	NodeID         string   `json:"nodeId,omitempty"`
+	WorkspaceID    string   `json:"workspaceId,omitempty"`
+	Registry       string   `json:"registry,omitempty"`
+	CacheFrom      []string `json:"cacheFrom,omitempty"`
+	CacheTo        []string `json:"cacheTo,omitempty"`
+	Platform       string   `json:"platform,omitempty"`
+	CommitSHA      string   `json:"commitSha,omitempty"`
+	CommitRef      string   `json:"commitRef,omitempty"`
+	Digest         string   `json:"digest,omitempty"`
+	RetryOf        string   `json:"retryOf,omitempty"`
+	RetryAttempt   int      `json:"retryAttempt,omitempty"`
+	TimedOut       bool     `json:"timedOut,omitempty"`
+	BuildTimeout   int      `json:"buildTimeoutSecs,omitempty"`
+	CredMasked     bool     `json:"credentialsMasked,omitempty"`
+	IdempotencyKey string   `json:"idempotencyKey,omitempty"`
+	BeaconBuildID  string   `json:"beaconBuildId,omitempty"`
 }
 
 func (s *Store) CreateBuild(ctx context.Context, record *BuildRecord) error {
@@ -314,7 +314,9 @@ func (s *Store) ListNonTerminalBuilds(ctx context.Context) ([]*BuildRecord, erro
 	return builds, rows.Err()
 }
 
-func scanBuildRow(row interface{ Scan(dest ...interface{}) error }) (*BuildRecord, error) {
+func scanBuildRow(row interface {
+	Scan(dest ...interface{}) error
+}) (*BuildRecord, error) {
 	var b BuildRecord
 	var imageRef, buildLog, errorMessage, nodeID, registry, workspaceID *string
 	var finishedAt *time.Time

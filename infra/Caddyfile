@@ -24,7 +24,16 @@ api.forge.local {
 }
 
 forge.local {
-  reverse_proxy web:3000
+  # Mirror Caddyfile.production: /api/* goes to the API (incl. WebSocket
+  # upgrades), everything else to web. A single host keeps dev/prod parity
+  # so frontend fetch paths never diverge by environment.
+  handle /api/* {
+    reverse_proxy api:8080
+  }
+
+  handle {
+    reverse_proxy web:3000
+  }
   header {
     Strict-Transport-Security     "max-age=63072000; includeSubDomains; preload"
     X-Content-Type-Options        "nosniff"

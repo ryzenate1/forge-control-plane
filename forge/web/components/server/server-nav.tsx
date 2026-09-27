@@ -5,6 +5,8 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useRef, useState } from "react";
 import { ChevronLeft, LogOut, Menu, User, X, type LucideIcon } from "lucide-react";
 import { type ApiServer, logout } from "@/lib/api";
+import { useServerStore } from "@/stores/use-server-store";
+import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { cn } from "@/lib/utils";
 import { useT } from "@/components/TranslationProvider";
 import { resolveActiveHref } from "@/lib/nav/active";
@@ -71,7 +73,15 @@ export function ServerNav({ serverId, server, access, activeTab }: ServerNavProp
     : server.transferring
       ? tr("server.nav.transferring", "Transferring")
       : server.status || tr("server.nav.unknown", "Unknown");
-  const signOut = async () => { await logout(); router.push("/"); };
+  const signOut = async () => {
+    try {
+      await logout();
+    } finally {
+      useServerStore.getState().reset();
+      useTenancyStore.getState().reset();
+      router.push("/");
+    }
+  };
 
   const content = (
     <>
@@ -129,7 +139,7 @@ export function ServerNav({ serverId, server, access, activeTab }: ServerNavProp
                       "mb-0.5 flex items-center gap-2 rounded-lg py-2.5 text-sm font-medium transition-colors motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
                       nested ? "ml-3 border-l border-[var(--line)] pl-3 text-[13px]" : "px-3",
                       selected
-                        ? "bg-[var(--brand)]/10 font-semibold text-[var(--brand)]"
+                        ? "bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] font-semibold text-[var(--brand)]"
                         : "text-[var(--text-subtle)] hover:bg-white/[0.05] hover:text-[var(--text)]",
                     )}
                     href={href}
@@ -172,7 +182,7 @@ export function ServerNav({ serverId, server, access, activeTab }: ServerNavProp
 
   return (
     <>
-      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[var(--line)] bg-[var(--surface)]/95 px-4 backdrop-blur md:hidden">
+      <header className="sticky top-0 z-30 flex h-14 items-center justify-between border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--surface)_95%,transparent)] px-4 backdrop-blur md:hidden">
         <div className="min-w-0">
           <p className="truncate text-sm font-bold text-[var(--text)]">{server.name}</p>
           <p className="truncate font-mono text-[10px] text-[var(--text-muted)]">{server.allocation || state}</p>

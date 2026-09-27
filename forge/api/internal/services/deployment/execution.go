@@ -20,6 +20,11 @@ var stepStatusMapping = map[string]Status{
 }
 
 func (s *Service) ExecuteDeployment(ctx context.Context, deploymentID string) error {
+	// The execution map entry is owned by whoever launched this run
+	// (launchExecution or ResumeDeployments); delete it on return so a
+	// finished deployment never blocks a future run. Deleting an absent key
+	// is a no-op, so direct callers are unaffected.
+	defer s.executingDeployments.Delete(deploymentID)
 	executorID := uuid.NewString()
 	claimed, err := s.store.ClaimExecutionLease(ctx, deploymentID, executorID, 5*time.Minute)
 	if err != nil {
@@ -477,8 +482,13 @@ func (s *Service) ResumeDeployments(ctx context.Context) error {
 			if _, loaded := s.executingDeployments.LoadOrStore(deployment.ID, true); loaded {
 				continue
 			}
+			s.wg.Add(1)
 			go func(id string) {
-				if err := s.ExecuteDeployment(context.Background(), id); err != nil {
+				defer s.wg.Done()
+				defer s.executingDeployments.Delete(id)
+				resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
+				defer cancel()
+				if err := s.ExecuteDeployment(resumeCtx, id); err != nil {
 					slog.Error("resume deployment failed", "deploymentId", id, "error", err.Error())
 				}
 			}(deployment.ID)
@@ -490,8 +500,13 @@ func (s *Service) ResumeDeployments(ctx context.Context) error {
 			if _, loaded := s.executingDeployments.LoadOrStore(deployment.ID, true); loaded {
 				continue
 			}
+			s.wg.Add(1)
 			go func(id string) {
-				if err := s.resumeFromStep(context.Background(), id); err != nil {
+				defer s.wg.Done()
+				defer s.executingDeployments.Delete(id)
+				resumeCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
+				defer cancel()
+				if err := s.resumeFromStep(resumeCtx, id); err != nil {
 					slog.Error("resume deployment from step failed", "deploymentId", id, "error", err.Error())
 				}
 			}(deployment.ID)
@@ -502,6 +517,7 @@ func (s *Service) ResumeDeployments(ctx context.Context) error {
 }
 
 func (s *Service) resumeFromStep(ctx context.Context, deploymentID string) error {
+	defer s.executingDeployments.Delete(deploymentID)
 	executorID := uuid.NewString()
 	claimed, err := s.store.ClaimExecutionLease(ctx, deploymentID, executorID, 5*time.Minute)
 	if err != nil {

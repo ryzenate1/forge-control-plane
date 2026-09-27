@@ -3,6 +3,7 @@ package http
 import (
 	"bytes"
 	"encoding/json"
+	"log/slog"
 	"strings"
 
 	"gamepanel/forge/internal/daemon"
@@ -82,6 +83,43 @@ func resolveDockerNode(cfg Config, c *fiber.Ctx) (*nodeAdminRequest, error) {
 	return &targets[0], nil
 }
 
+// requireDockerNode resolves the explicit `?node=` target for mutating Docker
+// operations. A mutation without an explicit node would silently act on
+// whichever node happens to be listed first, so it is rejected with 400
+// instead of guessing. Read-only handlers keep the resolveDockerNode
+// fallback; fleet-wide fan-outs (list/prune) address all nodes explicitly.
+func requireDockerNode(cfg Config, c *fiber.Ctx) (*nodeAdminRequest, error) {
+	nodeID := c.Query("node")
+	if nodeID == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "node query parameter is required for this operation")
+	}
+	return resolveSingleNodeTarget(cfg, nodeID)
+}
+
+// fanoutNodeError is one node's failure inside a multi-node fan-out response.
+type fanoutNodeError struct {
+	NodeID   string `json:"nodeId"`
+	NodeName string `json:"nodeName,omitempty"`
+	Error    string `json:"error"`
+}
+
+// fanoutFailed returns a 502 carrying every node's error when a fan-out
+// reached nodes but all of them failed. Partial failures are logged
+// server-side and return the successful subset with 200 (the array shape is
+// the web client's contract); a total failure must not look like an empty
+// fleet, so it is a non-2xx with errors[].
+func fanoutFailed(c *fiber.Ctx, failures []fanoutNodeError) error {
+	return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{"errors": failures})
+}
+
+func logFanoutPartial(c *fiber.Ctx, op string, failures []fanoutNodeError) {
+	for _, f := range failures {
+		slog.Warn("docker fan-out partial failure",
+			"op", op, "method", c.Method(), "path", c.Path(),
+			"nodeId", f.NodeID, "nodeName", f.NodeName, "error", f.Error)
+	}
+}
+
 func nodeListOrFirst(cfg Config) ([]nodeAdminRequest, error) {
 	targets, err := resolveAdminNodeTargets(cfg)
 	if err != nil {
@@ -103,9 +141,11 @@ func dockerListContainers(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminContainerList(c.Context(), t.NodeURL, t.NodeToken, all)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			results = append(results, fiber.Map{
@@ -114,6 +154,10 @@ func dockerListContainers(cfg Config) fiber.Handler {
 				"containers": data,
 			})
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "container:list", failures)
 		return c.JSON(results)
 	}
 }
@@ -139,7 +183,7 @@ func dockerCreateContainer(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -161,7 +205,7 @@ func dockerOperateContainer(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -192,7 +236,7 @@ func dockerDeleteContainer(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		containerID := c.Params("id")
 		force := c.Query("force") == "true"
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -244,13 +288,16 @@ func dockerListImages(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminImageList(c.Context(), t.NodeURL, t.NodeToken)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			var images []map[string]any
 			if err := json.Unmarshal(data, &images); err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			for _, img := range images {
@@ -259,7 +306,11 @@ func dockerListImages(cfg Config) fiber.Handler {
 				if len(tags) > 0 {
 					var ts []string
 					for _, tag := range tags {
-						ts = append(ts, tag.(string))
+						s, ok := tag.(string)
+						if !ok {
+							continue
+						}
+						ts = append(ts, s)
 					}
 					tagStr = strings.Join(ts, ",")
 				}
@@ -273,6 +324,10 @@ func dockerListImages(cfg Config) fiber.Handler {
 				})
 			}
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "image:list", failures)
 		return c.JSON(results)
 	}
 }
@@ -294,17 +349,12 @@ func dockerPullImage(cfg Config) fiber.Handler {
 		if err := validateContainerImageReference(image); err != nil {
 			return err
 		}
-		var target *nodeAdminRequest
-		var err error
-		if body.NodeID != "" {
-			target, err = resolveSingleNodeTarget(cfg, body.NodeID)
-		} else {
-			targets, e := nodeListOrFirst(cfg)
-			if e != nil {
-				return e
-			}
-			target = &targets[0]
+		// Pulling an image is a mutation: the target node must be named
+		// explicitly instead of defaulting to the first listed node.
+		if body.NodeID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "nodeId is required")
 		}
+		target, err := resolveSingleNodeTarget(cfg, body.NodeID)
 		if err != nil {
 			return err
 		}
@@ -344,13 +394,16 @@ func dockerListNetworks(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminNetworkList(c.Context(), t.NodeURL, t.NodeToken)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			var networks []map[string]any
 			if err := json.Unmarshal(data, &networks); err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			for _, n := range networks {
@@ -370,6 +423,10 @@ func dockerListNetworks(cfg Config) fiber.Handler {
 				})
 			}
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "network:list", failures)
 		return c.JSON(results)
 	}
 }
@@ -380,7 +437,7 @@ func dockerCreateNetwork(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -421,15 +478,18 @@ func dockerListVolumes(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminVolumeList(c.Context(), t.NodeURL, t.NodeToken)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			var resp struct {
 				Volumes []map[string]any `json:"volumes"`
 			}
 			if err := json.Unmarshal(data, &resp); err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			for _, v := range resp.Volumes {
@@ -447,6 +507,10 @@ func dockerListVolumes(cfg Config) fiber.Handler {
 				})
 			}
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "volume:list", failures)
 		return c.JSON(results)
 	}
 }
@@ -457,7 +521,7 @@ func dockerCreateVolume(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -532,7 +596,7 @@ func dockerContainerFilesUpload(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		containerID := c.Params("id")
 		destPath := c.Query("path")
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -554,7 +618,7 @@ func dockerContainerFilesDelete(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -579,7 +643,7 @@ func dockerBuildImage(cfg Config) fiber.Handler {
 		if err := validateContainerImageReference(body.Tag); err != nil {
 			return err
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -604,7 +668,7 @@ func dockerPushImage(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -629,7 +693,7 @@ func dockerTagImage(cfg Config) fiber.Handler {
 		if err := validateContainerImageReference(body.Repo + ":" + body.Tag); err != nil {
 			return err
 		}
-		target, err := resolveDockerNode(cfg, c)
+		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err
 		}
@@ -649,9 +713,11 @@ func dockerSearchImages(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminImageSearch(c.Context(), t.NodeURL, t.NodeToken, term)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			results = append(results, fiber.Map{
@@ -660,6 +726,10 @@ func dockerSearchImages(cfg Config) fiber.Handler {
 				"results":  data,
 			})
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "image:search", failures)
 		return c.JSON(results)
 	}
 }
@@ -671,14 +741,20 @@ func dockerPruneVolumes(cfg Config) fiber.Handler {
 			return err
 		}
 		results := make([]fiber.Map, 0, len(targets))
+		var failures []fanoutNodeError
 		for _, t := range targets {
 			data, err := cfg.Daemon.AdminVolumePrune(c.Context(), t.NodeURL, t.NodeToken)
 			if err != nil {
+				failures = append(failures, fanoutNodeError{NodeID: t.NodeID, NodeName: t.NodeName, Error: err.Error()})
 				continue
 			}
 			results = append(results, fiber.Map{"nodeId": t.NodeID, "nodeName": t.NodeName, "result": data})
 			recordAudit(cfg, c, "volume:prune", "node", &t.NodeID, nil)
 		}
+		if len(results) == 0 && len(failures) > 0 {
+			return fanoutFailed(c, failures)
+		}
+		logFanoutPartial(c, "volume:prune", failures)
 		return c.JSON(results)
 	}
 }

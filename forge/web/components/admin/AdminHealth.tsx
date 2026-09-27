@@ -30,15 +30,15 @@ import {
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import {
   fetchAdminActivity,
-  fetchNodes,
   fetchRecoveryPlans,
   fetchReservations,
   fetchServers,
   type ApiHealthCheck,
+  type ApiNode,
 } from "@/lib/api";
 import { Btn, EmptyState, Pill, cn } from "./admin-ui";
 import { LiveHealthChecks } from "./LiveHealthChecks";
-import { relativeTime, useHealthQuery } from "@/lib/admin/telemetry";
+import { relativeTime, useHealthQuery, useNodesQuery } from "@/lib/admin/telemetry";
 
 type MonitorSection =
   | "infrastructure"
@@ -214,7 +214,7 @@ export function AdminHealth({
   // Canonical health report — see the note in AdminOverview. The bare
   // ["health"] key this used cached separately from queryKeys.health.report().
   const healthQuery = useHealthQuery();
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, ...poll });
+  const nodesQuery = useNodesQuery();
   const serversQuery = useQuery({ queryKey: ["servers"], queryFn: fetchServers, ...poll });
   const reservationsQuery = useQuery({ queryKey: ["reservations"], queryFn: fetchReservations, retry: false, ...poll });
   const recoveryQuery = useQuery({ queryKey: ["recovery"], queryFn: fetchRecoveryPlans, retry: false, ...poll });
@@ -734,7 +734,7 @@ export function AdminHealth({
           className={cn(
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "infrastructure"
-              ? "border-[var(--brand)]/50 bg-[var(--surface-raised)] ring-1 ring-[var(--brand)]/30 shadow-md"
+              ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
               : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
           )}
           onClick={() => selectSection("infrastructure")}
@@ -785,7 +785,7 @@ export function AdminHealth({
           className={cn(
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "workloads"
-              ? "border-[var(--brand)]/50 bg-[var(--surface-raised)] ring-1 ring-[var(--brand)]/30 shadow-md"
+              ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
               : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
           )}
           onClick={() => selectSection("workloads")}
@@ -817,7 +817,7 @@ export function AdminHealth({
           className={cn(
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "platform"
-              ? "border-[var(--brand)]/50 bg-[var(--surface-raised)] ring-1 ring-[var(--brand)]/30 shadow-md"
+              ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
               : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
           )}
           onClick={() => selectSection("platform")}
@@ -846,7 +846,7 @@ export function AdminHealth({
           className={cn(
             "rounded-xl border p-4 text-left transition-all cursor-pointer relative overflow-hidden group",
             selected === "database"
-              ? "border-[var(--brand)]/50 bg-[var(--surface-raised)] ring-1 ring-[var(--brand)]/30 shadow-md"
+              ? "border-[color-mix(in_srgb,var(--brand)_50%,transparent)] bg-[var(--surface-raised)] ring-1 ring-[color-mix(in_srgb,var(--brand)_30%,transparent)] shadow-md"
               : "border-white/[0.08] bg-[var(--surface)] hover:border-white/20 hover:bg-white/[0.02]"
           )}
           onClick={() => selectSection("database")}
@@ -1347,7 +1347,7 @@ export function AdminHealth({
   );
 }
 
-function NodeTable({ nodes }: { nodes: Awaited<ReturnType<typeof fetchNodes>> }) {
+function NodeTable({ nodes }: { nodes: ApiNode[] }) {
   const router = useRouter();
   if (nodes.length === 0) {
     return <EmptyState icon={NodeHostIcon} message="No nodes are registered; node monitoring will begin after setup." />;

@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -157,7 +158,7 @@ export function AppMountsManager() {
   const [form, setForm] = useState<MountForm | null>(null);
   const [errors, setErrors] = useState<MountErrors>({});
 
-  const appsQuery = useQuery({ queryKey: ["apps"], queryFn: fetchApps });
+  const appsQuery = useQuery({ queryKey: queryKeys.apps.lists(), queryFn: fetchApps });
   const apps = useMemo(() => appsQuery.data ?? [], [appsQuery.data]);
   const appIds = useMemo(() => apps.map((app) => app.id), [apps]);
 

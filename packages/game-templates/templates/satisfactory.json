@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
   },
-  "startup": "./FactoryServer.sh -Port={{SERVER_PORT}} -ServerPassword={{SATISFACTORY_PASSWORD}} -SessionName=\"{{SERVER_NAME}}\" -MaxPlayers={{SATISFACTORY_MAX_PLAYERS}} -AutoSaveInterval={{SATISFACTORY_AUTO_SAVE_INTERVAL}} -DisableSeasonalEvents={{SATISFACTORY_DISABLE_SEASONAL}}",
+  "startup": "./FactoryServer.sh -Port={{SERVER_PORT}} -ServerPassword=\"{{SATISFACTORY_PASSWORD}}\" -SessionName=\"{{SERVER_NAME}}\" -MaxPlayers={{SATISFACTORY_MAX_PLAYERS}} -AutoSaveInterval={{SATISFACTORY_AUTO_SAVE_INTERVAL}} -DisableSeasonalEvents=\"{{SATISFACTORY_DISABLE_SEASONAL}}\"",
   "config": {
     "files": {},
     "startup": {
@@ -98,8 +98,15 @@
     "entrypoint": "bash",
     "script": "#!/bin/bash\n# Satisfactory SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Satisfactory dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 1690800 validate +quit\n\ncd /mnt/server\n\n# Make server executable\nif [ -f FactoryServer.sh ]; then\n    chmod +x FactoryServer.sh\nfi\n\necho \"Satisfactory server installation complete\""
   },
-  "supported_platforms": ["docker", "podman"],
-  "categories": ["sandbox", "building", "simulation"],
+  "supported_platforms": [
+    "docker",
+    "podman"
+  ],
+  "categories": [
+    "sandbox",
+    "building",
+    "simulation"
+  ],
   "file_denylist": [],
   "features": []
 }

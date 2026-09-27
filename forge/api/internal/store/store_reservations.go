@@ -33,6 +33,15 @@ func (s *Store) CreatePlacementReservation(ctx context.Context, req CreatePlacem
 	if req.NodeID == "" {
 		return PlacementReservation{}, errors.New("nodeId is required")
 	}
+	// A reservation that claims no capacity — or negative capacity, which
+	// would inflate the node's available headroom — is a malformed request,
+	// not an empty one. Reject it before it can skew every later snapshot.
+	if req.CPU < 0 || req.Memory < 0 || req.Disk < 0 {
+		return PlacementReservation{}, errors.New("reservation capacity must not be negative")
+	}
+	if req.CPU == 0 && req.Memory == 0 && req.Disk == 0 {
+		return PlacementReservation{}, errors.New("reservation must request capacity")
+	}
 	if req.ReservationType == "" {
 		req.ReservationType = PlacementReservationTypePlacement
 	}

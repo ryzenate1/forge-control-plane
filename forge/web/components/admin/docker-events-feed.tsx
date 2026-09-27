@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -20,7 +21,7 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchNodes } from "@/lib/api";
+import {  } from "@/lib/api";
 import {
   DOCKER_EVENT_TYPES,
   MAX_DOCKER_EVENTS,
@@ -160,7 +161,7 @@ export function DockerEventsFeed({ className }: { className?: string }) {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [now, setNow] = useState<number | null>(null);
 
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, staleTime: 60_000 });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const nodeNameById = useMemo(() => {
     const map = new Map<string, string>();

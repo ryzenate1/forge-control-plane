@@ -39,3 +39,37 @@ CREATE TABLE IF NOT EXISTS scaling_events (
 );
 CREATE INDEX IF NOT EXISTS idx_scaling_events_policy ON scaling_events(policy_id);
 CREATE INDEX IF NOT EXISTS idx_scaling_events_policy_created ON scaling_events(policy_id, created_at DESC);
+
+-- Hosts that applied 083_autoscaler.sql first already have these tables WITHOUT
+-- the server FKs (the CREATE TABLE IF NOT EXISTS statements above are then a
+-- no-op), so backfill the constraints idempotently. The guard checks for any
+-- FK covering the column (not just the name), so fresh installs that got the
+-- inline REFERENCES above do not end up with a duplicate constraint.
+DO $$ BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.conrelid = 'scaling_policies'::regclass
+          AND c.contype = 'f'
+          AND a.attname = 'server_id'
+          AND c.confrelid = 'servers'::regclass
+    ) THEN
+        ALTER TABLE scaling_policies
+            ADD CONSTRAINT fk_scaling_policies_server
+            FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE;
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1
+        FROM pg_constraint c
+        JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = ANY (c.conkey)
+        WHERE c.conrelid = 'scaling_events'::regclass
+          AND c.contype = 'f'
+          AND a.attname = 'server_id'
+          AND c.confrelid = 'servers'::regclass
+    ) THEN
+        ALTER TABLE scaling_events
+            ADD CONSTRAINT fk_scaling_events_server
+            FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE;
+    END IF;
+END $$;

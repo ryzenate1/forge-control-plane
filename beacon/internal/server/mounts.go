@@ -42,6 +42,17 @@ func (s *Server) runtimeMounts(mounts []mountConfiguration) ([]runtime.Mount, er
 		}
 		result = append(result, runtime.Mount{Source: source, Target: target, ReadOnly: configured.ReadOnly})
 	}
+	// Record every mount source Beacon actually provisioned so cleanup can
+	// refuse paths it never created. The record is the confinement boundary
+	// for the destructive endpoint below.
+	s.mountRecordsMu.Lock()
+	if s.mountRecords == nil {
+		s.mountRecords = make(map[string]struct{})
+	}
+	for _, m := range result {
+		s.mountRecords[m.Source] = struct{}{}
+	}
+	s.mountRecordsMu.Unlock()
 	return result, nil
 }
 
@@ -117,6 +128,12 @@ func (s *Server) cleanupMount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
+	// Destructive by design: require explicit confirmation like every other
+	// destructive admin endpoint.
+	if r.Header.Get("X-Confirm-Destructive") != "true" {
+		http.Error(w, "destructive operation requires X-Confirm-Destructive: true header", http.StatusBadRequest)
+		return
+	}
 	source := strings.TrimSpace(body.Source)
 	if source == "" {
 		http.Error(w, "source is required", http.StatusBadRequest)
@@ -149,6 +166,16 @@ func (s *Server) cleanupMount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "refusing to remove an allowed mount root", http.StatusBadRequest)
 		return
 	}
+	// Restrict cleanup to Beacon records: only mount sources Beacon actually
+	// provisioned through runtimeMounts may be removed here. Anything else is
+	// an arbitrary host path that happens to sit under an allowed root.
+	s.mountRecordsMu.RLock()
+	_, recorded := s.mountRecords[canonical]
+	s.mountRecordsMu.RUnlock()
+	if !recorded {
+		http.Error(w, "mount source is not a Beacon-managed record", http.StatusForbidden)
+		return
+	}
 	confined, err := rootfs.New(permittedRoot)
 	if err != nil {
 		http.Error(w, "failed to open mount root", http.StatusInternalServerError)
@@ -169,7 +196,23 @@ func (s *Server) cleanupMount(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// Audit the destructive action. The panel HMAC already authenticated the
+	// caller; the audit trail records who removed a Beacon-managed mount
+	// source and which one, so an unexpected cleanup is attributable.
+	s.logAdminAction(r.Context(), mountCleanupActor(r), "mount:cleanup", "mount", &canonical, map[string]interface{}{"source": canonical, "root": permittedRoot, "relative": relative})
+	s.mountRecordsMu.Lock()
+	delete(s.mountRecords, canonical)
+	s.mountRecordsMu.Unlock()
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "removed": true})
+}
+
+// mountCleanupActor attributes the cleanup in the audit log. Panel-HMAC calls
+// carry no JWT user, so they are recorded as the node operator channel.
+func mountCleanupActor(r *http.Request) string {
+	if user := strings.TrimSpace(r.Header.Get("X-Panel-User-ID")); user != "" {
+		return user
+	}
+	return "beacon-admin"
 }
 
 func isPathNotExist(err error) bool {

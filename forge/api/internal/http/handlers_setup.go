@@ -185,11 +185,7 @@ func registerSetupRoutes(public fiber.Router, cfg Config, authLimiter fiber.Hand
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue session token")
 		}
-		csrfToken, err := generateCSRFToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "could not generate csrf token")
-		}
-		setSessionCookies(c, token, csrfToken, tokenExpiry(cfg))
+		setSessionCookies(c, token, deriveSessionCSRFToken(cfg.AuthSecret, token), tokenExpiry(cfg))
 		response := fiber.Map{"ok": true, "userId": user.ID, "email": user.Email}
 		if setupNodeID != "" {
 			response["nodeId"] = setupNodeID

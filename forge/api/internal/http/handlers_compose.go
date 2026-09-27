@@ -64,16 +64,25 @@ type UpdateStackRequest struct {
 }
 
 func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
-	composeSvc, err := compose.New(cfg.Store, cfg.Daemon)
-	if err != nil {
-		slog.Error("failed to create compose service", "error", err)
-		return
-	}
-	if cfg.ComposeService != nil {
-		composeSvc = cfg.ComposeService
+	// Layering: handler -> compose.Service / compose.GitOpsService -> store.
+	// Both services are injected via Config (wired in cmd/api/main.go). Inline
+	// construction below is a dev/test fallback only, never the production
+	// path. Legacy compose-project CRUD stays store-backed: no service owns
+	// that table, and the boundary is documented at each call site.
+	composeSvc := cfg.ComposeService
+	if composeSvc == nil {
+		built, err := compose.New(cfg.Store, cfg.Daemon)
+		if err != nil {
+			slog.Error("failed to create compose service", "error", err)
+			return
+		}
+		composeSvc = built
 	}
 
-	gitOpsSvc := compose.NewGitOpsService(cfg.Store, composeSvc, cfg.GitDeployService, nil, slog.Default(), cfg.Daemon)
+	gitOpsSvc := cfg.ComposeGitOpsService
+	if gitOpsSvc == nil {
+		gitOpsSvc = compose.NewGitOpsService(cfg.Store, composeSvc, cfg.GitDeployService, nil, slog.Default(), cfg.Daemon)
+	}
 
 	protected.Post("/compose/validate", requireRole("admin"), func(c *fiber.Ctx) error {
 		var req ComposeValidateRequest

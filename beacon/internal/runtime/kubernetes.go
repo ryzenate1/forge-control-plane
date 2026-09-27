@@ -433,6 +433,9 @@ func (r *KubernetesRuntime) Stats(ctx context.Context, serverID string) (Stats, 
 	if err != nil {
 		return Stats{}, err
 	}
+	if pod.Status.Phase != v1.PodRunning {
+		return Stats{}, fmt.Errorf("pod %q is %q: no metrics to report", name, pod.Status.Phase)
+	}
 	var memLimit uint64
 	for _, container := range pod.Status.ContainerStatuses {
 		if container.State.Running == nil {
@@ -597,7 +600,13 @@ func (r *KubernetesRuntime) SendCommand(ctx context.Context, serverID, command s
 
 func (r *KubernetesRuntime) Delete(ctx context.Context, serverID string) error {
 	_ = r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID)+"-installer", metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)})
-	return r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID), metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)})
+	if err := r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID), metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)}); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *KubernetesRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEvent, <-chan error) {
@@ -912,11 +921,57 @@ func (r *KubernetesRuntime) validateCreate(req CreateRequest) error {
 	return err
 }
 
+// k8sProtectedHostPrefixes are host locations a workload pod must never
+// mount, even when an allowlist is configured. HostPath volumes expose the
+// node filesystem directly, so custom mounts are confined to explicitly
+// allowed roots and can never reach system or Beacon data directories.
+var k8sProtectedHostPrefixes = []string{
+	"/", "/etc", "/proc", "/sys", "/dev", "/boot",
+	"/usr", "/bin", "/sbin", "/lib", "/lib64",
+	"/root", "/var/run", "/run", "/var/lib/kubelet",
+}
+
+func k8sHostPathAllowed(source string) error {
+	for _, prefix := range k8sProtectedHostPrefixes {
+		if source == prefix || strings.HasPrefix(source, strings.TrimSuffix(prefix, "/")+"/") {
+			return fmt.Errorf("host path %q is in a protected system location", source)
+		}
+	}
+	if extra := strings.TrimSpace(os.Getenv("DAEMON_K8S_ALLOWED_HOSTPATHS")); extra != "" {
+		for _, root := range strings.Split(extra, ",") {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			if source == root || strings.HasPrefix(source, strings.TrimSuffix(root, "/")+"/") {
+				return nil
+			}
+		}
+		return fmt.Errorf("host path %q is outside DAEMON_K8S_ALLOWED_HOSTPATHS", source)
+	}
+	// Without an explicit allowlist, only the Beacon data directory subtree is
+	// eligible: workloads mount server data, not arbitrary host paths.
+	dataDir := strings.TrimSpace(os.Getenv("DAEMON_DATA_DIR"))
+	if dataDir == "" {
+		return fmt.Errorf("host path %q requires DAEMON_K8S_ALLOWED_HOSTPATHS to be configured", source)
+	}
+	if resolved, err := filepath.EvalSymlinks(filepath.Clean(dataDir)); err == nil {
+		dataDir = resolved
+	}
+	if source == dataDir || strings.HasPrefix(source, strings.TrimSuffix(dataDir, "/")+"/") {
+		return nil
+	}
+	return fmt.Errorf("host path %q is outside the Beacon data directory; set DAEMON_K8S_ALLOWED_HOSTPATHS to grant explicit roots", source)
+}
+
 func canonicalizeKubernetesMounts(req CreateRequest) (CreateRequest, error) {
 	if req.RootDir != "" {
 		root, err := validateRootDir(req.RootDir)
 		if err != nil {
 			return req, err
+		}
+		if err := k8sHostPathAllowed(root); err != nil {
+			return req, fmt.Errorf("root dir: %w", err)
 		}
 		req.RootDir = root
 	}
@@ -924,6 +979,9 @@ func canonicalizeKubernetesMounts(req CreateRequest) (CreateRequest, error) {
 		source, err := validateRootDir(req.Mounts[index].Source)
 		if err != nil {
 			return req, fmt.Errorf("validate mount %d: %w", index, err)
+		}
+		if err := k8sHostPathAllowed(source); err != nil {
+			return req, fmt.Errorf("mount %d: %w", index, err)
 		}
 		target := pathpkg.Clean(req.Mounts[index].Target)
 		if !pathpkg.IsAbs(target) || target == "/" || target == serverContainerRoot {
@@ -975,7 +1033,14 @@ func buildResourceLimits(req CreateRequest) v1.ResourceList {
 	if req.CPUPercent > 0 {
 		limits[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUPercent*10))
 	} else if req.CPUShares > 0 {
-		limits[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUShares))
+		// CPUShares are a relative weight (1024 == 1 CPU), not millicores.
+		// Reporting shares directly as millicores under-limits small values
+		// and over-limits large ones; convert through the 1024==1000m ratio.
+		millicores := req.CPUShares * 1000 / 1024
+		if millicores < 1 {
+			millicores = 1
+		}
+		limits[v1.ResourceCPU] = *resource.NewMilliQuantity(millicores, resource.DecimalSI)
 	}
 	if req.MemoryMB > 0 {
 		limits[v1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", req.MemoryMB))
@@ -988,7 +1053,11 @@ func buildResourceRequests(req CreateRequest) v1.ResourceList {
 	if req.CPUPercent > 0 {
 		requests[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUPercent*10))
 	} else if req.CPUShares > 0 {
-		requests[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUShares))
+		millicores := req.CPUShares * 1000 / 1024
+		if millicores < 1 {
+			millicores = 1
+		}
+		requests[v1.ResourceCPU] = *resource.NewMilliQuantity(millicores, resource.DecimalSI)
 	}
 	if req.MemoryMB > 0 {
 		requests[v1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", req.MemoryMB))

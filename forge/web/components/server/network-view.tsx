@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useState } from "react";
 import { Network, Plus, Trash2 } from "lucide-react";
@@ -34,7 +35,7 @@ export function NetworkView({ server }: { server?: ApiServer }) {
   });
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: ["server-allocations", server?.id] });
-    void queryClient.invalidateQueries({ queryKey: ["server", server?.id] });
+    void queryClient.invalidateQueries({ queryKey: queryKeys.servers.detail(server?.id ?? "") });
     void queryClient.invalidateQueries({ queryKey: ["servers"] });
   };
   const primaryMutation = useMutation({ mutationFn: (id: string) => setPrimaryServerAllocation(server?.id ?? "", id), onSuccess: refresh });

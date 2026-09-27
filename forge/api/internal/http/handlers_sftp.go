@@ -9,7 +9,7 @@ import (
 func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
 	admin := protected.Group("/admin", requireRole("admin"))
 
-	admin.Get("/sftp/settings", func(c *fiber.Ctx) error {
+	admin.Get("/sftp/settings", requireAdminScope("settings.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -22,7 +22,7 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		return c.JSON(settings)
 	})
 
-	admin.Put("/sftp/settings", mutationLimiter, func(c *fiber.Ctx) error {
+	admin.Put("/sftp/settings", mutationLimiter, requireAdminScope("settings.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -38,7 +38,7 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	admin.Get("/nodes/:nodeId/sftp", func(c *fiber.Ctx) error {
+	admin.Get("/nodes/:nodeId/sftp", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -51,7 +51,7 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		return c.JSON(config)
 	})
 
-	admin.Put("/nodes/:nodeId/sftp", mutationLimiter, func(c *fiber.Ctx) error {
+	admin.Put("/nodes/:nodeId/sftp", mutationLimiter, requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -68,7 +68,7 @@ func registerSFTPRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	admin.Get("/sftp/nodes", func(c *fiber.Ctx) error {
+	admin.Get("/sftp/nodes", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

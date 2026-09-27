@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, RefreshCw, Download } from "lucide-react";
 import { listImages, pullImage, deleteImage, type DockerImage } from "@/lib/api/docker";
+import { NodeSelect } from "@/components/docker/node-select";
 import { Btn, Card, EmptyState, Input, Modal, ModalFooter, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Alert, Pagination } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -41,7 +42,7 @@ export function ImagesView() {
   const images = useMemo(() => Array.isArray(imagesQuery.data) ? imagesQuery.data : [], [imagesQuery.data]);
 
   const pullMut = useMutation({
-    mutationFn: ({ image, tag }: { image: string; tag: string }) => pullImage(image, tag || undefined),
+    mutationFn: ({ image, tag, nodeId }: { image: string; tag: string; nodeId: string }) => pullImage(image, tag || undefined, nodeId),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "images"] }); setShowPull(false); },
   });
 
@@ -135,7 +136,7 @@ export function ImagesView() {
       {showPull && (
         <PullImageModal
           onClose={() => setShowPull(false)}
-          onPull={(image, tag) => pullMut.mutate({ image, tag })}
+          onPull={(image, tag, nodeId) => pullMut.mutate({ image, tag, nodeId })}
           loading={pullMut.isPending}
           error={pullMut.error?.message}
         />
@@ -155,9 +156,10 @@ export function ImagesView() {
   );
 }
 
-function PullImageModal({ onClose, onPull, loading, error }: { onClose: () => void; onPull: (image: string, tag: string) => void; loading: boolean; error?: string }) {
+function PullImageModal({ onClose, onPull, loading, error }: { onClose: () => void; onPull: (image: string, tag: string, nodeId: string) => void; loading: boolean; error?: string }) {
   const [image, setImage] = useState("");
   const [tag, setTag] = useState("latest");
+  const [nodeId, setNodeId] = useState("");
 
   return (
     <Modal onClose={onClose} title="Pull Image">
@@ -165,11 +167,12 @@ function PullImageModal({ onClose, onPull, loading, error }: { onClose: () => vo
         {error && <Alert tone="error" title="Pull failed">{error}</Alert>}
         <Input label="Image Name *" placeholder="nginx" value={image} onChange={setImage} />
         <Input label="Tag" placeholder="latest" value={tag} onChange={setTag} />
+        <NodeSelect value={nodeId} onChange={setNodeId} />
         <ModalFooter
           onCancel={onClose}
-          onConfirm={() => onPull(image, tag)}
+          onConfirm={() => onPull(image, tag, nodeId)}
           confirmLabel={loading ? "Pulling..." : "Pull"}
-          disabled={!image || loading}
+          disabled={!image || !nodeId || loading}
         />
       </div>
     </Modal>

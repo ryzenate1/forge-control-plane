@@ -30,7 +30,10 @@ func WireBeaconExecutor(svc *Service, st *store.Store, cli *daemon.Client) {
 
 // ApplyDeployment syncs the new image into the server's node configuration
 // and starts the workload. The beacon recreates the container from synced
-// configuration, so success means the node will actually run the image.
+// configuration, so success means the node will actually run the image. Each
+// node round-trip carries its own timeout derived from the caller's context:
+// a stuck daemon call fails the step instead of holding the deployment's
+// overall budget hostage.
 func (b *BeaconRuntimeExecutor) ApplyDeployment(ctx context.Context, serverID, image string) error {
 	targetCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
@@ -43,10 +46,14 @@ func (b *BeaconRuntimeExecutor) ApplyDeployment(ctx context.Context, serverID, i
 		return fmt.Errorf("load server: %w", err)
 	}
 	config := buildServerConfig(srv, image)
-	if err := b.Daemon.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, serverID, config); err != nil {
+	syncCtx, syncCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer syncCancel()
+	if err := b.Daemon.SyncServerConfiguration(syncCtx, target.NodeURL, target.NodeToken, serverID, config); err != nil {
 		return fmt.Errorf("sync configuration to node: %w", err)
 	}
-	if _, err := b.Daemon.SendPower(ctx, target.NodeURL, target.NodeToken, serverID, "start"); err != nil {
+	powerCtx, powerCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer powerCancel()
+	if _, err := b.Daemon.SendPower(powerCtx, target.NodeURL, target.NodeToken, serverID, "start"); err != nil {
 		return fmt.Errorf("start workload on node: %w", err)
 	}
 	return nil
@@ -65,7 +72,9 @@ func (b *BeaconRuntimeExecutor) VerifyRunning(ctx context.Context, serverID stri
 	if err != nil {
 		return false, fmt.Errorf("resolve node target: %w", err)
 	}
-	state, err := b.Daemon.ContainerState(ctx, target.NodeURL, target.NodeToken, serverID)
+	stateCtx, stateCancel := context.WithTimeout(ctx, 15*time.Second)
+	defer stateCancel()
+	state, err := b.Daemon.ContainerState(stateCtx, target.NodeURL, target.NodeToken, serverID)
 	if errors.Is(err, daemon.ErrContainerStateUnsupported) {
 		return false, fmt.Errorf("node exposes no container lifecycle state, refusing to report a running workload from telemetry alone")
 	}

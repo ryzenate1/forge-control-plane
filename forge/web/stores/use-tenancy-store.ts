@@ -9,6 +9,9 @@ import {
   fetchTeamMembers,
 } from '@/lib/api/tenancy';
 
+let orgsGeneration = 0;
+let projectGeneration = 0;
+
 interface TenancyState {
   organizations: Organization[];
   activeOrg: Organization | null;
@@ -57,19 +60,23 @@ export const useTenancyStore = create<TenancyState>((set) => ({
   setMembers: (members) => set({ members }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
-  reset: () => set({ organizations: [], activeOrg: null, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [], error: null }),
+  reset: () => set({ organizations: [], activeOrg: null, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [], loading: false, error: null }),
 
   fetchOrgs: async () => {
+    const generation = ++orgsGeneration;
     set({ loading: true, error: null });
     try {
       const orgs = await fetchOrganizations();
+      if (generation !== orgsGeneration) return;
       set({ organizations: orgs, loading: false });
     } catch (err) {
+      if (generation !== orgsGeneration) return;
       set({ error: err instanceof Error ? err.message : 'Failed to load organizations', loading: false });
     }
   },
 
   selectOrg: async (org) => {
+    const generation = ++orgsGeneration;
     set({ activeOrg: org, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [] });
     if (!org) return;
     set({ loading: true, error: null });
@@ -78,23 +85,28 @@ export const useTenancyStore = create<TenancyState>((set) => ({
         apiFetchProjects(org.id),
         fetchTeamMembers(org.id),
       ]);
+      if (generation !== orgsGeneration) return;
       const projects = results[0].status === 'fulfilled' ? results[0].value : [];
       const members = results[1].status === 'fulfilled' ? results[1].value : [];
       const errors = results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason);
       set({ projects, members, loading: false, error: errors.length > 0 ? (errors[0] instanceof Error ? errors[0].message : 'Failed to load org details') : null });
     } catch (err) {
+      if (generation !== orgsGeneration) return;
       set({ error: err instanceof Error ? err.message : 'Failed to load org details', loading: false });
     }
   },
 
   selectProject: async (project) => {
+    const generation = ++projectGeneration;
     set({ activeProject: project, environments: [], activeEnvironment: null });
     if (!project) return;
     set({ loading: true, error: null });
     try {
       const environments = await apiFetchEnvironments(project.id);
+      if (generation !== projectGeneration) return;
       set({ environments, loading: false });
     } catch (err) {
+      if (generation !== projectGeneration) return;
       set({ error: err instanceof Error ? err.message : 'Failed to load environments', loading: false });
     }
   },

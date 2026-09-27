@@ -1015,6 +1015,7 @@ func (s *Service) ProbeTargets(ctx context.Context) error {
 		return fmt.Errorf("resolve targets for probe: %w", err)
 	}
 
+	var markErrs []error
 	for _, rule := range resolved {
 		if rule.TargetHost == "" || rule.TargetPort == 0 {
 			continue
@@ -1029,7 +1030,7 @@ func (s *Service) ProbeTargets(ctx context.Context) error {
 			s.healthMu.Unlock()
 			if failures >= 3 {
 				if s.publisher != nil {
-					_ = s.publisher.Publish(ctx, events.NewEnvelope(
+					if pubErr := s.publisher.Publish(ctx, events.NewEnvelope(
 						events.EventTargetHealthChanged,
 						"trafficmanager",
 						"server",
@@ -1041,10 +1042,13 @@ func (s *Service) ProbeTargets(ctx context.Context) error {
 							"healthy":    false,
 							"failures":   failures,
 						},
-					))
+					)); pubErr != nil {
+						slog.Warn("failed to publish target unhealthy event", "ruleID", rule.ID, "error", pubErr)
+					}
 				}
 				if markErr := s.adapter.SetUpstreamHealth(ctx, rule.ID, rule.TargetHost, rule.TargetPort, false); markErr != nil {
 					slog.Warn("failed to mark upstream unhealthy", "ruleID", rule.ID, "target", addr, "error", markErr)
+					markErrs = append(markErrs, fmt.Errorf("mark %s %s unhealthy: %w", rule.ID, addr, markErr))
 				}
 			}
 		} else {
@@ -1057,7 +1061,7 @@ func (s *Service) ProbeTargets(ctx context.Context) error {
 			s.healthMu.Unlock()
 			if wasUnhealthy {
 				if s.publisher != nil {
-					_ = s.publisher.Publish(ctx, events.NewEnvelope(
+					if pubErr := s.publisher.Publish(ctx, events.NewEnvelope(
 						events.EventTargetHealthChanged,
 						"trafficmanager",
 						"server",
@@ -1068,13 +1072,16 @@ func (s *Service) ProbeTargets(ctx context.Context) error {
 							"targetPort": rule.TargetPort,
 							"healthy":    true,
 						},
-					))
+					)); pubErr != nil {
+						slog.Warn("failed to publish target healthy event", "ruleID", rule.ID, "error", pubErr)
+					}
 				}
 				if markErr := s.adapter.SetUpstreamHealth(ctx, rule.ID, rule.TargetHost, rule.TargetPort, true); markErr != nil {
 					slog.Warn("failed to mark upstream healthy", "ruleID", rule.ID, "target", addr, "error", markErr)
+					markErrs = append(markErrs, fmt.Errorf("mark %s %s healthy: %w", rule.ID, addr, markErr))
 				}
 			}
 		}
 	}
-	return nil
+	return errors.Join(markErrs...)
 }

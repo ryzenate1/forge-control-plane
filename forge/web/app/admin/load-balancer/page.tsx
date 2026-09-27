@@ -3,7 +3,7 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GanttChart, HeartPulse, Network, Plus, Target, Trash2, Zap, type LucideIcon } from "lucide-react";
-import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "@/lib/api";
+import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON, unwrapList } from "@/lib/api";
 import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -245,7 +245,7 @@ function Loading({ message }: { message: string }) { return <div className="p-8 
 
 function TargetRow({ target, onStatus, onRemove, removing }: { target: Target; onStatus: (status: TargetStatus) => void; onRemove: () => void; removing: boolean }) {
   const color = target.status === "healthy" ? "bg-emerald-400" : target.status === "draining" ? "bg-amber-400" : "bg-red-400";
-  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><div className="flex items-center gap-2"><select aria-label="Target status" className="h-8 rounded-md border border-white/10 bg-[var(--surface-input)] px-2 text-xs text-slate-200 focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30" disabled={removing} value={target.status} onChange={(event) => onStatus(event.target.value as TargetStatus)}><option value="healthy">Healthy</option><option value="draining">Draining</option><option value="unhealthy">Unhealthy</option></select><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div></div>;
+  return <div className="flex items-center justify-between px-4 py-3"><div className="flex items-center gap-3"><div className={`h-2 w-2 rounded-full ${color}`} /><div><p className="text-sm font-mono text-slate-200">{target.ip}:{target.port}</p><p className="text-xs text-slate-500">{target.status} — weight: {target.weight} — connections: {target.connections}</p></div></div><div className="flex items-center gap-2"><select aria-label="Target status" className="h-8 rounded-md border border-white/10 bg-[var(--surface-input)] px-2 text-xs text-slate-200 focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]" disabled={removing} value={target.status} onChange={(event) => onStatus(event.target.value as TargetStatus)}><option value="healthy">Healthy</option><option value="draining">Draining</option><option value="unhealthy">Unhealthy</option></select><Btn size="sm" tone="danger" disabled={removing} onClick={onRemove}><Trash2 size={12} /></Btn></div></div>;
 }
 
 function TargetGroupFormModal({ title, form, onChange, onSave, onClose, saving }: { title: string; form: GroupForm; onChange: (form: GroupForm) => void; onSave: () => void; onClose: () => void; saving: boolean }) {

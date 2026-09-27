@@ -12,21 +12,29 @@ import { useT } from "@/components/TranslationProvider";
 function ResetForm() {
   const t = useT();
   const params = useSearchParams();
-  const [token, setToken] = useState(params.get("token")?.trim() || "");
-  const [email, setEmail] = useState(params.get("email")?.trim() || "");
+  // Derive the query-string credentials on every render so a navigation that
+  // changes ?token=/ ?email= is picked up — useState(initial) would freeze
+  // the first values forever. Only the URL-fragment fallback lives in state,
+  // because reading window.location.hash is a side effect.
+  const queryToken = params.get("token")?.trim() || "";
+  const queryEmail = params.get("email")?.trim() || "";
+  const [hashToken, setHashToken] = useState("");
+  const [hashEmail, setHashEmail] = useState("");
 
   // The backend mailer links to /reset-password#token=...&email=... (URL
   // fragment), while some integrations build a plain query string. Read both.
   useEffect(() => {
-    if (token && email) return;
+    if (queryToken && queryEmail) return;
     const hash = new URLSearchParams(window.location.hash.replace(/^#/, ""));
-    const hashToken = hash.get("token")?.trim() || "";
-    const hashEmail = hash.get("email")?.trim() || "";
-    if (hashToken && hashEmail) {
-      setToken(hashToken);
-      setEmail(hashEmail);
+    const nextHashToken = hash.get("token")?.trim() || "";
+    const nextHashEmail = hash.get("email")?.trim() || "";
+    if (nextHashToken && nextHashEmail) {
+      setHashToken(nextHashToken);
+      setHashEmail(nextHashEmail);
     }
-  }, [token, email]);
+  }, [queryToken, queryEmail]);
+  const token = queryToken || hashToken;
+  const email = queryEmail || hashEmail;
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [show, setShow] = useState(false);

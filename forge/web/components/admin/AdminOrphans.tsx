@@ -60,7 +60,7 @@ export function AdminOrphans() {
         <div className="mt-6 space-y-6">
           <Card className="overflow-hidden">
             <CardHeader title="Server resources" icon={Server} />
-            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[var(--surface-input)]/50 px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
+            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
               <Server size={14} /> Server orphans <Pill>{serverRemediations.length}</Pill> <span className="ml-auto font-normal normal-case tracking-normal text-[11px] text-slate-500">server_orphan_remediations {status}</span>
             </div>
             {serverRemediations.length === 0 ? (
@@ -94,7 +94,7 @@ export function AdminOrphans() {
 
           <Card className="overflow-hidden">
             <CardHeader title="Database resources" icon={Database} />
-            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[var(--surface-input)]/50 px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
+            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
               <Database size={14} /> Database orphans <Pill>{databaseRemediations.length}</Pill> <span className="ml-auto font-normal normal-case tracking-normal text-[11px] text-slate-500">database_orphan_remediations {status}</span>
             </div>
             {databaseRemediations.length === 0 ? (

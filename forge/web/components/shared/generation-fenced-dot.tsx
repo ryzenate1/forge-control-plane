@@ -16,13 +16,22 @@ type DotState =
   | "cancelled"
   | string;
 
+/**
+ * Dot colour for one lane of the two-dot badge.
+ *
+ * Kept as an explicit state→class table (rather than routing through
+ * `resolveTone` in `components/ui/forge/status.ts`) because the lanes need
+ * hues the seven canonical tones deliberately collapse: in-flight transfer
+ * states stay violet and queued states stay sky-blue so "moving data" and
+ * "waiting" never render as the same chip. Anything unrecognised falls back
+ * to the `unknown` treatment (grey) — never green, never zero.
+ */
 function stateToDotClass(state: DotState): string {
   const s = (state ?? "").toLowerCase();
   if (["running", "completed", "succeeded", "restored", "drained"].includes(s)) return "bg-[var(--success)] border-[var(--success)]";
   if (["installing", "starting", "provisioning", "preparing", "deploying"].includes(s)) return "bg-[var(--warning)] border-[var(--warning)]";
-  if (["transferring", "transfer", "in_progress", "draining", "restoring"].includes(s)) return "bg-violet-500 border-violet-500";
-  if (["failed", "error", "errored", "crashed", "fault"].includes(s)) return "bg-[var(--danger)] border-[var(--danger)]";
-  if (["suspended"].includes(s)) return "bg-[var(--danger)] border-[var(--danger)]";
+  if (["transferring", "transfer", "in_progress", "restoring", "draining"].includes(s)) return "bg-violet-500 border-violet-500";
+  if (["failed", "error", "errored", "crashed", "fault", "suspended"].includes(s)) return "bg-[var(--danger)] border-[var(--danger)]";
   if (["pending", "planned", "queued", "waiting", "retrying"].includes(s)) return "bg-sky-500 border-sky-500";
   if (["stopped", "offline", "terminated", "cancelled", "unknown"].includes(s)) return "bg-[var(--text-subtle)] border-[var(--text-subtle)]";
   return "bg-[var(--text-subtle)] border-[var(--text-subtle)]";
@@ -67,7 +76,7 @@ export function GenerationFencedDots({
         className={cn(
           "rounded-full border",
           stateToDotClass(a),
-          fenced && "ring-2 ring-[var(--danger)]/70 ring-offset-1 ring-offset-[var(--canvas)] animate-[pulse_1.2s_ease-in-out_1]",
+          fenced && "ring-2 ring-[color-mix(in_srgb,var(--danger)_70%,transparent)] ring-offset-1 ring-offset-[var(--canvas)] animate-[pulse_1.2s_ease-in-out_1]",
           a === "pending" && !fenced && "opacity-60",
         )}
         style={{ width: size, height: size }}

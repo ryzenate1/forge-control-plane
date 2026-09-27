@@ -79,7 +79,7 @@ export default function AdminDNSPage() {
       <SectionHeader
         title="DNS Providers"
         sub="DNS providers used for automatic DNS-01 challenges. Verify a provider, then set a default for issuance."
-        action={<Btn onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={14} /> Add Provider</Btn>}
+        action={<Btn onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={14} /> Add Provider</Btn>}
       />
 
       <AdminTabs tabs={[{ id: "configured", label: "Configured" }, { id: "supported", label: "Supported Types" }]} active={tab} onChange={(v) => setTab(v as typeof tab)} />
@@ -103,7 +103,7 @@ export default function AdminDNSPage() {
                       <AdminTd className="text-xs text-slate-400">{p.createdAt ? new Date(p.createdAt).toLocaleString() : "—"}</AdminTd>
                       <AdminTd>
                         <div className="flex justify-end gap-1.5">
-                          {!p.verified && <Btn size="sm" tone="ghost" disabled={verifyMut.isPending} onClick={() => verifyMut.mutate(p.id)} className="border border-[var(--brand)]/20"><CheckCircle2 size={12} /> Verify</Btn>}
+                          {!p.verified && <Btn size="sm" tone="ghost" disabled={verifyMut.isPending} onClick={() => verifyMut.mutate(p.id)} className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)]"><CheckCircle2 size={12} /> Verify</Btn>}
                           {!p.isDefault && <Btn size="sm" tone="ghost" disabled={defaultMut.isPending} onClick={() => defaultMut.mutate(p.id)}><Star size={12} /> Set Default</Btn>}
                           <Btn size="sm" tone="danger" disabled={deleteMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Delete DNS provider ${p.name}?`, description: "The provider and its encrypted credentials will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(p.id); })(); }}><Trash2 size={12} /></Btn>
                         </div>
@@ -124,7 +124,7 @@ export default function AdminDNSPage() {
             : (
               <div className="grid gap-3 p-4 sm:grid-cols-2">
                 {supported.map((sp: DNSSupportedProvider) => (
-                  <div key={sp.type} className="rounded-xl border border-white/[0.06] bg-[var(--surface)] p-4 hover:border-[var(--brand)]/30 transition">
+                  <div key={sp.type} className="rounded-xl border border-white/[0.06] bg-[var(--surface)] p-4 hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] transition">
                     <h4 className="text-sm font-semibold text-slate-100">{sp.name} <code className="font-mono text-xs text-slate-400">({sp.type})</code></h4>
                     <p className="text-xs text-slate-400 mt-1">{sp.description}</p>
                     {sp.credentialFields?.length > 0 && (

@@ -35,6 +35,12 @@ See the [root README](../../README.md#quick-start-for-development) for the full 
 - Lint: `npm run lint`
 - Build: `npm run build`
 
+## Translations
+- `lang/en.json` is the reference catalog. Never add a key to another locale first.
+- After changing English strings, run `npm --workspace @forge/web run sync:locales` to backfill missing keys (English fallback) and drop orphans.
+- CI enforces parity via `npm --workspace @forge/web run sync:locales:check` — a PR that adds an English key without syncing fails the check.
+- There is no Crowdin integration (the former placeholder `crowdin.yml` was removed); translations are managed in-tree in `lang/`.
+
 ## Security
 - Report security-sensitive problems privately to the repository owner
 - Do not publish credentials or exploit details in public issues

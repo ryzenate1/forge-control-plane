@@ -68,12 +68,50 @@ started:
   `startup`/`config.files` must be either a built-in server variable or defined in
   `env[]`.
 
-`scripts/validate-templates.mjs` enforces this contract: it fails the build if a
-template references a placeholder that is neither a built-in server variable nor a
-defined env variable.
+`scripts/validate-templates.mjs` enforces this contract (and runs as
+`prebuild`, so violations fail the build). It checks:
+
+- required fields, `id` ↔ filename, and registration in `index.json`
+  (including the reverse: every registry id must have a template file);
+- `env[]` variable name shape (`^[A-Z][A-Z0-9_]*$`) and duplicate detection;
+- `rules` syntax (unknown tokens rejected) and default-vs-rules consistency
+  (empty default with `required` rules, non-integer defaults with `integer`
+  rules, defaults outside `in:`/`min:`/`max:` bounds);
+- secret hygiene: `*PASSWORD`/`*SECRET`/`*TOKEN` variables must not ship weak
+  defaults (`changeme`, `gamepanel`, …) — leave them empty and the server
+  generates a random credential at deploy time (empty + `required` is valid
+  for secrets only);
+- startup quoting: every non-numeric `{{VAR}}` interpolation in `startup`
+  must sit inside a quoted token so values with spaces or shell
+  metacharacters cannot inject commands;
+- `{{...}}` placeholders may appear **only** in `startup` and `config`
+  (install scripts get no substitution — the old `eval`-based `DL_PATH`
+  expansion was removed; `DL_PATH` is now a literal http(s) URL gated by a
+  `case` check);
+- resources ranges, non-empty `install_script` parts with no `eval`,
+  `update_url` http(s) URI validity, `file_denylist` without `..` traversal,
+  non-empty `images` with the default `image` chosen from them,
+  `supported_platforms` within the Forge `ValidateProvider` set, and
+  categories defined in `index.json`.
 
 > ⚠️ Do not use `{{PORT}}` in templates — it is not a built-in and will be passed
 > through to the game server literally. Use `{{SERVER_PORT}}`.
+
+### Converting to API shapes
+
+```typescript
+import { templateToApiTemplate } from '@forge/game-templates';
+
+// Timestamps must be real (registry `updatedAt`, file mtime, …) — the
+// converter never invents them. Fields without a value are omitted, never
+// explicit `undefined`.
+const apiTemplate = templateToApiTemplate(template, {
+  nestId: 'minecraft',
+  eggId: 'paper',
+  createdAt: registryItem.updatedAt,
+  updatedAt: registryItem.updatedAt,
+});
+```
 
 ## 📦 Installation
 

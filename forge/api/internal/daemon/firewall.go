@@ -139,7 +139,7 @@ func (c *Client) DeletePortForward(ctx context.Context, baseURL, nodeToken, forw
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("delete port forward failed with status %d", res.StatusCode)
+		return daemonResponseError("delete port forward", res)
 	}
 	return nil
 }
@@ -159,7 +159,7 @@ func (c *Client) hostPostJSON(ctx context.Context, nodeToken, url string, payloa
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("host post request failed with status %d: %s", res.StatusCode, tryReadBody(res.Body))
+		return nil, daemonResponseError("host post request", res)
 	}
 	var result json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {

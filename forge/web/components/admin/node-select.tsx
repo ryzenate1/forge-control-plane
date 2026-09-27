@@ -1,9 +1,10 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { } from "@tanstack/react-query";
 import { Server } from "lucide-react";
-import { fetchNodes, type ApiNode } from "@/lib/api";
+import { type ApiNode } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 // Node picker for host-level tools (terminal, file manager). Mirrors the
@@ -22,7 +23,7 @@ export function NodeSelect({
   onChange: (nodeId: string) => void;
   className?: string;
 }) {
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
 
   useEffect(() => {

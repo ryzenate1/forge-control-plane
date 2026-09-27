@@ -107,7 +107,10 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 			settings = store.DefaultPanelSettings()
 		}
 
-		uploadToken := generateUploadToken()
+		uploadToken, err := generateUploadToken()
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to issue upload token")
+		}
 		response := fiber.Map{
 			"object":     backupUUID,
 			"token":      uploadToken,

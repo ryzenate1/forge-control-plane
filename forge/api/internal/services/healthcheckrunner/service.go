@@ -210,19 +210,6 @@ func (s *Service) loadExistingStates(ctx context.Context) {
 			}
 			var status TargetStatus
 			var suspectedSince *time.Time
-			if t.Status == "unhealthy" {
-				status = TargetStatusUnhealthy
-			} else if t.Status == "draining" {
-				status = TargetStatusUnhealthy
-				now := time.Now()
-				suspectedSince = &now
-			} else if failures > 0 {
-				status = TargetStatusSuspected
-				now := time.Now().UTC()
-				suspectedSince = &now
-			} else {
-				status = TargetStatusHealthy
-			}
 			var hc HealthCheckConfig
 			if len(g.HealthCheck) > 0 {
 				if err := json.Unmarshal(g.HealthCheck, &hc); err != nil {
@@ -236,6 +223,28 @@ func (s *Service) loadExistingStates(ctx context.Context) {
 			unhealthyThreshold := hc.UnhealthyThreshold
 			if unhealthyThreshold <= 0 {
 				unhealthyThreshold = 3
+			}
+			// Fresh state must be earned, not assumed: a target with failures
+			// on record starts suspected, and one with too few successes to
+			// clear the healthy threshold starts suspected as well. Only a
+			// history of enough consecutive successes initializes as healthy.
+			switch {
+			case t.Status == "unhealthy":
+				status = TargetStatusUnhealthy
+			case t.Status == "draining":
+				status = TargetStatusUnhealthy
+				now := time.Now()
+				suspectedSince = &now
+			case failures > 0:
+				status = TargetStatusSuspected
+				now := time.Now().UTC()
+				suspectedSince = &now
+			case successes < healthyThreshold:
+				status = TargetStatusSuspected
+				now := time.Now().UTC()
+				suspectedSince = &now
+			default:
+				status = TargetStatusHealthy
 			}
 			s.mu.Lock()
 			s.states[t.ID] = &TargetHealthState{
@@ -337,11 +346,17 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 	state, exists := s.states[stateKey]
 	s.mu.RUnlock()
 	if !exists {
+		// A target seen for the first time starts suspected, not healthy:
+		// one good check must not certify a workload the runner has never
+		// observed. It becomes healthy only after healthyThreshold
+		// consecutive successes, via the transition below.
+		now := time.Now().UTC()
 		state = &TargetHealthState{
 			ID:                 target.ID,
 			GroupID:            groupID,
 			ServerID:           target.ServerID,
-			Status:             TargetStatusHealthy,
+			Status:             TargetStatusSuspected,
+			SuspectedSince:     &now,
 			HealthyThreshold:   hc.HealthyThreshold,
 			UnhealthyThreshold: hc.UnhealthyThreshold,
 		}
@@ -389,7 +404,6 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 	}
 
 	state.mu.Lock()
-	defer state.mu.Unlock()
 
 	state.LastCheckAt = result.CheckedAt
 
@@ -459,9 +473,17 @@ func (s *Service) checkTarget(ctx context.Context, target store.TargetRow, group
 	}
 
 	if !exists {
+		// Publish the new state under s.mu only. The lock order is strictly
+		// s.mu -> state.mu: s.mu must never be acquired while holding
+		// state.mu, so the mutation above is released first.
+		state.mu.Unlock()
 		s.mu.Lock()
-		s.states[stateKey] = state
+		if _, dup := s.states[stateKey]; !dup {
+			s.states[stateKey] = state
+		}
 		s.mu.Unlock()
+	} else {
+		state.mu.Unlock()
 	}
 }
 
@@ -597,10 +619,18 @@ func (s *Service) GetTargetState(targetID string) *TargetHealthState {
 }
 
 func (s *Service) ListUnhealthyTargets(ctx context.Context) []*TargetHealthState {
+	// Snapshot the state pointers under s.mu, then inspect each target under
+	// its own lock after releasing s.mu. Holding s.mu while taking state.mu
+	// would nest the two locks; the order is s.mu -> state.mu and they are
+	// never held together here.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	results := make([]*TargetHealthState, 0)
+	states := make([]*TargetHealthState, 0, len(s.states))
 	for _, state := range s.states {
+		states = append(states, state)
+	}
+	s.mu.RUnlock()
+	results := make([]*TargetHealthState, 0)
+	for _, state := range states {
 		state.mu.Lock()
 		if state.Status != TargetStatusHealthy {
 			results = append(results, state)
@@ -615,13 +645,19 @@ func (s *Service) CorrelationID() string {
 }
 
 func (s *Service) Metrics() map[string]any {
+	// Same snapshot discipline as ListUnhealthyTargets: copy the pointers
+	// under s.mu, release it, then read each target under its own lock.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
-	total := len(s.states)
+	states := make([]*TargetHealthState, 0, len(s.states))
+	for _, state := range s.states {
+		states = append(states, state)
+	}
+	s.mu.RUnlock()
+	total := len(states)
 	healthy := 0
 	suspected := 0
 	unhealthy := 0
-	for _, state := range s.states {
+	for _, state := range states {
 		state.mu.Lock()
 		switch state.Status {
 		case TargetStatusHealthy:

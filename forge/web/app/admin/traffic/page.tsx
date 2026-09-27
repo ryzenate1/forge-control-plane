@@ -7,7 +7,7 @@ import {
   GanttChart, Globe, Plus, RefreshCw, Shield, ShieldCheck,
   ShieldOff, SlidersHorizontal, Trash2, Zap,
 } from "lucide-react";
-import { fetchJSON, postJSON, putJSON, deleteJSON } from "@/lib/api";
+import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapList } from "@/lib/api";
 import { AdminPageLayout, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -63,7 +63,7 @@ export default function AdminTrafficPage() {
 
   const routesQuery = useQuery({
     queryKey: ["admin", "traffic", "rules"],
-    queryFn: () => fetchJSON<RouteRule[]>("/admin/traffic/rules"),
+    queryFn: async () => unwrapList(await fetchJSON<RouteRule[]>("/admin/traffic/rules")),
   });
 
   const policiesQuery = useQuery({
@@ -313,7 +313,7 @@ export default function AdminTrafficPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={policyForm.type}
                 onChange={(e) => setPolicyForm({ ...policyForm, type: e.target.value as TrafficPolicy["type"] })}
               >
@@ -347,7 +347,7 @@ export default function AdminTrafficPage() {
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
               <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[var(--brand)]/60 focus:ring-1 focus:ring-[var(--brand)]/30"
+                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                 value={policyForm.type}
                 onChange={(e) => setPolicyForm({ ...policyForm, type: e.target.value as TrafficPolicy["type"] })}
               >

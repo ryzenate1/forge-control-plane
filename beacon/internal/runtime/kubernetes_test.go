@@ -86,8 +86,9 @@ func TestBuildResourceLimits(t *testing.T) {
 
 	req2 := CreateRequest{CPUShares: 512}
 	limits2 := buildResourceLimits(req2)
-	if limits2.Cpu().Cmp(resource.MustParse("512m")) != 0 {
-		t.Fatalf("CPU limit from shares = %v, want 512m", limits2.Cpu())
+	// CPUShares are a relative weight (1024 == 1 CPU), not millicores.
+	if limits2.Cpu().Cmp(resource.MustParse("500m")) != 0 {
+		t.Fatalf("CPU limit from shares = %v, want 500m", limits2.Cpu())
 	}
 }
 

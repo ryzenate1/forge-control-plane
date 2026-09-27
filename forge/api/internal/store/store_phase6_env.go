@@ -99,4 +99,3 @@ func (s *Store) ListNodeEnvGroups(ctx context.Context) ([]NodeEnvGroup, error) {
 	}
 	return groups, rows.Err()
 }
-

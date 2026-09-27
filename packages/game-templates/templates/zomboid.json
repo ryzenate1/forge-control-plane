@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
   },
-  "startup": "./start-server.sh -servername {{SERVER_NAME}} -adminpassword {{ADMIN_PASSWORD}} -port {{SERVER_PORT}}",
+  "startup": "./start-server.sh -servername \"{{SERVER_NAME}}\" -adminpassword \"{{ADMIN_PASSWORD}}\" -port {{SERVER_PORT}}",
   "config": {
     "files": {},
     "startup": {
@@ -47,8 +47,8 @@
     {
       "name": "Admin Password",
       "env_variable": "ADMIN_PASSWORD",
-      "description": "Admin password for server administration.",
-      "default_value": "changeme",
+      "description": "Admin password for in-game/server commands. Left empty, the server generates a random password at deploy time.",
+      "default_value": "",
       "user_viewable": false,
       "user_editable": true,
       "rules": "required|string|min:4|max:32"
@@ -86,8 +86,18 @@
     "entrypoint": "bash",
     "script": "#!/bin/bash\n# Project Zomboid SteamCMD Installation Script\n# Server Files: /mnt/server\n\ncd /mnt/server\n\nmkdir -p steamcmd\ncd steamcmd\n\n# Download and extract SteamCMD\ncurl -sL \"https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz\" | tar -xzvf -\n\n# Install Project Zomboid dedicated server\n./steamcmd.sh +force_install_dir /mnt/server +login anonymous +app_update 380870 validate +quit\n\necho \"Project Zomboid server installation complete\""
   },
-  "supported_platforms": ["docker", "podman"],
-  "categories": ["survival", "open-world", "zombie"],
+  "supported_platforms": [
+    "docker",
+    "podman"
+  ],
+  "categories": [
+    "survival",
+    "open-world",
+    "zombie"
+  ],
   "file_denylist": [],
-  "features": ["steamcmd", "pid_limit"]
+  "features": [
+    "steamcmd",
+    "pid_limit"
+  ]
 }

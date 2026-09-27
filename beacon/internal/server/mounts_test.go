@@ -109,11 +109,22 @@ func TestCleanupMountRemovesDirectory(t *testing.T) {
 	rt := &stubRuntime{}
 	server, handler := NewServer(rt, t.TempDir())
 	server.SetAllowedMounts([]string{allowed})
+	resolved, err := filepath.EvalSymlinks(mountDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.mountRecordsMu.Lock()
+	if server.mountRecords == nil {
+		server.mountRecords = make(map[string]struct{})
+	}
+	server.mountRecords[resolved] = struct{}{}
+	server.mountRecordsMu.Unlock()
 
 	body := `{"source":"` + mountDir + `"}`
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -141,6 +152,7 @@ func TestCleanupMountRejectsOutsideAllowed(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -160,6 +172,7 @@ func TestCleanupMountNoAllowedMountsReturnsError(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
@@ -179,6 +192,7 @@ func TestCleanupMountDirectoryDoesNotExist(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
@@ -194,10 +208,56 @@ func TestCleanupMountRequiresSource(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
 	handler.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 Bad Request for empty source, got %d", rec.Code)
+	}
+}
+
+func TestCleanupMountRequiresConfirmHeader(t *testing.T) {
+	allowed := t.TempDir()
+	mountDir := filepath.Join(allowed, "game-data")
+	if err := osMkdirAll(mountDir); err != nil {
+		t.Fatal(err)
+	}
+	rt := &stubRuntime{}
+	_, handler := NewServer(rt, t.TempDir())
+
+	body := `{"source":"` + mountDir + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 without X-Confirm-Destructive, got %d", rec.Code)
+	}
+}
+
+func TestCleanupMountRejectsUnrecordedSource(t *testing.T) {
+	allowed := t.TempDir()
+	mountDir := filepath.Join(allowed, "game-data")
+	if err := osMkdirAll(mountDir); err != nil {
+		t.Fatal(err)
+	}
+	rt := &stubRuntime{}
+	server, handler := NewServer(rt, t.TempDir())
+	server.SetAllowedMounts([]string{allowed})
+
+	body := `{"source":"` + mountDir + `"}`
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/mounts/cleanup", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Confirm-Destructive", "true")
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("unrecorded mount source must be 403, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if _, err := os.Stat(mountDir); os.IsNotExist(err) {
+		t.Fatal("unrecorded mount source must not have been removed")
 	}
 }
 

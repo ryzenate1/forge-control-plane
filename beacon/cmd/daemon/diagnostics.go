@@ -78,6 +78,20 @@ func diagnosticsCmdRun(_ *cobra.Command, _ []string) error {
 		results = append(results, checkResult{"Docker binary", "FAIL", "not found in PATH"})
 	}
 
+	// 3b. DOCKER_HOST endpoint policy (incl. Colima). A remote TCP daemon
+	// here means the runtime client would refuse to connect.
+	if host := strings.TrimSpace(os.Getenv("DOCKER_HOST")); host != "" {
+		if err := validateDockerHost(host); err != nil {
+			results = append(results, checkResult{"DOCKER_HOST", "FAIL", err.Error()})
+		} else {
+			detail := host
+			if strings.Contains(host, ".colima") || strings.Contains(host, "colima") {
+				detail += " (Colima socket)"
+			}
+			results = append(results, checkResult{"DOCKER_HOST", "PASS", detail})
+		}
+	}
+
 	// 4. Docker socket
 	if _, err := os.Stat("/var/run/docker.sock"); err == nil {
 		results = append(results, checkResult{"Docker socket", "PASS", "/var/run/docker.sock"})
@@ -228,6 +242,24 @@ func diagnosticsCmdRun(_ *cobra.Command, _ []string) error {
 	}
 	fmt.Println(green("✓ All checks passed!"))
 	return nil
+}
+
+// validateDockerHost mirrors the runtime endpoint policy for diagnostics:
+// only the local default, Unix sockets, named pipes, and the least-privilege
+// socket proxy are acceptable. Colima exposes a Unix socket (often via
+// ~/.colima), which passes; an arbitrary TCP daemon fails.
+func validateDockerHost(raw string) error {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return nil
+	}
+	if strings.HasPrefix(trimmed, "unix://") || strings.HasPrefix(trimmed, "npipe://") {
+		return nil
+	}
+	if trimmed == "tcp://docker-proxy:2375" || trimmed == "tcp://traefik-docker-proxy:2375" {
+		return nil
+	}
+	return fmt.Errorf("remote Docker endpoint %q is forbidden; use a local Unix socket or named pipe", raw)
 }
 
 func uploadToHastebin(hbUrl, content string) (string, error) {

@@ -115,7 +115,9 @@ func (s *Service) WaitForHealthGate(ctx context.Context, deployment *Deployment,
 	for {
 		select {
 		case <-ctx.Done():
-			_ = s.markStepFailed(context.Background(), stepID, fmt.Sprintf("health gate timed out after %d consecutive failures", threshold))
+			// ctx is already done here, so the audit write uses a detached
+			// context: it must not inherit a deadline that has fired.
+			_ = s.markStepFailed(context.WithoutCancel(ctx), stepID, fmt.Sprintf("health gate timed out after %d consecutive failures", threshold))
 			return fmt.Errorf("health gate timed out after %d consecutive failures: %w", threshold, ErrHealthCheckFailed)
 		case <-ticker.C:
 			result, err := s.CheckHealth(ctx, deployment)

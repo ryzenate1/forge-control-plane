@@ -22,10 +22,16 @@ import (
 )
 
 const (
-	maxRetries        = 3
-	baseBackoff       = 500 * time.Millisecond
-	maxBackoff        = 30 * time.Second
-	retryableStatuses = "429,502,503,504"
+	maxRetries     = 3
+	baseBackoff    = 500 * time.Millisecond
+	maxBackoff     = 30 * time.Second
+	defaultTimeout = 30 * time.Second
+	// longTransferTimeout preserves the previous client-wide budget for
+	// streaming transfers (backups, archives, file uploads/downloads), whose
+	// bodies legitimately take longer than an RPC. Callers opt in per
+	// operation via WithTimeout; everything else gets defaultTimeout.
+	longTransferTimeout = 15 * time.Minute
+	retryableStatuses   = "429,502,503,504"
 )
 
 var ErrMissingNodeToken = errors.New("daemon node token is required")
@@ -75,6 +81,23 @@ func (c *Client) SetDefaultNode(baseURL, nodeToken string) {
 	c.defaultNodeToken = nodeToken
 }
 
+// WithTimeout returns a copy of the client whose HTTP budget is d. The
+// default client budget (defaultTimeout) suits RPCs; streaming transfers and
+// other long operations opt into a larger (or zero, deadline-free) budget
+// per call without widening every other operation's.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	if c.httpClient != nil {
+		hc := *c.httpClient
+		hc.Timeout = d
+		clone.httpClient = &hc
+	}
+	return &clone
+}
+
 func (c *Client) Get(ctx context.Context, endpoint string, dest interface{}) error {
 	url := c.defaultBaseURL + endpoint
 	req, err := c.newRequest(ctx, c.defaultNodeToken, http.MethodGet, url, nil)
@@ -88,7 +111,7 @@ func (c *Client) Get(ctx context.Context, endpoint string, dest interface{}) err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon GET %s failed with status %d: %s", endpoint, res.StatusCode, tryReadBody(res.Body))
+		return daemonResponseError("GET "+endpoint, res)
 	}
 	return json.NewDecoder(res.Body).Decode(dest)
 }
@@ -117,7 +140,7 @@ func (c *Client) Post(ctx context.Context, endpoint string, body, dest interface
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon POST %s failed with status %d: %s", endpoint, res.StatusCode, tryReadBody(res.Body))
+		return daemonResponseError("POST "+endpoint, res)
 	}
 	if dest != nil {
 		return json.NewDecoder(res.Body).Decode(dest)
@@ -134,6 +157,26 @@ type retryRoundTripper struct {
 	resign func(*http.Request, []byte) error
 }
 
+// idempotentRequest reports whether replaying the request is safe. Reads
+// always are; a mutating request is only replayed when it carries an
+// idempotency key the daemon can dedupe on (Idempotency-Key,
+// X-Idempotency-Key, or the command ID header SendPower sets). Replaying a
+// keyless POST/PUT/DELETE after a transport blip would execute the command
+// twice — power, restore and pull operations must never be retried blind.
+func idempotentRequest(req *http.Request) bool {
+	switch req.Method {
+	case http.MethodGet, http.MethodHead:
+		return true
+	}
+	if req.Header.Get("Idempotency-Key") != "" {
+		return true
+	}
+	if req.Header.Get("X-Idempotency-Key") != "" {
+		return true
+	}
+	return req.Header.Get("X-Forge-Command-ID") != ""
+}
+
 func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var (
 		resp      *http.Response
@@ -147,7 +190,11 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	attempts := 1
+	if idempotentRequest(req) {
+		attempts = maxRetries + 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			backoff := jitter(baseBackoff * (1 << (attempt - 1)))
 			if backoff > maxBackoff {
@@ -173,9 +220,19 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		resp, err = r.base.RoundTrip(req)
 		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
 			continue
 		}
 		if !isRetryableStatus(resp.StatusCode) {
+			return resp, nil
+		}
+		if attempts == 1 {
+			// A mutating request without an idempotency key must not be
+			// replayed, but its answer is still an answer: return it open so
+			// the caller maps the status to a typed ResponseError instead of
+			// a retry-budget error that hides what the daemon said.
 			return resp, nil
 		}
 		resp.Body.Close()
@@ -185,7 +242,7 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 	}
 	lastStatus := resp.StatusCode
 	resp.Body.Close()
-	return nil, fmt.Errorf("request failed after %d retries, last status: %d", maxRetries+1, lastStatus)
+	return nil, fmt.Errorf("request failed after %d attempt(s), last status: %d", attempts, lastStatus)
 }
 
 func NewClient(baseURL, nodeToken string) (*Client, error) {
@@ -194,7 +251,7 @@ func NewClient(baseURL, nodeToken string) (*Client, error) {
 	if baseURL == "" && nodeToken == "" {
 		client := &Client{}
 		client.httpClient = &http.Client{
-			Timeout:   15 * time.Minute,
+			Timeout:   defaultTimeout,
 			Transport: newRetryRoundTripper(http.DefaultTransport, client.resignRequest),
 		}
 		return client, nil
@@ -223,7 +280,7 @@ func NewClient(baseURL, nodeToken string) (*Client, error) {
 		loopback:         lb,
 	}
 	client.httpClient = &http.Client{
-		Timeout:   15 * time.Minute,
+		Timeout:   defaultTimeout,
 		Transport: newRetryRoundTripper(transport, client.resignRequest),
 	}
 	return client, nil
@@ -579,13 +636,7 @@ func (c *Client) SyncServerConfiguration(ctx context.Context, baseURL, nodeToken
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon config sync failed with status %d", res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			if text := strings.TrimSpace(string(details)); text != "" {
-				message += ": " + text
-			}
-		}
-		return errors.New(message)
+		return daemonResponseError("config sync", res)
 	}
 	return nil
 }
@@ -614,13 +665,7 @@ func (c *Client) runInstaller(ctx context.Context, baseURL, nodeToken, serverID,
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon %s failed with status %d", action, res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			if text := strings.TrimSpace(string(details)); text != "" {
-				message += ": " + text
-			}
-		}
-		return InstallResponse{}, errors.New(message)
+		return InstallResponse{}, daemonResponseError(action, res)
 	}
 	var payload InstallResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -648,14 +693,7 @@ func (c *Client) CreateServer(ctx context.Context, baseURL, nodeToken string, re
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon create request failed with status %d", res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			text := strings.TrimSpace(string(details))
-			if text != "" {
-				message += ": " + text
-			}
-		}
-		return CreateResponse{}, errors.New(message)
+		return CreateResponse{}, daemonResponseError("create request", res)
 	}
 
 	var payload CreateResponse
@@ -680,7 +718,7 @@ func (c *Client) Logs(ctx context.Context, baseURL, nodeToken, serverID string) 
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon logs request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("logs request", res)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 256*1024))
 	if err != nil {
@@ -718,7 +756,7 @@ func (c *Client) sendCommandWithBody(ctx context.Context, baseURL, nodeToken, se
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon command request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("command request", res)
 	}
 	respBody, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if err != nil {
@@ -748,7 +786,7 @@ func (c *Client) SendPower(ctx context.Context, baseURL, nodeToken, serverID, si
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return PowerResponse{}, fmt.Errorf("daemon power request failed with status %d", res.StatusCode)
+		return PowerResponse{}, daemonResponseError("power request", res)
 	}
 
 	var payload PowerResponse
@@ -772,7 +810,7 @@ func (c *Client) DeleteServer(ctx context.Context, baseURL, nodeToken, serverID 
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return PowerResponse{}, fmt.Errorf("daemon delete request failed with status %d", res.StatusCode)
+		return PowerResponse{}, daemonResponseError("delete request", res)
 	}
 
 	var payload PowerResponse
@@ -796,7 +834,7 @@ func (c *Client) Stats(ctx context.Context, baseURL, nodeToken, serverID string)
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return StatsResponse{}, fmt.Errorf("daemon stats request failed with status %d", res.StatusCode)
+		return StatsResponse{}, daemonResponseError("stats request", res)
 	}
 	var payload StatsResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -830,7 +868,7 @@ func (c *Client) ContainerState(ctx context.Context, baseURL, nodeToken, serverI
 	case res.StatusCode == http.StatusNotFound:
 		return ContainerStateResponse{}, ErrContainerStateUnsupported
 	case res.StatusCode < 200 || res.StatusCode >= 300:
-		return ContainerStateResponse{}, fmt.Errorf("daemon container state request failed with status %d", res.StatusCode)
+		return ContainerStateResponse{}, daemonResponseError("container state request", res)
 	}
 	var payload ContainerStateResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -866,7 +904,7 @@ func (c *Client) CreateBackup(ctx context.Context, baseURL, nodeToken, serverID 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return BackupEntry{}, fmt.Errorf("daemon backup create request failed with status %d", res.StatusCode)
+		return BackupEntry{}, daemonResponseError("backup create request", res)
 	}
 	var payload BackupEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -887,7 +925,7 @@ func (c *Client) ListBackups(ctx context.Context, baseURL, nodeToken, serverID s
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon backup list request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("backup list request", res)
 	}
 	var payload []BackupEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -903,13 +941,13 @@ func (c *Client) DownloadBackup(ctx context.Context, baseURL, nodeToken, serverI
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/zip")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		_ = res.Body.Close()
-		return nil, fmt.Errorf("daemon backup download request failed with status %d", res.StatusCode)
+		defer res.Body.Close()
+		return nil, daemonResponseError("backup download request", res)
 	}
 	return res.Body, nil
 }
@@ -930,7 +968,7 @@ func (c *Client) RestoreBackup(ctx context.Context, baseURL, nodeToken, serverID
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon backup restore request failed with status %d", res.StatusCode)
+		return daemonResponseError("backup restore request", res)
 	}
 	return nil
 }
@@ -947,7 +985,7 @@ func (c *Client) DeleteBackup(ctx context.Context, baseURL, nodeToken, serverID,
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon backup delete request failed with status %d", res.StatusCode)
+		return daemonResponseError("backup delete request", res)
 	}
 	return nil
 }
@@ -959,13 +997,13 @@ func (c *Client) ArchiveFiles(ctx context.Context, baseURL, nodeToken, serverID,
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/gzip")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		_ = res.Body.Close()
-		return nil, fmt.Errorf("daemon archive request failed with status %d", res.StatusCode)
+		defer res.Body.Close()
+		return nil, daemonResponseError("archive request", res)
 	}
 	return res.Body, nil
 }
@@ -986,7 +1024,7 @@ func (c *Client) DecompressFile(ctx context.Context, baseURL, nodeToken, serverI
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon decompress request failed with status %d", res.StatusCode)
+		return daemonResponseError("decompress request", res)
 	}
 	return nil
 }
@@ -1003,7 +1041,7 @@ func (c *Client) ListFiles(ctx context.Context, baseURL, nodeToken, serverID, pa
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon file list request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("file list request", res)
 	}
 	var payload []FileEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -1019,7 +1057,7 @@ func (c *Client) DownloadFile(ctx context.Context, baseURL, nodeToken, serverID,
 		return FileDownload{}, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return FileDownload{}, err
 	}
@@ -1043,7 +1081,7 @@ func (c *Client) ReadFile(ctx context.Context, baseURL, nodeToken, serverID, pat
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon file read request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("file read request", res)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if err != nil {
@@ -1105,7 +1143,7 @@ func (c *Client) WriteFile(ctx context.Context, baseURL, nodeToken, serverID, pa
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file write request failed with status %d", res.StatusCode)
+		return daemonResponseError("file write request", res)
 	}
 	return nil
 }
@@ -1122,13 +1160,13 @@ func (c *Client) UploadFileChunk(ctx context.Context, baseURL, nodeToken, server
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file upload request failed with status %d", res.StatusCode)
+		return daemonResponseError("file upload request", res)
 	}
 	return nil
 }
@@ -1187,7 +1225,7 @@ func (c *Client) DeleteFile(ctx context.Context, baseURL, nodeToken, serverID, p
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file delete request failed with status %d", res.StatusCode)
+		return daemonResponseError("file delete request", res)
 	}
 	return nil
 }
@@ -1204,7 +1242,7 @@ func (c *Client) MakeDir(ctx context.Context, baseURL, nodeToken, serverID, path
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon mkdir request failed with status %d", res.StatusCode)
+		return daemonResponseError("mkdir request", res)
 	}
 	return nil
 }
@@ -1225,7 +1263,7 @@ func (c *Client) RenameFile(ctx context.Context, baseURL, nodeToken, serverID, f
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon rename request failed with status %d", res.StatusCode)
+		return daemonResponseError("rename request", res)
 	}
 	return nil
 }
@@ -1333,7 +1371,7 @@ func (c *Client) HostFilesRead(ctx context.Context, baseURL, nodeToken, path str
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("host file read failed with status %d", res.StatusCode)
+		return "", daemonResponseError("host file read", res)
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, 10*1024*1024))
 	if err != nil {
@@ -1407,13 +1445,13 @@ func (c *Client) HostFilesUpload(ctx context.Context, baseURL, nodeToken, path s
 		return err
 	}
 	copyHeaders(req.Header, headers)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("host file upload failed with status %d", resp.StatusCode)
+		return daemonResponseError("host file upload", resp)
 	}
 	return nil
 }
@@ -1424,13 +1462,13 @@ func (c *Client) HostFilesDownload(ctx context.Context, baseURL, nodeToken, path
 	if err != nil {
 		return nil, err
 	}
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		_ = res.Body.Close()
-		return nil, fmt.Errorf("host file download failed with status %d", res.StatusCode)
+		defer res.Body.Close()
+		return nil, daemonResponseError("host file download", res)
 	}
 	return res.Body, nil
 }
@@ -1458,7 +1496,7 @@ func (c *Client) hostGetJSON(ctx context.Context, nodeToken, url string) (json.R
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("host request failed with status %d: %s", res.StatusCode, tryReadBody(res.Body))
+		return nil, daemonResponseError("host request", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -1482,14 +1520,9 @@ func (c *Client) hostPost(ctx context.Context, nodeToken, url string, payload []
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("host request failed with status %d: %s", res.StatusCode, tryReadBody(res.Body))
+		return daemonResponseError("host request", res)
 	}
 	return nil
-}
-
-func tryReadBody(r io.Reader) string {
-	data, _ := io.ReadAll(io.LimitReader(r, 4096))
-	return strings.TrimSpace(string(data))
 }
 
 func (c *Client) newRequest(ctx context.Context, nodeToken, method, url string, body []byte) (*http.Request, error) {
@@ -1582,13 +1615,7 @@ func (c *Client) CleanupMount(ctx context.Context, baseURL, nodeToken, mountSour
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon mount cleanup failed with status %d", res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			if text := strings.TrimSpace(string(details)); text != "" {
-				message += ": " + text
-			}
-		}
-		return MountCleanupResponse{}, errors.New(message)
+		return MountCleanupResponse{}, daemonResponseError("mount cleanup", res)
 	}
 	var payload MountCleanupResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -1634,7 +1661,7 @@ func (c *Client) AdminContainerLogs(ctx context.Context, baseURL, nodeToken, con
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon container logs failed with status %d", res.StatusCode)
+		return "", daemonResponseError("container logs request", res)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 512*1024))
 	if err != nil {
@@ -1667,7 +1694,7 @@ func (c *Client) adminContainerAction(ctx context.Context, baseURL, nodeToken, c
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon container %s failed with status %d", action, res.StatusCode)
+		return daemonResponseError("container "+action, res)
 	}
 	return nil
 }
@@ -1684,7 +1711,7 @@ func (c *Client) AdminContainerDelete(ctx context.Context, baseURL, nodeToken, c
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon container delete failed with status %d", res.StatusCode)
+		return daemonResponseError("container delete", res)
 	}
 	return nil
 }
@@ -1710,7 +1737,7 @@ func (c *Client) AdminImagePull(ctx context.Context, baseURL, nodeToken, image, 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon image pull failed with status %d", res.StatusCode)
+		return daemonResponseError("image pull", res)
 	}
 	return nil
 }
@@ -1727,7 +1754,7 @@ func (c *Client) AdminImageDelete(ctx context.Context, baseURL, nodeToken, image
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon image delete failed with status %d", res.StatusCode)
+		return daemonResponseError("image delete", res)
 	}
 	return nil
 }
@@ -1815,7 +1842,7 @@ func (c *Client) AdminImagePush(ctx context.Context, baseURL, nodeToken, imageRe
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon image push failed with status %d", res.StatusCode)
+		return daemonResponseError("image push", res)
 	}
 	return nil
 }
@@ -1836,7 +1863,7 @@ func (c *Client) AdminImageTag(ctx context.Context, baseURL, nodeToken, imageID,
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon image tag failed with status %d", res.StatusCode)
+		return daemonResponseError("image tag", res)
 	}
 	return nil
 }
@@ -1870,7 +1897,7 @@ func (c *Client) AdminContainerFilesRead(ctx context.Context, baseURL, nodeToken
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon container file read failed with status %d", res.StatusCode)
+		return "", daemonResponseError("container file read", res)
 	}
 	data, err := io.ReadAll(io.LimitReader(res.Body, 10*1024*1024))
 	if err != nil {
@@ -1891,13 +1918,13 @@ func (c *Client) AdminContainerFilesUpload(ctx context.Context, baseURL, nodeTok
 		return err
 	}
 	copyHeaders(req.Header, headers)
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("daemon container file upload failed with status %d", resp.StatusCode)
+		return daemonResponseError("container file upload", resp)
 	}
 	return nil
 }
@@ -1918,7 +1945,7 @@ func (c *Client) AdminContainerFilesDelete(ctx context.Context, baseURL, nodeTok
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon container file delete failed with status %d", res.StatusCode)
+		return daemonResponseError("container file delete", res)
 	}
 	return nil
 }
@@ -1946,7 +1973,7 @@ func (c *Client) AdminNetworkDelete(ctx context.Context, baseURL, nodeToken, net
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon network delete failed with status %d", res.StatusCode)
+		return daemonResponseError("network delete", res)
 	}
 	return nil
 }
@@ -1972,7 +1999,7 @@ func (c *Client) AdminVolumeDelete(ctx context.Context, baseURL, nodeToken, volu
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon volume delete failed with status %d", res.StatusCode)
+		return daemonResponseError("volume delete", res)
 	}
 	return nil
 }
@@ -2010,7 +2037,7 @@ func (c *Client) adminGetJSON(ctx context.Context, nodeToken, url string) (json.
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon admin request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("admin request", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -2034,7 +2061,7 @@ func (c *Client) adminPostJSON(ctx context.Context, nodeToken, url string, body 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon admin request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("admin request", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -2075,7 +2102,7 @@ func (c *Client) KubernetesScale(ctx context.Context, baseURL, nodeToken, name s
 	if err != nil {
 		return err
 	}
-	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments/"+name+"/scale"
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments/" + name + "/scale"
 	_, err = c.adminPostJSON(ctx, nodeToken, url, body)
 	return err
 }

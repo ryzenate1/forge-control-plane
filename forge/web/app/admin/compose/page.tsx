@@ -320,7 +320,7 @@ export default function ComposeStacksPage() {
           <h3 className="text-sm font-semibold text-slate-200 mb-3">Import Compose — POST /compose/import</h3>
           <div className="space-y-3">
             <Input placeholder="Stack name" value={importName} onChange={setImportName} />
-            <textarea value={importContent} onChange={(e) => setImportContent(e.target.value)} rows={8} placeholder={`services:\n  web:\n    image: nginx:alpine`} className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15" />
+            <textarea value={importContent} onChange={(e) => setImportContent(e.target.value)} rows={8} placeholder={`services:\n  web:\n    image: nginx:alpine`} className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 text-xs font-mono text-slate-200 placeholder:text-slate-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]" />
             <div className="flex gap-2 justify-end">
               <Btn tone="ghost" size="sm" onClick={() => setShowImport(false)}>Cancel</Btn>
               <Btn size="sm" tone="primary" onClick={() => importMut.mutate()} disabled={importMut.isPending || !importName.trim() || !importContent.trim()}>{importMut.isPending ? "Importing..." : "Import"}</Btn>

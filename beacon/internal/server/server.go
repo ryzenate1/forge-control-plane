@@ -66,6 +66,8 @@ type Server struct {
 	dataDir           string
 	allowedMounts     []string
 	allowedMountsMu   sync.RWMutex
+	mountRecordsMu    sync.RWMutex
+	mountRecords      map[string]struct{}
 	hostFileRoots     []string
 	hostFileRootsMu   sync.RWMutex
 	token             string
@@ -675,11 +677,11 @@ func (s *Server) Shutdown() {
 
 func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 	available := runtimeAvailable(s.runtime)
-	payload := map[string]any{"ok": true, "service": "daemon", "runtime": available}
 	if !available {
-		payload["reason"] = "container runtime unavailable"
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "service": "daemon", "runtime": false, "reason": "container runtime unavailable"})
+		return
 	}
-	writeJSON(w, http.StatusOK, payload)
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "daemon", "runtime": true})
 }
 
 func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
@@ -712,15 +714,35 @@ func (s *Server) TrackSession(userID, serverID string, closer io.Closer) func() 
 }
 
 func (s *Server) trackWebSocket(r *http.Request, conn *websocket.Conn) func() {
-	userID := strings.TrimSpace(r.Header.Get("X-Panel-User-ID"))
-	if userID == "" {
-		userID = strings.TrimSpace(r.URL.Query().Get("user"))
-	}
+	userID := s.webSocketUser(r)
 	if userID == "" {
 		return func() {}
 	}
 	s.sessionsReg.track(userID, r.PathValue("id"), conn)
 	return func() { s.sessionsReg.untrack(conn) }
+}
+
+// webSocketUser derives the session owner from the validated JWT claims when
+// available, falling back to the legacy explicit fields. The JWT path is
+// authoritative: header/query user IDs are caller-controlled and must never
+// override an authenticated claim.
+func (s *Server) webSocketUser(r *http.Request) string {
+	if s.tokenGenerator != nil {
+		if tokenStr := r.URL.Query().Get("token"); tokenStr != "" {
+			if claims, err := s.tokenGenerator.Validate(tokenStr); err == nil && strings.TrimSpace(claims.User) != "" {
+				return strings.TrimSpace(claims.User)
+			}
+		}
+		if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
+			if claims, err := s.tokenGenerator.Validate(strings.TrimPrefix(auth, "Bearer ")); err == nil && strings.TrimSpace(claims.User) != "" {
+				return strings.TrimSpace(claims.User)
+			}
+		}
+	}
+	if userID := strings.TrimSpace(r.Header.Get("X-Panel-User-ID")); userID != "" {
+		return userID
+	}
+	return strings.TrimSpace(r.URL.Query().Get("user"))
 }
 
 func (s *Server) dockerStatus() string {
@@ -892,6 +914,10 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	// A node that cannot advertise its own engine skips the second check rather
 	// than rejecting every request as a mismatch.
 	requestedProvider := strings.ToLower(strings.TrimSpace(body.Provider))
+	if requestedProvider == "unknown" {
+		http.Error(w, "runtime provider \"unknown\" is ambiguous; specify the placed provider explicitly", http.StatusBadRequest)
+		return
+	}
 	if err := runtime.ValidateProvider(requestedProvider); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -905,8 +931,19 @@ func (s *Server) create(w http.ResponseWriter, r *http.Request) {
 	if mode == "" || mode == "unknown" {
 		mode = provider
 	}
+	// Never silently default an ambiguous workload to Docker when the node
+	// knows its own engine: an unknown engine there means the placement was
+	// never resolved, and serving Docker for it is the phantom-provider bug.
+	// Test doubles and mock runtimes report "unknown" as their provider; with
+	// no engine to compare against, the legacy docker default is kept so the
+	// placement check (above) remains the enforcement point.
 	if mode == "" || mode == "unknown" {
-		mode = runtime.ProviderDocker
+		if provider == "" || provider == "unknown" {
+			mode = runtime.ProviderDocker
+		} else {
+			http.Error(w, "runtime provider is unknown; specify the placed provider explicitly", http.StatusBadRequest)
+			return
+		}
 	}
 
 	rootDir, err := s.safePath(body.ServerID, "")
@@ -1027,6 +1064,11 @@ func (s *Server) syncConfiguration(w http.ResponseWriter, r *http.Request) {
 	}
 	s.manager.UpdateRuntimeConfig(serverID, memoryMBFromConfiguration(payload), allocationIPFromConfiguration(payload), allocationPortFromConfiguration(payload), stopTypeFromConfiguration(payload), stopValueFromConfiguration(payload), stopTimeoutFromConfiguration(payload))
 	s.manager.MarkConfigurationSynced(serverID, diskLimitMBFromConfiguration(payload))
+	// Workloads always reconcile through buildHostConfigWithSettings, which
+	// enforces a read-only rootfs, dropped capabilities, no-new-privileges,
+	// and bounded json-file logging. Configuration sync never relaxes those:
+	// it only reconciles image, command, env, ports, mounts, and limits.
+	log.Printf("[beacon] configuration synced for server %s (read-only rootfs preserved)", serverID)
 	writeJSON(w, http.StatusOK, map[string]any{"serverId": serverID, "synced": true})
 }
 
@@ -2058,7 +2100,7 @@ func (s *Server) streamStats(ctx context.Context, writer *webSocketWriter, serve
 
 		writeOK := true
 		for {
-			runtimeStats, decodeErr := runtime.DecodeDockerStats(stream)
+			runtimeStats, decodeErr := decodeProviderStats(stream, s.runtimeProvider())
 			if decodeErr != nil {
 				break
 			}
@@ -2083,6 +2125,22 @@ func (s *Server) streamStats(ctx context.Context, writer *webSocketWriter, serve
 		// Re-inspect rather than assume which.
 		lastState = ""
 	}
+}
+
+// decodeProviderStats decodes one frame from a StatsStream using the framing
+// of the provider that produced it. Docker streams raw engine samples that
+// need DecodeDockerStats; every other runtime streams runtime.Stats JSON.
+// Decoding Docker frames as Stats (or vice versa) yields zero telemetry that
+// looks healthy, so the provider selects the decoder explicitly.
+func decodeProviderStats(stream io.Reader, provider string) (runtime.Stats, error) {
+	if strings.EqualFold(strings.TrimSpace(provider), runtime.ProviderDocker) || strings.TrimSpace(provider) == "" {
+		return runtime.DecodeDockerStats(stream)
+	}
+	var stats runtime.Stats
+	if err := json.NewDecoder(stream).Decode(&stats); err != nil {
+		return runtime.Stats{}, err
+	}
+	return stats, nil
 }
 
 func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
@@ -2123,7 +2181,22 @@ func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(writer, serverID, errors.New("token not valid for this server"))
 		return
 	}
-	stream, err := s.runtime.LogsStream(r.Context(), serverID, "100")
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
+	// Drain the client side so control frames are processed: the pong that
+	// answers our keepalive ping is what extends the read deadline, and without
+	// a reader the session dies after one deadline interval.
+	go func() {
+		defer cancel()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	stream, err := s.runtime.LogsStream(ctx, serverID, "100")
 	if err != nil {
 		writeJSONError(writer, serverID, err)
 		return
@@ -3844,10 +3917,28 @@ func (s *Server) authenticate(next http.Handler) http.Handler {
 			next.ServeHTTP(w, r)
 			return
 		}
-		// Only the exact GET health and readiness routes are public. Metrics
-		// contain operational information and require the same signed
-		// authentication as other API routes.
-		if s.token == "" || (r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/ready")) || r.URL.Path == "/download/backup" || isScopedTokenRoute(r.URL.Path) || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
+		// Per-route authentication. Production startup (cmd/daemon/main.go)
+		// refuses to serve without DAEMON_NODE_TOKEN except on a loopback
+		// listener, so an empty s.token here only happens in isolated
+		// development and tests; it bypasses HMAC like before but the
+		// listener is loopback-only.
+		//
+		//   public (no auth):              GET /health, GET /ready
+		//   loopback-or-bearer:             GET /metrics
+		//   JWT backup-download scope:      GET /download/backup (handler validates scope)
+		//   JWT websocket scope:            /servers/{id}/ws/*, /servers/{id}/ws (handler validates scope+binding)
+		//   transfer bearer credential:     /api/v1/transfers/* except /credentials (handlers validate via transferBearer)
+		//   legacy transfer HMAC headers:   POST /api/transfers (handler checks HMAC headers)
+		//   node HMAC (default):            everything else
+		if s.token == "" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method == http.MethodGet && (r.URL.Path == "/health" || r.URL.Path == "/ready") {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.URL.Path == "/download/backup" || isScopedTokenRoute(r.URL.Path) || (strings.HasPrefix(r.URL.Path, "/api/v1/transfers/") && r.URL.Path != "/api/v1/transfers/credentials") {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -4119,7 +4210,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		diag.EdgeState = string(s.edgeAgent.State())
 	}
 	s.edgeMu.RUnlock()
-	diag.AgentConnected = s.runtime != nil
+	diag.AgentConnected = runtimeAvailable(s.runtime)
 	writeJSON(w, http.StatusOK, diag)
 }
 

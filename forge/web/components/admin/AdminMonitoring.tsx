@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState, useCallback, type ComponentType } from "react";
-import { useQuery } from "@tanstack/react-query";
 import {
   AlertTriangle,
   ArrowUpRight,
@@ -27,13 +26,6 @@ import {
 } from "recharts";
 import { useRouter } from "next/navigation";
 import {
-  fetchAdminActivity,
-  fetchAllNodes,
-  fetchAllServers,
-} from "@/lib/api";
-import {
-  getNodeMetrics,
-  getSystemInfo,
   type MetricPeriod,
   type NodeMetrics,
 } from "@/lib/api/monitoring";
@@ -42,8 +34,14 @@ import {
   findCheck,
   isAvailable,
   relativeTime,
+  summaryIsTrustworthy,
+  useActivityQuery,
   useHealthQuery,
+  useLatestNodeMetricsQuery,
+  useMonitoringSummaryQuery,
   useNodeMetricsHistoryQuery,
+  useNodesQuery,
+  useServersQuery,
 } from "@/lib/admin/telemetry";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import { Card, Pill, cn } from "@/components/admin/admin-ui";
@@ -207,48 +205,22 @@ export function AdminMonitoring() {
 
   const periodLabel = PERIODS.find((p) => p.value === period)?.label ?? "1 hour";
 
-  const nodesQuery = useQuery({
-    queryKey: ["nodes", "all"],
-    queryFn: fetchAllNodes,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 2,
-  });
-  const serversQuery = useQuery({
-    queryKey: ["servers", "all"],
-    queryFn: fetchAllServers,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 2,
-  });
+  const nodesQuery = useNodesQuery();
+  const serversQuery = useServersQuery();
   // See the note in AdminOverview: one canonical key for the health report.
   const healthQuery = useHealthQuery();
-  const activityQuery = useQuery({
-    queryKey: ["admin-activity", { limit: 8 }],
-    queryFn: () => fetchAdminActivity({ limit: 8 }),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 1,
-  });
-  const summaryQuery = useQuery({
-    queryKey: ["monitoring-summary"],
-    queryFn: getSystemInfo,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 1,
+  const activityQuery = useActivityQuery(8);
+  const summaryQuery = useMonitoringSummaryQuery();
+  const summaryTrustworthy = summaryIsTrustworthy(summaryQuery.data, {
+    nodeCount: nodesQuery.data?.length,
+    serverCount: serversQuery.data?.length,
   });
 
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const servers = useMemo(() => serversQuery.data ?? [], [serversQuery.data]);
   const nodeById = useMemo(() => new Map(nodes.map((n) => [n.id, n])), [nodes]);
 
-  const latestQuery = useQuery({
-    queryKey: ["monitoring-latest"],
-    queryFn: () => getNodeMetrics(),
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 1,
-  });
+  const latestQuery = useLatestNodeMetricsQuery();
   const latestByNode = useMemo(() => {
     const map = new Map<string, NodeMetrics>();
     for (const m of latestQuery.data ?? []) map.set(m.nodeId, m);
@@ -1193,7 +1165,7 @@ export function AdminMonitoring() {
         .
       </p>
 
-      {summaryQuery.data?.unacknowledgedAlerts ? (
+      {summaryTrustworthy && summaryQuery.data?.unacknowledgedAlerts ? (
         <p className="text-[11px] text-amber-400/80">
           {summaryQuery.data.unacknowledgedAlerts} unacknowledged alert{(summaryQuery.data.unacknowledgedAlerts ?? 0) > 1 ? "s" : ""} in the alert pipeline.
         </p>

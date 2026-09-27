@@ -33,7 +33,12 @@ func registerAppMountRoutesPhase(v1 fiber.Router, protected fiber.Router, cfg *C
 		}
 		return nil
 	}
-	svc := mountssvc.New(cfg.Store)
+	// Injected via Config (handlers -> mounts.Service -> store); inline New is
+	// the dev/test fallback when main has not populated the field.
+	svc := cfg.MountService
+	if svc == nil {
+		svc = mountssvc.New(cfg.Store)
+	}
 	limiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis, cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")))
 	registerAppMountRoutes(protected, svc, limiter)
 	return nil

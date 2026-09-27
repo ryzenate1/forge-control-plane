@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -43,7 +44,7 @@ import {
   runCatalogRetention,
   type CatalogEntry,
 } from "@/lib/api/catalog";
-import { fetchNodes, fetchRegions } from "@/lib/api";
+import { fetchRegions } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -826,7 +827,7 @@ function ProvisionModal({ entry, onClose, onDone }: { entry: CatalogEntry; onClo
   const [showAllVersions, setShowAllVersions] = useState(false);
   const sectionRefs = useRef<Array<HTMLDivElement | null>>([]);
 
-  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, retry: false });
+  const nodesQ = useNodesQuery();
   const regionsQ = useQuery({ queryKey: ["regions"], queryFn: fetchRegions, retry: false });
 
   const nodes = useMemo(() => nodesQ.data ?? [], [nodesQ.data]);

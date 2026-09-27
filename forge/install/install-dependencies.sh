@@ -59,6 +59,18 @@ detect_os() {
     echo "$OS_NAME"
 }
 
+# --- RHEL-family package helper (dnf preferred, yum fallback) ---
+pkg_rhel() {
+    if command -v dnf >/dev/null 2>&1; then
+        dnf install -y "$@"
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y "$@"
+    else
+        log_error "Neither dnf nor yum found; cannot install: $*"
+        exit 1
+    fi
+}
+
 # --- Install Docker ---
 install_docker() {
     local os_name
@@ -89,22 +101,34 @@ install_docker() {
 }
 
 install_docker_ubuntu_debian() {
+    export DEBIAN_FRONTEND=noninteractive
+    local distro codename
+    # shellcheck disable=SC1091
+    . /etc/os-release 2>/dev/null || true
+    distro="${ID:-ubuntu}"
+    # Debian must use the debian repo, not ubuntu (different codenames/keys).
+    case "$distro" in
+        debian) distro="debian" ;;
+        *) distro="ubuntu" ;;
+    esac
+    codename="$(lsb_release -cs 2>/dev/null || echo "${VERSION_CODENAME:-stable}")"
     # Remove old Docker versions
     apt-get remove -y docker docker-engine docker.io containerd runc || true
-    
+
     # Install required packages
     apt-get update
     apt-get install -y ca-certificates curl gnupg lsb-release
-    
-    # Add Docker's official GPG key
+
+    # Add Docker's official GPG key for the matching distro
     mkdir -p /etc/apt/keyrings
-    curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-    
+    curl -fsSL "https://download.docker.com/linux/${distro}/gpg" | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+    chmod 644 /etc/apt/keyrings/docker.gpg
+
     # Set up the repository
     echo \
-      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-      $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-    
+      "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/${distro} \
+      ${codename} stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
+
     # Install Docker Engine
     apt-get update
     apt-get install -y docker-ce docker-ce-cli containerd.io docker-compose-plugin
@@ -139,8 +163,16 @@ install_docker_compose() {
     fi
     
     # Install Docker Compose standalone (fallback)
-    local compose_version="v2.24.5"
-    curl -SL https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-x86_64 -o /usr/local/bin/docker-compose
+    # Match the host arch: the hard-coded x86_64 asset 404s/fails on arm64.
+    local compose_version="v2.24.5" compose_arch machine
+    machine="$(uname -m)"
+    case "$machine" in
+        x86_64|amd64) compose_arch="x86_64" ;;
+        aarch64|arm64) compose_arch="aarch64" ;;
+        armv7l|armv7*) compose_arch="armv7" ;;
+        *) log_error "Unsupported architecture for compose fallback: $machine"; exit 1 ;;
+    esac
+    curl -SL "https://github.com/docker/compose/releases/download/${compose_version}/docker-compose-linux-${compose_arch}" -o /usr/local/bin/docker-compose
     chmod +x /usr/local/bin/docker-compose
     
     # Verify installation
@@ -161,11 +193,12 @@ install_git() {
     
     case "$os_name" in
         ubuntu|debian)
+            export DEBIAN_FRONTEND=noninteractive
             apt-get update
             apt-get install -y git
             ;;
         centos|rhel|fedora)
-            yum install -y git
+            pkg_rhel git
             ;;
         *)
             log_error "Unsupported OS for Git installation: $os_name"
@@ -191,11 +224,12 @@ install_dependencies() {
     
     case "$os_name" in
         ubuntu|debian)
+            export DEBIAN_FRONTEND=noninteractive
             apt-get update
             apt-get install -y curl wget jq htop net-tools lsof
             ;;
         centos|rhel|fedora)
-            yum install -y curl wget jq htop net-tools lsof
+            pkg_rhel curl wget jq htop net-tools lsof
             ;;
         *)
             log_error "Unsupported OS for dependencies installation: $os_name"
@@ -221,19 +255,24 @@ configure_docker_autostart() {
 # --- Add Current User to Docker Group ---
 configure_docker_group() {
     log_step "Configuring Docker group"
-    
+
     # Create docker group if it doesn't exist
     if ! getent group docker > /dev/null; then
         groupadd docker
     fi
-    
-    # Add current user to docker group
+
+    # Add the invoking (non-root) user — under sudo $USER is root, so prefer
+    # $SUDO_USER which names the human who ran sudo.
     local current_user
-    current_user=$(whoami)
-    if [ "$current_user" != "root" ]; then
+    current_user="${SUDO_USER:-$(whoami)}"
+    # Strip domain suffix if present (e.g. DOMAIN\user handled elsewhere).
+    current_user="${current_user%% *}"
+    if [ "$current_user" != "root" ] && [ -n "$current_user" ]; then
         usermod -aG docker "$current_user"
         log_info "User $current_user added to docker group"
         log_info "Please log out and log back in for Docker group changes to take effect"
+    elif [ -n "${SUDO_USER:-}" ]; then
+        log_info "Invoked via sudo by $SUDO_USER; added to docker group"
     fi
 }
 

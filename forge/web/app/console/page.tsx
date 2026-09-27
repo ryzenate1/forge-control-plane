@@ -32,7 +32,7 @@ export default function ConsoleDashboardPage() {
   });
 
   const appsQuery = useQuery({
-    queryKey: ["apps"],
+    queryKey: queryKeys.apps.lists(),
     queryFn: fetchApps,
     staleTime: 30_000,
     retry: 1,

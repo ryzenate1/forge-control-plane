@@ -12,24 +12,24 @@ func TestAllowAuthenticationBurstAndSeparateIPs(t *testing.T) {
 	s := &Server{}
 	ip := "203.0.113.1"
 	otherIP := "203.0.113.2"
-	// First 5 should succeed (burst 5)
-	for i := 0; i < 5; i++ {
+	// First 3 should succeed (strict burst 3)
+	for i := 0; i < 3; i++ {
 		if !s.allowAuthentication(ip) {
 			t.Fatalf("allow %d for %s should succeed", i+1, ip)
 		}
 	}
-	// 6th should be denied
+	// 4th should be denied
 	if s.allowAuthentication(ip) {
-		t.Fatal("6th auth within burst window should be denied")
+		t.Fatal("4th auth within burst window should be denied")
 	}
 	// Different IP should still have its own burst
-	for i := 0; i < 5; i++ {
+	for i := 0; i < 3; i++ {
 		if !s.allowAuthentication(otherIP) {
 			t.Fatalf("allow %d for otherIP %s should succeed", i+1, otherIP)
 		}
 	}
 	if s.allowAuthentication(otherIP) {
-		t.Fatal("otherIP 6th auth should be denied")
+		t.Fatal("otherIP 4th auth should be denied")
 	}
 }
 

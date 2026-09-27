@@ -2,7 +2,7 @@
   "$schema": "../template-schema.json",
   "id": "minecraft-paper",
   "name": "Minecraft (Paper)",
-  "description": "High-performance PaperMC server — the most widely used Minecraft server software, featuring optimized gameplay, extensive plugin API, and automatic latest build downloads.",
+  "description": "High-performance PaperMC server \u2014 the most widely used Minecraft server software, featuring optimized gameplay, extensive plugin API, and automatic latest build downloads.",
   "version": "1.0.0",
   "game": "Minecraft",
   "author": "GamePanel",
@@ -12,7 +12,7 @@
     "Java 21": "ghcr.io/pterodactyl/yolks:java_21",
     "Java 17": "ghcr.io/pterodactyl/yolks:java_17"
   },
-  "startup": "java -Xms128M -XX:MaxRAMPercentage=95.0 -Dterminal.jline=false -Dterminal.ansi=true -jar {{SERVER_JARFILE}}",
+  "startup": "java -Xms128M -XX:MaxRAMPercentage=95.0 -Dterminal.jline=false -Dterminal.ansi=true -jar \"{{SERVER_JARFILE}}\"",
   "config": {
     "files": {
       "server.properties": {
@@ -124,10 +124,21 @@
   "install_script": {
     "container": "ghcr.io/pterodactyl/installers:alpine",
     "entrypoint": "ash",
-    "script": "#!/bin/ash\n# PaperMC Installation Script\n# Server Files: /mnt/server\n\nPROJECT=paper\nUSER_AGENT=\"GamePanel (https://gamepanel.io)\"\n\nif [ -n \"${DL_PATH}\" ]; then\n    echo \"Using supplied download url: ${DL_PATH}\"\n    DOWNLOAD_URL=$(eval echo $(echo ${DL_PATH} | sed -e 's/{{/${/g' -e 's/}}/}/g'))\nelse\n    VER_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r --arg VERSION $MINECRAFT_VERSION '.versions[] | contains($VERSION)' | grep -m1 true)\n    LATEST_VERSION=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r '.versions | last')\n\n    if [ \"${VER_EXISTS}\" = \"true\" ]; then\n        echo \"Version is valid. Using version ${MINECRAFT_VERSION}\"\n    else\n        echo \"Specified version not found. Defaulting to the latest ${PROJECT} version\"\n        MINECRAFT_VERSION=${LATEST_VERSION}\n    fi\n\n    BUILD_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r --arg BUILD ${BUILD_NUMBER} '.builds[] | tostring | contains($BUILD)' | grep -m1 true)\n    LATEST_BUILD=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r '.builds | last')\n\n    if [ \"${BUILD_EXISTS}\" = \"true\" ]; then\n        echo \"Build is valid for version ${MINECRAFT_VERSION}. Using build ${BUILD_NUMBER}\"\n    else\n        echo \"Using the latest ${PROJECT} build for version ${MINECRAFT_VERSION}\"\n        BUILD_NUMBER=${LATEST_BUILD}\n    fi\n\n    DOWNLOAD_URL=\"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}/builds/${BUILD_NUMBER}/downloads/${PROJECT}-${MINECRAFT_VERSION}-${BUILD_NUMBER}.jar\"\nfi\n\ncd /mnt/server\necho \"Downloading ${PROJECT} version ${MINECRAFT_VERSION} build ${BUILD_NUMBER}\"\ncurl --user-agent \"${USER_AGENT}\" -o ${SERVER_JARFILE} -L \"${DOWNLOAD_URL}\"\necho \"Download complete\""
+    "script": "#!/bin/ash\n# PaperMC Installation Script\n# Server Files: /mnt/server\n\nPROJECT=paper\nUSER_AGENT=\"GamePanel (https://gamepanel.io)\"\n\nif [ -n \"${DL_PATH}\" ]; then\n    # DL_PATH is used literally (no template substitution, no shell eval):\n    # it must be a complete http(s) URL. Anything else is ignored and the\n    # version is resolved from the upstream API below.\n    case \"${DL_PATH}\" in\n        https://*|http://*)\n            DOWNLOAD_URL=\"${DL_PATH}\"\n            echo \"Using supplied download url override\"\n            ;;\n        *)\n            echo \"Ignoring unsafe DL_PATH override (must be a literal http(s) URL)\"\n            DOWNLOAD_URL=\"\"\n            ;;\n    esac\nfi\nif [ -z \"${DOWNLOAD_URL:-}\" ]; then\n    VER_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r --arg VERSION $MINECRAFT_VERSION '.versions[] | contains($VERSION)' | grep -m1 true)\n    LATEST_VERSION=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}\" | jq -r '.versions | last')\n\n    if [ \"${VER_EXISTS}\" = \"true\" ]; then\n        echo \"Version is valid. Using version ${MINECRAFT_VERSION}\"\n    else\n        echo \"Specified version not found. Defaulting to the latest ${PROJECT} version\"\n        MINECRAFT_VERSION=${LATEST_VERSION}\n    fi\n\n    BUILD_EXISTS=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r --arg BUILD ${BUILD_NUMBER} '.builds[] | tostring | contains($BUILD)' | grep -m1 true)\n    LATEST_BUILD=$(curl --user-agent \"${USER_AGENT}\" -s \"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}\" | jq -r '.builds | last')\n\n    if [ \"${BUILD_EXISTS}\" = \"true\" ]; then\n        echo \"Build is valid for version ${MINECRAFT_VERSION}. Using build ${BUILD_NUMBER}\"\n    else\n        echo \"Using the latest ${PROJECT} build for version ${MINECRAFT_VERSION}\"\n        BUILD_NUMBER=${LATEST_BUILD}\n    fi\n\n    DOWNLOAD_URL=\"https://api.papermc.io/v2/projects/${PROJECT}/versions/${MINECRAFT_VERSION}/builds/${BUILD_NUMBER}/downloads/${PROJECT}-${MINECRAFT_VERSION}-${BUILD_NUMBER}.jar\"\nfi\n\ncd /mnt/server\necho \"Downloading ${PROJECT} version ${MINECRAFT_VERSION} build ${BUILD_NUMBER}\"\ncurl --user-agent \"${USER_AGENT}\" -o ${SERVER_JARFILE} -L \"${DOWNLOAD_URL}\"\necho \"Download complete\""
   },
-  "supported_platforms": ["docker", "podman"],
-  "categories": ["survival", "sandbox", "building"],
+  "supported_platforms": [
+    "docker",
+    "podman"
+  ],
+  "categories": [
+    "survival",
+    "sandbox",
+    "building"
+  ],
   "file_denylist": [],
-  "features": ["eula", "java_version", "pid_limit"]
+  "features": [
+    "eula",
+    "java_version",
+    "pid_limit"
+  ]
 }

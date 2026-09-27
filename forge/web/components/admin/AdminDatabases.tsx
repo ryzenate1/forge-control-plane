@@ -1,9 +1,10 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Box, CheckCircle2, Database, LayoutGrid, List, Network, Plus, RefreshCw, Search, Server, Trash2 } from "lucide-react";
-import { type ApiDatabaseHost, type CreateDatabaseHostInput, createDatabaseHost, deleteDatabaseHost, fetchDatabaseHosts, fetchNodes, fetchOrphanRemediations, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation, testDatabaseHostConnection, updateDatabaseHost } from "@/lib/api";
+import { type ApiDatabaseHost, type CreateDatabaseHostInput, createDatabaseHost, deleteDatabaseHost, fetchDatabaseHosts, fetchOrphanRemediations, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation, testDatabaseHostConnection, updateDatabaseHost } from "@/lib/api";
 import { toast } from "@/components/ui/sonner";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminSelect, AdminFormSection, AdminLoadingState, cn } from "./admin-ui";
@@ -42,7 +43,7 @@ export function AdminDatabases() {
   const [confirm, renderConfirm] = useConfirm();
   const hostsQuery = useQuery({ queryKey: ["database-hosts"], queryFn: fetchDatabaseHosts });
   const hosts = useMemo(() => Array.isArray(hostsQuery.data) ? hostsQuery.data : [], [hostsQuery.data]);
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => Array.isArray(nodesQuery.data) ? nodesQuery.data : [], [nodesQuery.data]);
   const [remediationStatus, setRemediationStatus] = useState<"pending" | "resolved">("pending");
   const remediationsQuery = useQuery({ queryKey: ["orphan-remediations", remediationStatus], queryFn: () => fetchOrphanRemediations(remediationStatus), retry: false });
@@ -399,7 +400,7 @@ export function AdminDatabases() {
           </div>
         ) : (
           <div>
-            <div className="flex items-center gap-2 border-b border-[var(--line)] bg-[var(--surface-raised)]/50 px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
+            <div className="flex items-center gap-2 border-b border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
               <Server size={14} /> Server resources <Pill>{serverRemediations.length}</Pill>
             </div>
             {serverRemediations.length === 0 ? (
@@ -428,7 +429,7 @@ export function AdminDatabases() {
               </div>
             )}
 
-            <div className="flex items-center gap-2 border-y border-[var(--line)] bg-[var(--surface-raised)]/50 px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
+            <div className="flex items-center gap-2 border-y border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
               <Database size={14} /> Database resources <Pill>{databaseRemediations.length}</Pill>
             </div>
             {databaseRemediations.length === 0 ? (
@@ -499,7 +500,7 @@ export function AdminDatabases() {
           <AdminFormSection title="TLS">
             <div>
               <label className="mb-1.5 block text-sm font-medium text-slate-300">TLS CA certificate (write-only)</label>
-              <textarea className="h-28 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3.5 py-2 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-400 hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15 font-mono text-xs" value={hTLSCA} onChange={(e) => setHTLSCA(e.target.value)} placeholder={modal === "create" ? "Optional PEM certificate" : "Leave blank to keep current certificate"}/>
+              <textarea className="h-28 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3.5 py-2 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition placeholder:text-slate-400 hover:border-white/20 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)] font-mono text-xs" value={hTLSCA} onChange={(e) => setHTLSCA(e.target.value)} placeholder={modal === "create" ? "Optional PEM certificate" : "Leave blank to keep current certificate"}/>
               <p className="mt-1 text-xs text-slate-400">Certificates and passwords are redacted by the API and never displayed after submission.</p>
             </div>
           </AdminFormSection>

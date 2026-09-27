@@ -187,6 +187,9 @@ func TestHealthFilter_RecoversAfterSuccess(t *testing.T) {
 func TestHealthFilter_FiltersUnhealthyBackends(t *testing.T) {
 	filter := NewHealthFilter(2, 30*time.Second)
 
+	// Only recorded-healthy backends pass the filter.
+	filter.RecordSuccess("10.0.0.1", 8080)
+
 	for i := 0; i < 2; i++ {
 		filter.RecordFailure("10.0.0.2", 8081, "down")
 	}
@@ -333,6 +336,8 @@ func TestOneUnhealthyReplica(t *testing.T) {
 	}
 
 	health := NewHealthFilter(2, 30*time.Second)
+	// Only recorded-healthy backends pass the filter.
+	health.RecordSuccess("node-1.internal", 8080)
 	health.RecordFailure("node-2.internal", 8080, "connection refused")
 	health.RecordFailure("node-2.internal", 8080, "connection refused")
 
@@ -520,6 +525,8 @@ func TestIngressSyncStats(t *testing.T) {
 	proxy := trafficmanager.NewTraefikReverseProxy(dir, strings.TrimPrefix(admin.URL, "http://"))
 	resolver := NewResolver(nil)
 	health := NewHealthFilter(2, 30*time.Second)
+	// The synchronizer only routes to recorded-healthy backends.
+	health.RecordSuccess("localhost", 8080)
 	syncer := NewIngressSynchronizer(proxy, resolver, health)
 
 	syncer.SetRules([]*trafficmanager.RoutingRule{

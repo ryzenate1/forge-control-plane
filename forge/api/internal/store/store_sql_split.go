@@ -48,6 +48,14 @@ func splitSQLStatements(input string) []string {
 		}
 
 		if ch == ';' && len(openTags) == 0 {
+			candidate := string(runes[start:pos])
+			if isTriggerStart(candidate) && !triggerTerminated(candidate) {
+				// Inside a SQLite BEGIN ... END trigger body: the semicolon
+				// separates body statements, it does not end the migration
+				// statement. The terminator is the closing END; line.
+				pos++
+				continue
+			}
 			stmt := strings.TrimSpace(string(runes[start:pos]))
 			if stmt != "" {
 				statements = append(statements, stmt)
@@ -131,7 +139,7 @@ func stripSQLComments(input string) string {
 }
 
 // skipSingleQuoted returns the index just past the single-quoted literal that
-// starts at pos, treating '' as an escaped quote.
+// starts at pos, treating ” as an escaped quote.
 func skipSingleQuoted(runes []rune, pos int) int {
 	pos++
 	for pos < len(runes) {
@@ -171,4 +179,48 @@ func scanDollarTag(runes []rune, pos int) string {
 
 func isAlphaNumeric(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// isTriggerStart reports whether a partial statement is the head of a
+// CREATE TRIGGER definition. Only the SQLite form (plain BEGIN ... END body,
+// no dollar quoting) reaches this check; PostgreSQL trigger functions are
+// dollar-quoted and protected by the openTags tracking above.
+func isTriggerStart(candidate string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(candidate))
+	rest := strings.TrimPrefix(upper, "CREATE ")
+	rest = strings.TrimPrefix(rest, "TEMP ")
+	rest = strings.TrimPrefix(rest, "TEMPORARY ")
+	return strings.HasPrefix(rest, "TRIGGER ")
+}
+
+// triggerTerminated reports whether a CREATE TRIGGER head already contains
+// its closing END; line. The check requires BEGIN to be present as a whole
+// word so a trigger name ending in "end" cannot false-positive. Limitation:
+// an "\nEND;" sequence inside a single-quoted trigger literal would
+// terminate early; migration triggers keep literals single-line to avoid it.
+func triggerTerminated(candidate string) bool {
+	upper := strings.ToUpper(candidate)
+	hasBegin := false
+	for _, field := range strings.Fields(upper) {
+		if field == "BEGIN" {
+			hasBegin = true
+			break
+		}
+	}
+	if !hasBegin {
+		// No body yet (e.g. DROP TRIGGER, or the head before BEGIN): a bare
+		// semicolon still ends the statement.
+		return true
+	}
+	// The splitter hands us the candidate WITHOUT the semicolon under the
+	// cursor, so the closing "END;" appears as a trailing whole-word END.
+	// (An "\nEND;" already inside would mean we missed the terminator.)
+	// Limitation: a trigger body statement that itself ends with the keyword
+	// END (e.g. a CASE ... END; assignment inside the body) terminates early;
+	// migration triggers avoid that shape.
+	trimmed := strings.TrimRight(upper, " \t\r\n")
+	if fields := strings.Fields(trimmed); len(fields) > 0 && fields[len(fields)-1] == "END" {
+		return true
+	}
+	return strings.Contains(upper, "\nEND;") || strings.Contains(upper, "\nEND ;")
 }

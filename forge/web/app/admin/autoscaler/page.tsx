@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/components/ui/toast';
 import { Activity, AlertTriangle, BarChart3, Plus, Play, Trash2, Zap } from 'lucide-react';
-import { fetchJSON, postJSON, putJSON, deleteJSON } from '@/lib/api';
+import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapList, unwrapData } from '@/lib/api';
 import {
   AdminPageHeader,
   AdminPageLayout,
@@ -64,13 +64,11 @@ export default function AdminAutoscalerPage() {
 
   const policiesQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'policies'],
-    queryFn: () =>
-      fetchJSON<ScalingPolicy[]>('/admin/autoscaler/policies'),
+    queryFn: async () => unwrapList(await fetchJSON<ScalingPolicy[]>('/admin/autoscaler/policies')),
   });
   const metricsQuery = useQuery({
     queryKey: ['admin', 'autoscaler', 'metrics'],
-    queryFn: () =>
-      fetchJSON<AutoscalerMetrics>('/admin/autoscaler/metrics'),
+    queryFn: async () => unwrapData(await fetchJSON<AutoscalerMetrics>('/admin/autoscaler/metrics')),
   });
 
   const policies = useMemo(() => policiesQuery.data ?? [], [policiesQuery.data]);

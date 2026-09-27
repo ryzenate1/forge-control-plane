@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -23,31 +24,31 @@ export default function AdminAppsPage() {
   const [deleteTarget, setDeleteTarget] = useState<ApiApp | null>(null);
 
   const { data: apps = [], isLoading } = useQuery({
-    queryKey: ["apps"],
+    queryKey: queryKeys.apps.lists(),
     queryFn: fetchApps,
     refetchInterval: 15_000,
   });
 
   const startMut = useMutation({
     mutationFn: startApp,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() }),
     onError: (err) => toast({ tone: "error", title: "Failed to start app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const stopMut = useMutation({
     mutationFn: stopApp,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() }),
     onError: (err) => toast({ tone: "error", title: "Failed to stop app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const restartMut = useMutation({
     mutationFn: restartApp,
-    onSuccess: () => void qc.invalidateQueries({ queryKey: ["apps"] }),
+    onSuccess: () => void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() }),
     onError: (err) => toast({ tone: "error", title: "Failed to restart app", message: err instanceof Error ? err.message : "An error occurred" }),
   });
   const deleteMut = useMutation({
     mutationFn: deleteApp,
     onSuccess: () => {
       setDeleteTarget(null);
-      void qc.invalidateQueries({ queryKey: ["apps"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() });
     },
   });
 

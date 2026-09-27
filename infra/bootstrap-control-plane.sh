@@ -21,11 +21,14 @@ set +a
 
 mkdir -p "${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}"
 
+# Single-shot full stack (postgres, redis, api, web, daemon, monitoring,
+# backup, caddy). No phased bring-up: partial stacks hide dependency errors
+# and leave /setup pointing at services that are not running yet.
 compose=(docker compose -f compose.yml -f compose.production.yml --env-file .env)
 "${compose[@]}" config --quiet
-"${compose[@]}" up -d --build postgres redis api web
+"${compose[@]}" up -d --build
 "${compose[@]}" ps
 
-echo "Control plane started. Complete /setup, create a node, replace"
-echo "DAEMON_NODE_ID and DAEMON_NODE_TOKEN in .env, then run:"
-echo "  ${compose[*]} up -d --build daemon prometheus alertmanager grafana"
+echo "Control plane started (full profile, incl. Caddy on 80/443)."
+echo "Complete /setup, create a node, then set DAEMON_NODE_ID/DAEMON_NODE_TOKEN"
+echo "in .env and re-run this script to roll the new identity."

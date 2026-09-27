@@ -98,7 +98,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
         <div className="mb-4 flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 font-mono text-[11px] text-[var(--text-subtle)]">
           <span className="h-2 w-2 rounded-full bg-[var(--success)] shadow-[0_0_8px_rgba(5,150,105,0.4)]" aria-hidden />
           <span className="text-[var(--text)]">forge</span>
-          <span className="text-[var(--text-subtle)]/60">::</span>
+          <span className="text-[color-mix(in_srgb,var(--text-subtle)_60%,transparent)]">::</span>
           <span className="text-[var(--brand)]">gateway</span>
           <span className="text-[var(--text-subtle)]">— routers → services → targets</span>
           <span className="ml-auto hidden sm:inline text-[10px] uppercase tracking-widest text-[var(--text-subtle)]">
@@ -134,7 +134,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
                     </span>
                     <span className="shrink-0 font-mono text-[11px] text-[var(--text-subtle)]">{r.path}</span>
                     <span
-                      className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${r.enabled ? "bg-[var(--success)]" : "bg-[var(--text-subtle)]/40"}`}
+                      className={`ml-auto h-1.5 w-1.5 shrink-0 rounded-full ${r.enabled ? "bg-[var(--success)]" : "bg-[color-mix(in_srgb,var(--text-subtle)_40%,transparent)]"}`}
                       aria-hidden
                     />
                   </div>
@@ -240,9 +240,9 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           <span className="inline-flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-[var(--brand)]" aria-hidden /> Caddy · Traefik
           </span>
-          <span className="text-[var(--text-subtle)]/60">·</span>
+          <span className="text-[color-mix(in_srgb,var(--text-subtle)_60%,transparent)]">·</span>
           <span>5 writers collapsed → 1 reconciler (desired-state)</span>
-          <span className="ml-auto hidden sm:inline text-[var(--text-subtle)]/70">tip: Hover router to see its service binding</span>
+          <span className="ml-auto hidden sm:inline text-[color-mix(in_srgb,var(--text-subtle)_70%,transparent)]">tip: Hover router to see its service binding</span>
         </div>
       </div>
     </Card>
@@ -460,7 +460,7 @@ export default function AdminGatewaysPage() {
                 ) : (
                   <div className="divide-y divide-[var(--line)]">
                     {s.targets.map((t) => (
-                      <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-[var(--surface-hover)]/50 motion-safe:transition-colors motion-reduce:transition-none">
+                      <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-[color-mix(in_srgb,var(--surface-hover)_50%,transparent)] motion-safe:transition-colors motion-reduce:transition-none">
                         <div className="flex items-center gap-3">
                           <span
                             className={`h-2 w-2 rounded-full ${t.status === "healthy" ? "bg-[var(--success)]" : t.status === "draining" ? "bg-[var(--warning)]" : "bg-[var(--danger)]"}`}
@@ -486,7 +486,7 @@ export default function AdminGatewaysPage() {
         <Card>
           <CardHeader title="Middlewares" icon={Shield} />
           <div className="p-4">
-            <div className="rounded-lg border border-[var(--warning)]/20 bg-[var(--warning-subtle)] px-4 py-3 text-sm leading-6 text-[var(--text)]">
+            <div className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,transparent)] bg-[var(--warning-subtle)] px-4 py-3 text-sm leading-6 text-[var(--text)]">
               Middlewares (rate-limit, IP allow/deny, circuit-breaker, headers, redirect) are not yet exposed as a list — backend has no <code className="rounded bg-[var(--surface-raised)] px-1 py-0.5 font-mono text-xs border border-[var(--line)]">GET /policies</code> (only <code className="font-mono text-xs">GET /policies/:id</code>). They are currently applied as <span className="font-semibold">all-policies → all-routes</span> (see audit F-NET-05). The intended fix is a <code className="font-mono text-xs">gateway_middlewares</code> table referenced by routers (Traefik model).
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">

@@ -43,7 +43,7 @@ function Breadcrumbs({ directory, onOpen }: { directory: string; onOpen: (path: 
         const path = "/" + parts.slice(0, index + 1).join("/");
         return (
           <span className="flex shrink-0 items-center gap-1" key={path}>
-            <ChevronRight className="text-[var(--text-subtle)]/60 shrink-0" size={14} />
+            <ChevronRight className="text-[color-mix(in_srgb,var(--text-subtle)_60%,transparent)] shrink-0" size={14} />
             <button
               className="text-[var(--text-subtle)] hover:text-white transition-colors truncate max-w-[120px] sm:max-w-[200px]"
               onClick={() => onOpen(path)}
@@ -470,7 +470,7 @@ export function HostFilesView() {
     <div className="relative space-y-4" onDragEnter={handleDragEnter} onDragLeave={handleDragLeave} onDragOver={handleDragOver} onDrop={handleDrop}>
       {renderConfirm()}
       {/* Drag-and-drop overlay – mirrors server files-view */}
-      {dragging ? <div aria-live="assertive" className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="status"><div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-[var(--brand)]/60 bg-[var(--surface-raised)]/90 px-16 py-12 text-center shadow-2xl"><Upload className="h-12 w-12 text-[var(--brand)] animate-bounce" /><p className="text-lg font-bold text-[var(--text)]">Drop files to upload</p><p className="text-sm text-[var(--text-subtle)]">Files will be uploaded to the current directory</p></div></div> : null}
+      {dragging ? <div aria-live="assertive" className="pointer-events-none fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" role="status"><div className="flex flex-col items-center gap-4 rounded-2xl border-2 border-dashed border-[color-mix(in_srgb,var(--brand)_60%,transparent)] bg-[color-mix(in_srgb,var(--surface-raised)_90%,transparent)] px-16 py-12 text-center shadow-2xl"><Upload className="h-12 w-12 text-[var(--brand)] animate-bounce" /><p className="text-lg font-bold text-[var(--text)]">Drop files to upload</p><p className="text-sm text-[var(--text-subtle)]">Files will be uploaded to the current directory</p></div></div> : null}
 
       <AdminToolbar className="items-center">
         <Breadcrumbs directory={directory} onOpen={setDirectory} />
@@ -478,7 +478,7 @@ export function HostFilesView() {
           <NodeSelect value={nodeId} onChange={handleNodeChange} />
           <Link
             href={nodeId ? `/admin/terminal?nodeId=${encodeURIComponent(nodeId)}` : "/admin/terminal"}
-            className={cn(btn, "gap-1.5 border-[var(--brand)]/20 hover:border-[var(--brand)]/40 hover:bg-[var(--brand-subtle)]")}
+            className={cn(btn, "gap-1.5 border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:border-[color-mix(in_srgb,var(--brand)_40%,transparent)] hover:bg-[var(--brand-subtle)]")}
             title={nodeId ? `Open host terminal for selected node (${nodeId.slice(0, 8)}) — forwards ?nodeId=` : "Open host terminal (select a node first)"}
           >
             <Terminal size={14} />
@@ -547,7 +547,7 @@ export function HostFilesView() {
         </div>
       ) : entries.length === 0 && !files.isError ? (
         <div className="rounded-xl border border-dashed border-[var(--line)] bg-[var(--surface-input)] p-10 text-center">
-          <File className="mx-auto mb-3 text-[var(--text-subtle)]/50" size={32} strokeWidth={1} />
+          <File className="mx-auto mb-3 text-[color-mix(in_srgb,var(--text-subtle)_50%,transparent)]" size={32} strokeWidth={1} />
           <p className="text-sm text-[var(--text-subtle)]">
             {search ? "No files match this filter." : "This directory is empty."}
           </p>
@@ -593,7 +593,7 @@ export function HostFilesView() {
                   <span className="truncate">{entry.name}</span>
                 </button>
                 <span className="text-xs text-[var(--text-subtle)] truncate">{entry.isDir ? "Folder" : formatBytes(entry.size)}</span>
-                <time className="text-xs text-[var(--text-subtle)]/70 truncate hidden sm:block">{entry.modTime || "—"}</time>
+                <time className="text-xs text-[color-mix(in_srgb,var(--text-subtle)_70%,transparent)] truncate hidden sm:block">{entry.modTime || "—"}</time>
                 <div className="flex justify-end gap-0.5">
                   <button
                     aria-label="Download"
@@ -679,7 +679,7 @@ export function HostFilesView() {
 
       {/* Bulk action bar – wired to delete-batch (looped) + bulk chmod */}
       {selected.length ? (
-        <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[var(--surface-raised)]/95 p-3 shadow-2xl backdrop-blur">
+        <div className="sticky bottom-4 z-20 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_95%,transparent)] p-3 shadow-2xl backdrop-blur">
           <span className="flex items-center gap-2 text-sm font-semibold text-[var(--text)]"><CheckSquare size={17} />{selected.length} selected</span>
           <div className="flex flex-wrap gap-2">
             <button className={btn} disabled={busy} onClick={handleBulkChmod} type="button"><Lock size={14} />Permissions</button>
@@ -758,7 +758,7 @@ export function HostFilesView() {
           <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); void handlePull(); }}>
             <label className="block space-y-1.5">
               <span className="text-sm font-medium text-[var(--text)]">Public file URL</span>
-              <input autoFocus className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus:border-[var(--brand)]/70 focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-subtle)]" onChange={(ev) => setPullUrl(ev.target.value)} placeholder="https://example.com/file.jar" type="url" value={pullUrl} />
+              <input autoFocus className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2.5 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand-subtle)]" onChange={(ev) => setPullUrl(ev.target.value)} placeholder="https://example.com/file.jar" type="url" value={pullUrl} />
             </label>
             {error ? <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-200" role="alert">{error}</p> : null}
             <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">

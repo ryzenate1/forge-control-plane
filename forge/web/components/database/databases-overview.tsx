@@ -162,34 +162,40 @@ async function fetchCatalogOverview(): Promise<{ rows: OverviewRow[]; backedIds:
 type ServersPage = { data?: ApiServer[]; meta?: { pagination?: PaginationMeta } } | ApiServer[];
 
 /** All servers, handling both envelope shapes (mirrors lib/api fetchAllServers). */
+const SERVERS_OVERVIEW_MAX_PAGES = 10;
+const SERVER_DB_FANOUT_CAP = 50;
+
 async function fetchAllServersLocal(): Promise<ApiServer[]> {
   const first = await fetchJSON<ServersPage>("/servers?page=1&per_page=100");
   const firstData = Array.isArray(first) ? first : (first.data ?? []);
   const totalPages = !Array.isArray(first) ? first.meta?.pagination?.total : undefined;
-  if (typeof totalPages !== "number" || totalPages <= 1) return firstData;
+  if (typeof totalPages !== "number" || totalPages <= 1) return firstData.slice(0, SERVER_DB_FANOUT_CAP);
+  const pages = Math.min(totalPages, SERVERS_OVERVIEW_MAX_PAGES);
   const rest = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) =>
+    Array.from({ length: pages - 1 }, (_, i) =>
       fetchJSON<ServersPage>(`/servers?page=${i + 2}&per_page=100`).then((p) => (Array.isArray(p) ? p : (p.data ?? [])))),
   );
-  return [...firstData, ...rest.flat()];
+  return [...firstData, ...rest.flat()].slice(0, SERVER_DB_FANOUT_CAP);
 }
 
 /** Per-server databases across all servers. */
-async function fetchServerDbOverview(): Promise<{ rows: OverviewRow[]; failed: number }> {
+async function fetchServerDbOverview(): Promise<{ rows: OverviewRow[]; failed: number; failedIds: string[] }> {
   const servers = await fetchAllServersLocal();
   const perServer = await Promise.allSettled(
     servers.map((s) => fetchJSON<ApiDatabase[]>(`/servers/${encodeURIComponent(s.id)}/databases`).then((rows) => ({ server: s, rows }))),
   );
   const rows: OverviewRow[] = [];
   let failed = 0;
-  for (const r of perServer) {
+  const failedIds: string[] = [];
+  perServer.forEach((r, index) => {
     if (r.status !== "fulfilled") {
       failed += 1;
-      continue;
+      failedIds.push(servers[index]?.id ?? `index-${index}`);
+      return;
     }
     for (const db of Array.isArray(r.value.rows) ? r.value.rows : []) rows.push(serverDbRow(r.value.server.name || r.value.server.id.slice(0, 8), db));
-  }
-  return { rows, failed };
+  });
+  return { rows, failed, failedIds };
 }
 
 function OriginIcon({ origin, className }: { origin: Origin; className?: string }) {
@@ -473,7 +479,13 @@ export function DatabasesOverview({ onOpenTab }: { onOpenTab: (tab: DatabaseTab)
 
       {loadError && rows.length === 0 ? (
         <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-4 text-sm text-red-200">Could not load database inventory. One or more sources are unreachable.</div>
-      ) : sorted.length === 0 ? (
+      ) : (serverDbQ.data && serverDbQ.data.failed > 0) || (catalogQ.data && catalogQ.data.failed > 0) ? (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.06] p-3 text-xs text-amber-200" role="status">
+          Partial inventory: {serverDbQ.data?.failed ?? 0} server{(serverDbQ.data?.failed ?? 0) === 1 ? "" : "s"} and {catalogQ.data?.failed ?? 0} catalog {(catalogQ.data?.failed ?? 0) === 1 ? "entry" : "entries"} failed to load
+          {serverDbQ.data?.failedIds?.length ? ` (${serverDbQ.data.failedIds.slice(0, 5).join(", ")}${serverDbQ.data.failedIds.length > 5 ? ` +${serverDbQ.data.failedIds.length - 5} more` : ""})` : ""}. Showing what could be read.
+        </div>
+      ) : null}
+      {loadError && rows.length === 0 ? null : sorted.length === 0 ? (
         <EmptyState
           icon={Database}
           title={hasActiveFilters ? "No matches" : "No databases yet"}

@@ -116,8 +116,8 @@ func TestClassify_NilLastSeenAt(t *testing.T) {
 	if recoveryCount != 0 {
 		t.Fatalf("expected 0 recovery count, got %d", recoveryCount)
 	}
-	if ageSeconds != 0 {
-		t.Fatalf("expected 0 age seconds, got %d", ageSeconds)
+	if ageSeconds != -1 {
+		t.Fatalf("expected -1 age seconds for never-seen node, got %d", ageSeconds)
 	}
 }
 
@@ -531,16 +531,16 @@ func TestNormalizeConfig(t *testing.T) {
 func TestEvaluateAll_NilReceiver(t *testing.T) {
 	var nilSvc *Service
 	err := nilSvc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil error from nil receiver, got %v", err)
+	if err == nil {
+		t.Fatal("expected error from nil receiver, got nil")
 	}
 }
 
 func TestEvaluateAll_NilStore(t *testing.T) {
 	svc := NewWithConfig(nil, nil, DefaultConfig())
 	err := svc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil error when store is nil, got %v", err)
+	if err == nil {
+		t.Fatal("expected error when store is nil, got nil")
 	}
 }
 
@@ -615,8 +615,8 @@ func TestEvaluateAll_ContinuesOnError(t *testing.T) {
 	}
 	svc := NewWithConfig(store, nil, DefaultConfig())
 	err := svc.EvaluateAll(context.Background())
-	if err != nil {
-		t.Fatalf("expected nil (errors swallowed per node), got %v", err)
+	if err == nil {
+		t.Fatal("expected aggregated error when a node evaluation fails, got nil")
 	}
 	if evaluated != 1 {
 		t.Fatalf("expected exactly 1 successful evaluation, got %d", evaluated)

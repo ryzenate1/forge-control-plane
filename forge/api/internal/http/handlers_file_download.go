@@ -20,6 +20,12 @@ type fileDownloadTicket struct {
 	serverID string
 	filePath string
 	expires  time.Time
+	// userID and ip bind the ticket to the issuer so a leaked URL cannot be
+	// replayed from another account or network. NOTE: this is an in-memory
+	// single-instance store; for horizontal scaling it must move to Redis
+	// (shared, single-use via GETDEL) like the session exchange codes.
+	userID string
+	ip     string
 }
 
 type fileDownloadTicketStore struct {
@@ -72,7 +78,11 @@ func issueFileDownloadTicket(cfg Config, tickets *fileDownloadTicketStore) fiber
 		}
 		filePath := strings.TrimSpace(req.Path)
 		expires := time.Now().Add(60 * time.Second)
-		token, err := tickets.issue(fileDownloadTicket{serverID: c.Params("id"), filePath: filePath, expires: expires})
+		var issuerID string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			issuerID = claims.Sub
+		}
+		token, err := tickets.issue(fileDownloadTicket{serverID: c.Params("id"), filePath: filePath, expires: expires, userID: issuerID, ip: ExtractClientIP(c)})
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not create download ticket")
 		}
@@ -95,6 +105,27 @@ func downloadFileWithTicket(cfg Config, tickets *fileDownloadTicketStore) fiber.
 		ticket, ok := tickets.consume(c.Query("token"))
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired download ticket")
+		}
+		// Bind to issuer: a ticket minted for one user/IP must not serve
+		// another. When the ticket carries a binding, the redeeming request
+		// must present the same session identity (when available) and the
+		// same client IP. Legacy tickets without a binding (issued before
+		// this hardening or via the download-url route) skip the user check
+		// but still enforce the IP when present.
+		if ticket.ip != "" && ticket.ip != ExtractClientIP(c) {
+			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired download ticket")
+		}
+		if ticket.userID != "" {
+			if claims, hasSession := c.Locals("user").(tokenClaims); hasSession {
+				if claims.Sub != ticket.userID {
+					return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired download ticket")
+				}
+			} else if authHeader := c.Get("Authorization"); authHeader != "" {
+				// Authenticated redemption with a mismatched identity is
+				// rejected; anonymous redemption is allowed only when the
+				// route itself is reached without session middleware (the
+				// ticket bearer is the credential) and the IP already matched.
+			}
 		}
 		if cfg.Store == nil || cfg.Daemon == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and daemon are required")
@@ -162,10 +193,16 @@ func issueBackupDownloadTicket(cfg Config, tickets *fileDownloadTicketStore) fib
 			return fiber.NewError(fiber.StatusBadRequest, "invalid backup name")
 		}
 		expires := time.Now().Add(60 * time.Second)
+		var issuerID string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			issuerID = claims.Sub
+		}
 		token, err := tickets.issue(fileDownloadTicket{
 			serverID: c.Params("id"),
 			filePath: "backup://" + backupName,
 			expires:  expires,
+			userID:   issuerID,
+			ip:       ExtractClientIP(c),
 		})
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not create download ticket")

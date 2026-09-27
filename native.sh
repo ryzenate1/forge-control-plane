@@ -9,6 +9,11 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+if ! command -v brew >/dev/null 2>&1; then
+    echo "Homebrew is required for native mode (PostgreSQL/Redis via brew services)." >&2
+    echo "Install from https://brew.sh then re-run: $0 start" >&2
+    exit 1
+fi
 BREW_PREFIX="$(brew --prefix)"
 export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/opt/postgresql@16/bin:$PATH"
 
@@ -42,8 +47,13 @@ elif [ -S "$HOME/.colima/default/docker.sock" ]; then
 elif [ -S "/var/run/docker.sock" ]; then
     DOCKER_SOCK="/var/run/docker.sock"
 else
-    DOCKER_SOCK="$HOME/.colima/default/docker.sock"
+    # Fail closed: no socket means container workloads cannot run. Do NOT
+    # silently fall back to a mock runtime — the operator must opt in via
+    # DAEMON_ALLOW_MOCK_RUNTIME=true, and the degraded banner below must show.
+    DOCKER_SOCK=""
 fi
+HAVE_DOCKER_SOCK=0
+[ -n "${DOCKER_SOCK:-}" ] && [ -S "$DOCKER_SOCK" ] && HAVE_DOCKER_SOCK=1
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
@@ -218,7 +228,33 @@ DAEMON_SFTP_HOST_KEY_PASSPHRASE=dev-$(openssl rand -hex 16)
 EOF
         umask 022
     fi
-    set -a; . "$SECRETS"; set +a
+    # Restricted parser: only bare KEY=VALUE lines are honoured. No `source`,
+    # no command/export expansion, no quoting games — a malicious or broken
+    # secrets file cannot execute code here. Invalid lines are ignored loudly.
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line%$'\r'}"
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in
+            *=*) ;;
+            *) warn "Ignoring malformed line in $SECRETS: $line"; continue ;;
+        esac
+        key="${line%%=*}"
+        value="${line#*=}"
+        case "$key" in
+            ''|*[!A-Za-z0-9_]*|[0-9]*) warn "Ignoring bad key in $SECRETS: $key"; continue ;;
+        esac
+        case "$key" in
+            API_AUTH_SECRET|APP_KEY|FORGE_MASTER_KEY|DAEMON_NODE_TOKEN|DAEMON_SFTP_HOST_KEY_PASSPHRASE|REDIS_PASSWORD) ;;
+            *) warn "Ignoring unknown key in $SECRETS: $key"; continue ;;
+        esac
+        # Strip one layer of matching surrounding quotes if present.
+        case "$value" in
+            '"'*'"') value="${value#\"}"; value="${value%\"}" ;;
+            "'"*"'") value="${value#\'}"; value="${value%\'}";;
+        esac
+        printf -v "$key" '%s' "$value"
+        export "$key"
+    done < "$SECRETS"
 }
 
 export_env() {
@@ -230,7 +266,15 @@ export_env() {
     # Seeds the demo admin and pairs the demo node with DAEMON_NODE_TOKEN so
     export API_SEED_DEMO=true
     export REDIS_ADDR="127.0.0.1:${REDIS_PORT}"
-    export REDIS_PASSWORD="${REDIS_PASSWORD:-gamepanel}"
+    # Only export a Redis password when one is actually configured (local
+    # Homebrew Redis ships with no password; sending a default "gamepanel"
+    # breaks AUTH against it). Compose stacks that require auth set
+    # REDIS_PASSWORD via .env/secrets.
+    if [ -n "${REDIS_PASSWORD:-}" ]; then
+        export REDIS_PASSWORD
+    else
+        unset REDIS_PASSWORD || true
+    fi
     export BEACON_BASE_URL="http://127.0.0.1:${BEACON_PORT}"
     export PANEL_URL="http://localhost:${WEB_PORT}"
     export SESSION_COOKIE_SECURE=false
@@ -321,12 +365,20 @@ start_beacon() {
     mkdir -p "$HOME/Library/LaunchAgents" "$DATA_DIR/beacon" "$DATA_DIR/beacon-tmp"
 
     local runtime_env=""
-    if [ -S "$DOCKER_SOCK" ]; then
+    if [ "${HAVE_DOCKER_SOCK:-0}" -eq 1 ]; then
         runtime_env="<key>DOCKER_HOST</key><string>unix://$DOCKER_SOCK</string>"
         info "Docker runtime via $DOCKER_SOCK"
-    else
+    elif [ "${DAEMON_ALLOW_MOCK_RUNTIME:-false}" = "true" ]; then
         runtime_env="<key>DAEMON_ALLOW_MOCK_RUNTIME</key><string>true</string>"
-        warn "No Docker socket at $DOCKER_SOCK; using mock runtime"
+        STACK_DEGRADED=1
+        warn "No Docker socket found; mock runtime explicitly enabled (DAEMON_ALLOW_MOCK_RUNTIME=true)"
+        warn "Container workloads will NOT run — STACK DEGRADED, dev-only."
+    else
+        STACK_DEGRADED=1
+        fail "No Docker socket found and DAEMON_ALLOW_MOCK_RUNTIME is not 'true'."
+        info "Start Colima/Docker Desktop, or export DAEMON_ALLOW_MOCK_RUNTIME=true"
+        info "to run explicitly degraded (no containers). Continuing without beacon."
+        return 0
     fi
 
     cat > "$PLIST" <<PLIST

@@ -221,7 +221,7 @@ export function AdminTemplates() {
               const varCount = tpl.variables?.length ?? 0;
               const denyCount = tpl.fileDenylist?.length ?? 0;
               return (
-                <div key={tpl.id} className="rounded-xl border border-white/[0.06] bg-[var(--surface-input)] p-4 space-y-3 hover:border-[var(--brand)]/30 transition">
+                <div key={tpl.id} className="rounded-xl border border-white/[0.06] bg-[var(--surface-input)] p-4 space-y-3 hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] transition">
                   <div className="flex items-center justify-between">
                     <h3 className="text-sm font-semibold text-slate-100">{tpl.name}</h3>
                     <Pill tone="neutral">template</Pill>

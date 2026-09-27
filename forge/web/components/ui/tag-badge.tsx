@@ -69,10 +69,10 @@ export function TagBadge({
   return (
     <span
       className={cn(
-        "inline-flex max-w-full items-center gap-1.5 rounded-full border font-medium tracking-tight",
+        "ui-badge max-w-full gap-1.5 tracking-tight",
         small ? "px-2 py-0.5 text-[11px]" : "px-2.5 py-1 text-xs",
         // Neutral fallback when there is no usable color, or for subtle mode.
-        (subtle || !safe) && "border-[var(--line)] bg-white/[0.03] text-slate-300",
+        (subtle || !safe) && "border-[var(--line)] bg-overlay-subtle text-text-subtle",
         className,
       )}
       style={subtle ? undefined : baseStyle}
@@ -97,7 +97,7 @@ export function TagBadge({
           }}
           className={cn(
             "-mr-1 inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition",
-            subtle || !safe ? "hover:bg-white/10" : "hover:bg-black/20",
+            subtle || !safe ? "hover:bg-overlay-strong" : "hover:bg-black/20",
           )}
         >
           <X size={small ? 10 : 12} />

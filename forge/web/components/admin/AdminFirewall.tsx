@@ -141,10 +141,10 @@ export function AdminFirewall() {
               icon={Shield}
               action={
                 <div className="flex gap-2">
-                  <Btn size="sm" tone="ghost" onClick={() => setShowQuickOpen(true)} className="border border-[var(--brand)]/20 hover:bg-[var(--brand)]/10">
+                  <Btn size="sm" tone="ghost" onClick={() => setShowQuickOpen(true)} className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]">
                     <Network size={12} /> Quick Open Port
                   </Btn>
-                  <Btn size="sm" tone="primary" onClick={() => setShowAddRule(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white">
+                  <Btn size="sm" tone="primary" onClick={() => setShowAddRule(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
                     <Plus size={14} /> Add Rule
                   </Btn>
                 </div>

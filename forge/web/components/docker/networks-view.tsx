@@ -4,6 +4,7 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Trash2, RefreshCw, Plus } from "lucide-react";
 import { listNetworks, createNetwork, deleteNetwork, type DockerNetwork } from "@/lib/api/docker";
+import { NodeSelect } from "@/components/docker/node-select";
 import { Btn, Card, EmptyState, Input, Modal, ModalFooter, AdminLoadingState } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Alert, Pagination } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
@@ -26,8 +27,8 @@ export function NetworksView() {
   const networks = useMemo(() => Array.isArray(networksQuery.data) ? networksQuery.data : [], [networksQuery.data]);
 
   const createMut = useMutation({
-    mutationFn: (data: { name: string; driver: string; subnet: string }) =>
-      createNetwork({ name: data.name, driver: data.driver, subnet: data.subnet || undefined }),
+    mutationFn: (data: { name: string; driver: string; subnet: string; nodeId: string }) =>
+      createNetwork({ name: data.name, driver: data.driver, subnet: data.subnet || undefined, nodeId: data.nodeId }),
     onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["docker", "networks"] }); setShowCreate(false); },
   });
 
@@ -136,16 +137,18 @@ export function NetworksView() {
   );
 }
 
-function CreateNetworkModal({ onClose, onCreate, loading, error }: { onClose: () => void; onCreate: (data: { name: string; driver: string; subnet: string }) => void; loading: boolean; error?: string }) {
+function CreateNetworkModal({ onClose, onCreate, loading, error }: { onClose: () => void; onCreate: (data: { name: string; driver: string; subnet: string; nodeId: string }) => void; loading: boolean; error?: string }) {
   const [name, setName] = useState("");
   const [driver, setDriver] = useState("bridge");
   const [subnet, setSubnet] = useState("");
+  const [nodeId, setNodeId] = useState("");
 
   return (
     <Modal onClose={onClose} title="Create Network">
       <div className="space-y-4">
         {error && <Alert tone="error" title="Create failed">{error}</Alert>}
         <Input label="Network Name *" placeholder="my-network" value={name} onChange={setName} />
+        <NodeSelect value={nodeId} onChange={setNodeId} />
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Driver</label>
           <select className="ui-input" value={driver} onChange={(e) => setDriver(e.target.value)}>
@@ -159,9 +162,9 @@ function CreateNetworkModal({ onClose, onCreate, loading, error }: { onClose: ()
         <Input label="Subnet (optional)" placeholder="172.20.0.0/16" value={subnet} onChange={setSubnet} />
         <ModalFooter
           onCancel={onClose}
-          onConfirm={() => onCreate({ name, driver, subnet })}
+          onConfirm={() => onCreate({ name, driver, subnet, nodeId })}
           confirmLabel={loading ? "Creating..." : "Create"}
-          disabled={!name || loading}
+          disabled={!name || !nodeId || loading}
         />
       </div>
     </Modal>

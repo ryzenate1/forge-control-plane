@@ -36,3 +36,63 @@ groups:
         annotations:
           summary: "Forge API reconciliation failures"
           description: "The Forge API reconciler is failing reconciliation runs (game_panel_api_reconciliation_failures_total is increasing)."
+
+      - alert: PostgresDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "postgres-exporter has been unreachable for 2m. Check the postgres service and storage."
+
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "redis-exporter has been unreachable for 2m. Caching/sessions are degraded."
+
+      - alert: PostgresBackupStale
+        # postgres-backup pushes backup_last_success_seconds to the
+        # pushgateway after each successful dump (see postgres-backup.sh).
+        # Fires when no successful backup has been recorded for 36h.
+        expr: (time() - backup_last_success_seconds) > 129600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL backups are stale"
+          description: "No successful backup in 36h. See docs/restore-runbook.md."
+
+      - alert: TlsCertExpiringSoon
+        # Fires when any Caddy-managed certificate expires within 7 days.
+        expr: (caddy_tls_certificate_expiration_seconds - time()) < 604800
+        for: 1h
+        labels:
+          severity: warning
+        annotations:
+          summary: "TLS certificate expiring soon"
+          description: "A TLS certificate expires in <7d. Check Caddy/ACME renewal."
+
+      - alert: ApiHigh5xxRate
+        expr: sum(rate(http_requests_total{job="api", status=~"5.."}[5m])) / sum(rate(http_requests_total{job="api"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx rate is high"
+          description: "More than 5% of API responses are 5xx over the last 5m."
+
+      - alert: DiskSpaceLow
+        # Requires node-exporter (add the job to prometheus.yml when the
+        # exporter is deployed). Kept here so the rule exists before it fires.
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low"
+          description: "Root filesystem has <15% free. Backups and images will fail next."

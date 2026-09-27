@@ -4,11 +4,19 @@
     "minecraft-paper": {
       "id": "minecraft-paper",
       "name": "Minecraft (Paper)",
-      "description": "High-performance PaperMC server — the most widely used Minecraft server software, featuring optimized gameplay, extensive plugin API, and automatic latest build downloads.",
+      "description": "High-performance PaperMC server \u2014 the most widely used Minecraft server software, featuring optimized gameplay, extensive plugin API, and automatic latest build downloads.",
       "game": "Minecraft",
       "version": "1.0.0",
-      "categories": ["survival", "sandbox", "building"],
-      "tags": ["java", "papermc", "bukkit"],
+      "categories": [
+        "survival",
+        "sandbox",
+        "building"
+      ],
+      "tags": [
+        "java",
+        "papermc",
+        "bukkit"
+      ],
       "source": "https://papermc.io",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -19,8 +27,16 @@
       "description": "Official vanilla Minecraft server from Mojang. Pure, unmodified gameplay experience with automatic version detection and download.",
       "game": "Minecraft",
       "version": "1.0.0",
-      "categories": ["survival", "sandbox", "building"],
-      "tags": ["java", "vanilla", "mojang"],
+      "categories": [
+        "survival",
+        "sandbox",
+        "building"
+      ],
+      "tags": [
+        "java",
+        "vanilla",
+        "mojang"
+      ],
       "source": "https://minecraft.net",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -31,8 +47,16 @@
       "description": "Palworld dedicated server via SteamCMD. Full dedicated server with configurable difficulty, XP rates, and advanced world settings.",
       "game": "Palworld",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "adventure"],
-      "tags": ["steamcmd", "unreal-engine", "pve"],
+      "categories": [
+        "survival",
+        "open-world",
+        "adventure"
+      ],
+      "tags": [
+        "steamcmd",
+        "unreal-engine",
+        "pve"
+      ],
       "source": "https://www.pocketpair.jp/palworld",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -43,8 +67,16 @@
       "description": "Valheim dedicated server with crossplay support. Explore a Viking purgatory with friends in this brutal survival sandbox.",
       "game": "Valheim",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "co-op"],
-      "tags": ["steamcmd", "unity", "crossplay"],
+      "categories": [
+        "survival",
+        "open-world",
+        "co-op"
+      ],
+      "tags": [
+        "steamcmd",
+        "unity",
+        "crossplay"
+      ],
       "source": "https://www.valheimgame.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -55,8 +87,16 @@
       "description": "Terraria dedicated server via SteamCMD. Full TShock-compatible server with world size and difficulty configuration.",
       "game": "Terraria",
       "version": "1.0.0",
-      "categories": ["sandbox", "adventure", "survival"],
-      "tags": ["steamcmd", "monogame", "2d"],
+      "categories": [
+        "sandbox",
+        "adventure",
+        "survival"
+      ],
+      "tags": [
+        "steamcmd",
+        "monogame",
+        "2d"
+      ],
       "source": "https://terraria.org",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -67,8 +107,16 @@
       "description": "Enshrouded dedicated server via SteamCMD. Explore a vast, open-world action RPG with survival crafting elements in a corrupted fantasy realm.",
       "game": "Enshrouded",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "rpg"],
-      "tags": ["steamcmd", "unreal-engine", "co-op"],
+      "categories": [
+        "survival",
+        "open-world",
+        "rpg"
+      ],
+      "tags": [
+        "steamcmd",
+        "unreal-engine",
+        "co-op"
+      ],
       "source": "https://enshrouded.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -79,8 +127,16 @@
       "description": "Satisfactory dedicated server via SteamCMD. Build massive factories, automate production chains, and explore an alien planet with friends.",
       "game": "Satisfactory",
       "version": "1.0.0",
-      "categories": ["sandbox", "building", "simulation"],
-      "tags": ["steamcmd", "unreal-engine", "automation"],
+      "categories": [
+        "sandbox",
+        "building",
+        "simulation"
+      ],
+      "tags": [
+        "steamcmd",
+        "unreal-engine",
+        "automation"
+      ],
       "source": "https://www.satisfactorygame.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -91,8 +147,16 @@
       "description": "Rust dedicated server via SteamCMD. The ultimate survival game where you must build, craft, and fight to survive in a harsh open world.",
       "game": "Rust",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "adventure"],
-      "tags": ["steamcmd", "unity", "pvp"],
+      "categories": [
+        "survival",
+        "open-world",
+        "crafting"
+      ],
+      "tags": [
+        "steamcmd",
+        "unity",
+        "pvp"
+      ],
       "source": "https://rust.facepunch.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -103,8 +167,16 @@
       "description": "Counter-Strike 2 dedicated server via SteamCMD. The legendary tactical first-person shooter with competitive matchmaking and community servers.",
       "game": "Counter-Strike 2",
       "version": "1.0.0",
-      "categories": ["adventure", "survival"],
-      "tags": ["steamcmd", "source-engine", "competitive"],
+      "categories": [
+        "fps",
+        "multiplayer",
+        "competitive"
+      ],
+      "tags": [
+        "steamcmd",
+        "source-engine",
+        "competitive"
+      ],
       "source": "https://www.counter-strike.net",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -115,8 +187,16 @@
       "description": "Factorio dedicated server. Build and manage automated factories in this legendary optimization and resource-management simulation game.",
       "game": "Factorio",
       "version": "1.0.0",
-      "categories": ["sandbox", "simulation", "building"],
-      "tags": ["headless", "automation", "multiplayer"],
+      "categories": [
+        "sandbox",
+        "simulation",
+        "building"
+      ],
+      "tags": [
+        "headless",
+        "automation",
+        "multiplayer"
+      ],
       "source": "https://factorio.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -127,8 +207,16 @@
       "description": "7 Days to Die dedicated server via SteamCMD. The open-world zombie survival sandbox game with crafting, building, and horde nights.",
       "game": "7 Days to Die",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "adventure"],
-      "tags": ["steamcmd", "unity", "zombie"],
+      "categories": [
+        "survival",
+        "open-world",
+        "zombie"
+      ],
+      "tags": [
+        "steamcmd",
+        "unity",
+        "zombie"
+      ],
       "source": "https://7daystodie.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -139,8 +227,16 @@
       "description": "Minecraft Bedrock Edition dedicated server. Cross-platform Minecraft server supporting Windows, mobile, and console players.",
       "game": "Minecraft Bedrock",
       "version": "1.0.0",
-      "categories": ["survival", "sandbox", "building"],
-      "tags": ["bedrock", "cross-platform", "mojang"],
+      "categories": [
+        "survival",
+        "sandbox",
+        "building"
+      ],
+      "tags": [
+        "bedrock",
+        "cross-platform",
+        "mojang"
+      ],
       "source": "https://minecraft.net",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -151,8 +247,16 @@
       "description": "TeamSpeak 3 voice server. The high-quality voice communication platform for online multiplayer gaming and communities.",
       "game": "TeamSpeak 3",
       "version": "1.0.0",
-      "categories": ["adventure", "survival"],
-      "tags": ["voice", "communication", "audio"],
+      "categories": [
+        "voice",
+        "communication",
+        "social"
+      ],
+      "tags": [
+        "voice",
+        "communication",
+        "audio"
+      ],
       "source": "https://www.teamspeak.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
@@ -163,21 +267,85 @@
       "description": "Project Zomboid dedicated server via SteamCMD. The ultimate zombie survival simulation game with deep crafting, building, and permadeath mechanics.",
       "game": "Project Zomboid",
       "version": "1.0.0",
-      "categories": ["survival", "open-world", "adventure"],
-      "tags": ["steamcmd", "zombie", "isometric"],
+      "categories": [
+        "survival",
+        "open-world",
+        "zombie"
+      ],
+      "tags": [
+        "steamcmd",
+        "zombie",
+        "isometric"
+      ],
       "source": "https://projectzomboid.com",
       "author": "GamePanel",
       "updatedAt": "2026-07-21T00:00:00Z"
     }
   },
   "categories": {
-    "survival": { "name": "Survival", "description": "Survival and crafting games" },
-    "sandbox": { "name": "Sandbox", "description": "Open-ended sandbox games" },
-    "building": { "name": "Building", "description": "Construction and building focused" },
-    "open-world": { "name": "Open World", "description": "Open world exploration" },
-    "adventure": { "name": "Adventure", "description": "Adventure and exploration" },
-    "co-op": { "name": "Co-op", "description": "Cooperative multiplayer" },
-    "rpg": { "name": "RPG", "description": "Role-playing game elements" },
-    "simulation": { "name": "Simulation", "description": "Simulation and management" }
+    "survival": {
+      "name": "Survival",
+      "description": "Survival and crafting games"
+    },
+    "sandbox": {
+      "name": "Sandbox",
+      "description": "Open-ended sandbox games"
+    },
+    "building": {
+      "name": "Building",
+      "description": "Construction and building focused"
+    },
+    "open-world": {
+      "name": "Open World",
+      "description": "Open world exploration"
+    },
+    "adventure": {
+      "name": "Adventure",
+      "description": "Adventure and exploration"
+    },
+    "co-op": {
+      "name": "Co-op",
+      "description": "Cooperative multiplayer"
+    },
+    "rpg": {
+      "name": "RPG",
+      "description": "Role-playing game elements"
+    },
+    "simulation": {
+      "name": "Simulation",
+      "description": "Simulation and management"
+    },
+    "zombie": {
+      "name": "Zombie",
+      "description": "Zombie survival games"
+    },
+    "fps": {
+      "name": "FPS",
+      "description": "First-person shooters"
+    },
+    "multiplayer": {
+      "name": "Multiplayer",
+      "description": "Multiplayer-focused games"
+    },
+    "competitive": {
+      "name": "Competitive",
+      "description": "Competitive play"
+    },
+    "crafting": {
+      "name": "Crafting",
+      "description": "Crafting and base building"
+    },
+    "voice": {
+      "name": "Voice",
+      "description": "Voice communication servers"
+    },
+    "communication": {
+      "name": "Communication",
+      "description": "Communication and community tools"
+    },
+    "social": {
+      "name": "Social",
+      "description": "Social and community servers"
+    }
   }
 }

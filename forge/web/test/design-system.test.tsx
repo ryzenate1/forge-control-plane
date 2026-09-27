@@ -179,7 +179,7 @@ describe("design tokens: semantic groups exist", () => {
     expect(motion.duration).toBe(180);
     expect(motion.easing).toBe("cubic-bezier(0.2,0,0,1)");
     expect(typeTokens.display).toBe("Space Grotesk");
-    expect(typeTokens.body).toBe("IBM Plex Sans");
+    expect(typeTokens.body).toBe("Manrope");
     expect(typeTokens.mono).toBe("JetBrains Mono");
   });
 

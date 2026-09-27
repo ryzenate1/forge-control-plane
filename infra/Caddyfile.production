@@ -3,6 +3,12 @@
 # Customize by editing this file; Caddyfile.production.example documents the baseline.
 # Do not run this alongside compose.tls.yml: both claim ports 80 and 443.
 
+{
+  # The admin API is unauthenticated: bind loopback only (matches the dev
+  # Caddyfile and compose.caddy.production.yml CADDY_ADMIN).
+  admin 127.0.0.1:2019
+}
+
 {$PANEL_DOMAIN} {
   encode zstd gzip
 

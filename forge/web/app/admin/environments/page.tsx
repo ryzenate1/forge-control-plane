@@ -181,8 +181,8 @@ export default function AdminEnvironmentsPage() {
               <span className="text-xs text-slate-500">{(Array.isArray(envVars) ? envVars : []).length} variables</span>
             } />
             <form onSubmit={handleAddVar} className="flex gap-2 p-3 border-b border-white/[0.06]">
-              <input value={varKey} onChange={(e) => setVarKey(e.target.value)} placeholder="KEY" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-mono text-white placeholder:text-gray-500 focus:border-[var(--brand)]/70 focus:outline-none" required />
-              <input value={varValue} onChange={(e) => setVarValue(e.target.value)} placeholder="value" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-[var(--brand)]/70 focus:outline-none" />
+              <input value={varKey} onChange={(e) => setVarKey(e.target.value)} placeholder="KEY" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-mono text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none" required />
+              <input value={varValue} onChange={(e) => setVarValue(e.target.value)} placeholder="value" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none" />
               <Btn type="submit" loading={addVarMutation.isPending}><Plus size={14} /></Btn>
             </form>
             {envVarsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
@@ -219,7 +219,7 @@ export default function AdminEnvironmentsPage() {
                     {revisions.map((r) => (
                       <div key={r.id} className="flex items-center justify-between px-4 py-2.5">
                         <div className="flex items-center gap-2">
-                          <span className="rounded bg-[var(--brand)]/20 px-2 py-0.5 text-xs font-semibold text-[var(--brand)]">v{r.version}</span>
+                          <span className="rounded bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] px-2 py-0.5 text-xs font-semibold text-[var(--brand)]">v{r.version}</span>
                           {r.createdBy && <span className="text-xs text-slate-400">by {r.createdBy}</span>}
                         </div>
                         <span className="text-xs text-slate-500">{new Date(r.createdAt).toLocaleString()}</span>

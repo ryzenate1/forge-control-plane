@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -26,7 +27,7 @@ import {
   type DiscoveryEndpointStatus,
   type PolicyView,
 } from "@/lib/api/discovery";
-import { fetchNodes } from "@/lib/api";
+import {  } from "@/lib/api";
 import { discoveryStatusTone } from "@/lib/api/status";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -285,7 +286,7 @@ function EndpointRow({ ep }: { ep: DiscoveryEndpoint }) {
 
 function NodeViewCard() {
   const [nodeId, setNodeId] = useState("");
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const q = useQuery({ queryKey: ["node-view", nodeId], queryFn: () => fetchNodeNetworkView(nodeId), enabled: !!nodeId });
   return (
     <Card>
@@ -435,7 +436,7 @@ function ReachabilityCard() {
 function DiscoveryManageCard() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const [regService, setRegService] = useState("my-service");
   const [regNode, setRegNode] = useState("");
   const [regAddr, setRegAddr] = useState("10.0.0.1");

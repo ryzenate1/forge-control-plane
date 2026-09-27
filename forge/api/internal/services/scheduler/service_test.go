@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"reflect"
 	"testing"
 
 	"gamepanel/forge/internal/domain"
@@ -92,7 +93,7 @@ func TestNormalizeRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeRequest(tt.input)
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("normalizeRequest() = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -110,8 +111,8 @@ func TestHasCapacity(t *testing.T) {
 		{name: "insufficient capacity", total: 100, available: 30, requested: 50, want: false},
 		{name: "zero requested", total: 100, available: 0, requested: 0, want: true},
 		{name: "negative requested", total: 100, available: 50, requested: -1, want: true},
-		{name: "zero total", total: 0, available: 50, requested: 50, want: true},
-		{name: "negative total", total: -1, available: 50, requested: 50, want: true},
+		{name: "zero total", total: 0, available: 50, requested: 50, want: false},
+		{name: "negative total", total: -1, available: 50, requested: 50, want: false},
 		{name: "zero available", total: 100, available: 0, requested: 10, want: false},
 		{name: "all zero", total: 0, available: 0, requested: 0, want: true},
 	}
@@ -168,11 +169,5 @@ func TestFirstNonEmpty(t *testing.T) {
 }
 
 func hasCapacity(total, available, requested int) bool {
-	if total <= 0 {
-		return true
-	}
-	if requested <= 0 {
-		return true
-	}
-	return requested <= available
+	return HasCapacity(total, available, requested)
 }

@@ -98,11 +98,11 @@ trigger_rollback() {
     fi
 
     if [ "${#COMPOSE_CMD[@]}" -gt 0 ] && [ -f "$ENV_FILE" ]; then
-        warn "Stopping containers"
-        "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" down --remove-orphans --volumes 2>/dev/null || true
+        warn "Stopping containers (volumes and data preserved)"
+        "${COMPOSE_CMD[@]}" --env-file "$ENV_FILE" down --remove-orphans 2>/dev/null || true
     fi
 
-    warn "Rollback complete. No persistent state remains."
+    warn "Rollback complete. Volumes and host data were preserved."
 }
 
 # --- CLI parsing ---
@@ -153,6 +153,19 @@ new_uuid() {
     hex="$(new_secret 16)"
     printf '%s-%s-%s-%s-%s\n' \
         "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
+}
+
+url_encode() {
+    python3 -c 'import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))' "$1" 2>/dev/null || printf '%s' "$1"
+}
+
+normalize_fqdn() {
+    local v="$1"
+    v="${v#https://}"
+    v="${v#http://}"
+    v="${v%%/*}"
+    v="$(printf '%s' "$v" | tr -d '\r\n ')"
+    printf '%s' "$v"
 }
 
 port_in_use() {
@@ -284,7 +297,7 @@ detect_os() {
                     fail "Unsupported OS in unattended mode. Use --skip-checks to override."
                 fi
                 printf "  Continue anyway? [y/N]: "
-                read -r response
+                read -r response || response="n"
                 case "${response:-n}" in [Yy]*) ;; *) exit 1 ;; esac
             fi
             ;;
@@ -330,8 +343,11 @@ check_docker() {
         if [ "$UNATTENDED" = "true" ]; then
             detail "Attempting unattended Docker installation..."
         else
+            if [ ! -t 0 ]; then
+                fail "Docker is required. Re-run interactively or install Docker first."
+            fi
             printf "  Install Docker Engine? [Y/n]: "
-            read -r response
+            read -r response || response="y"
             case "${response:-y}" in [Nn]*) fail "Docker is required to continue." ;; esac
         fi
         install_docker
@@ -474,10 +490,16 @@ configure_interactive() {
         : "${GAMEPANEL_ADMIN_EMAIL:?GAMEPANEL_ADMIN_EMAIL is required for unattended install}"
         : "${GAMEPANEL_ADMIN_PASSWORD:?GAMEPANEL_ADMIN_PASSWORD is required for unattended install}"
         : "${GAMEPANEL_DB_PASSWORD:=$(new_secret 24)}"
+        GAMEPANEL_FQDN="$(normalize_fqdn "$GAMEPANEL_FQDN")"
+        [ -n "$GAMEPANEL_FQDN" ] || fail "GAMEPANEL_FQDN is empty after normalization"
         info "Using unattended configuration"
         info "FQDN: $GAMEPANEL_FQDN"
         info "Admin: $GAMEPANEL_ADMIN_EMAIL"
         return 0
+    fi
+
+    if [ ! -t 0 ]; then
+        fail "No TTY available for interactive configuration. Re-run with --unattended and the required env vars."
     fi
 
     echo ""
@@ -490,6 +512,7 @@ configure_interactive() {
     echo ""
 
     GAMEPANEL_FQDN="$(prompt FQDN "Enter domain name" "${GAMEPANEL_FQDN:-}")"
+    GAMEPANEL_FQDN="$(normalize_fqdn "$GAMEPANEL_FQDN")"
     GAMEPANEL_ADMIN_EMAIL="$(prompt ADMIN_EMAIL "Enter admin email" "${GAMEPANEL_ADMIN_EMAIL:-}")"
     GAMEPANEL_ADMIN_PASSWORD="$(prompt ADMIN_PASSWORD "Enter admin password (min 12 chars)" "" true)"
     GAMEPANEL_DB_PASSWORD="${GAMEPANEL_DB_PASSWORD:-$(new_secret 24)}"
@@ -519,7 +542,8 @@ generate_environment() {
     fi
 
     local api_secret app_key node_token_id node_token_secret node_token
-    local node_id postgres_password grafana_password master_key metrics_token sftp_host_key_passphrase
+    local node_id postgres_password postgres_password_enc grafana_password master_key metrics_token sftp_host_key_passphrase
+    local redis_password
 
     api_secret="$(new_secret 32)"
     app_key="$(new_secret 32)"
@@ -528,6 +552,10 @@ generate_environment() {
     node_token="$node_token_id.$node_token_secret"
     node_id="${GAMEPANEL_NODE_ID:-$(new_uuid)}"
     postgres_password="${GAMEPANEL_DB_PASSWORD}"
+    # URL-encode: hex secrets are URL-safe, but a user-supplied DB password
+    # may contain +/=:@ which are meaningful in a URL (see gen-env.sh).
+    postgres_password_enc="$(url_encode "$postgres_password")"
+    redis_password="${GAMEPANEL_REDIS_PASSWORD:-$(new_secret 24)}"
     grafana_password="$(new_secret 24)"
     master_key="$(new_secret 32)"
     metrics_token="$(new_secret 32)"
@@ -545,13 +573,14 @@ generate_environment() {
 POSTGRES_DB=gamepanel
 POSTGRES_USER=gamepanel
 POSTGRES_PASSWORD=$postgres_password
-DATABASE_URL=postgres://gamepanel:$postgres_password@postgres:5432/gamepanel?sslmode=prefer
+DATABASE_URL=postgres://gamepanel:$postgres_password_enc@postgres:5432/gamepanel?sslmode=prefer
 POSTGRES_BACKUP_HOST_DIR=/var/backups/gamepanel/postgres
 POSTGRES_BACKUP_INTERVAL_SECONDS=86400
 POSTGRES_BACKUP_RETENTION_DAYS=14
 
 # --- Redis ---
 REDIS_ADDR=redis:6379
+REDIS_PASSWORD=$redis_password
 
 # --- Panel URL ---
 PANEL_URL=https://$GAMEPANEL_FQDN
@@ -577,7 +606,8 @@ DAEMON_NODE_TOKEN=$node_token
 DAEMON_SFTP_HOST_KEY_PASSPHRASE=$sftp_host_key_passphrase
 DAEMON_UPGRADE_PUBLIC_KEY=
 DAEMON_ADDR=:9090
-DAEMON_SFTP_ADDR=127.0.0.1:2022
+# Single authoritative SFTP bind (see compose.yml). The legacy DAEMON_SFTP_ADDR
+# alias is intentionally not written to avoid split-brain configs.
 DAEMON_SFTP_BIND_ADDR=0.0.0.0:2022
 DAEMON_DATA_DIR=/srv/game-panel/servers
 DAEMON_BACKUP_DIR=/srv/game-panel/servers/.beacon/backups
@@ -603,8 +633,8 @@ GAMEPANEL_ADMIN_EMAIL=$GAMEPANEL_ADMIN_EMAIL
 EOF
 
     chmod 600 "$ENV_FILE"
-    printf '%s\n' "$metrics_token" > "$INFRA_DIR/.metrics-token"
-    chmod 600 "$INFRA_DIR/.metrics-token"
+    printf '%s\n' "$metrics_token" > "$env_dir/.metrics-token"
+    chmod 600 "$env_dir/.metrics-token"
     info "Environment written to $ENV_FILE"
 
     ROLLBACK_STATE="env_generated"
@@ -834,7 +864,7 @@ detect_existing() {
     echo "    [A] Abort    — Exit without changes (default)"
     echo ""
     printf "  Choose [u/R/a]: "
-    read -r choice
+    read -r choice || choice="a"
     case "${choice:-a}" in
         [Uu]*)
             INSTALL_EXISTING=true

@@ -217,7 +217,13 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 		}
 	}
 
-	totalScore := baseScore*(1+trendScore) + affinityScore - antiAffinityScore
+	// TotalScore is the operator-facing roll-up, so it lives in [0,1]: the
+	// mean available-capacity ratio (neutral 0.5 when the node reports no
+	// totals), shifted by the bounded trend term and a damped affinity delta.
+	// The raw BaseScore stays exposed as a component for debugging, but it
+	// must never be the comparable number — it spans orders of magnitude and
+	// would drown every other signal it is added to.
+	totalScore := clampPredictiveScore(capacityRatio(snapshot) + trendScore + predictiveAffinityDamp*(affinityScore-antiAffinityScore))
 
 	return &PredictiveScore{
 		NodeID:            nodeID,
@@ -229,6 +235,50 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 		PredictedLoad:     predictedLoad,
 		Confidence:        confidence,
 	}, nil
+}
+
+// predictiveAffinityDamp scales unbounded rule-weight sums into the [0,1]
+// band the total assumes. Rule weights are operator-chosen magnitudes, not
+// ratios, so without damping a single heavy rule would pin the total at 0
+// or 1 regardless of capacity or trend.
+const predictiveAffinityDamp = 0.05
+
+// capacityRatio is the mean available-over-total ratio across the resources a
+// node reports totals for, clamped to [0,1]. A node reporting no totals has
+// unknown capacity — neutral 0.5, with the scarcity recorded in Confidence,
+// never a fabricated 0 or 1.
+func capacityRatio(snapshot store.NodeCapacitySnapshot) float64 {
+	var sum float64
+	var known int
+	if snapshot.TotalCPU > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableCPU) / float64(snapshot.TotalCPU))
+		known++
+	}
+	if snapshot.TotalMemory > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableMemory) / float64(snapshot.TotalMemory))
+		known++
+	}
+	if snapshot.TotalDisk > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableDisk) / float64(snapshot.TotalDisk))
+		known++
+	}
+	if known == 0 {
+		return 0.5
+	}
+	return sum / float64(known)
+}
+
+func clampPredictiveScore(value float64) float64 {
+	if math.IsNaN(value) {
+		return 0.5
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func matchesAffinity(rule AffinityRule, req domain.PlacementRequest, nodeID string) bool {

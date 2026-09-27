@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON } from './http';
+import { fetchJSON, postJSON, unwrapList } from './http';
 
 export type InstallStatus = 'pending' | 'running' | 'completed' | 'failed';
 export type WorkflowType = 'install' | 'uninstall' | 'reinstall';
@@ -27,8 +27,8 @@ export interface InstallWorkflow {
 }
 
 export async function listInstallWorkflows(serverId: string): Promise<InstallWorkflow[]> {
-  const res = await fetchJSON<{ data: InstallWorkflow[] }>(`/servers/${encodeURIComponent(serverId)}/install-workflows`);
-  return Array.isArray((res as unknown as { data: InstallWorkflow[] }).data) ? (res as unknown as { data: InstallWorkflow[] }).data : [];
+  const res = await fetchJSON<{ data: InstallWorkflow[] } | InstallWorkflow[]>(`/servers/${encodeURIComponent(serverId)}/install-workflows`);
+  return unwrapList(res);
 }
 
 export async function listRecentInstallWorkflows(limit = 20): Promise<{ data: InstallWorkflow[]; executionEnabled: boolean }> {

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"gamepanel/forge/internal/secrets"
@@ -49,7 +50,9 @@ func (s *Store) decryptSecret(envelope, plaintext, aad string) (string, error) {
 	return "", fmt.Errorf("decrypt stored secret: %w", err)
 }
 
-func secretAAD(table, id, field string) string { return "forge:secret:" + table + ":" + id + ":" + field }
+func secretAAD(table, id, field string) string {
+	return "forge:secret:" + table + ":" + id + ":" + field
+}
 
 func secretAADLegacy(table, id, field string) string { return table + ":" + id + ":" + field }
 
@@ -128,14 +131,20 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 			return err
 		}
 		rows.Close()
+		// Batch the writes: one UPDATE ... CASE per table instead of one
+		// UPDATE per row, so rotation on large fleets is O(tables), not
+		// O(rows). The CASE form preserves per-row AAD ciphertexts computed
+		// above; it only changes how they are persisted.
+		updates := make(map[string]string, len(values))
 		for _, value := range values {
-			// The AAD field is the semantic secret name, not the plaintext column name.
-			// The reversible-legacy columns are suffixed *_plaintext (e.g. git_credentials
-			// .credential_plaintext) while the encrypt/decrypt call sites bind AAD to the
-			// stripped name ("credential"). Reusing the column name here produces a
-			// mismatched AAD that fails GCM authentication and bricks startup, so strip
-			// the suffix to match the call sites (a no-op for tables whose column already
-			// equals the field name, e.g. nodes.daemon_token).
+			// The AAD field is the semantic secret name, not the plaintext
+			// column name: reversible-legacy columns are suffixed *_plaintext
+			// (e.g. git_credentials.credential_plaintext) while the
+			// encrypt/decrypt call sites bind AAD to the stripped name
+			// ("credential"). Reusing the column name here produces a
+			// mismatched AAD that fails GCM authentication, so strip the
+			// suffix to match the call sites (a no-op for tables whose
+			// column already equals the field name, e.g. nodes.daemon_token).
 			aad := secretAAD(spec.table, value.id, strings.TrimSuffix(spec.plainColumn, "_plaintext"))
 			secret := value.plain
 			if value.encrypted != "" {
@@ -153,10 +162,10 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 					return err
 				}
 			}
-			update := fmt.Sprintf("UPDATE %s SET %s=$1, %s='' WHERE %s=$2", spec.table, spec.encryptedColumn, spec.plainColumn, spec.idColumn)
-			if _, err := tx.Exec(ctx, update, value.encrypted, value.id); err != nil {
-				return fmt.Errorf("persist %s encrypted secret: %w", spec.table, err)
-			}
+			updates[value.id] = value.encrypted
+		}
+		if err := batchUpdateSecretColumn(ctx, tx, spec.table, spec.idColumn, spec.plainColumn, spec.encryptedColumn, updates); err != nil {
+			return err
 		}
 	}
 
@@ -188,6 +197,50 @@ func (s *Store) MigrateOperationalSecrets(ctx context.Context) error {
 		return err
 	}
 	return tx.Commit(ctx)
+}
+
+// batchUpdateSecretColumn persists per-row ciphertexts with a single
+// UPDATE ... CASE per chunk instead of one UPDATE per row. The plaintext
+// column is cleared in the same statement. Chunks of 2,000 rows keep the
+// parameter count (2 per row) far below the PostgreSQL 65,535 limit. An
+// empty updates map is a no-op, never an error.
+func batchUpdateSecretColumn(ctx context.Context, tx pgx.Tx, table, idColumn, plainColumn, encryptedColumn string, updates map[string]string) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	ids := make([]string, 0, len(updates))
+	for id := range updates {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	const chunkSize = 2000
+	for start := 0; start < len(ids); start += chunkSize {
+		end := start + chunkSize
+		if end > len(ids) {
+			end = len(ids)
+		}
+		var sb strings.Builder
+		fmt.Fprintf(&sb, "UPDATE %s SET %s = CASE %s", table, encryptedColumn, idColumn)
+		args := make([]any, 0, (end-start)*2)
+		for _, id := range ids[start:end] {
+			fmt.Fprintf(&sb, " WHEN $%d THEN $%d", len(args)+1, len(args)+2)
+			args = append(args, id, updates[id])
+		}
+		fmt.Fprintf(&sb, " ELSE %s END, %s = '' WHERE %s IN (", encryptedColumn, plainColumn, idColumn)
+		inStart := len(args) + 1
+		for i, id := range ids[start:end] {
+			if i > 0 {
+				sb.WriteString(", ")
+			}
+			fmt.Fprintf(&sb, "$%d", inStart+i)
+			args = append(args, id)
+		}
+		sb.WriteString(")")
+		if _, err := tx.Exec(ctx, sb.String(), args...); err != nil {
+			return fmt.Errorf("persist %s encrypted secrets: %w", table, err)
+		}
+	}
+	return nil
 }
 
 func migrateComposeSecrets(ctx context.Context, tx pgx.Tx, s *Store) error {

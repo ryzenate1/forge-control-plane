@@ -23,11 +23,6 @@ export default function ConsoleError({ error, reset }: { error: Error & { digest
         {error.digest ? (
           <p className="mt-3 font-mono text-xs text-slate-600">Reference: {error.digest}</p>
         ) : null}
-        {error.message ? (
-          <p className="mt-3 rounded-lg border border-red-500/20 bg-red-950/20 px-3 py-2 text-left font-mono text-xs text-red-300">
-            {error.message}
-          </p>
-        ) : null}
         <div className="mt-6 flex flex-col gap-2 sm:flex-row sm:justify-center">
           <button
             className="inline-flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] disabled:opacity-60"

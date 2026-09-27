@@ -88,8 +88,11 @@ services:
     init: true
     stop_grace_period: 30s
     image: redis:7-alpine
+    # $$ defers expansion to the container shell so REDIS_PASSWORD is read
+    # from the service environment at runtime (compose parse-time splicing
+    # would split passwords containing spaces and leak them into `config`).
     command: >
-      sh -c 'exec redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass $REDIS_PASSWORD}'
+      sh -c 'exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
     expose:
       - "6379"
     environment:
@@ -153,7 +156,10 @@ services:
       S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-}
       S3_BACKUP_PREFIX: ${S3_BACKUP_PREFIX:-postgres}
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER-postgres} -d $${POSTGRES_DB-postgres}"]
+      # Probe the backup target with this service's own PG* credentials.
+      # (The previous check referenced POSTGRES_USER/POSTGRES_DB, which are
+      # unset in this container and silently defaulted to 'postgres'.)
+      test: ["CMD-SHELL", "pg_isready -h $${PGHOST:-postgres} -U $${PGUSER:-gamepanel} -d $${PGDATABASE:-gamepanel}"]
       interval: 60s
       timeout: 10s
       retries: 3
@@ -210,7 +216,7 @@ services:
       MIGRATIONS_DIR: /migrations
       LANGS_DIR: /lang
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
-      REDIS_PASSWORD: "${REDIS_PASSWORD:-}"
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
       METRICS_TOKEN: "${METRICS_TOKEN:?Set METRICS_TOKEN in infra/.env}"
       PANEL_URL: ${PANEL_URL:-http://localhost:3000}
@@ -283,8 +289,10 @@ services:
       DAEMON_SFTP_HOST_KEY_PASSPHRASE: "${DAEMON_SFTP_HOST_KEY_PASSPHRASE:?Set DAEMON_SFTP_HOST_KEY_PASSPHRASE in infra/.env}"
       DAEMON_UPGRADE_PUBLIC_KEY: "${DAEMON_UPGRADE_PUBLIC_KEY:-}"
       PANEL_API_URL: "${PANEL_API_URL:?Set an HTTPS PANEL_API_URL in infra/.env}"
-      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-127.0.0.1:2022}
-      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-0.0.0.0:2022}
+      # Single SFTP bind variable. The daemon resolves the listen address from
+      # DAEMON_SFTP_BIND_ADDR only (see beacon/cmd/daemon/main.go); the legacy
+      # DAEMON_SFTP_ADDR alias is not set here to avoid split-brain configs.
+      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-127.0.0.1:2022}
       DAEMON_ALLOW_MOCK_RUNTIME: ${DAEMON_ALLOW_MOCK_RUNTIME:-false}
       DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
       METRICS_TOKEN: "${METRICS_TOKEN:?Set METRICS_TOKEN in infra/.env}"
@@ -418,7 +426,10 @@ services:
       ALERTMANAGER_ADMIN_EMAIL: ${ALERTMANAGER_ADMIN_EMAIL:-}
       ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
     volumes:
-      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Rendered by scripts/gen-alertmanager.sh from
+      # infra/alertmanager/alertmanager.yml.tmpl (see its header). The legacy
+      # ./alertmanager.yml static copy is not used by the stack.
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
       - ./alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager-data:/alertmanager
     networks:

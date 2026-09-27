@@ -106,7 +106,7 @@ export default function NewComposeStackPage() {
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   placeholder="my-stack"
-                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-400 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-400 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
                 />
               </div>
               <div>
@@ -114,7 +114,7 @@ export default function NewComposeStackPage() {
                 <select
                   value={nodeId}
                   onChange={(e) => setNodeId(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
                 >
                   <option value="">Auto-select</option>
                   {(Array.isArray(nodes) ? nodes : []).map((n: { id: string; name: string }) => (
@@ -128,7 +128,7 @@ export default function NewComposeStackPage() {
                 <select
                   value={composeType}
                   onChange={(e) => setComposeType(e.target.value)}
-                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                  className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
                 >
                   <option value="docker-compose">Docker Compose</option>
                   <option value="stack">Docker Stack</option>
@@ -146,7 +146,7 @@ export default function NewComposeStackPage() {
                     {t.label}
                   </Btn>
                 ))}
-                <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-dashed border-[var(--line)] bg-[var(--surface-input)] px-3 py-1.5 text-xs text-slate-400 hover:border-[var(--brand)]/70 hover:text-[var(--brand)] transition-colors">
+                <label className="flex cursor-pointer items-center gap-1 rounded-lg border border-dashed border-[var(--line)] bg-[var(--surface-input)] px-3 py-1.5 text-xs text-slate-400 hover:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] hover:text-[var(--brand)] transition-colors">
                   <Upload className="h-3 w-3" /> Upload
                   <input type="file" accept=".yml,.yaml" onChange={handleFileUpload} className="hidden" />
                 </label>
@@ -159,7 +159,7 @@ export default function NewComposeStackPage() {
                 }}
                 placeholder={`services:\n  app:\n    image: nginx:latest\n    ports:\n      - "8080:80"`}
                 rows={18}
-                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm font-mono text-slate-200 placeholder:text-slate-400 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15 resize-y"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm font-mono text-slate-200 placeholder:text-slate-400 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)] resize-y"
               />
             </AdminFormSection>
 

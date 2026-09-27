@@ -90,7 +90,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
           }}
         >
           {/* Header & Search Input */}
-          <div className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 bg-[var(--surface-input)]/50">
+          <div className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)]">
             <Search className="h-4 w-4 shrink-0 text-[var(--text-subtle)]" />
             <Command.Input
               autoFocus
@@ -114,7 +114,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
               <Command.Item
                 value="action create workload new game server"
                 onSelect={() => handleSelect("/admin/servers")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
               >
                 <div className="flex items-center gap-2.5">
                   <Layers className="h-3.5 w-3.5 text-[var(--brand)]" />
@@ -126,7 +126,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
               <Command.Item
                 value="action fleet health diagnostics anomalies"
                 onSelect={() => handleSelect("/admin/monitoring")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
               >
                 <div className="flex items-center gap-2.5">
                   <HeartPulse className="h-3.5 w-3.5 text-emerald-400" />
@@ -138,7 +138,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
               <Command.Item
                 value="action onboarding token new host beacon register"
                 onSelect={() => handleSelect("/admin/onboarding-tokens")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
               >
                 <div className="flex items-center gap-2.5">
                   <Ticket className="h-3.5 w-3.5 text-amber-400" />
@@ -150,7 +150,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
               <Command.Item
                 value="action live operations queue running tasks reconciliation"
                 onSelect={() => handleSelect("/admin/operations")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
               >
                 <div className="flex items-center gap-2.5">
                   <SlidersHorizontal className="h-3.5 w-3.5 text-cyan-400" />
@@ -162,7 +162,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
               <Command.Item
                 value="action host terminal remote shell console ssh"
                 onSelect={() => handleSelect("/admin/terminal")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
               >
                 <div className="flex items-center gap-2.5">
                   <Terminal className="h-3.5 w-3.5 text-indigo-400" />
@@ -191,7 +191,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
                       key={item.href}
                       value={`${group.title} ${label} ${item.description} ${item.href} ${keywords}`}
                       onSelect={() => handleSelect(item.href)}
-                      className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
+                      className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
                     >
                       <div className="flex items-center gap-2.5 truncate">
                         <Icon className="h-3.5 w-3.5 shrink-0" />
@@ -216,7 +216,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
           </Command.List>
 
           {/* Footer Navigation Bar */}
-          <div className="flex items-center justify-between border-t border-[var(--line)] px-4 py-2 bg-[var(--surface-input)]/30 font-mono text-[11px] text-[var(--text-muted)]">
+          <div className="flex items-center justify-between border-t border-[var(--line)] px-4 py-2 bg-[color-mix(in_srgb,var(--surface-input)_30%,transparent)] font-mono text-[11px] text-[var(--text-muted)]">
             <div className="flex items-center gap-3">
               <span className="flex items-center gap-1">
                 <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1">↑</kbd>

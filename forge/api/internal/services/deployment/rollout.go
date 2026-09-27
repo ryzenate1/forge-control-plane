@@ -166,13 +166,7 @@ func (s *Service) recreateRollout(ctx context.Context, req *RolloutRequest) (*De
 		}))
 	}
 
-	go func(id string) {
-		execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if execErr := s.ExecuteDeployment(execCtx, id); execErr != nil {
-			slog.Error("execute deployment", "deploymentId", id, "error", execErr.Error())
-		}
-	}(deployment.ID)
+	s.launchExecution(ctx, deployment.ID)
 
 	return deployment, nil
 }
@@ -217,13 +211,7 @@ func (s *Service) rollingRollout(ctx context.Context, req *RolloutRequest) (*Dep
 		}))
 	}
 
-	go func(id string) {
-		execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if execErr := s.ExecuteDeployment(execCtx, id); execErr != nil {
-			slog.Error("execute deployment", "deploymentId", id, "error", execErr.Error())
-		}
-	}(deployment.ID)
+	s.launchExecution(ctx, deployment.ID)
 
 	return deployment, nil
 }
@@ -245,13 +233,7 @@ func (s *Service) blueGreenRollout(ctx context.Context, req *RolloutRequest) (*D
 		return nil, fmt.Errorf("set rollout strategy: %w", err)
 	}
 
-	go func(id string) {
-		execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if execErr := s.ExecuteDeployment(execCtx, id); execErr != nil {
-			slog.Error("execute deployment", "deploymentId", id, "error", execErr.Error())
-		}
-	}(dep.ID)
+	s.launchExecution(ctx, dep.ID)
 
 	return dep, nil
 }
@@ -305,15 +287,30 @@ func (s *Service) canaryRollout(ctx context.Context, req *RolloutRequest) (*Depl
 		}))
 	}
 
-	go func(id string) {
-		execCtx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
-		defer cancel()
-		if execErr := s.ExecuteDeployment(execCtx, id); execErr != nil {
-			slog.Error("execute deployment", "deploymentId", id, "error", execErr.Error())
-		}
-	}(deployment.ID)
+	s.launchExecution(ctx, deployment.ID)
 
 	return deployment, nil
+}
+
+// launchExecution starts ExecuteDeployment in the background for one
+// deployment, owning its executingDeployments entry and WaitGroup slot until
+// the run finishes. The run is detached from request cancellation (values
+// preserved) with a 30-minute timeout, matching the inline goroutines this
+// replaced in blueGreenRollout/canaryRollout.
+func (s *Service) launchExecution(ctx context.Context, deploymentID string) {
+	if _, loaded := s.executingDeployments.LoadOrStore(deploymentID, true); loaded {
+		return
+	}
+	s.wg.Add(1)
+	go func(id string) {
+		defer s.wg.Done()
+		defer s.executingDeployments.Delete(id)
+		execCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Minute)
+		defer cancel()
+		if err := s.ExecuteDeployment(execCtx, id); err != nil {
+			slog.Error("execute deployment", "deploymentId", id, "error", err.Error())
+		}
+	}(deploymentID)
 }
 
 func validateImageRef(imageRef string) error {

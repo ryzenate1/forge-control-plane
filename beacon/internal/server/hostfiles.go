@@ -47,16 +47,54 @@ var hostFileDenylistPrefixes = []string{
 //   - With no allowlist configured, a conservative denylist still blocks
 //     system locations and the daemon's own data directory.
 //
+// Symlinks are resolved exactly once via EvalSymlinks and the resolved target
+// is re-checked against the same policy, so a symlink inside an allowed root
+// cannot point at /etc/shadow. Callers that then open the path must use
+// O_NOFOLLOW and re-verify after open (see openHostFileNoFollow); the
+// resolution here closes the pre-open window, the post-open check closes the
+// race between check and use.
+//
 // The beacon's own data directory is always denied regardless of mode.
 func (s *Server) resolveHostPath(raw string) (string, error) {
 	cleaned, err := validateHostPath(raw)
 	if err != nil {
 		return "", err
 	}
+	if err := s.verifyHostPolicy(cleaned); err != nil {
+		return "", err
+	}
+	resolved := cleaned
+	if target, err := filepath.EvalSymlinks(cleaned); err == nil {
+		resolved = target
+	} else if !os.IsNotExist(err) {
+		return "", fmt.Errorf("resolve path %q: %w", cleaned, err)
+	} else {
+		// The path itself does not exist yet (mkdir/upload/copy target):
+		// resolve the nearest existing parent so a symlinked parent cannot
+		// redirect the new file outside the policy.
+		parent := filepath.Dir(cleaned)
+		if resolvedParent, parentErr := filepath.EvalSymlinks(parent); parentErr == nil {
+			resolved = filepath.Join(resolvedParent, filepath.Base(cleaned))
+		} else if !os.IsNotExist(parentErr) {
+			return "", fmt.Errorf("resolve parent of %q: %w", cleaned, parentErr)
+		}
+	}
+	if resolved != cleaned {
+		if err := s.verifyHostPolicy(resolved); err != nil {
+			return "", err
+		}
+	}
+	return resolved, nil
+}
+
+// verifyHostPolicy enforces the allowlist/denylist on an already-cleaned
+// absolute path. Both the pre-resolution and post-resolution forms of a path
+// pass through here.
+func (s *Server) verifyHostPolicy(cleaned string) error {
 	if s != nil && s.dataDir != "" {
 		dd := strings.TrimSuffix(s.dataDir, "/")
 		if cleaned == dd || strings.HasPrefix(cleaned, dd+"/") {
-			return "", errors.New("access to the beacon data directory is not permitted")
+			return errors.New("access to the beacon data directory is not permitted")
 		}
 	}
 
@@ -75,15 +113,15 @@ func (s *Server) resolveHostPath(raw string) (string, error) {
 
 	if len(roots) > 0 {
 		if !underAny(cleaned, roots) {
-			return "", fmt.Errorf("path %q is outside the configured host file allowlist", cleaned)
+			return fmt.Errorf("path %q is outside the configured host file allowlist", cleaned)
 		}
-		return cleaned, nil
+		return nil
 	}
 
 	if cleaned == "/" || underAny(cleaned, hostFileDenylistPrefixes) {
-		return "", fmt.Errorf("path %q is in a protected system location; configure DAEMON_HOST_FILES_ALLOWLIST to grant explicit roots", cleaned)
+		return fmt.Errorf("path %q is in a protected system location; configure DAEMON_HOST_FILES_ALLOWLIST to grant explicit roots", cleaned)
 	}
-	return cleaned, nil
+	return nil
 }
 
 // SetHostFileAllowlist configures the exclusive set of absolute roots the
@@ -148,6 +186,43 @@ func hostAtomicWrite(hostPath string, reader io.Reader, limit int64, perm os.Fil
 	return nil
 }
 
+// openHostFileNoFollow opens a resolved host path while refusing to follow a
+// final symlink component, then re-verifies the opened file: the descriptor
+// is fstat'ed (must be a regular file) and the path is re-resolved and
+// re-checked against the policy to close the check-to-use race. Callers must
+// close the returned file.
+//
+// Symlink refusal is implemented with Lstat (portable across GOOS) rather
+// than O_NOFOLLOW so this file keeps building on Windows: the pre-open Lstat
+// rejects a symlinked final component, and the post-open EvalSymlinks +
+// policy re-check closes the race between check and use.
+func (s *Server) openHostFileNoFollow(resolved string) (*os.File, error) {
+	if info, err := os.Lstat(resolved); err != nil {
+		return nil, err
+	} else if info.Mode()&os.ModeSymlink != 0 {
+		return nil, errors.New("refusing to open symlinked path")
+	}
+	file, err := os.Open(resolved)
+	if err != nil {
+		return nil, err
+	}
+	info, err := file.Stat()
+	if err != nil || !info.Mode().IsRegular() {
+		_ = file.Close()
+		return nil, errors.New("cannot read non-regular file")
+	}
+	if target, err := filepath.EvalSymlinks(resolved); err == nil {
+		if err := s.verifyHostPolicy(target); err != nil {
+			_ = file.Close()
+			return nil, err
+		}
+	} else if !os.IsNotExist(err) {
+		_ = file.Close()
+		return nil, fmt.Errorf("re-verify path %q: %w", resolved, err)
+	}
+	return file, nil
+}
+
 func (s *Server) handleHostFilesList(w http.ResponseWriter, r *http.Request) {
 	raw := r.URL.Query().Get("path")
 	if raw == "" {
@@ -209,9 +284,13 @@ func (s *Server) handleHostFilesRead(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	file, err := os.Open(cleaned)
+	file, err := s.openHostFileNoFollow(cleaned)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		if os.IsNotExist(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()
@@ -362,6 +441,15 @@ func (s *Server) handleHostFilesCopy(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "cannot copy root", http.StatusBadRequest)
 		return
 	}
+	srcInfo, err := os.Lstat(srcClean)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusNotFound)
+		return
+	}
+	if srcInfo.Mode()&os.ModeSymlink != 0 {
+		http.Error(w, "refusing to copy symlinked source", http.StatusBadRequest)
+		return
+	}
 	srcFile, err := os.Open(srcClean)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -372,6 +460,12 @@ func (s *Server) handleHostFilesCopy(w http.ResponseWriter, r *http.Request) {
 	if err != nil || !info.Mode().IsRegular() {
 		http.Error(w, "source is not a regular file", http.StatusNotFound)
 		return
+	}
+	if target, err := filepath.EvalSymlinks(srcClean); err == nil {
+		if err := s.verifyHostPolicy(target); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 	}
 	if _, err := os.Stat(dstClean); err == nil {
 		http.Error(w, "destination already exists", http.StatusConflict)
@@ -507,9 +601,13 @@ func (s *Server) handleHostFilesDownload(w http.ResponseWriter, r *http.Request)
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	file, err := os.Open(cleaned)
+	file, err := s.openHostFileNoFollow(cleaned)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusNotFound)
+		if os.IsNotExist(err) {
+			http.Error(w, err.Error(), http.StatusNotFound)
+			return
+		}
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer file.Close()

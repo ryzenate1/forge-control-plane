@@ -95,12 +95,12 @@ All `ports:` replacements use Compose `!override` (requires `2.24.4+`). See `inf
 
 | Artifact | Path | Served where | Status |
 |---|---|---|---|
-| OpenAPI JSON (canonical) | `forge/api/docs/openapi.json` (256 paths) | `GET /api/docs/openapi.json` (`swagger.go:22`) embedded via `docs.go:9` `go:embed openapi.json` | **CURRENT** — but verify against handlers (`register*Routes`); may lag |
+| OpenAPI JSON (canonical) | `forge/api/docs/openapi.json` (175 paths) | `GET /api/docs/openapi.json` (`swagger.go:22`) embedded via `docs.go:9` `go:embed openapi.json` | **CURRENT** — but verify against handlers (`register*Routes`); may lag |
 | OpenAPI YAML (legacy) | advertised `forge/api/docs/openapi.yaml` | `GET /api/docs/openapi.yaml` (`swagger.go:32`) — serves **same embedded JSON** (`Content-Type: application/json`) so route does not 404 | **DEPRECATED alias** — CURRENT shim |
 | Swagger UI | `forge/api/docs/swagger-ui/index.html` | `GET /api/docs` and `GET /api/docs/` (`swagger.go:40,47`) served only when `APP_ENV != production` (`swagger.go:18`), 404 in production | **DEPRECATED for production** — CURRENT in non-prod |
 | Static assets | `forge/api/docs/swagger-ui/` on disk | `GET /api/docs/static` when present (`swagger.go:57`) | **CURRENT** (best-effort) |
 
-- **Phase 27 drift note:** Handlers are **source of truth**. SDK (`packages/sdk/src/client.ts`) is validated against **handlers**, not just OpenAPI. Critical handler-only routes not yet in `openapi.json` (add to spec or fix route): `GET /setup/status`, `POST /auth/session/refresh`, `GET/PUT /admin/settings`, granular `/servers/:id/files/*` (`GET /files?path=` vs `GET /files/list` in spec). Phantom spec paths removed: see `forge/api/docs/openapi.json` audit (26 phantom entries under `/roles`, `/plugins`, `/activity` without `admin/` prefix, `/servers/:id/files/list|contents|write|compress` vs correct `/files`, `/files/content`, `/files/archive`).
+- **Phase 27 drift note:** Handlers are **source of truth**. SDK (`packages/sdk/src/client.ts`) is validated against **handlers**, not just OpenAPI. There is no spec generator, so `openapi.json` is maintained by hand: handler-only routes not yet in the spec are `GET /setup/status`, `POST /auth/session/refresh`, `GET/PUT /admin/settings`, granular `/servers/:id/files/*` (`GET /files?path=` vs `GET /files/list` in spec). The four phantom file paths (`/servers/{id}/files/list|contents|write|compress` — handlers serve `/files`, `/files/content`, `/files/archive`) are marked `"deprecated": true` in `openapi.json` rather than removed, so existing codegen clients keep building while new code targets the handler paths. Earlier phantom entries under `/roles`, `/plugins`, `/activity` without the `admin/` prefix were removed outright.
 
 ## Frontend ↔ shared-types ↔ handlers ↔ OpenAPI ↔ SDK — Phase 27 contract (CURRENT)
 

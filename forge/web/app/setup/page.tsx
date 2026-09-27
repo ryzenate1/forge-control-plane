@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { useMutation, useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Database, Eye, EyeOff, Globe, Mail, Server, ShieldCheck, HardDrive, Building2 } from "lucide-react";
 import { fetchSetupStatus, runSetup } from "@/lib/api";
 import { AuthShell } from "@/components/ui/auth-shell";
@@ -19,6 +19,7 @@ const URL_RE = /^https?:\/\/\S+$/i;
 export default function SetupPage() {
   const t = useT();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const [step, setStep] = useState<SetupStep>(1);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -128,7 +129,10 @@ export default function SetupPage() {
         password,
         ...setupData,
       }),
-    onSuccess: () => setStep(8),
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: ["setup-status"] });
+      setStep(8);
+    },
     onError: (error) => setErrors({ form: error instanceof Error ? error.message : t("setupWizard.genericError") }),
   });
 
@@ -185,7 +189,7 @@ export default function SetupPage() {
 
   const visibleSteps = stepLabels.slice(
     0,
-    stepLabels.findIndex((s) => s.n === Math.min(step, 8)) + 1
+    stepLabels.findIndex((s) => s.n === Math.min(step, 7)) + 1
   );
 
   return (
@@ -290,7 +294,7 @@ export default function SetupPage() {
             const next: Record<string, string> = {};
             if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = t("setupWizard.step2.errors.invalidEmail");
             if (password.length < 12) next.password = t("setupWizard.step2.errors.tooShort");
-            else if (password === email) next.password = t("setupWizard.step2.errors.sameAsEmail");
+            else if (password === email.trim().toLowerCase()) next.password = t("setupWizard.step2.errors.sameAsEmail");
             if (confirm !== password) next.confirm = t("setupWizard.step2.errors.mismatch");
             setErrors(next);
             if (!next.email && !next.password && !next.confirm) setStep(3);

@@ -68,7 +68,12 @@ func registerDomainRedirectsPhase(v1 fiber.Router, protected fiber.Router, cfg *
 	// package receives it; the registrar contract hands over a pointer, so it is
 	// dereferenced once here instead of at every call site.
 	conf := *cfg
-	svc := redirects.NewFromPool(pool)
+	// Injected via Config (handlers -> redirects.Service -> store); inline
+	// NewFromPool is the dev/test fallback when main has not wired the field.
+	svc := cfg.RedirectService
+	if svc == nil {
+		svc = redirects.NewFromPool(pool)
+	}
 	mutationLimiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis,
 		cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")))
 

@@ -2,8 +2,10 @@ package mail
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +105,14 @@ func (w *Worker) processOne(ctx context.Context) bool {
 }
 
 func (w *Worker) Enqueue(ctx context.Context, recipient, subject, textBody, htmlBody string) error {
+	// The recipient becomes the SMTP envelope; CR/LF here would corrupt the
+	// envelope, so reject instead of sanitizing (a mangled address must not
+	// be delivered anywhere). The subject is a header: sanitize rather than
+	// reject so a weird server name degrades to a flat subject line.
+	if strings.ContainsAny(recipient, "\r\n") {
+		return fmt.Errorf("mail: recipient contains newline")
+	}
+	subject = sanitizeHeaderValue(subject)
 	_, err := w.store.EnqueueMail(ctx, recipient, subject, textBody, htmlBody)
 	return err
 }

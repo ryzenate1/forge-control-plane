@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -11,7 +12,7 @@ import {
   revokeOnboardingToken,
   type OnboardingToken,
 } from "@/lib/api/onboarding";
-import { fetchNodes } from "@/lib/api";
+import {  } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { OfflineBanner } from "@/components/shared/states-offline";
@@ -45,7 +46,7 @@ export function AdminOnboardingTokens() {
   const [rejectReason, setRejectReason] = useState<Record<string, string>>({});
   const [revokeReason, setRevokeReason] = useState<Record<string, string>>({});
 
-  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, retry: false });
+  const nodesQ = useNodesQuery();
   const nodes = useMemo(() => nodesQ.data ?? [], [nodesQ.data]);
 
   const tokensQ = useQuery({
@@ -130,7 +131,7 @@ export function AdminOnboardingTokens() {
 
             <div>
               <label htmlFor="onboarding-ttl" className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">
-                TTL — {ttlLabel(ttlHours)} <span className="normal-case tracking-normal text-[var(--text-subtle)]/70">(max 72h)</span>
+                TTL — {ttlLabel(ttlHours)} <span className="normal-case tracking-normal text-[color-mix(in_srgb,var(--text-subtle)_70%,transparent)]">(max 72h)</span>
               </label>
               <input
                 id="onboarding-ttl"

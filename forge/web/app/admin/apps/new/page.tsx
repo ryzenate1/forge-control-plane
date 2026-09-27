@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useState, useEffect, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -289,7 +290,7 @@ export default function CreateAppPage() {
       return createApp(input);
     },
     onSuccess: (result) => {
-      void qc.invalidateQueries({ queryKey: ["apps"] });
+      void qc.invalidateQueries({ queryKey: queryKeys.apps.lists() });
       router.push(`/admin/apps/${result.id}`);
     },
   });
@@ -344,7 +345,7 @@ export default function CreateAppPage() {
                   className={cn(
                     "flex flex-col items-center gap-3 rounded-xl border p-5 sm:p-6 text-center transition-all duration-200",
                     sourceType === id
-                      ? "border-[var(--brand)] bg-[var(--brand)]/5 shadow-sm shadow-[var(--brand)]/10"
+                      ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,transparent)] shadow-sm shadow-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
                       : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
                   )}
                   onClick={() => { setSourceType(id); setFieldsDirty(false); setTemplateConfirm(null); }}
@@ -388,7 +389,7 @@ export default function CreateAppPage() {
                       className={cn(
                         "rounded-xl border p-4 text-left transition-all duration-200",
                         selectedTemplate === tpl.id
-                          ? "border-[var(--brand)] bg-[var(--brand)]/5 shadow-sm shadow-[var(--brand)]/10"
+                          ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_5%,transparent)] shadow-sm shadow-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
                           : "border-white/[0.08] bg-white/[0.02] hover:border-white/[0.15] hover:bg-white/[0.04]",
                       )}
                       onClick={() => handleTemplateClick(tpl.id)}
@@ -580,7 +581,7 @@ export default function CreateAppPage() {
                       const file = e.target.files?.[0];
                       if (file) setComposeFile(file);
                     }}
-                    className="block w-full text-xs text-slate-400 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[var(--brand)]/20 file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[var(--brand)] hover:file:bg-[var(--brand)]/30"
+                    className="block w-full text-xs text-slate-400 file:mr-4 file:cursor-pointer file:rounded-lg file:border-0 file:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] file:px-4 file:py-2 file:text-xs file:font-semibold file:text-[var(--brand)] hover:file:bg-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
                   />
                 </div>
                 <div>

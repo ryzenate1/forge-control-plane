@@ -6,7 +6,9 @@ import { usePathname } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import { ChevronLeft, type LucideIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser, fetchServer } from "@/lib/api";
+import { fetchServer } from "@/lib/api";
+import { useCurrentUser } from "@/lib/api/use-current-user";
+import { queryKeys } from "@/lib/api/query-keys";
 import { useT } from "@/components/TranslationProvider";
 import { resolveActiveHref } from "@/lib/nav/active";
 import { navListKeyDown } from "@/lib/hooks/use-nav-drawer";
@@ -63,7 +65,7 @@ function navItemClass(active: boolean, minHeight: string) {
     "flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
     minHeight,
     active
-      ? "border-l-2 border-[var(--brand)] bg-[var(--brand)]/10 pl-2.5 font-semibold text-[var(--brand)]"
+      ? "border-l-2 border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] pl-2.5 font-semibold text-[var(--brand)]"
       : "text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]",
   );
 }
@@ -74,18 +76,13 @@ function ServerSection({ activeHref, onNavigate }: { activeHref?: string; onNavi
   const serverId = matchServerId(pathname);
 
   const serverQuery = useQuery({
-    queryKey: ["server", serverId],
+    queryKey: serverId ? queryKeys.servers.detail(serverId) : ["servers", "detail", "none"],
     queryFn: () => fetchServer(serverId as string),
     enabled: Boolean(serverId),
     staleTime: 30_000,
     retry: 1,
   });
-  const userQuery = useQuery({
-    queryKey: ["current-user"],
-    queryFn: fetchCurrentUser,
-    staleTime: 30_000,
-    retry: 1,
-  });
+  const userQuery = useCurrentUser();
 
   if (!serverId) return null;
 

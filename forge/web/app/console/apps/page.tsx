@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
@@ -19,7 +20,7 @@ export default function ConsoleAppsPage() {
   const [search, setSearch] = useState("");
 
   const { data: apps = [], isLoading } = useQuery({
-    queryKey: ["apps"],
+    queryKey: queryKeys.apps.lists(),
     queryFn: fetchApps,
     staleTime: 30_000,
     refetchInterval: 15_000,

@@ -49,17 +49,14 @@ export function useDeploymentSteps(
     queryKey: ["deployment-steps", deploymentId],
     queryFn: ({ signal }) => fetchDeploymentSteps(deploymentId, { signal }),
     enabled: Boolean(deploymentId) && (opts?.enabled ?? true),
-    // Adaptive 5s polling: only when steps contain non-terminal work
+    // Adaptive 5s polling: keep polling while any step is non-terminal.
     refetchInterval: (query) => {
       const elapsed = Date.now() - hookStartRef.current;
       if (elapsed > MAX_POLL_DURATION_MS) return false;
       const data = query.state.data as DeploymentStep[] | undefined;
       if (!data || data.length === 0) return POLL_INTERVAL_MS;
       if (isDeploymentStepsTerminal(data)) return false;
-      const hasActive = data.some(
-        (s) => (s.status as string) === "in_progress" || (s.status as string) === "pending" || (s.status as string) === "running",
-      );
-      return hasActive ? POLL_INTERVAL_MS : false;
+      return POLL_INTERVAL_MS;
     },
     refetchIntervalInBackground: false,
     placeholderData: (prev) => prev,

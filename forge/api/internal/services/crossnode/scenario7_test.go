@@ -85,6 +85,11 @@ func TestScenario7_CrossNodeRoutingEndToEnd(t *testing.T) {
 	t.Run("Unhealthy targets are removed", func(t *testing.T) {
 		health := NewHealthFilter(2, 30*time.Second)
 
+		// Only backends with a recorded healthy result pass the filter, so
+		// the survivors must have proven healthy first.
+		health.RecordSuccess("node-1.internal", 8080)
+		health.RecordSuccess("node-3.internal", 8080)
+
 		// Mark node-2 as unhealthy
 		health.RecordFailure("node-2.internal", 8080, "connection refused")
 		health.RecordFailure("node-2.internal", 8080, "connection refused")
@@ -111,6 +116,10 @@ func TestScenario7_CrossNodeRoutingEndToEnd(t *testing.T) {
 
 	t.Run("Recovered targets return", func(t *testing.T) {
 		health := NewHealthFilter(2, 30*time.Second)
+
+		// node-1 proves healthy up front; only recorded-healthy backends
+		// pass the filter.
+		health.RecordSuccess("node-1.internal", 8080)
 
 		// Mark node-2 as unhealthy
 		health.RecordFailure("node-2.internal", 8080, "connection refused")
@@ -242,6 +251,10 @@ func TestScenario7_CrossNodeRoutingEndToEnd(t *testing.T) {
 		proxy := trafficmanager.NewTraefikReverseProxy(dir, strings.TrimPrefix(admin.URL, "http://"))
 		resolver := NewResolver(nil)
 		health := NewHealthFilter(2, 30*time.Second)
+		// The synchronizer only routes to backends with a recorded healthy
+		// result; unknown backends are skipped, not assumed.
+		health.RecordSuccess("localhost", 8080)
+		health.RecordSuccess("localhost", 8081)
 		syncer := NewIngressSynchronizer(proxy, resolver, health)
 
 		rules := []*trafficmanager.RoutingRule{
@@ -301,6 +314,10 @@ func TestScenario7_IntegrationTest(t *testing.T) {
 
 	// 3. Test health filtering
 	health := NewHealthFilter(2, 30*time.Second)
+	// Only recorded-healthy backends pass the filter: node-1 and node-3
+	// prove healthy first, node-2 never does.
+	health.RecordSuccess("node-1.internal", 8080)
+	health.RecordSuccess("node-3.internal", 8080)
 	health.RecordFailure("node-2.internal", 8080, "connection timeout")
 	health.RecordFailure("node-2.internal", 8080, "connection timeout")
 

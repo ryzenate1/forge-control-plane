@@ -45,6 +45,10 @@ RUN apk upgrade --no-cache && \
 COPY --from=build /src/forge/web/.next/standalone ./
 COPY --from=build /src/forge/web/.next/static ./forge/web/.next/static
 COPY --from=build /src/forge/web/public ./forge/web/public
+# The /api/i18n/[locale] route and lib/get-translation.ts load JSON from the
+# repo-root `lang/` catalog at request time (not bundled imports), so the
+# files must exist in the standalone runner at /app/lang.
+COPY --from=build /src/lang ./lang
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup && \
     chown -R appuser:appgroup /app

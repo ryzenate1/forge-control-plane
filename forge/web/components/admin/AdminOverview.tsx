@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useMemo, useState, useCallback } from "react";
 import { useQuery } from "@tanstack/react-query";
@@ -365,7 +366,7 @@ export function AdminOverview() {
   });
 
   const appsQuery = useQuery({
-    queryKey: ["apps"],
+    queryKey: queryKeys.apps.lists(),
     queryFn: fetchApps,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,

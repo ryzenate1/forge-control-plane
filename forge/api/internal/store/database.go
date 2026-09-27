@@ -4,7 +4,9 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"net/url"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -12,9 +14,16 @@ type DatabaseType string
 
 const (
 	DatabasePostgres DatabaseType = "postgres"
-	DatabaseMySQL    DatabaseType = "mysql"
-	DatabaseMariaDB  DatabaseType = "mariadb"
-	DatabaseSQLite   DatabaseType = "sqlite"
+	// DatabaseMySQL and DatabaseMariaDB are best-effort targets: the
+	// deployed and CI-verified path is PostgreSQL (SQLite for local
+	// dev/tests). The MigrationRunner applies mysqlCompatibleMigration for
+	// the common PG-isms and per-file mysql/ dialect overrides take
+	// precedence; migrations outside that coverage fail with the raw
+	// driver error rather than silently diverging. Do not claim full
+	// MySQL parity for migrations without an override.
+	DatabaseMySQL   DatabaseType = "mysql"
+	DatabaseMariaDB DatabaseType = "mariadb"
+	DatabaseSQLite  DatabaseType = "sqlite"
 )
 
 type DatabaseDriver interface {
@@ -56,8 +65,18 @@ func (c DBConfig) DSN() string {
 				sslmode = "require"
 			}
 		}
-		return fmt.Sprintf("postgres://%s:%s@%s:%d/%s?sslmode=%s",
-			c.User, c.Password, c.Host, c.Port, c.Database, sslmode)
+		// Credentials are percent-encoded so special characters (@, :, /, ?,
+		// #) in usernames or passwords cannot corrupt the URL parse.
+		// url.UserPassword applies RFC 3986 userinfo encoding (space becomes
+		// %20, not the + that QueryEscape would emit).
+		dsnURL := &url.URL{
+			Scheme:   "postgres",
+			User:     url.UserPassword(c.User, c.Password),
+			Host:     fmt.Sprintf("%s:%d", c.Host, c.Port),
+			Path:     "/" + c.Database,
+			RawQuery: "sslmode=" + url.QueryEscape(sslmode),
+		}
+		return dsnURL.String()
 	case DatabaseMySQL, DatabaseMariaDB:
 		tls := "false"
 		if c.SSLMode == "require" || c.SSLMode == "enable" {
@@ -68,6 +87,16 @@ func (c DBConfig) DSN() string {
 	case DatabaseSQLite:
 		if c.SQLitePath == "" {
 			c.SQLitePath = "file:gamepanel.db?cache=shared&_journal_mode=WAL"
+		}
+		// _foreign_keys=on applies per connection (mattn/go-sqlite3 honors it
+		// for every pooled connection), unlike a one-shot PRAGMA that only
+		// affects the connection it runs on.
+		if !strings.Contains(c.SQLitePath, "_foreign_keys=") && !strings.HasPrefix(c.SQLitePath, ":memory:") {
+			sep := "?"
+			if strings.Contains(c.SQLitePath, "?") {
+				sep = "&"
+			}
+			c.SQLitePath += sep + "_foreign_keys=on"
 		}
 		return c.SQLitePath
 	default:

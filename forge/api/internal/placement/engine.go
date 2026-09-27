@@ -3,19 +3,22 @@ package placement
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sort"
-	"sync"
+	"strings"
 )
 
 type Logger interface {
 	Log(ctx context.Context, msg string, args ...any)
 }
 
+// Engine is safe for concurrent use: scorer, checker and logger are fixed at
+// construction and scoring itself touches no shared state. A scorer that is not
+// safe for concurrent use guards its own mutable fields (see RandomScorer).
 type Engine struct {
 	scorer  Scorer
 	checker *ConstraintChecker
 	logger  Logger
-	mu      sync.Mutex
 }
 
 func NewEngine(scorer Scorer, checker *ConstraintChecker) *Engine {
@@ -49,6 +52,9 @@ func (e *Engine) Place(ctx context.Context, candidates []Candidate, req Workload
 
 	var results []ScoreResult
 	for _, c := range filtered {
+		if err := ctx.Err(); err != nil {
+			return ScoreResult{}, fmt.Errorf("placement cancelled: %w", err)
+		}
 		score, scoreReasons, err := e.scorer.Score(ctx, c, req)
 		if err != nil {
 			continue
@@ -91,6 +97,9 @@ func (e *Engine) PlaceAll(ctx context.Context, candidates []Candidate, req Workl
 
 	var results []ScoreResult
 	for _, c := range filtered {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("placement cancelled: %w", err)
+		}
 		score, scoreReasons, err := e.scorer.Score(ctx, c, req)
 		if err != nil {
 			continue

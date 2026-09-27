@@ -6,36 +6,40 @@ PID_DIR="$ROOT/.dev-pids"
 LOG_DIR="$ROOT/.dev-logs"
 MODE="${1:-docker}"
 
+# Canonical ports (single source of truth).
+# shellcheck disable=SC1091
+. "$ROOT/scripts/dev/ports.env"
 DB_USER="${DB_USER:-gamepanel}"
 DB_PASS="${DB_PASS:-gamepanel}"
 DB_NAME="${DB_NAME:-gamepanel}"
-DB_PORT="${DB_PORT:-5432}"
-REDIS_PORT="${REDIS_PORT:-6379}"
-API_PORT="${API_PORT:-8080}"
-DAEMON_PORT="${DAEMON_PORT:-9090}"
-DAEMON_SFTP_PORT="${DAEMON_SFTP_PORT:-2022}"
-FRONTEND_PORT="${FRONTEND_PORT:-3000}"
-# Load environment variables from local .env file if it exists
+# Restricted .env parser: only bare KEY=VALUE lines for an explicit allowlist,
+# never sourced (a malicious .env must not execute code on load). Mirrors the
+# native.sh load_secrets allowlist (plus dev-only overrides).
 if [ -f "$ROOT/.env" ]; then
   while IFS= read -r line || [ -n "$line" ]; do
-    # Remove carriage returns (Windows compat)
-    line="${line//$'\r'/}"
-    # Strip leading/trailing whitespace
+    line="$(printf '%s' "$line" | tr -d '\r')"
     line="${line#"${line%%[![:space:]]*}"}"
     line="${line%"${line##*[![:space:]]}"}"
-    # Skip empty lines and comments
     if [ -z "$line" ] || [ "${line:0:1}" = "#" ]; then
       continue
     fi
-    # Only export if it has an equals sign
-    if [[ "$line" == *"="* ]]; then
-      key="${line%%=*}"
-      value="${line#*=}"
-      # Remove surrounding quotes if present
-      value="${value#[\"\']}"
-      value="${value%[\"\']}"
-      export "$key"="$value"
-    fi
+    case "$line" in *"="*) ;; *) warn "Ignoring malformed line in $ROOT/.env"; continue ;; esac
+    key="${line%%=*}"
+    value="${line#*=}"
+    key="${key%"${key##*[![:space:]]}"}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*|[0-9]*) warn "Ignoring bad key in $ROOT/.env: $key"; continue ;;
+    esac
+    case "$key" in
+      API_AUTH_SECRET|APP_KEY|FORGE_MASTER_KEY|DAEMON_NODE_TOKEN|DAEMON_SFTP_HOST_KEY_PASSPHRASE|REDIS_PASSWORD|DATABASE_URL|API_ADDR|APP_ENV|API_DEMO_MODE|REDIS_ADDR|MIGRATIONS_DIR|NEXT_PUBLIC_API_URL|SEED_NODE_BASE_URL|FORGE_MASTER_KEY_ID|FORGE_ALLOW_EPHEMERAL_MASTER_KEY|DAEMON_NODE_ID|DAEMON_ALLOW_MOCK_RUNTIME|DB_USER|DB_PASS|DB_NAME) ;;
+      *) warn "Ignoring unknown key in $ROOT/.env: $key"; continue ;;
+    esac
+    # Strip one layer of matching quotes (dotenv convention).
+    case "$value" in
+      '"'*'"') value="${value#\"}"; value="${value%\"}" ;;
+      "'"*"'") value="${value#\'}"; value="${value%\'}";;
+    esac
+    export "$key"="$value"
   done < "$ROOT/.env"
 fi
 
@@ -52,12 +56,24 @@ export FORGE_ALLOW_EPHEMERAL_MASTER_KEY="${FORGE_ALLOW_EPHEMERAL_MASTER_KEY:-fal
 # Local development secrets are generated once and persisted in
 # .dev-data/secrets.env (git-ignored) so encrypted demo data stays decryptable
 # across restarts. Values provided via env/.env always win. Never commit these.
+# The file is parsed with the same restricted allowlist parser (never sourced).
 DEV_SECRETS_FILE="$ROOT/.dev-data/secrets.env"
+parse_secrets_file() {
+  local file="$1"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(printf '%s' "$line" | tr -d '\r')"
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *"="*) ;; *) continue ;; esac
+    local key="${line%%=*}" value="${line#*=}"
+    case "$key" in
+      DAEMON_NODE_TOKEN|API_AUTH_SECRET|FORGE_MASTER_KEY|APP_KEY) ;;
+      *) continue ;;
+    esac
+    export "$key"="$value"
+  done < "$file"
+}
 if [ -f "$DEV_SECRETS_FILE" ]; then
-  set -a
-  # shellcheck disable=SC1090
-  . "$DEV_SECRETS_FILE"
-  set +a
+  parse_secrets_file "$DEV_SECRETS_FILE"
 fi
 if [ -z "${DAEMON_NODE_TOKEN:-}" ]; then
   DAEMON_NODE_TOKEN="dev-$(openssl rand -hex 8).$(openssl rand -hex 24)"
@@ -83,7 +99,22 @@ API_AUTH_SECRET=$API_AUTH_SECRET
 FORGE_MASTER_KEY=$FORGE_MASTER_KEY
 APP_KEY=$APP_KEY
 EOF
-umask 022
+chmod 600 "$DEV_SECRETS_FILE" 2>/dev/null || true
+# Default demo node identity (overridable via environment).
+if [ -z "${DAEMON_NODE_ID:-}" ]; then
+  DAEMON_NODE_ID="22222222-2222-2222-2222-222222222222"
+  export DAEMON_NODE_ID
+fi
+# Record effective ports for status/diagnose discovery (single source).
+cat > "$ROOT/.dev-data/ports.env" <<EOF
+DB_PORT=${DB_PORT:-5432}
+REDIS_PORT=${REDIS_PORT:-6379}
+API_PORT=${API_PORT:-8080}
+DAEMON_PORT=${DAEMON_PORT:-9090}
+DAEMON_SFTP_PORT=${DAEMON_SFTP_PORT:-2022}
+FRONTEND_PORT=${FRONTEND_PORT:-3000}
+EOF
+chmod 644 "$ROOT/.dev-data/ports.env"
 printf "[dev] development node token: %s\n" "$DAEMON_NODE_TOKEN"
 
 
@@ -138,27 +169,19 @@ wait_port() {
 }
 
 kill_stale_ports() {
-  info "Cleaning up stale processes on critical ports"
+  # Refuse foreign listeners instead of killing them: `kill -9` on a PID we
+  # did not start can take down an unrelated app (or another checkout's
+  # server) holding the same port. Only PIDs recorded in $PID_DIR are ours
+  # and may be signalled; anything else is reported for the operator.
+  info "Checking for stale processes on critical ports"
   local ports=("${API_PORT:-8080}" "${DAEMON_PORT:-9090}" "${FRONTEND_PORT:-3000}" "${DAEMON_SFTP_PORT:-2022}")
   for port in "${ports[@]}"; do
-    if have lsof; then
-      local pids
-      pids="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
-      if [ -n "$pids" ]; then
-        for pid in $pids; do
-          kill "$pid" >/dev/null 2>&1 || true
-          printf "  %s[killed]%s stale process pid %s on port %s\n" "$yellow" "$reset" "$pid" "$port"
-        done
-      fi
-    fi
-  done
-  for port in "${ports[@]}"; do
-    for _ in 1 2 3 4 5; do
-      port_open "$port" || break
-      sleep 1
-    done
     if port_open "$port"; then
-      fail "port $port is still in use after cleanup"
+      local holder=""
+      if have lsof; then
+        holder="$(lsof -tiTCP:"$port" -sTCP:LISTEN 2>/dev/null || true)"
+      fi
+      fail "port $port is already in use${holder:+ (pid $holder)}. Stop the holder first (./scripts/dev/stop-dev.sh only stops PIDs it recorded) — refusing to kill foreign processes."
     fi
   done
 }
@@ -217,13 +240,16 @@ start_daemon() {
   info "Starting daemon"
   ensure_port_free "Daemon" "$DAEMON_PORT"
   mkdir -p "$ROOT/.dev-data/servers"
+  # NOTE: $pid below is the direct child (go run wrapper). stop-dev.sh kills
+  # the whole process group (like native.sh kill -TERM -pgid) so `npm`/`go
+  # run` children die with their parent instead of orphaning.
   (
     cd "$ROOT/beacon"
     nohup env \
       DAEMON_ADDR=":${DAEMON_PORT}" \
       DAEMON_SFTP_ADDR=":${DAEMON_SFTP_PORT}" \
       DAEMON_DATA_DIR="$ROOT/.dev-data/servers" \
-      DAEMON_NODE_ID="${DAEMON_NODE_ID:?DAEMON_NODE_ID must be set}" \
+      DAEMON_NODE_ID="${DAEMON_NODE_ID:-22222222-2222-2222-2222-222222222222}" \
       DAEMON_NODE_TOKEN="$DAEMON_NODE_TOKEN" \
       PANEL_API_URL="http://localhost:${API_PORT}/api/v1" \
       APP_ENV="$APP_ENV" \

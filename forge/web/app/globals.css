@@ -489,7 +489,17 @@ a { text-underline-offset: 3px; }
    AUTH SHELL
    ========================================================================== */
 
-.auth-shell { min-height: 100vh; min-height: 100svh; background-color: var(--canvas); }
+/* Viewport overlays must ignore parent stack spacing.
+ * Dialogs render inline inside page stacks (e.g. AdminServers' space-y-6),
+ * and Tailwind's space-y-* injects margin-top onto every non-first child —
+ * including fixed inset-0 layers. That margin offsets the backdrop and leaves
+ * a gap above the modal. A fixed full-viewport layer must never carry margin. */
+.fixed.inset-0,
+.ui-dialog-layer {
+  margin: 0 !important;
+}
+
+.auth-shell { min-height: 100vh; min-height: 100svh; background-color: var(--canvas); background-position: center; background-size: cover; }
 .auth-grid { display: grid; min-height: inherit; }
 .auth-brand-panel { display: none; }
 .auth-form-panel { display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; }

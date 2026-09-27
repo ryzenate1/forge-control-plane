@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import ServerDetailLayout from "@/app/server/[id]/layout";
@@ -38,7 +38,8 @@ describe("server detail layout", () => {
     expect(screen.getByText("Admin: true")).toBeInTheDocument();
   });
 
-  it("treats a 401 current-user response as an anonymous viewer", async () => {
+  it("redirects to sign-in when the session is gone instead of rendering anonymously", async () => {
+    replace.mockClear();
     mockFetchByUrl({
       "/servers/s1": jsonResponse(fixtureServer),
       "/auth/me": jsonResponse({ message: "unauthorized" }, 401),
@@ -48,7 +49,10 @@ describe("server detail layout", () => {
         <Probe />
       </ServerDetailLayout>
     );
-    expect(await screen.findByText("Admin: false")).toBeInTheDocument();
+    // An explicit null user means the session expired: bounce to sign-in with
+    // the current path as next, and never render the shell without a user.
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/?reason=session-expired&next=%2Fserver%2Fs1"));
+    expect(screen.queryByText(/Server:/)).not.toBeInTheDocument();
   });
 
   it("shows the error state with retry when the server fetch fails", async () => {

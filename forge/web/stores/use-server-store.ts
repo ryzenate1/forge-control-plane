@@ -66,6 +66,9 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
     consoleLines: [],
     consoleStatus: "Connecting",
     activeTab: "console" as ServerTab,
+    liveStats: null,
+    cpuHistory: Array(24).fill(0) as number[],
+    memoryHistory: Array(24).fill(0) as number[],
   }),
 
   addConsoleLine: (line: string) => set((state) => ({
@@ -79,11 +82,11 @@ export const useServerStore = create<ServerStoreState>()((set) => ({
 
   updateStats: (stats: ServerStats) => set((state) => {
     if (!stats) return state;
-    const memoryLimit = Number.isFinite(stats.memoryLimit) ? stats.memoryLimit : 0;
-    const memoryBytes = Number.isFinite(stats.memoryBytes) ? stats.memoryBytes : 0;
-    const cpuPercent = Number.isFinite(stats.cpuPercent) ? stats.cpuPercent : 0;
-    const memPct = memoryLimit > 0 ? Math.min(100, Math.round((memoryBytes / memoryLimit) * 100)) : 0;
-    const cpuPct = Math.min(300, cpuPercent);
+    const memoryLimit = Number.isFinite(stats.memoryLimit) ? Math.max(0, stats.memoryLimit) : 0;
+    const memoryBytes = Number.isFinite(stats.memoryBytes) ? Math.max(0, stats.memoryBytes) : 0;
+    const cpuPercent = Number.isFinite(stats.cpuPercent) ? Math.max(0, stats.cpuPercent) : 0;
+    const memPct = memoryLimit > 0 ? Math.min(100, Math.max(0, Math.round((memoryBytes / memoryLimit) * 100))) : 0;
+    const cpuPct = Math.min(300, Math.max(0, cpuPercent));
     return {
       liveStats: stats,
       cpuHistory: [...state.cpuHistory.slice(-23), cpuPct],

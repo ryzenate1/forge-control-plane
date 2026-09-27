@@ -17,6 +17,7 @@ test: ## Run all tests
 build: ## Build all components
 	cd forge/api && go build ./cmd/api && cd ../..
 	cd beacon && go build ./cmd/daemon && cd ../..
+	npm run build:packages
 	cd forge/web && npm run build && cd ../..
 
 api-test: ## Run only API tests

@@ -288,7 +288,7 @@ export function DeploymentHistoryView({ server, appId }: DeploymentHistoryViewPr
                   className={cn(
                     "rounded-md px-3 py-1 text-xs font-semibold capitalize transition-colors",
                     tab === value
-                      ? "bg-[var(--brand)]/15 text-[var(--brand)]"
+                      ? "bg-[color-mix(in_srgb,var(--brand)_15%,transparent)] text-[var(--brand)]"
                       : "text-[var(--text-subtle)] hover:text-[var(--text)]",
                   )}
                 >
@@ -406,7 +406,7 @@ export function DeploymentHistoryView({ server, appId }: DeploymentHistoryViewPr
                     className={cn(
                       "flex cursor-pointer flex-col gap-2 rounded-lg border p-3 transition-colors",
                       selectedId === version.id
-                        ? "border-[var(--brand)]/40 bg-[var(--brand)]/10"
+                        ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"
                         : "border-[var(--line)] bg-[var(--surface-raised)] hover:border-[var(--line-strong)]",
                     )}
                   >
@@ -449,7 +449,7 @@ export function DeploymentHistoryView({ server, appId }: DeploymentHistoryViewPr
                               void beginRollback(version);
                             }}
                             disabled={rollbackMut.isPending}
-                            className="inline-flex items-center gap-1 rounded-lg border border-[var(--warning)]/40 bg-[var(--warning-subtle)] px-2 py-1 text-xs font-bold text-amber-200 transition-colors hover:bg-[var(--warning)]/25 disabled:opacity-40"
+                            className="inline-flex items-center gap-1 rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[var(--warning-subtle)] px-2 py-1 text-xs font-bold text-amber-200 transition-colors hover:bg-[color-mix(in_srgb,var(--warning)_25%,transparent)] disabled:opacity-40"
                           >
                             <RotateCcw className="h-3 w-3" />
                             Rollback to this
@@ -621,7 +621,7 @@ export function DeploymentHistoryView({ server, appId }: DeploymentHistoryViewPr
       </section>
 
       {pending && (
-        <div className="ui-card space-y-3 border-[var(--warning)]/40">
+        <div className="ui-card space-y-3 border-[color-mix(in_srgb,var(--warning)_40%,transparent)]">
           <div className="flex items-center gap-2">
             <RotateCcw className="h-4 w-4 text-amber-300" />
             <h3 className="text-sm font-semibold text-[var(--text)]">
@@ -642,7 +642,7 @@ export function DeploymentHistoryView({ server, appId }: DeploymentHistoryViewPr
                     {pending.diff.from.commitSha ? pending.diff.from.commitSha.slice(0, 10) : "no commit"}
                   </p>
                 </div>
-                <div className="rounded-lg border border-[var(--warning)]/40 bg-[var(--warning-subtle)] p-2">
+                <div className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_40%,transparent)] bg-[var(--warning-subtle)] p-2">
                   <p className="mb-1 font-semibold uppercase tracking-wider text-amber-200/80">After rollback</p>
                   <p className="break-all font-mono text-[var(--text-subtle)]">{pending.diff.to.image}</p>
                   <p className="mt-1 text-[var(--text-muted)]">

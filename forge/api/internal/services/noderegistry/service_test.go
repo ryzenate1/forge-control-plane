@@ -89,7 +89,7 @@ func TestHealthScore_Computation(t *testing.T) {
 			wantMax: 70,
 		},
 		{
-			name: "zero total capacity defaults to score 50",
+			name: "zero total capacity is unknown and excluded from the average",
 			node: store.Node{
 				ActualState: string(domain.NodeActualStateOnline),
 				LastSeenAt:  ptr(time.Now().Add(-30 * time.Second)),
@@ -151,7 +151,7 @@ func TestHeartbeatScore(t *testing.T) {
 		lastSeen *time.Time
 		want     int
 	}{
-		{"nil last seen", nil, 0},
+		{"nil last seen is unknown, not zero", nil, -1},
 		{"recent heartbeat", ptr(now.Add(-30 * time.Second)), 100},
 		{"old heartbeat", ptr(now.Add(-20 * time.Minute)), 0},
 	}
@@ -173,8 +173,8 @@ func TestStatusScore(t *testing.T) {
 		{string(domain.NodeActualStateOnline), 100},
 		{string(domain.NodeActualStateDegraded), 40},
 		{string(domain.NodeActualStateOffline), 0},
-		{"unknown", 0},
-		{"", 0},
+		{"unknown", -1},
+		{"", -1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.status, func(t *testing.T) {
@@ -193,8 +193,8 @@ func TestResourceScore(t *testing.T) {
 		available int
 		want      int
 	}{
-		{"no total capacity", 0, 0, 50},
-		{"no total with non-zero available", 0, 100, 50},
+		{"no total capacity is unknown", 0, 0, -1},
+		{"no total with non-zero available is unknown", 0, 100, -1},
 		{"fully available", 100, 100, 100},
 		{"half used", 100, 50, 50},
 		{"fully used", 100, 0, 0},

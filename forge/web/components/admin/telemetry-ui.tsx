@@ -708,7 +708,7 @@ export function MetricSeriesChart({
 
       {empty ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <div className="pointer-events-auto max-w-sm rounded-lg border border-dashed border-white/[0.12] bg-[var(--surface)]/90 px-4 py-3 text-center">
+          <div className="pointer-events-auto max-w-sm rounded-lg border border-dashed border-white/[0.12] bg-[color-mix(in_srgb,var(--surface)_90%,transparent)] px-4 py-3 text-center">
             <p className="text-sm font-medium text-slate-200">{emptyTitle}</p>
             {emptyMessage ? <p className="mt-1 text-xs leading-5 text-slate-500">{emptyMessage}</p> : null}
           </div>

@@ -227,7 +227,17 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Get("/servers", requireAdminScope("servers.read"), func(c *fiber.Ctx) error {
+	protected.Get("/servers", func(c *fiber.Ctx) error {
+		// No servers.read gate here: non-admins list only their own servers
+		// via ListServersForUser. A global scope check would 403 every
+		// non-admin even though the store already filters by owner/subuser.
+		// Scoped credentials (API keys/OAuth) still need servers.read.
+		if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+			scopes, _ := c.Locals("apiScopes").([]string)
+			if !store.HasAdminScope(scopes, "servers.read") {
+				return fiber.NewError(fiber.StatusForbidden, "missing api scope: servers.read")
+			}
+		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -307,6 +317,12 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	})
 
 	protected.Patch("/servers/:id", mutationLimiter, func(c *fiber.Ctx) error {
+		// Upfront access gate: the per-field checks below must not run on a
+		// server the caller cannot access at all. This also binds OAuth
+		// server-scoped tokens and scoped API keys before any mutation logic.
+		if err := checkServerPermission(c, cfg, ""); err != nil {
+			return err
+		}
 		var req UpdateServerRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -340,8 +356,19 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 		}
 		claims, ok := c.Locals("user").(tokenClaims)
-		if adminChanged && (!ok || claims.Role != "admin") {
-			return fiber.NewError(fiber.StatusForbidden, "admin role is required to update owner or build limits")
+		if adminChanged {
+			if !ok || claims.Role != "admin" {
+				return fiber.NewError(fiber.StatusForbidden, "admin role is required to update owner or build limits")
+			}
+			// Admin fields also require the servers.write admin scope so a
+			// scoped admin key (e.g. servers.read only) cannot escalate via
+			// build limits or ownership transfer.
+			if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+				scopes, _ := c.Locals("apiScopes").([]string)
+				if !store.HasAdminScope(scopes, "servers.write") {
+					return fiber.NewError(fiber.StatusForbidden, "missing api scope: servers.write")
+				}
+			}
 		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")

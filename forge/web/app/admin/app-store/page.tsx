@@ -1,4 +1,5 @@
 "use client";
+import { queryKeys } from "@/lib/api/query-keys";
 
 import { useState, useEffect, useMemo, useCallback } from "react";
 import Image from "next/image";
@@ -74,7 +75,7 @@ export default function AppStorePage() {
   }, [category]);
 
   const appsQuery = useQuery({
-    queryKey: ["app-store", "apps", debouncedCategory, debouncedSearch],
+    queryKey: queryKeys.apps.store(debouncedCategory, debouncedSearch),
     queryFn: () => appStoreApi.listApps(debouncedCategory || undefined, debouncedSearch || undefined),
     staleTime: 5 * 60 * 1000, // 5 minutes - don't refetch if data is recent
     retry: 2, // Retry failed requests up to 2 times
@@ -127,7 +128,7 @@ export default function AppStorePage() {
     mutationFn: () => appStoreApi.syncBundledTemplates(),
     retry: retryTransientMutation,
     onSuccess: (res) => {
-      queryClient.invalidateQueries({ queryKey: ["app-store", "apps"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.apps.all });
       toast({
         title: "Bundled templates synced",
         message: `${res.imported} imported, ${res.updated} updated, ${res.skipped} skipped`,
@@ -180,7 +181,7 @@ export default function AppStorePage() {
   // Refresh function to manually retry
   const refreshData = useCallback(() => {
     if (view === "browse" || view === "detail") {
-      queryClient.invalidateQueries({ queryKey: ["app-store", "apps"] });
+      queryClient.invalidateQueries({ queryKey: queryKeys.apps.all });
     }
     if (view === "installed" || view === "detail") {
       queryClient.invalidateQueries({ queryKey: ["app-store", "installs"] });
@@ -236,14 +237,14 @@ export default function AppStorePage() {
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => { setView("browse"); setSelectedApp(null); setAppsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
             >
               <Grid3X3 className="mr-1.5 inline-block h-4 w-4" />
               Browse
             </button>
             <button
               onClick={() => { setView("installed"); setSelectedApp(null); setInstallsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[var(--brand)]/70 bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
             >
               <Package className="mr-1.5 inline-block h-4 w-4" />
               Installed ({installs.length})
@@ -302,7 +303,7 @@ export default function AppStorePage() {
                 placeholder="Search apps..."
                 value={searchInput}
                 onChange={(e) => { setSearchInput(e.target.value); setAppsPage(1); }}
-                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] py-2 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] py-2 pl-10 pr-4 text-sm text-white placeholder-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               />
             </div>
             {categories.map((c) => (
@@ -328,7 +329,7 @@ export default function AppStorePage() {
                 <button
                   key={app.key}
                   onClick={() => handleAppClick(app)}
-                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] p-5 text-left transition-all hover:border-[var(--brand)]/40 hover:bg-white/[0.06]"
+                  className="group relative overflow-hidden rounded-xl border border-white/10 bg-white/[0.03] p-5 text-left transition-all hover:border-[color-mix(in_srgb,var(--brand)_40%,transparent)] hover:bg-white/[0.06]"
                 >
                   {installedKeys.has(app.key) && (
                     <span className="absolute right-3 top-3 rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] font-bold uppercase text-emerald-400">
@@ -594,7 +595,7 @@ function InstallFormModal({
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+              className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               required
             />
           </div>
@@ -604,7 +605,7 @@ function InstallFormModal({
               type="text"
               value={nodeId}
               onChange={(e) => setNodeId(e.target.value)}
-              className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+              className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               placeholder="Leave empty for auto-selection"
             />
           </div>
@@ -615,7 +616,7 @@ function InstallFormModal({
                 type="number"
                 value={memoryMb}
                 onChange={(e) => setMemoryMb(Number(e.target.value))}
-                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               />
             </div>
             <div>
@@ -624,7 +625,7 @@ function InstallFormModal({
                 type="number"
                 value={diskMb}
                 onChange={(e) => setDiskMb(Number(e.target.value))}
-                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               />
             </div>
           </div>
@@ -647,14 +648,14 @@ function InstallFormModal({
                         type="number"
                         value={params[key] ?? String(field.default ?? "")}
                         onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
-                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
                       />
                     ) : (
                       <input
                         type="text"
                         value={params[key] ?? String(field.default ?? "")}
                         onChange={(e) => setParams((p) => ({ ...p, [key]: e.target.value }))}
-                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                        className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-white placeholder:text-slate-500 focus:border-[var(--brand)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
                       />
                     )}
                   </div>

@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -24,7 +23,7 @@ func (c *Client) hostGet(ctx context.Context, nodeToken, url string) (json.RawMe
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("host request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("host request", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {

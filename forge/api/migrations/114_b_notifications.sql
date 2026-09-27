@@ -29,6 +29,6 @@ CREATE TABLE IF NOT EXISTS notification_logs (
     sent_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-CREATE INDEX idx_notification_logs_channel ON notification_logs(channel_id);
-CREATE INDEX idx_notification_logs_sent_at ON notification_logs(sent_at DESC);
-CREATE INDEX idx_notification_event_subscriptions_channel ON notification_event_subscriptions(channel_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_channel ON notification_logs(channel_id);
+CREATE INDEX IF NOT EXISTS idx_notification_logs_sent_at ON notification_logs(sent_at DESC);
+CREATE INDEX IF NOT EXISTS idx_notification_event_subscriptions_channel ON notification_event_subscriptions(channel_id);

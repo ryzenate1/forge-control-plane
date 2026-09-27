@@ -17,8 +17,8 @@ import {
   Input,
   Pill,
 } from "@/components/admin/admin-ui";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { fetchNodes } from "@/lib/api";
+import { ForgeDialog } from "@/components/ui/forge/overlay";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 import {
   createComposeTemplate,
   deleteComposeTemplate,
@@ -40,7 +40,7 @@ const PARAM_TYPES = [
 ];
 
 const CONTROL_CLASS =
-  "w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-400 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15";
+  "w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-200 placeholder:text-slate-400 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]";
 
 type Draft = {
   name: string;
@@ -88,7 +88,7 @@ export default function ComposeTemplatesPage() {
     queryKey: ["compose-templates"],
     queryFn: () => listComposeTemplates(),
   });
-  const nodesQ = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQ = useNodesQuery();
   const safeTemplates = useMemo(() => (Array.isArray(templatesQ.data) ? templatesQ.data : []), [templatesQ.data]);
   const safeNodes = useMemo(() => (Array.isArray(nodesQ.data) ? nodesQ.data : []), [nodesQ.data]);
 
@@ -295,13 +295,22 @@ export default function ComposeTemplatesPage() {
       )}
 
       {/* Create / edit modal */}
-      <Dialog open={modalOpen} onOpenChange={setModalOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>{editing ? "Edit template" : "New template"}</DialogTitle>
-            <DialogDescription>Define the compose document and the parameters operators fill in on deploy.</DialogDescription>
-          </DialogHeader>
-          <div className="ui-dialog-body space-y-4">
+      <ForgeDialog
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        title={editing ? "Edit template" : "New template"}
+        description="Define the compose document and the parameters operators fill in on deploy."
+        size="lg"
+        footer={
+          <>
+            <Btn tone="ghost" onClick={() => setModalOpen(false)}>Cancel</Btn>
+            <Btn tone="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !canSave}>
+              {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Create template"}
+            </Btn>
+          </>
+        }
+      >
+          <div className="space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Input label="Name" value={draft.name} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} placeholder="PostgreSQL + PgBouncer" />
               <Input label="Category" value={draft.category} onChange={(v) => setDraft((d) => ({ ...d, category: v }))} placeholder="Databases" />
@@ -325,7 +334,7 @@ export default function ComposeTemplatesPage() {
                 rows={10}
                 spellCheck={false}
                 placeholder={"services:\n  web:\n    image: ${IMAGE}\n    ports:\n      - \"${HOST_PORT}:80\""}
-                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 font-mono text-xs text-slate-200 placeholder:text-slate-500 focus:border-[var(--brand)]/70 focus:outline-none focus:ring-2 focus:ring-[var(--brand)]/15"
+                className="w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3 font-mono text-xs text-slate-200 placeholder:text-slate-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]"
               />
               <p className="mt-1 text-[11px] text-slate-500">Use {"${PARAM_KEY}"} placeholders; unknown variables are left intact at deploy time.</p>
             </div>
@@ -392,23 +401,25 @@ export default function ComposeTemplatesPage() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Btn tone="ghost" onClick={() => setModalOpen(false)}>Cancel</Btn>
-            <Btn tone="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !canSave}>
-              {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Create template"}
-            </Btn>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ForgeDialog>
 
       {/* Deploy (instantiate) modal */}
-      <Dialog open={deploying !== null} onOpenChange={(open) => { if (!open) setDeploying(null); }}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Deploy “{deploying?.name}”</DialogTitle>
-            <DialogDescription>Fill in the template parameters, then create a new stack.</DialogDescription>
-          </DialogHeader>
-          <div className="ui-dialog-body space-y-4">
+      <ForgeDialog
+        open={deploying !== null}
+        onClose={() => setDeploying(null)}
+        title={`Deploy “${deploying?.name ?? ""}”`}
+        description="Fill in the template parameters, then create a new stack."
+        size="md"
+        footer={
+          <>
+            <Btn tone="ghost" onClick={() => setDeploying(null)}>Cancel</Btn>
+            <Btn tone="primary" onClick={() => instantiateMutation.mutate()} disabled={instantiateMutation.isPending || !canDeploy}>
+              <Rocket className="h-4 w-4" /> {instantiateMutation.isPending ? "Deploying…" : "Deploy stack"}
+            </Btn>
+          </>
+        }
+      >
+          <div className="space-y-4">
             <Input label="Stack name" value={deployName} onChange={setDeployName} placeholder="my-postgres-prod" />
             <label className="block text-sm font-medium text-slate-300">
               <span className="mb-1.5 block">Target node</span>
@@ -454,14 +465,7 @@ export default function ComposeTemplatesPage() {
               </div>
             )}
           </div>
-          <DialogFooter>
-            <Btn tone="ghost" onClick={() => setDeploying(null)}>Cancel</Btn>
-            <Btn tone="primary" onClick={() => instantiateMutation.mutate()} disabled={instantiateMutation.isPending || !canDeploy}>
-              <Rocket className="h-4 w-4" /> {instantiateMutation.isPending ? "Deploying…" : "Deploy stack"}
-            </Btn>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      </ForgeDialog>
 
       {renderConfirm()}
     </AdminPageLayout>

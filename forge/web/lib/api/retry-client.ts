@@ -6,20 +6,36 @@ import { requestJSON, type ForgeRequestOptions, type ForgeRetryPolicy } from "./
  * Retry knobs for the legacy retrying client. These are a 1:1 view onto the
  * canonical {@link ForgeRetryPolicy} in `lib/api/http.ts` — kept under the
  * historical names so existing call sites keep compiling.
+ *
+ * Retries are strictly opt-in: an empty config performs a single attempt.
+ * Non-idempotent methods additionally require `idempotent: true`, otherwise
+ * even an explicit `maxRetries` is ignored for POST/PUT/PATCH/DELETE.
  */
 interface RetryConfig {
   maxRetries?: number;
   baseDelay?: number;
   maxDelay?: number;
   retryOnStatus?: number[];
+  idempotent?: boolean;
 }
 
-function toRetryPolicy(config: RetryConfig): ForgeRetryPolicy {
+function toRetryPolicy(config: RetryConfig): ForgeRetryPolicy | undefined {
   const policy: ForgeRetryPolicy = {};
   if (config.maxRetries !== undefined) policy.retries = config.maxRetries;
   if (config.baseDelay !== undefined) policy.baseDelay = config.baseDelay;
   if (config.maxDelay !== undefined) policy.maxDelay = config.maxDelay;
   if (config.retryOnStatus !== undefined) policy.retryOnStatus = config.retryOnStatus;
+  if (config.idempotent !== undefined) policy.idempotent = config.idempotent;
+  // No knobs set means no retries: `{}` must keep single-attempt semantics.
+  if (
+    policy.retries === undefined &&
+    policy.baseDelay === undefined &&
+    policy.maxDelay === undefined &&
+    policy.retryOnStatus === undefined &&
+    policy.idempotent === undefined
+  ) {
+    return undefined;
+  }
   return policy;
 }
 
@@ -39,8 +55,8 @@ export async function fetchWithRetry<T>(
   options: RequestInit & { signal?: AbortSignal } = {},
   config: RetryConfig = {},
 ): Promise<T> {
-  const retry: ForgeRequestOptions["retry"] = toRetryPolicy(config);
-  return requestJSON<T>(url, options, { retry });
+  const retry = toRetryPolicy(config);
+  return requestJSON<T>(url, options, retry === undefined ? {} : { retry });
 }
 
 /**

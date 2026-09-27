@@ -322,6 +322,16 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A pending token is not an approval. Enrolling before an operator
+	// approves would let any holder of a freshly generated token join.
+	if et.State != EnrollmentApproved {
+		writeJSON(w, http.StatusForbidden, map[string]any{
+			"enrolled": false,
+			"reason":   fmt.Sprintf("enrollment token state is %s; approval is required", et.State),
+		})
+		return
+	}
+
 	compat := CheckVersionCompatibility(body.BeaconVersion, "")
 	if !compat.Compatible {
 		writeJSON(w, http.StatusOK, map[string]any{
@@ -348,24 +358,22 @@ func (s *Server) handleEnrollmentStatus(w http.ResponseWriter, r *http.Request) 
 	}
 	nodeID := r.URL.Query().Get("nodeId")
 	token := r.URL.Query().Get("token")
-	if nodeID == "" && token == "" {
-		writeError(w, http.StatusBadRequest, "nodeId or token query parameter required")
+	// The status endpoint is a token oracle if a bare nodeId answers with
+	// enrollment state: node authentication (HMAC, enforced by middleware)
+	// plus the token itself are both required. A nodeId may additionally be
+	// supplied but must match the token's binding.
+	if token == "" {
+		writeError(w, http.StatusBadRequest, "token query parameter required")
 		return
 	}
-	var et *EnrollmentToken
-	if token != "" {
-		var err error
-		et, err = s.enrollmentMgr.ValidateToken(token)
-		if err != nil {
-			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "reason": err.Error()})
-			return
-		}
-	} else {
-		et = s.enrollmentMgr.GetByNodeID(nodeID)
-		if et == nil {
-			writeJSON(w, http.StatusOK, map[string]any{"valid": false, "reason": "no enrollment found"})
-			return
-		}
+	et, err := s.enrollmentMgr.ValidateToken(token)
+	if err != nil {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "reason": err.Error()})
+		return
+	}
+	if nodeID != "" && nodeID != et.NodeID {
+		writeJSON(w, http.StatusOK, map[string]any{"valid": false, "reason": "token does not match node id"})
+		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"valid":     et.State == EnrollmentApproved || et.State == EnrollmentPending,

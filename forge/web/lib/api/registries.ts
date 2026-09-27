@@ -46,6 +46,15 @@ export async function deleteRegistry(id: string): Promise<void> {
   await deleteJSON<void>(`/registries/${encodeURIComponent(id)}`);
 }
 
-export async function verifyRegistry(id: string): Promise<{ ok: boolean; verified?: boolean; error?: string }> {
-  return postJSON<{ ok: boolean; verified?: boolean; error?: string }>(`/registries/${encodeURIComponent(id)}/verify`, {});
+export type RegistryVerifyResult = {
+  ok: boolean;
+  verified?: boolean;
+  nodeId?: string;
+  error?: string;
+  results?: Array<{ nodeId: string; nodeName?: string; ok: boolean; error?: string }>;
+};
+
+export async function verifyRegistry(id: string, nodeId?: string): Promise<RegistryVerifyResult> {
+  const qs = nodeId ? `?node=${encodeURIComponent(nodeId)}` : "";
+  return postJSON<RegistryVerifyResult>(`/registries/${encodeURIComponent(id)}/verify${qs}`, {});
 }

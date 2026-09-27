@@ -83,6 +83,9 @@ func NewFirecrackerRuntime(cfg FirecrackerConfig) (*FirecrackerRuntime, error) {
 	if cfg.JailerPath == "" {
 		cfg.JailerPath = "jailer"
 	}
+	if err := validateJailerPath(cfg.JailerPath); err != nil {
+		return nil, err
+	}
 
 	if err := os.MkdirAll(cfg.SocketPath, 0o700); err != nil {
 		return nil, fmt.Errorf("create Firecracker socket directory: %w", err)
@@ -96,6 +99,71 @@ func NewFirecrackerRuntime(cfg FirecrackerConfig) (*FirecrackerRuntime, error) {
 		instances: make(map[string]*firecrackerInstance),
 		events:    make(chan ContainerEvent, 128),
 	}, nil
+}
+
+// validateJailerPath confines the jailer executable to an allowlist so a
+// compromised control plane cannot point Beacon at an arbitrary binary. The
+// bare "jailer" resolved via PATH and absolute paths under the known install
+// prefixes are accepted; anything with shell metacharacters, traversal, or an
+// unexpected directory is rejected.
+func validateJailerPath(raw string) error {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return errors.New("firecracker jailer path is required")
+	}
+	if strings.ContainsAny(value, "\x00\r\n;|&$`'\"*?~#(){}[]!\\") || strings.Contains(value, "..") {
+		return fmt.Errorf("firecracker jailer path %q contains disallowed characters", raw)
+	}
+	if !strings.Contains(value, "/") {
+		if value != filepath.Base(value) {
+			return fmt.Errorf("firecracker jailer path %q is not a plain binary name", raw)
+		}
+		return nil
+	}
+	if !filepath.IsAbs(value) {
+		return fmt.Errorf("firecracker jailer path %q must be \"jailer\" or an absolute path", raw)
+	}
+	cleaned := filepath.Clean(value)
+	allowedPrefixes := []string{"/usr/bin/", "/usr/local/bin/", "/opt/firecracker/", "/var/lib/gamepanel/firecracker/"}
+	for _, prefix := range allowedPrefixes {
+		if strings.HasPrefix(cleaned, prefix) && len(strings.TrimPrefix(cleaned, prefix)) > 0 && !strings.Contains(strings.TrimPrefix(cleaned, prefix), "/../") {
+			return nil
+		}
+	}
+	return fmt.Errorf("firecracker jailer path %q is outside the allowed prefixes", raw)
+}
+
+// firecrackerMachineConfig maps workload limits onto microVM resources or
+// rejects the request when the limits cannot be honoured. CPUShares are a
+// relative weight, not a vCPU count: only an explicit, bounded vCPU count is
+// accepted here.
+func firecrackerMachineConfig(req CreateRequest) (vcpuCount, memSizeMib int, err error) {
+	vcpuCount = 1
+	memSizeMib = 512
+	if req.CPUPercent > 0 {
+		// 100 percent == 1 vCPU, rounded up, capped at the microVM ceiling.
+		vcpuCount = int((req.CPUPercent + 99) / 100)
+	} else if req.CPUShares > 0 {
+		// Shares cannot be translated to vCPUs without the host's total, so
+		// only the unambiguous 1:1 legacy values are honoured.
+		if req.CPUShares < 1 || req.CPUShares > 32 {
+			return 0, 0, fmt.Errorf("firecracker cpus must map to 1-32 vCPUs; got cpuShares=%d (use cpuPercent instead)", req.CPUShares)
+		}
+		vcpuCount = int(req.CPUShares)
+	}
+	if req.MemoryMB > 0 {
+		if req.MemoryMB < 128 || req.MemoryMB > 65536 {
+			return 0, 0, fmt.Errorf("firecracker memory must be between 128MiB and 64GiB; got %dMiB", req.MemoryMB)
+		}
+		memSizeMib = int(req.MemoryMB)
+	}
+	if vcpuCount < 1 || vcpuCount > 32 {
+		return 0, 0, fmt.Errorf("firecracker vcpu count must be between 1 and 32; got %d", vcpuCount)
+	}
+	if len(req.Mounts) > 0 {
+		return 0, 0, errors.New("firecracker runtime does not support custom host mounts")
+	}
+	return vcpuCount, memSizeMib, nil
 }
 
 func (r *FirecrackerRuntime) Provider() string {
@@ -169,9 +237,43 @@ func (r *FirecrackerRuntime) fcDo(ctx context.Context, method, socketPath, path 
 	return client.Do(req)
 }
 
+// fcDoChecked performs a Firecracker API call, drains and closes the response
+// body, and rejects non-2xx statuses as errors. Every caller must use this
+// instead of fcDo directly: ignoring the status would mark a rejected
+// microVM as running, and ignoring the body would leak connections.
+func (r *FirecrackerRuntime) fcDoChecked(ctx context.Context, method, socketPath, path string, body interface{}) ([]byte, error) {
+	resp, err := r.fcDo(ctx, method, socketPath, path, body)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	data, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		detail := strings.TrimSpace(string(data))
+		if detail == "" {
+			detail = resp.Status
+		}
+		if len(detail) > 512 {
+			detail = detail[:512]
+		}
+		return nil, fmt.Errorf("firecracker %s %s rejected: %s: %s", method, path, resp.Status, detail)
+	}
+	return data, nil
+}
+
 func (r *FirecrackerRuntime) Create(ctx context.Context, req CreateRequest) error {
 	if err := validateCreateRequest(req); err != nil {
 		return err
+	}
+	// Fail closed on limits that cannot be mapped onto a microVM before
+	// recording any instance state.
+	if _, _, err := firecrackerMachineConfig(req); err != nil {
+		return err
+	}
+	if strings.TrimSpace(req.RootDir) != "" {
+		if _, err := validateRootDir(req.RootDir); err != nil {
+			return err
+		}
 	}
 
 	vmID := containerName(req.ServerID)
@@ -254,14 +356,14 @@ func (r *FirecrackerRuntime) configureMicroVM(ctx context.Context, socketPath st
 		kernelArgs += " random.trust_cpu=on"
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/boot-source", map[string]interface{}{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/boot-source", map[string]interface{}{
 		"kernel_image_path": r.config.KernelImage,
 		"boot_args":         kernelArgs,
 	}); err != nil {
 		return fmt.Errorf("set boot source: %w", err)
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/drives/rootfs", map[string]interface{}{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/drives/rootfs", map[string]interface{}{
 		"drive_id":       "rootfs",
 		"path_on_host":   r.config.RootfsImage,
 		"is_root_device": true,
@@ -270,13 +372,9 @@ func (r *FirecrackerRuntime) configureMicroVM(ctx context.Context, socketPath st
 		return fmt.Errorf("set rootfs: %w", err)
 	}
 
-	vcpuCount := 1
-	memSizeMib := 512
-	if req.CPUShares > 0 {
-		vcpuCount = int(req.CPUShares)
-	}
-	if req.MemoryMB > 0 {
-		memSizeMib = int(req.MemoryMB)
+	vcpuCount, memSizeMib, err := firecrackerMachineConfig(req)
+	if err != nil {
+		return err
 	}
 
 	machineConfig := map[string]interface{}{
@@ -287,7 +385,7 @@ func (r *FirecrackerRuntime) configureMicroVM(ctx context.Context, socketPath st
 		machineConfig["cpu_template"] = r.config.CPUTemplate
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/machine-config", machineConfig); err != nil {
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/machine-config", machineConfig); err != nil {
 		return fmt.Errorf("set machine config: %w", err)
 	}
 
@@ -328,13 +426,13 @@ func (r *FirecrackerRuntime) ensureInstanceRunning(ctx context.Context, vmID, so
 			}
 		}
 		if len(mmdsData) > 0 {
-			if _, err := r.fcDo(ctx, "PUT", socketPath, "/mmds", mmdsData); err != nil {
+			if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/mmds", mmdsData); err != nil {
 				return fmt.Errorf("set mmds: %w", err)
 			}
 		}
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/actions", map[string]string{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/actions", map[string]string{
 		"action_type": "InstanceStart",
 	}); err != nil {
 		return fmt.Errorf("start instance: %w", err)
@@ -428,14 +526,14 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 	}
 
 	kernelArgs := "console=ttyS0 noapic reboot=k panic=1 pci=off nomodules"
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/boot-source", map[string]interface{}{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/boot-source", map[string]interface{}{
 		"kernel_image_path": r.config.KernelImage,
 		"boot_args":         kernelArgs,
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("set boot source: %w", err)
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/drives/rootfs", map[string]interface{}{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/drives/rootfs", map[string]interface{}{
 		"drive_id":       "rootfs",
 		"path_on_host":   r.config.RootfsImage,
 		"is_root_device": true,
@@ -444,7 +542,7 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 		return InstallResult{}, fmt.Errorf("set rootfs: %w", err)
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/machine-config", map[string]interface{}{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/machine-config", map[string]interface{}{
 		"vcpu_count":   1,
 		"mem_size_mib": 512,
 	}); err != nil {
@@ -461,11 +559,11 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 		"env":      req.Env,
 		"root_dir": rootDir,
 	}
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/mmds", mmdsData); err != nil {
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/mmds", mmdsData); err != nil {
 		return InstallResult{}, fmt.Errorf("set mmds: %w", err)
 	}
 
-	if _, err := r.fcDo(ctx, "PUT", socketPath, "/actions", map[string]string{
+	if _, err := r.fcDoChecked(ctx, "PUT", socketPath, "/actions", map[string]string{
 		"action_type": "InstanceStart",
 	}); err != nil {
 		return InstallResult{}, fmt.Errorf("start instance: %w", err)
@@ -489,11 +587,21 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 	drain.Wait()
 	logs := installLogs.String()
 
+	// Report the installer's real exit code. Unknown is not zero: a missing
+	// ProcessState means the outcome was not observed and must surface as an
+	// error rather than a fabricated success.
+	exitCode := -1
 	r.mu.Lock()
+	if inst.cmd != nil && inst.cmd.ProcessState != nil {
+		exitCode = inst.cmd.ProcessState.ExitCode()
+	}
 	delete(r.instances, vmID)
 	r.mu.Unlock()
+	if exitCode < 0 {
+		return InstallResult{ExitCode: exitCode, Logs: logs}, errors.New("firecracker installer exit code is unknown")
+	}
 
-	return InstallResult{ExitCode: 0, Logs: logs}, nil
+	return InstallResult{ExitCode: exitCode, Logs: logs}, nil
 }
 
 func (r *FirecrackerRuntime) Inspect(ctx context.Context, serverID string) (ContainerState, error) {
@@ -503,11 +611,21 @@ func (r *FirecrackerRuntime) Inspect(ctx context.Context, serverID string) (Cont
 		return ContainerState{ServerID: serverID, Exists: false}, nil
 	}
 
-	running := false
+	running := inst.running
+	alive := false
 	if inst.cmd != nil && inst.cmd.Process != nil {
 		if err := inst.cmd.Process.Signal(unix.Signal(0)); err == nil {
-			running = true
+			alive = true
 		}
+	}
+	// The reaped flag is authoritative: a process that exited but has not
+	// been reaped yet must not be reported as running.
+	running = running && alive
+	status := "created"
+	if running {
+		status = statusRunning
+	} else if inst.cmd != nil {
+		status = "stopped"
 	}
 
 	return ContainerState{
@@ -515,7 +633,7 @@ func (r *FirecrackerRuntime) Inspect(ctx context.Context, serverID string) (Cont
 		ID:        vmID,
 		Exists:    true,
 		Running:   running,
-		Status:    statusRunning,
+		Status:    status,
 		StartedAt: inst.createdAt,
 	}, nil
 }
@@ -526,18 +644,25 @@ func (r *FirecrackerRuntime) List(ctx context.Context) ([]ContainerState, error)
 
 	states := make([]ContainerState, 0, len(r.instances))
 	for _, inst := range r.instances {
-		running := false
+		alive := false
 		if inst.cmd != nil && inst.cmd.Process != nil {
 			if err := inst.cmd.Process.Signal(unix.Signal(0)); err == nil {
-				running = true
+				alive = true
 			}
+		}
+		running := inst.running && alive
+		status := "created"
+		if running {
+			status = statusRunning
+		} else if inst.cmd != nil {
+			status = "stopped"
 		}
 		states = append(states, ContainerState{
 			ServerID:  inst.machineID,
 			ID:        inst.vmID,
 			Exists:    true,
 			Running:   running,
-			Status:    statusRunning,
+			Status:    status,
 			StartedAt: inst.createdAt,
 		})
 	}
@@ -565,6 +690,14 @@ func (r *FirecrackerRuntime) SendCommand(ctx context.Context, serverID, command 
 func (r *FirecrackerRuntime) Stop(ctx context.Context, serverID string) error {
 	inst, ok := r.getInstance(serverID)
 	if !ok {
+		return fmt.Errorf("workload %q does not exist", serverID)
+	}
+	if inst.cmd == nil || inst.cmd.Process == nil || inst.done == nil {
+		r.mu.Lock()
+		if inst, ok := r.instances[containerName(serverID)]; ok {
+			inst.running = false
+		}
+		r.mu.Unlock()
 		return nil
 	}
 
@@ -594,7 +727,7 @@ func (r *FirecrackerRuntime) WaitForStop(ctx context.Context, serverID string, d
 
 	inst, ok := r.getInstance(serverID)
 	if !ok {
-		return nil
+		return fmt.Errorf("workload %q does not exist", serverID)
 	}
 
 	if inst.cmd == nil || inst.cmd.Process == nil {
@@ -627,7 +760,7 @@ func (r *FirecrackerRuntime) WaitForStop(ctx context.Context, serverID string, d
 func (r *FirecrackerRuntime) Kill(ctx context.Context, serverID string) error {
 	inst, ok := r.getInstance(serverID)
 	if !ok {
-		return nil
+		return fmt.Errorf("workload %q does not exist", serverID)
 	}
 
 	if inst.cmd != nil && inst.cmd.Process != nil {
@@ -674,39 +807,43 @@ func (r *FirecrackerRuntime) Stats(ctx context.Context, serverID string) (Stats,
 	if !ok {
 		return Stats{}, fmt.Errorf("instance %s not found", serverID)
 	}
+	if !inst.running {
+		return Stats{}, fmt.Errorf("instance %s is not running: no metrics to report", serverID)
+	}
 
-	resp, err := r.fcDo(ctx, "GET", inst.socketPath, "/vm/config", nil)
+	configData, err := r.fcDoChecked(ctx, "GET", inst.socketPath, "/vm/config", nil)
 	if err != nil {
 		return Stats{}, fmt.Errorf("get vm config: %w", err)
 	}
-	defer resp.Body.Close()
 
 	var vmConfig struct {
 		VcpuCount  int `json:"vcpu_count"`
 		MemSizeMib int `json:"mem_size_mib"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&vmConfig); err != nil {
+	if err := json.Unmarshal(configData, &vmConfig); err != nil {
 		return Stats{}, fmt.Errorf("decode vm config: %w", err)
 	}
 
-	stats := Stats{
+	// Usage is only reported when the metrics endpoint answers. A limit-only
+	// reading with zero usage would look like an idle VM; unknown usage must
+	// surface as an error instead.
+	metricsData, err := r.fcDoChecked(ctx, "GET", inst.socketPath, "/metrics", nil)
+	if err != nil {
+		return Stats{}, fmt.Errorf("get firecracker metrics: %w", err)
+	}
+	var metrics struct {
+		MemoryUsageMB   float64 `json:"memory_usage_mb"`
+		CPUUsagePercent float64 `json:"cpu_usage_percent"`
+	}
+	if err := json.Unmarshal(metricsData, &metrics); err != nil {
+		return Stats{}, fmt.Errorf("decode firecracker metrics: %w", err)
+	}
+
+	return Stats{
 		MemoryLimit: uint64(vmConfig.MemSizeMib) * 1024 * 1024,
-	}
-
-	metricsResp, err := r.fcDo(ctx, "GET", inst.socketPath, "/metrics", nil)
-	if err == nil {
-		defer metricsResp.Body.Close()
-		var metricsData struct {
-			MemoryUsageMB   float64 `json:"memory_usage_mb"`
-			CPUUsagePercent float64 `json:"cpu_usage_percent"`
-		}
-		if err := json.NewDecoder(metricsResp.Body).Decode(&metricsData); err == nil {
-			stats.MemoryBytes = uint64(metricsData.MemoryUsageMB) * 1024 * 1024
-			stats.CPUPercent = metricsData.CPUUsagePercent
-		}
-	}
-
-	return stats, nil
+		MemoryBytes: uint64(metrics.MemoryUsageMB) * 1024 * 1024,
+		CPUPercent:  metrics.CPUUsagePercent,
+	}, nil
 }
 
 func (r *FirecrackerRuntime) Logs(ctx context.Context, serverID string) (io.ReadCloser, error) {
@@ -783,31 +920,12 @@ func (r *FirecrackerRuntime) StatsStream(ctx context.Context, serverID string) (
 		for {
 			select {
 			case <-ticker.C:
-				resp, err := r.fcDo(ctx, "GET", inst.socketPath, "/vm/config", nil)
+				stats, err := r.Stats(ctx, serverID)
 				if err != nil {
-					continue
-				}
-				var vmConfig struct {
-					VcpuCount  int `json:"vcpu_count"`
-					MemSizeMib int `json:"mem_size_mib"`
-				}
-				_ = json.NewDecoder(resp.Body).Decode(&vmConfig)
-				resp.Body.Close()
-
-				stats := Stats{
-					MemoryLimit: uint64(vmConfig.MemSizeMib) * 1024 * 1024,
-				}
-
-				metricsResp, err := r.fcDo(ctx, "GET", inst.socketPath, "/metrics", nil)
-				if err == nil {
-					var metricsData struct {
-						MemoryUsageMB   float64 `json:"memory_usage_mb"`
-						CPUUsagePercent float64 `json:"cpu_usage_percent"`
-					}
-					_ = json.NewDecoder(metricsResp.Body).Decode(&metricsData)
-					metricsResp.Body.Close()
-					stats.MemoryBytes = uint64(metricsData.MemoryUsageMB) * 1024 * 1024
-					stats.CPUPercent = metricsData.CPUUsagePercent
+					// Propagate the failure instead of emitting a zero frame:
+					// a silent EOF reads as "no load" rather than "no metrics".
+					_ = writer.CloseWithError(err)
+					return
 				}
 
 				body, _ := json.Marshal(stats)
@@ -823,38 +941,10 @@ func (r *FirecrackerRuntime) StatsStream(ctx context.Context, serverID string) (
 }
 
 func (r *FirecrackerRuntime) AttachConsole(ctx context.Context, serverID string) (ConsoleSession, error) {
-	inst, ok := r.getInstance(serverID)
-	if !ok {
-		return nil, fmt.Errorf("instance %s not found", serverID)
-	}
-
-	reader, writer := io.Pipe()
-	go func() {
-		defer writer.Close()
-		buf := make([]byte, 4096)
-		for {
-			if inst.stdout != nil {
-				n, err := inst.stdout.Read(buf)
-				if n > 0 {
-					_, _ = writer.Write(buf[:n])
-				}
-				if err != nil {
-					return
-				}
-			}
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				time.Sleep(50 * time.Millisecond)
-			}
-		}
-	}()
-
-	return &firecrackerConsoleSession{
-		reader: reader,
-		writer: writer,
-	}, nil
+	// Firecracker has no Docker-style attach stream. Console access requires a
+	// vsock guest agent, which this runtime does not provision; returning a
+	// pipe that silently drops input would be a dishonest console.
+	return nil, errors.New("interactive console attachment is not supported by the firecracker runtime: configure vsock access")
 }
 
 func (r *FirecrackerRuntime) Delete(ctx context.Context, serverID string) error {
@@ -868,6 +958,10 @@ func (r *FirecrackerRuntime) killInstance(vmID string) error {
 
 	inst, ok := r.instances[vmID]
 	if !ok {
+		// Delete is idempotent: removing a workload that does not exist is
+		// a no-op (matching Docker Delete on NotFound). Stop/Kill/Wait
+		// above still return does-not-exist so an ambiguous target is
+		// never reported as stopped.
 		return nil
 	}
 

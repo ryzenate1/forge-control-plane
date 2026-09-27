@@ -1,9 +1,8 @@
 "use client";
 
-import { useQuery } from "@tanstack/react-query";
 import { BellRing } from "lucide-react";
 import { Card, CardHeader, SectionHeader, AdminErrorState, AdminLoadingState, Pill } from "@/components/admin/admin-ui";
-import { getSystemInfo } from "@/lib/api/monitoring";
+import { useMonitoringSummaryQuery, summaryIsTrustworthy, useNodesQuery, useServersQuery } from "@/lib/admin/telemetry";
 import { SystemMetrics } from "@/components/monitoring/system-metrics";
 import { NodeList } from "@/components/monitoring/node-list";
 import { HealthStatusGauge } from "@/components/health/health-status-gauge";
@@ -13,14 +12,16 @@ import { DegradedBanner, ApiUnavailableState, BeaconUnavailableState, RetryingBa
 import { ApiError } from "@/lib/api/http";
 
 export default function ConsoleHealthPage() {
-  const { data, isLoading, isError, error, refetch, isFetching } = useQuery({
-    queryKey: ["monitoring", "summary"],
-    queryFn: getSystemInfo,
-    refetchInterval: 30_000,
-    retry: 1,
+  const { data, isLoading, isError, error, refetch, isFetching } = useMonitoringSummaryQuery();
+  const nodesQuery = useNodesQuery();
+  const serversQuery = useServersQuery();
+  const trustworthy = summaryIsTrustworthy(data, {
+    nodeCount: nodesQuery.data?.length,
+    serverCount: serversQuery.data?.length,
   });
+  const displayData = trustworthy ? data : undefined;
 
-  const isDegraded = !isLoading && !isError && data?.recentHealthChecks?.some((check) => check.reachable === false || check.status === "degraded" || check.status === "critical");
+  const isDegraded = !isLoading && !isError && displayData?.recentHealthChecks?.some((check) => check.reachable === false || check.status === "degraded" || check.status === "critical");
 
   if (isError) {
     const kind = error instanceof ApiError ? error.status : 0;
@@ -46,18 +47,20 @@ export default function ConsoleHealthPage() {
       <SectionHeader
         title="Health"
         sub="Node status, endpoint checks and system resource usage across the fleet"
-        action={<Pill tone={data?.unacknowledgedAlerts == null ? "neutral" : data.unacknowledgedAlerts > 0 ? "red" : "green"}>{data?.unacknowledgedAlerts ?? "Unreported"} unacknowledged alerts</Pill>}
+        action={<Pill tone={displayData?.unacknowledgedAlerts == null ? "neutral" : displayData.unacknowledgedAlerts > 0 ? "red" : "green"}>{trustworthy ? `${displayData?.unacknowledgedAlerts ?? "Unreported"} unacknowledged alerts` : "Summary unreported"}</Pill>}
       />
 
       <div className="grid gap-4 lg:grid-cols-3">
-        <HealthStatusGauge checks={data?.recentHealthChecks ?? []} className="lg:col-span-2" />
+        <HealthStatusGauge checks={displayData?.recentHealthChecks ?? []} className="lg:col-span-2" />
         <Card>
           <CardHeader title="Alert Queue" icon={BellRing} />
           <div className="p-4 text-sm text-slate-300">
-            {data?.unacknowledgedAlerts == null
+            {!trustworthy
+              ? "Alert count is unavailable — observability not reporting."
+              : displayData?.unacknowledgedAlerts == null
               ? "Alert count is unavailable."
-              : data.unacknowledgedAlerts > 0
-              ? `${data.unacknowledgedAlerts} unacknowledged alert${data.unacknowledgedAlerts === 1 ? "" : "s"} require attention.`
+              : displayData.unacknowledgedAlerts > 0
+              ? `${displayData.unacknowledgedAlerts} unacknowledged alert${displayData.unacknowledgedAlerts === 1 ? "" : "s"} require attention.`
               : "All alerts are acknowledged. No action needed right now."}
           </div>
         </Card>
@@ -66,7 +69,7 @@ export default function ConsoleHealthPage() {
       {isLoading ? (
         <AdminLoadingState label="Loading monitoring summary…" />
       ) : (
-        <HealthSummary checks={data?.recentHealthChecks ?? []} />
+        <HealthSummary checks={displayData?.recentHealthChecks ?? []} />
       )}
 
       <div className="grid gap-6 xl:grid-cols-[1fr_320px]">

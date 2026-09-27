@@ -4,6 +4,7 @@ import { useState } from "react";
 import { useMutation } from "@tanstack/react-query";
 import { Plus, X } from "lucide-react";
 import { createContainer, type CreateContainerRequest } from "@/lib/api/docker";
+import { NodeSelect } from "@/components/docker/node-select";
 import { Btn, Input, Modal, ModalFooter } from "@/components/admin/admin-ui";
 import { Alert } from "@/components/ui/primitives";
 
@@ -19,12 +20,14 @@ export function ContainerCreateModal({ onClose, onCreated }: { onClose: () => vo
   const [ports, setPorts] = useState<PortMapping[]>([{ hostPort: "", containerPort: "", protocol: "tcp" }]);
   const [envVars, setEnvVars] = useState<EnvVar[]>([{ key: "", value: "" }]);
   const [volumes, setVolumes] = useState<VolumeBinding[]>([{ hostPath: "", containerPath: "", readOnly: false }]);
+  const [nodeId, setNodeId] = useState("");
   const [error, setError] = useState("");
 
   const createMut = useMutation({
     mutationFn: () => {
       const config: CreateContainerRequest = {
         image,
+        nodeId,
       };
       if (name) config.name = name;
       if (network) config.network = network;
@@ -90,6 +93,8 @@ export function ContainerCreateModal({ onClose, onCreated }: { onClose: () => vo
           <Input label="Image *" placeholder="nginx:latest" value={image} onChange={setImage} />
           <Input label="Container Name" placeholder="my-container" value={name} onChange={setName} />
         </div>
+
+        <NodeSelect value={nodeId} onChange={setNodeId} />
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div>
@@ -181,7 +186,7 @@ export function ContainerCreateModal({ onClose, onCreated }: { onClose: () => vo
           onCancel={onClose}
           onConfirm={() => createMut.mutate()}
           confirmLabel={createMut.isPending ? "Creating..." : "Create"}
-          disabled={!image || createMut.isPending}
+          disabled={!image || !nodeId || createMut.isPending}
         />
       </div>
     </Modal>

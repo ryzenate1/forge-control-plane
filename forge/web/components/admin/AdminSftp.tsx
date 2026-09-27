@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -12,7 +13,7 @@ import {
   type SFTPGlobalConfig,
   type SFTPNodeConfig,
 } from "@/lib/api/sftp";
-import { fetchNodes } from "@/lib/api";
+import {  } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -36,7 +37,7 @@ export function AdminSftp() {
 
   const globalQ = useQuery({ queryKey: ["admin-sftp-settings"], queryFn: fetchSFTPGlobalConfig, retry: false });
   const nodesQ = useQuery({ queryKey: ["admin-sftp-nodes"], queryFn: fetchSFTPNodeConfigs, retry: false });
-  const allNodesQ = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, retry: false });
+  const allNodesQ = useNodesQuery();
 
   const [globalForm, setGlobalForm] = useState<SFTPGlobalConfig | null>(null);
   const [editingNodeId, setEditingNodeId] = useState<string | null>(null);

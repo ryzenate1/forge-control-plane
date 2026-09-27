@@ -5,6 +5,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"gamepanel/beacon/internal/runtime"
 )
 
 // TestCreatePhantomProvider_Rejected verifies honesty fix 110-03-17:
@@ -22,9 +24,12 @@ func TestCreatePhantomProvider_Rejected(t *testing.T) {
 		{" KVM ", true},
 		{"unknown-phantom", true},
 		{"docker", false},
-		{"containerd", false},
+		// containerd/firecracker are only servable in builds compiled with
+		// their tags; without the tag IsSupportedProvider rejects them and
+		// the handler must refuse rather than serve Docker behind their back.
+		{"containerd", !runtime.IsSupportedProvider("containerd")},
 		{"podman", false},
-		{"firecracker", false},
+		{"firecracker", !runtime.IsSupportedProvider("firecracker")},
 		{"kubernetes", false},
 		{"", false},
 	}

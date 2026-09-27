@@ -1,4 +1,5 @@
 "use client";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -8,7 +9,7 @@ import {
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
-  fetchNodes, createNode, deleteNode, fetchServers, fetchLocations, fetchRegions, fetchNode, updateNode, rotateNodeToken,
+  createNode, deleteNode, fetchServers, fetchLocations, fetchRegions, fetchNode, updateNode, rotateNodeToken,
   fetchNodeAllocations, fetchNodeServers, fetchNodeLifecycle,
   fetchNodeSystemInformation, setAllocationAlias, deleteAllocationsBulk, getBeaconAPIURL,
   type ApiNode, type ApiAllocation, type ApiLocation, type ApiRegion, type ApiServer,
@@ -51,7 +52,7 @@ function validateNodeForm(name: string, locationId: string, fqdn: string, scheme
 }
 
 export function AdminNodes() {
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
+  const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => Array.isArray(nodesQuery.data) ? nodesQuery.data : [], [nodesQuery.data]);
   const locationsQuery = useQuery({ queryKey: ["locations"], queryFn: fetchLocations });
   const locations = useMemo(() => Array.isArray(locationsQuery.data) ? locationsQuery.data : [], [locationsQuery.data]);

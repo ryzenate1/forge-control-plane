@@ -5,6 +5,11 @@ import "context"
 type SchedulerType string
 
 const (
+	// SchedulerTypeDocker matches the nodes.scheduler_type column default and
+	// the admin UI vocabulary, but docker is deliberately NOT served by this
+	// package: docker workloads run through Beacon's runtime adapters over
+	// the Panel→Beacon HTTP client. NewScheduler/NodeScheduler report it with
+	// ErrDockerHandledByBeacon instead of pretending to build one.
 	SchedulerTypeDocker SchedulerType = "docker"
 	SchedulerTypeK3s    SchedulerType = "k3s"
 	SchedulerTypeNomad  SchedulerType = "nomad"
@@ -74,10 +79,16 @@ type ScaleRequest struct {
 	Replicas int    `json:"replicas"`
 }
 
+// ResourceUsage carries only what the platform actually measured. Fields are
+// pointers because "not reported" must never be encoded as zero: a query that
+// did not answer for a metric leaves that field nil (e.g. metrics-server
+// reports no disk usage; a Nomad job spec reports configured CPU, never a
+// live percentage).
 type ResourceUsage struct {
-	CPUPercent float64 `json:"cpuPercent"`
-	MemoryMB   int64   `json:"memoryMb"`
-	DiskMB     int64   `json:"diskMb"`
+	CPUPercent *float64 `json:"cpuPercent,omitempty"`
+	CPUMHz     *int64   `json:"cpuMHz,omitempty"`
+	MemoryMB   *int64   `json:"memoryMb,omitempty"`
+	DiskMB     *int64   `json:"diskMb,omitempty"`
 }
 
 type LogEntry struct {

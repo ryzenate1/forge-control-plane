@@ -5,9 +5,11 @@ import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { LogOut, Menu, User, X } from "lucide-react";
-import { fetchCurrentUser, logout } from "@/lib/api";
+import { logout } from "@/lib/api";
+import { useCurrentUser } from "@/lib/api/use-current-user";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
+import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { ConsoleNav } from "@/components/console/console-nav";
 import { consoleNavGroups } from "@/components/console/console-registry";
 import { humanizeSegment, resolveActive } from "@/lib/nav/active";
@@ -79,12 +81,7 @@ function ConsoleFrame({ children }: { children: React.ReactNode }) {
     return applyBreadcrumbOverrides(trail, overrides);
   }, [pathname, overrides]);
 
-  const userQuery = useQuery({
-    queryKey: ["current-user"],
-    queryFn: fetchCurrentUser,
-    staleTime: 30_000,
-    retry: 1,
-  });
+  const userQuery = useCurrentUser();
 
   useEffect(() => {
     if (userQuery.data === null) {
@@ -95,8 +92,13 @@ function ConsoleFrame({ children }: { children: React.ReactNode }) {
   useEffect(() => { setMobileOpen(false); }, [pathname]);
 
   const handleLogout = async () => {
-    await logout();
-    router.push("/");
+    try {
+      await logout();
+    } finally {
+      useServerStore.getState().reset();
+      useTenancyStore.getState().reset();
+      router.push("/");
+    }
   };
 
   if (userQuery.isPending || userQuery.data === undefined) {

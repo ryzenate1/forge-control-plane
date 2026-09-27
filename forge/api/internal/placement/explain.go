@@ -8,6 +8,7 @@ type PlacementReport struct {
 	Request          WorkloadRequest
 	TotalCandidates  int
 	FilteredOut      []FilterReason
+	ScoreFailures    []ScoreFailure
 	ScoredCandidates []ScoreResult
 	Selected         *ScoreResult
 }
@@ -16,6 +17,14 @@ type FilterReason struct {
 	NodeID     string
 	Constraint Constraint
 	Reason     string
+}
+
+// ScoreFailure records a candidate that passed filtering but could not be
+// scored (capacity shortfall, scorer error). Dropped silently it would look
+// like the node was never considered; collected it explains a short ranking.
+type ScoreFailure struct {
+	NodeID string `json:"nodeId"`
+	Reason string `json:"reason"`
 }
 
 type ScoreBreakdown struct {
@@ -41,6 +50,9 @@ func ExplainPlacement(ctx context.Context, engine *Engine, candidates []Candidat
 
 	var viable []Candidate
 	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			break
+		}
 		passed := true
 		for _, constraint := range hardConstraints {
 			if err := engine.checker.checkSingle(candidate, constraint, constraintCtx); err != nil {
@@ -59,8 +71,15 @@ func ExplainPlacement(ctx context.Context, engine *Engine, candidates []Candidat
 	}
 
 	for _, c := range viable {
+		if err := ctx.Err(); err != nil {
+			break
+		}
 		score, reasons, err := engine.scorer.Score(ctx, c, req)
 		if err != nil {
+			report.ScoreFailures = append(report.ScoreFailures, ScoreFailure{
+				NodeID: c.NodeID,
+				Reason: err.Error(),
+			})
 			continue
 		}
 		bonus, bonusReasons := engine.checker.CheckSoft(c, req.Constraints, constraintCtx)

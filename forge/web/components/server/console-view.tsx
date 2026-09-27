@@ -974,7 +974,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
           aria-live="polite"
           className={cn(
             "flex flex-wrap items-center gap-x-3 gap-y-1 rounded-xl border px-3 py-2 text-xs",
-            track.phase === "failed" || track.phase === "cancelled" ? "border-[var(--danger)]/30 bg-[var(--danger)]/10 text-[var(--danger)]"
+            track.phase === "failed" || track.phase === "cancelled" ? "border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] text-[var(--danger)]"
               : track.phase === "succeeded" ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
                 : "border-[var(--line)] bg-[var(--surface-raised)] text-[var(--text-subtle)]",
           )}
@@ -1008,7 +1008,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
               <span className="hidden min-w-0 truncate font-mono text-[11px] text-[var(--text-muted)] sm:inline">· {presentation.detail}</span>
             </div>
             <div className="flex items-center gap-1">
-              <button aria-label="Toggle search" aria-pressed={searchOpen} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", searchOpen ? "bg-[var(--brand)]/10 text-[var(--brand)]" : "text-[var(--text-subtle)] hover:text-[var(--text)]")} onClick={() => setSearchOpen((v) => !v)} type="button"><Search size={14} /></button>
+              <button aria-label="Toggle search" aria-pressed={searchOpen} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", searchOpen ? "bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] text-[var(--brand)]" : "text-[var(--text-subtle)] hover:text-[var(--text)]")} onClick={() => setSearchOpen((v) => !v)} type="button"><Search size={14} /></button>
               <button aria-label={autoScroll ? "Freeze scroll" : "Auto-scroll"} aria-pressed={autoScroll} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", autoScroll ? "text-emerald-400" : "text-[var(--text-muted)] hover:text-[var(--text)]")} onClick={() => setAutoScroll((v) => !v)} type="button"><ArrowDown size={14} /></button>
               <button aria-label={showTimestamps ? "Hide timestamps" : "Show timestamps"} aria-pressed={showTimestamps} className={cn("rounded-md p-1.5 transition-colors hover:bg-white/5", showTimestamps ? "text-emerald-400" : "text-[var(--text-muted)] hover:text-[var(--text)]")} onClick={() => setShowTimestamps((v) => !v)} type="button"><Clock size={14} /></button>
               <button aria-label="Reconnect console" className="rounded-md p-1.5 text-[var(--text-subtle)] transition-colors hover:bg-white/5 hover:text-[var(--text)]" onClick={() => setNonce((value) => value + 1)} type="button"><RefreshCw size={14} /></button>
@@ -1020,7 +1020,7 @@ export function ConsoleView({ server }: { server: ApiServer }) {
           {session !== "connected" ? (
             <div className={cn(
               "flex flex-wrap items-center gap-x-3 gap-y-1 border-b px-3 py-2 text-xs",
-              presentation.tone === "bad" ? "border-[var(--danger)]/30 bg-[var(--danger)]/10 text-[var(--danger)]"
+              presentation.tone === "bad" ? "border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[color-mix(in_srgb,var(--danger)_10%,transparent)] text-[var(--danger)]"
                 : presentation.tone === "warn" ? "border-amber-500/30 bg-amber-500/10 text-amber-100"
                   : "border-[var(--line)] bg-[var(--surface-raised)] text-[var(--text-subtle)]",
             )}>

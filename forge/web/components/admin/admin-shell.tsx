@@ -6,11 +6,13 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown, ChevronRight, CheckCircle2, Clock, User } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser, logout, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
+import { logout, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
+import { useCurrentUser } from "@/lib/api/use-current-user";
 import { useHealthQuery } from "@/lib/admin/telemetry";
 import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
+import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { useT } from "@/components/TranslationProvider";
 import { useDismissOnOutside } from "@/lib/hooks/use-dismiss-on-outside";
 import { navListKeyDown, useNavDrawer } from "@/lib/hooks/use-nav-drawer";
@@ -89,7 +91,7 @@ function SidebarNav({
     cn(
       "flex w-full items-center gap-2.5 rounded-md border-l-2 px-2.5 py-1.5 text-left text-xs font-medium transition-colors motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
       active
-        ? "border-[var(--brand)] bg-[var(--brand)]/10 font-semibold text-[var(--brand)]"
+        ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] font-semibold text-[var(--brand)]"
         : "border-transparent text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]",
     );
 
@@ -197,13 +199,10 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { companyName } = useBranding();
-  const { currentUser, setCurrentUser } = useServerStore();
-  const userQuery = useQuery({
-    queryKey: ["current-user"],
-    queryFn: fetchCurrentUser,
-    staleTime: 30_000,
-    retry: 1,
-  });
+  const { currentUser } = useServerStore();
+  const resetServer = useServerStore((s) => s.reset);
+  const resetTenancy = useTenancyStore((s) => s.reset);
+  const userQuery = useCurrentUser();
   const user = userQuery.data === null ? null : userQuery.data ?? currentUser;
 
   // Canonical health report — see the note in AdminOverview. The shell wraps
@@ -300,7 +299,8 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
     } catch {
       // Session may already be gone server-side; still clear local state and leave.
     } finally {
-      setCurrentUser(null);
+      resetServer();
+      resetTenancy();
       router.push("/");
     }
   };
@@ -316,7 +316,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
   if (!userQuery.data) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--canvas)] p-4">
-        <div className="w-full max-w-md space-y-4 rounded-xl border border-[var(--danger)]/30 bg-[var(--surface-raised)] p-6 text-center" role="alert">
+        <div className="w-full max-w-md space-y-4 rounded-xl border border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[var(--surface-raised)] p-6 text-center" role="alert">
           <AlertTriangle size={28} className="mx-auto text-amber-400" strokeWidth={1.5} />
           <h1 className="text-xl font-bold text-[var(--text)]">{tOr("admin.shell.verifyFailedTitle", "Unable to verify admin access")}</h1>
           <p className="text-sm text-red-300">
@@ -707,7 +707,7 @@ function PlatformStatusPill({
     pending: { text: "Checking status…", dot: "bg-slate-400", chip: "border-[var(--line)] bg-white/[0.03] text-[var(--text-subtle)]", pulse: false },
     healthy: { text: "All Systems Operational", dot: "bg-emerald-500", chip: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", pulse: true },
     degraded: { text: "Platform Degraded", dot: "bg-amber-500", chip: "border-amber-500/30 bg-amber-500/15 text-amber-300", pulse: true },
-    unknown: { text: "Status Unknown", dot: "bg-rose-500", chip: "border-rose-500/30 bg-rose-500/10 text-rose-300", pulse: false },
+    unknown: { text: "Status Unknown", dot: "bg-unknown", chip: "border-unknown-line bg-unknown-subtle text-text-subtle", pulse: false },
   }[status];
 
   return (

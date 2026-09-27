@@ -124,10 +124,32 @@ type PlacementRequest struct {
 	// RuntimeProvider constrains placement to nodes whose runtime_provider
 	// matches. Empty (or "docker") leaves placement unconstrained.
 	RuntimeProvider string `json:"runtimeProvider,omitempty"`
-	MemoryMB        int    `json:"memoryMb,omitempty"`
-	CPUShares       int    `json:"cpuShares,omitempty"`
-	CPU             int    `json:"cpu,omitempty"`
-	DiskMB          int    `json:"diskMb,omitempty"`
+	// Constraints are scheduler-level placement constraints (required,
+	// preferred, forbidden) threaded through to the placement engine.
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
+	MemoryMB        int                   `json:"memoryMb,omitempty"`
+	CPUShares       int                   `json:"cpuShares,omitempty"`
+	CPU             int                   `json:"cpu,omitempty"`
+	DiskMB          int                   `json:"diskMb,omitempty"`
+}
+
+// PlacementConstraintType names how strongly a placement constraint binds.
+type PlacementConstraintType string
+
+const (
+	PlacementConstraintRequired  PlacementConstraintType = "required"
+	PlacementConstraintPreferred PlacementConstraintType = "preferred"
+	PlacementConstraintForbidden PlacementConstraintType = "forbidden"
+)
+
+// PlacementConstraint is the domain-level placement constraint. The scheduler
+// translates it into the engine's own constraint type so the domain package
+// stays free of engine imports.
+type PlacementConstraint struct {
+	Type     PlacementConstraintType `json:"type"`
+	Key      string                  `json:"key"`
+	Operator string                  `json:"operator"`
+	Value    string                  `json:"value"`
 }
 
 type ConstraintFailure struct {
@@ -204,20 +226,25 @@ type PlacementReason struct {
 }
 
 type PlaceReplicasRequest struct {
-	AppID         string `json:"appId"`
-	ReplicaCount  int    `json:"replicaCount"`
-	CPU           int    `json:"cpu"`
-	MemoryMB      int    `json:"memoryMb"`
-	DiskMB        int    `json:"diskMb"`
-	RegionID      string `json:"regionId,omitempty"`
-	RequiredNode  string `json:"requiredNode,omitempty"`
-	PreferredNode string `json:"preferredNode,omitempty"`
-	RuntimeFilter string `json:"runtimeFilter,omitempty"`
+	AppID           string `json:"appId"`
+	ReplicaCount    int    `json:"replicaCount"`
+	CPU             int    `json:"cpu"`
+	MemoryMB        int    `json:"memoryMb"`
+	DiskMB          int    `json:"diskMb"`
+	RegionID        string `json:"regionId,omitempty"`
+	RequiredNode    string `json:"requiredNode,omitempty"`
+	PreferredNode   string `json:"preferredNode,omitempty"`
+	RuntimeFilter   string `json:"runtimeFilter,omitempty"`
+	StorageLocality string `json:"storageLocality,omitempty"`
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
 }
 
 type ScaleRequest struct {
-	AppID        string `json:"appId"`
-	ReplicaCount int    `json:"replicaCount"`
+	AppID           string `json:"appId"`
+	ReplicaCount    int    `json:"replicaCount"`
+	RegionID        string `json:"regionId,omitempty"`
+	StorageLocality string `json:"storageLocality,omitempty"`
+	Constraints     []PlacementConstraint `json:"constraints,omitempty"`
 }
 
 type ReplaceFailedInstanceRequest struct {

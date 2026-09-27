@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
-import { useParams, usePathname } from "next/navigation";
+import { useParams, usePathname, useRouter } from "next/navigation";
 import { AlertCircle, RefreshCw } from "lucide-react";
 import { fetchCurrentUser, fetchServer, type ApiServer, type ApiUser } from "@/lib/api";
 import { ServerNav, type ServerTab } from "@/components/server/server-nav";
@@ -32,9 +32,11 @@ export function ServerConsoleLayout(props: ServerConsoleLayoutProps) {
 function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsoleLayoutProps) {
   const params = useParams();
   const pathname = usePathname();
+  const router = useRouter();
   const serverId = String(params.id ?? "");
   const [server, setServer] = useState<ApiServer | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
   const [permissions, setPermissions] = useState<string[] | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -45,8 +47,16 @@ function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsol
     abortRef.current = false;
     setLoading(true);
     setError(null);
+    setSessionExpired(false);
     try {
       const [nextServer, nextUser] = await Promise.all([fetchServer(serverId), fetchCurrentUser()]);
+      if (abortRef.current) return;
+      // An explicit null user means the session is gone — never render the
+      // shell without a user, bounce to sign-in instead.
+      if (nextUser == null) {
+        setSessionExpired(true);
+        return;
+      }
       setServer(nextServer);
       setUser(nextUser);
 
@@ -70,8 +80,16 @@ function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsol
 
   useEffect(() => { void load(); return () => { abortRef.current = true; }; }, [load]);
 
+  useEffect(() => {
+    if (sessionExpired) router.replace(`/?reason=session-expired&next=${encodeURIComponent(pathname)}`);
+  }, [pathname, router.replace, sessionExpired]);
+
   if (loading) {
     return <div className="grid min-h-screen place-items-center bg-[var(--canvas)] text-slate-300" role="status"><div className="text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-slate-700 border-t-red-500" /><p className="mt-3 text-sm">Loading server…</p></div></div>;
+  }
+
+  if (sessionExpired) {
+    return <div className="grid min-h-screen place-items-center bg-[var(--canvas)] text-slate-300" role="status"><div className="text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-slate-700 border-t-red-500" /><p className="mt-3 text-sm">Session expired — returning to sign in…</p></div></div>;
   }
 
   if (error || !server) {

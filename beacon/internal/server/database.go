@@ -136,7 +136,10 @@ func databaseDefaultPort(engine string) int {
 }
 
 func getDockerClient() (*client.Client, error) {
-	return client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
+	if err := runtime.ValidateDockerEndpoint(os.Getenv("DOCKER_HOST")); err != nil {
+		return nil, err
+	}
+	return client.NewClientWithOpts(client.FromEnv, client.WithVersion("1.43"))
 }
 
 func getDefaultNetwork() string {

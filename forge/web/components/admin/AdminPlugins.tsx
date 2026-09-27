@@ -165,15 +165,15 @@ export function AdminPlugins() {
       sub="PLATFORM · Integrations: plugin manifest registry with install/update/enable/disable, marketplace, discover and hooks. Distinct from Deploy (Compose) and Infrastructure."
       action={
         <div className="flex gap-2">
-          <Btn tone="ghost" onClick={() => setShowFile(true)} className="border border-[var(--brand)]/30 hover:bg-[var(--brand)]/10"><Upload size={14}/> Import File</Btn>
-          <Btn onClick={() => setOpen(true)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={14}/> Import Manifest URL</Btn>
+          <Btn tone="ghost" onClick={() => setShowFile(true)} className="border border-[color-mix(in_srgb,var(--brand)_30%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"><Upload size={14}/> Import File</Btn>
+          <Btn onClick={() => setOpen(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={14}/> Import Manifest URL</Btn>
         </div>
       }
     />
     <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
       <span className="font-semibold text-slate-300">PLATFORM</span> · <span className="font-semibold text-slate-200">Integrations</span> — <code className="font-mono text-[11px]">Plugins</code> (this page) · <code className="font-mono">Webhooks</code> · <code className="font-mono">API Keys</code> + <code className="font-mono">Settings</code> for panel. Plugin hooks fire on workload lifecycle — see <code className="font-mono">GET /admin/plugins/:id/hooks</code>.
     </div>
-    <div className="rounded-lg border border-[var(--brand)]/30 bg-[var(--brand)]/10 p-3 text-sm text-slate-200">
+    <div className="rounded-lg border border-[color-mix(in_srgb,var(--brand)_30%,transparent)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] p-3 text-sm text-slate-200">
       <div className="flex items-start gap-2">
         <Zap className="h-4 w-4 mt-0.5 flex-shrink-0 text-[var(--brand)]" />
         <div>
@@ -186,7 +186,7 @@ export function AdminPlugins() {
     <div className="flex items-center gap-3">
       <div className="relative w-64">
         <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search plugins…" className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface)] pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-[var(--brand)]/50" />
+        <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search plugins…" className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface)] pl-9 pr-3 text-sm text-slate-100 placeholder:text-slate-500 outline-none focus:border-[color-mix(in_srgb,var(--brand)_50%,transparent)]" />
       </div>
       <span className="text-xs text-slate-500">{tab === "installed" ? `${filteredInstalled.length} installed` : tab === "marketplace" ? `${filteredMarketplace.length} marketplace` : `${filteredDiscover.length} discovered`}</span>
     </div>
@@ -222,7 +222,7 @@ export function AdminPlugins() {
                   <td className="px-4 py-3 text-right">
                     <div className="flex justify-end gap-1.5 flex-wrap">
                       <Btn size="sm" tone="ghost" onClick={() => setHooksPluginId(plugin.id)} title="GET /:id/hooks"><Compass size={12}/> Hooks</Btn>
-                      <Btn size="sm" tone="ghost" onClick={() => setEditingPlugin(plugin)} className="border border-[var(--brand)]/20"><Settings2 size={12}/> Edit (PATCH)</Btn>
+                      <Btn size="sm" tone="ghost" onClick={() => setEditingPlugin(plugin)} className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)]"><Settings2 size={12}/> Edit (PATCH)</Btn>
                       <Btn size="sm" tone="ghost" onClick={() => lifecycleMut.mutate({ id: plugin.id, enabled: plugin.enabled })}>
                         {plugin.enabled ? "Disable" : "Enable"}
                       </Btn>
@@ -249,7 +249,7 @@ export function AdminPlugins() {
          : (
           <div className="grid gap-3 p-4 sm:grid-cols-2 lg:grid-cols-3">
             {filteredMarketplace.map((item) => (
-              <div key={item.id ?? item.name} className="rounded-xl border border-white/[0.06] bg-[var(--surface)] p-4 hover:border-[var(--brand)]/30 transition">
+              <div key={item.id ?? item.name} className="rounded-xl border border-white/[0.06] bg-[var(--surface)] p-4 hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] transition">
                 <div className="flex items-start justify-between gap-2">
                   <h4 className="text-sm font-semibold text-slate-100 line-clamp-1">{item.name}</h4>
                   <Pill tone="blue">{item.kind ?? "integration"}</Pill>
@@ -257,7 +257,7 @@ export function AdminPlugins() {
                 <p className="mt-1 line-clamp-2 text-xs text-slate-400">{item.description ?? "No description"}</p>
                 <p className="mt-2 font-mono text-[11px] text-slate-500">v{item.version ?? "0.0.0"} {item.author ? `· ${item.author}` : ""}</p>
                 <div className="mt-3 flex gap-2">
-                  <Btn size="sm" tone="primary" disabled={installMut.isPending} onClick={() => installMut.mutate(item)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Plus size={12}/> Install (POST /install)</Btn>
+                  <Btn size="sm" tone="primary" disabled={installMut.isPending} onClick={() => installMut.mutate(item)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={12}/> Install (POST /install)</Btn>
                   <Btn size="sm" tone="ghost" onClick={() => setHooksPluginId(item.id)}>Hooks</Btn>
                 </div>
               </div>
@@ -283,7 +283,7 @@ export function AdminPlugins() {
                     <td className="px-4 py-3"><p className="font-medium text-slate-200">{item.name}</p><p className="text-xs text-slate-500">{item.id}</p></td>
                     <td className="px-4 py-3 font-mono text-xs text-slate-400">{(item as DiscoverItem).path ?? (item as MarketplaceItem).source ?? "—"}</td>
                     <td className="px-4 py-3 text-right flex justify-end gap-2">
-                      <Btn size="sm" tone="primary" disabled={installMut.isPending} onClick={() => installMut.mutate(item)} className="bg-[var(--brand)] hover:bg-[var(--brand)]/90 text-white"><Wrench size={12}/> Install</Btn>
+                      <Btn size="sm" tone="primary" disabled={installMut.isPending} onClick={() => installMut.mutate(item)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Wrench size={12}/> Install</Btn>
                       <Btn size="sm" tone="ghost" onClick={() => setHooksPluginId(item.id)}>Hooks</Btn>
                     </td>
                   </tr>
@@ -337,7 +337,7 @@ export function AdminPlugins() {
     {showFile ? (
       <Modal title="Import Plugin Manifest" description="POST /admin/plugins/import/file" onClose={() => { setShowFile(false); if (fileRef.current) fileRef.current.value = ""; }}>
         <AdminFormSection title="Manifest File">
-          <input ref={fileRef} type="file" accept=".json,application/json" className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-[var(--brand)]/30 file:bg-[var(--brand)]/10 file:px-3 file:py-2 file:text-sm file:text-slate-100 hover:file:bg-[var(--brand)]/20" onChange={(e) => {
+          <input ref={fileRef} type="file" accept=".json,application/json" className="block w-full text-sm text-slate-300 file:mr-3 file:rounded-lg file:border file:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] file:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] file:px-3 file:py-2 file:text-sm file:text-slate-100 hover:file:bg-[color-mix(in_srgb,var(--brand)_20%,transparent)]" onChange={(e) => {
             const f = e.target.files?.[0];
             if (f) fileImportMut.mutate(f);
           }} />

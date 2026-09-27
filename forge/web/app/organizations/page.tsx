@@ -1,9 +1,10 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { fetchCurrentUser } from '@/lib/api';
 import { fetchOrganizations, createOrganization } from '@/lib/api/tenancy';
 import type { Organization } from '@/lib/api/tenancy';
 import { useT } from '@/components/TranslationProvider';
@@ -18,6 +19,20 @@ export default function OrganizationsPage() {
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
+
+  // Session guard — same contract as /servers: an explicit null means the
+  // session is gone (redirect to sign-in), while errors keep the page mounted
+  // with a retry instead of bouncing an authenticated user on a blip.
+  const userQuery = useQuery({
+    queryKey: ['current-user'],
+    queryFn: fetchCurrentUser,
+    retry: 1,
+    staleTime: 30_000,
+  });
+
+  useEffect(() => {
+    if (userQuery.data === null) router.replace('/?reason=session-expired&next=%2Forganizations');
+  }, [router.replace, userQuery.data]);
 
   // Server state lives in react-query only — same ["organizations"] key the
   // TenancyHydrator already populates, so this screen shares the cached list
@@ -56,6 +71,28 @@ export default function OrganizationsPage() {
     if (!name.trim()) return;
     createMut.mutate({ name: name.trim(), slug: slug.trim() || undefined });
   };
+
+  const sessionPending = userQuery.isPending || userQuery.data === undefined;
+  if (sessionPending || userQuery.data === null) {
+    return <div className="mx-auto max-w-4xl px-4 py-8 text-center text-gray-400">{t('common.loading')}</div>;
+  }
+
+  if (userQuery.isError) {
+    return (
+      <div className="mx-auto max-w-4xl space-y-4 px-4 py-8 text-center">
+        <p className="text-lg font-semibold text-white">{t('servers.sessionVerificationUnavailable')}</p>
+        <p className="text-sm text-gray-400">{t('servers.retryOnceReachable')}</p>
+        <button
+          type="button"
+          disabled={userQuery.isFetching}
+          onClick={() => void userQuery.refetch()}
+          className="rounded-lg bg-white/[0.06] px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-white/[0.1] disabled:opacity-60"
+        >
+          {userQuery.isFetching ? `${t('common.retry')}…` : t('common.retry')}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="mx-auto max-w-4xl px-4 py-8">

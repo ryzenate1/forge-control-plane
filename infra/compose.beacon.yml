@@ -49,7 +49,8 @@ services:
       DOCKER_HOST: tcp://docker-proxy:2375
       APP_ENV: production
       DAEMON_ADDR: ${DAEMON_ADDR:-0.0.0.0:9090}
-      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-127.0.0.1:2022}
+      # Single SFTP bind variable (authoritative; legacy DAEMON_SFTP_ADDR
+      # alias intentionally unset — see compose.yml).
       DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-0.0.0.0:2022}
       DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
       DAEMON_BACKUP_DIR: ${DAEMON_BACKUP_DIR:-/srv/game-panel/servers/.beacon/backups}

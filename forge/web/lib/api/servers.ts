@@ -1,5 +1,5 @@
 // Server management API functions
-import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, requestBlob, API_BASE_URL, ApiError } from './http';
+import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, requestBlob, getApiBaseUrl, ApiError } from './http';
 import type {
   ApiServerSubuser,
   ApiAuditEvent,
@@ -12,22 +12,52 @@ import type {
   OneOffTask,
   ProcfileEntry,
 } from './types';
-import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, ApiServerDatabaseDeleteResult, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput, PaginatedEnvelope } from './types';
-// PaginatedEnvelope is the canonical paginated type from @forge/shared-types (re-exported via ./types).
+import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, ApiScheduleTask, ApiServerDatabaseDeleteResult, ApiStartupVariable, BackupCreateInput, ServerCreateInput, ServerUpdateInput, DatabaseCreateInput, ScheduleCreateInput, ScheduleUpdateInput, ScheduleTaskCreateInput, ScheduleTaskUpdateInput, PaginatedEnvelope, ApiLegacyTransferStatus } from './types';
+// ApiStartupVariable is canonical in @forge/shared-types (re-exported via ./types).
+// ServerStartupVariable is kept as a backward-compatible alias so existing
+// imports (`import { ServerStartupVariable } from "@/lib/api"`) keep working.
+/** @deprecated Use `ApiStartupVariable` from `@forge/shared-types` instead. */
+export type ServerStartupVariable = ApiStartupVariable;
 
 async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>> {
-  return fetchJSON<PaginatedEnvelope<T>>(path);
+  const body = await fetchJSON<PaginatedEnvelope<T> | T[]>(path);
+  // Backend paginated lists return `{ data, meta.pagination }`; older routes
+  // may return a bare array. Normalize to the envelope so callers never
+  // branch on the shape.
+  if (Array.isArray(body)) return { data: body };
+  if (body && typeof body === 'object' && Array.isArray((body as PaginatedEnvelope<T>).data)) {
+    return body as PaginatedEnvelope<T>;
+  }
+  if (body == null) return { data: [] };
+  throw new Error(`Unexpected response: expected an array or { data: [...] }`);
+}
+
+/** Page count from a pagination meta. `total_records / per_page` is authoritative; `total`/`total_pages` are fallback. */
+function pageCountOf(pagination?: { total?: number; total_pages?: number; total_records?: number; per_page?: number }): number {
+  if (!pagination) return 1;
+  if (
+    typeof pagination.total_records === 'number' &&
+    typeof pagination.per_page === 'number' &&
+    pagination.per_page > 0 &&
+    pagination.total_records >= 0
+  ) {
+    return Math.max(1, Math.ceil(pagination.total_records / pagination.per_page));
+  }
+  if (typeof pagination.total_pages === 'number' && pagination.total_pages > 0) return Math.floor(pagination.total_pages);
+  // `total` is already a page count — never divide it by per_page again.
+  if (typeof pagination.total === 'number' && pagination.total > 0) return Math.floor(pagination.total);
+  return 1;
 }
 
 export async function fetchServers(): Promise<ApiServer[]> {
   const firstPage = await fetchWithEnvelope<ApiServer>('/servers?page=1&per_page=100');
-  const pagination = firstPage.meta?.pagination;
-  if (!pagination || pagination.total <= 1) {
+  const totalPages = pageCountOf(firstPage.meta?.pagination);
+  if (totalPages <= 1) {
     return firstPage.data ?? [];
   }
 
   const remainingPages = await Promise.all(
-    Array.from({ length: pagination.total - 1 }, (_, i) =>
+    Array.from({ length: totalPages - 1 }, (_, i) =>
       fetchWithEnvelope<ApiServer>(`/servers?page=${i + 2}&per_page=100`),
     ),
   );
@@ -36,6 +66,19 @@ export async function fetchServers(): Promise<ApiServer[]> {
     ...firstPage.data,
     ...remainingPages.flatMap((r) => r.data ?? []),
   ];
+}
+
+/** Fetch one server page and retain the response pagination metadata. Canonical for the `@/lib/api` barrel. */
+export async function fetchServersPage(
+  page = 1,
+  perPage = 100,
+): Promise<PaginatedEnvelope<ApiServer>> {
+  return fetchWithEnvelope<ApiServer>(`/servers?page=${page}&per_page=${perPage}`);
+}
+
+/** Fetch every server page. Alias of {@link fetchServers} for callers that name the aggregation explicitly. */
+export async function fetchAllServers(): Promise<ApiServer[]> {
+  return fetchServers();
 }
 
 export async function fetchServer(id: string): Promise<ApiServer> {
@@ -312,21 +355,7 @@ export async function deleteServerScheduleTask(
 }
 
 // Server startup
-export interface ServerStartupVariable {
-  name: string;
-  description: string;
-  envVariable: string;
-  defaultValue: string;
-  serverValue: string;
-  isEditable: boolean;
-  rules: string;
-  id?: string;
-  env_variable?: string;
-  server_value?: string;
-  is_editable?: boolean;
-}
-
-export type ApiStartupVariable = ServerStartupVariable;
+export type { ApiStartupVariable } from './types';
 
 export interface ServerStartup {
   startupCommand: string;
@@ -366,7 +395,7 @@ export async function getBackupDownloadURL(serverId: string, backupId: string): 
     `/servers/${encodeURIComponent(serverId)}/backups/download-ticket`,
     { name: backupId }
   );
-  return { url: `${API_BASE_URL}/download/file?token=${encodeURIComponent(ticket.token)}` };
+  return { url: `${getApiBaseUrl()}/download/file?token=${encodeURIComponent(ticket.token)}` };
 }
 
 export interface ActivityPage {
@@ -379,6 +408,12 @@ export async function fetchServerActivity(
   page = 1,
   perPage = 50,
 ): Promise<ActivityPage> {
+  // The backend has no server-side pagination for this route
+  // (handlers_servers.go returns the full event list, capped at 100) — the
+  // page/per_page query is accepted for backward compatibility but ignored
+  // server-side. The returned `pagination` block is an honest client-side
+  // synthesis over the complete list, not a backend cursor; ActivityView
+  // paginates locally and labels it as such.
   const response = await fetchJSON<ApiAuditEvent[] | ActivityPage>(
     `/servers/${encodeURIComponent(serverId)}/activity?page=${page}&per_page=${perPage}`,
   );
@@ -388,7 +423,10 @@ export async function fetchServerActivity(
       pagination: { page: 1, per_page: response.length, total: response.length, total_pages: 1 },
     };
   }
-  return response;
+  if (response && typeof response === 'object' && Array.isArray((response as ActivityPage).data)) {
+    return response as ActivityPage;
+  }
+  return { data: [], pagination: { page: 1, per_page: 0, total: 0, total_pages: 1 } };
 }
 
 export async function fetchServerUsers(serverId: string): Promise<ApiServerSubuser[]> {
@@ -444,9 +482,10 @@ export async function resetServerCrashState(serverId: string): Promise<{ ok: boo
 
 export async function fetchServerTransferStatus(
   serverId: string,
-): Promise<{ transferring: boolean; transferId?: string; status?: string; progress?: number } | null> {
+): Promise<ApiLegacyTransferStatus | null> {
   try {
-    return await fetchJSON<{ transferring: boolean; transferId?: string; status?: string; progress?: number }>(
+    // Backend shape (handlers_servers.go): { state, transferring, targetNodeId, error }.
+    return await fetchJSON<ApiLegacyTransferStatus>(
       `/servers/${encodeURIComponent(serverId)}/transfer`,
     );
   } catch (error) {

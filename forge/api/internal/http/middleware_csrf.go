@@ -1,9 +1,13 @@
 package http
 
 import (
+	"crypto/hmac"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
+	"encoding/base64"
 	"encoding/hex"
+	"net/http"
 	"strings"
 	"time"
 
@@ -19,7 +23,42 @@ const (
 	CSRFTokenExpiry = 2 * time.Hour
 )
 
-func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
+// csrfBindingDomain separates the session-bound CSRF derivation from every
+// other HMAC use of the auth secret.
+const csrfBindingDomain = "forge:csrf:v1\x00"
+
+// deriveSessionCSRFToken binds a CSRF token to the session cookie value with
+// a keyed HMAC so a token minted for one session cannot be replayed against
+// another. It is deterministic per session and infallible; an empty secret
+// yields an empty token and every caller must treat that as "no token".
+func deriveSessionCSRFToken(secret, sessionToken string) string {
+	if secret == "" || sessionToken == "" {
+		return ""
+	}
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(csrfBindingDomain))
+	mac.Write([]byte(sessionToken))
+	return base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+}
+
+// validSessionBoundCSRF reports whether the presented double-submit pair is
+// both self-consistent and bound to the given session value. All comparisons
+// are constant-time and every failure mode denies.
+func validSessionBoundCSRF(secret, sessionToken, cookieToken, headerToken string) bool {
+	if secret == "" || sessionToken == "" || cookieToken == "" || headerToken == "" {
+		return false
+	}
+	if subtle.ConstantTimeCompare([]byte(cookieToken), []byte(headerToken)) != 1 {
+		return false
+	}
+	expected := deriveSessionCSRFToken(secret, sessionToken)
+	if expected == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookieToken), []byte(expected)) == 1
+}
+
+func csrfMiddleware(secret string, cfg SessionCookieConfig) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		method := c.Method()
 		if method == fiber.MethodGet || method == fiber.MethodHead || method == fiber.MethodOptions {
@@ -29,6 +68,14 @@ func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
 		authSource, _ := c.Locals("authSource").(string)
 		if authSource != authSourceCookieSession {
 			return c.Next()
+		}
+
+		if secret == "" {
+			return fiber.NewError(fiber.StatusInternalServerError, "auth secret is not configured")
+		}
+		sessionToken, ok := getSessionCookie(c)
+		if !ok || sessionToken == "" {
+			return fiber.NewError(fiber.StatusForbidden, "missing session for CSRF validation")
 		}
 
 		csrfCookie := c.Cookies(secureCookieName(CSRFCookieName, cfg.Secure))
@@ -41,7 +88,10 @@ func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
 			return fiber.NewError(fiber.StatusForbidden, "missing X-CSRF-Token header")
 		}
 
-		if subtle.ConstantTimeCompare([]byte(csrfCookie), []byte(csrfHeader)) != 1 {
+		// Double-submit match plus binding to the session that the cookie
+		// carries: a token stolen or fixed for another session is rejected
+		// even when cookie and header agree with each other.
+		if !validSessionBoundCSRF(secret, sessionToken, csrfCookie, csrfHeader) {
 			return fiber.NewError(fiber.StatusForbidden, "invalid CSRF token")
 		}
 
@@ -79,22 +129,40 @@ func GenerateCSRFToken() (string, error) {
 
 func SetCSRFCookie(c *fiber.Ctx, token string) {
 	cfg := LoadSessionCookieConfig()
+	sameSite := "Lax"
+	if cfg.SameSite == http.SameSiteStrictMode {
+		sameSite = "Strict"
+	} else if cfg.SameSite == http.SameSiteNoneMode {
+		sameSite = "None"
+	}
 	c.Cookie(&fiber.Cookie{
 		Name:     secureCookieName(CSRFCookieName, cfg.Secure),
 		Value:    token,
 		HTTPOnly: false,
 		Secure:   cfg.Secure,
-		SameSite: "Strict",
+		SameSite: sameSite,
 		Expires:  time.Now().Add(CSRFTokenExpiry),
 		Path:     "/",
 	})
 }
 
-func GetCSRFTokenHandler() fiber.Handler {
+func GetCSRFTokenHandler(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		token, err := GenerateCSRFToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "failed to generate CSRF token")
+		// Prefer a token bound to the caller's session: the CSRF cookie must
+		// echo a value derived from the session cookie, so minting a fresh
+		// random token here would immediately fail validation on the next
+		// mutation. Without a session (pre-login) there is nothing to bind
+		// to; the random token is harmless because login rotates both cookies.
+		var token string
+		if sessionToken, ok := getSessionCookie(c); ok && sessionToken != "" {
+			token = deriveSessionCSRFToken(cfg.AuthSecret, sessionToken)
+		}
+		if token == "" {
+			var err error
+			token, err = GenerateCSRFToken()
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to generate CSRF token")
+			}
 		}
 
 		SetCSRFCookie(c, token)

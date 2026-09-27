@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON } from "./http";
+import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapList, unwrapData } from "./http";
 
 export type ProxyDomain = {
   id: string;
@@ -66,22 +66,19 @@ export function fetchAdminProxyDomains(filter?: { serviceId?: string; serviceTyp
   if (filter?.limit) params.set("limit", String(filter.limit));
   if (filter?.offset) params.set("offset", String(filter.offset));
   const q = params.toString() ? `?${params.toString()}` : "";
-  return fetchJSON<{ data: ProxyDomain[] }>(`/domains${q}`).then((r) => {
-    if (Array.isArray(r as unknown as ProxyDomain[])) return r as unknown as ProxyDomain[];
-    return (r as { data: ProxyDomain[] }).data ?? [];
-  });
+  return fetchJSON<{ data: ProxyDomain[] } | ProxyDomain[]>(`/domains${q}`).then(unwrapList);
 }
 
 export function createAdminProxyDomain(input: CreateProxyDomainInput & { serviceId?: string; serviceType?: string; certData?: string; certKey?: string }): Promise<ProxyDomain> {
-  return postJSON<{ data: ProxyDomain }>("/domains", input).then((r) => r.data);
+  return postJSON<{ data: ProxyDomain } | ProxyDomain>("/domains", input).then(unwrapData);
 }
 
 export function fetchAdminProxyDomain(id: string): Promise<ProxyDomain> {
-  return fetchJSON<{ data: ProxyDomain }>(`/domains/${encodeURIComponent(id)}`).then((r) => r.data);
+  return fetchJSON<{ data: ProxyDomain } | ProxyDomain>(`/domains/${encodeURIComponent(id)}`).then(unwrapData);
 }
 
 export function updateAdminProxyDomain(id: string, input: Partial<CreateProxyDomainInput>): Promise<ProxyDomain> {
-  return putJSON<{ data: ProxyDomain }>(`/domains/${encodeURIComponent(id)}`, input).then((r) => r.data);
+  return putJSON<{ data: ProxyDomain } | ProxyDomain>(`/domains/${encodeURIComponent(id)}`, input).then(unwrapData);
 }
 
 export function deleteAdminProxyDomain(id: string): Promise<void> {

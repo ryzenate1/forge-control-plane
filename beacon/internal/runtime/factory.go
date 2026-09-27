@@ -14,6 +14,13 @@ func NewFactory(config RuntimeConfig) *Factory {
 }
 
 func (f *Factory) CreateRuntime(ctx context.Context) (Runtime, error) {
+	// Reject names Forge cannot serve before touching any engine: without
+	// this, an unknown provider would fall through to the switch default with
+	// a generic error, and a recognised-but-unavailable provider would be
+	// answered by whichever engine the daemon happens to run.
+	if err := ValidateProvider(f.config.Provider); err != nil {
+		return nil, err
+	}
 	var rt Runtime
 	var err error
 	switch f.config.Provider {
@@ -50,7 +57,8 @@ func (f *Factory) CreateRuntime(ctx context.Context) (Runtime, error) {
 }
 
 func (f *Factory) AvailableProviders() []string {
-	return []string{
+	out := []string{}
+	for _, name := range []string{
 		ProviderDocker,
 		ProviderContainerd,
 		ProviderPodman,
@@ -58,5 +66,10 @@ func (f *Factory) AvailableProviders() []string {
 		ProviderKubernetes,
 		LXCProvider,
 		KVMProvider,
+	} {
+		if IsSupportedProvider(name) {
+			out = append(out, name)
+		}
 	}
+	return out
 }

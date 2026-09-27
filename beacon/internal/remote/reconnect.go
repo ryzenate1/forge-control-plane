@@ -4,10 +4,27 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/binary"
+	"errors"
 	"log"
 	"sync"
 	"sync/atomic"
 	"time"
+)
+
+const (
+	// defaultOfflineTimeout is used when a caller does not configure one; a
+	// zero timeout would make the offline ticker panic and the offline check
+	// fire on every tick.
+	defaultOfflineTimeout = 30 * time.Second
+	heartbeatProbeInterval = 15 * time.Second
+	minOfflineCheckInterval = time.Second
+	panelProbeTimeout      = 10 * time.Second
+	initialReconnectBackoff = time.Second
+	maxReconnectBackoff     = 5 * time.Minute
+	// circuitBreakerFailures caps how often the loop retries a panel that is
+	// clearly down: after this many consecutive failed round-trips the backoff
+	// is pinned at maxReconnectBackoff until something succeeds.
+	circuitBreakerFailures = 10
 )
 
 type ConnState int32
@@ -51,6 +68,8 @@ type ReconnectClient struct {
 	stopOnce  sync.Once
 	started   chan struct{}
 	newClient func() Client
+	// Circuit breaker: consecutive failed round-trips. Reset on any success.
+	consecutiveFails int
 }
 
 func NewReconnectClient(panelURL, token string, offlineTimeout time.Duration) *ReconnectClient {
@@ -58,7 +77,7 @@ func NewReconnectClient(panelURL, token string, offlineTimeout time.Duration) *R
 		inner:          NewClient(panelURL, token),
 		panelURL:       panelURL,
 		token:          token,
-		offlineTimeout: offlineTimeout,
+		offlineTimeout: normalizeOfflineTimeout(offlineTimeout),
 		state:          int32(StateDisconnected),
 		stopCh:         make(chan struct{}),
 		stopped:        make(chan struct{}),
@@ -72,11 +91,28 @@ func NewReconnectClientWithClient(inner Client, reconnect func() Client, offline
 		reconnect = func() Client { return inner }
 	}
 	client := &ReconnectClient{
-		inner: inner, offlineTimeout: offlineTimeout,
+		inner: inner, offlineTimeout: normalizeOfflineTimeout(offlineTimeout),
 		state: int32(StateDisconnected), stopCh: make(chan struct{}),
 		stopped: make(chan struct{}), started: make(chan struct{}), newClient: reconnect,
 	}
 	return client
+}
+
+// normalizeOfflineTimeout keeps a misconfigured (zero, negative or absurdly
+// small) timeout from panicking the offline ticker or busy-looping it.
+func normalizeOfflineTimeout(value time.Duration) time.Duration {
+	if value < minOfflineCheckInterval*2 {
+		return defaultOfflineTimeout
+	}
+	return value
+}
+
+func (rc *ReconnectClient) offlineCheckInterval() time.Duration {
+	interval := rc.offlineTimeout / 2
+	if interval < minOfflineCheckInterval {
+		return minOfflineCheckInterval
+	}
+	return interval
 }
 
 func (rc *ReconnectClient) Inner() Client {
@@ -120,12 +156,21 @@ func (rc *ReconnectClient) run(ctx context.Context) {
 			atomic.StoreInt32(&rc.state, int32(StateDisconnected))
 			return
 		case <-ticker.C:
+			// Real probe: only a successful panel round-trip refreshes the
+			// heartbeat. A blind timer refresh would mask an outage and
+			// prevent the offline detector below from ever firing.
+			if err := rc.probe(ctx); err != nil {
+				log.Printf("[reconnect] heartbeat probe failed: %v", err)
+				continue
+			}
 			rc.mu.Lock()
 			rc.lastHb = time.Now()
+			rc.consecutiveFails = 0
 			if rc.onHB != nil {
 				rc.onHB()
 			}
 			rc.mu.Unlock()
+			backoff = 1 * time.Second
 		case <-offlineCheck.C:
 			rc.mu.Lock()
 			last := rc.lastHb
@@ -137,35 +182,71 @@ func (rc *ReconnectClient) run(ctx context.Context) {
 					atomic.AddInt64(&rc.attempts, 1)
 					log.Printf("[reconnect] offline detected, reconnecting (attempt %d)...", atomic.LoadInt64(&rc.attempts))
 				}
-				backoff = rc.doReconnect(ctx, backoff, maxBackoff)
+				var ok bool
+				backoff, ok = rc.doReconnect(ctx, backoff, maxBackoff)
+				if ok {
+					backoff = 1 * time.Second
+				}
 			}
 		}
 	}
 }
 
-func (rc *ReconnectClient) doReconnect(ctx context.Context, backoff, maxBackoff time.Duration) time.Duration {
+// probe performs a cheap authenticated panel round-trip. Any error means the
+// link is not healthy; only success may advance lastHb.
+func (rc *ReconnectClient) probe(ctx context.Context) error {
+	inner := rc.Inner()
+	if inner == nil {
+		return errors.New("no panel client")
+	}
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := inner.GetServers(probeCtx, 1)
+	return err
+}
+
+func (rc *ReconnectClient) doReconnect(ctx context.Context, backoff, maxBackoff time.Duration) (time.Duration, bool) {
 	select {
 	case <-time.After(backoff):
 	case <-ctx.Done():
-		return backoff
+		return backoff, false
 	case <-rc.stopCh:
-		return backoff
+		return backoff, false
+	}
+
+	candidate := rc.newClient()
+	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	_, err := candidate.GetServers(probeCtx, 1)
+	cancel()
+	if err != nil {
+		rc.mu.Lock()
+		rc.consecutiveFails++
+		fails := rc.consecutiveFails
+		rc.mu.Unlock()
+		log.Printf("[reconnect] reconnect probe failed (consecutive %d): %v", fails, err)
+		// Circuit breaker: after 10 consecutive failures, stop hammering and
+		// cap at maxBackoff until a probe succeeds.
+		nextBackoff := time.Duration(float64(backoff) * 2.0)
+		if nextBackoff > maxBackoff {
+			nextBackoff = maxBackoff
+		}
+		if fails >= 10 {
+			nextBackoff = maxBackoff
+		}
+		jitter := secureDurationJitter(nextBackoff / 4)
+		return nextBackoff - nextBackoff/8 + jitter, false
 	}
 
 	rc.mu.Lock()
-	rc.inner = rc.newClient()
+	rc.inner = candidate
 	rc.lastHb = time.Now()
+	rc.consecutiveFails = 0
 	rc.mu.Unlock()
 
 	atomic.StoreInt32(&rc.state, int32(StateConnected))
 	log.Printf("[reconnect] reconnected successfully")
 
-	nextBackoff := time.Duration(float64(backoff) * 2.0)
-	if nextBackoff > maxBackoff {
-		nextBackoff = maxBackoff
-	}
-	jitter := secureDurationJitter(nextBackoff / 4)
-	return nextBackoff - nextBackoff/8 + jitter
+	return 1 * time.Second, true
 }
 
 func (rc *ReconnectClient) Stop() {

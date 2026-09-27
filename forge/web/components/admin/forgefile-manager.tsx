@@ -169,7 +169,7 @@ export function ForgefileManager() {
           ) : (
             <div className="mt-3 space-y-2">
               {manifests.map((slug) => (
-                <button key={slug} onClick={() => handleGet(slug)} className={`w-full text-left rounded-lg border px-3 py-2 text-sm ${selected === slug ? "border-[var(--brand)] bg-[var(--brand)]/10" : "border-[var(--line)] bg-surface"}`}>
+                <button key={slug} onClick={() => handleGet(slug)} className={`w-full text-left rounded-lg border px-3 py-2 text-sm ${selected === slug ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]" : "border-[var(--line)] bg-surface"}`}>
                   {slug}
                 </button>
               ))}

@@ -4,7 +4,10 @@
   "version": "0.1.0",
   "scripts": {
     "dev": "next dev --port 3000 --hostname 0.0.0.0",
+    "prebuild": "npm --prefix ../.. run build:packages",
     "build": "next build",
+    "prestypecheck": "npm --prefix ../.. run build:packages",
+    "start": "next start --port 3000",
     "lint": "eslint .",
     "typecheck": "tsc --noEmit",
     "sync:locales": "node scripts/sync-locales.mjs",

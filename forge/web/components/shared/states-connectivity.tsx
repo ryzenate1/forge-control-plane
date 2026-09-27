@@ -148,8 +148,8 @@ export function ApiUnavailableState({
   onRetry?: () => void;
 }) {
   return (
-    <div className="flex flex-col items-center justify-center rounded-xl border border-[var(--danger)]/20 bg-[var(--danger-subtle)] px-6 py-10 text-center" role="alert">
-      <div className="grid h-11 w-11 place-items-center rounded-full bg-[var(--danger-subtle)] text-[var(--danger)] border border-[var(--danger)]/20">
+    <div className="flex flex-col items-center justify-center rounded-xl border border-[color-mix(in_srgb,var(--danger)_20%,transparent)] bg-[var(--danger-subtle)] px-6 py-10 text-center" role="alert">
+      <div className="grid h-11 w-11 place-items-center rounded-full bg-[var(--danger-subtle)] text-[var(--danger)] border border-[color-mix(in_srgb,var(--danger)_20%,transparent)]">
         <CloudOff size={20} aria-hidden="true" />
       </div>
       <h3 className="mt-3 text-sm font-semibold text-[var(--text)]">API unavailable</h3>
@@ -182,7 +182,7 @@ export function OperationFailedState({
 }) {
   const msg = error instanceof Error ? error.message : String(error);
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[var(--danger)]/25 bg-[var(--danger-subtle)] p-4 text-sm text-[var(--danger)]" role="alert">
+    <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[color-mix(in_srgb,var(--danger)_25%,transparent)] bg-[var(--danger-subtle)] p-4 text-sm text-[var(--danger)]" role="alert">
       <span>
         <strong className="font-semibold">{title}:</strong> {msg}
       </span>
