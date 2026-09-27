@@ -22,6 +22,24 @@ const (
 	// made before normalization can still be reproduced while investigating it.
 	legacySoftWeight  = 1e12
 	legacySoftPenalty = 1e10
+
+	// PreferredNodeBonus is the single preferred-node term used by every
+	// placement path: Engine.Place/PlaceAll score it, the replica engine
+	// scores it, and the scheduler layer must not add it a second time.
+	// Preferred means preferred — it beats comparable candidates but does not
+	// override a node that is materially worse. RequiredNode is the directive
+	// and is enforced by filtering instead.
+	PreferredNodeBonus = 0.30
+	// StorageMatchBonus is added when a node offers the requested storage
+	// locality; StorageMismatchPenalty is subtracted when it cannot. The
+	// penalty is larger because a locality the node cannot provide is a
+	// functional mismatch, not a nicety.
+	StorageMatchBonus      = 0.15
+	StorageMismatchPenalty = 0.50
+
+	legacyPreferredNodeBonus     = 1e9
+	legacyStorageLocalityBonus   = 1e8
+	legacyStorageLocalityPenalty = 1e10
 )
 
 // placementV2 reports whether normalized scoring is active. It is read per call
@@ -48,4 +66,32 @@ func clampUnit(value float64) float64 {
 		return 1
 	}
 	return value
+}
+
+// PreferredNodeBonusValue returns the preferred-node term for the active
+// maths generation: the bounded bonus above, or the legacy overflow when
+// FORGE_PLACEMENT_V2=false so a pre-normalization decision reproduces.
+func PreferredNodeBonusValue() float64 {
+	if placementV2() {
+		return PreferredNodeBonus
+	}
+	return legacyPreferredNodeBonus
+}
+
+// StorageMatchBonusValue returns the storage-locality match term for the
+// active maths generation.
+func StorageMatchBonusValue() float64 {
+	if placementV2() {
+		return StorageMatchBonus
+	}
+	return legacyStorageLocalityBonus
+}
+
+// StorageMismatchPenaltyValue returns the storage-locality mismatch term for
+// the active maths generation.
+func StorageMismatchPenaltyValue() float64 {
+	if placementV2() {
+		return StorageMismatchPenalty
+	}
+	return legacyStorageLocalityPenalty
 }

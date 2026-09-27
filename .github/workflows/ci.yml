@@ -12,6 +12,8 @@ concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+timeout-minutes: 30
+
 jobs:
   forge-api:
     name: forge/api (Go)
@@ -75,6 +77,13 @@ jobs:
 
       - name: Build packages
         run: npm run build:packages
+
+      - name: Test packages
+        run: |
+          test -f packages/sdk/package.json
+          test -f packages/game-templates/package.json
+          npm --workspace @forge/sdk test
+          npm --workspace @forge/game-templates test
 
   web:
     name: forge/web (Next.js)

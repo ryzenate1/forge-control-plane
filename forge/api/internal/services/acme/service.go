@@ -560,11 +560,44 @@ func checkManualKeyPair(certPEM, keyPEM string) error {
 }
 
 func (s *Service) GetCertificate(ctx context.Context, certID string) (store.Certificate, error) {
-	return s.store.GetCertificate(ctx, certID)
+	cert, err := s.store.GetCertificate(ctx, certID)
+	if err != nil {
+		return cert, err
+	}
+	return redactCertificate(cert), nil
 }
 
 func (s *Service) ListCertificates(ctx context.Context, filter store.CertificateFilter) ([]store.Certificate, error) {
-	return s.store.ListCertificates(ctx, filter)
+	certs, err := s.store.ListCertificates(ctx, filter)
+	if err != nil {
+		return nil, err
+	}
+	for i := range certs {
+		certs[i] = redactCertificate(certs[i])
+	}
+	return certs, nil
+}
+
+// redactCertificate strips third-party credentials from a certificate before it
+// leaves the service. store.Certificate is marshalled straight into HTTP
+// responses (GET /certificates, GET /certificates/:id, POST /certificates/issue
+// and POST /certificates/:id/renew), and DNSCredentials holds the DNS API token
+// used for dns-01 validation — an admin-scope read of a certificate would
+// otherwise hand out a live credential to a third-party DNS account. Renewal
+// reads the credentials from the store directly, not through these methods, so
+// redaction here does not affect it. The PrivateKey field is already `json:"-"`.
+func redactCertificate(cert store.Certificate) store.Certificate {
+	cert.DNSCredentials = nil
+	return cert
+}
+
+// logWarn is nil-logger-safe: New() accepts a nil logger and several call paths
+// (and every test) build a Service without one.
+func (s *Service) logWarn(msg string, args ...any) {
+	if s.logger == nil {
+		return
+	}
+	s.logger.Warn(msg, args...)
 }
 
 func (s *Service) StartAutoRenewal(ctx context.Context) {

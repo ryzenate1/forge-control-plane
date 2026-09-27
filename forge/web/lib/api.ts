@@ -878,6 +878,10 @@ export async function connectServerWebSocket(
   stream: "console" | "stats" | "logs" | "install" | "backup",
 ): Promise<WebSocket> {
   const ticketResponse = await fetchWSTicket(serverId, stream);
+  // The ticket is a short-lived (60s) single-use credential minted for this
+  // stream — it is the only thing that may appear in the WS query string.
+  // The session JWT is never used here: browsers cannot attach cookies or
+  // Authorization headers to a cross-origin WebSocket upgrade.
   // Normalized panel route for install is /ws/install; legacy alias /install/ws also valid
   const url = serverWebSocketURL(serverId, stream) + `?token=${encodeURIComponent(ticketResponse.token)}`;
   return new WebSocket(url);

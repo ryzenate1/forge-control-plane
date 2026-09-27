@@ -75,33 +75,51 @@ type ReplicaFailure struct {
 	Reason string `json:"reason"`
 }
 
-func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req ReplicaPlacementRequest) (*ReplicaPlacementResult, error) {
+// replicaPlacementState is the request-scoped working set both the decision and
+// the explanation run against, so an explanation cannot describe a winner the
+// engine would not pick.
+type replicaPlacementState struct {
+	candidates    []Candidate
+	usedNodeCount map[string]int
+}
+
+// prepareReplicaPlacement applies everything that is true for the whole request
+// before any replica is scored: input validation, storage locality, and the
+// capacity the app already holds on each node.
+func prepareReplicaPlacement(candidates []Candidate, req ReplicaPlacementRequest) (*replicaPlacementState, error) {
+	if err := ValidateReplicaConstraints(req); err != nil {
+		return nil, err
+	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no candidates available for replica placement")
 	}
-
-	result := &ReplicaPlacementResult{
-		Placements: make([]ReplicaPlacement, 0, len(req.Replicas)),
+	// Candidate carries only value fields, so this copy is deep enough: writing
+	// to it cannot reach the caller's slice. PlaceReplicas mutates no Engine
+	// field for the same reason.
+	state := &replicaPlacementState{
+		candidates:    append([]Candidate(nil), candidates...),
+		usedNodeCount: make(map[string]int, len(req.ExistingNodeMap)),
 	}
-
-	workingCandidates := append([]Candidate(nil), candidates...)
+	for nodeID, count := range req.ExistingNodeMap {
+		state.usedNodeCount[nodeID] = count
+	}
 	if req.StorageLocality != "" {
-		workingCandidates = filterByStorageLocality(workingCandidates, req.StorageLocality)
-		if len(workingCandidates) == 0 {
+		state.candidates = filterByStorageLocality(state.candidates, req.StorageLocality)
+		if len(state.candidates) == 0 {
 			return nil, fmt.Errorf("no candidates satisfy storage locality %q", req.StorageLocality)
 		}
 	}
-	usedNodeCount := make(map[string]int)
-	for nodeID, count := range req.ExistingNodeMap {
-		usedNodeCount[nodeID] = count
-	}
 	if len(req.ExistingUsage) > 0 {
 		// Exact accounting: subtract what existing instances actually consume.
-		for index := range workingCandidates {
-			if usage, ok := req.ExistingUsage[workingCandidates[index].NodeID]; ok {
-				workingCandidates[index].AvailableCPU -= usage.CPU
-				workingCandidates[index].AvailableMemory -= usage.MemoryMB
-				workingCandidates[index].AvailableDisk -= usage.DiskMB
+		// Callers whose candidates already net those instances out (a capacity
+		// snapshot, for example) must not supply them, or the same consumption
+		// is subtracted twice; subtracting twice only ever rejects a placement
+		// the node could have carried, which is the safe direction.
+		for index := range state.candidates {
+			if usage, ok := req.ExistingUsage[state.candidates[index].NodeID]; ok {
+				state.candidates[index].AvailableCPU -= usage.CPU
+				state.candidates[index].AvailableMemory -= usage.MemoryMB
+				state.candidates[index].AvailableDisk -= usage.DiskMB
 			}
 		}
 	} else {
@@ -121,21 +139,52 @@ func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req 
 		}
 		perCPU, perMemory, perDisk := sumCPU/n, sumMemory/n, sumDisk/n
 		for nodeID, count := range req.ExistingNodeMap {
-			for index := range workingCandidates {
-				if workingCandidates[index].NodeID == nodeID {
-					workingCandidates[index].AvailableCPU -= count * perCPU
-					workingCandidates[index].AvailableMemory -= count * perMemory
-					workingCandidates[index].AvailableDisk -= count * perDisk
+			for index := range state.candidates {
+				if state.candidates[index].NodeID == nodeID {
+					state.candidates[index].AvailableCPU -= count * perCPU
+					state.candidates[index].AvailableMemory -= count * perMemory
+					state.candidates[index].AvailableDisk -= count * perDisk
 				}
 			}
 		}
+	}
+	return state, nil
+}
+
+// apply records that a replica landed on nodeID: the node's readable capacity
+// and the app's instance count both move, so the next replica sees the same
+// world the placement created.
+func (s *replicaPlacementState) apply(replica ReplicaSpec, nodeID string) {
+	s.usedNodeCount[nodeID]++
+	for index := range s.candidates {
+		if s.candidates[index].NodeID != nodeID {
+			continue
+		}
+		s.candidates[index].AvailableCPU -= replica.CPU
+		s.candidates[index].AvailableMemory -= replica.MemoryMB
+		s.candidates[index].AvailableDisk -= replica.DiskMB
+		s.candidates[index].AllocatedCPU += replica.CPU
+		s.candidates[index].AllocatedMemory += replica.MemoryMB
+		s.candidates[index].AllocatedDisk += replica.DiskMB
+		s.candidates[index].ServerCount++
+	}
+}
+
+func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req ReplicaPlacementRequest) (*ReplicaPlacementResult, error) {
+	state, err := prepareReplicaPlacement(candidates, req)
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ReplicaPlacementResult{
+		Placements: make([]ReplicaPlacement, 0, len(req.Replicas)),
 	}
 
 	for _, replica := range req.Replicas {
 		if err := ctx.Err(); err != nil {
 			return result, fmt.Errorf("replica placement cancelled: %w", err)
 		}
-		placement, err := e.placeSingleReplica(ctx, workingCandidates, replica, req, usedNodeCount)
+		placement, err := e.placeSingleReplica(ctx, state, replica, req)
 		if err != nil {
 			result.Failures = append(result.Failures, ReplicaFailure{
 				Index:  replica.Index,
@@ -143,18 +192,7 @@ func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req 
 			})
 			continue
 		}
-		usedNodeCount[placement.NodeID]++
-		for index := range workingCandidates {
-			if workingCandidates[index].NodeID == placement.NodeID {
-				workingCandidates[index].AvailableCPU -= replica.CPU
-				workingCandidates[index].AvailableMemory -= replica.MemoryMB
-				workingCandidates[index].AvailableDisk -= replica.DiskMB
-				workingCandidates[index].AllocatedCPU += replica.CPU
-				workingCandidates[index].AllocatedMemory += replica.MemoryMB
-				workingCandidates[index].AllocatedDisk += replica.DiskMB
-				workingCandidates[index].ServerCount++
-			}
-		}
+		state.apply(replica, placement.NodeID)
 		result.Placements = append(result.Placements, *placement)
 	}
 	if len(result.Placements) == 0 && len(result.Failures) > 0 {

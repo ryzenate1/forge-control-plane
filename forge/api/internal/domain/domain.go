@@ -1,6 +1,15 @@
 package domain
 
-import "time"
+import (
+	"errors"
+	"time"
+)
+
+// ErrAmbiguousTarget is returned when a request names the same placement
+// target two different ways (e.g. RegionID vs Region, RequiredNode vs
+// NodeID). An ambiguous target must be rejected, never resolved by silently
+// picking the first value. Handlers map this to 400.
+var ErrAmbiguousTarget = errors.New("conflicting placement target: values must agree")
 
 type Cluster struct {
 	ID        string

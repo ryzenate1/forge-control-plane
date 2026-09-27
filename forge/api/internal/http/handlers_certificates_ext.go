@@ -1,8 +1,13 @@
 package http
 
 import (
+	"crypto"
+	"crypto/x509"
+	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/services/acme"
 
@@ -18,6 +23,7 @@ func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.
 	if svc == nil {
 		return
 	}
+	_ = cfg
 
 	certs := protected.Group("/certificates", adminIPAccess)
 
@@ -34,42 +40,19 @@ func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.
 			return c.Status(400).JSON(fiber.Map{"error": "certificate and privateKey are required"})
 		}
 
-		certData, err := validateCertificatePEM(body.Certificate)
-		if err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("invalid certificate: %v", err)})
-		}
-
-		if err := validateKeyPair(body.Certificate, body.PrivateKey); err != nil {
-			return c.Status(400).JSON(fiber.Map{"error": fmt.Sprintf("key pair mismatch: %v", err)})
-		}
-
-		domains := certData.DNSNames
-		if len(domains) == 0 {
-			if certData.Subject.CommonName != "" {
-				domains = append(domains, certData.Subject.CommonName)
-			}
-		}
-		if len(domains) == 0 {
-			domains = append(domains, certData.Subject.CommonName)
-		}
-
-		certPEM := body.Certificate
-		if body.Chain != "" {
-			certPEM = body.Certificate + "\n" + body.Chain
-		}
-
 		ctx, cancel := requestContext()
 		defer cancel()
-		cert, err := cfg.Store.CreateCertificate(ctx, store.CreateCertificateRequest{
-			Domains:     domains,
-			Issuer:      certData.Issuer.String(),
-			Certificate: certPEM,
-			PrivateKey:  body.PrivateKey,
-			ExpiresAt:   certData.NotAfter,
-			AutoRenew:   false,
-			Provider:    "manual",
-		})
+		cert, err := svc.ImportManualCertificate(ctx, body.Certificate, body.PrivateKey, body.Chain)
 		if err != nil {
+			// Validation failures are client errors; anything else is a store
+			// failure. The service prefixes validation with invalid/key-pair
+			// language, so match on that rather than echoing internals.
+			msg := err.Error()
+			if strings.Contains(msg, "invalid certificate") || strings.Contains(msg, "key pair mismatch") ||
+				strings.Contains(msg, "no valid PEM") || strings.Contains(msg, "no private key") ||
+				strings.Contains(msg, "do not match") || strings.Contains(msg, "expired") {
+				return c.Status(400).JSON(fiber.Map{"error": msg})
+			}
 			return respondInternalError(c, err)
 		}
 		return c.Status(201).JSON(fiber.Map{"data": cert})
@@ -78,7 +61,7 @@ func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.
 	certs.Get("/:id/download", requireRole("admin"), requireAdminScope("certificates.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
-		cert, err := cfg.Store.GetCertificate(ctx, c.Params("id"))
+		cert, err := svc.GetCertificate(ctx, c.Params("id"))
 		if err != nil {
 			return c.Status(404).JSON(fiber.Map{"error": err.Error()})
 		}
@@ -92,12 +75,12 @@ func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.
 	certs.Post("/:id/export", mutationLimiter, requireRole("admin"), requireAdminScope("certificates.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
-		cert, err := cfg.Store.GetCertificate(ctx, c.Params("id"))
+		cert, err := svc.ExportCertificate(ctx, c.Params("id"))
 		if err != nil {
+			if strings.Contains(err.Error(), "private key not available") {
+				return c.Status(400).JSON(fiber.Map{"error": "private key not available for export"})
+			}
 			return c.Status(404).JSON(fiber.Map{"error": err.Error()})
-		}
-		if cert.PrivateKey == "" {
-			return c.Status(400).JSON(fiber.Map{"error": "private key not available for export"})
 		}
 
 		return c.JSON(fiber.Map{
@@ -108,6 +91,12 @@ func registerCertificateRoutesExt(protected fiber.Router, cfg Config, svc *acme.
 		})
 	})
 }
+
+// validateCertificatePEM and validateKeyPair remain as the shared PEM helpers
+// for the proxy-domain import route (handlers_proxy_domains.go), which is
+// store-backed by design: it binds an operator certificate to a proxy domain
+// row rather than the ACME certificate lifecycle. They delegate to the same
+// rules the acme service enforces so both imports agree.
 
 func validateCertificatePEM(certPEM string) (*x509.Certificate, error) {
 	block, _ := pem.Decode([]byte(certPEM))

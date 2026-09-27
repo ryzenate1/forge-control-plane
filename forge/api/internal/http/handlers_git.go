@@ -416,7 +416,10 @@ func CreateGitSource(cfg Config) fiber.Handler {
 			}
 		}
 
-		webhookSecret := generateWebhookSecret()
+		webhookSecret, err := generateWebhookSecret()
+		if err != nil {
+			return respondInternalError(c, err)
+		}
 		webhookID := ""
 
 		if req.AutoDeploy && req.ProviderTokenID != nil && *req.ProviderTokenID != "" && cfg.GitService != nil {
@@ -813,10 +816,12 @@ func requireResourceOwner(c *fiber.Ctx, ownerID string) error {
 	return nil
 }
 
-func generateWebhookSecret() string {
+func generateWebhookSecret() (string, error) {
 	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return fmt.Sprintf("%x", b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate webhook secret: %w", err)
+	}
+	return fmt.Sprintf("%x", b), nil
 }
 
 // ---------- Git Deployments ----------

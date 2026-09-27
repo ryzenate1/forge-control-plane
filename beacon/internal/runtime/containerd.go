@@ -485,11 +485,15 @@ func (r *ContainerdRuntime) Stop(ctx context.Context, serverID string) error {
 
 	container, err := r.client.LoadContainer(ctx, name)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("workload %q does not exist", serverID)
+		}
 		return fmt.Errorf("load container: %w", err)
 	}
 
 	task, err := container.Task(ctx, nil)
 	if err != nil {
+		// Container exists but has no task: not running, nothing to stop.
 		return nil
 	}
 
@@ -521,11 +525,15 @@ func (r *ContainerdRuntime) WaitForStop(ctx context.Context, serverID string, du
 
 	container, err := r.client.LoadContainer(ctx, containerName(serverID))
 	if err != nil {
-		return nil
+		if strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("workload %q does not exist", serverID)
+		}
+		return fmt.Errorf("load container: %w", err)
 	}
 
 	task, err := container.Task(ctx, nil)
 	if err != nil {
+		// Container exists but has no task: already stopped.
 		return nil
 	}
 
@@ -577,11 +585,15 @@ func (r *ContainerdRuntime) Kill(ctx context.Context, serverID string) error {
 
 	container, err := r.client.LoadContainer(ctx, name)
 	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			return fmt.Errorf("workload %q does not exist", serverID)
+		}
 		return fmt.Errorf("load container: %w", err)
 	}
 
 	task, err := container.Task(ctx, nil)
 	if err != nil {
+		// Container exists but has no task: not running, nothing to kill.
 		return nil
 	}
 
@@ -634,6 +646,16 @@ func (r *ContainerdRuntime) Stats(ctx context.Context, serverID string) (Stats, 
 	task, err := container.Task(ctx, nil)
 	if err != nil {
 		return Stats{}, fmt.Errorf("get task: %w", err)
+	}
+
+	// A stopped task still answers Metrics with its last-known values; those are
+	// not a live reading and must not be reported as one.
+	taskStatus, err := task.Status(ctx)
+	if err != nil {
+		return Stats{}, fmt.Errorf("read containerd task status: %w", err)
+	}
+	if taskStatus.Status != containerdclient.Running {
+		return Stats{}, fmt.Errorf("containerd task is %q: no metrics to report", taskStatus.Status)
 	}
 
 	metric, err := task.Metrics(ctx)
@@ -784,6 +806,8 @@ func (r *ContainerdRuntime) Delete(ctx context.Context, serverID string) error {
 
 	container, err := r.client.LoadContainer(ctx, name)
 	if err != nil {
+		// Delete is idempotent: removing a workload that does not exist is
+		// a no-op (matching Docker Delete on NotFound).
 		return nil
 	}
 

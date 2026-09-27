@@ -235,7 +235,7 @@ export type AppLogEntry = {
   stream: "stdout" | "stderr";
 };
 
-import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, API_BASE_URL } from "./http";
+import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, buildWebSocketUrl } from "./http";
 import { getAllTemplates } from "@/lib/app-templates-data";
 
 export async function fetchApps(): Promise<ApiApp[]> {
@@ -511,9 +511,7 @@ export function toggleAppAutoDeploy(appId: string, enabled: boolean): Promise<{ 
 }
 
 export function fetchAppConsoleWSURL(serverId: string): string {
-  const protocol = typeof window !== "undefined" && window.location.protocol === "https:" ? "wss:" : "ws:";
-  const wsBase = API_BASE_URL.replace("http:", protocol).replace("https:", protocol);
-  return `${wsBase}/servers/${encodeURIComponent(serverId)}/ws/console`;
+  return buildWebSocketUrl(`/servers/${encodeURIComponent(serverId)}/ws/console`);
 }
 
 /**

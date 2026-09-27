@@ -262,15 +262,10 @@ func (s *Store) UpdateAllocation(ctx context.Context, allocationID string, req U
 		return Allocation{}, errors.New("allocation not found")
 	}
 	_ = s.AppendAudit(ctx, actorID, "allocation updated", "allocation", &allocationID, fmt.Sprintf(`{"alias":"%s"}`, strings.TrimSpace(req.Alias)))
-	allocations, listErr := s.ListAllocations(ctx)
-	if listErr == nil {
-		for _, candidate := range allocations {
-			if candidate.ID == allocationID {
-				return candidate, nil
-			}
-		}
-	}
-	return Allocation{ID: allocationID, Alias: alias, Notes: notes}, nil
+	// Re-read by id: scanning the whole allocation inventory (up to 1000 rows) to
+	// find one record, and discarding the list error when it failed, used to
+	// return a half-populated Allocation as if it were the stored row.
+	return s.GetAllocation(ctx, allocationID)
 }
 
 func (s *Store) UpdateServerAllocation(ctx context.Context, serverID, allocationID string, req UpdateAllocationRequest, actorID *string) (Allocation, error) {

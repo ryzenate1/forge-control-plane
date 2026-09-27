@@ -133,53 +133,58 @@ func (s *NomadScheduler) Deploy(ctx context.Context, req DeployRequest) (DeployR
 }
 
 func (s *NomadScheduler) Stop(ctx context.Context, name string) error {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return err
+	}
 	_, err := s.nomad(ctx, "job", "stop", name)
 	return err
 }
 
+// Start cannot honestly restart a stopped job: Nomad needs the full job spec
+// resubmitted and this scheduler is stateless, so it says so instead of
+// posing as a restart of a live job.
 func (s *NomadScheduler) Start(ctx context.Context, name string) error {
-	return s.Restart(ctx, name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return err
+	}
+	status, err := s.GetStatus(ctx, name)
+	if err != nil {
+		return fmt.Errorf("start nomad job %q: could not read current status: %w", name, err)
+	}
+	switch status {
+	case "running", "pending":
+		return nil
+	default:
+		return fmt.Errorf("nomad job %q is %q: restarting it requires resubmitting the full job spec via Deploy, which this stateless scheduler does not retain", name, status)
+	}
 }
 
 func (s *NomadScheduler) Restart(ctx context.Context, name string) error {
-	name = sanitizeName(name)
-	out, err := s.nomad(ctx, "job", "status", name, "-json")
-	if err != nil {
+	if err := validateResourceIdentifier("workload name", name); err != nil {
 		return err
 	}
-	var jobStatus struct {
-		ID string `json:"ID"`
-	}
-	if err := json.Unmarshal([]byte(out), &jobStatus); err != nil {
-		return err
-	}
-	allocOut, err := s.nomad(ctx, "job", "allocations", name, "-json")
-	if err != nil {
-		return err
-	}
-	var allocs []struct {
-		ID string `json:"ID"`
-	}
-	if err := json.Unmarshal([]byte(allocOut), &allocs); err != nil {
-		return err
-	}
-	for _, alloc := range allocs {
-		if _, err := s.nomad(ctx, "alloc", "stop", alloc.ID); err != nil {
-			return err
-		}
-	}
-	return nil
+	// `job restart` is Nomad's own rolling-replace primitive. The previous
+	// implementation stopped allocations one by one and reported success even
+	// when the job had no allocations at all — work never performed.
+	_, err := s.nomad(ctx, "job", "restart", "-yes", "-detach", name)
+	return err
 }
 
 func (s *NomadScheduler) Scale(ctx context.Context, req ScaleRequest) error {
-	name := sanitizeName(req.Name)
-	_, err := s.nomad(ctx, "job", "scale", name, fmt.Sprintf("%d", req.Replicas))
+	if err := validateResourceIdentifier("workload name", req.Name); err != nil {
+		return err
+	}
+	if req.Replicas < 0 {
+		return fmt.Errorf("replica count must not be negative, got %d", req.Replicas)
+	}
+	_, err := s.nomad(ctx, "job", "scale", req.Name, fmt.Sprintf("%d", req.Replicas))
 	return err
 }
 
 func (s *NomadScheduler) GetStatus(ctx context.Context, name string) (string, error) {
-	name = sanitizeName(name)
+	if err := validateResourceIdentifier("workload name", name); err != nil {
+		return "unknown", err
+	}
 	out, err := s.nomad(ctx, "job", "status", name, "-json")
 	if err != nil {
 		return "unknown", err
@@ -189,6 +194,11 @@ func (s *NomadScheduler) GetStatus(ctx context.Context, name string) (string, er
 	}
 	if err := json.Unmarshal([]byte(out), &job); err != nil {
 		return "unknown", err
+	}
+	if strings.TrimSpace(job.Status) == "" {
+		// Nomad answers with an empty document for unknown job IDs; an
+		// unobserved status is not a status.
+		return "unknown", fmt.Errorf("nomad job %q returned no status", name)
 	}
 	switch job.Status {
 	case "running":

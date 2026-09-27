@@ -133,19 +133,24 @@ func (rc *ReconnectClient) Start(ctx context.Context) {
 
 func (rc *ReconnectClient) run(ctx context.Context) {
 	defer close(rc.stopped)
-	atomic.StoreInt32(&rc.state, int32(StateConnected))
-	rc.mu.Lock()
-	rc.lastHb = time.Now()
-	rc.mu.Unlock()
 
-	ticker := time.NewTicker(15 * time.Second)
+	ticker := time.NewTicker(heartbeatProbeInterval)
 	defer ticker.Stop()
-
-	offlineCheck := time.NewTicker(rc.offlineTimeout / 2)
+	offlineCheck := time.NewTicker(rc.offlineCheckInterval())
 	defer offlineCheck.Stop()
 
-	backoff := 1 * time.Second
-	maxBackoff := 5 * time.Minute
+	backoff := initialReconnectBackoff
+
+	// The channel is only healthy once a round-trip has proved it. Marking
+	// StateConnected before the first probe would let a node that cannot reach
+	// the panel advertise itself as healthy.
+	atomic.StoreInt32(&rc.state, int32(StateConnecting))
+	if err := rc.probe(ctx); err != nil {
+		atomic.StoreInt32(&rc.state, int32(StateDisconnected))
+		log.Print("[reconnect] panel unreachable at startup, retrying in the background")
+	} else {
+		rc.markConnected()
+	}
 
 	for {
 		select {
@@ -156,97 +161,147 @@ func (rc *ReconnectClient) run(ctx context.Context) {
 			atomic.StoreInt32(&rc.state, int32(StateDisconnected))
 			return
 		case <-ticker.C:
-			// Real probe: only a successful panel round-trip refreshes the
-			// heartbeat. A blind timer refresh would mask an outage and
-			// prevent the offline detector below from ever firing.
 			if err := rc.probe(ctx); err != nil {
-				log.Printf("[reconnect] heartbeat probe failed: %v", err)
+				// One failed round-trip is a blip, not an outage: the heartbeat
+				// clock simply stops advancing and the offline detector below
+				// decides when the link is really gone.
 				continue
 			}
-			rc.mu.Lock()
-			rc.lastHb = time.Now()
-			rc.consecutiveFails = 0
-			if rc.onHB != nil {
-				rc.onHB()
-			}
-			rc.mu.Unlock()
-			backoff = 1 * time.Second
+			rc.markConnected()
+			backoff = initialReconnectBackoff
 		case <-offlineCheck.C:
-			rc.mu.Lock()
-			last := rc.lastHb
-			rc.mu.Unlock()
-			if !last.IsZero() && time.Since(last) > rc.offlineTimeout {
-				cur := ConnState(atomic.LoadInt32(&rc.state))
-				if cur == StateConnected || cur == StateReconnecting {
-					atomic.StoreInt32(&rc.state, int32(StateReconnecting))
-					atomic.AddInt64(&rc.attempts, 1)
-					log.Printf("[reconnect] offline detected, reconnecting (attempt %d)...", atomic.LoadInt64(&rc.attempts))
-				}
-				var ok bool
-				backoff, ok = rc.doReconnect(ctx, backoff, maxBackoff)
-				if ok {
-					backoff = 1 * time.Second
-				}
+			if !rc.linkExpired() {
+				continue
+			}
+			if ConnState(atomic.LoadInt32(&rc.state)) != StateReconnecting {
+				atomic.StoreInt32(&rc.state, int32(StateReconnecting))
+				log.Printf("[reconnect] no panel round-trip for %v, reconnecting", rc.offlineTimeout)
+			}
+			var ok bool
+			backoff, ok = rc.doReconnect(ctx, backoff)
+			if ok {
+				backoff = initialReconnectBackoff
 			}
 		}
 	}
 }
 
-// probe performs a cheap authenticated panel round-trip. Any error means the
-// link is not healthy; only success may advance lastHb.
+// probe performs one cheap authenticated panel round-trip through the current
+// inner client. Any error means the link is not provably healthy; only success
+// may advance the heartbeat clock.
 func (rc *ReconnectClient) probe(ctx context.Context) error {
-	inner := rc.Inner()
-	if inner == nil {
+	probeCtx, cancel := rc.probeContext(ctx, panelProbeTimeout)
+	defer cancel()
+	return rc.roundTrip(probeCtx, rc.Inner())
+}
+
+// roundTrip executes a probe against a specific client and keeps the failure
+// bookkeeping, so an outage is reported on transition rather than on every tick.
+func (rc *ReconnectClient) roundTrip(ctx context.Context, c Client) error {
+	if c == nil {
 		return errors.New("no panel client")
 	}
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	_, err := inner.GetServers(probeCtx, 1)
+	_, err := c.GetServers(ctx, 1)
+	if err == nil {
+		return nil
+	}
+	atomic.AddInt64(&rc.attempts, 1)
+	rc.mu.Lock()
+	rc.consecutiveFails++
+	fails := rc.consecutiveFails
+	rc.mu.Unlock()
+	if fails == 1 || fails%circuitBreakerFailures == 0 {
+		log.Printf("[reconnect] panel round-trip failed (%d consecutive): %v", fails, err)
+	}
 	return err
 }
 
-func (rc *ReconnectClient) doReconnect(ctx context.Context, backoff, maxBackoff time.Duration) (time.Duration, bool) {
-	select {
-	case <-time.After(backoff):
-	case <-ctx.Done():
-		return backoff, false
-	case <-rc.stopCh:
+// markConnected records a proven-healthy link: the attempt counters reset and a
+// link that had been down says so once, rather than on every subsequent beat.
+func (rc *ReconnectClient) markConnected() {
+	rc.mu.Lock()
+	recovered := rc.consecutiveFails
+	rc.consecutiveFails = 0
+	rc.lastHb = time.Now()
+	onHB := rc.onHB
+	rc.mu.Unlock()
+
+	atomic.StoreInt32(&rc.state, int32(StateConnected))
+	if recovered > 0 {
+		log.Printf("[reconnect] panel reachable again after %d failed round-trip(s)", recovered)
+	}
+	if onHB != nil {
+		onHB()
+	}
+}
+
+// linkExpired reports whether the last proven round-trip is older than the
+// offline timeout. A link that never succeeded has no reading to age: unknown
+// is not connected.
+func (rc *ReconnectClient) linkExpired() bool {
+	rc.mu.Lock()
+	last := rc.lastHb
+	rc.mu.Unlock()
+	return last.IsZero() || time.Since(last) > rc.offlineTimeout
+}
+
+// probeContext bounds a round-trip by the parent context, the probe timeout and
+// Stop(), so no probe can outlive shutdown.
+func (rc *ReconnectClient) probeContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	probeCtx, cancel := context.WithTimeout(ctx, timeout)
+	watchStop := context.AfterFunc(rc.stopCh, cancel)
+	return probeCtx, func() {
+		watchStop()
+		cancel()
+	}
+}
+
+// doReconnect waits out the current backoff, then proves a freshly built client
+// can round-trip before promoting it. It returns the next backoff and whether
+// the link is healthy again.
+func (rc *ReconnectClient) doReconnect(ctx context.Context, backoff time.Duration) (time.Duration, bool) {
+	if !waitOrCancelled(ctx, rc.stopCh, backoff) {
 		return backoff, false
 	}
 
 	candidate := rc.newClient()
-	probeCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	_, err := candidate.GetServers(probeCtx, 1)
+	probeCtx, cancel := rc.probeContext(ctx, panelProbeTimeout)
+	err := rc.roundTrip(probeCtx, candidate)
 	cancel()
 	if err != nil {
 		rc.mu.Lock()
-		rc.consecutiveFails++
 		fails := rc.consecutiveFails
 		rc.mu.Unlock()
-		log.Printf("[reconnect] reconnect probe failed (consecutive %d): %v", fails, err)
-		// Circuit breaker: after 10 consecutive failures, stop hammering and
-		// cap at maxBackoff until a probe succeeds.
-		nextBackoff := time.Duration(float64(backoff) * 2.0)
-		if nextBackoff > maxBackoff {
-			nextBackoff = maxBackoff
+		next := backoff * 2
+		// Circuit breaker: past the threshold, stop hammering a panel that is
+		// clearly down and hold at the cap until a round-trip succeeds.
+		if fails >= circuitBreakerFailures || next > maxReconnectBackoff {
+			next = maxReconnectBackoff
 		}
-		if fails >= 10 {
-			nextBackoff = maxBackoff
-		}
-		jitter := secureDurationJitter(nextBackoff / 4)
-		return nextBackoff - nextBackoff/8 + jitter, false
+		jitter := secureDurationJitter(next / 4)
+		return next - next/8 + jitter, false
 	}
 
 	rc.mu.Lock()
 	rc.inner = candidate
-	rc.lastHb = time.Now()
-	rc.consecutiveFails = 0
 	rc.mu.Unlock()
+	rc.markConnected()
+	return initialReconnectBackoff, true
+}
 
-	atomic.StoreInt32(&rc.state, int32(StateConnected))
-	log.Printf("[reconnect] reconnected successfully")
-
-	return 1 * time.Second, true
+// waitOrCancelled sleeps for d unless ctx is cancelled or stopCh closes first.
+// It reports whether the full delay elapsed.
+func waitOrCancelled(ctx context.Context, stopCh <-chan struct{}, d time.Duration) bool {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	case <-stopCh:
+		return false
+	}
 }
 
 func (rc *ReconnectClient) Stop() {

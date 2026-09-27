@@ -349,8 +349,10 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 	})
 }
 
-func generateUploadToken() string {
+func generateUploadToken() (string, error) {
 	buf := make([]byte, 16)
-	_, _ = rand.Read(buf)
-	return hex.EncodeToString(buf)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate upload token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }

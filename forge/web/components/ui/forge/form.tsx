@@ -43,7 +43,10 @@ export function ForgeField({
   const controlId = htmlFor ?? fallbackId;
   const describedBy = error ? `${controlId}-error` : hint ? `${controlId}-hint` : undefined;
   let wiredChildren = children;
-  if (describedBy && React.isValidElement(children)) {
+  // Fragments accept only `key` — cloning an id/aria onto one warns in the
+  // console and wires nothing. Fragment children keep their own ids; the
+  // hint/error text below still renders for sighted operators.
+  if (describedBy && React.isValidElement(children) && children.type !== React.Fragment) {
     const child = children as React.ReactElement<{ "aria-describedby"?: string; "aria-invalid"?: boolean | string; id?: string }>;
     wiredChildren = React.cloneElement(child, {
       id: child.props.id ?? controlId,

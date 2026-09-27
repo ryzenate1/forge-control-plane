@@ -43,12 +43,17 @@ export const Button = forwardRef<HTMLButtonElement, ButtonHTMLAttributes<HTMLBut
 export function Field({ id, label, hint, error, children }: { id: string; label: string; hint?: ReactNode; error?: string; children: ReactNode }) {
   const describedBy = error ? `${id}-error` : hint ? `${id}-hint` : undefined;
   let wiredChildren = children;
-  if (describedBy && isValidElement(children)) {
+  // Fragments accept only `key` — cloning aria props onto one warns and wires
+  // nothing, so fragment children are left alone (see ForgeField).
+  if (describedBy && isValidElement(children) && (children as React.ReactElement).type !== Symbol.for("react.fragment") && (children.type as unknown) !== undefined) {
     const child = children as React.ReactElement<{ "aria-describedby"?: string; "aria-invalid"?: boolean | string }>;
-    wiredChildren = cloneElement(child, {
-      "aria-describedby": [child.props["aria-describedby"], describedBy].filter(Boolean).join(" ") || undefined,
-      "aria-invalid": error ? true : child.props["aria-invalid"],
-    });
+    // React.Fragment has no props to receive an id; skip it rather than warn.
+    if (typeof child.type !== "symbol") {
+      wiredChildren = cloneElement(child, {
+        "aria-describedby": [child.props["aria-describedby"], describedBy].filter(Boolean).join(" ") || undefined,
+        "aria-invalid": error ? true : child.props["aria-invalid"],
+      });
+    }
   }
   return (
     <div className="space-y-1.5">

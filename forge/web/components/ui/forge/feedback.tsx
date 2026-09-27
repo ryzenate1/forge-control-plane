@@ -357,6 +357,9 @@ export function ForgeErrorState({
 /**
  * Determinate bar. Pass `value={null}` when the figure is unknown — the track
  * renders striped and empty rather than pretending the value is 0%.
+ *
+ * A non-positive `max` is also "no reading": dividing by it would claim 100%
+ * (or NaN), so it renders the same unknown track as a missing value.
  */
 export function ForgeProgress({
   value,
@@ -373,8 +376,9 @@ export function ForgeProgress({
   showValue?: boolean;
   className?: string;
 }) {
-  const known = typeof value === "number" && Number.isFinite(value);
-  const pct = known ? Math.min(100, Math.max(0, (value / max) * 100)) : 0;
+  const scaleKnown = typeof max === "number" && Number.isFinite(max) && max > 0;
+  const known = scaleKnown && typeof value === "number" && Number.isFinite(value);
+  const pct = known ? Math.min(100, Math.max(0, (value / (max as number)) * 100)) : 0;
 
   return (
     <div className={cn("space-y-1", className)}>
@@ -394,7 +398,7 @@ export function ForgeProgress({
         </div>
       ) : null}
       <div
-        aria-valuemax={max}
+        aria-valuemax={scaleKnown ? max : 100}
         aria-valuemin={0}
         aria-valuenow={known ? value : undefined}
         aria-valuetext={known ? undefined : "Unknown"}

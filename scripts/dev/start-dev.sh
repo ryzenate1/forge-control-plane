@@ -6,6 +6,18 @@ PID_DIR="$ROOT/.dev-pids"
 LOG_DIR="$ROOT/.dev-logs"
 MODE="${1:-docker}"
 
+red=$'\033[31m'
+green=$'\033[32m'
+yellow=$'\033[33m'
+cyan=$'\033[36m'
+reset=$'\033[0m'
+
+info() { printf "%s==>%s %s\n" "$cyan" "$reset" "$1"; }
+ok() { printf "  %s[ok]%s %s\n" "$green" "$reset" "$1"; }
+warn() { printf "  %s[warn]%s %s\n" "$yellow" "$reset" "$1"; }
+fail() { printf "  %s[error]%s %s\n" "$red" "$reset" "$1"; exit 1; }
+have() { command -v "$1" >/dev/null 2>&1; }
+
 # Canonical ports (single source of truth).
 # shellcheck disable=SC1091
 . "$ROOT/scripts/dev/ports.env"
@@ -100,6 +112,7 @@ FORGE_MASTER_KEY=$FORGE_MASTER_KEY
 APP_KEY=$APP_KEY
 EOF
 chmod 600 "$DEV_SECRETS_FILE" 2>/dev/null || true
+umask 022
 # Default demo node identity (overridable via environment).
 if [ -z "${DAEMON_NODE_ID:-}" ]; then
   DAEMON_NODE_ID="22222222-2222-2222-2222-222222222222"
@@ -115,22 +128,10 @@ DAEMON_SFTP_PORT=${DAEMON_SFTP_PORT:-2022}
 FRONTEND_PORT=${FRONTEND_PORT:-3000}
 EOF
 chmod 644 "$ROOT/.dev-data/ports.env"
-printf "[dev] development node token: %s\n" "$DAEMON_NODE_TOKEN"
+info "Dev secrets ready ($DEV_SECRETS_FILE, mode 600). Token available via env, never printed."
 
 
 mkdir -p "$PID_DIR" "$LOG_DIR"
-
-red=$'\033[31m'
-green=$'\033[32m'
-yellow=$'\033[33m'
-cyan=$'\033[36m'
-reset=$'\033[0m'
-
-info() { printf "%s==>%s %s\n" "$cyan" "$reset" "$1"; }
-ok() { printf "  %s[ok]%s %s\n" "$green" "$reset" "$1"; }
-warn() { printf "  %s[warn]%s %s\n" "$yellow" "$reset" "$1"; }
-fail() { printf "  %s[error]%s %s\n" "$red" "$reset" "$1"; exit 1; }
-have() { command -v "$1" >/dev/null 2>&1; }
 
 port_open() {
   local port="$1"

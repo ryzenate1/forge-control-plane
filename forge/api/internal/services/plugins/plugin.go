@@ -283,32 +283,56 @@ func (s *Service) RegisterHook(pluginID, hook string, handler HookHandler) {
 	})
 }
 
+// ExecuteHook runs every handler registered for a hook. Skipped and failed
+// handlers are reported: a chain where nothing ran is not a success. The
+// returned slice always holds one result per handler that produced output, so
+// callers can pair the error with the partial work.
 func (s *Service) ExecuteHook(ctx context.Context, hook string, args map[string]any) ([]map[string]any, error) {
 	s.mu.RLock()
-	handlers := s.hooks[hook]
+	handlers := make([]struct {
+		pluginID string
+		handler  HookHandler
+	}, len(s.hooks[hook]))
+	copy(handlers, s.hooks[hook])
 	s.mu.RUnlock()
 
+	if len(handlers) == 0 {
+		return nil, fmt.Errorf("no plugin hook handler is registered for %q", hook)
+	}
+
 	results := make([]map[string]any, 0, len(handlers))
+	var failures []string
 	for _, h := range handlers {
-		plugin, err := s.store.GetPlugin(ctx, h.pluginID)
-		if err != nil || plugin.State != PluginStateEnabled {
+		plugin, err := s.mustGet(ctx, h.pluginID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", h.pluginID, err))
+			continue
+		}
+		if plugin.State != PluginStateEnabled {
+			failures = append(failures, fmt.Sprintf("%s: plugin is %s, hook did not run", plugin.Name, plugin.State))
 			continue
 		}
 
-		hookCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		hookCtx, cancel := context.WithTimeout(ctx, pluginHookTimeout)
 		result, err := h.handler(hookCtx, plugin, args)
 		cancel()
 		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", plugin.Name, err))
 			continue
 		}
 		results = append(results, result)
+	}
+
+	if len(failures) > 0 {
+		return results, fmt.Errorf("plugin hook %q did not complete for %d handler(s): %s",
+			hook, len(failures), strings.Join(failures, "; "))
 	}
 	return results, nil
 }
 
 func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 	if s.pluginsDir == "" {
-		return nil, nil
+		return nil, fmt.Errorf("plugin discovery is not configured: no plugins directory is set")
 	}
 
 	entries, err := os.ReadDir(s.pluginsDir)
@@ -317,28 +341,48 @@ func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 	}
 
 	var discovered []Plugin
+	var failures []string
 	for _, entry := range entries {
-		if !entry.IsDir() || !pluginNamePattern.MatchString(entry.Name()) {
+		if !entry.IsDir() {
+			continue
+		}
+		if !pluginNamePattern.MatchString(entry.Name()) {
+			failures = append(failures, fmt.Sprintf("%s: directory name is not a valid plugin name", entry.Name()))
 			continue
 		}
 
 		pluginDir, err := safePluginPath(s.pluginsDir, entry.Name())
 		if err != nil {
+			failures = append(failures, err.Error())
 			continue
 		}
 		manifestPath := filepath.Join(pluginDir, "manifest.json")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: read manifest: %v", entry.Name(), err))
+			continue
+		}
+		if len(data) > maxManifestBytes {
+			failures = append(failures, fmt.Sprintf("%s: manifest exceeds 1 MiB", entry.Name()))
 			continue
 		}
 
 		var manifest PluginManifest
 		if err := json.Unmarshal(data, &manifest); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: invalid manifest: %v", entry.Name(), err))
+			continue
+		}
+		if manifest.Name != "" && manifest.Name != entry.Name() {
+			failures = append(failures, fmt.Sprintf("%s: manifest name %q does not match directory", entry.Name(), manifest.Name))
 			continue
 		}
 
-		existing, err := s.store.FindPluginByName(ctx, entry.Name())
-		if err == nil && existing != nil {
+		existing, err := s.findByName(ctx, entry.Name())
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if existing != nil {
 			discovered = append(discovered, *existing)
 			continue
 		}
@@ -351,14 +395,19 @@ func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 			State:       PluginStateInstalled,
 			InstalledAt: time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
+			Settings:    manifest.Settings,
 		}
 
 		if err := s.store.CreatePlugin(ctx, &plugin); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: record plugin: %v", entry.Name(), err))
 			continue
 		}
 		discovered = append(discovered, plugin)
 	}
 
+	if len(failures) > 0 {
+		return discovered, fmt.Errorf("plugin discovery was incomplete: %s", strings.Join(failures, "; "))
+	}
 	return discovered, nil
 }
 
