@@ -420,8 +420,6 @@ export default function GitPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        breadcrumb="Delivery / Git Integrations"
-        hideLiveBadge
         title={
           <span className="flex items-center gap-2.5">
             Git Integrations

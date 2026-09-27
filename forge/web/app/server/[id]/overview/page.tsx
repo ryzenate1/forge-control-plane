@@ -1,12 +1,18 @@
-"use client";
+import { permanentRedirect } from "next/navigation";
 
-import { OverviewView } from "@/components/server/overview-view";
-import { ServerConsoleLayout } from "@/components/server/server-console-layout";
-
-export default function ServerOverviewPage() {
-  return (
-    <ServerConsoleLayout activeTab="overview">
-      {(server) => <OverviewView server={server} />}
-    </ServerConsoleLayout>
-  );
+/**
+ * Compat alias for the duplicate overview route.
+ *
+ * `/server/<id>` and `/server/<id>/overview` rendered the same `OverviewView`
+ * through the same layout — two URLs for one page, which meant the sidebar's
+ * Overview row highlighted on one of them and not the other depending on how
+ * the user arrived. `/server/<id>` is the canonical landing page.
+ */
+export default async function ServerOverviewAlias({
+  params,
+}: {
+  params: Promise<{ id: string }>;
+}): Promise<never> {
+  const { id } = await params;
+  return permanentRedirect(`/server/${id}`);
 }

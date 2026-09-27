@@ -1973,34 +1973,115 @@ func (s *Server) statsWS(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(writer, serverID, errors.New("token not valid for this server"))
 		return
 	}
-	stream, err := s.runtime.StatsStream(r.Context(), serverID)
-	if err != nil {
-		writeJSONError(writer, serverID, err)
-		return
-	}
-	defer stream.Close()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 
+	// Drain the client side so control frames are processed: the pong that
+	// answers our keepalive ping is what extends the read deadline, and without
+	// a reader the session dies after one deadline interval.
 	go func() {
-		<-r.Context().Done()
-		_ = stream.Close()
+		defer cancel()
+		for {
+			if _, _, err := conn.ReadMessage(); err != nil {
+				return
+			}
+		}
 	}()
 
-	for {
-		runtimeStats, err := runtime.DecodeDockerStats(stream)
+	s.streamStats(ctx, writer, serverID)
+}
+
+// streamStats carries telemetry plus the workload's lifecycle. A stopped
+// workload has no metrics to sample, which is a state and not an error, so the
+// socket stays open reporting that state and attaches to the metric stream by
+// itself once the workload starts.
+func (s *Server) streamStats(ctx context.Context, writer *webSocketWriter, serverID string) {
+	lastState := ""
+	for ctx.Err() == nil {
+		inspection, retry, ok := s.inspectForStream(ctx, writer, serverID)
+		if !ok {
+			return
+		}
+		if retry {
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+
+		if !inspection.Running {
+			if key := lifecycleKey(inspection); key != lastState {
+				frame := lifecycleFrame(inspection)
+				frame["metrics"] = false
+				if err := writer.WriteJSON(frame); err != nil {
+					return
+				}
+				lastState = key
+			}
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+
+		stream, err := s.runtime.StatsStream(ctx, serverID)
 		if err != nil {
+			if ctx.Err() != nil {
+				return
+			}
+			// The workload is running but its metrics cannot be read. That is a
+			// real failure, not an absence of load.
+			if writeErr := writer.WriteJSON(map[string]any{
+				"serverId": serverID,
+				"type":     "error",
+				"code":     "stats_unavailable",
+				"data":     err.Error(),
+				"error":    err.Error(),
+			}); writeErr != nil {
+				return
+			}
+			lastState = ""
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+
+		closed := make(chan struct{})
+		go func() {
+			select {
+			case <-ctx.Done():
+			case <-closed:
+			}
+			_ = stream.Close()
+		}()
+
+		writeOK := true
+		for {
+			runtimeStats, decodeErr := runtime.DecodeDockerStats(stream)
+			if decodeErr != nil {
+				break
+			}
+			frame := lifecycleFrame(inspection)
+			frame["metrics"] = true
+			frame["cpuPercent"] = runtimeStats.CPUPercent
+			frame["memoryBytes"] = runtimeStats.MemoryBytes
+			frame["memoryLimit"] = runtimeStats.MemoryLimit
+			frame["networkRxBytes"] = runtimeStats.NetworkRxBytes
+			frame["networkTxBytes"] = runtimeStats.NetworkTxBytes
+			if err := writer.WriteJSON(frame); err != nil {
+				writeOK = false
+				break
+			}
+		}
+		close(closed)
+		_ = stream.Close()
+		if !writeOK || ctx.Err() != nil {
 			return
 		}
-		stats := map[string]any{
-			"serverId":       serverID,
-			"cpuPercent":     runtimeStats.CPUPercent,
-			"memoryBytes":    runtimeStats.MemoryBytes,
-			"memoryLimit":    runtimeStats.MemoryLimit,
-			"networkRxBytes": runtimeStats.NetworkRxBytes,
-			"networkTxBytes": runtimeStats.NetworkTxBytes,
-		}
-		if err := writer.WriteJSON(stats); err != nil {
-			return
-		}
+		// The metric stream ended: the workload stopped, or was replaced.
+		// Re-inspect rather than assume which.
+		lastState = ""
 	}
 }
 
@@ -2120,59 +2201,141 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The manager owns one attach per running server. Every websocket receives
-	// only this server's bounded replay and live output.
-	if err := s.consoles.Ensure(serverID); err != nil {
-		_ = writer.WriteJSON(map[string]any{"type": "error", "data": err.Error()})
-		return
-	}
-	ch, unsubscribe, err := s.consoles.Subscribe(serverID)
-	if err != nil {
-		_ = writer.WriteJSON(map[string]any{"type": "error", "data": err.Error()})
-		return
-	}
-	defer unsubscribe()
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 
-	errs := make(chan error, 2)
-
+	// Read commands for the whole session, across however many workload runs it
+	// spans. The read deadline is the one configureWebSocket installed and the
+	// pong handler extends; setting a shorter deadline per iteration here would
+	// clobber that extension and kill an idle-but-healthy console.
 	go func() {
-		for msg := range ch {
-			if err := writer.WriteJSON(map[string]any{"type": "output", "data": string(msg)}); err != nil {
-				errs <- err
+		defer cancel()
+		for {
+			messageType, payload, err := conn.ReadMessage()
+			if err != nil {
 				return
 			}
-		}
-		errs <- nil
-	}()
-
-	// Read commands from the WebSocket and forward to Docker.
-	go func() {
-		for {
-			select {
-			case <-r.Context().Done():
-				errs <- r.Context().Err()
-				return
-			default:
-				conn.SetReadDeadline(time.Now().Add(30 * time.Second))
-				messageType, payload, err := conn.ReadMessage()
-				if err != nil {
-					errs <- err
+			if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
+				continue
+			}
+			cmd := strings.TrimSpace(string(payload))
+			if cmd == "" {
+				continue
+			}
+			// A command that cannot be delivered is reported as a failure. It is
+			// never silently dropped and never acknowledged.
+			if err := s.consoles.Write(serverID, cmd); err != nil {
+				code := "command_failed"
+				if errors.Is(err, errConsoleNotRunning) {
+					code = "not_running"
+				}
+				if writeErr := writer.WriteJSON(map[string]any{
+					"serverId": serverID,
+					"type":     "error",
+					"code":     code,
+					"data":     err.Error(),
+				}); writeErr != nil {
 					return
 				}
-				if messageType != websocket.TextMessage && messageType != websocket.BinaryMessage {
-					continue
-				}
-				cmd := strings.TrimSpace(string(payload))
-				if cmd == "" {
-					continue
-				}
-				if err := s.consoles.Write(serverID, cmd); err != nil {
-					_ = writer.WriteJSON(map[string]any{"type": "error", "data": err.Error()})
-				}
 			}
 		}
 	}()
-	<-errs
+
+	s.streamConsole(ctx, writer, serverID)
+}
+
+// streamConsole keeps a console session attached for as long as the websocket
+// lives. While the workload is not running it reports that state and waits
+// instead of closing, then attaches on its own once the workload starts, so a
+// restart does not look like a transport failure to the viewer.
+func (s *Server) streamConsole(ctx context.Context, writer *webSocketWriter, serverID string) {
+	lastState := ""
+	for ctx.Err() == nil {
+		inspection, retry, ok := s.inspectForStream(ctx, writer, serverID)
+		if !ok {
+			return
+		}
+		if retry {
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+
+		if key := lifecycleKey(inspection); key != lastState {
+			frame := lifecycleFrame(inspection)
+			frame["type"] = "state"
+			if err := writer.WriteJSON(frame); err != nil {
+				return
+			}
+			lastState = key
+		}
+
+		if !inspection.Running {
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+
+		// The manager owns one attach per running server. Every websocket
+		// receives only this server's bounded replay and live output.
+		if err := s.consoles.Ensure(serverID); err != nil {
+			if writeErr := writer.WriteJSON(map[string]any{
+				"serverId": serverID,
+				"type":     "error",
+				"code":     "attach_failed",
+				"data":     err.Error(),
+			}); writeErr != nil {
+				return
+			}
+			lastState = ""
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+		ch, unsubscribe, err := s.consoles.Subscribe(serverID)
+		if err != nil {
+			// The producer detached between Ensure and Subscribe: re-inspect
+			// rather than guess which way the workload went.
+			lastState = ""
+			if !waitTick(ctx) {
+				return
+			}
+			continue
+		}
+		delivered := pumpConsole(ctx, writer, ch, serverID)
+		unsubscribe()
+		if !delivered {
+			return
+		}
+		// The producer detached — the workload stopped, or its console closed.
+		// Re-inspect so the next state frame is a fresh reading.
+		lastState = ""
+	}
+}
+
+// pumpConsole forwards one attach's output. It reports false when the socket
+// can no longer be written to, and true when the producer simply detached.
+func pumpConsole(ctx context.Context, writer *webSocketWriter, ch <-chan []byte, serverID string) bool {
+	for {
+		select {
+		case <-ctx.Done():
+			return false
+		case msg, open := <-ch:
+			if !open {
+				return true
+			}
+			if err := writer.WriteJSON(map[string]any{
+				"serverId": serverID,
+				"type":     "output",
+				"data":     string(msg),
+			}); err != nil {
+				return false
+			}
+		}
+	}
 }
 
 func (s *Server) backupProgressWS(w http.ResponseWriter, r *http.Request) {

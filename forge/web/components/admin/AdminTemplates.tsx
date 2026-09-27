@@ -194,8 +194,8 @@ export function AdminTemplates() {
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Templates"
-        description="Browse game templates from our catalog. Import them into your nests as eggs."
+        title="Legacy Templates"
+        description="Legacy compatibility templates kept for imported installs. Browse the game catalog and import entries into your nests as eggs; new definitions belong in Service Definitions."
         action={<Btn onClick={openCreate}><Plus size={14} /> New Template</Btn>}
       />
 

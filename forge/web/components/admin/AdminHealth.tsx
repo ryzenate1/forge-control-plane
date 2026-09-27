@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
@@ -39,6 +39,7 @@ import {
 } from "@/lib/api";
 import { Btn, EmptyState, Pill, cn } from "./admin-ui";
 import { LiveHealthChecks } from "./LiveHealthChecks";
+import { relativeTime } from "@/lib/admin/telemetry";
 
 type MonitorSection =
   | "infrastructure"
@@ -136,11 +137,14 @@ function MetricTile({
   label,
   value,
   status,
+  hint,
   onClick,
 }: {
   label: string;
   value: string;
   status?: string;
+  /** What the source actually said, when there is something to say. */
+  hint?: string;
   onClick?: () => void;
 }) {
   return (
@@ -156,6 +160,7 @@ function MetricTile({
         <p className="font-mono text-sm sm:text-base font-bold text-slate-100 tabular-nums truncate">{value}</p>
         {status && <span className="shrink-0">{statusIcon(status, 14)}</span>}
       </div>
+      {hint ? <p className="mt-1 line-clamp-2 text-[11px] leading-4 text-slate-500">{hint}</p> : null}
     </div>
   );
 }
@@ -205,7 +210,6 @@ export function AdminHealth({
 }) {
   const router = useRouter();
   const [selected, setSelected] = useState<MonitorSection>(initialSection);
-  const lastRefreshedRef = useRef<Date | null>(null);
 
   const poll = { refetchInterval: 30_000, refetchIntervalInBackground: false } as const;
   const healthQuery = useQuery({ queryKey: ["health"], queryFn: fetchHealthStatus, ...poll });
@@ -302,7 +306,6 @@ export function AdminHealth({
 
 
   function refresh() {
-    lastRefreshedRef.current = new Date();
     void healthQuery.refetch();
     void nodesQuery.refetch();
     void serversQuery.refetch();
@@ -318,6 +321,21 @@ export function AdminHealth({
     reservationsQuery.isFetching ||
     recoveryQuery.isFetching ||
     activityQuery.isFetching;
+
+  // Real freshness for the header badge, which previously read
+  // "Live · updated just now" at all times — including before the first fetch
+  // returned and after it failed.
+  const pageFresh = ((): { label: string; tone: "live" | "stale" | "loading" | "error" } => {
+    const sources = [healthQuery, nodesQuery, serversQuery];
+    if (sources.every((q) => q.isError)) return { label: "No source responding", tone: "error" };
+    const newest = sources.reduce((max, q) => (q.dataUpdatedAt > max ? q.dataUpdatedAt : max), 0);
+    if (newest === 0) return { label: "Loading…", tone: "loading" };
+    const rel = relativeTime(newest) ?? "at an unknown time";
+    if (sources.some((q) => q.isError)) return { label: `Partial · read ${rel}`, tone: "stale" };
+    // Sources poll every 30s; past twice that the page is showing stale reads.
+    const stale = Date.now() - newest > 75_000;
+    return { label: stale ? `Stale · read ${rel}` : `Live · read ${rel}`, tone: stale ? "stale" : "live" };
+  })();
 
   const activeReservations = Array.isArray(reservations)
     ? reservations.filter((item) => !["completed", "cancelled", "canceled", "used", "expired", "failed"].includes(item.status)).length
@@ -421,10 +439,20 @@ export function AdminHealth({
         </div>
         <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
           <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            {pageFresh.tone === "live" ? (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            ) : null}
+            <span
+              className={cn(
+                "relative inline-flex h-1.5 w-1.5 rounded-full",
+                pageFresh.tone === "live" && "bg-emerald-400",
+                pageFresh.tone === "stale" && "bg-amber-400",
+                pageFresh.tone === "error" && "bg-red-400",
+                pageFresh.tone === "loading" && "bg-slate-500",
+              )}
+            />
           </span>
-          <span>Live · updated just now</span>
+          <span>{pageFresh.label}</span>
         </div>
       </div>
 
@@ -481,7 +509,10 @@ export function AdminHealth({
             >
               <option value="infrastructure">Infrastructure</option>
               <option value="workloads">Workloads</option>
-              <option value="api">API &amp; Queue</option>
+              {/* "platform", not "api": the Control-Plane Services section
+                  opens on `selected === "platform"`, so the old value picked
+                  a section that nothing renders. */}
+              <option value="platform">API &amp; Queue</option>
               <option value="database">Database &amp; Cache</option>
               <option value="resources">Runtime Resources</option>
               <option value="orchestration">Orchestration</option>
@@ -554,6 +585,9 @@ export function AdminHealth({
       {/* ========================================================================= */}
       {/* ZONE 2: OVERALL PLATFORM OPERATIONAL STATE CARD                           */}
       {/* ========================================================================= */}
+      {/* `overallStatus` is "unknown" until the report is read, so the card
+          used to sit in an alarm-red frame while still loading. Unknown gets
+          a neutral frame; red is reserved for a status the report stated. */}
       <div
         className={cn(
           "rounded-2xl border p-5 shadow-sm transition-all relative overflow-hidden",
@@ -561,6 +595,8 @@ export function AdminHealth({
             ? "border-emerald-500/25 bg-emerald-500/[0.03]"
             : overallStatus === "warning"
             ? "border-amber-500/25 bg-amber-500/[0.03]"
+            : overallStatus === "unknown"
+            ? "border-white/[0.08] bg-white/[0.02]"
             : "border-red-500/25 bg-red-500/[0.03]"
         )}
       >
@@ -573,6 +609,12 @@ export function AdminHealth({
             >
               {overallStatus === "ok" ? (
                 <SystemHealthOperationalIcon size={44} />
+              ) : overallStatus === "unknown" ? (
+                // Not an alert — nothing has reported a problem, the report
+                // simply has not been read yet.
+                <span className="opacity-30">
+                  <SystemHealthAlertIcon size={44} />
+                </span>
               ) : (
                 <SystemHealthAlertIcon size={44} />
               )}
@@ -581,10 +623,17 @@ export function AdminHealth({
               <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 Control Plane Status
               </div>
+              {/* Loading is not a failure and unavailable is not a verdict:
+                  both used to be printed in red, which read as a detected
+                  problem rather than an unread source. */}
               <p
                 className={cn(
                   "text-xl font-bold tracking-tight",
-                  overallStatus === "ok"
+                  healthQuery.isLoading
+                    ? "text-slate-300"
+                    : healthQuery.isError
+                    ? "text-slate-400"
+                    : overallStatus === "ok"
                     ? "text-emerald-300"
                     : overallStatus === "warning"
                     ? "text-amber-300"
@@ -592,25 +641,42 @@ export function AdminHealth({
                 )}
               >
                 {healthQuery.isLoading
-                  ? "Loading..."
+                  ? "Reading health report…"
                   : healthQuery.isError
-                  ? "Unavailable"
+                  ? "Status Unavailable"
                   : overallStatus === "ok"
                   ? "All Systems Operational"
                   : overallStatus === "warning"
                   ? "Degraded Performance"
                   : "System Issues Detected"}
               </p>
+              {/* Counts only where the list behind them was actually read —
+                  an unread node list is not a fleet of zero nodes. */}
               <p className="mt-0.5 text-xs text-slate-400 font-mono">
-                {summary.totalNodes} nodes · {summary.totalServers} workloads
+                {nodesQuery.isError
+                  ? "nodes unavailable"
+                  : nodesQuery.isPending
+                  ? "reading nodes…"
+                  : `${summary.totalNodes} nodes`}
+                {" · "}
+                {serversQuery.isError
+                  ? "workloads unavailable"
+                  : serversQuery.isPending
+                  ? "reading workloads…"
+                  : `${summary.totalServers} workloads`}
                 {healthQuery.data?.uptime ? ` · Uptime ${secondsLabel(healthQuery.data.uptime)}` : ""}
               </p>
             </div>
           </div>
 
           <div className="flex items-center gap-2">
+            {/* "All healthy" is a claim about every source that feeds this
+                count, so it is only made when every one of them answered.
+                It previously appeared whenever health had finished loading,
+                even if the nodes, reservations or recovery reads had failed
+                and their failure counts were therefore zero by default. */}
             {healthQuery.isLoading ? (
-              <Pill tone="neutral">Checking...</Pill>
+              <Pill tone="neutral">Reading…</Pill>
             ) : (
               <>
                 {hasFailures && (
@@ -627,7 +693,15 @@ export function AdminHealth({
                     {summary.warningChecks.length + summary.degradedNodes} warnings
                   </Pill>
                 )}
-                {!hasFailures && !hasWarnings && <Pill tone="green">All healthy</Pill>}
+                {!hasFailures && !hasWarnings ? (
+                  queryErrors.length > 0 ? (
+                    <Pill tone="neutral">
+                      {queryErrors.length} source{queryErrors.length === 1 ? "" : "s"} unread
+                    </Pill>
+                  ) : (
+                    <Pill tone="green">All healthy</Pill>
+                  )
+                ) : null}
               </>
             )}
             <button
@@ -670,14 +744,29 @@ export function AdminHealth({
               <ServerRackIcon size={14} className="text-sky-400" />
               <span>Infrastructure</span>
             </span>
-            {statusIcon(nodes.length === 0 ? undefined : summary.unexpectedOfflineNodes > 0 ? "offline" : "ok", 14)}
+            {/* Degraded nodes are not "ok": the icon only went amber for
+                unexpected offline nodes, so a degraded fleet showed green. */}
+            {statusIcon(
+              !nodesAvailable || nodes.length === 0
+                ? undefined
+                : summary.unexpectedOfflineNodes > 0
+                ? "offline"
+                : summary.degradedNodes > 0
+                ? "degraded"
+                : "ok",
+              14
+            )}
           </div>
           <p className="mt-2.5 font-mono text-xl font-bold tracking-tight text-slate-100">
             {nodesQuery.isLoading ? "..." : nodesQuery.isError ? "Unavailable" : `${summary.healthyNodes}/${summary.totalNodes} nodes`}
           </p>
+          {/* An unread list is not an empty fleet — "Register a node" used to
+              show while the request was still in flight. */}
           <p className="mt-1 text-xs text-slate-400">
             {nodesQuery.isError
               ? "API unreachable"
+              : nodesQuery.isPending
+              ? "Reading node list…"
               : summary.totalNodes === 0
               ? "Register a node to begin hosting workloads"
               : summary.expectedOfflineNodes > 0
@@ -714,6 +803,8 @@ export function AdminHealth({
           <p className="mt-1 text-xs text-slate-400">
             {serversQuery.isError
               ? "Server data unavailable"
+              : serversQuery.isPending
+              ? "Reading workloads…"
               : `${summary.stoppedServers} stopped · ${summary.suspendedServers} suspended${
                   summary.failedDeployments > 0 ? ` · ${summary.failedDeployments} failed` : ""
                 }`}
@@ -742,7 +833,10 @@ export function AdminHealth({
             {checkStatus(healthAvailable, system)}
           </p>
           <p className="mt-1 text-xs text-slate-400">
-            Queue {checkStatus(healthAvailable, queue)} · {checks.length} checks
+            {/* Only count checks once the report is in hand: "0 checks" was
+                being printed while it was still being read. */}
+            Queue {checkStatus(healthAvailable, queue)} ·{" "}
+            {healthAvailable ? `${checks.length} checks` : "checks unread"}
           </p>
         </button>
 
@@ -924,10 +1018,21 @@ export function AdminHealth({
         defaultOpen={selected === "infrastructure"}
       >
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+          {/* Healthy out of total: a bare count read as "all good" when it was
+              1 of 10, so the denominator is shown and the tile is only green
+              when every node is heartbeating. */}
           <MetricTile
             label="Healthy Heartbeats"
-            value={nodesAvailable ? String(summary.healthyNodes) : "Unavailable"}
-            status={summary.healthyNodes > 0 ? "ok" : nodesAvailable && summary.totalNodes > 0 ? "failed" : undefined}
+            value={nodesAvailable ? `${summary.healthyNodes} / ${summary.totalNodes}` : "Unavailable"}
+            status={
+              !nodesAvailable || summary.totalNodes === 0
+                ? undefined
+                : summary.healthyNodes === summary.totalNodes
+                  ? "ok"
+                  : summary.healthyNodes === 0
+                    ? "failed"
+                    : "warning"
+            }
             onClick={() => router.push("/admin/nodes")}
           />
           <MetricTile
@@ -947,17 +1052,15 @@ export function AdminHealth({
             status={summary.degradedNodes > 0 ? "warning" : undefined}
             onClick={() => router.push("/admin/nodes")}
           />
+          {/* One tile, not two. "Heartbeat Message" used to render the exact
+              same value as "Daemon Check" from the same check, so the message
+              the check reported is now shown here instead. */}
           <MetricTile
+            hint={healthAvailable ? daemon?.notificationMessage : undefined}
             label="Daemon Check"
-            value={checkStatus(healthAvailable, daemon)}
-            status={healthAvailable ? daemon?.status : undefined}
             onClick={() => router.push("/admin/nodes")}
-          />
-          <MetricTile
-            label="Heartbeat Message"
-            value={checkStatus(healthAvailable, daemon)}
             status={healthAvailable ? daemon?.status : undefined}
-            onClick={() => router.push("/admin/nodes")}
+            value={checkStatus(healthAvailable, daemon)}
           />
         </div>
         {nodesAvailable && summary.totalNodes > 0 && <NodeTable nodes={nodes} />}
@@ -1113,7 +1216,7 @@ export function AdminHealth({
           <MetricTile
             label="Platform Activity"
             value={activityAvailable ? String(activityQuery.data?.total ?? 0) : "Unavailable"}
-            onClick={() => router.push("/admin/audit")}
+            onClick={() => router.push("/admin/activity")}
           />
         </div>
         {summary.failedDeployments > 0 && (

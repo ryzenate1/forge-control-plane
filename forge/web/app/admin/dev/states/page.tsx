@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { notFound, useRouter } from "next/navigation";
 import { AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
 import {
   ArrowLeft,
@@ -96,6 +96,15 @@ export default function StatesDemoPage() {
   const [showOffline, setShowOffline] = useState(false);
   const [showRateLimit, setShowRateLimit] = useState(false);
 
+  // A component gallery is a development tool, not a feature of the product.
+  // It is hidden from the sidebar (`hidden: true` in the admin registry) but
+  // hiding a link is not access control — the route answered in production to
+  // anyone who typed it, and rendered a page of fake servers, fake
+  // deployments and fake error states that looks like real platform data.
+  if (process.env.NODE_ENV === "production") {
+    notFound();
+  }
+
   return (
     <AdminPageLayout className="space-y-8">
       <SectionHeader
@@ -103,7 +112,6 @@ export default function StatesDemoPage() {
         sub="QA review page for all loading, empty, error, and permission states"
         backAction={() => router.push("/admin")}
         backLabel="Admin"
-        breadcrumb="Platform / Dev / States"
       />
 
       {/* ===== Loading States ===== */}

@@ -39,6 +39,8 @@ import { CardSkeleton } from "@/components/ui/loading-skeleton";
 import { EmptyState } from "@/components/ui/primitives";
 import { chart } from "@/lib/design-tokens";
 import { cn } from "@/lib/utils";
+import { statusTone as centralStatusTone } from "@/lib/api/status";
+import { toneStyles } from "@/components/ui/forge/status";
 
 function timeAgo(iso?: string | null): string {
   if (!iso) return "—";
@@ -126,12 +128,14 @@ function shortImage(image?: string): string {
   return parts[parts.length - 1] || image;
 }
 
-function statusTone(status?: string, suspended = false): string {
-  if (suspended) return "border-rose-500/40 bg-rose-500/15 text-rose-300";
-  if (status === "running") return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
-  if (status === "installing" || status === "starting") return "border-amber-500/40 bg-amber-500/15 text-amber-300";
-  if (status === "crashed") return "border-red-500/40 bg-red-500/15 text-red-300";
-  return "border-slate-500/40 bg-slate-700/50 text-slate-300";
+/**
+ * Chip classes for the server status badge. A suspended server reads as an
+ * alert regardless of its last reported status; everything else resolves
+ * through the shared vocabulary, so an unrecognised status renders `unknown`
+ * rather than a confident grey "inactive".
+ */
+function statusChip(status?: string, suspended = false): string {
+  return toneStyles[suspended ? "danger" : centralStatusTone(status)].chip;
 }
 
 function isPrimaryAllocation(allocation: ApiAllocation, server?: ApiServer) {
@@ -282,6 +286,12 @@ export function OverviewView({ server }: { server?: ApiServer }) {
 
   const stats: ApiStats | undefined = statsQuery.data;
   const statsLive = statsQuery.isSuccess && Boolean(stats);
+  // Uptime comes from the node as milliseconds since the runtime reported the
+  // workload started, and only when it reported one. An absent value stays
+  // absent rather than becoming a zero-second uptime.
+  const liveUptimeSeconds = statsLive && typeof stats?.uptimeMs === "number" && Number.isFinite(stats.uptimeMs)
+    ? Math.floor(stats.uptimeMs / 1000)
+    : null;
   const memPct = stats ? percentOf(stats.memoryBytes, stats.memoryLimit) : null;
   const diskPct = stats ? percentOf(stats.diskBytes, stats.diskLimit) : null;
 
@@ -312,7 +322,7 @@ export function OverviewView({ server }: { server?: ApiServer }) {
             <p className="text-[10px] font-bold uppercase tracking-widest text-rose-400/80">{server?.template ? "Game server" : "Server"}</p>
             <div className="mt-1 flex flex-wrap items-center gap-2">
               <h1 className="truncate text-xl font-bold text-white" title={server?.name}>{server?.name ?? "Server"}</h1>
-              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", statusTone(server?.status, server?.suspended))}>
+              <span className={cn("rounded-full border px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider", statusChip(server?.status, server?.suspended))}>
                 {server?.suspended ? "Suspended" : server?.status ?? "Unknown"}
               </span>
             </div>
@@ -327,7 +337,7 @@ export function OverviewView({ server }: { server?: ApiServer }) {
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500">
               <span title={node?.fqdn ?? node?.name}>Node: <span className="font-mono text-slate-300">{node?.name ?? server?.node ?? "—"}</span></span>
               <span title="Runtime engine this workload is dispatched to">Engine: <span className="font-mono text-slate-300">{server?.runtimeProvider || "unknown"}</span></span>
-              <span title={statsLive && stats ? `Uptime ${stats.uptime}s reported by the beacon` : "Uptime is reported by the beacon while the server runs"}>Uptime: <span className="font-mono text-slate-300">{statsLive && stats ? formatUptime(stats.uptime) : "—"}</span></span>
+              <span title={liveUptimeSeconds !== null ? `Uptime ${liveUptimeSeconds}s reported by the beacon` : "Uptime is reported by the beacon while the server runs"}>Uptime: <span className="font-mono text-slate-300">{liveUptimeSeconds !== null ? formatUptime(liveUptimeSeconds) : "—"}</span></span>
               <span>Version: <span className="font-mono text-slate-300">{versionValue ?? imageShort}</span></span>
               <span>Last activity: <span className="font-mono text-slate-300">{lastActivityAt ? timeAgo(lastActivityAt) : "—"}</span></span>
             </div>
@@ -418,7 +428,7 @@ export function OverviewView({ server }: { server?: ApiServer }) {
               ) : <span className="text-slate-500">Unavailable</span>}
             </InfoRow>
             <InfoRow label="Allocations"><span className="font-mono text-slate-200">{allocationsQuery.isLoading ? "…" : allocations.length}{typeof server?.allocationLimit === "number" && server.allocationLimit > 0 ? ` / ${server.allocationLimit}` : ""}</span></InfoRow>
-            <InfoRow label="Uptime"><span className="font-mono text-slate-200" title={statsLive && stats ? `Beacon-reported uptime: ${stats.uptime}s` : "Uptime is reported by the beacon while the server runs"}>{statsLive && stats ? formatUptime(stats.uptime) : "—"}</span></InfoRow>
+            <InfoRow label="Uptime"><span className="font-mono text-slate-200" title={liveUptimeSeconds !== null ? `Beacon-reported uptime: ${liveUptimeSeconds}s` : "Uptime is reported by the beacon while the server runs"}>{liveUptimeSeconds !== null ? formatUptime(liveUptimeSeconds) : "—"}</span></InfoRow>
             {server?.transferring ? <InfoRow label="Transfer"><span className="font-semibold text-sky-300">In progress</span></InfoRow> : null}
             {server?.installing ? <InfoRow label="Install"><span className="font-semibold text-amber-300">In progress</span></InfoRow> : null}
           </div>

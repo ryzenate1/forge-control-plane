@@ -1,0 +1,44 @@
+REGISTRY HREFS: 89
+
+== nav href with NO page (DEAD) ==
+  /admin/backups/engines
+
+== static admin page NOT in nav and NOT an alias source (ORPHAN) ==
+  /admin/apps/new
+  /admin/compose/new
+  /admin/deployments/history
+  /admin/deployments/new
+  /admin/dev/states
+  /admin/git-providers
+
+== alias sources ==
+  /admin/access -> /admin/users  (target exists: True)
+  /admin/acme-accounts -> /admin/acme  (target exists: True)
+  /admin/automation -> /admin/cron-jobs  (target exists: True)
+  /admin/beacon -> /admin/nodes  (target exists: True)
+  /admin/beacons -> /admin/nodes  (target exists: True)
+  /admin/build -> /admin/catalog  (target exists: True)
+  /admin/command -> /admin/overview  (target exists: True)
+  /admin/containers -> /admin/docker  (target exists: True)
+  /admin/data -> /admin/databases  (target exists: True)
+  /admin/database-hosts -> /admin/databases  (target exists: True)
+  /admin/database-services -> /admin/databases  (target exists: True)
+  /admin/deploy -> /admin/deployments  (target exists: True)
+  /admin/dns-providers -> /admin/dns  (target exists: True)
+  /admin/game-servers -> /admin/servers  (target exists: True)
+  /admin/infra -> /admin/nodes  (target exists: True)
+  /admin/infra/beacons -> /admin/nodes  (target exists: True)
+  /admin/infra/networking -> /admin/endpoints  (target exists: True)
+  /admin/infra/storage -> /admin/mounts  (target exists: True)
+  /admin/logs -> /admin/activity  (target exists: True)
+  /admin/mtls-ca -> /admin/mtls  (target exists: True)
+  /admin/network -> /admin/domains  (target exists: True)
+  /admin/networking -> /admin/endpoints  (target exists: True)
+  /admin/operations/advanced -> /admin/operations  (target exists: True)
+  /admin/platform -> /admin/settings  (target exists: True)
+  /admin/security-headers -> /admin/security  (target exists: True)
+  /admin/storage -> /admin/mounts  (target exists: True)
+  /admin/tenancy -> /admin/organizations  (target exists: True)
+  /admin/traffic-policies -> /admin/traffic  (target exists: True)
+  /admin/volumes -> /admin/mounts  (target exists: True)
+  /admin/workloads -> /admin/servers  (target exists: True)

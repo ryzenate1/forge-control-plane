@@ -245,22 +245,19 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 		configureClientSocket(client)
 		configureUpstreamSocket(upstream)
 
-		// Start ping keepalive — periodically sends a ping to detect half-open
-		// connections and prevent silent disconnects.
-		pingTicker := time.NewTicker(30 * time.Second)
+		// Start ping keepalive — periodically sends a ping in BOTH directions to
+		// detect half-open connections and prevent silent disconnects.
+		//
+		// Both sockets enforce a read deadline that only an inbound pong extends
+		// (see configureClientSocket / configureUpstreamSocket). A browser's
+		// WebSocket answers pings but never initiates them, and a console or
+		// stats viewer may legitimately send nothing for minutes, so without a
+		// client-bound ping the browser side of every stream is torn down after
+		// one read-deadline interval of user inactivity even though the workload
+		// is still streaming output. Ping the client too.
+		pingTicker := time.NewTicker(realtimePingInterval)
 		defer pingTicker.Stop()
-		go func() {
-			for {
-				select {
-				case <-pingTicker.C:
-					if err := upstream.WriteControl(gorilla.PingMessage, []byte("keepalive"), time.Now().Add(5*time.Second)); err != nil {
-						return
-					}
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
+		go pumpKeepalive(ctx, pingTicker.C, upstream, client)
 
 		errs := make(chan error, 2)
 		// Rate-limit upstream-bound messages (from client) to 10/s to prevent
@@ -276,19 +273,59 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 	}
 }
 
+const (
+	// realtimeReadLimit caps a single inbound frame on either side of the proxy.
+	realtimeReadLimit = 1024 * 1024
+	// realtimeReadTimeout is how long a socket may stay silent before it is
+	// considered dead. Only an inbound pong extends it, so it must stay
+	// comfortably above realtimePingInterval.
+	realtimeReadTimeout = 60 * time.Second
+	// realtimePingInterval is the keepalive cadence for both directions.
+	realtimePingInterval = 30 * time.Second
+	// realtimePingWriteTimeout bounds a blocked control-frame write.
+	realtimePingWriteTimeout = 5 * time.Second
+)
+
+// controlPinger is the part of a WebSocket connection the keepalive loop uses.
+// Both *gorilla.Conn and *fiberws.Conn satisfy it, so the loop can be driven
+// with a stub in tests instead of a live socket pair.
+type controlPinger interface {
+	WriteControl(messageType int, data []byte, deadline time.Time) error
+}
+
+// pumpKeepalive pings every peer on each tick until the context is cancelled or
+// a write fails. Every peer is pinged — dropping the client-bound ping is the
+// regression this function exists to make testable, because the browser side of
+// an idle stream is then torn down by its own read deadline.
+func pumpKeepalive(ctx context.Context, tick <-chan time.Time, peers ...controlPinger) {
+	for {
+		select {
+		case <-tick:
+			deadline := time.Now().Add(realtimePingWriteTimeout)
+			for _, peer := range peers {
+				if err := peer.WriteControl(gorilla.PingMessage, []byte("keepalive"), deadline); err != nil {
+					return
+				}
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
+}
+
 func configureClientSocket(conn *fiberws.Conn) {
-	conn.SetReadLimit(1024 * 1024)
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadLimit(realtimeReadLimit)
+	_ = conn.SetReadDeadline(time.Now().Add(realtimeReadTimeout))
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return conn.SetReadDeadline(time.Now().Add(realtimeReadTimeout))
 	})
 }
 
 func configureUpstreamSocket(conn *gorilla.Conn) {
-	conn.SetReadLimit(1024 * 1024)
-	_ = conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+	conn.SetReadLimit(realtimeReadLimit)
+	_ = conn.SetReadDeadline(time.Now().Add(realtimeReadTimeout))
 	conn.SetPongHandler(func(string) error {
-		return conn.SetReadDeadline(time.Now().Add(60 * time.Second))
+		return conn.SetReadDeadline(time.Now().Add(realtimeReadTimeout))
 	})
 }
 

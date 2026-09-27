@@ -44,6 +44,8 @@ import {
   selectStyle,
   cn,
 } from "./admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 
 type ActivityKind = "user_action" | "deployment" | "auth" | "admin" | "node_event" | "system";
 
@@ -253,19 +255,17 @@ export function AdminActivityLog() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center gap-2">
-          <span>Command</span>
-          <span className="text-slate-600">/</span>
-          <span className="font-semibold text-slate-200">Activity</span>
-        </div>
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
-          </span>
-          <span>Live · updated just now</span>
-        </div>
+      {/*
+        No breadcrumb here: `AdminShell` renders the registry-derived trail for
+        every /admin page, and this file's hand-written "Command / Activity"
+        both duplicated it and named a group that no longer exists.
+
+        The badge is derived from the query's own `dataUpdatedAt`. It replaces a
+        pulsing "Live · updated just now" that was pure markup — it claimed
+        freshness before the first fetch and while the fetch was failing.
+      */}
+      <div className="flex items-center justify-end text-xs">
+        <FreshnessBadge state={sourceState(activityQuery, 15_000)} />
       </div>
 
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">

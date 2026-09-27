@@ -59,7 +59,7 @@ export function AdminBilling() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => void plansQ.refetch()} />
       <SectionHeader
-        title="Billing"
+        title="Billing & Quotas"
         sub="Sell tiers, assign plans to organizations, and meter usage. Webhook deliveries from your payment processor are HMAC-verified and recorded idempotently."
         action={
           <div className="flex gap-2">

@@ -1,0 +1,3849 @@
+{
+ "routes": {
+  "ALL /.well-known/acme-challenge/*": [
+   "server.go:NewServer"
+  ],
+  "DELETE /api/v1/account/oauth-clients/:id": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/account/sessions/:id": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/account/social/:provider/unlink": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "DELETE /api/v1/account/two-factor": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/account/webauthn/credentials/:id": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "DELETE /api/v1/acme/accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "DELETE /api/v1/acme/dns-accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "DELETE /api/v1/admin/autoscaler/policies/:id": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "DELETE /api/v1/admin/backups/artifacts/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "DELETE /api/v1/admin/backups/configs/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "DELETE /api/v1/admin/backups/jobs/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "DELETE /api/v1/admin/backups/restores/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "DELETE /api/v1/admin/cloud/instances/:provider/:id": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "DELETE /api/v1/admin/compose-templates/:id": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "DELETE /api/v1/admin/containers/:id": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "DELETE /api/v1/admin/database-services/:id": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "DELETE /api/v1/admin/database-services/:id/credentials/:credId": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "DELETE /api/v1/admin/docker-cleanup/policies/:id": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "DELETE /api/v1/admin/failover/policies/:id": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "DELETE /api/v1/admin/images/:id": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "DELETE /api/v1/admin/incus/instances/:name": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "DELETE /api/v1/admin/load-balancer/groups/:groupId/targets/:targetId": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "DELETE /api/v1/admin/load-balancer/groups/:id": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "DELETE /api/v1/admin/netbird/acls/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "DELETE /api/v1/admin/netbird/groups/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "DELETE /api/v1/admin/netbird/networks/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "DELETE /api/v1/admin/netbird/peers/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "DELETE /api/v1/admin/netbird/routes/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "DELETE /api/v1/admin/oauth-clients/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/admin/plugins/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/admin/roles/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/admin/scheduler/constraints/:id": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "DELETE /api/v1/admin/scheduler/predictive/affinity-rules/:id": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "DELETE /api/v1/admin/scheduler/predictive/anti-affinity-rules/:id": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "DELETE /api/v1/admin/service-discovery/endpoints/:id": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "DELETE /api/v1/admin/traffic/policies/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "DELETE /api/v1/admin/traffic/rules/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "DELETE /api/v1/admin/vault/:id": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "DELETE /api/v1/allocations/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/allocations/bulk": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/api-keys/:id": [
+   "handlers_api_keys.go:registerApiKeyRoutes",
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/apps/:appId/mounts/:mountId": [
+   "handlers_mount_manage.go:registerAppMountRoutes"
+  ],
+  "DELETE /api/v1/apps/:appId/processes/:processType": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "DELETE /api/v1/apps/:appId/redirects/:redirectId": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "DELETE /api/v1/apps/:appId/services/:serviceId": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "DELETE /api/v1/apps/:id": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "DELETE /api/v1/apps/:id/backups/:backupId": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "DELETE /api/v1/apps/:id/domains/:domainId": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "DELETE /api/v1/auth/sessions": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/auth/sessions/:id": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/autoscale/policies/:id": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "DELETE /api/v1/billing/plans/:id": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "DELETE /api/v1/certificates/:id": [
+   "handlers_certificates.go:registerCertificateRoutes",
+   "handlers_proxy_domains.go:registerProxyCertificateRoutes"
+  ],
+  "DELETE /api/v1/compose/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "DELETE /api/v1/compose/projects/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "DELETE /api/v1/cron-jobs/:id": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "DELETE /api/v1/database-hosts/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/databases/containers/:id": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "DELETE /api/v1/dns/providers/:id": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "DELETE /api/v1/docker/containers/:id": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "DELETE /api/v1/docker/images/:id": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "DELETE /api/v1/docker/networks/:id": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "DELETE /api/v1/docker/volumes/:id": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "DELETE /api/v1/domains/:domainId/redirects/:id": [
+   "handlers_proxy_domains.go:registerRedirectRulesRoutes"
+  ],
+  "DELETE /api/v1/domains/:domainId/security-headers/:id": [
+   "handlers_proxy_domains.go:registerSecurityHeadersRoutes"
+  ],
+  "DELETE /api/v1/domains/:id": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "DELETE /api/v1/eggs/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "DELETE /api/v1/eggs/:id/variables/:variableId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/endpoints/:id": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "DELETE /api/v1/endpoints/:id/nodes/:nodeId": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "DELETE /api/v1/endpoints/:id/policies/:principalType/:principalId": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "DELETE /api/v1/env-vars/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/envs/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/envs/:id/groups/:name": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "DELETE /api/v1/git-push/apps/:id": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "DELETE /api/v1/git-push/apps/:id/env": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "DELETE /api/v1/git/credentials/:id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "DELETE /api/v1/git/providers/:id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "DELETE /api/v1/git/servers/:id/hooks/:hook_id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "DELETE /api/v1/git/sources/:id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "DELETE /api/v1/git/sources/:id/link-env": [
+   "phase1_registrar.go:init"
+  ],
+  "DELETE /api/v1/host/firewall/forward/:id": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "DELETE /api/v1/host/firewall/rules/:id": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "DELETE /api/v1/locations/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_locations.go:registerLocationRoutes"
+  ],
+  "DELETE /api/v1/managed-databases/:id": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "DELETE /api/v1/mounts/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/mounts/:id/eggs/:eggId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/mounts/:id/nodes/:nodeId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/mounts/:id/servers/:serverId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/nests/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "DELETE /api/v1/nodes/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/nodes/:id/allocations/:allocationId": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "DELETE /api/v1/nodes/:id/allocations/bulk": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "DELETE /api/v1/nodes/:id/maintenance": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "DELETE /api/v1/notification-channels/:id": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "DELETE /api/v1/notification-channels/:id/subscribe/:subId": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "DELETE /api/v1/notifications/alerts/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "DELETE /api/v1/notifications/channels/:id": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes",
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "DELETE /api/v1/notifications/preferences/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "DELETE /api/v1/notifications/subscriptions/:id": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes"
+  ],
+  "DELETE /api/v1/organizations/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/organizations/:id/invitations/:invId": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/organizations/:id/members/:userId": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/pipelines/:id": [
+   "handlers_pipeline.go:registerPipelineRoutes",
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "DELETE /api/v1/procedures/:id": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "DELETE /api/v1/projects/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "DELETE /api/v1/projects/:id/previews/:previewId": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "DELETE /api/v1/regions/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_regions.go:registerRegionRoutes"
+  ],
+  "DELETE /api/v1/registries/:id": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "DELETE /api/v1/servers/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/allocations/:allocationId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/backups": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/backups/:backupName": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/backups/policies/:policyId": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/buildpacks/:buildpackId": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/container/files": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/database-service": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/databases/:databaseId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/databases/:databaseId/delete": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/domains/:domainId": [
+   "handlers_domains.go:registerDomainRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/files": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/files/delete": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/invitations/:invitationId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/mounts/:mountId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/schedules/:scheduleId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/schedules/:scheduleId/tasks/:taskId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/servers/:id/users/:userId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/source-deployments/:id": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "DELETE /api/v1/ssh-keys/:fingerprint": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "DELETE /api/v1/tags/:tagId": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "DELETE /api/v1/templates/:id": [
+   "handlers_templates.go:registerTemplateRoutes"
+  ],
+  "DELETE /api/v1/upgrade/plans/:id": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "DELETE /api/v1/users/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "DELETE /api/v1/webhooks/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "DELETE /api/v1/webhooks/deliveries/:deliveryId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /.well-known/forge-verify": [
+   "handlers_domains.go:registerWellKnownVerifyRoute"
+  ],
+  "GET /api/docs/openapi.json": [
+   "swagger.go:registerSwaggerRoutes"
+  ],
+  "GET /api/docs/openapi.yaml": [
+   "swagger.go:registerSwaggerRoutes"
+  ],
+  "GET /api/remote/backups/:backup": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "GET /api/remote/servers": [
+   "server.go:NewServer"
+  ],
+  "GET /api/remote/servers/:id": [
+   "server.go:NewServer"
+  ],
+  "GET /api/remote/servers/:id/install": [
+   "server.go:NewServer"
+  ],
+  "GET /api/remote/servers/:id/transfer": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "GET /api/v1/account/activity": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/account/oauth-clients": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/account/recovery/tokens": [
+   "handlers_account_recovery.go:registerAccountRecoveryRoutes"
+  ],
+  "GET /api/v1/account/sessions": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/account/social/identities": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "GET /api/v1/account/two-factor": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/account/webauthn/credentials": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "GET /api/v1/acme/accounts": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "GET /api/v1/acme/accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "GET /api/v1/acme/dns-accounts": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "GET /api/v1/acme/dns-accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "GET /api/v1/admin-scopes": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/admin/activity": [
+   "handlers_activity.go:registerActivityRoutes"
+  ],
+  "GET /api/v1/admin/activity/export": [
+   "handlers_activity.go:registerActivityRoutes"
+  ],
+  "GET /api/v1/admin/activity/stats": [
+   "handlers_activity.go:registerActivityRoutes"
+  ],
+  "GET /api/v1/admin/app-store-templates": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "GET /api/v1/admin/app-templates": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/admin/audit": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/admin/audit-logs": [
+   "handlers_auditlog.go:registerAuditLogRoutes"
+  ],
+  "GET /api/v1/admin/audit-logs/resource/:resourceType/:resourceId": [
+   "handlers_auditlog.go:registerAuditLogRoutes"
+  ],
+  "GET /api/v1/admin/audit-logs/user/:userId": [
+   "handlers_auditlog.go:registerAuditLogRoutes"
+  ],
+  "GET /api/v1/admin/autoscaler/metrics": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "GET /api/v1/admin/autoscaler/policies": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "GET /api/v1/admin/autoscaler/policies/:id": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "GET /api/v1/admin/autoscaler/policies/server/:serverId": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "GET /api/v1/admin/backups/artifacts": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/artifacts/:id/download": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/configs": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/configs/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/jobs": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/restores": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/status": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/backups/storage-providers": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/admin/branding/file/:name": [
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/admin/buildpacks": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "GET /api/v1/admin/cloud/instances": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "GET /api/v1/admin/cloud/links": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "GET /api/v1/admin/cloud/providers": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "GET /api/v1/admin/cloud/providers/:provider/regions": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "GET /api/v1/admin/cloud/providers/:provider/types": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "GET /api/v1/admin/compose-templates": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "GET /api/v1/admin/compose-templates/:id": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "GET /api/v1/admin/containers/": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/:id": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/:id/changes": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/:id/logs": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/:id/stats": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/:id/top": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/containers/inventory": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/crash-detection/config": [
+   "handlers_crashdetect.go:registerCrashDetectionRoutes"
+  ],
+  "GET /api/v1/admin/crash-detection/servers/:id": [
+   "handlers_crashdetect.go:registerCrashDetectionRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/describe/:host/:port": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/health": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/ingress/health/stats": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/ingress/policies": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/ingress/rules": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/ingress/stats": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/crossnode/resolve": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "GET /api/v1/admin/database-service-templates": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id/backups": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id/credentials": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id/diagnostics": [
+   "handlers_db_diagnostics.go:registerDBDiagnosticRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id/logs": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/admin/database-services/:id/stats": [
+   "handlers_db_diagnostics.go:registerDBDiagnosticRoutes"
+  ],
+  "GET /api/v1/admin/deployment-history/": [
+   "handlers_deployment_history.go:registerDeploymentHistoryRoutes"
+  ],
+  "GET /api/v1/admin/deployment-history/:id": [
+   "handlers_deployment_history.go:registerDeploymentHistoryRoutes"
+  ],
+  "GET /api/v1/admin/deployment-history/:id/logs": [
+   "handlers_deployment_history.go:registerDeploymentHistoryRoutes"
+  ],
+  "GET /api/v1/admin/deployment-history/:id/rollbacks": [
+   "handlers_deployment_history.go:registerDeploymentHistoryRoutes"
+  ],
+  "GET /api/v1/admin/deployments/": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id/compare": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id/revisions": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id/revisions/:revId": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id/steps": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/deployments/:id/steps/:stepId": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/deployments/server/:serverId": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/docker-cleanup/disk-usage/:nodeId": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "GET /api/v1/admin/docker-cleanup/policies": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "GET /api/v1/admin/docker-cleanup/unused-images/:nodeId": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "GET /api/v1/admin/docker/events": [
+   "handlers_docker_events.go:registerDockerEventRoutes"
+  ],
+  "GET /api/v1/admin/failover/metrics": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "GET /api/v1/admin/failover/policies": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "GET /api/v1/admin/failover/policies/:id": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "GET /api/v1/admin/failover/policies/node/:nodeId": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "GET /api/v1/admin/images/": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/images/inventory": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/incus/cluster": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/images": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/instances": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/instances/:name": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/metrics": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/nodes": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/profiles": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/incus/storage-pools": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "GET /api/v1/admin/install-workflows": [
+   "handlers_installer.go:registerInstallerRoutes"
+  ],
+  "GET /api/v1/admin/kubernetes/deployments": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "GET /api/v1/admin/kubernetes/events": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "GET /api/v1/admin/kubernetes/nodes": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "GET /api/v1/admin/kubernetes/pods": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "GET /api/v1/admin/kubernetes/services": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "GET /api/v1/admin/load-balancer/groups": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "GET /api/v1/admin/load-balancer/groups/:id": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "GET /api/v1/admin/load-balancer/groups/:id/next": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "GET /api/v1/admin/load-balancer/metrics": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "GET /api/v1/admin/mail/settings": [
+   "handlers_mail_settings.go:registerMailSettingsRoutes"
+  ],
+  "GET /api/v1/admin/mail/triggers": [
+   "handlers_mail_settings.go:registerMailSettingsRoutes"
+  ],
+  "GET /api/v1/admin/migrations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/netbird/acls": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/dns": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/groups": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/networks": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/peers": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/peers/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/netbird/routes": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "GET /api/v1/admin/networks/": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/networks/:id": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/networks/inventory": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/nodes/:nodeId/sftp": [
+   "handlers_sftp.go:registerSFTPRoutes"
+  ],
+  "GET /api/v1/admin/nomad/allocations": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/deployments": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/deployments/:id": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/jobs": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/jobs/:id": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/nodes": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/nomad/nodes/:id": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "GET /api/v1/admin/oauth-clients": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/operations/timeline": [
+   "handlers_operations_timeline.go:registerOperationsTimelineRoutes"
+  ],
+  "GET /api/v1/admin/operations/transfer/:id": [
+   "handlers_operations_timeline.go:registerOperationsTimelineRoutes"
+  ],
+  "GET /api/v1/admin/orphan-remediations/": [
+   "handlers_orphan_remediations.go:registerOrphanRemediationRoutes"
+  ],
+  "GET /api/v1/admin/plugins": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/plugins/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/plugins/:id/hooks": [
+   "handlers_plugins_extended.go:registerPluginRoutes"
+  ],
+  "GET /api/v1/admin/plugins/discover": [
+   "handlers_plugins_extended.go:registerPluginRoutes"
+  ],
+  "GET /api/v1/admin/plugins/marketplace": [
+   "handlers_plugins_extended.go:registerPluginRoutes"
+  ],
+  "GET /api/v1/admin/preview-deployments/": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/preview-deployments/:id": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/preview-deployments/server/:serverId": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "GET /api/v1/admin/reconcile/metrics": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "GET /api/v1/admin/reconcile/plans": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "GET /api/v1/admin/reconcile/plans/:id": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "GET /api/v1/admin/reconcile/summary": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "GET /api/v1/admin/roles": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/roles/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/backends": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/constraints": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/predictive/affinity-rules": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/predictive/anti-affinity-rules": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/predictive/nodes/:nodeId/score": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/scheduler/predictive/scores": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/endpoints": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/endpoints/:id": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/network/nodes/:nodeId": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/network/visibility": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/reaper/stats": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/resolve": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/service-discovery/services": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "GET /api/v1/admin/settings": [
+   "handlers_settings.go:registerSettingsRoutes"
+  ],
+  "GET /api/v1/admin/settings/advanced": [
+   "handlers_settings_extras.go:registerSettingsExtras"
+  ],
+  "GET /api/v1/admin/settings/mail": [
+   "handlers_settings_extras.go:registerSettingsExtras"
+  ],
+  "GET /api/v1/admin/settings/maintenance": [
+   "handlers_maintenance.go:registerMaintenanceRoutes"
+  ],
+  "GET /api/v1/admin/settings/rate-limits": [
+   "handlers_rate_limit_config.go:registerRateLimitSettingsRoutes"
+  ],
+  "GET /api/v1/admin/sftp/nodes": [
+   "handlers_sftp.go:registerSFTPRoutes"
+  ],
+  "GET /api/v1/admin/sftp/settings": [
+   "handlers_sftp.go:registerSFTPRoutes"
+  ],
+  "GET /api/v1/admin/social/providers": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "GET /api/v1/admin/traffic/policies": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "GET /api/v1/admin/traffic/policies/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "GET /api/v1/admin/traffic/rules": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "GET /api/v1/admin/traffic/rules/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "GET /api/v1/admin/traffic/rules/server/:serverId": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "GET /api/v1/admin/users/:id/roles": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/admin/users/accounts.json": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "GET /api/v1/admin/vault/": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "GET /api/v1/admin/volumes/": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/volumes/:id": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/volumes/inventory": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/admin/volumes/usage": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "GET /api/v1/alerts/": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "GET /api/v1/alerts/:id": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "GET /api/v1/allocations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/allocations/nodes": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/api-keys": [
+   "handlers_api_keys.go:registerApiKeyRoutes",
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/app-store/apps": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "GET /api/v1/app-store/apps/:key": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "GET /api/v1/app-store/installed": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "GET /api/v1/apps": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:appId/mounts": [
+   "handlers_mount_manage.go:registerAppMountRoutes"
+  ],
+  "GET /api/v1/apps/:appId/processes": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "GET /api/v1/apps/:appId/processes/health-status": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "GET /api/v1/apps/:appId/redirects": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "GET /api/v1/apps/:id": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/backups": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/compose": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/deployments": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/domains": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/git": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/logs": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/apps/:id/services": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/audit": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/auth/me": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/auth/sessions": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/auth/social/:provider": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "GET /api/v1/auth/social/:provider/callback": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "GET /api/v1/autoscale/events": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "GET /api/v1/autoscale/policies": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "GET /api/v1/backup/providers": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/billing/org/:orgId/quota": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/billing/org/:orgId/usage": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/billing/org/:orgId/usage-events": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/billing/plans": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/billing/plans/:code": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/billing/settings": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "GET /api/v1/builds/": [
+   "handlers_builds.go:registerBuildRoutes"
+  ],
+  "GET /api/v1/builds/:id": [
+   "handlers_builds.go:registerBuildRoutes"
+  ],
+  "GET /api/v1/builds/:id/logs": [
+   "handlers_builds.go:registerBuildRoutes"
+  ],
+  "GET /api/v1/capabilities": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/capabilities/:nodeId": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/capabilities/:nodeId/delta": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/capabilities/:nodeId/history": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/catalog": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "GET /api/v1/catalog/:key": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "GET /api/v1/catalog/:key/instances": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "GET /api/v1/catalog/backups/retention": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "GET /api/v1/certificates/": [
+   "handlers_certificates.go:registerCertificateRoutes",
+   "handlers_proxy_domains.go:registerProxyCertificateRoutes"
+  ],
+  "GET /api/v1/certificates/:id": [
+   "handlers_certificates.go:registerCertificateRoutes",
+   "handlers_proxy_domains.go:registerProxyCertificateRoutes"
+  ],
+  "GET /api/v1/certificates/:id/download": [
+   "handlers_certificates_ext.go:registerCertificateRoutesExt"
+  ],
+  "GET /api/v1/cleanup/inspect": [
+   "handlers_cleanup.go:registerCleanupRoutes"
+  ],
+  "GET /api/v1/compose": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/:id/logs": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/:id/status": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/git/:id/check-update": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/git/:id/drift": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/git/:id/last-webhook": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/git/:id/preview": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/git/:id/status": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/projects": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/projects/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/compose/projects/:id/summary": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "GET /api/v1/correlations/:id": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/cron-jobs": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "GET /api/v1/cron-jobs/:id": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "GET /api/v1/cron-jobs/:id/executions": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "GET /api/v1/csrf-token": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/database-hosts": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/database-hosts/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/databases/containers": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "GET /api/v1/databases/containers/:id": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "GET /api/v1/databases/containers/:id/credentials": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "GET /api/v1/databases/engines": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "GET /api/v1/dns/providers": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "GET /api/v1/dns/providers/configured": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "GET /api/v1/docker/containers": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/containers/:id": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/containers/:id/files": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/containers/:id/logs": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/containers/:id/stats": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/images": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/images/search": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/networks": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/docker/volumes": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "GET /api/v1/domains/": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "GET /api/v1/domains/:domainId/redirects/": [
+   "handlers_proxy_domains.go:registerRedirectRulesRoutes"
+  ],
+  "GET /api/v1/domains/:domainId/security-headers/": [
+   "handlers_proxy_domains.go:registerSecurityHeadersRoutes"
+  ],
+  "GET /api/v1/domains/:id": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "GET /api/v1/download/file": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/drain-ledger": [
+   "handlers_drain.go:registerDrainRoutes"
+  ],
+  "GET /api/v1/drain-ledger/:nodeId": [
+   "handlers_drain.go:registerDrainRoutes"
+  ],
+  "GET /api/v1/eggs": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "GET /api/v1/eggs/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "GET /api/v1/eggs/:id/export": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/eggs/:id/variables": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/endpoints": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id/diagnostics": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id/health": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id/inventory": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id/nodes": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/endpoints/:id/policies": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "GET /api/v1/env-vars/:id/revisions": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/environments/:id/env-vars": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/environments/:id/env-vars/resolved": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/environments/:id/services/:service/logs": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "GET /api/v1/envs/:id/groups": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "GET /api/v1/envs/:id/manifest": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "GET /api/v1/envs/:id/ports-urls": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "GET /api/v1/envs/:id/services/:service/logs/ws": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "GET /api/v1/evacuation-plans/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/evacuations/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/fencing/nodes/:id/preview": [
+   "handlers_fencing.go:registerFencingRoutes"
+  ],
+  "GET /api/v1/forgefile": [
+   "handlers_forgefile.go:registerForgefileRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/forgefile/:slug": [
+   "handlers_forgefile.go:registerForgefileRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/forgefile/validate": [
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/git-push/apps": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "GET /api/v1/git-push/apps/:id": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "GET /api/v1/git-push/apps/:id/events": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "GET /api/v1/git-push/apps/:id/remote": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "GET /api/v1/git/credentials": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/credentials/:id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/oauth/:provider/authorize": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/oauth/:provider/callback": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/oauth/:provider/status": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/providers": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/providers/:id/branches": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/providers/:id/repos": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/providers/:provider_id/repos/:owner/:repo/commits": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/providers/:provider_id/repos/:owner/:repo/contents": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/providers/:provider_id/repos/:owner/:repo/readme": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/providers/:provider_id/repos/:owner/:repo/tree": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/git/servers/:id/deployments": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/servers/:id/deployments/:deployment_id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/servers/:id/hooks": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/sources": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "GET /api/v1/git/sources/:gitSourceId/deployments": [
+   "handlers_git_deploy.go:RegisterGitDeploymentRoutes"
+  ],
+  "GET /api/v1/git/sources/:gitSourceId/deployments/latest": [
+   "handlers_git_deploy.go:RegisterGitDeploymentRoutes"
+  ],
+  "GET /api/v1/git/sources/:id/webhook-events": [
+   "phase1_registrar.go:init"
+  ],
+  "GET /api/v1/health": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/health/:check": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/health/:check/history": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/health/live": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/health/ready": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/host/disk": [
+   "handlers_host.go:registerHostRoutes"
+  ],
+  "GET /api/v1/host/files/download": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "GET /api/v1/host/files/list": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "GET /api/v1/host/firewall/forward": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "GET /api/v1/host/firewall/rules": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "GET /api/v1/host/firewall/status": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "GET /api/v1/host/info": [
+   "handlers_host.go:registerHostRoutes"
+  ],
+  "GET /api/v1/host/memory": [
+   "handlers_host.go:registerHostRoutes"
+  ],
+  "GET /api/v1/host/network": [
+   "handlers_host.go:registerHostRoutes"
+  ],
+  "GET /api/v1/host/processes": [
+   "handlers_host.go:registerHostRoutes"
+  ],
+  "GET /api/v1/host/terminal/ws": [
+   "handlers_files.go:registerHostTerminalRoute"
+  ],
+  "GET /api/v1/i18n/:locale": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/i18n/locales": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/ide/files": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/install-workflows/:id": [
+   "handlers_installer.go:registerInstallerRoutes"
+  ],
+  "GET /api/v1/locations": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_locations.go:registerLocationRoutes"
+  ],
+  "GET /api/v1/locations/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_locations.go:registerLocationRoutes"
+  ],
+  "GET /api/v1/managed-databases": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "GET /api/v1/managed-databases/:id": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "GET /api/v1/managed-databases/:id/backups": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "GET /api/v1/managed-databases/:id/restores": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "GET /api/v1/managed-databases/engines": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "GET /api/v1/metrics": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/migrations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/migrations/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/migrations/executor": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/monitoring/nodes/metrics": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "GET /api/v1/monitoring/summary": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "GET /api/v1/mounts": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/mounts/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/mounts/:id/eggs": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/mounts/:id/nodes": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/mounts/:id/servers": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/mtls/certificates": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "GET /api/v1/mtls/certificates/:id": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "GET /api/v1/mtls/migration/status": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "GET /api/v1/mtls/status": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "GET /api/v1/nests": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "GET /api/v1/nests/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "GET /api/v1/nests/:nestId/eggs": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/allocations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/capacity": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/configuration": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/deployment": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/drain": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "GET /api/v1/nodes/:id/evacuation-preview": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/health": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/health-history": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/nodes/:id/heartbeat": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/nodes/:id/heartbeats": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/nodes/:id/lifecycle": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/servers": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/nodes/:id/system": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "GET /api/v1/nodes/:id/system-information": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "GET /api/v1/notification-channels/": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "GET /api/v1/notification-channels/:id": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "GET /api/v1/notification-channels/:id/subscribe/": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "GET /api/v1/notification-logs": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/alerts/": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/alerts/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/alerts/:id/states": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/channels/": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes",
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/channels/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/events": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes"
+  ],
+  "GET /api/v1/notifications/logs": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/preferences/": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/preferences/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/notifications/subscriptions/": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes"
+  ],
+  "GET /api/v1/notifications/ws": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "GET /api/v1/onboarding-tokens": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/onboarding-tokens/:tokenId": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /api/v1/onboarding/repos": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/onboarding/repos/:repo/branches": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/onboarding/status": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/operations/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/organizations": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:id/invitations": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:id/members": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:id/members/:userId/permissions": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:id/projects": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:id/servers": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/organizations/:orgId/apps": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "GET /api/v1/organizations/:slug": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/panel/settings/public": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/permissions": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/pipeline-artifacts/:id": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:id": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:id/artifacts": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:id/logs": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:runId": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:runId/artifacts": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "GET /api/v1/pipeline-runs/:runId/logs": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "GET /api/v1/pipelines": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipelines/": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "GET /api/v1/pipelines/:id": [
+   "handlers_pipeline.go:registerPipelineRoutes",
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "GET /api/v1/pipelines/:id/runs": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "GET /api/v1/procedures/": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "GET /api/v1/procedures/:id": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "GET /api/v1/procedures/:id/executions": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "GET /api/v1/procedures/executions/:id": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "GET /api/v1/procedures/executions/steps/:stepId/logs": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "GET /api/v1/projects/:id/env-vars": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/projects/:id/envs": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "GET /api/v1/projects/:id/previews/": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "GET /api/v1/projects/:id/previews/:previewId": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "GET /api/v1/projects/:id/previews/config": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "GET /api/v1/projects/:id/previews/webhook-secret": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "GET /api/v1/public/forgefile/:slug": [
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "GET /api/v1/reconciler/metrics": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/recovery": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/recovery-plans": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/recovery-plans/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/recovery/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/regions": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_regions.go:registerRegionRoutes"
+  ],
+  "GET /api/v1/regions/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_regions.go:registerRegionRoutes"
+  ],
+  "GET /api/v1/regions/:id/capacity": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/regions/:id/cluster": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/registries/": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "GET /api/v1/registries/:id": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "GET /api/v1/reservations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/reservations/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/servers": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/activity": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/allocations": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups/:backupName": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups/download": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups/policies": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups/storage/download": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/backups/verify": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/buildpacks": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "GET /api/v1/servers/:id/builds/": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "GET /api/v1/servers/:id/builds/:buildId": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "GET /api/v1/servers/:id/configuration": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/container/files/download": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "GET /api/v1/servers/:id/container/files/ls": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "GET /api/v1/servers/:id/container/files/read": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "GET /api/v1/servers/:id/database-services": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "GET /api/v1/servers/:id/databases": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/databases/:databaseId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/deployments": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "GET /api/v1/servers/:id/deployments/:releaseId": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "GET /api/v1/servers/:id/deployments/:releaseId/events": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "GET /api/v1/servers/:id/deployments/:releaseId/health": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "GET /api/v1/servers/:id/domains": [
+   "handlers_domains.go:registerDomainRoutes"
+  ],
+  "GET /api/v1/servers/:id/files": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/files/content": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/files/download-url": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/flags": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/health": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "GET /api/v1/servers/:id/health-check": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "GET /api/v1/servers/:id/install-workflows": [
+   "handlers_installer.go:registerInstallerRoutes"
+  ],
+  "GET /api/v1/servers/:id/install/ws": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/invitations": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/logs": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/mounts": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/processes": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "GET /api/v1/servers/:id/processes/history": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "GET /api/v1/servers/:id/processes/tasks": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "GET /api/v1/servers/:id/resource-limits": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "GET /api/v1/servers/:id/schedules": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/schedules/:scheduleId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/schedules/:scheduleId/runs": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/schedules/:scheduleId/tasks": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/startup": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/stats": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/status": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/transfer": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/users": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/servers/:id/users/:userId": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/ws/backup": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/ws/console": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/ws/install": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/ws/logs": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/:id/ws/stats": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/servers/external/:externalId": [
+   "handlers_external.go:registerExternalLookupRoutes"
+  ],
+  "GET /api/v1/setup/status": [
+   "handlers_setup.go:registerSetupRoutes"
+  ],
+  "GET /api/v1/source-deployments/": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "GET /api/v1/source-deployments/:id": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "GET /api/v1/source-deployments/:id/logs": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "GET /api/v1/ssh-keys": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "GET /api/v1/tags": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "GET /api/v1/tags/:tagId": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "GET /api/v1/tags/:tagId/resources": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "GET /api/v1/target-health/metrics": [
+   "handlers_health_checks.go:registerHealthCheckRoutes"
+  ],
+  "GET /api/v1/target-health/targets": [
+   "handlers_health_checks.go:registerHealthCheckRoutes"
+  ],
+  "GET /api/v1/templates": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_templates.go:registerTemplateRoutes"
+  ],
+  "GET /api/v1/templates/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_templates.go:registerTemplateRoutes"
+  ],
+  "GET /api/v1/timeline": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/timeline/:resourceType/:resourceId": [
+   "handlers_observability.go:registerObservabilityRoutes"
+  ],
+  "GET /api/v1/upgrade/plans": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "GET /api/v1/upgrade/plans/:id": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "GET /api/v1/upgrade/system-status": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "GET /api/v1/upgrade/versions": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "GET /api/v1/users": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/users/:id": [
+   "server.go:NewServer"
+  ],
+  "GET /api/v1/users/external/:externalId": [
+   "handlers_external.go:registerExternalLookupRoutes"
+  ],
+  "GET /api/v1/users/search": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "GET /api/v1/webhooks": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/webhooks/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/webhooks/:id/dead-letter": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/webhooks/:id/deliveries": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "GET /api/v1/workload-kinds": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "GET /health": [
+   "server.go:NewServer"
+  ],
+  "GET /health/live": [
+   "server.go:NewServer"
+  ],
+  "GET /health/ready": [
+   "server.go:NewServer"
+  ],
+  "PATCH /api/v1/account/email": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "PATCH /api/v1/admin/backups/configs/:id": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "PATCH /api/v1/admin/compose-templates/:id": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "PATCH /api/v1/admin/docker-cleanup/policies/:id": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "PATCH /api/v1/admin/load-balancer/groups/:groupId/targets/:targetId": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "PATCH /api/v1/admin/netbird/dns": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "PATCH /api/v1/admin/netbird/networks/:id": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "PATCH /api/v1/admin/plugins/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/admin/roles/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/admin/service-discovery/endpoints/:id/status": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "PATCH /api/v1/admin/settings/advanced": [
+   "handlers_settings_extras.go:registerSettingsExtras"
+  ],
+  "PATCH /api/v1/admin/settings/mail": [
+   "handlers_settings_extras.go:registerSettingsExtras"
+  ],
+  "PATCH /api/v1/admin/users/:id/roles/assign": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/admin/users/:id/roles/remove": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/admin/vault/:id": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "PATCH /api/v1/allocations/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/apps/:appId/mounts/:mountId": [
+   "handlers_mount_manage.go:registerAppMountRoutes"
+  ],
+  "PATCH /api/v1/apps/:appId/redirects/:redirectId": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "PATCH /api/v1/apps/:id/git": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "PATCH /api/v1/apps/:id/git/auto-deploy": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "PATCH /api/v1/auth/email/change": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "PATCH /api/v1/compose/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "PATCH /api/v1/database-hosts/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/eggs/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "PATCH /api/v1/eggs/:id/variables/:variableId": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/git-push/apps/:id": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "PATCH /api/v1/git/providers/:id": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "PATCH /api/v1/locations/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_locations.go:registerLocationRoutes"
+  ],
+  "PATCH /api/v1/managed-databases/:id": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "PATCH /api/v1/migrations/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/mounts/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/nests/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "PATCH /api/v1/nodes/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/notification-channels/:id": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "PATCH /api/v1/notifications/alerts/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "PATCH /api/v1/notifications/channels/:id": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes",
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "PATCH /api/v1/notifications/preferences/:id": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "PATCH /api/v1/organizations/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PATCH /api/v1/regions/:id": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_regions.go:registerRegionRoutes"
+  ],
+  "PATCH /api/v1/servers/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/allocations/:allocationId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/build": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/databases/reset-password": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/details": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/files/rename": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/schedules/:scheduleId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/schedules/:scheduleId/tasks/:taskId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/startup": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/startup/command": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/startup/image": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/servers/:id/users/:userId": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/source-deployments/:id": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "PATCH /api/v1/tags/:tagId": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "PATCH /api/v1/templates/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "PATCH /api/v1/users/:id": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PATCH /api/v1/webhooks/:id": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/edge/connect": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/activity": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "POST /api/remote/backups/:backup": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "POST /api/remote/backups/:backup/restore": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "POST /api/remote/servers/:id/activity": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/archive": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "POST /api/remote/servers/:id/backups/restore-status": [
+   "handlers_remote_extra.go:registerRemoteExtras"
+  ],
+  "POST /api/remote/servers/:id/backups/status": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/crash": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/health": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/install": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/status": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/transfer/failure": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/:id/transfer/success": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/servers/reset": [
+   "server.go:NewServer"
+  ],
+  "POST /api/remote/sftp/auth": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/account/2fa/recovery-codes": [
+   "handlers_account_recovery.go:registerAccountRecoveryRoutes"
+  ],
+  "POST /api/v1/account/oauth-clients": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/account/sessions/revoke-all": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/account/social/:provider/link": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "POST /api/v1/account/two-factor": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/acme/accounts": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "POST /api/v1/acme/dns-accounts": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "POST /api/v1/admin/app-store/sync-bundled": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "POST /api/v1/admin/autoscaler/evaluate/:serverId": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "POST /api/v1/admin/autoscaler/policies": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "POST /api/v1/admin/backups/artifacts/:id/lock": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/artifacts/:id/unlock": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/artifacts/:id/verify": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/configs": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/configs/:id/execute": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/jobs": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/jobs/:id/cancel": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/backups/restore": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/admin/branding/upload": [
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/admin/buildpacks": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "POST /api/v1/admin/catalog/provision": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "POST /api/v1/admin/cloud/provision": [
+   "handlers_cloud.go:registerCloudRoutes"
+  ],
+  "POST /api/v1/admin/compose-templates": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "POST /api/v1/admin/compose-templates/:id/instantiate": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "POST /api/v1/admin/compose-templates/preview": [
+   "handlers_compose_templates.go:registerComposeTemplateRoutes"
+  ],
+  "POST /api/v1/admin/containers/:id/exec": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/containers/:id/restart": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/containers/:id/start": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/containers/:id/stop": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/crash-detection/servers/:id/reset": [
+   "handlers_crashdetect.go:registerCrashDetectionRoutes"
+  ],
+  "POST /api/v1/admin/crossnode/cache/clear": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "POST /api/v1/admin/crossnode/cache/ttl": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "POST /api/v1/admin/crossnode/ingress/cleanup": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "POST /api/v1/admin/crossnode/ingress/sync": [
+   "handlers_crossnode.go:registerCrossNodeRoutes"
+  ],
+  "POST /api/v1/admin/database-service-templates": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services/:id/backups": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services/:id/backups/:backupId/restore": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services/:id/credentials": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services/:id/query": [
+   "handlers_db_diagnostics.go:registerDBDiagnosticRoutes"
+  ],
+  "POST /api/v1/admin/database-services/:id/restart": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/database-services/test-connection": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/cancel": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/cleanup": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/complete": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/execute": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/revisions/:revId/rollback": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/rollback": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/rollback-previous": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:id/rollout": [
+   "handlers_revisions.go:registerRevisionRoutes"
+  ],
+  "POST /api/v1/admin/deployments/:serverId/rollout": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/blue-green": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/canary": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/recreate": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/resume": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/deployments/rolling": [
+   "handlers_deployment.go:registerDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/docker-cleanup/policies": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "POST /api/v1/admin/docker-cleanup/policies/:id/run-now": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "POST /api/v1/admin/docker-cleanup/prune/build-cache/:nodeId": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "POST /api/v1/admin/docker-cleanup/prune/images": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "POST /api/v1/admin/docker-cleanup/prune/volumes/:nodeId": [
+   "handlers_docker_cleanup.go:registerDockerCleanupRoutesOn"
+  ],
+  "POST /api/v1/admin/failover/crash/:serverId/:nodeId": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "POST /api/v1/admin/failover/policies": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "POST /api/v1/admin/failover/record-failure/:nodeId": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "POST /api/v1/admin/images/prune": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/images/pull": [
+   "handlers_portainer.go:registerPortainerRoutes"
+  ],
+  "POST /api/v1/admin/incus/instances": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "POST /api/v1/admin/incus/instances/:name/restart": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "POST /api/v1/admin/incus/instances/:name/start": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "POST /api/v1/admin/incus/instances/:name/stop": [
+   "handlers_incus.go:registerIncusRoutes"
+  ],
+  "POST /api/v1/admin/kubernetes/deployments/:name/scale": [
+   "handlers_kubernetes.go:registerKubernetesRoutes"
+  ],
+  "POST /api/v1/admin/load-balancer/groups": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "POST /api/v1/admin/load-balancer/groups/:id/targets": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "POST /api/v1/admin/mail/test": [
+   "handlers_mail_settings.go:registerMailSettingsRoutes"
+  ],
+  "POST /api/v1/admin/migrations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/migrations/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/netbird/acls": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/groups": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/networks": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/peers/:id/approve": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/peers/:id/deny": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/routes": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/setup-keys": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/netbird/setup-keys/:id/revoke": [
+   "handlers_netbird.go:registerNetBirdRoutes"
+  ],
+  "POST /api/v1/admin/nomad/allocations/:id/promote": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "POST /api/v1/admin/nomad/jobs": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "POST /api/v1/admin/nomad/jobs/:id/stop": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "POST /api/v1/admin/nomad/nodes/:id/drain": [
+   "handlers_nomad.go:registerNomadRoutes"
+  ],
+  "POST /api/v1/admin/oauth-clients": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/orphan-remediations/databases/:id/resolve": [
+   "handlers_orphan_remediations.go:registerOrphanRemediationRoutes"
+  ],
+  "POST /api/v1/admin/orphan-remediations/servers/:id/resolve": [
+   "handlers_orphan_remediations.go:registerOrphanRemediationRoutes"
+  ],
+  "POST /api/v1/admin/plugins/:id/disable": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/plugins/:id/enable": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/plugins/:id/uninstall": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/plugins/import/file": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/plugins/import/url": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/plugins/install": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/preview-deployments/": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/preview-deployments/:id/cleanup": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/preview-deployments/:id/deploy": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/preview-deployments/:id/status": [
+   "handlers_preview_deployments.go:registerPreviewDeploymentRoutes"
+  ],
+  "POST /api/v1/admin/reconcile/events": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "POST /api/v1/admin/reconcile/plans/:id/confirm": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "POST /api/v1/admin/reconcile/plans/:id/execute": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "POST /api/v1/admin/reconcile/resources/:kind/:id": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "POST /api/v1/admin/reconcile/trigger-all": [
+   "handlers_reconcile.go:registerReconcileRoutes"
+  ],
+  "POST /api/v1/admin/roles": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/admin/scheduler/predictive/affinity-rules": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "POST /api/v1/admin/scheduler/predictive/anti-affinity-rules": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "POST /api/v1/admin/scheduler/predictive/metrics/:nodeId": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "POST /api/v1/admin/service-discovery/endpoints": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "POST /api/v1/admin/service-discovery/reachability/sweep": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "POST /api/v1/admin/service-discovery/reachability/verify": [
+   "handlers_servicediscovery.go:registerServiceDiscoveryRoutes"
+  ],
+  "POST /api/v1/admin/settings/branding-upload": [
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/admin/settings/mail/test": [
+   "handlers_settings_extras.go:registerSettingsExtras"
+  ],
+  "POST /api/v1/admin/settings/maintenance": [
+   "handlers_maintenance.go:registerMaintenanceRoutes"
+  ],
+  "POST /api/v1/admin/traffic/gateway/rollback": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "POST /api/v1/admin/traffic/policies": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "POST /api/v1/admin/traffic/rules": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "POST /api/v1/admin/traffic/sync": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "POST /api/v1/admin/vault/": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "POST /api/v1/admin/vault/:id/test": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "POST /api/v1/admin/vault/validate-reference": [
+   "handlers_vault_provider.go:registerVaultProviderRoutesOn"
+  ],
+  "POST /api/v1/alerts/:id/acknowledge": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "POST /api/v1/alerts/:id/resolve": [
+   "handlers_alerts.go:registerAlertRoutes"
+  ],
+  "POST /api/v1/allocations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/allocations/:id/alias": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/api-keys": [
+   "handlers_api_keys.go:registerApiKeyRoutes",
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/app-store/:id/uninstall": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "POST /api/v1/app-store/:id/upgrade": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "POST /api/v1/app-store/install": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "POST /api/v1/app-store/sync": [
+   "handlers_appstore.go:registerAppStoreRoutes"
+  ],
+  "POST /api/v1/apps": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:appId/mounts": [
+   "handlers_mount_manage.go:registerAppMountRoutes"
+  ],
+  "POST /api/v1/apps/:appId/mounts/validate": [
+   "handlers_mount_manage.go:registerAppMountRoutes"
+  ],
+  "POST /api/v1/apps/:appId/processes/:processType/scale": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "POST /api/v1/apps/:appId/processes/compose/apply": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "POST /api/v1/apps/:appId/processes/compose/preview": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "POST /api/v1/apps/:appId/redirects": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "POST /api/v1/apps/:appId/redirects/apply": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "POST /api/v1/apps/:appId/redirects/presets": [
+   "handlers_redirects.go:registerDomainRedirectsPhase"
+  ],
+  "POST /api/v1/apps/:id/backups": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/backups/:backupId/restore": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/compose/redeploy": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/deploy": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/domains": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/restart": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/services": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/start": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/apps/:id/stop": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/auth/email/change": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/auth/login": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/auth/login/checkpoint": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/auth/logout": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/auth/password/change": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/auth/password/email": [
+   "handlers_password_reset.go:registerPasswordResetRoutes"
+  ],
+  "POST /api/v1/auth/password/reset": [
+   "handlers_password_reset.go:registerPasswordResetRoutes"
+  ],
+  "POST /api/v1/auth/recovery/initiate": [
+   "handlers_account_recovery.go:registerAccountRecoveryRoutes"
+  ],
+  "POST /api/v1/auth/recovery/verify": [
+   "handlers_account_recovery.go:registerAccountRecoveryRoutes"
+  ],
+  "POST /api/v1/auth/session/exchange": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/auth/session/migrate": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/auth/session/refresh": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/auth/webauthn/login/begin": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "POST /api/v1/auth/webauthn/login/finish": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "POST /api/v1/auth/webauthn/register/begin": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "POST /api/v1/auth/webauthn/register/finish": [
+   "handlers_webauthn.go:registerWebAuthnRoutes"
+  ],
+  "POST /api/v1/autoscale/evaluate": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "POST /api/v1/autoscale/policies": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "POST /api/v1/autoscale/scale-in": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "POST /api/v1/autoscale/scale-out": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "POST /api/v1/billing/org/:orgId/plan": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "POST /api/v1/billing/plans": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "POST /api/v1/billing/usage": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "POST /api/v1/billing/webhook": [
+   "handlers_billing.go:registerBillingWebhookRoute"
+  ],
+  "POST /api/v1/builds/": [
+   "handlers_builds.go:registerBuildRoutes"
+  ],
+  "POST /api/v1/builds/:id/cancel": [
+   "handlers_builds.go:registerBuildRoutes"
+  ],
+  "POST /api/v1/builds/language/detect": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "POST /api/v1/capabilities/:nodeId/probe": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/capabilities/ingest": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/catalog/:key/instances": [
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "POST /api/v1/catalog/:key/instances/:id/attach": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "POST /api/v1/catalog/backups/retention/run": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "POST /api/v1/certificates/": [
+   "handlers_proxy_domains.go:registerProxyCertificateRoutes"
+  ],
+  "POST /api/v1/certificates/:id/export": [
+   "handlers_certificates_ext.go:registerCertificateRoutesExt"
+  ],
+  "POST /api/v1/certificates/:id/renew": [
+   "handlers_certificates.go:registerCertificateRoutes",
+   "handlers_proxy_domains.go:registerProxyCertificateRoutes"
+  ],
+  "POST /api/v1/certificates/issue": [
+   "handlers_certificates.go:registerCertificateRoutes"
+  ],
+  "POST /api/v1/certificates/upload": [
+   "handlers_certificates_ext.go:registerCertificateRoutesExt"
+  ],
+  "POST /api/v1/cleanup/run": [
+   "handlers_cleanup.go:registerCleanupRoutes"
+  ],
+  "POST /api/v1/compose": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/:id/deploy": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/:id/pull": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/:id/restart": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/:id/start": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/:id/stop": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/git/:id/pull-redeploy": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/git/:id/redeploy": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/git/:id/rollback": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/git/deploy": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/import": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/projects/:id/export": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/validate": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/compose/webhook/:webhookId": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "POST /api/v1/cron-jobs": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "POST /api/v1/cron-jobs/:id/execute": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "POST /api/v1/cron-jobs/:id/toggle": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "POST /api/v1/csp-report": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/database-hosts": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/database-hosts/:id/test": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/database-hosts/test": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/databases/containers/:id/backup": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "POST /api/v1/databases/containers/:id/restart": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "POST /api/v1/databases/provision": [
+   "handlers_db_containers.go:registerDBContainerRoutes"
+  ],
+  "POST /api/v1/dns/providers": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "POST /api/v1/dns/providers/:id/set-default": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "POST /api/v1/dns/providers/:id/verify": [
+   "handlers_dns.go:registerDNSRoutes"
+  ],
+  "POST /api/v1/docker/containers": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/containers/:id/files/delete": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/containers/:id/files/read": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/containers/:id/files/upload": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/containers/:id/operate": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/images/:id/push": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/images/:id/tag": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/images/build": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/images/pull": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/networks": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/volumes": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/docker/volumes/prune": [
+   "handlers_docker.go:registerDockerRoutes"
+  ],
+  "POST /api/v1/domains/": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "POST /api/v1/domains/:domainId/redirects/": [
+   "handlers_proxy_domains.go:registerRedirectRulesRoutes"
+  ],
+  "POST /api/v1/domains/:domainId/security-headers/": [
+   "handlers_proxy_domains.go:registerSecurityHeadersRoutes"
+  ],
+  "POST /api/v1/domains/:id/verify": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "POST /api/v1/domains/check-dns": [
+   "handlers_domains.go:registerDomainRoutes"
+  ],
+  "POST /api/v1/domains/verify": [
+   "handlers_domains.go:registerDomainRoutes"
+  ],
+  "POST /api/v1/eggs": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "POST /api/v1/eggs/:id/variables": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/eggs/import": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/endpoints": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "POST /api/v1/endpoints/:id/nodes": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "POST /api/v1/endpoints/:id/policies": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "POST /api/v1/environments/:id/env-vars": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/envs/:id/domains/provision": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "POST /api/v1/envs/:id/groups/:name/apply": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "POST /api/v1/evacuations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/evacuations/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/evacuations/preview": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/fencing/nodes/:id": [
+   "handlers_fencing.go:registerFencingRoutes"
+  ],
+  "POST /api/v1/forgefile/apply": [
+   "handlers_forgefile.go:registerForgefileRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/forgefile/validate": [
+   "handlers_forgefile.go:registerForgefileRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/git-push/apps": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "POST /api/v1/git-push/apps/:id/rotate-secret": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "POST /api/v1/git-push/receive/:slug": [
+   "handlers_gitpush.go:registerGitPushWebhookRoutes"
+  ],
+  "POST /api/v1/git/credentials": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/credentials/:id/generate-key": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/deployments/:deploymentId/cancel": [
+   "handlers_git_deploy.go:RegisterGitDeploymentRoutes"
+  ],
+  "POST /api/v1/git/providers": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/providers/:id/test": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/providers/test": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/servers/:id/deployments": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/servers/:id/hooks": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/servers/:id/hooks/:hook_id/regenerate": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/sources": [
+   "handlers_git.go:registerGitRoutes"
+  ],
+  "POST /api/v1/git/sources/:gitSourceId/deploy": [
+   "handlers_git_deploy.go:RegisterGitDeploymentRoutes"
+  ],
+  "POST /api/v1/git/sources/:id/link-env": [
+   "phase1_registrar.go:init"
+  ],
+  "POST /api/v1/git/sources/:id/provision-deploy-key": [
+   "phase1_registrar.go:init"
+  ],
+  "POST /api/v1/git/webhook/bitbucket": [
+   "handlers_git.go:registerGitWebhookRoutes"
+  ],
+  "POST /api/v1/git/webhook/deploy/:serverId": [
+   "handlers_git.go:registerGitWebhookRoutes"
+  ],
+  "POST /api/v1/git/webhook/gitea": [
+   "handlers_git.go:registerGitWebhookRoutes"
+  ],
+  "POST /api/v1/git/webhook/github": [
+   "handlers_git.go:registerGitWebhookRoutes"
+  ],
+  "POST /api/v1/git/webhook/gitlab": [
+   "handlers_git.go:registerGitWebhookRoutes"
+  ],
+  "POST /api/v1/host/files/chmod": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/copy": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/mkdir": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/read": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/remove": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/rename": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/upload": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/files/write": [
+   "handlers_files.go:registerHostFileRoutes"
+  ],
+  "POST /api/v1/host/firewall/disable": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "POST /api/v1/host/firewall/enable": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "POST /api/v1/host/firewall/forward": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "POST /api/v1/host/firewall/port": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "POST /api/v1/host/firewall/rules": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "POST /api/v1/install-workflows/:id/execute": [
+   "handlers_installer.go:registerInstallerRoutes"
+  ],
+  "POST /api/v1/invitations/accept": [
+   "handlers_auth.go:registerAuthRoutes",
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/locations": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_locations.go:registerLocationRoutes"
+  ],
+  "POST /api/v1/managed-databases": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "POST /api/v1/managed-databases/:id/backup": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "POST /api/v1/managed-databases/:id/restore": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "POST /api/v1/managed-databases/:id/rotate-password": [
+   "handlers_managed_databases.go:registerManagedDatabaseRoutes"
+  ],
+  "POST /api/v1/migrations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/migrations/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/migrations/:id/execute": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/migrations/:id/prepare": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/mounts": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/mounts/:id/eggs": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/mounts/:id/nodes": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/mounts/:id/servers": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/mtls/certificates/:id/revoke": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "POST /api/v1/mtls/certificates/generate-ca": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "POST /api/v1/mtls/migration/run": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "POST /api/v1/mtls/nodes/:id/certificates/generate": [
+   "handlers_mtls.go:registerMTLSRoutes"
+  ],
+  "POST /api/v1/nests": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_nests.go:registerNestRoutes"
+  ],
+  "POST /api/v1/nodes": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/nodes/:id/allocations/alias": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "POST /api/v1/nodes/:id/configuration/token": [
+   "handlers_admin_extras.go:registerAdminExtras"
+  ],
+  "POST /api/v1/nodes/:id/drain": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "POST /api/v1/nodes/:id/drain/cancel": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "POST /api/v1/nodes/:id/evacuation-plan": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/nodes/:id/heartbeat": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/nodes/:id/join": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "POST /api/v1/nodes/:id/leave": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "POST /api/v1/nodes/:id/maintenance": [
+   "handlers_clustermembership.go:registerClusterMembershipRoutes"
+  ],
+  "POST /api/v1/nodes/:id/rotate-token": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/nodes/capabilities": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/nodes/deployable": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/notification-channels/": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "POST /api/v1/notification-channels/:id/subscribe/": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "POST /api/v1/notification-channels/:id/test": [
+   "handlers_notifications.go:registerNotificationRoutes"
+  ],
+  "POST /api/v1/notifications/alerts/": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "POST /api/v1/notifications/channels/": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes",
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "POST /api/v1/notifications/channels/:id/test": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes",
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "POST /api/v1/notifications/channels/test": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes"
+  ],
+  "POST /api/v1/notifications/preferences/": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "POST /api/v1/notifications/subscriptions/": [
+   "handlers_notifications_crud.go:registerNotificationCrudRoutes"
+  ],
+  "POST /api/v1/notifications/test": [
+   "handlers_notifications_enhanced.go:registerEnhancedNotificationRoutes"
+  ],
+  "POST /api/v1/oauth/token": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/oauth2/token": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/onboarding-tokens": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/onboarding-tokens/:tokenId/approve": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/onboarding-tokens/:tokenId/reject": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/onboarding-tokens/:tokenId/revoke": [
+   "handlers_capabilities.go:registerCapabilityRoutes"
+  ],
+  "POST /api/v1/onboarding/connect": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/onboarding/deploy": [
+   "phase8_onboarding.go:registerPhase8OnboardingRoutes",
+   "phase8_registrar.go:RegisterPhase8"
+  ],
+  "POST /api/v1/onboarding/exchange": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/organizations": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/organizations/:id/invitations": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/organizations/:id/members": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/organizations/:id/projects": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/organizations/:orgId/apps": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:id/cancel": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:id/retry": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:id/stages/:stageId/approve": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:id/stages/:stageId/reject": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:runId/cancel": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:runId/retry": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:runId/stages/:stageId/approve": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipeline-runs/:runId/stages/:stageId/reject": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipelines": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipelines/": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipelines/:id/run": [
+   "handlers_pipeline.go:registerPipelineRoutes"
+  ],
+  "POST /api/v1/pipelines/:id/runs": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/pipelines/webhook/:id": [
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "POST /api/v1/placement/enrich": [
+   "handlers_placement.go:registerPlacementRoutes"
+  ],
+  "POST /api/v1/placement/explain": [
+   "handlers_placement.go:registerPlacementRoutes"
+  ],
+  "POST /api/v1/placement/patch-constraints": [
+   "handlers_placement.go:registerPlacementRoutes"
+  ],
+  "POST /api/v1/procedures/": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "POST /api/v1/procedures/:id/execute": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "POST /api/v1/procedures/executions/:id/cancel": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "POST /api/v1/procedures/executions/steps/:stepId/approve": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "POST /api/v1/procedures/executions/steps/:stepId/reject": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "POST /api/v1/projects/:id/env-vars": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/projects/:id/envs": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/projects/:id/previews/": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "POST /api/v1/projects/:id/previews/:previewId/close": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "POST /api/v1/projects/:id/previews/:previewId/redeploy": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "POST /api/v1/projects/:id/previews/webhook-secret/rotate": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "POST /api/v1/reconciler/run": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/recovery": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/recovery-plans": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/recovery/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/recovery/:id/start": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/regions": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_regions.go:registerRegionRoutes"
+  ],
+  "POST /api/v1/registries/": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "POST /api/v1/registries/:id/verify": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "POST /api/v1/reservations": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/reservations/:id/cancel": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/reservations/:id/confirm": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/servers": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/allocations": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/allocations/:allocationId/primary": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/:name/lock": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/:name/rename": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/:name/unlock": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/cleanup": [
+   "handlers_backup_extended.go:registerBackupRoutes",
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/download-ticket": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/servers/:id/backups/policies": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/policies/:policyId/lock": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/policies/:policyId/unlock": [
+   "handlers_backup_extended.go:registerBackupRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/restore": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/backups/storage/restore": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/buildpacks": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "POST /api/v1/servers/:id/builds/": [
+   "handlers_buildpacks.go:registerBuildpackRoutes"
+  ],
+  "POST /api/v1/servers/:id/command": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/servers/:id/container/files/mkdir": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "POST /api/v1/servers/:id/container/files/upload": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "POST /api/v1/servers/:id/databases": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/databases/:databaseId/rotate-password": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/deployments": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "POST /api/v1/servers/:id/deployments/:releaseId/promote": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "POST /api/v1/servers/:id/deployments/:releaseId/rollback": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "POST /api/v1/servers/:id/description": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/domains": [
+   "handlers_domains.go:registerDomainRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/archive": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/chmod": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/chmod-batch": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/copy": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/create-directory": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/decompress": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/delete-batch": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/download": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/download-ticket": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/servers/:id/files/mkdir": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/pull": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/rename": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/files/rename-batch": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/flags": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/health-report": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "POST /api/v1/servers/:id/install": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/install-workflows": [
+   "handlers_installer.go:registerInstallerRoutes"
+  ],
+  "POST /api/v1/servers/:id/invitations": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/invitations/:invitationId/revoke": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/mounts": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/operations/run": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/power": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/processes": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "POST /api/v1/servers/:id/processes/parse-procfile": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "POST /api/v1/servers/:id/processes/run": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "POST /api/v1/servers/:id/reinstall": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/reload": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/schedules": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/schedules/:scheduleId/run": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/schedules/:scheduleId/tasks": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/settings/rename": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/startup/variable": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/suspend": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/suspension": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/toggle-install": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/transfer": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/transfer/cancel": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/unsuspend": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/users": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/servers/:id/ws/ticket": [
+   "server.go:NewServer"
+  ],
+  "POST /api/v1/setup": [
+   "handlers_setup.go:registerSetupRoutes"
+  ],
+  "POST /api/v1/source-deployments/": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "POST /api/v1/source-deployments/:id/cancel": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "POST /api/v1/source-deployments/:id/deploy": [
+   "handlers_source_deployments.go:registerSourceDeploymentRoutes"
+  ],
+  "POST /api/v1/ssh-keys": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "POST /api/v1/tags": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "POST /api/v1/tags/:tagId/bulk": [
+   "handlers_tags.go:registerTagRoutes"
+  ],
+  "POST /api/v1/templates": [
+   "handlers_admin.go:registerAdminRoutes",
+   "handlers_templates.go:registerTemplateRoutes"
+  ],
+  "POST /api/v1/tenancy/invitations/accept": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "POST /api/v1/upgrade/plans": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "POST /api/v1/upgrade/plans/:id/cancel": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "POST /api/v1/upgrade/plans/:id/execute": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "POST /api/v1/upgrade/plans/:id/verify": [
+   "handlers_upgrade.go:registerUpgradeRoutes"
+  ],
+  "POST /api/v1/users": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "POST /api/v1/webhooks": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/webhooks/:id/deliveries/:deliveryId/retry": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/webhooks/:id/test": [
+   "handlers_admin.go:registerAdminRoutes"
+  ],
+  "POST /api/v1/webhooks/preview": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "POST /api/v1/webhooks/preview/:projectId": [
+   "handlers_preview_deployments.go:previewEnvironmentRoutes"
+  ],
+  "PUT /api/v1/account/password": [
+   "handlers_auth.go:registerAuthRoutes"
+  ],
+  "PUT /api/v1/acme/accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "PUT /api/v1/acme/dns-accounts/:id": [
+   "handlers_acme_accounts.go:registerAcmeAccountRoutes"
+  ],
+  "PUT /api/v1/admin/autoscaler/policies/:id": [
+   "handlers_autoscaler.go:registerAutoScalerRoutes"
+  ],
+  "PUT /api/v1/admin/database-service-templates": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "PUT /api/v1/admin/failover/policies/:id": [
+   "handlers_failover.go:registerFailoverRoutes"
+  ],
+  "PUT /api/v1/admin/load-balancer/groups/:id": [
+   "handlers_loadbalancer.go:registerLoadBalancerRoutes"
+  ],
+  "PUT /api/v1/admin/mail/settings": [
+   "handlers_mail_settings.go:registerMailSettingsRoutes"
+  ],
+  "PUT /api/v1/admin/nodes/:nodeId/sftp": [
+   "handlers_sftp.go:registerSFTPRoutes"
+  ],
+  "PUT /api/v1/admin/plugins/:id/settings": [
+   "handlers_plugins_extended.go:registerPluginRoutes"
+  ],
+  "PUT /api/v1/admin/scheduler/constraints": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "PUT /api/v1/admin/scheduler/nodes/:id/scheduler": [
+   "handlers_scheduler.go:registerSchedulerRoutes"
+  ],
+  "PUT /api/v1/admin/settings": [
+   "handlers_settings.go:registerSettingsRoutes"
+  ],
+  "PUT /api/v1/admin/settings/rate-limits": [
+   "handlers_rate_limit_config.go:registerRateLimitSettingsRoutes"
+  ],
+  "PUT /api/v1/admin/sftp/settings": [
+   "handlers_sftp.go:registerSFTPRoutes"
+  ],
+  "PUT /api/v1/admin/social/providers/:id": [
+   "handlers_social_auth.go:registerSocialAuthRoutes"
+  ],
+  "PUT /api/v1/admin/traffic/policies/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "PUT /api/v1/admin/traffic/rules/:id": [
+   "handlers_trafficmanager.go:registerTrafficManagerRoutes"
+  ],
+  "PUT /api/v1/apps/:appId/processes/:processType": [
+   "handlers_resource_limits.go:registerResourceLimitsRoutes"
+  ],
+  "PUT /api/v1/apps/:id": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "PUT /api/v1/apps/:id/compose": [
+   "handlers_apphosting.go:registerAppHostingRoutes"
+  ],
+  "PUT /api/v1/autoscale/policies/:id": [
+   "handlers_nodeautoscale.go:registerNodeAutoscaleRoutes"
+  ],
+  "PUT /api/v1/billing/plans/:id": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "PUT /api/v1/billing/settings": [
+   "handlers_billing.go:registerBillingRoutes"
+  ],
+  "PUT /api/v1/catalog/backups/retention": [
+   "handlers_catalog.go:registerCatalogRoutes",
+   "phase3_registrar.go:catalogRoutes"
+  ],
+  "PUT /api/v1/compose/git/:id/auto-update": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "PUT /api/v1/compose/git/:id/branch": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "PUT /api/v1/compose/projects/:id": [
+   "handlers_compose.go:registerComposeRoutes"
+  ],
+  "PUT /api/v1/cron-jobs/:id": [
+   "handlers_cronjob.go:registerCronJobRoutes"
+  ],
+  "PUT /api/v1/domains/:domainId/redirects/:id": [
+   "handlers_proxy_domains.go:registerRedirectRulesRoutes"
+  ],
+  "PUT /api/v1/domains/:domainId/security-headers/:id": [
+   "handlers_proxy_domains.go:registerSecurityHeadersRoutes"
+  ],
+  "PUT /api/v1/domains/:id": [
+   "handlers_proxy_domains.go:registerProxyDomainRoutes"
+  ],
+  "PUT /api/v1/endpoints/:id": [
+   "handlers_endpoints.go:registerEndpointRoutes"
+  ],
+  "PUT /api/v1/env-vars/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PUT /api/v1/envs/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PUT /api/v1/envs/:id/groups/:name": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "PUT /api/v1/envs/:id/manifest": [
+   "phase2_env.go:registerPhase2EnvironmentEngine"
+  ],
+  "PUT /api/v1/git-push/apps/:id/env": [
+   "handlers_gitpush.go:registerGitPushRoutes"
+  ],
+  "PUT /api/v1/host/firewall/rules/:id": [
+   "handlers_firewall.go:registerFirewallRoutes"
+  ],
+  "PUT /api/v1/organizations/:id/members/:userId": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PUT /api/v1/organizations/:id/members/:userId/permissions": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PUT /api/v1/pipelines/:id": [
+   "handlers_pipeline.go:registerPipelineRoutes",
+   "phase5_registrar.go:pipelineRoutes"
+  ],
+  "PUT /api/v1/procedures/:id": [
+   "handlers_procedures.go:registerProcedureRoutes"
+  ],
+  "PUT /api/v1/projects/:id": [
+   "handlers_tenancy.go:registerTenancyRoutes"
+  ],
+  "PUT /api/v1/registries/:id": [
+   "handlers_registries.go:registerRegistryRoutes"
+  ],
+  "PUT /api/v1/servers/:id/container/files/write": [
+   "handlers_container_files.go:registerContainerFileRoutes"
+  ],
+  "PUT /api/v1/servers/:id/database-service": [
+   "handlers_database_services.go:registerDatabaseServiceRoutes"
+  ],
+  "PUT /api/v1/servers/:id/files/content": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PUT /api/v1/servers/:id/files/upload": [
+   "handlers_servers.go:registerServerRoutes"
+  ],
+  "PUT /api/v1/servers/:id/health-check": [
+   "handlers_zerodowntime.go:registerZeroDowntimeRoutes"
+  ],
+  "PUT /api/v1/servers/:id/processes/:type/scale": [
+   "handlers_processes.go:registerProcessRoutes"
+  ],
+  "PUT /api/v1/servers/:id/startup/variable": [
+   "handlers_servers.go:registerServerRoutes"
+  ]
+ }
+}

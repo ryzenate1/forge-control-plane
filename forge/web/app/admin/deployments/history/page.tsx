@@ -64,7 +64,6 @@ export default function AdminDeploymentHistoryPage() {
         sub="Historical record of all deployments across the cluster."
         backAction={() => router.push("/admin/deployments")}
         backLabel="Deployments"
-        breadcrumb="Deploy / Deployments / History"
       />
 
       <Card>

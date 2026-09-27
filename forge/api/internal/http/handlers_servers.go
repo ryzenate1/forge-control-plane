@@ -1400,7 +1400,29 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		return c.JSON(stats)
+		// The lifecycle fields the node reported are passed through so a caller
+		// can tell a running workload at rest from a stopped one. Anything the
+		// node did not report is omitted, never defaulted: an absent status is
+		// unknown, and an absent uptime is not zero uptime.
+		payload := fiber.Map{
+			"cpuPercent":     stats.CPUPercent,
+			"memoryBytes":    stats.MemoryBytes,
+			"memoryLimit":    stats.MemoryLimit,
+			"networkRxBytes": stats.NetworkRxBytes,
+			"networkTxBytes": stats.NetworkTxBytes,
+			"exists":         stats.Exists,
+			"running":        stats.Running,
+		}
+		if stats.Status != "" {
+			payload["status"] = stats.Status
+		}
+		if !stats.StartedAt.IsZero() {
+			payload["startedAt"] = stats.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		if uptime, ok := stats.UptimeMS(); ok {
+			payload["uptimeMs"] = uptime
+		}
+		return c.JSON(payload)
 	})
 
 	protected.Get("/servers/:id/logs", requireServerPermission(cfg, store.PermWebsocketConnect), func(c *fiber.Ctx) error {

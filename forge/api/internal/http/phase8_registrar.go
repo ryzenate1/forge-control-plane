@@ -1,9 +1,6 @@
 package http
 
 import (
-	"gamepanel/forge/internal/services/forgefile"
-	"gamepanel/forge/internal/services/onboarding"
-
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -18,47 +15,30 @@ func init() {
 	RegisterPhaseRegistrar("phase8-env-as-code", phase8Priority, RegisterPhase8)
 }
 
-// RegisterPhase8 is the Phase 8 (env-as-code + polish) registrar. It wires
-// the forge.yaml apply/validate surface, the onboarding wizard endpoints,
-// branding upload + persistence, and the IDE file listing onto the shared
-// routers. It only depends on services already present in http.Config
-// (Store, GitService, AppHostingService) and constructs its own lightweight
-// facades, so an incomplete shared config degrades to 5xx instead of
-// crashing route registration.
+// RegisterPhase8 registers the branding upload/serve surface, which has no
+// other owner.
 //
-// This function existed with no init() and no call sites, so none of these
-// routes were ever mounted while /admin/forgefile and /admin/onboarding
-// shipped as pages in the dashboard. Defining a registrar is not the same as
-// registering it.
+// It used to also register /forgefile/*, /onboarding/* and /ide/files. Those
+// paths belong to registerForgefileRoutes (handlers_forgefile.go) and
+// registerPhase8OnboardingRoutes (phase8_onboarding.go), both of which run
+// before this registrar — every register*Routes call happens first, and among
+// registrars the onboarding one has the lower priority number — so Fiber
+// resolved all of those paths to the other registration and these copies never
+// answered a request. They also carried weaker gating: the forgefile copies
+// had no requireRole at all, and the manifest read was additionally exposed
+// unauthenticated on v1 as /public/forgefile/:slug, leaking a project's deploy
+// configuration and environment list to anyone who could guess a slug. The
+// duplicates are gone and the two behaviours worth keeping (raw-YAML bodies,
+// GET-form validate) now live on the routes that actually serve.
 func RegisterPhase8(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg == nil || cfg.Store == nil {
 		return nil
 	}
-	st := cfg.Store
-
-	ffSvc := forgefile.NewService(st, cfg.AppHostingService, cfg.Logger, forgefileBaseDomain())
-	onbSvc := onboarding.NewService(st, cfg.GitService, cfg.AppHostingService, cfg.Logger)
 
 	admin := protected.Group("/admin", requireRole("admin"))
 	admin.Post("/branding/upload", brandingUploadHandler(cfg, false))
 	admin.Post("/settings/branding-upload", brandingUploadHandler(cfg, true))
 	admin.Get("/branding/file/:name", brandingFileHandler(cfg))
-
-	protected.Get("/forgefile", listForgefileManifestsHandler(ffSvc))
-	protected.Get("/forgefile/validate", validateForgefileHandler(ffSvc))
-	protected.Post("/forgefile/validate", validateForgefileHandler(ffSvc))
-	protected.Post("/forgefile/apply", applyForgefileHandler(ffSvc))
-	protected.Get("/forgefile/:slug", getForgefileHandler(ffSvc))
-	v1.Get("/public/forgefile/:slug", publicForgefileHandler(ffSvc))
-
-	onb := protected.Group("/onboarding")
-	onb.Get("/status", onboardingStatusHandler(onbSvc))
-	onb.Get("/repos", onboardingReposHandler(onbSvc))
-	onb.Get("/repos/:repo/branches", onboardingBranchesHandler(onbSvc))
-	onb.Post("/connect", onboardingConnectHandler(onbSvc))
-	onb.Post("/deploy", onboardingDeployHandler(onbSvc))
-
-	protected.Get("/ide/files", ideFilesHandler(onbSvc))
 
 	return nil
 }

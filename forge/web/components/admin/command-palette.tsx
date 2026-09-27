@@ -5,20 +5,14 @@ import { useRouter } from "next/navigation";
 import { Command } from "cmdk";
 import {
   Search,
-  Server,
   Terminal,
-  Activity,
   HeartPulse,
   SlidersHorizontal,
-  KeyRound,
   Ticket,
-  Box,
   Layers,
-  FileCode,
-  ArrowRight,
   Sparkles,
 } from "lucide-react";
-import { adminPageRegistry, type AdminNavEntry } from "./admin-registry";
+import { adminPageRegistry } from "./admin-registry";
 import { useT } from "@/components/TranslationProvider";
 
 interface CommandPaletteProps {
@@ -45,12 +39,20 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
     [isControlled, onOpenChange]
   );
 
-  // Global Cmd+K / Ctrl+K listener
+  // Global Cmd+K / Ctrl+K to toggle, Escape to close.
+  //
+  // The footer has always advertised "ESC to close" while nothing listened for
+  // it, so the only way out of the palette was a mouse click on the backdrop.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
         e.preventDefault();
         setOpen(!isOpen);
+        return;
+      }
+      if (e.key === "Escape" && isOpen) {
+        e.preventDefault();
+        setOpen(false);
       }
     };
 
@@ -180,10 +182,14 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
                 {group.items.map((item) => {
                   const Icon = item.icon;
                   const label = t(item.labelKey) !== item.labelKey ? t(item.labelKey) : item.label;
+                  // Keywords are the whole point of the registry's synonym list:
+                  // without them "docker" cannot find Containers and "postgres"
+                  // cannot find Databases, which is how people actually search.
+                  const keywords = item.keywords?.join(" ") ?? "";
                   return (
                     <Command.Item
                       key={item.href}
-                      value={`${group.title} ${label} ${item.description} ${item.href}`}
+                      value={`${group.title} ${label} ${item.description} ${item.href} ${keywords}`}
                       onSelect={() => handleSelect(item.href)}
                       className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[var(--brand)]/10 data-[selected=true]:text-[var(--brand)]"
                     >
@@ -196,7 +202,7 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         {item.capability === "metadata-only" && (
-                          <span className="rounded border border-[var(--line)] bg-[var(--surface-input)] px-1.5 py-0.2 text-[9px] font-mono text-[var(--text-muted)]">
+                          <span className="rounded border border-[var(--line)] bg-[var(--surface-input)] px-1.5 py-0.5 text-[9px] font-mono text-[var(--text-muted)]">
                             meta
                           </span>
                         )}

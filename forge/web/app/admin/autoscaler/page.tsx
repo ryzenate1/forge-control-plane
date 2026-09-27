@@ -117,8 +117,8 @@ export default function AdminAutoscalerPage() {
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Auto-Scaler"
-        description="Scaling policies that automatically adjust resources based on load thresholds."
+        title="Workload Autoscaling"
+        description="Policies that automatically adjust workload resources against load thresholds."
         action={
           <Btn tone="primary" onClick={() => setShowCreate(true)}>
             <Plus size={14} /> Create Policy

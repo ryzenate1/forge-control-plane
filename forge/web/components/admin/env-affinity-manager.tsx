@@ -79,7 +79,7 @@ export function EnvAffinityManager() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { /* per-action retry */ }} />
       <AdminPageHeader
-        title="Placement & Env Affinity"
+        title="Placement Affinity"
         description="Debug how environments pin workloads to nodes. Explain why a node would or would not host a server, preview the constraints an env-affinity adds, and re-sync affinity rules into the scheduler."
       />
 

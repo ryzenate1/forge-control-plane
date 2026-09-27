@@ -55,7 +55,7 @@ export default function AdminRegistriesPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Container Registries"
+        title="Image Registries"
         sub="Private Docker registry credentials used to pull and push images on nodes."
         action={
           <Btn size="sm" tone="primary" onClick={() => setShowCreate(true)}>

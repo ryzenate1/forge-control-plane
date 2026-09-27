@@ -1,6 +1,8 @@
 package http
 
 import (
+	"strings"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -54,4 +56,36 @@ func respondInternalError(c *fiber.Ctx, err error) error {
 		msg = err.Error()
 	}
 	return fiber.NewError(fiber.StatusInternalServerError, msg)
+}
+
+// respondStoreError maps a store-layer error onto the HTTP status that
+// describes it, falling back to respondInternalError when the error is not a
+// recognised client-side condition. Store methods report these conditions as
+// error text rather than sentinel values, so the classification is textual;
+// resource, uniqueness and dependency failures are the caller's fault and must
+// not be reported as 500.
+func respondStoreError(c *fiber.Ctx, err error) error {
+	if err == nil {
+		return nil
+	}
+	if fe, ok := err.(*fiber.Error); ok {
+		return fe
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "not found"), strings.Contains(lower, "no rows"):
+		return fiber.NewError(fiber.StatusNotFound, msg)
+	case strings.Contains(lower, "already exists"),
+		strings.Contains(lower, "duplicate"),
+		strings.Contains(lower, "unique constraint"):
+		return fiber.NewError(fiber.StatusConflict, msg)
+	case strings.Contains(lower, "in use"),
+		strings.Contains(lower, "still has"),
+		strings.Contains(lower, "foreign key"):
+		return fiber.NewError(fiber.StatusConflict, msg)
+	case strings.Contains(lower, "invalid"), strings.Contains(lower, "required"):
+		return fiber.NewError(fiber.StatusBadRequest, msg)
+	}
+	return respondInternalError(c, err)
 }

@@ -14,6 +14,7 @@ import {
 import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { formatDate } from "@/lib/utils";
 import { toast } from "@/components/ui/sonner";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 interface GitConfig {
   repoUrl?: string;
@@ -87,6 +88,11 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
     }
   };
 
+  // The shell renders the one breadcrumb trail; this names its id crumb so
+  // it reads as the app rather than a bare uuid. Before the name loads the
+  // crumb keeps the id — it does not flash a placeholder.
+  useBreadcrumbLabel(id, app?.name ?? null);
+
   if (appLoading || gitLoading) {
     return (
       <div className="space-y-6">
@@ -103,7 +109,6 @@ export default function GitSourcePage({ params }: { params: Promise<{ id: string
         sub="Repository configuration and deployment triggers"
         backAction={() => router.push(`/admin/apps/${id}`)}
         backLabel={app?.name ?? "App"}
-        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Git`}
         action={
           <div className="flex items-center gap-3">
             {triggerMut.isPending && (

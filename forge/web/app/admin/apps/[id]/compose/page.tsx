@@ -15,6 +15,7 @@ import type { ComposeService } from "@/lib/api/apps";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, Modal } from "@/components/admin/admin-ui";
 import { LogViewer } from "@/components/admin/AdminAppsShared";
 import { toast } from "@/components/ui/sonner";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 export default function ComposeStackPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -65,6 +66,11 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
     : typeof sourceConfig?.composeContent === "string" ? (sourceConfig.composeContent as string)
     : sourceConfig ? JSON.stringify(sourceConfig, null, 2) : "";
 
+  // The shell renders the one breadcrumb trail; this names its id crumb so
+  // it reads as the app rather than a bare uuid. Before the name loads the
+  // crumb keeps the id — it does not flash a placeholder.
+  useBreadcrumbLabel(id, app?.name ?? null);
+
   if (appLoading) {
     return (
       <div className="space-y-6">
@@ -81,7 +87,6 @@ export default function ComposeStackPage({ params }: { params: Promise<{ id: str
         sub="Multi-service Docker Compose management"
         backAction={() => router.push(`/admin/apps/${id}`)}
         backLabel={app?.name ?? "App"}
-        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Compose`}
       />
 
       <div className="flex flex-wrap gap-3">

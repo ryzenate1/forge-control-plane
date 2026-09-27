@@ -98,15 +98,15 @@ describe("backup policy API client", () => {
     });
   });
 
-  describe("cleanupExpiredBackups", () => {
+  describe("cleanupServerBackups", () => {
     it("sends POST to cleanup endpoint", async () => {
       const { calls } = mockFetchByUrl({
-        "/servers/s1/backups/cleanup": jsonResponse({ ok: true, cleaned: 3 }),
+        "/servers/s1/backups/cleanup": jsonResponse({ ok: true, deleted: 3 }),
       });
 
-      const { cleanupExpiredBackups } = await import("./backup");
-      const result = await cleanupExpiredBackups("s1");
-      expect(result.cleaned).toBe(3);
+      const { cleanupServerBackups } = await import("./backup");
+      const result = await cleanupServerBackups("s1");
+      expect(result.deleted).toBe(3);
       expect(calls[0].init.method).toBe("POST");
     });
   });

@@ -93,8 +93,8 @@ export default function AdminMTLSPage() {
   return (
     <div className="space-y-6 p-6">
       <SectionHeader
-        title="mTLS Certificate Management"
-        sub="Mutual TLS authentication between the control plane and node agents."
+        title="Private CA & mTLS"
+        sub="The private certificate authority and the mutual-TLS identities it issues for control plane to node-agent traffic."
         action={
           <button
             onClick={() => setShowGenerateCA(true)}

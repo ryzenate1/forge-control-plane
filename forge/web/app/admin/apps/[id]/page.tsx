@@ -24,6 +24,7 @@ import { DashHeader, InfoCard } from "@/components/admin/dashboard-cards";
 import { DeployStatusBadge, LogViewer, ResourceGauge, EnvVarEditor, PortMapper, VolumeEditor } from "@/components/admin/AdminAppsShared";
 import { formatDate, formatBytes } from "@/lib/utils";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 type TabId = "overview" | "deployments" | "configuration" | "logs" | "console" | "domains" | "redirects" | "backups";
 
@@ -56,6 +57,11 @@ function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) 
     refetchInterval: 10_000,
   });
 
+  // The shell renders the one breadcrumb trail; this names its id crumb so
+  // it reads as the app rather than a bare uuid. Before the name loads the
+  // crumb keeps the id — it does not flash a placeholder.
+  useBreadcrumbLabel(id, app?.name ?? null);
+
   if (isLoading) {
     return (
       <div className="space-y-6">
@@ -81,7 +87,6 @@ function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) 
         sub={`${typeLabel(app.type)} · ${app.id.slice(0, 8)}...`}
         backAction={() => router.push("/admin/apps")}
         backLabel="Apps"
-        breadcrumb={`Build / Apps / ${app.name}`}
       />
 
       <div className="flex flex-wrap gap-4">

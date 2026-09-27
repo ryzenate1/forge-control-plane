@@ -21,6 +21,7 @@ import { RevisionCompare } from "@/components/app/revision-compare";
 import { RollbackConfirm } from "@/components/app/rollback-confirm";
 import type { RollbackChange } from "@/components/app/rollback-confirm";
 import { formatDate } from "@/lib/utils";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 export default function AppDeploymentsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -67,6 +68,11 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
 
   const deployments = useMemo(() => deploymentsQuery.data ?? [], [deploymentsQuery.data]);
   const app = appQuery.data;
+  // The shell renders the one breadcrumb trail; this names its id crumb so
+  // it reads as the app rather than a bare uuid. Before the name loads the
+  // crumb keeps the id — it does not flash a placeholder.
+  useBreadcrumbLabel(id, app?.name ?? null);
+
   const inProgress = useMemo(() => Array.isArray(deployments) ? deployments.filter(
     (d) => d.status === "pending" || d.status === "running",
   ) : [], [deployments]);
@@ -95,7 +101,6 @@ export default function AppDeploymentsPage({ params }: { params: Promise<{ id: s
         sub={app ? `${app.name} · ${(Array.isArray(deployments) ? deployments : []).length} total` : "Loading..."}
         backAction={() => router.push(`/admin/apps/${id}`)}
         backLabel={app?.name ?? "App"}
-        breadcrumb={`Build / Apps / ${app?.name ?? "App"} / Deployments`}
         action={
           <div className="flex items-center gap-2">
             <Btn tone="ghost" size="sm" onClick={() => setShowCompare(!showCompare)}>

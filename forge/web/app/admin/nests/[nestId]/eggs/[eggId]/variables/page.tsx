@@ -6,6 +6,7 @@ import { ArrowLeft, Container, FileCode, Terminal } from "lucide-react";
 import { fetchEgg, fetchNest } from "@/lib/api";
 import { AdminEggVariables } from "@/components/admin/AdminEggVariables";
 import { AdminPageLayout, Btn, Card, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
@@ -35,6 +36,12 @@ export default function EggVariablesPage() {
 
   const nest = nestQuery.data;
   const egg = eggQuery.data;
+
+  // Two dynamic segments, both named on the shell's single trail: the nest
+  // and the egg. This page used to draw its own second trail beneath the
+  // shell's, and the two disagreed about depth.
+  useBreadcrumbLabel(nestId, nestQuery.data?.name ?? null);
+  useBreadcrumbLabel(eggId, egg?.name ?? null);
 
   if (eggQuery.isLoading) {
     return (
@@ -70,7 +77,6 @@ export default function EggVariablesPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        breadcrumb={`Build / Service Definitions / ${nestQuery.data?.name ?? "Nest"} / Eggs / ${egg.name}`}
         title={`Egg: ${egg.name}`}
         sub="Service definition details and environment variable schema."
         backAction={() => router.push(`/admin/nests/${nestId}/eggs`)}

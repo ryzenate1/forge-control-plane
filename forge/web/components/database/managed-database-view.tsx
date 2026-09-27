@@ -19,6 +19,7 @@ import {
 import { AdminConfirmDialog, Btn, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { statusTone } from "@/lib/api/status";
+import { StatusDot } from "@/components/ui/primitives";
 import { DbStatCards } from "./databases-overview";
 
 const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[var(--brand)]/70 focus:ring-2 focus:ring-[var(--brand)]/15";
@@ -39,24 +40,7 @@ function fmtDate(iso?: string): string {
 }
 
 function ManagedStatusDot({ status }: { status: string }) {
-  const tone = statusTone(status);
-  const color =
-    tone === "green" ? "bg-emerald-400"
-    : tone === "yellow" ? "bg-amber-400"
-    : tone === "red" ? "bg-red-400"
-    : tone === "blue" ? "bg-sky-400"
-    : "bg-slate-500";
-  const text =
-    tone === "green" ? "text-emerald-300"
-    : tone === "yellow" ? "text-amber-300"
-    : tone === "red" ? "text-red-300"
-    : tone === "blue" ? "text-sky-300"
-    : "text-slate-300";
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold capitalize ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${color}`} />{status}
-    </span>
-  );
+  return <StatusDot status={status} tone={statusTone(status)} />;
 }
 
 const filterSelectCls = "h-10 cursor-pointer appearance-none rounded-lg border border-white/[0.08] bg-black/20 pl-3 pr-8 text-xs text-slate-200 outline-none";

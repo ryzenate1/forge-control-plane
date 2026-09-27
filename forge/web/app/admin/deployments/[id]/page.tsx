@@ -99,7 +99,6 @@ export default function AdminDeploymentDetailPage() {
         sub={`Server ${dep.serverId} — ${dep.strategy.replace("_", "-")} strategy`}
         backAction={() => router.push("/admin/deployments")}
         backLabel="Deployments"
-        breadcrumb={`Deploy / Deployments / ${dep.id.slice(0, 8)}`}
         action={
           <div className="flex gap-2">
             <Btn tone="ghost" onClick={() => router.push(`/admin/deployments/${id}/revisions`)}>

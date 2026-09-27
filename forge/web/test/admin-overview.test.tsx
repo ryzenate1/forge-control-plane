@@ -161,8 +161,9 @@ describe("AdminOverview — mocked API", () => {
     expect(screen.getAllByText(/2 running/).length).toBeGreaterThanOrEqual(1);
     // attention section: platform is calm when no failures
     expect(await screen.findByText(/No open issues/)).toBeInTheDocument();
-    // Recent activity renders the audit event action (underscores replaced)
-    expect(await screen.findByText("server create")).toBeInTheDocument();
+    // Recent activity and the infrastructure events table both render the audit
+    // event action (underscores replaced), so more than one match is expected.
+    expect((await screen.findAllByText("server create")).length).toBeGreaterThanOrEqual(1);
     // Capacity section present
     expect(screen.getAllByText("Capacity").length).toBeGreaterThanOrEqual(1);
   });
@@ -240,8 +241,8 @@ describe("AdminOverview — mocked API", () => {
     ]);
 
     renderWithQuery(<AdminOverview />);
-    // Empty activity should show "No recent changes."
-    expect(await screen.findByText("No recent changes.")).toBeInTheDocument();
+    // An empty audit feed says so; it does not fall back to sample events.
+    expect(await screen.findByText("No audit events recorded.")).toBeInTheDocument();
     expect(screen.getByText("All systems operational")).toBeInTheDocument();
   });
 
@@ -423,8 +424,25 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     renderWithQuery(<AdminMonitoring />);
 
-    expect(await screen.findByText(/No telemetry for 1 hour yet/i)).toBeInTheDocument();
-    expect(screen.getByText(/Charts stay empty until beacons report/i)).toBeInTheDocument();
+    // An empty window must read as "no samples", never as zero usage.
+    expect(await screen.findByText(/No samples recorded for 1 hour/i)).toBeInTheDocument();
+    expect(screen.getByText(/Charts stay empty rather than flat at zero/i)).toBeInTheDocument();
+  });
+
+  it("surfaces a failed telemetry query instead of rendering an empty window", async () => {
+    // A 500 is not "no data": showing the empty-state banner here would claim
+    // the collector reported nothing when in fact we never got an answer.
+    installFetch([
+      { test: (u) => u.includes("/monitoring/nodes/metrics"), response: () => new Response("boom", { status: 500 }) },
+      { test: (u) => u.includes("/monitoring/summary"), response: () => jsonResponse({ nodes: [], unacknowledgedAlerts: 0, recentHealthChecks: [] }) },
+      { test: (u) => u.includes("/alerts"), response: () => jsonResponse({ alerts: [] }) },
+      { test: (u) => u.includes("/nodes"), response: () => jsonResponse(apiPage([{ id: "n1", name: "alpha" }])) },
+    ]);
+
+    renderWithQuery(<AdminMonitoring />);
+
+    expect(await screen.findByText(/Telemetry query failed/i)).toBeInTheDocument();
+    expect(screen.queryByText(/No samples recorded for/i)).not.toBeInTheDocument();
   });
 
   it("renders charts and beacon list when telemetry is present", async () => {
@@ -439,13 +457,17 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     // Should render monitoring heading and window controls
     expect(await screen.findByRole("heading", { name: "Monitoring", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/Real-time telemetry from your beacons/i)).toBeInTheDocument();
+    expect(screen.getByText(/Allocation trends across your nodes and workloads/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "1 hour" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "6 hours" })).toBeInTheDocument();
-    expect(screen.getByText(/Resource Usage Over Time/i)).toBeInTheDocument();
-    expect(screen.getByText("Node Metrics")).toBeInTheDocument();
-    expect(screen.getByText("Top Workloads")).toBeInTheDocument();
+    // Section titles say what the data is: these series are allocated shares of
+    // capacity, not measured usage, and no workload is ranked by usage.
+    expect(screen.getByText("Allocation Over Time")).toBeInTheDocument();
+    expect(screen.getByText("Node Allocation")).toBeInTheDocument();
+    expect(screen.getByText("Workloads")).toBeInTheDocument();
+    expect(screen.getByText(/per-workload usage is not reported/i)).toBeInTheDocument();
     expect(screen.getByText("System Health")).toBeInTheDocument();
+    expect(screen.queryByText(/No samples recorded for/i)).not.toBeInTheDocument();
   });
 
   it("allows switching time window", async () => {
@@ -453,9 +475,11 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     renderWithQuery(<AdminMonitoring />);
 
-    expect(await screen.findByText(/No telemetry for 1 hour yet/i)).toBeInTheDocument();
+    expect(await screen.findByText(/No samples recorded for 1 hour/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: "6 hours" }));
-    expect(await screen.findByText(/No telemetry for 6 hours yet/i)).toBeInTheDocument();
+    // The banner must name the window it is reporting on, so switching windows
+    // cannot leave a stale "1 hour" claim on screen.
+    expect(await screen.findByText(/No samples recorded for 6 hours/i)).toBeInTheDocument();
   });
 
   it("renders screenshot sections with empty telemetry", async () => {
@@ -463,9 +487,9 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     renderWithQuery(<AdminMonitoring />);
 
-    expect(await screen.findByText(/No telemetry data yet/i)).toBeInTheDocument();
-    expect(screen.getByText("Node Metrics")).toBeInTheDocument();
-    expect(screen.getByText("Top Workloads")).toBeInTheDocument();
+    expect(await screen.findByText(/No samples recorded for 1 hour/i)).toBeInTheDocument();
+    expect(screen.getByText("Node Allocation")).toBeInTheDocument();
+    expect(screen.getByText("Workloads")).toBeInTheDocument();
     expect(screen.getByText("System Health")).toBeInTheDocument();
     expect(screen.getByText("Recent Activity")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /View Health/i })).toBeInTheDocument();
@@ -653,7 +677,7 @@ describe("AdminServers page", () => {
       "/servers/s1/stats": jsonResponse({
         cpuPercent: 12.5, memoryBytes: 1174405120, memoryLimit: 4294967296,
         diskBytes: 3355443200, diskLimit: 10737418240,
-        networkRxBytes: 1048576, networkTxBytes: 2097152, uptime: 367782,
+        networkRxBytes: 1048576, networkTxBytes: 2097152, uptimeMs: 367782000,
       }),
       "/servers/s1/startup": jsonResponse({
         startupCommand: "java -jar server.jar", rawStartupCommand: "java -jar server.jar", dockerImages: {},

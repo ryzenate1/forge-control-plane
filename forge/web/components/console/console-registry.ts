@@ -2,9 +2,15 @@
  * Console page registry — single source of truth for the /console shell.
  *
  * Mirrors the adminPageRegistry pattern but scoped to the customer-facing
- * product surface. Every entry here MUST have a corresponding page under
- * app/console/ or be marked `workload: true` (dynamic server/app routes).
- * The console-nav component filters out entries without pages at build time.
+ * product surface. Every `href` here must resolve to a real page file;
+ * `test/route-integrity.test.ts` walks `app/` and fails the build if one does
+ * not, so this registry cannot drift into advertising a 404 again.
+ *
+ * Namespacing note: game servers are **not** under `/console`. The canonical
+ * customer surfaces are `/servers` (the list) and `/server/[id]/*` (20 detail
+ * tabs, each a real page with its own layout). The console shell links out to
+ * them rather than re-hosting them under `/console/servers/*`, which would mean
+ * a second copy of every workload route.
  */
 import {
   Archive,
@@ -43,7 +49,7 @@ export type ConsoleNavItem = {
   icon: LucideIcon;
   badge?: string;
   audience: Audience;
-  /** Marks dynamic workload detail routes (e.g. /console/servers/[id]) */
+  /** Marks workload routes that live outside the /console namespace. */
   workload?: boolean;
 };
 
@@ -59,6 +65,7 @@ export type WorkloadTabId =
   | "terminal"
   | "files"
   | "databases"
+  | "database-services"
   | "schedules"
   | "tasks"
   | "backups"
@@ -93,6 +100,7 @@ export const workloadTabs: WorkloadTabConfig[] = [
   { id: "terminal", labelKey: "server.terminal", fallback: "Terminal", icon: Terminal, permissions: ["websocket.connect", "control.console"] },
   { id: "files", labelKey: "server.files", fallback: "Files", icon: Folder, permissions: ["file.read"] },
   { id: "databases", labelKey: "server.databases", fallback: "Databases", icon: Database, permissions: ["database.read"] },
+  { id: "database-services", labelKey: "server.databaseServices", fallback: "Managed Services", icon: Boxes, permissions: ["database.read"] },
   { id: "schedules", labelKey: "server.schedules", fallback: "Schedules", icon: Calendar, permissions: ["schedule.read"] },
   { id: "tasks", labelKey: "server.scheduledTasks", fallback: "Scheduled Tasks", icon: ListChecks, permissions: ["schedule.read"] },
   { id: "backups", labelKey: "server.backups", fallback: "Backups", icon: Archive, permissions: ["backup.read"] },
@@ -111,21 +119,59 @@ export const workloadTabs: WorkloadTabConfig[] = [
 ];
 
 export const workloadTabGroups: Array<{ title: string; tabs: WorkloadTabId[] }> = [
-  { title: "Daily", tabs: ["overview", "terminal", "files", "databases", "schedules", "tasks", "backups"] },
+  { title: "Daily", tabs: ["overview", "terminal", "files", "databases", "database-services", "schedules", "tasks", "backups"] },
   { title: "Configuration", tabs: ["startup", "network", "mounts", "users", "resource-limits", "settings"] },
   { title: "Deploy & Ops", tabs: ["deployments", "builds", "git", "processes", "activity", "transfer"] },
 ];
 
-/** Generate the href for a workload tab within the /console namespace. */
+/**
+ * Tab ids whose route path differs from the id. Values may contain `/`.
+ *
+ * The terminal tab's page is `app/server/[id]/console/page.tsx` — the directory
+ * predates the "terminal" label — so the id alone would produce
+ * `/server/<id>/terminal`, which has no page.
+ *
+ * `database-services` nests under the databases section: it used to live at
+ * `/server/<id>/database`, one character away from `/server/<id>/databases` and
+ * a different feature, so the sidebar offered "Database" and "Databases" as
+ * sibling rows. It is now a child of Databases, and the old path redirects.
+ */
+const WORKLOAD_TAB_SEGMENTS: Partial<Record<WorkloadTabId, string>> = {
+  terminal: "console",
+  "database-services": "databases/services",
+};
+
+/** Tabs rendered one level in, under the tab named here. */
+export const WORKLOAD_TAB_PARENTS: Partial<Record<WorkloadTabId, WorkloadTabId>> = {
+  "database-services": "databases",
+};
+
+/**
+ * Href for a workload tab.
+ *
+ * These resolve to `app/server/[id]/*`, which is where every one of these tabs
+ * actually exists. The previous form returned `/console/servers/<id>/<tab>` —
+ * a namespace with no pages in it at all, so every tab in the console sidebar
+ * led to a 404.
+ */
 export function workloadTabHref(serverId: string, tab: WorkloadTabId): string {
-  return tab === "overview" ? `/console/servers/${serverId}` : `/console/servers/${serverId}/${tab}`;
+  if (tab === "overview") return `/server/${serverId}`;
+  return `/server/${serverId}/${WORKLOAD_TAB_SEGMENTS[tab] ?? tab}`;
 }
+
+/** The canonical customer server list, linked from the console shell. */
+export const SERVERS_LIST_HREF = "/servers";
 
 // ─── Top-level console navigation groups ─────────────────────────────────────
 
 /**
- * These are the landing pages of the customer console. Each MUST have a
- * corresponding page.tsx under app/console/ or the nav will filter it out.
+ * The landing pages of the customer console.
+ *
+ * "Backups" used to sit in Operations pointing at `/console/backups`. There is
+ * no such page and no aggregate backups API behind it — backups are per-server
+ * (`fetchBackups(serverId)`, surfaced at `/server/[id]/backups`). Advertising a
+ * platform-wide backups section implied a capability the product does not have,
+ * so the entry is gone rather than pointed at a stub.
  */
 export const consoleNavGroups: ConsoleNavGroup[] = [
   {
@@ -138,7 +184,7 @@ export const consoleNavGroups: ConsoleNavGroup[] = [
   {
     title: "Workloads",
     items: [
-      { href: "/console/servers", label: "Game Servers", labelKey: "console.servers", icon: Server, audience: "customer", workload: true },
+      { href: SERVERS_LIST_HREF, label: "Game Servers", labelKey: "console.servers", icon: Server, audience: "customer", workload: true },
       { href: "/console/apps", label: "Applications", labelKey: "console.apps", icon: Boxes, audience: "customer", workload: true },
       { href: "/console/databases", label: "Databases", labelKey: "console.databases", icon: Database, audience: "customer" },
     ],
@@ -146,7 +192,6 @@ export const consoleNavGroups: ConsoleNavGroup[] = [
   {
     title: "Operations",
     items: [
-      { href: "/console/backups", label: "Backups", labelKey: "console.backups", icon: Archive, audience: "customer" },
       { href: "/console/domains", label: "Domains", labelKey: "console.domains", icon: Network, audience: "customer" },
     ],
   },

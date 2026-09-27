@@ -232,8 +232,8 @@ export function AdminNestsEggs() {
  return (
  <div>
  <SectionHeader
- title="Nests & Eggs"
- sub="Game server definitions."
+ title="Service Definitions"
+ sub="Reusable game-server blueprints. A nest groups related games; an egg is one runnable definition inside it."
  action={<Btn onClick={openNestCreate}><Plus size={14} /> New Nest</Btn>}
  />
 

@@ -2483,18 +2483,12 @@ func NewServer(cfg Config) *fiber.App {
 		return c.JSON(user)
 	})
 
-	protected.Get("/mounts/:id", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		mount, err := cfg.Store.GetMount(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "mount not found")
-		}
-		return c.JSON(mount)
-	})
+	// GET /mounts/:id is registered by registerAdminRoutes with
+	// requireAdminScope("mounts.read"). It used to be duplicated here with only
+	// requireRole("admin"); because Fiber resolves overlapping paths in
+	// registration order and this block runs first, the copy below shadowed the
+	// scoped one and let any admin API key read a mount regardless of its
+	// scopes. The duplicate is gone so the scoped registration is the live one.
 
 	protected.Get("/servers/:id/users/:userId", requireRole("admin"), requireAdminScope("servers.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -2517,11 +2511,14 @@ func NewServer(cfg Config) *fiber.App {
 	// Register fixed plugin subroutes before admin's /admin/plugins/:id route.
 	// Otherwise paths such as /discover are parsed as a plugin identifier.
 	registerPluginRoutes(protected, cfg)
-	registerApiKeyRoutes(protected, cfg, mutationLimiter)
-	registerNestRoutes(protected, cfg, mutationLimiter)
-	registerLocationRoutes(protected, cfg, mutationLimiter)
-	registerRegionRoutes(protected, cfg, mutationLimiter)
-	registerTemplateRoutes(protected, cfg, mutationLimiter)
+	// /api-keys is owned by registerAuthRoutes above: keys belong to the
+	// authenticated user, not to admins. A second /api-keys group used to be
+	// registered here; it was unreachable (registerAuthRoutes runs first) and
+	// read the caller from a "userId" local that authMiddleware never sets.
+	registerNestRoutes(protected, cfg, mutationLimiter, adminIPAccess)
+	registerLocationRoutes(protected, cfg, mutationLimiter, adminIPAccess)
+	registerRegionRoutes(protected, cfg, mutationLimiter, adminIPAccess)
+	registerTemplateRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerAdminRoutes(protected, cfg, nodeRegistry, clusterManager, evacuationPlanner, migrationService, reservationManager, recoveryCoordinator, mutationLimiter, adminIPAccess)
 	registerServerRoutes(protected, cfg, runner, clusterManager, mutationLimiter, adminIPAccess)
 	registerSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)

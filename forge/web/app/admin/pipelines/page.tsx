@@ -40,43 +40,17 @@ import {
   AdminLoadingState,
   AdminErrorState,
 } from "@/components/admin/admin-ui";
+import { ProgressBar } from "@/components/ui/primitives";
 import { DashHeader } from "@/components/admin/dashboard-cards";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { formatDate, cn } from "@/lib/utils";
 import { API_BASE_URL } from "@/lib/api/http";
 import { statusTone, type StatusTone } from "@/lib/api/status";
 
-const TONE_PILL: Record<StatusTone, "green" | "red" | "yellow" | "blue" | "neutral"> = {
-  green: "green",
-  red: "red",
-  yellow: "yellow",
-  blue: "blue",
-  neutral: "neutral",
-};
-
 const ACTIVE = new Set(["queued", "running", "await_approval", "in_progress"]);
 
-function runTone(status: string): "green" | "red" | "yellow" | "blue" | "neutral" {
-  return TONE_PILL[statusTone(status, "deployment")] ?? "neutral";
-}
-
-function ProgressBar({ pct, tone }: { pct: number; tone: string }) {
-  const clamped = Math.max(0, Math.min(100, pct || 0));
-  return (
-    <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]" role="progressbar" aria-valuenow={clamped} aria-valuemin={0} aria-valuemax={100}>
-      <div
-        className={cn(
-          "h-full rounded-full transition-all",
-          tone === "green" && "bg-emerald-400/70",
-          tone === "red" && "bg-red-400/70",
-          tone === "yellow" && "bg-amber-400/70",
-          tone === "blue" && "bg-blue-400/70",
-          tone === "neutral" && "bg-slate-400/60",
-        )}
-        style={{ width: `${clamped}%` }}
-      />
-    </div>
-  );
+function runTone(status: string): StatusTone {
+  return statusTone(status, "deployment");
 }
 
 export default function AdminPipelinesPage() {
@@ -273,7 +247,7 @@ export default function AdminPipelinesPage() {
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex flex-col gap-1">
-                          <ProgressBar pct={r.progressPct ?? 0} tone={tone} />
+                          <ProgressBar label={`${r.pipelineName ?? "Pipeline"} run progress`} tone={tone} value={r.progressPct} />
                           <span className="text-[10px] text-slate-500">
                             {r.currentStage ? r.currentStage.replace(/_/g, " ") : ""}
                             {typeof r.progressPct === "number" ? ` · ${r.progressPct}%` : ""}

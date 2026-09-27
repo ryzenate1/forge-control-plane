@@ -10,6 +10,7 @@ import { type ApiEgg, fetchNest, fetchEggs, createEgg, updateEgg, deleteEgg } fr
 import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -94,6 +95,10 @@ export default function NestEggsPage() {
   const nestQuery = useQuery({ queryKey: ["nest", nestId], queryFn: () => fetchNest(nestId) });
   const eggsQuery = useQuery({ queryKey: ["eggs", nestId], queryFn: () => fetchEggs(nestId) });
   const nest = nestQuery.data;
+
+  // One breadcrumb trail, rendered by the shell. This names the dynamic
+  // segment so it reads as the resource rather than an opaque id.
+  useBreadcrumbLabel(nestId, nest?.name ?? null);
   const eggs = eggsQuery.data ?? [];
   const isLoading = eggsQuery.isLoading;
   const isError = eggsQuery.isError;
@@ -195,7 +200,6 @@ export default function NestEggsPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        breadcrumb={`Build / Service Definitions / ${nest?.name ?? "Nest"} / Eggs`}
         title={nest ? `Eggs: ${nest.name}` : "Eggs"}
         sub="Service definitions that define game server behavior."
         backAction={() => router.push("/admin/nests")}

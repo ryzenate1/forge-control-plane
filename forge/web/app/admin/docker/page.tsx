@@ -23,7 +23,13 @@ export default function DockerPage() {
 
   return (
     <div className="space-y-6">
-      <SectionHeader title="Docker" sub="Manage containers, images, networks, and volumes across all nodes." />
+      {/*
+        Titled "Containers", matching the sidebar entry and the breadcrumb.
+        "Docker" named the runtime rather than the thing being managed, so the
+        sidebar said Containers and the page said Docker; the runtime is still
+        named in the subtitle, where it belongs.
+      */}
+      <SectionHeader title="Containers" sub="Docker containers, images, networks and volumes across all nodes." />
       <OfflineBanner onRetry={() => window.location.reload()} />
       <div className="flex gap-1 border-b border-[var(--line)]">
         {TABS.map((t) => {

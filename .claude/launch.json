@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "forge-web",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--workspace", "@forge/web", "run", "dev"],
+      "port": 3000,
+      "autoPort": false
+    }
+  ]
+}

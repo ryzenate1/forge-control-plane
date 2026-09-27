@@ -517,7 +517,13 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	}
-	protected.Post("/invitations/accept", acceptTenancyInvitation)
+	// Only /tenancy/invitations/accept is registered here. A second
+	// registration on /invitations/accept used to sit alongside it, but
+	// registerAuthRoutes claims that path first for *subuser* invitations, and
+	// Fiber resolves overlapping paths in registration order — so this copy
+	// could never run, and a caller posting an organization invitation token
+	// there had it looked up as a subuser token and rejected. The two
+	// invitation kinds live in different tables and must keep different paths.
 	protected.Post("/tenancy/invitations/accept", acceptTenancyInvitation)
 
 	protected.Delete("/organizations/:id/invitations/:invId", tenancyOrgAccess(tenancySvc), func(c *fiber.Ctx) error {

@@ -6,7 +6,7 @@ import { DeploymentsView } from "@/components/server/deployments-view";
 import { SchedulesView } from "@/components/server/schedules-view";
 import { FilesView } from "@/components/server/files-view";
 import GitDeployPage from "@/app/server/[id]/git/page";
-import ServerDatabasePage from "@/app/server/[id]/database/page";
+import ServerDatabaseServicesPage from "@/app/server/[id]/databases/services/page";
 import { jsonResponse, mockFetchByUrl } from "@/test/fetch-mock";
 import { renderWithQuery } from "@/test/render";
 import { ServerProvider } from "@/components/server/server-context";
@@ -171,7 +171,7 @@ describe("database services page admin gate", () => {
     mockFetchByUrl({
       "/servers/s1/database-services": jsonResponse([]),
     });
-    renderWithAccess(<ServerDatabasePage />, makeServerAccess({ isAdmin: false, isOwner: true }));
+    renderWithAccess(<ServerDatabaseServicesPage />, makeServerAccess({ isAdmin: false, isOwner: true }));
     expect(await screen.findByText("No database services linked to this server.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /Link Service/ })).not.toBeInTheDocument();
     expect(screen.getByText("Only administrators can link, unlink, back up, or view credentials for managed database services.")).toBeInTheDocument();
@@ -181,7 +181,7 @@ describe("database services page admin gate", () => {
     mockFetchByUrl({
       "/servers/s1/database-services": jsonResponse([]),
     });
-    renderWithAccess(<ServerDatabasePage />, makeServerAccess({ isAdmin: true }));
+    renderWithAccess(<ServerDatabaseServicesPage />, makeServerAccess({ isAdmin: true }));
     expect(await screen.findByRole("button", { name: /Link Service/ })).toBeInTheDocument();
   });
 });

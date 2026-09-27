@@ -15,6 +15,7 @@ import { ServerProvider } from "@/components/server/server-context";
 const fetchServerLogsMock = vi.fn().mockResolvedValue("");
 const sendPowerSignalMock = vi.fn().mockResolvedValue({ serverId: "s1", signal: "start", accepted: true });
 const reinstallServerMock = vi.fn().mockResolvedValue({ accepted: true });
+const fetchOperationMock = vi.fn();
 
 vi.mock("@/lib/api", async () => {
   const actual = await vi.importActual<typeof import("@/lib/api")>("@/lib/api");
@@ -23,6 +24,7 @@ vi.mock("@/lib/api", async () => {
     fetchServerLogs: (...args: unknown[]) => fetchServerLogsMock(...args),
     sendPowerSignal: (...args: unknown[]) => sendPowerSignalMock(...args),
     reinstallServer: (...args: unknown[]) => reinstallServerMock(...args),
+    fetchOperation: (...args: unknown[]) => fetchOperationMock(...args),
     connectServerWebSocket: vi.fn().mockImplementation(async () => {
       // Return a dummy websocket — the manager mock ignores this factory
       return {
@@ -61,7 +63,15 @@ vi.mock("@/lib/api/ws/websocket-manager", () => {
 });
 
 // Exercise production helpers, not copies of the intended implementation.
-import { ConsoleView, computeNetworkDelta, extractServerTimestamp, getChartMax } from "@/components/server/console-view";
+import {
+  ConsoleView,
+  computeNetworkDelta,
+  decodeConsoleFrame,
+  decodeStatsFrame,
+  deriveSessionState,
+  extractServerTimestamp,
+  getChartMax,
+} from "@/components/server/console-view";
 function getConsoleManager() {
   // first manager is console (factory for "console"), second is stats
   return managerInstances[0] as unknown as { config: { onMessage?: (data: unknown) => void; onStatusChange?: (s: string) => void } };
@@ -78,6 +88,9 @@ beforeEach(() => {
   managerInstances.length = 0;
   fetchServerLogsMock.mockReset();
   fetchServerLogsMock.mockResolvedValue("");
+  fetchOperationMock.mockReset();
+  sendPowerSignalMock.mockReset();
+  sendPowerSignalMock.mockResolvedValue({ serverId: "s1", signal: "start", accepted: true });
   vi.useRealTimers();
   // jsdom doesn't implement scrollTo — console-view autoScroll uses it
   if (!Element.prototype.scrollTo) {
@@ -278,9 +291,9 @@ describe("console-view network delta per tick not cumulative", () => {
     // Feed three stats ticks: cumulative totals 1000/2000, 1100/2150, 1120/2180
     // Expected deltas: 0, 250, 50
     await act(async () => {
-      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1000, networkTxBytes: 2000, diskBytes: 0, diskLimit: 0, uptime: 10 });
-      onMessage({ cpuPercent: 12, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1100, networkTxBytes: 2150, diskBytes: 0, diskLimit: 0, uptime: 11 });
-      onMessage({ cpuPercent: 11, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1120, networkTxBytes: 2180, diskBytes: 0, diskLimit: 0, uptime: 12 });
+      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1000, networkTxBytes: 2000 });
+      onMessage({ cpuPercent: 12, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1100, networkTxBytes: 2150 });
+      onMessage({ cpuPercent: 11, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 1120, networkTxBytes: 2180 });
     });
 
     // Verify network chart's history via its SVG points reflects deltas not totals
@@ -311,8 +324,8 @@ describe("console-view network delta per tick not cumulative", () => {
     const statsMgr = getStatsManager();
     const onMessage = statsMgr?.config.onMessage as (data: unknown) => void;
     await act(async () => {
-      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 5000, networkTxBytes: 7000, diskBytes: 0, diskLimit: 0, uptime: 10 });
-      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 100, networkTxBytes: 200, diskBytes: 0, diskLimit: 0, uptime: 11 });
+      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 5000, networkTxBytes: 7000 });
+      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 100, networkTxBytes: 200 });
     });
     await waitFor(() => {
       const networkChart = document.querySelector('[aria-label="Network chart"]') as HTMLElement;
@@ -397,8 +410,8 @@ describe("console-view Chart auto-max with limit (limitOr100)", () => {
     const statsMgr = getStatsManager();
     const onMessage = statsMgr?.config.onMessage as (data: unknown) => void;
     await act(async () => {
-      onMessage({ cpuPercent: 1, memoryBytes: 10, memoryLimit: 1000, networkRxBytes: 0, networkTxBytes: 0, diskBytes: 0, diskLimit: 0, uptime: 1 });
-      onMessage({ cpuPercent: 2, memoryBytes: 20, memoryLimit: 1000, networkRxBytes: 0, networkTxBytes: 0, diskBytes: 0, diskLimit: 0, uptime: 2 });
+      onMessage({ cpuPercent: 1, memoryBytes: 10, memoryLimit: 1000, networkRxBytes: 0, networkTxBytes: 0 });
+      onMessage({ cpuPercent: 2, memoryBytes: 20, memoryLimit: 1000, networkRxBytes: 0, networkTxBytes: 0 });
     });
     await waitFor(() => {
       const cpuChart = document.querySelector('[aria-label="CPU chart"]') as HTMLElement;
@@ -425,8 +438,8 @@ describe("console-view Chart auto-max with limit (limitOr100)", () => {
     const statsMgr = getStatsManager();
     const onMessage = statsMgr?.config.onMessage as (data: unknown) => void;
     await act(async () => {
-      onMessage({ cpuPercent: 150, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 0, networkTxBytes: 0, diskBytes: 0, diskLimit: 0, uptime: 1 });
-      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 100, networkTxBytes: 100, diskBytes: 0, diskLimit: 0, uptime: 2 });
+      onMessage({ cpuPercent: 150, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 0, networkTxBytes: 0 });
+      onMessage({ cpuPercent: 10, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 100, networkTxBytes: 100 });
     });
     await waitFor(() => {
       const cpuChart = document.querySelector('[aria-label="CPU chart"]') as HTMLElement;
@@ -456,7 +469,7 @@ describe("console-view Chart auto-max with limit (limitOr100)", () => {
     const onMessage = statsMgr?.config.onMessage as (data: unknown) => void;
     await act(async () => {
       for (let i = 0; i < 70; i++) {
-        onMessage({ cpuPercent: i, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: i * 10, networkTxBytes: i * 5, diskBytes: 0, diskLimit: 0, uptime: i });
+        onMessage({ cpuPercent: i, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: i * 10, networkTxBytes: i * 5 });
       }
     });
     await waitFor(() => {
@@ -467,5 +480,194 @@ describe("console-view Chart auto-max with limit (limitOr100)", () => {
       const points = attr.trim().split(/\s+/).filter(Boolean);
       expect(points.length).toBe(60);
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Frame decoding — the shapes beacon actually puts on the wire
+// ---------------------------------------------------------------------------
+
+describe("console frame decoding", () => {
+  it("decodes an output frame object, never stringifying it", () => {
+    // WebSocketManager parses JSON before handing the frame over, so the
+    // console receives an object. Stringifying it produced "[object Object]".
+    const frame = decodeConsoleFrame({ serverId: "s1", type: "output", data: "hello world" });
+    expect(frame).toEqual({ kind: "output", text: "hello world" });
+    expect(JSON.stringify(frame)).not.toContain("[object Object]");
+  });
+
+  it("decodes a lifecycle state frame without defaulting absent fields to zero", () => {
+    const frame = decodeConsoleFrame({ serverId: "s1", type: "state", exists: true, running: false, status: "exited" }, 1000);
+    expect(frame).toEqual({
+      kind: "state",
+      lifecycle: { exists: true, running: false, status: "exited", startedAt: null, uptimeMs: null, observedAt: 1000 },
+    });
+  });
+
+  it("decodes an error frame and keeps the daemon's code", () => {
+    expect(decodeConsoleFrame({ serverId: "s1", type: "error", code: "inspect_failed", data: "docker unreachable" }))
+      .toEqual({ kind: "error", code: "inspect_failed", message: "docker unreachable" });
+    // The legacy auth failure frame carries no code.
+    expect(decodeConsoleFrame({ type: "error", data: "token not valid for this server" }))
+      .toEqual({ kind: "error", code: "stream_error", message: "token not valid for this server" });
+    // The proxy's permission rejection is a bare {error} object.
+    expect(decodeConsoleFrame({ error: "missing server permission: control.console" }))
+      .toEqual({ kind: "error", code: "stream_error", message: "missing server permission: control.console" });
+  });
+
+  it("treats a raw string as output rather than dropping it", () => {
+    expect(decodeConsoleFrame("not json but still output")).toEqual({ kind: "output", text: "not json but still output" });
+    expect(decodeConsoleFrame("")).toEqual({ kind: "ignored" });
+    expect(decodeConsoleFrame(null)).toEqual({ kind: "ignored" });
+    expect(decodeConsoleFrame({ serverId: "s1" })).toEqual({ kind: "ignored" });
+  });
+
+  it("reads a stats sample and separates it from a metrics-less lifecycle report", () => {
+    const sample = decodeStatsFrame({ serverId: "s1", running: true, metrics: true, cpuPercent: 4, memoryBytes: 1, memoryLimit: 2, networkRxBytes: 0, networkTxBytes: 0 }, 5);
+    expect(sample.kind).toBe("sample");
+    expect(sample.kind === "sample" && sample.lifecycle?.running).toBe(true);
+
+    const stopped = decodeStatsFrame({ serverId: "s1", exists: true, running: false, status: "exited", metrics: false }, 5);
+    expect(stopped).toEqual({
+      kind: "lifecycle",
+      lifecycle: { exists: true, running: false, status: "exited", startedAt: null, uptimeMs: null, observedAt: 5 },
+    });
+
+    expect(decodeStatsFrame({ serverId: "s1", type: "error", code: "stats_unavailable", data: "no stats stream" }))
+      .toEqual({ kind: "error", code: "stats_unavailable", message: "no stats stream" });
+  });
+
+  it("distinguishes transport health from workload lifecycle", () => {
+    const base = { permitted: true, blockedReason: null, link: "connected" as const, streamError: null, lifecycle: null };
+    const running = { exists: true, running: true, status: "running", startedAt: null, uptimeMs: null, observedAt: 0 };
+    const stopped = { ...running, running: false, status: "exited" };
+
+    expect(deriveSessionState({ ...base, permitted: false })).toBe("forbidden");
+    expect(deriveSessionState({ ...base, blockedReason: "suspended" })).toBe("unavailable");
+    expect(deriveSessionState({ ...base, link: "connecting" })).toBe("connecting");
+    expect(deriveSessionState({ ...base, link: "reconnecting" })).toBe("reconnecting");
+    expect(deriveSessionState({ ...base, link: "disconnected" })).toBe("disconnected");
+    expect(deriveSessionState({ ...base, streamError: "inspect failed" })).toBe("stream-error");
+    // A stopped workload on a healthy socket is not a broken connection.
+    expect(deriveSessionState({ ...base, lifecycle: stopped })).toBe("workload-stopped");
+    expect(deriveSessionState({ ...base, lifecycle: running })).toBe("connected");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Integration: real frames end to end
+// ---------------------------------------------------------------------------
+
+function mount(server = makeServer({ status: "running" })) {
+  return renderWithQuery(
+    <ServerProvider value={{ server, access: makeServerAccess(), refreshServer: async () => {} }}>
+      <ConsoleView server={server} />
+    </ServerProvider>,
+  );
+}
+
+describe("console-view against real daemon frames", () => {
+  it("renders output frames as text and never as [object Object]", async () => {
+    mount();
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    const onMessage = getConsoleManager().config.onMessage!;
+    await act(async () => {
+      onMessage({ serverId: "s1", type: "output", data: "[10:00:00] Done (3.2s)! For help, type \"help\"" });
+    });
+    expect(await screen.findByText('[10:00:00] Done (3.2s)! For help, type "help"')).toBeInTheDocument();
+    expect(screen.queryByText("[object Object]")).not.toBeInTheDocument();
+  });
+
+  it("reports a stopped workload as stopped and refuses to accept commands", async () => {
+    mount();
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    const onMessage = getConsoleManager().config.onMessage!;
+    await act(async () => {
+      onMessage({ serverId: "s1", type: "state", exists: true, running: false, status: "exited" });
+    });
+    expect(await screen.findByText("Workload stopped")).toBeInTheDocument();
+    expect(screen.getByLabelText("Console command")).toBeDisabled();
+    expect(screen.getByPlaceholderText("The workload is not running")).toBeInTheDocument();
+  });
+
+  it("surfaces a stream error with a way to reconnect", async () => {
+    mount();
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    const onMessage = getConsoleManager().config.onMessage!;
+    await act(async () => {
+      onMessage({ serverId: "s1", type: "error", code: "inspect_failed", data: "docker daemon unreachable" });
+    });
+    expect(await screen.findByText("Stream error")).toBeInTheDocument();
+    expect(screen.getByText("docker daemon unreachable")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Reconnect" })).toBeInTheDocument();
+  });
+
+  it("shows telemetry as not running instead of zeros when the node reports no metrics", async () => {
+    mount();
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    const tick = getStatsManager().config.onMessage!;
+    await act(async () => {
+      tick({ serverId: "s1", exists: true, running: false, status: "exited", metrics: false });
+    });
+    await waitFor(() => expect(screen.getAllByText("Not running").length).toBeGreaterThanOrEqual(2));
+    // Nothing was plotted: a stopped workload contributes no sample.
+    expect(document.querySelector('[aria-label="CPU chart"] polyline')?.getAttribute("points")).toBe("");
+    expect(screen.queryByText("0 B")).not.toBeInTheDocument();
+  });
+
+  it("clears a live sample when the workload stops rather than leaving a stale reading", async () => {
+    mount();
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    const tick = getStatsManager().config.onMessage!;
+    await act(async () => {
+      tick({ serverId: "s1", running: true, metrics: true, cpuPercent: 42.5, memoryBytes: 512, memoryLimit: 1024, networkRxBytes: 0, networkTxBytes: 0 });
+    });
+    expect(await screen.findByText("42.5%")).toBeInTheDocument();
+    await act(async () => {
+      tick({ serverId: "s1", exists: true, running: false, status: "exited", metrics: false });
+    });
+    await waitFor(() => expect(screen.queryByText("42.5%")).not.toBeInTheDocument());
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Operation progress — accepted is not completed
+// ---------------------------------------------------------------------------
+
+describe("console-view power operation progress", () => {
+  it("tracks the durable operation the API created and reports its terminal status", async () => {
+    sendPowerSignalMock.mockResolvedValue({ serverId: "s1", signal: "start", accepted: true, mode: "durable", operationId: "op-1" });
+    fetchOperationMock.mockResolvedValue({ id: "op-1", status: "running", rawStatus: "running", terminal: false });
+
+    mount(makeServer({ status: "stopped" }));
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    await userEvent.click(screen.getByLabelText("Start workload"));
+
+    expect(await screen.findByText("operation op-1")).toBeInTheDocument();
+    await waitFor(() => expect(screen.getByText("Running")).toBeInTheDocument());
+
+    fetchOperationMock.mockResolvedValue({ id: "op-1", status: "succeeded", rawStatus: "completed", terminal: true });
+    await waitFor(() => expect(screen.getByText("Completed")).toBeInTheDocument(), { timeout: 4000 });
+    expect(fetchOperationMock).toHaveBeenCalledWith("op-1");
+  });
+
+  it("says progress is untrackable when the API returns no operation id", async () => {
+    sendPowerSignalMock.mockResolvedValue({ serverId: "s1", signal: "start", accepted: true, mode: "queued" });
+    mount(makeServer({ status: "stopped" }));
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    await userEvent.click(screen.getByLabelText("Start workload"));
+
+    expect(await screen.findByText("Accepted, progress not trackable")).toBeInTheDocument();
+    expect(fetchOperationMock).not.toHaveBeenCalled();
+  });
+
+  it("reports a rejected signal as failed", async () => {
+    sendPowerSignalMock.mockRejectedValue(new Error("node offline"));
+    mount(makeServer({ status: "stopped" }));
+    await waitFor(() => expect(managerInstances.length).toBe(2));
+    await userEvent.click(screen.getByLabelText("Start workload"));
+
+    expect(await screen.findByText("Failed")).toBeInTheDocument();
+    expect(screen.getByText("node offline")).toBeInTheDocument();
   });
 });

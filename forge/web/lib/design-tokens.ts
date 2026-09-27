@@ -44,33 +44,67 @@ export const line = {
   border: "var(--border)",
   borderStrong: "var(--border-strong)",
   hexLine: "rgba(148, 163, 184, 0.14)",
-  hexLineStrong: "rgba(148, 163, 184, 0.25)",
+  hexLineStrong: "rgba(148, 163, 184, 0.26)",
+} as const;
+
+// --overlay / --overlay-subtle / --overlay-strong
+// Theme-aware foreground wash. Replaces `bg-white/[0.0x]`, which is invisible
+// on a light surface.
+export const overlay = {
+  DEFAULT: "var(--overlay)",
+  subtle: "var(--overlay-subtle)",
+  strong: "var(--overlay-strong)",
 } as const;
 
 export const text = {
   DEFAULT: "var(--text)",
   subtle: "var(--text-subtle)",
+  muted: "var(--text-muted)",
   focus: "var(--focus)",
 } as const;
 
-// --success / --success-subtle / --warning / --warning-subtle / --danger / --danger-subtle
+/**
+ * Status vocabulary — seven states, one meaning each.
+ *
+ * `unknown` is deliberately grey-and-dashed, never green: an unreported or
+ * stale reading must not render as healthy (see AGENTS.md — "unknown is not
+ * zero, not-reported is not zero, and a stale reading is not a healthy one").
+ */
 export const status = {
+  ok: "var(--ok)",
+  okSubtle: "var(--ok-subtle)",
+  okLine: "var(--ok-line)",
+  warn: "var(--warn)",
+  warnSubtle: "var(--warn-subtle)",
+  warnLine: "var(--warn-line)",
+  danger: "var(--danger)",
+  dangerSubtle: "var(--danger-subtle)",
+  dangerLine: "var(--danger-line)",
+  info: "var(--info)",
+  infoSubtle: "var(--info-subtle)",
+  infoLine: "var(--info-line)",
+  unknown: "var(--unknown)",
+  unknownSubtle: "var(--unknown-subtle)",
+  unknownLine: "var(--unknown-line)",
+  // Legacy aliases — `--success`/`--warning` still exist in globals.css.
   success: "var(--success)",
   successSubtle: "var(--success-subtle)",
   warning: "var(--warning)",
   warningSubtle: "var(--warning-subtle)",
-  danger: "var(--danger)",
-  dangerSubtle: "var(--danger-subtle)",
 } as const;
 
 // --shadow-* / --radius-*
 export const shadow = {
+  flat: "var(--shadow-flat)",
   card: "var(--shadow-card)",
+  raised: "var(--shadow-raised)",
   elevated: "var(--shadow-elevated)",
+  popover: "var(--shadow-popover)",
   dialog: "var(--shadow-dialog)",
 } as const;
 
 export const radius = {
+  xs: "var(--radius-xs)",
   sm: "var(--radius-sm)",
   DEFAULT: "var(--radius)",
   lg: "var(--radius-lg)",
@@ -110,12 +144,14 @@ export const chart = {
   lightEmerald: "#34d399",
   lightViolet: "#c084fc",
   indigo: "#6366f1",
-  /** Status hex mirrors for SVG attributes. */
+  /** Status hex mirrors for SVG attributes — track `--ok`/`--warn`/`--danger`. */
   success: "#10b981",
   warning: "#f59e0b",
   dangerBright: "#ef4444",
   dangerSoft: "#f87171",
   critical: "#f43f5e",
+  /** Mirrors `--unknown`. Use for gaps in a series — never render those as 0. */
+  unknown: "#64748b",
   onColor: "#ffffff",
   /**
    * Chart chrome hairlines. Same SVG-attribute restriction as above, so the
@@ -170,6 +206,7 @@ export const tokens = {
   brand,
   canvas,
   line,
+  overlay,
   text,
   status,
   shadow,
@@ -212,14 +249,9 @@ export const motion = {
   easing: "cubic-bezier(0.2,0,0,1)",
 } as const;
 
-/** Single source for status tone mapping (mirrors `lib/api/status.ts:46` `statusTone`). */
-export const statusTones = [
-  "neutral",
-  "success",
-  "warning",
-  "danger",
-  "info",
-  "blue",
-] as const;
-
-export type StatusTone = (typeof statusTones)[number];
+// The status vocabulary used to be declared here too, as a list of six colour
+// and meaning words that called itself the "single source for status tone
+// mapping". Nothing imported it but the test that pinned it, and it did not
+// match either of the two vocabularies actually in use. It is gone: status
+// tones live in `components/ui/forge/status.ts` (`forgeStatusTones`), which is
+// what every chip, dot, meter and verdict now resolves through.

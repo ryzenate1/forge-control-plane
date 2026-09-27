@@ -92,7 +92,6 @@ export default function DeploymentRevisionsPage() {
         sub="View, compare, and roll back deployment revisions."
         backAction={() => router.push(`/admin/deployments/${id}`)}
         backLabel="Deployment"
-        breadcrumb={`Deploy / Deployments / ${id.slice(0, 8)} / Revisions`}
       />
 
       {activeRevision && (

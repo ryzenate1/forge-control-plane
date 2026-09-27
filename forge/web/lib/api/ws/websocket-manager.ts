@@ -16,6 +16,13 @@ export interface WebSocketConfig {
   maxRetries?: number;
   baseDelay?: number;
   maxDelay?: number;
+  /**
+   * Deliver frames that are not JSON to `onMessage` as the raw string instead
+   * of dropping them. Console-style streams carry workload output, and a line
+   * that happens not to be valid JSON is still real output that must reach the
+   * viewer. Consumers that opt in must type-guard `onMessage` data.
+   */
+  deliverRawText?: boolean;
 }
 
 const INITIAL_BACKOFF_MS = 1000;
@@ -109,9 +116,12 @@ export class WebSocketManager {
         const data = JSON.parse(event.data);
         this.config.onMessage?.(data);
       } catch {
-        if (typeof event.data === 'string') {
-          console.warn('[WebSocketManager] received non-JSON message', event.data.slice(0, 200));
+        if (typeof event.data !== 'string') return;
+        if (this.config.deliverRawText) {
+          this.config.onMessage?.(event.data);
+          return;
         }
+        console.warn('[WebSocketManager] received non-JSON message', event.data.slice(0, 200));
       }
     };
 
@@ -198,7 +208,7 @@ export class WebSocketManager {
 
 export function useWebSocket(config: WebSocketConfig) {
   const managerRef = useRef<WebSocketManager | null>(null);
-  const { url, factory, onMessage, onStatusChange, onError, maxRetries, baseDelay, maxDelay } = config;
+  const { url, factory, onMessage, onStatusChange, onError, maxRetries, baseDelay, maxDelay, deliverRawText } = config;
 
   const onMessageRef = useRef(onMessage);
   const onStatusChangeRef = useRef(onStatusChange);
@@ -209,7 +219,7 @@ export function useWebSocket(config: WebSocketConfig) {
 
   useEffect(() => {
     const manager = new WebSocketManager({
-      url, factory, maxRetries, baseDelay, maxDelay,
+      url, factory, maxRetries, baseDelay, maxDelay, deliverRawText,
       onMessage: (data) => onMessageRef.current?.(data),
       onStatusChange: (status) => onStatusChangeRef.current?.(status),
       onError: (err) => onErrorRef.current?.(err),
@@ -220,7 +230,7 @@ export function useWebSocket(config: WebSocketConfig) {
       manager.disconnect();
       managerRef.current = null;
     };
-  }, [url, factory, maxRetries, baseDelay, maxDelay]);
+  }, [url, factory, maxRetries, baseDelay, maxDelay, deliverRawText]);
 
   return useMemo(
     () => ({

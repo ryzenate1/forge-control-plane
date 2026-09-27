@@ -356,12 +356,35 @@ type InstallResponse struct {
 	Logs     string `json:"logs,omitempty"`
 }
 
+// StatsResponse is Beacon's telemetry answer for a workload. Beacon reports the
+// workload's lifecycle alongside the metrics, because metrics alone cannot say
+// whether a zero reading means idle, stopped or missing. Those fields are
+// carried through verbatim; a beacon that does not send them leaves Status
+// empty, which callers must read as unknown rather than as stopped.
 type StatsResponse struct {
-	CPUPercent     float64 `json:"cpuPercent"`
-	MemoryBytes    uint64  `json:"memoryBytes"`
-	MemoryLimit    uint64  `json:"memoryLimit"`
-	NetworkRxBytes uint64  `json:"networkRxBytes"`
-	NetworkTxBytes uint64  `json:"networkTxBytes"`
+	CPUPercent     float64   `json:"cpuPercent"`
+	MemoryBytes    uint64    `json:"memoryBytes"`
+	MemoryLimit    uint64    `json:"memoryLimit"`
+	NetworkRxBytes uint64    `json:"networkRxBytes"`
+	NetworkTxBytes uint64    `json:"networkTxBytes"`
+	Exists         bool      `json:"exists"`
+	Running        bool      `json:"running"`
+	Status         string    `json:"status,omitempty"`
+	StartedAt      time.Time `json:"startedAt,omitempty"`
+}
+
+// UptimeMS returns how long the workload has been running, and false when that
+// is not knowable — the workload is not running, or the node did not report a
+// start time. A zero uptime is a measurement and must not stand in for one.
+func (s StatsResponse) UptimeMS() (int64, bool) {
+	if !s.Running || s.StartedAt.IsZero() {
+		return 0, false
+	}
+	uptime := time.Since(s.StartedAt).Milliseconds()
+	if uptime < 0 {
+		return 0, false
+	}
+	return uptime, true
 }
 
 // ContainerStateResponse is Beacon's explicit lifecycle answer for a workload.

@@ -53,6 +53,11 @@ func (ct *ConsoleThrottle) Reset() {
 	ct.limit.Reset()
 }
 
+// errConsoleNotRunning means no console producer is attached for the server,
+// because the workload is not running. It is a lifecycle answer rather than a
+// failure, so callers can report "stopped" instead of an opaque error.
+var errConsoleNotRunning = errors.New("server console is not running")
+
 const (
 	consoleReplayEntries  = 128
 	consoleReplayBytes    = 256 * 1024
@@ -170,13 +175,13 @@ func (m *consoleManager) Subscribe(serverID string) (<-chan []byte, func(), erro
 	producer := m.producers[serverID]
 	if producer == nil {
 		m.mu.Unlock()
-		return nil, nil, errors.New("server console is not running")
+		return nil, nil, errConsoleNotRunning
 	}
 	producer.mu.Lock()
 	m.mu.Unlock()
 	if producer.closed {
 		producer.mu.Unlock()
-		return nil, nil, errors.New("server console is not running")
+		return nil, nil, errConsoleNotRunning
 	}
 	channel := make(chan []byte, consoleReplayEntries+consoleSubscriberSize)
 	for _, entry := range producer.replay {
@@ -207,7 +212,7 @@ func (m *consoleManager) Write(serverID, command string) error {
 	producer := m.producers[serverID]
 	m.mu.Unlock()
 	if producer == nil {
-		return errors.New("server console is not running")
+		return errConsoleNotRunning
 	}
 	producer.writeMu.Lock()
 	defer producer.writeMu.Unlock()

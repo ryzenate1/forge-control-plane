@@ -2,172 +2,525 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ==========================================================================
+   FORGE DESIGN TOKENS — "Industrial Terminal"
+   Single source of truth. Never hardcode a hex or a white/black overlay in
+   app code; every colour, radius, shadow and elevation step lives here.
+   Documented in forge/web/DESIGN_TOKENS.md.
+   ========================================================================== */
+
 :root {
   color-scheme: dark;
+
+  /* --- Brand ------------------------------------------------------------ */
   --brand: #dc2626;
   --brand-hover: #ef4444;
   --brand-dark: #991b1b;
   --brand-subtle: rgba(220, 38, 38, 0.10);
+  --brand-line: rgba(220, 38, 38, 0.32);
+
+  /* --- Surface hierarchy (4 strict levels) ------------------------------ */
+  /* L0 canvas — the page. L1 surface — cards/panels. L2 raised — dialogs,
+     popovers, table heads. L3 input/well — inset fields, code, terminals.  */
   --canvas: #0a0e16;
   --surface: #111722;
   --surface-raised: #171f2d;
   --surface-input: #0d131d;
+  --surface-well: #080c13;
   --surface-hover: #1a2233;
   --nav: #0f141f;
+
+  /* Theme-aware overlays. These replace every `bg-white/[0.0x]` — a white
+     wash is invisible (or inverted) on a light surface, so overlays are
+     expressed as a mix of the foreground colour instead. */
+  --overlay-subtle: rgba(148, 163, 184, 0.035);
+  --overlay: rgba(148, 163, 184, 0.06);
+  --overlay-strong: rgba(148, 163, 184, 0.10);
+
+  /* --- Lines ------------------------------------------------------------ */
   --line: rgba(148, 163, 184, 0.14);
-  --line-strong: rgba(148, 163, 184, 0.25);
+  --line-strong: rgba(148, 163, 184, 0.26);
   --border: rgba(148, 163, 184, 0.14);
-  --border-strong: rgba(148, 163, 184, 0.25);
+  --border-strong: rgba(148, 163, 184, 0.26);
+
+  /* --- Text ------------------------------------------------------------- */
   --text: #f1f5f9;
   --text-subtle: #94a3b8;
   --text-muted: #64748b;
   --focus: #fb7185;
-  --success: #059669;
-  --success-subtle: rgba(5, 150, 105, 0.15);
-  --warning: #d97706;
-  --warning-subtle: rgba(217, 119, 6, 0.15);
-  --danger: #dc2626;
-  --danger-subtle: rgba(220, 38, 38, 0.15);
+
+  /* --- Status semantics -------------------------------------------------
+     Seven states, one vocabulary. `unknown` is deliberately NOT green and
+     NOT zero — an unreported reading must never read as healthy.         */
+  --ok: #10b981;
+  --ok-subtle: rgba(16, 185, 129, 0.12);
+  --ok-line: rgba(16, 185, 129, 0.30);
+  --warn: #f59e0b;
+  --warn-subtle: rgba(245, 158, 11, 0.12);
+  --warn-line: rgba(245, 158, 11, 0.30);
+  --danger: #f43f5e;
+  --danger-subtle: rgba(244, 63, 94, 0.12);
+  --danger-line: rgba(244, 63, 94, 0.30);
   --info: #38bdf8;
+  --info-subtle: rgba(56, 189, 248, 0.12);
+  --info-line: rgba(56, 189, 248, 0.30);
+  --unknown: #64748b;
+  --unknown-subtle: rgba(100, 116, 139, 0.10);
+  --unknown-line: rgba(100, 116, 139, 0.32);
+
+  /* Legacy status aliases — kept so existing `--success` callers keep working */
+  --success: #10b981;
+  --success-subtle: rgba(16, 185, 129, 0.12);
+  --warning: #f59e0b;
+  --warning-subtle: rgba(245, 158, 11, 0.12);
+
   --accent-violet: #8b5cf6;
-  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.3);
-  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.45);
-  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.6);
+
+  /* --- Elevation -------------------------------------------------------
+     Cards are near-flat: the hairline border carries the hierarchy, not a
+     drop shadow. Real elevation is reserved for things that float.       */
+  --shadow-flat: 0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.20);
+  --shadow-raised: 0 4px 16px rgba(0, 0, 0, 0.28);
+  --shadow-elevated: 0 4px 16px rgba(0, 0, 0, 0.28);
+  --shadow-popover: 0 12px 32px rgba(0, 0, 0, 0.42);
+  --shadow-dialog: 0 24px 64px rgba(0, 0, 0, 0.55);
+
+  /* --- Radius — four steps, nothing else ------------------------------- */
+  --radius-xs: 4px;
   --radius-sm: 6px;
   --radius: 8px;
   --radius-lg: 12px;
   --radius-full: 9999px;
-  --ink: #0B1118;
-  --steel: #1B2636;
-  --concrete: #8A9BA8;
-  --paper: #E6EDF3;
-  --phosphor: #FFB000;
-  --fault: #E63E2A;
+
+  /* --- Identity aliases (Industrial Terminal spec) --------------------- */
+  --ink: #0b1118;
+  --steel: #1b2636;
+  --concrete: #8a9ba8;
+  --paper: #e6edf3;
+  --phosphor: #ffb000;
+  --fault: #e63e2a;
 }
 
 [data-theme="light"] {
   color-scheme: light;
+
+  --brand: #dc2626;
+  --brand-hover: #b91c1c;
+  --brand-dark: #991b1b;
+  --brand-subtle: rgba(220, 38, 38, 0.07);
+  --brand-line: rgba(220, 38, 38, 0.28);
+
   --canvas: #f4f7fb;
   --surface: #ffffff;
-  --surface-raised: #eef2f7;
+  --surface-raised: #ffffff;
   --surface-input: #ffffff;
-  --surface-hover: #e2e8f0;
+  --surface-well: #f1f5f9;
+  --surface-hover: #eef2f7;
   --nav: #ffffff;
-  --line: rgba(15, 23, 42, 0.13);
-  --line-strong: rgba(15, 23, 42, 0.24);
-  --border: rgba(15, 23, 42, 0.13);
-  --border-strong: rgba(15, 23, 42, 0.24);
+
+  --overlay-subtle: rgba(15, 23, 42, 0.02);
+  --overlay: rgba(15, 23, 42, 0.04);
+  --overlay-strong: rgba(15, 23, 42, 0.07);
+
+  --line: rgba(15, 23, 42, 0.11);
+  --line-strong: rgba(15, 23, 42, 0.22);
+  --border: rgba(15, 23, 42, 0.11);
+  --border-strong: rgba(15, 23, 42, 0.22);
+
   --text: #0f172a;
   --text-subtle: #475569;
   --text-muted: #64748b;
   --focus: #dc2626;
-  --success: #059669;
-  --success-subtle: rgba(5, 150, 105, 0.15);
-  --warning: #d97706;
-  --warning-subtle: rgba(217, 119, 6, 0.15);
-  --danger: #dc2626;
-  --danger-subtle: rgba(220, 38, 38, 0.15);
-  --info: #0284c7;
-  --accent-violet: #7c3aed;
-  --shadow-card: 0 4px 24px rgba(0, 0, 0, 0.08);
-  --shadow-elevated: 0 8px 32px rgba(0, 0, 0, 0.12);
-  --shadow-dialog: 0 16px 48px rgba(0, 0, 0, 0.16);
-  --radius-sm: 6px;
-  --radius: 8px;
-  --radius-lg: 12px;
-  --radius-full: 9999px;
-  --ink: #0B1118;
-  --steel: #1B2636;
-  --concrete: #8A9BA8;
-  --paper: #E6EDF3;
-  --phosphor: #FFB000;
-  --fault: #E63E2A;
+
+  --ok: #047857;
+  --ok-subtle: rgba(4, 120, 87, 0.10);
+  --ok-line: rgba(4, 120, 87, 0.26);
+  --warn: #b45309;
+  --warn-subtle: rgba(180, 83, 9, 0.10);
+  --warn-line: rgba(180, 83, 9, 0.26);
+  --danger: #be123c;
+  --danger-subtle: rgba(190, 18, 60, 0.09);
+  --danger-line: rgba(190, 18, 60, 0.26);
+  --info: #0369a1;
+  --info-subtle: rgba(3, 105, 161, 0.09);
+  --info-line: rgba(3, 105, 161, 0.26);
+  --unknown: #64748b;
+  --unknown-subtle: rgba(100, 116, 139, 0.08);
+  --unknown-line: rgba(100, 116, 139, 0.30);
+
+  --success: #047857;
+  --success-subtle: rgba(4, 120, 87, 0.10);
+  --warning: #b45309;
+  --warning-subtle: rgba(180, 83, 9, 0.10);
+
+  --accent-violet: #6d28d9;
+
+  --shadow-flat: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-card: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --shadow-raised: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-elevated: 0 4px 16px rgba(15, 23, 42, 0.08);
+  --shadow-popover: 0 12px 32px rgba(15, 23, 42, 0.13);
+  --shadow-dialog: 0 24px 64px rgba(15, 23, 42, 0.18);
 }
+
+/* ==========================================================================
+   RESET / BASE
+   ========================================================================== */
 
 * { box-sizing: border-box; }
 html { min-height: 100%; background: var(--canvas); scroll-behavior: smooth; }
-body { min-height: 100vh; margin: 0; background: var(--canvas); color: var(--text); font-family: var(--font-sans), sans-serif; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; text-rendering: optimizeLegibility; }
-button, input, select, textarea { font: inherit; }
+body {
+  min-height: 100vh;
+  margin: 0;
+  background: var(--canvas);
+  color: var(--text);
+  font-family: var(--font-sans), system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  font-variant-ligatures: none;
+}
+button, input, select, textarea { font: inherit; color: inherit; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; }
 a { text-underline-offset: 3px; }
-::selection { background: color-mix(in srgb, var(--brand) 38%, transparent); color: white; }
-:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
-@media (prefers-reduced-motion: reduce) { *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; } }
+::selection { background: color-mix(in srgb, var(--brand) 38%, transparent); color: #fff; }
+
+/* One focus treatment for the entire product. */
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}
 
 @layer base {
   h1, h2, h3, h4, h5, h6 {
-    font-family: var(--font-sans), sans-serif;
+    font-family: var(--font-sans), system-ui, sans-serif;
+    font-weight: 650;
+    letter-spacing: -0.015em;
+    margin: 0;
   }
-  .font-display {
-    font-family: var(--font-display), var(--font-sans), sans-serif;
-  }
+  .font-display { font-family: var(--font-display), var(--font-sans), sans-serif; }
   code, pre, kbd, samp {
     font-family: var(--font-mono), ui-monospace, monospace;
+    font-variant-ligatures: none;
+    font-feature-settings: "zero" 1, "ss01" 1;
+  }
+  /* Technical values are tabular so columns of numbers align. */
+  .font-mono { font-variant-numeric: tabular-nums; }
+}
+
+/* ==========================================================================
+   COMPONENT LAYER
+   These class names are load-bearing across the app (ui-card: 100+ sites,
+   ui-button: 180+). Refine them here rather than restyling per call site.
+   ========================================================================== */
+
+@layer components {
+
+  /* --- Typography roles ----------------------------------------------- */
+
+  /* Uppercase micro-label: metric labels, table heads, section eyebrows. */
+  .t-eyebrow { @apply font-mono text-eyebrow font-semibold uppercase text-text-subtle; }
+  .t-meta { @apply text-meta text-text-subtle; }
+  .t-title { @apply text-title font-semibold text-text; }
+  .t-section { @apply text-sm font-semibold tracking-[-0.01em] text-text; }
+  .t-page { @apply text-2xl font-bold text-text sm:text-display; }
+  /* Numeric readout — metrics, counters, gauges. */
+  .t-readout { @apply font-mono text-2xl font-bold leading-none tabular-nums; }
+
+  /* --- Surfaces -------------------------------------------------------- */
+
+  .ui-surface { @apply rounded-lg border border-line bg-surface; }
+  .ui-card { @apply rounded-lg border border-line bg-surface p-4 shadow-card sm:p-5; }
+  .ui-card-header {
+    @apply flex items-start justify-between gap-4 border-b border-line bg-overlay-subtle px-4 py-3 sm:px-5;
+  }
+  .ui-well { @apply rounded-lg border border-line bg-well; }
+
+  /* --- Buttons ---------------------------------------------------------
+     Shared geometry + motion; the variant classes only carry colour.    */
+  .ui-button {
+    @apply inline-flex h-9 min-h-9 shrink-0 select-none items-center justify-center gap-1.5
+           whitespace-nowrap rounded-md border px-3.5 text-xs font-semibold tracking-[-0.005em]
+           text-text transition-[background-color,border-color,color,box-shadow,opacity] duration-150
+           disabled:pointer-events-none disabled:opacity-45;
+  }
+  .ui-button-primary {
+    @apply border-transparent bg-brand text-white shadow-flat hover:bg-brand-hover active:bg-brand-dark;
+  }
+  .ui-button-secondary {
+    @apply border-line bg-overlay text-text hover:border-line-strong hover:bg-overlay-strong;
+  }
+  .ui-button-danger {
+    @apply border-danger-line bg-danger-subtle text-danger hover:bg-[color-mix(in_srgb,var(--danger)_20%,transparent)];
+  }
+  .ui-button-ghost {
+    @apply border-transparent bg-transparent text-text-subtle hover:bg-overlay hover:text-text;
+  }
+  .ui-button-outline {
+    @apply border-line bg-transparent text-text hover:border-line-strong hover:bg-overlay;
+  }
+  .ui-icon-button {
+    @apply inline-grid h-9 w-9 shrink-0 place-items-center rounded-md border border-transparent
+           text-text-subtle transition-colors duration-150 hover:bg-overlay hover:text-text
+           disabled:pointer-events-none disabled:opacity-45;
+  }
+
+  /* --- Forms ----------------------------------------------------------- */
+
+  .ui-label { @apply block text-xs font-semibold text-text; }
+  .ui-input {
+    @apply block h-9 min-h-9 w-full rounded-md border border-line bg-surface-input px-3 text-xs
+           text-text outline-none transition-[border-color,box-shadow] duration-150
+           placeholder:text-text-muted hover:border-line-strong
+           focus:border-brand focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_22%,transparent)]
+           disabled:cursor-not-allowed disabled:bg-overlay-subtle disabled:text-text-muted;
+  }
+  .ui-input[aria-invalid="true"] {
+    @apply border-danger-line focus:border-danger focus:ring-[color-mix(in_srgb,var(--danger)_22%,transparent)];
+  }
+  .ui-hint { @apply text-meta text-text-subtle; }
+  .ui-field-error { @apply text-meta text-danger; }
+
+  /* --- Alerts ---------------------------------------------------------- */
+
+  .ui-alert { @apply flex items-start gap-2.5 rounded-lg border p-3 text-xs leading-5; }
+  .ui-alert-error { @apply border-danger-line bg-danger-subtle text-danger; }
+  .ui-alert-danger { @apply border-danger-line bg-danger-subtle text-danger; }
+  .ui-alert-warning { @apply border-warn-line bg-warn-subtle text-warn; }
+  .ui-alert-success { @apply border-ok-line bg-ok-subtle text-ok; }
+  .ui-alert-info { @apply border-info-line bg-info-subtle text-info; }
+
+  /* --- Badges & status -------------------------------------------------
+     Badge = a label. Status pill = a live state with a dot. Both are
+     square-ish (radius-sm), never fully rounded "arbitrary pills".      */
+  .ui-badge {
+    @apply inline-flex shrink-0 items-center gap-1 rounded-sm border px-1.5 py-0.5
+           font-mono text-eyebrow font-semibold uppercase tracking-[0.08em];
+  }
+  .ui-badge-neutral { @apply border-line bg-overlay text-text-subtle; }
+  .ui-badge-success { @apply border-ok-line bg-ok-subtle text-ok; }
+  .ui-badge-warning { @apply border-warn-line bg-warn-subtle text-warn; }
+  .ui-badge-danger { @apply border-danger-line bg-danger-subtle text-danger; }
+  .ui-badge-info { @apply border-info-line bg-info-subtle text-info; }
+  .ui-badge-brand { @apply border-brand-line bg-brand-subtle text-brand; }
+  .ui-badge-unknown { @apply border-dashed border-unknown-line bg-unknown-subtle text-unknown; }
+
+  .ui-status-pill {
+    @apply inline-flex shrink-0 items-center gap-1.5 rounded-sm border px-1.5 py-0.5
+           text-eyebrow font-semibold uppercase tracking-[0.08em];
+  }
+  .ui-status-pill-neutral { @apply border-line bg-overlay text-text-subtle; }
+  .ui-status-pill-success { @apply border-ok-line bg-ok-subtle text-ok; }
+  .ui-status-pill-warning { @apply border-warn-line bg-warn-subtle text-warn; }
+  .ui-status-pill-danger { @apply border-danger-line bg-danger-subtle text-danger; }
+  .ui-status-pill-info { @apply border-info-line bg-info-subtle text-info; }
+  .ui-status-pill-unknown { @apply border-dashed border-unknown-line bg-unknown-subtle text-unknown; }
+
+  /* --- Empty / loading / error ----------------------------------------- */
+
+  .ui-empty {
+    @apply flex flex-col items-center justify-center rounded-lg border border-dashed border-line
+           bg-overlay-subtle px-5 py-10 text-center;
+  }
+  .ui-empty-icon {
+    @apply grid h-10 w-10 place-items-center rounded-lg border border-line bg-overlay text-text-subtle;
+  }
+  .ui-skeleton { @apply animate-pulse rounded bg-overlay-strong; }
+
+  /* --- Table ----------------------------------------------------------
+     One density model. `.ui-table-compact` tightens rows for ops walls. */
+  .ui-table { @apply w-full border-separate border-spacing-0 text-left text-xs; }
+  .ui-th {
+    @apply sticky top-0 z-10 whitespace-nowrap border-b border-line bg-surface-raised px-3 py-2
+           font-mono text-eyebrow font-semibold uppercase tracking-[0.12em] text-text-subtle;
+  }
+  .ui-td { @apply border-b border-line px-3 py-2.5 align-middle text-text; }
+  .ui-tr-interactive {
+    @apply cursor-pointer transition-colors duration-100 hover:bg-overlay-subtle
+           focus-visible:bg-overlay-subtle focus-visible:outline-none;
+  }
+  .ui-table-compact .ui-td { @apply py-1.5; }
+  .ui-table-compact .ui-th { @apply py-1.5; }
+
+  /* --- Tabs ------------------------------------------------------------ */
+
+  .ui-tablist { @apply flex gap-0.5 overflow-x-auto border-b border-line; }
+  .ui-tab {
+    @apply relative inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap border-b-2
+           border-transparent px-3 py-2 text-xs font-semibold text-text-subtle
+           transition-colors duration-150 hover:text-text
+           disabled:pointer-events-none disabled:opacity-45;
+  }
+  .ui-tab[aria-selected="true"] { @apply border-brand text-text; }
+
+  /* --- Overlays -------------------------------------------------------- */
+
+  .ui-dialog-layer {
+    @apply fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/60 p-4 backdrop-blur-sm sm:p-6;
+    animation: forge-fade-in 140ms ease-out;
+  }
+  .ui-dialog {
+    @apply relative flex max-h-[86vh] w-full max-w-lg flex-col overflow-hidden rounded-lg
+           border border-line bg-surface-raised shadow-dialog;
+    animation: forge-dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .ui-dialog-header {
+    @apply flex items-start justify-between gap-4 border-b border-line bg-overlay-subtle px-5 py-4;
+  }
+  .ui-dialog-title { @apply text-title font-semibold text-text; }
+  .ui-dialog-description { @apply mt-1 text-xs text-text-subtle; }
+  .ui-dialog-body { @apply min-h-0 flex-1 overflow-y-auto px-5 py-4 text-xs leading-5 text-text; }
+  .ui-dialog-footer {
+    @apply flex flex-col-reverse items-stretch gap-2 border-t border-line bg-overlay-subtle
+           px-5 py-3.5 sm:flex-row sm:items-center sm:justify-end;
+  }
+
+  .ui-drawer-layer {
+    @apply fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-sm;
+    animation: forge-fade-in 140ms ease-out;
+  }
+  .ui-drawer {
+    @apply flex h-full w-full max-w-xl flex-col border-l border-line bg-surface shadow-dialog;
+    animation: forge-drawer-in 220ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .ui-popover {
+    @apply z-50 overflow-hidden rounded-lg border border-line bg-surface-raised p-1 shadow-popover;
+    animation: forge-pop-in 120ms ease-out;
+  }
+  .ui-menu-item {
+    @apply flex w-full cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-xs text-text
+           transition-colors duration-100 hover:bg-overlay
+           disabled:pointer-events-none disabled:opacity-45;
+  }
+  .ui-menu-item-danger { @apply text-danger hover:bg-danger-subtle; }
+
+  /* --- Toast ----------------------------------------------------------- */
+
+  .ui-toast-region {
+    @apply pointer-events-none fixed inset-x-4 top-4 z-[60] flex flex-col items-end gap-2 sm:left-auto sm:w-96;
+  }
+  .ui-toast {
+    @apply pointer-events-auto flex w-full items-start gap-2.5 rounded-lg border border-line
+           bg-surface-raised p-3 text-xs shadow-popover;
+    animation: forge-pop-in 160ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .ui-toast-success { @apply text-ok; }
+  .ui-toast-error { @apply text-danger; }
+  .ui-toast-info { @apply text-info; }
+  .ui-toast-warning { @apply text-warn; }
+  .ui-toast-loading { @apply text-info; }
+
+  /* --- Code & terminal -------------------------------------------------
+     The console is a first-class Forge surface: darkest well, phosphor
+     accent, mono, no rounded-pill chrome.                               */
+  .ui-code-inline {
+    @apply rounded-sm border border-line bg-surface-input px-1 py-0.5 font-mono text-meta text-text;
+  }
+  .ui-code-block {
+    @apply overflow-x-auto rounded-lg border border-line bg-well p-3 font-mono text-meta
+           leading-5 text-text;
+  }
+  .ui-terminal {
+    @apply overflow-hidden rounded-lg border border-line bg-well font-mono text-meta leading-[1.6];
+  }
+  .ui-terminal-body { @apply overflow-y-auto whitespace-pre-wrap break-words p-3 text-text; }
+  .ui-kbd {
+    @apply inline-flex min-w-[1.4rem] items-center justify-center rounded-sm border border-line
+           bg-overlay px-1 py-px font-mono text-eyebrow font-semibold text-text-subtle;
+  }
+
+  /* --- Misc ------------------------------------------------------------ */
+
+  .ui-separator { @apply h-px w-full shrink-0 border-0 bg-line; }
+  .ui-toolbar {
+    @apply flex flex-col gap-2 rounded-lg border border-line bg-overlay-subtle p-2
+           sm:flex-row sm:flex-wrap sm:items-center;
+  }
+  /* Live-data indicator. Used by the shell and page headers only. */
+  .ui-pulse { @apply relative inline-flex h-1.5 w-1.5 shrink-0; }
+  .ui-pulse::before {
+    @apply absolute inline-flex h-full w-full rounded-full bg-current opacity-60;
+    content: "";
+    animation: forge-ping 1.8s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+  .ui-pulse::after {
+    @apply relative inline-flex h-1.5 w-1.5 rounded-full bg-current;
+    content: "";
   }
 }
 
-@layer components {
-  .ui-button { @apply inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border px-4 py-2 text-sm font-semibold tracking-[-0.01em] text-[var(--text)] transition-[background-color,border-color,color,box-shadow,transform] duration-150 disabled:pointer-events-none disabled:opacity-50; }
-  .ui-button-primary { @apply border-red-500/70 bg-[var(--brand)] text-white shadow-sm shadow-red-950/40 hover:-translate-y-px hover:bg-[var(--brand-hover)] hover:shadow-md hover:shadow-red-950/30; }
-  .ui-button-secondary { @apply border-[var(--line)] bg-white/[0.04] text-[var(--text)] hover:border-[var(--line-strong)] hover:bg-white/[0.08] hover:text-[var(--text)]; }
-  .ui-button-danger { @apply border-red-500/30 bg-red-500/10 text-red-300 hover:bg-red-500/20; }
-  .ui-button-ghost { @apply border-transparent bg-transparent text-[var(--text-subtle)] shadow-none hover:bg-white/[0.06] hover:text-[var(--text)]; }
-  .ui-icon-button { @apply inline-grid h-9 w-9 shrink-0 place-items-center rounded-lg text-[var(--text-subtle)] transition hover:bg-white/[0.07] hover:text-[var(--text)]; }
-  .ui-label { @apply block text-sm font-medium text-[var(--text)]; }
-  .ui-input { @apply block min-h-11 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3.5 text-sm text-[var(--text)] shadow-inner shadow-black/10 outline-none transition placeholder:text-[var(--text-subtle)] hover:border-[var(--line-strong)] focus:border-[var(--brand)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)] disabled:cursor-not-allowed disabled:bg-white/[0.03] disabled:text-[var(--text-subtle)]; }
-  .ui-input[aria-invalid="true"] { @apply border-red-400/70 focus:border-red-400 focus:ring-red-500/20; }
-  .ui-hint { @apply text-xs leading-5 text-[var(--text-subtle)]; }
-  .ui-field-error { @apply text-xs leading-5 text-red-300; }
-  .ui-card { @apply rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-4 shadow-[0_12px_30px_rgba(0,0,0,0.14)] sm:p-5; }
-  .ui-card-header { @apply flex items-start justify-between gap-4 border-b border-[var(--line)] bg-white/[0.018] px-5 py-4 sm:px-6; }
-  .ui-alert { @apply flex items-start gap-3 rounded-lg border p-3.5 leading-6; }
-  .ui-alert-error { @apply border-red-500/25 bg-red-500/[0.09] text-red-200; }
-  .ui-alert-warning { @apply border-amber-500/25 bg-amber-500/[0.09] text-amber-200; }
-  .ui-alert-success { @apply border-emerald-500/25 bg-emerald-500/[0.09] text-emerald-200; }
-  .ui-alert-info { @apply border-sky-500/20 bg-sky-500/[0.07] text-sky-200; }
-  .ui-badge { @apply inline-flex shrink-0 items-center rounded-full border px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider; }
-  .ui-badge-neutral { @apply border-slate-500/30 bg-slate-500/10 text-slate-300; }
-  .ui-badge-success { @apply border-emerald-500/30 bg-emerald-500/10 text-emerald-300; }
-  .ui-badge-warning { @apply border-amber-500/30 bg-amber-500/10 text-amber-300; }
-  .ui-badge-danger { @apply border-red-500/30 bg-red-500/10 text-red-300; }
-  .ui-empty { @apply flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--line)] bg-black/10 px-5 py-10 text-center; }
-  .ui-empty-icon { @apply grid h-10 w-10 place-items-center rounded-full bg-white/[0.05] text-[var(--text-subtle)]; }
-  .ui-dialog-layer { @apply fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/70 p-4 backdrop-blur-md sm:p-6; animation: forge-dialog-fade 160ms ease-out; }
-  .ui-dialog { @apply relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-dialog)]; animation: forge-dialog-in 180ms cubic-bezier(0.16, 1, 0.3, 1); }
-  .ui-dialog-header { @apply flex items-start justify-between gap-4 border-b border-[var(--line)] bg-white/[0.015] px-6 pb-4 pt-5; }
-  .ui-dialog-title { @apply text-[15px] font-bold tracking-tight text-[var(--text)]; }
-  .ui-dialog-description { @apply mt-1 text-[13px] leading-5 text-[var(--text-subtle)]; }
-  .ui-dialog-body { @apply min-h-0 flex-1 overflow-y-auto px-6 py-5 text-sm leading-6 text-[var(--text)]; }
-  .ui-toast-region { @apply pointer-events-none fixed inset-x-4 top-4 z-[60] flex flex-col items-end gap-2 sm:left-auto sm:w-96; }
-  .ui-toast { @apply pointer-events-auto flex w-full items-start gap-3 rounded-xl border border-[var(--line)] bg-[color-mix(in_srgb,var(--surface-raised)_95%,transparent)] p-4 shadow-2xl backdrop-blur; }
-  .ui-toast-success { @apply text-emerald-400; }
-  .ui-toast-error { @apply text-red-400; }
-  .ui-toast-info { @apply text-sky-400; }
-  .ui-toast-warning { @apply text-amber-400; }
-  .ui-toast-loading { @apply text-sky-400; }
-  .ui-status-pill { @apply inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider; }
-  .ui-status-pill-neutral { @apply border-slate-500/30 bg-slate-500/10 text-slate-300; }
-  .ui-status-pill-success { @apply border-emerald-500/30 bg-emerald-500/10 text-emerald-300; }
-  .ui-status-pill-warning { @apply border-amber-500/30 bg-amber-500/10 text-amber-300; }
-  .ui-status-pill-danger { @apply border-rose-500/30 bg-rose-500/10 text-rose-300; }
-  .ui-status-pill-info { @apply border-sky-500/30 bg-sky-500/10 text-sky-300; }
+/* ==========================================================================
+   MOTION
+   ========================================================================== */
+
+@keyframes forge-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes forge-dialog-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.985); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes forge-drawer-in {
+  from { transform: translateX(16px); opacity: 0; }
+  to { transform: none; opacity: 1; }
+}
+@keyframes forge-pop-in {
+  from { opacity: 0; transform: translateY(-4px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes forge-ping {
+  75%, 100% { transform: scale(2.4); opacity: 0; }
 }
 
-@keyframes forge-dialog-fade { from { opacity: 0; } to { opacity: 1; } }
-@keyframes forge-dialog-in { from { opacity: 0; transform: translateY(8px) scale(0.97); } to { opacity: 1; transform: none; } }
+/* ==========================================================================
+   AUTH SHELL
+   ========================================================================== */
 
-.auth-shell { min-height: 100vh; min-height: 100svh; background-color: var(--canvas); background-position: center; background-size: cover; }
+.auth-shell { min-height: 100vh; min-height: 100svh; background-color: var(--canvas); }
 .auth-grid { display: grid; min-height: inherit; }
 .auth-brand-panel { display: none; }
-.auth-form-panel { display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; background: radial-gradient(circle at 80% 10%, color-mix(in srgb, var(--brand) 9%, transparent), transparent 28%); }
+.auth-form-panel { display: flex; align-items: center; justify-content: center; padding: 2rem 1.25rem; }
 .auth-brand-mark { display: flex; align-items: center; gap: .75rem; }
 @media (min-width: 1024px) {
-  .auth-grid { grid-template-columns: minmax(360px, 44%) 1fr; }
-  .auth-brand-panel { display: flex; min-height: 100vh; flex-direction: column; justify-content: space-between; border-right: 1px solid var(--line); padding: 3rem clamp(2.5rem, 6vw, 6rem); background: linear-gradient(145deg, color-mix(in srgb, var(--surface) 86%, transparent), color-mix(in srgb, var(--canvas) 97%, transparent)); }
+  .auth-grid { grid-template-columns: minmax(360px, 42%) 1fr; }
+  .auth-brand-panel {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+    justify-content: space-between;
+    border-right: 1px solid var(--line);
+    padding: 3rem clamp(2.5rem, 6vw, 6rem);
+    background: var(--surface);
+  }
   .auth-form-panel { padding: 3rem; }
 }
 
-::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-track { background: var(--canvas); }
-::-webkit-scrollbar-thumb { border: 2px solid var(--canvas); border-radius: 999px; background: color-mix(in srgb, var(--text-subtle) 25%, transparent); }
+/* ==========================================================================
+   SCROLLBARS
+   ========================================================================== */
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background-clip: content-box;
+  background-color: color-mix(in srgb, var(--text-subtle) 28%, transparent);
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in srgb, var(--text-subtle) 45%, transparent);
+}
+::-webkit-scrollbar-corner { background: transparent; }

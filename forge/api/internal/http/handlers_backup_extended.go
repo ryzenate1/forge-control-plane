@@ -140,16 +140,6 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		return c.JSON(fiber.Map{"ok": true, "locked": false})
 	})
 
-	protected.Post("/servers/:id/backups/cleanup", mutationLimiter, requireRole("admin"), requireAdminScope("backups.write"), func(c *fiber.Ctx) error {
-		ctx, cancel := requestContext()
-		defer cancel()
-		count, err := svc.CleanupExpiredBackups(ctx)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		return c.JSON(fiber.Map{"ok": true, "cleaned": count})
-	})
-
 	protected.Get("/backup/providers", requireRole("admin"), func(c *fiber.Ctx) error {
 		providers := backup.RegisteredProviders()
 		return c.JSON(fiber.Map{"providers": providers})
@@ -166,6 +156,23 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		}
 		return claims.Sub, nil
 	}
+
+	// Retention sweep across every backup policy in the installation. This used
+	// to be registered on POST /servers/:id/backups/cleanup, which was wrong
+	// twice over: the handler ignores :id and deletes expired backups for all
+	// servers, and handlers_servers.go already claims that path for the real
+	// per-server cleanup — so in registration order this copy could never run.
+	// The scheduler calls the same service method (schedule_runner.go), this is
+	// the manual trigger for it.
+	adminBackups.Post("/cleanup", mutationLimiter, requireAdminScope("backups.write"), func(c *fiber.Ctx) error {
+		ctx, cancel := requestContext()
+		defer cancel()
+		count, err := svc.CleanupExpiredBackups(ctx)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.JSON(fiber.Map{"ok": true, "cleaned": count})
+	})
 
 	adminBackups.Get("/configs", func(c *fiber.Ctx) error {
 		configs, _, err := adminSvc.ListBackupConfigs(c.UserContext(), backup.BackupConfigFilter{

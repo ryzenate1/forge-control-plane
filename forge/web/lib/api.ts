@@ -5,7 +5,7 @@ export * from './api/auth';
 export * from './api/mounts';
 export * from './api/files';
 export {
-  listBackupProviders, listBackupPolicies, createBackupPolicy, deleteBackupPolicy, triggerBackup, cleanupExpiredBackups, lockBackupPolicy, unlockBackupPolicy,
+  listBackupProviders, listBackupPolicies, createBackupPolicy, deleteBackupPolicy, triggerBackup, cleanupServerBackups, lockBackupPolicy, unlockBackupPolicy,
   type BackupPolicy, type BackupPolicyConfig, type BackupProvider, type BackupProvidersResponse, type BackupPoliciesResponse,
 } from './api/backup';
 export * from './api/backup-engine';

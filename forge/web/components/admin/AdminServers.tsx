@@ -1038,6 +1038,9 @@ function ServerAboutTab({ server, users, nodes, allocations, setTab }: { server:
   const live = statsQuery.isSuccess && Boolean(stats);
   const memPct = stats ? pctOf(stats.memoryBytes, stats.memoryLimit) : null;
   const diskPct = stats ? pctOf(stats.diskBytes, stats.diskLimit) : null;
+  // Uptime is only knowable while the workload is running and the node reported
+  // a start time. Anything else is unknown, not zero.
+  const uptimeSeconds = live && stats && typeof stats.uptimeMs === "number" ? Math.floor(stats.uptimeMs / 1000) : null;
 
   const startupVars = startupQuery.data?.variables ?? [];
   const startupValue = (matcher: RegExp): string | null => {
@@ -1067,7 +1070,9 @@ function ServerAboutTab({ server, users, nodes, allocations, setTab }: { server:
       trend: samples.map((s) => s.mem), bar: live ? memPct : null },
     { key: "disk", title: "Disk", icon: Database, color: chart.lightOrange, iconClass: "text-orange-400", valueClass: "text-orange-300",
       value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
-      sub: live && stats ? `${fmtBytes(stats.diskBytes)} / ${fmtBytes(stats.diskLimit)}` : statsQuery.isLoading ? "…" : "Offline",
+      sub: live && stats && stats.diskBytes !== undefined && stats.diskLimit !== undefined
+        ? `${fmtBytes(stats.diskBytes)} / ${fmtBytes(stats.diskLimit)}`
+        : live ? "Not reported by node" : statsQuery.isLoading ? "…" : "Offline",
       live,
       trend: samples.map((s) => s.disk), bar: live ? diskPct : null },
     { key: "network", title: "Network", icon: Network, color: chart.lightCyan, iconClass: "text-cyan-400", valueClass: "text-cyan-300",
@@ -1148,8 +1153,8 @@ function ServerAboutTab({ server, users, nodes, allocations, setTab }: { server:
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
               <dt className="text-slate-500">Uptime</dt>
-              <dd className="font-mono text-slate-200" title={live && stats ? `Beacon-reported uptime: ${stats.uptime}s` : undefined}>
-                {live && stats ? uptimeLabel(stats.uptime) : "—"}
+              <dd className="font-mono text-slate-200" title={uptimeSeconds != null ? `Node-reported uptime: ${uptimeSeconds}s` : undefined}>
+                {uptimeSeconds != null ? uptimeLabel(uptimeSeconds) : live ? "Not reported by node" : "—"}
               </dd>
             </div>
           </dl>

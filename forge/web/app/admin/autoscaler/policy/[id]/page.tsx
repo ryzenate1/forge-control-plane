@@ -110,7 +110,6 @@ export default function AdminPolicyDetailPage() {
         sub={`Created ${new Date(policy.createdAt).toLocaleDateString()}`}
         backAction={() => router.push('/admin/autoscaler')}
         backLabel="Auto-Scaler"
-        breadcrumb={`Automation / Auto-Scaler / Policy ${policy.serverId}`}
         action={
           <div className="flex gap-2">
             <Btn

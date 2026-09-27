@@ -22,8 +22,8 @@ type scheduleRunner struct {
 	running  bool
 	lastTick time.Time
 	lastErr  string
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
 
 	// lastRetention gates the once-daily metrics-retention sweep. It is only
 	// touched from tick (single goroutine), so it needs no lock.
@@ -257,21 +257,25 @@ func (r *scheduleRunner) runBackupCleanup(ctx context.Context) {
 		return
 	}
 
+	// A retention sweep is best-effort per backup: it reports how many it
+	// actually deleted alongside an error describing whatever failed. Log the
+	// failures instead of swallowing them, and keep going — invitation cleanup
+	// below is independent work that used to be skipped whenever a single
+	// backup deletion failed.
 	if r.cfg.BackupSvc != nil {
 		deleted, err := r.cfg.BackupSvc.CleanupExpiredBackups(ctx)
 		if err != nil {
-			return
+			r.cfg.Logger.Error("backup retention sweep incomplete", "deleted", deleted, "error", err.Error())
 		}
-		_ = deleted
 	} else {
-		deleted, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup)
-		if err != nil {
-			return
+		if _, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup); err != nil {
+			r.cfg.Logger.Error("backup retention sweep failed", "error", err.Error())
 		}
-		_ = deleted
 	}
 
-	_, _ = r.cfg.Store.CleanupExpiredInvitations(ctx)
+	if _, err := r.cfg.Store.CleanupExpiredInvitations(ctx); err != nil {
+		r.cfg.Logger.Error("expired invitation cleanup failed", "error", err.Error())
+	}
 }
 
 // runBackupPrune fails backups stuck in pending/running state past the configured threshold

@@ -177,11 +177,6 @@ export function acceptInvitation(token: string): Promise<void> {
   return postJSON<void>("/tenancy/invitations/accept", { token });
 }
 
-/** @deprecated Use acceptInvitation which now targets /tenancy/invitations/accept */
-export function acceptInvitationLegacy(token: string): Promise<void> {
-  return postJSON<void>("/invitations/accept", { token });
-}
-
 export function revokeInvitation(orgId: string, invId: string): Promise<void> {
   return deleteJSON<void>(`/organizations/${encodeURIComponent(orgId)}/invitations/${encodeURIComponent(invId)}`);
 }

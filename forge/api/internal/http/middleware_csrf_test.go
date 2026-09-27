@@ -150,6 +150,13 @@ func TestCSRFMiddleware_OriginEnforcement(t *testing.T) {
 		{name: "cross-origin", origin: "https://evil.example.com", wantCode: http.StatusForbidden, wantBody: "invalid Origin"},
 		{name: "matching origin", origin: panelOrigin, wantCode: http.StatusNoContent},
 		{name: "fetch-site fallback", fetchSite: "same-origin", wantCode: http.StatusNoContent},
+		{name: "fetch-site same-site", fetchSite: "same-site", wantCode: http.StatusNoContent},
+		{name: "fetch-site strict-same-origin", fetchSite: "strict-same-origin", wantCode: http.StatusNoContent},
+		// Regression: the fallback accepted any non-empty Sec-Fetch-Site, so a
+		// request that announced itself as cross-site passed the origin check.
+		{name: "fetch-site cross-site", fetchSite: "cross-site", wantCode: http.StatusForbidden, wantBody: "missing Origin header"},
+		{name: "fetch-site none", fetchSite: "none", wantCode: http.StatusForbidden, wantBody: "missing Origin header"},
+		{name: "fetch-site garbage", fetchSite: "not-a-real-value", wantCode: http.StatusForbidden, wantBody: "missing Origin header"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

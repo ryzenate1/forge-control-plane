@@ -64,14 +64,89 @@ export async function sendServerCommand(
   });
 }
 
+export type PowerSignal = 'start' | 'stop' | 'restart' | 'kill';
+
+/**
+ * The API accepts a power signal by dispatching a durable operation and answers
+ * with its id. Accepted means queued — never completed — so the id is required
+ * to report real progress instead of assuming the workload obeyed.
+ */
+export type PowerDispatch = {
+  serverId: string;
+  signal: string;
+  accepted: boolean;
+  mode?: 'durable' | 'queued' | string;
+  operationId?: string;
+};
+
 export async function sendPowerSignal(
   serverId: string,
-  signal: 'start' | 'stop' | 'restart' | 'kill',
-): Promise<{ serverId: string; signal: string; accepted: boolean }> {
-  return postJSON<{ serverId: string; signal: string; accepted: boolean }>(
+  signal: PowerSignal,
+): Promise<PowerDispatch> {
+  return postJSON<PowerDispatch>(
     `/servers/${encodeURIComponent(serverId)}/power`,
     { signal },
   );
+}
+
+/**
+ * Progress of a dispatched operation. `GET /operations/:id` serves either an
+ * operation record or a queue job, and the two use different status words; the
+ * raw status is preserved alongside the normalized one so nothing is invented.
+ */
+export type OperationProgressStatus = 'pending' | 'running' | 'succeeded' | 'failed' | 'cancelled' | 'unknown';
+
+export type OperationProgress = {
+  id: string;
+  status: OperationProgressStatus;
+  rawStatus: string;
+  error?: string;
+  startedAt?: string;
+  completedAt?: string;
+  terminal: boolean;
+};
+
+function normalizeOperationStatus(raw: string): OperationProgressStatus {
+  switch (raw) {
+    case 'queued':
+    case 'pending':
+      return 'pending';
+    case 'running':
+    case 'retrying':
+      return 'running';
+    case 'succeeded':
+    case 'completed':
+      return 'succeeded';
+    case 'failed':
+      return 'failed';
+    case 'cancelled':
+      return 'cancelled';
+    default:
+      // An unrecognised status is reported as unknown. Guessing "succeeded"
+      // here would claim an operation finished that may still be running.
+      return 'unknown';
+  }
+}
+
+export async function fetchOperation(operationId: string): Promise<OperationProgress> {
+  const raw = await fetchJSON<{
+    id?: string;
+    status?: string;
+    error?: string;
+    startedAt?: string;
+    completedAt?: string;
+  }>(`/operations/${encodeURIComponent(operationId)}`);
+  const rawStatus = raw.status ?? '';
+  const status = normalizeOperationStatus(rawStatus);
+  return {
+    id: raw.id ?? operationId,
+    status,
+    rawStatus,
+    error: raw.error,
+    startedAt: raw.startedAt,
+    completedAt: raw.completedAt,
+    terminal: status === 'succeeded' || status === 'failed' || status === 'cancelled',
+  };
 }
 
 export async function reinstallServer(serverId: string): Promise<{ accepted: boolean }> {

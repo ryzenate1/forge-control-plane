@@ -49,9 +49,15 @@ func csrfMiddleware(cfg SessionCookieConfig) fiber.Handler {
 		panelOrigin := c.Locals("panelOrigin")
 		if panelOriginStr, ok := panelOrigin.(string); ok && panelOriginStr != "" {
 			if origin == "" {
-				// Origin header required for cookie-session mutations
-				fetchSite := c.Get("Sec-Fetch-Site")
-				if fetchSite == "" {
+				// No Origin: fall back to Sec-Fetch-Site, which only vouches
+				// for the request when the browser says it came from our own
+				// site. Accepting any non-empty value (the previous behaviour)
+				// let a request that explicitly announced itself as
+				// "cross-site" satisfy the check — see
+				// publicMutationOriginCheck below for the same rule.
+				switch c.Get("Sec-Fetch-Site") {
+				case "same-origin", "same-site", "strict-same-origin":
+				default:
 					return fiber.NewError(fiber.StatusForbidden, "missing Origin header")
 				}
 			} else if origin != panelOriginStr {

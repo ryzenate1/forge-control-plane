@@ -9,6 +9,7 @@ import { useToast } from "@/components/ui/toast";
 import { DBContainerCreateModal } from "./container-create-modal";
 import { DBContainerCredentialsModal } from "./container-credentials-modal";
 import { statusTone } from "@/lib/api/status";
+import { StatusDot } from "@/components/ui/primitives";
 import { DbStatCards, type DbStat } from "./databases-overview";
 
 function fmtDate(iso?: string): string {
@@ -19,14 +20,7 @@ function fmtDate(iso?: string): string {
 }
 
 function ContainerStatusDot({ status }: { status: string }) {
-  const tone = statusTone(status);
-  const color = tone === "green" ? "bg-emerald-400" : tone === "yellow" ? "bg-amber-400" : tone === "red" ? "bg-red-400" : tone === "blue" ? "bg-sky-400" : "bg-slate-500";
-  const text = tone === "green" ? "text-emerald-300" : tone === "yellow" ? "text-amber-300" : tone === "red" ? "text-red-300" : tone === "blue" ? "text-sky-300" : "text-slate-300";
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold capitalize ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${color}`} />{status}
-    </span>
-  );
+  return <StatusDot status={status} tone={statusTone(status)} />;
 }
 
 function ContainerActions({ db, onRestart, onBackup, onDelete, onShowCreds, isPending }: {

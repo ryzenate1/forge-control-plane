@@ -31,8 +31,8 @@ import {
   type as typeTokens,
   space,
   motion,
-  statusTones,
 } from "@/lib/design-tokens";
+import { forgeStatusTones, toneStyles } from "@/components/ui/forge/status";
 import { GenerationFencedDots, StateLanesBadge, ServerStateLaneBadge, NodeStateLaneBadge } from "@/components/shared/generation-fenced-dot";
 
 // ---------------------------------------------------------------------------
@@ -143,8 +143,28 @@ describe("design tokens: semantic groups exist", () => {
     expect(colors.canvas).toBe("#0a0e16");
   });
 
-  it("statusTones covers 6-tone scale", () => {
-    expect(statusTones).toEqual(["neutral", "success", "warning", "danger", "info", "blue"]);
+  it("the status vocabulary is the canonical seven, and every one has styles", () => {
+    expect(forgeStatusTones).toEqual([
+      "ok",
+      "warn",
+      "danger",
+      "info",
+      "pending",
+      "neutral",
+      "unknown",
+    ]);
+    for (const tone of forgeStatusTones) {
+      expect(toneStyles[tone]).toBeDefined();
+    }
+  });
+
+  it("unknown is visually distinct from every other tone", () => {
+    // A reading we do not have must not look like one we do. The dashed edge
+    // is what separates "no reading" from the solid chips around it.
+    expect(toneStyles.unknown.chip).toContain("border-dashed");
+    for (const tone of forgeStatusTones.filter((t) => t !== "unknown")) {
+      expect(toneStyles[tone].chip).not.toContain("border-dashed");
+    }
   });
 
   it("spacing uses 4pt grid", () => {

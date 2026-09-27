@@ -1,0 +1,612 @@
+"use client";
+
+/**
+ * Admin Monitoring — depth on live host telemetry over time.
+ *
+ * Overview answers "is anything wrong"; Health answers "which subsystem";
+ * Monitoring answers "what have the hosts actually been doing". It owns the
+ * time-series view and nothing else: the duplicate System Health and Recent
+ * Activity panels that used to live here belong to Health and Overview, and
+ * duplicating them meant three panels making three claims from three caches.
+ *
+ * Truthfulness rules specific to this page:
+ *
+ *   - Fleet-wide history is a client-side fan-out, because the control plane
+ *     only serves history per node (`GET /monitoring/nodes/metrics` returns the
+ *     latest row per node when `nodeId` is omitted and ignores `limit`/`since`).
+ *     A fan-out that partly failed says so; it does not present a partial fleet
+ *     as the fleet.
+ *   - An empty series draws real axes and an overlay, never a line at zero.
+ *   - "No telemetry" is not "degraded". A fleet that has never reported is
+ *     unknown, and the page says which endpoint would populate it.
+ *   - Every series here is a reported percentage. No metric is synthesised
+ *     from another (the previous build invented a "network %" by scaling bytes
+ *     by an arbitrary constant), and no KPI carries a delta or sparkline that
+ *     is not backed by the series on screen.
+ */
+
+import React, { useMemo, useState } from "react";
+import Link from "next/link";
+import { Activity, Boxes, Download, Server } from "lucide-react";
+
+import {
+  AdminPageHeader,
+  AdminSection,
+  AdminSelect,
+  AdminTBody,
+  AdminTable,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminToolbar,
+  AdminTr,
+  Btn,
+  Pill,
+} from "@/components/admin/admin-ui";
+import {
+  DataState,
+  MetricSeriesChart,
+  MetricTile,
+  NodeTelemetryTable,
+  PanelCard,
+  PartialFleetNotice,
+  Reading,
+  SourceRibbon,
+  type NamedSource,
+  type SeriesPoint,
+} from "@/components/admin/telemetry-ui";
+import {
+  FLEET_HISTORY_NODE_CAP,
+  REFRESH,
+  fleetAverage,
+  indexLatestByNode,
+  mbLabel,
+  percentLabel,
+  relativeTime,
+  sourceState,
+  summaryIsTrustworthy,
+  useAdminOperationalRefresh,
+  useLatestNodeMetricsQuery,
+  useMonitoringSummaryQuery,
+  useNodeMetricsHistoryQuery,
+  useNodesQuery,
+  useRefreshOnVisible,
+  useServersQuery,
+  type MetricPeriod,
+  type NodeMetrics,
+} from "@/lib/admin/telemetry";
+import type { ApiServer } from "@/lib/api/types";
+
+const PERIODS: Array<{ value: MetricPeriod; label: string }> = [
+  { value: "1h", label: "Last hour" },
+  { value: "6h", label: "Last 6 hours" },
+  { value: "24h", label: "Last 24 hours" },
+  { value: "7d", label: "Last 7 days" },
+  { value: "30d", label: "Last 30 days" },
+];
+
+const PERIOD_LABEL: Record<MetricPeriod, string> = {
+  "1h": "1 hour",
+  "6h": "6 hours",
+  "24h": "24 hours",
+  "7d": "7 days",
+  "30d": "30 days",
+};
+
+export function AdminMonitoring() {
+  useRefreshOnVisible();
+  const refresh = useAdminOperationalRefresh();
+
+  const [period, setPeriod] = useState<MetricPeriod>("24h");
+  const [selectedNode, setSelectedNode] = useState<string | null>(null);
+
+  const nodesQuery = useNodesQuery();
+  const serversQuery = useServersQuery();
+  const latestQuery = useLatestNodeMetricsQuery();
+  const summaryQuery = useMonitoringSummaryQuery();
+
+  const nodes = nodesQuery.data ?? [];
+  const servers = serversQuery.data ?? [];
+
+  const historyQuery = useNodeMetricsHistoryQuery(period, selectedNode, nodes, nodes.length > 0);
+
+  const nodesState = sourceState(nodesQuery, REFRESH.inventory);
+  const serversState = sourceState(serversQuery, REFRESH.inventory);
+  const latestState = sourceState(latestQuery, REFRESH.telemetry);
+  const historyState = sourceState(historyQuery, REFRESH.history);
+  const summaryState = sourceState(summaryQuery, REFRESH.telemetry);
+
+  const latestByNode = useMemo(() => indexLatestByNode(latestQuery.data), [latestQuery.data]);
+  const nodeNames = useMemo(
+    () => new Map(nodes.map((node) => [node.id, node.name] as const)),
+    [nodes],
+  );
+
+  const history = historyQuery.data;
+  const points = useMemo(() => bucketSeries(history?.rows ?? [], period), [history?.rows, period]);
+  const hasSeries = points.length > 0;
+
+  // The summary endpoint returns an all-zero payload when the API's
+  // observability service is not wired. Corroborate against inventory before
+  // rendering any of its counters as real numbers.
+  const summaryUsable =
+    summaryState.status === "ready" &&
+    summaryIsTrustworthy(summaryQuery.data, { nodeCount: nodes.length, serverCount: servers.length });
+
+  const sources: NamedSource[] = [
+    { label: "Nodes", state: nodesState },
+    { label: "Latest metrics", state: latestState },
+    { label: `History (${PERIOD_LABEL[period]})`, state: historyState },
+    { label: "Summary", state: summaryState },
+  ];
+
+  const busy = [nodesQuery, latestQuery, historyQuery, summaryQuery].some((query) => query.isFetching);
+  const scopeLabel = selectedNode ? (nodeNames.get(selectedNode) ?? selectedNode) : "All nodes";
+
+  return (
+    <>
+      <AdminPageHeader
+        action={
+          <div className="flex items-center gap-2">
+            <Btn loading={busy} onClick={refresh} size="sm" tone="ghost">
+              Refresh
+            </Btn>
+            <Link href="/admin/health">
+              <Btn size="sm" tone="subtle">
+                Health
+              </Btn>
+            </Link>
+          </div>
+        }
+        description="Host telemetry reported by Beacon agents, over time."
+        hideLiveBadge
+        title="Monitoring"
+      />
+
+      <SourceRibbon sources={sources} />
+
+      <AdminToolbar>
+        <div className="sm:w-52">
+          <AdminSelect
+            label="Period"
+            onChange={(value) => setPeriod(value as MetricPeriod)}
+            options={PERIODS}
+            value={period}
+          />
+        </div>
+        <div className="sm:w-64">
+          <AdminSelect
+            disabled={nodesState.status !== "ready" || nodes.length === 0}
+            label="Scope"
+            onChange={(value) => setSelectedNode(value === "" ? null : value)}
+            options={[
+              { value: "", label: "All nodes (fan-out)" },
+              ...nodes.map((node) => ({ value: node.id, label: node.name })),
+            ]}
+            value={selectedNode ?? ""}
+          />
+        </div>
+        <div className="flex items-end gap-2 sm:ml-auto">
+          <Btn
+            disabled={!hasSeries}
+            onClick={() => downloadCsv(history?.rows ?? [], nodeNames, period)}
+            size="sm"
+            title={hasSeries ? "Export the plotted rows as CSV" : "Nothing to export — no rows reported"}
+            tone="subtle"
+          >
+            <Download size={13} />
+            Export CSV
+          </Btn>
+        </div>
+      </AdminToolbar>
+
+      {historyState.status === "ready" && !hasSeries ? <NoTelemetryBanner period={period} /> : null}
+
+      <AdminSection
+        description={`Reported CPU, memory and disk for ${scopeLabel.toLowerCase() === "all nodes" ? "every node that reported" : scopeLabel}, over the last ${PERIOD_LABEL[period]}.`}
+        title="Utilisation over time"
+      >
+        {history ? (
+          <PartialFleetNotice
+            failedNodeIds={history.failedNodeIds}
+            nodeNames={nodeNames}
+            skippedNodeIds={history.skippedNodeIds}
+          />
+        ) : null}
+
+        <PanelCard
+          description={
+            selectedNode
+              ? "GET /monitoring/nodes/metrics?nodeId=…"
+              : `GET /monitoring/nodes/metrics per node (up to ${FLEET_HISTORY_NODE_CAP})`
+          }
+          footer={
+            selectedNode
+              ? "Single-node history as reported by that node's agent."
+              : "Fleet series averages each timestamp bucket across the nodes that reported in it. Buckets with no reports are omitted, not zeroed."
+          }
+          icon={Activity}
+          title={`Utilisation — ${scopeLabel}`}
+        >
+          <DataState
+            loadingLabel="Reading metric history…"
+            onRetry={() => void historyQuery.refetch()}
+            state={historyState}
+          >
+            <MetricSeriesChart
+              emptyMessage={`No node reported CPU, memory or disk in the last ${PERIOD_LABEL[period]}. Beacon agents populate this by posting to /monitoring/nodes/metrics.`}
+              emptyTitle="No telemetry in this window"
+              height={340}
+              points={points}
+              series={["cpuPercent", "memoryPercent", "diskPercent"]}
+            />
+          </DataState>
+        </PanelCard>
+
+        <LiveKpiRow
+          latestByNode={latestByNode}
+          latestState={latestState}
+          nodeCount={nodes.length}
+          selectedNode={selectedNode}
+        />
+      </AdminSection>
+
+      <AdminSection
+        description="The most recent reading from each node. Select a node to scope the series above to it."
+        title="Per-node readings"
+      >
+        <PanelCard description="GET /monitoring/nodes/metrics" icon={Server} title="Nodes">
+          <DataState
+            emptyMessage="No nodes are registered with this control plane yet."
+            emptyTitle="No nodes"
+            isEmpty={nodes.length === 0}
+            loadingLabel="Reading node inventory…"
+            onRetry={() => void nodesQuery.refetch()}
+            state={nodesState}
+          >
+            <NodeTelemetryTable
+              latestByNode={latestByNode}
+              nodes={nodes}
+              onSelect={(nodeId) => setSelectedNode((current) => (current === nodeId ? null : nodeId))}
+              selectedNodeId={selectedNode}
+              telemetryState={latestState}
+            />
+          </DataState>
+        </PanelCard>
+      </AdminSection>
+
+      <AdminSection
+        description="Workload resource figures are the limits configured for each workload. Per-workload runtime usage is not reported to the control plane, so it is shown as unknown rather than guessed."
+        title="Workloads"
+      >
+        <WorkloadTable
+          onRetry={() => void serversQuery.refetch()}
+          servers={servers}
+          state={serversState}
+        />
+      </AdminSection>
+
+      {summaryState.status === "ready" && !summaryUsable ? (
+        <p className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5 text-xs leading-5 text-amber-200">
+          The observability summary returned zero for every counter while nodes or workloads exist in
+          inventory. That is the response the API produces when its observability service is not wired, so
+          its counters are suppressed here rather than displayed as zeros.
+        </p>
+      ) : null}
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Live KPIs — derived from the latest readings, with their coverage
+ * ------------------------------------------------------------------ */
+
+function LiveKpiRow({
+  latestByNode,
+  latestState,
+  nodeCount,
+  selectedNode,
+}: {
+  latestByNode: Map<string, NodeMetrics>;
+  latestState: ReturnType<typeof sourceState>;
+  nodeCount: number;
+  selectedNode: string | null;
+}) {
+  const rows = selectedNode
+    ? [latestByNode.get(selectedNode)].filter((row): row is NodeMetrics => row !== undefined)
+    : [...latestByNode.values()];
+
+  const cpu = fleetAverage(rows, (row) => row.cpuPercent);
+  const memory = fleetAverage(rows, (row) => row.memoryPercent);
+  const disk = fleetAverage(rows, (row) => row.diskPercent);
+
+  const ready = latestState.status === "ready";
+  const scope = selectedNode ? "this node" : `${cpu.reporting} of ${nodeCount} nodes`;
+  const missing =
+    latestState.status === "restricted"
+      ? "Telemetry is not visible to your account"
+      : latestState.status === "error"
+        ? "Telemetry source unavailable"
+        : latestState.status === "loading"
+          ? "Reading telemetry…"
+          : selectedNode
+            ? "This node has not reported a reading"
+            : "No node has reported a reading";
+
+  const newest = rows.reduce<string | undefined>((latest, row) => {
+    if (!latest) return row.observedAt;
+    return Date.parse(row.observedAt) > Date.parse(latest) ? row.observedAt : latest;
+  }, undefined);
+
+  return (
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <MetricTile
+        context={`Mean across ${scope}`}
+        kind="live"
+        label="CPU"
+        missingReason={missing}
+        state={latestState}
+        value={ready ? percentLabel(cpu.value, 1) : undefined}
+      />
+      <MetricTile
+        context={`Mean across ${scope}`}
+        kind="live"
+        label="Memory"
+        missingReason={missing}
+        state={latestState}
+        value={ready ? percentLabel(memory.value, 1) : undefined}
+      />
+      <MetricTile
+        context={`Mean across ${scope}`}
+        kind="live"
+        label="Disk"
+        missingReason={missing}
+        state={latestState}
+        value={ready ? percentLabel(disk.value, 1) : undefined}
+      />
+      <MetricTile
+        context={newest ? "Newest reading in scope" : missing}
+        kind="live"
+        label="Last observed"
+        missingReason={missing}
+        state={latestState}
+        value={ready ? relativeTime(newest) : undefined}
+      />
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Workloads — configured limits, explicitly not usage
+ * ------------------------------------------------------------------ */
+
+function WorkloadTable({
+  servers,
+  state,
+  onRetry,
+}: {
+  servers: ApiServer[];
+  state: ReturnType<typeof sourceState>;
+  onRetry: () => void;
+}) {
+  const rows = useMemo(
+    () => [...servers].sort((a, b) => (b.memoryMb ?? 0) - (a.memoryMb ?? 0)).slice(0, 12),
+    [servers],
+  );
+
+  return (
+    <PanelCard
+      description="GET /servers"
+      footer="Memory, disk and CPU are the limits configured for each workload. They are allocation, not measured consumption."
+      icon={Boxes}
+      title="Largest configured workloads"
+    >
+      <DataState
+        emptyMessage="No workloads are defined on this control plane yet."
+        emptyTitle="No workloads"
+        isEmpty={rows.length === 0}
+        loadingLabel="Reading workloads…"
+        onRetry={onRetry}
+        state={state}
+      >
+        <AdminTable label="Workloads by configured memory">
+          <AdminTHead>
+            <AdminTh>Workload</AdminTh>
+            <AdminTh>State</AdminTh>
+            <AdminTh className="text-right">Memory limit</AdminTh>
+            <AdminTh className="text-right">Disk limit</AdminTh>
+            <AdminTh className="text-right">CPU limit</AdminTh>
+          </AdminTHead>
+          <AdminTBody>
+            {rows.map((server) => (
+              <AdminTr key={server.id}>
+                <AdminTd>
+                  <div className="truncate font-medium text-slate-100">{server.name}</div>
+                  <Reading
+                    className="text-[11px] text-slate-500"
+                    reason="No node recorded for this workload"
+                    value={server.node ?? server.nodeId ?? undefined}
+                  />
+                </AdminTd>
+                <AdminTd>
+                  <Pill tone={server.status === "running" ? "success" : "neutral"}>
+                    {server.actualState ?? server.status}
+                  </Pill>
+                  {server.desiredState && server.actualState && server.desiredState !== server.actualState ? (
+                    <div className="mt-0.5 font-mono text-[10px] text-amber-300/90">
+                      desired {server.desiredState}
+                    </div>
+                  ) : null}
+                </AdminTd>
+                <AdminTd className="text-right">
+                  <Reading reason="No memory limit configured" value={mbLabel(server.memoryMb)} />
+                </AdminTd>
+                <AdminTd className="text-right">
+                  <Reading reason="No disk limit configured" value={mbLabel(server.diskMb)} />
+                </AdminTd>
+                <AdminTd className="text-right">
+                  <Reading
+                    reason="No CPU limit configured"
+                    value={server.cpuLimit != null ? `${server.cpuLimit}%` : undefined}
+                  />
+                </AdminTd>
+              </AdminTr>
+            ))}
+          </AdminTBody>
+        </AdminTable>
+      </DataState>
+    </PanelCard>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Empty-telemetry banner
+ * ------------------------------------------------------------------ */
+
+function NoTelemetryBanner({ period }: { period: MetricPeriod }) {
+  return (
+    <div
+      className="rounded-xl border border-white/[0.09] bg-white/[0.015] p-4 text-sm leading-6 text-slate-300"
+      role="status"
+    >
+      <p className="font-medium text-slate-100">No telemetry for the last {PERIOD_LABEL[period]}</p>
+      <p className="mt-1 text-slate-400">
+        No node posted a metric sample in this window. This is an absence of data, not a degraded fleet —
+        the charts below stay empty until Beacon agents report to{" "}
+        <code className="font-mono text-[12px] text-slate-300">POST /monitoring/nodes/metrics</code>.
+      </p>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ *
+ * Series bucketing
+ * ------------------------------------------------------------------ */
+
+const BUCKET_MS: Record<MetricPeriod, number> = {
+  "1h": 60_000,
+  "6h": 5 * 60_000,
+  "24h": 15 * 60_000,
+  "7d": 60 * 60_000,
+  "30d": 6 * 60 * 60_000,
+};
+
+/**
+ * Collapse raw per-node rows into one point per time bucket.
+ *
+ * Each bucket averages only the rows present in it. A bucket where nothing
+ * reported produces no point at all, so the chart shows a gap rather than a
+ * dip to zero — a gap is what actually happened.
+ */
+export function bucketSeries(rows: NodeMetrics[], period: MetricPeriod): SeriesPoint[] {
+  if (rows.length === 0) return [];
+  const width = BUCKET_MS[period];
+  const buckets = new Map<number, { cpu: number[]; memory: number[]; disk: number[] }>();
+
+  for (const row of rows) {
+    const at = Date.parse(row.observedAt);
+    if (!Number.isFinite(at)) continue;
+    const key = Math.floor(at / width) * width;
+    const bucket = buckets.get(key) ?? { cpu: [], memory: [], disk: [] };
+    if (Number.isFinite(row.cpuPercent)) bucket.cpu.push(row.cpuPercent);
+    if (Number.isFinite(row.memoryPercent)) bucket.memory.push(row.memoryPercent);
+    if (Number.isFinite(row.diskPercent)) bucket.disk.push(row.diskPercent);
+    buckets.set(key, bucket);
+  }
+
+  const mean = (values: number[]): number | undefined =>
+    values.length === 0 ? undefined : values.reduce((sum, value) => sum + value, 0) / values.length;
+
+  const showDate = period === "7d" || period === "30d";
+  return [...buckets.entries()]
+    .sort(([a], [b]) => a - b)
+    .map(([at, bucket]) => {
+      const point: SeriesPoint = {
+        t: at,
+        label: new Date(at).toLocaleString(undefined, {
+          hour: "2-digit",
+          minute: "2-digit",
+          ...(showDate ? { month: "short", day: "numeric" } : {}),
+        }),
+      };
+      const cpu = mean(bucket.cpu);
+      const memory = mean(bucket.memory);
+      const disk = mean(bucket.disk);
+      if (cpu !== undefined) point.cpuPercent = cpu;
+      if (memory !== undefined) point.memoryPercent = memory;
+      if (disk !== undefined) point.diskPercent = disk;
+      return point;
+    })
+    .filter(
+      (point) =>
+        point.cpuPercent !== undefined ||
+        point.memoryPercent !== undefined ||
+        point.diskPercent !== undefined,
+    );
+}
+
+/* ------------------------------------------------------------------ *
+ * CSV export — the raw reported rows, not the plotted averages
+ * ------------------------------------------------------------------ */
+
+export function toCsv(rows: NodeMetrics[], nodeNames: Map<string, string>): string {
+  const header = [
+    "observedAt",
+    "nodeId",
+    "nodeName",
+    "cpuPercent",
+    "memoryPercent",
+    "diskPercent",
+    "memoryUsedMb",
+    "memoryTotalMb",
+    "diskUsedMb",
+    "diskTotalMb",
+    "cpuLoad1m",
+    "networkRxBytes",
+    "networkTxBytes",
+    "containerRunning",
+    "containerTotal",
+  ];
+  const escape = (value: unknown) => {
+    const text = value == null ? "" : String(value);
+    return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+  };
+  const lines = rows
+    .slice()
+    .sort((a, b) => Date.parse(a.observedAt) - Date.parse(b.observedAt))
+    .map((row) =>
+      [
+        row.observedAt,
+        row.nodeId,
+        nodeNames.get(row.nodeId) ?? "",
+        row.cpuPercent,
+        row.memoryPercent,
+        row.diskPercent,
+        row.memoryUsedMb,
+        row.memoryTotalMb,
+        row.diskUsedMb,
+        row.diskTotalMb,
+        row.cpuLoad1m,
+        row.networkRxBytes,
+        row.networkTxBytes,
+        row.containerRunning,
+        row.containerTotal,
+      ]
+        .map(escape)
+        .join(","),
+    );
+  return [header.join(","), ...lines].join("\n");
+}
+
+function downloadCsv(rows: NodeMetrics[], nodeNames: Map<string, string>, period: MetricPeriod): void {
+  if (rows.length === 0 || typeof document === "undefined") return;
+  const blob = new Blob([toCsv(rows, nodeNames)], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `forge-node-metrics-${period}-${new Date().toISOString().slice(0, 19)}.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+export default AdminMonitoring;

@@ -958,17 +958,41 @@ export type ApiAdminAuditEvent = {
   createdAt: string;
 };
 
+/**
+ * Runtime telemetry for a workload, as reported by the node.
+ *
+ * Only `cpuPercent`, `memoryBytes`, `memoryLimit` and the two network counters
+ * are always measured. Everything else is optional because a node may not be
+ * able to report it, and an absent reading must render as unknown — never as a
+ * zero, which is indistinguishable from a real measurement of nothing.
+ */
 export type ApiStats = {
   cpuPercent: number;
   memoryBytes: number;
   memoryLimit: number;
-  diskBytes: number;
-  diskLimit: number;
   networkRxBytes: number;
   networkTxBytes: number;
-  uptime: number;
+  /** Whether the workload's container exists on the node. */
+  exists?: boolean;
+  /** Whether it is running. A stats frame with `running: false` carries no metrics. */
+  running?: boolean;
+  /** The runtime's own status string (e.g. "running", "exited"). */
+  status?: string;
+  /** RFC3339 start time of the current run; absent when it has never started. */
+  startedAt?: string;
+  /** Uptime of the current run. Absent when the workload is not running. */
   uptimeMs?: number;
-  state?: string;
+  /**
+   * Present on streamed frames: `false` means the frame reports lifecycle only,
+   * because a stopped workload has no metrics to sample.
+   */
+  metrics?: boolean;
+  /**
+   * Disk usage. No runtime adapter reports this yet, so it is normally absent
+   * and must be shown as not reported rather than as 0 B.
+   */
+  diskBytes?: number;
+  diskLimit?: number;
 };
 
 export type TwoFactorSetup = {

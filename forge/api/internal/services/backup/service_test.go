@@ -1112,12 +1112,16 @@ func TestWorker_Health_AfterStart(t *testing.T) {
 	cancel()
 }
 
-func TestService_CleanupExpiredBackups_EmptyPolicy(t *testing.T) {
+func TestService_CleanupExpiredBackups_NoStore(t *testing.T) {
 	t.Parallel()
+	// A service with no store cannot sweep anything. It must say so rather
+	// than returning (0, nil), which the scheduler and the admin cleanup
+	// route would both read as "swept, nothing was expired".
 	svc := New(nil)
 	ctx := context.Background()
 	count, err := svc.CleanupExpiredBackups(ctx)
-	assert.NoError(t, err)
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "store unavailable")
 	assert.Equal(t, int64(0), count)
 }
 

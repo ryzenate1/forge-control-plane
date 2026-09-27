@@ -38,6 +38,7 @@ import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "@/co
 import { DeployStatusBadge, LogViewer } from "@/components/admin/AdminAppsShared";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 import { formatBytes, formatDate } from "@/lib/utils";
+import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
 
 /**
  * /console/apps/[id] — customer-facing app detail page.
@@ -76,6 +77,11 @@ export default function ConsoleAppDetailPage() {
     return domains[0]?.domain ?? "";
   }, [app]);
 
+  // The console frame renders the one breadcrumb trail; this names the id
+  // segment so it reads "Console / Applications / My API". This page used to
+  // render a second trail of its own inside the page header.
+  useBreadcrumbLabel(id, app?.name ?? null);
+
   if (isLoading) return <LoadingSpinner />;
 
   if (error || !app) {
@@ -92,7 +98,6 @@ export default function ConsoleAppDetailPage() {
       <SectionHeader
         title={app.name}
         sub={`${typeLabel(app.type)} · ${app.id.slice(0, 8)}...`}
-        breadcrumb={`Applications / ${app.name}`}
         action={
           <div className="flex items-center gap-2">
             <Pill tone={statusTone(app.status)}>{app.status}</Pill>

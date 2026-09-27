@@ -26,6 +26,7 @@ import { Btn, EmptyState, Input, Modal, ModalFooter, SectionHeader, Pill, cn } f
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { statusTone } from "@/lib/api/status";
+import { StatusDot } from "@/components/ui/primitives";
 import { formatBytes, formatDate } from "@/lib/utils";
 import { DbStatCards, type DbStat } from "./databases-overview";
 
@@ -306,14 +307,7 @@ export function DatabaseServicesView() {
 }
 
 function ServiceStatusDot({ status }: { status: string }) {
-  const tone = statusTone(status);
-  const color = tone === "green" ? "bg-emerald-400" : tone === "yellow" ? "bg-amber-400" : tone === "red" ? "bg-red-400" : tone === "blue" ? "bg-sky-400" : "bg-slate-500";
-  const text = tone === "green" ? "text-emerald-300" : tone === "yellow" ? "text-amber-300" : tone === "red" ? "text-red-300" : tone === "blue" ? "text-sky-300" : "text-slate-300";
-  return (
-    <span className={`inline-flex items-center gap-1.5 text-xs font-semibold capitalize ${text}`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${color}`} />{status}
-    </span>
-  );
+  return <StatusDot status={status} tone={statusTone(status)} />;
 }
 
 function ServiceCard({ svc, onManage, onRestart, onDelete, restartPending, deletePending }: {

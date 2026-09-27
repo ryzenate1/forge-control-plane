@@ -129,7 +129,7 @@ export function ZerodowntimeManager() {
 
   return (
     <AdminPageLayout
-      title="Zero-Downtime Deployments"
+      title="Zero-Downtime Releases"
       description="522L service: CreateRelease → DeployRelease → RunHealthChecks (ticker + thresholds, 2m max) → PromoteRelease / RollbackRelease. Health checks hit allocation IP:port + path. Requires server + allocation."
     >
       <OfflineBanner onRetry={() => { if (serverId.trim()) void loadReleases(); }} />

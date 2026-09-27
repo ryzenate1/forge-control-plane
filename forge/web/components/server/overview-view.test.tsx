@@ -55,7 +55,7 @@ function installOverviewFetch() {
       diskLimit: 10737418240,
       networkRxBytes: 1048576,
       networkTxBytes: 2097152,
-      uptime: 367782,
+      uptimeMs: 367782000,
     }),
     "/servers/s1/startup": jsonResponse({
       startupCommand: "java -jar server.jar",

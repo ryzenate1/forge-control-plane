@@ -2,19 +2,30 @@
 
 import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
-import { ArrowRight, Boxes, Database, HardDrive, Server, Shield } from "lucide-react";
+import { ArrowRight, Boxes, Database, Server, Shield } from "lucide-react";
 import { fetchServers } from "@/lib/api/servers";
 import { fetchApps } from "@/lib/api/apps";
+import { listDatabaseServices } from "@/lib/api/database-services";
+import { queryKeys } from "@/lib/api/query-keys";
+import { SERVERS_LIST_HREF } from "@/components/console/console-registry";
 import { Card, CardHeader, Pill } from "@/components/admin/admin-ui";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 
 /**
  * Console Dashboard — customer landing at /console.
  * Shows workload counts, recent activity, and quick-action cards.
+ *
+ * Every tile here is backed by a query. A tile that cannot be sourced does not
+ * get a placeholder: the previous version shipped "Databases —/Managed
+ * instances" and "Backups —/Last 24 hours", two tiles that never issued a
+ * request, so the dash was not "no data yet" but "this number does not exist".
+ * Databases now read the same `listDatabaseServices` source as
+ * /console/databases; Backups is gone because backups are per-server and there
+ * is no aggregate endpoint to total them.
  */
 export default function ConsoleDashboardPage() {
   const serversQuery = useQuery({
-    queryKey: ["servers"],
+    queryKey: queryKeys.servers.lists(),
     queryFn: fetchServers,
     staleTime: 30_000,
     retry: 1,
@@ -27,8 +38,18 @@ export default function ConsoleDashboardPage() {
     retry: 1,
   });
 
+  // Same key as /console/databases so the two surfaces share one cache entry
+  // instead of issuing two requests and drifting apart.
+  const databasesQuery = useQuery({
+    queryKey: ["database-services"],
+    queryFn: listDatabaseServices,
+    staleTime: 30_000,
+    retry: 1,
+  });
+
   const servers = serversQuery.data ?? [];
   const apps = appsQuery.data ?? [];
+  const databases = databasesQuery.data ?? [];
   const runningServers = servers.filter((s) => s.status === "running").length;
   const runningApps = apps.filter((a) => a.desiredState === "running").length;
 
@@ -41,13 +62,13 @@ export default function ConsoleDashboardPage() {
       </div>
 
       {/* Stats row */}
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
         <StatCard
           title="Game Servers"
           value={servers.length}
           subtitle={`${runningServers} running`}
           icon={Server}
-          href="/console/servers"
+          href={SERVERS_LIST_HREF}
           loading={serversQuery.isPending}
         />
         <StatCard
@@ -60,17 +81,11 @@ export default function ConsoleDashboardPage() {
         />
         <StatCard
           title="Databases"
-          value="—"
-          subtitle="Managed instances"
+          value={databasesQuery.isError ? "Unavailable" : databases.length}
+          subtitle={databasesQuery.isError ? "Could not be read" : "Managed instances"}
           icon={Database}
           href="/console/databases"
-        />
-        <StatCard
-          title="Backups"
-          value="—"
-          subtitle="Last 24 hours"
-          icon={HardDrive}
-          href="/console/backups"
+          loading={databasesQuery.isPending}
         />
       </div>
 
@@ -84,11 +99,15 @@ export default function ConsoleDashboardPage() {
             icon={Boxes}
             href="/console/apps/new"
           />
+          {/* Labelled for what it does. It used to read "Create Game Server /
+              Provision a Minecraft, Rust, or other game server" and link to the
+              server list — there is no customer-facing provisioning route, so
+              the card promised a capability that does not exist here. */}
           <ActionCard
-            title="Create Game Server"
-            description="Provision a Minecraft, Rust, or other game server"
+            title="Manage Game Servers"
+            description="Open a server's console, files, backups and settings"
             icon={Server}
-            href="/console/servers"
+            href={SERVERS_LIST_HREF}
           />
           <ActionCard
             title="Platform Health"
@@ -104,14 +123,14 @@ export default function ConsoleDashboardPage() {
         <Card>
           <CardHeader
             title="Your Servers"
-            action={<Link className="flex items-center gap-1 text-xs font-medium text-red-400 hover:text-red-300" href="/console/servers">View all <ArrowRight size={12} /></Link>}
+            action={<Link className="flex items-center gap-1 text-xs font-medium text-red-400 hover:text-red-300" href={SERVERS_LIST_HREF}>View all <ArrowRight size={12} /></Link>}
           />
           <div className="divide-y divide-white/[0.04]">
             {servers.slice(0, 5).map((server) => (
               <Link
                 key={server.id}
                 className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-white/[0.02]"
-                href={`/console/servers/${server.id}`}
+                href={`/server/${server.id}`}
               >
                 <span className={`h-2 w-2 shrink-0 rounded-full ${server.suspended ? "bg-rose-400" : server.status === "running" ? "bg-emerald-400" : "bg-slate-500"}`} />
                 <span className="min-w-0 flex-1 truncate text-sm font-medium text-slate-200">{server.name}</span>

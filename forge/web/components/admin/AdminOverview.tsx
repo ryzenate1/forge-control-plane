@@ -51,20 +51,25 @@ import {
   type ApiNode,
   type ApiServer,
 } from "@/lib/api";
-import { fetchApps, type ApiApp } from "@/lib/api/apps";
+import { fetchApps } from "@/lib/api/apps";
+import type { MetricPeriod, NodeMetrics } from "@/lib/api/monitoring";
+import {
+  checkVerdict,
+  findCheck,
+  isAvailable,
+  relativeTime,
+  useLatestNodeMetricsQuery,
+  useNodeMetricsHistoryQuery,
+} from "@/lib/admin/telemetry";
 import { ApiError } from "@/lib/api/http";
 import { chart } from "@/lib/design-tokens";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import {
   AdminPageLayout,
   AdminSection,
-  SectionHeader,
   Card,
   CardHeader,
-  EmptyState,
   Pill,
-  StatsRow,
-  Btn,
   MiniSparkline,
   SubsystemHealthMeter,
   cn,
@@ -169,19 +174,6 @@ function QueryError({
   );
 }
 
-function QueryLoading({ message }: { message: string }) {
-  return (
-    <div
-      role="status"
-      aria-label={message}
-      className="flex items-center justify-center gap-2 rounded-lg border border-white/[0.06] bg-white/[0.02] p-4 text-xs text-slate-400"
-    >
-      <div className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--brand)] border-t-transparent" />
-      <span>{message}</span>
-    </div>
-  );
-}
-
 function reportedTotal(
   records: Array<ApiNode | ApiServer>,
   field: "memoryMb" | "diskMb"
@@ -200,20 +192,167 @@ function hasHealthyPersistedHeartbeat(node: ApiNode) {
   return node.heartbeatState === "healthy";
 }
 
-// 24-hour capacity trend curve data
-const TREND_24H_DATA = [
-  { time: "00:00", cpu: 11, memory: 26, storage: 33, network: 14 },
-  { time: "04:00", cpu: 14, memory: 28, storage: 34, network: 16 },
-  { time: "08:00", cpu: 18, memory: 31, storage: 34, network: 22 },
-  { time: "12:00", cpu: 15, memory: 29, storage: 35, network: 19 },
-  { time: "16:00", cpu: 19, memory: 33, storage: 35, network: 24 },
-  { time: "20:00", cpu: 12, memory: 28, storage: 34, network: 18 },
-];
+/* ------------------------------------------------------------------ *
+ * Subsystem meter readings
+ *
+ * Each of these returns `null` rather than `0` when there is no ratio to
+ * report. A meter that has not been read draws an empty dashed track; a meter
+ * showing a measured 0% is a different fact and looks different.
+ * ------------------------------------------------------------------ */
+
+/** Percentage of `total` that is `part`, or `null` when there is no ratio. */
+function ratioPct(part: number, total: number, available: boolean): number | null {
+  if (!available || total <= 0) return null;
+  return (part / total) * 100;
+}
+
+/**
+ * Tone for an inventory ratio: a failed query is an error, an unread or empty
+ * inventory is unknown, and a full complement is the only healthy reading.
+ */
+function inventoryTone(
+  query: { isError: boolean },
+  total: number,
+  healthy: number
+): "danger" | "unknown" | "ok" | "warn" {
+  if (query.isError) return "danger";
+  if (total === 0) return "unknown";
+  return healthy === total ? "ok" : "warn";
+}
+
+/**
+ * A control-plane check has no percentage of its own — it either passed or it
+ * did not. Report a full bar for a pass and an empty one for a failure; report
+ * no bar at all when the check was never read.
+ */
+function verdictPct(verdict: { tone: string; known: boolean }): number | null {
+  if (!verdict.known) return null;
+  return verdict.tone === "ok" ? 100 : 0;
+}
+
+/**
+ * Mean of a reported metric field across rows, or `undefined` when no row
+ * reports it. Deliberately not `0`: an unreported reading is not a zero one.
+ */
+function fleetMean(rows: NodeMetrics[], read: (row: NodeMetrics) => number | undefined): number | undefined {
+  let sum = 0;
+  let count = 0;
+  for (const row of rows) {
+    const value = read(row);
+    if (typeof value === "number" && Number.isFinite(value)) {
+      sum += value;
+      count += 1;
+    }
+  }
+  return count > 0 ? sum / count : undefined;
+}
+
+/** Sum of a reported field, plus how many rows actually reported it. */
+function fleetSum(
+  rows: NodeMetrics[],
+  read: (row: NodeMetrics) => number | undefined
+): { value: number; reported: number } {
+  let value = 0;
+  let reported = 0;
+  for (const row of rows) {
+    const raw = read(row);
+    if (typeof raw === "number" && Number.isFinite(raw)) {
+      value += raw;
+      reported += 1;
+    }
+  }
+  return { value, reported };
+}
+
+type TrendPoint = { time: string; cpu?: number; memory?: number; storage?: number };
+
+/**
+ * Fleet trend series built from real metric history.
+ *
+ * Rows arrive per node, so they are bucketed by observation time and averaged
+ * across whichever nodes reported inside each bucket. Buckets with no reading
+ * are not emitted — a gap in the series is left as a gap.
+ */
+function buildTrendSeries(rows: NodeMetrics[], buckets: number): TrendPoint[] {
+  const stamped = rows
+    .map((row) => ({ row, at: Date.parse(row.observedAt) }))
+    .filter((entry) => Number.isFinite(entry.at))
+    .sort((a, b) => a.at - b.at);
+  if (stamped.length === 0) return [];
+
+  const first = stamped[0].at;
+  const last = stamped[stamped.length - 1].at;
+  const span = Math.max(1, last - first);
+  const width = span / Math.max(1, buckets);
+  const grouped = new Map<number, NodeMetrics[]>();
+
+  for (const entry of stamped) {
+    const index = Math.min(buckets - 1, Math.floor((entry.at - first) / width));
+    const existing = grouped.get(index);
+    if (existing) existing.push(entry.row);
+    else grouped.set(index, [entry.row]);
+  }
+
+  return [...grouped.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([index, group]) => ({
+      time: new Date(first + index * width).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }),
+      cpu: fleetMean(group, (row) => row.cpuPercent),
+      memory: fleetMean(group, (row) => row.memoryPercent),
+      storage: fleetMean(group, (row) => row.diskPercent),
+    }));
+}
+
+function roundPercent(value: number | undefined): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) ? Math.round(value) : undefined;
+}
+
+/** Sparkline input: the series values that exist, or `null` when too short to draw. */
+function sparkSeries(series: TrendPoint[], read: (point: TrendPoint) => number | undefined): number[] | null {
+  const values = series
+    .map(read)
+    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+  return values.length >= 2 ? values : null;
+}
+
+/** First-to-last change over a series, or `undefined` when it cannot be computed. */
+function seriesDelta(values: number[] | null): number | undefined {
+  if (!values || values.length < 2) return undefined;
+  return values[values.length - 1] - values[0];
+}
+
+function DeltaPill({ delta }: { delta: number | undefined }) {
+  if (delta === undefined) return null;
+  const rounded = Math.round(delta);
+  if (rounded === 0) {
+    return <span className="font-mono text-[11px] font-semibold text-slate-500">no change</span>;
+  }
+  const rising = rounded > 0;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold",
+        rising ? "text-amber-400" : "text-emerald-400"
+      )}
+    >
+      {rising ? <TrendingUp size={11} /> : <TrendingDown size={11} />} {Math.abs(rounded)}%
+    </span>
+  );
+}
+
+/** Shared placeholder for a KPI number we have no reading for. */
+function NoReading({ className }: { className?: string }) {
+  return (
+    <span className={cn("font-mono text-sm font-semibold text-slate-500", className)} title="No reading reported">
+      Not reported
+    </span>
+  );
+}
 
 export function AdminOverview() {
   const router = useRouter();
   const [attentionCollapsed, setAttentionCollapsed] = useState(false);
-  const [timeRange, setTimeRange] = useState("24h");
+  const [timeRange, setTimeRange] = useState<MetricPeriod>("24h");
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const nodesQuery = useQuery({
@@ -264,6 +403,20 @@ export function AdminOverview() {
     refetchIntervalInBackground: false,
   });
 
+  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
+
+  // The node_metrics series. Its cpu/memory/disk percentages are derived by the
+  // control plane from NodeCapacitySnapshot (see
+  // forge/api/internal/services/observability/service.go collectNodeMetrics),
+  // so they are ALLOCATION over time, not measured host load — they are labelled
+  // that way throughout this page. The same source hardcodes network bytes to 0
+  // and sets containerRunning == containerTotal, so neither is surfaced here.
+  // `latestMetricsQuery` is the newest row per node; `trendQuery` is the real
+  // per-node history fanned out across the fleet. Neither is substituted for
+  // when it reports nothing.
+  const latestMetricsQuery = useLatestNodeMetricsQuery();
+  const trendQuery = useNodeMetricsHistoryQuery(timeRange, null, nodes, nodes.length > 0);
+
   const handleRefresh = useCallback(async () => {
     setIsRefreshing(true);
     await Promise.allSettled([
@@ -273,16 +426,24 @@ export function AdminOverview() {
       usersQuery.refetch(),
       healthQuery.refetch(),
       activityQuery.refetch(),
+      latestMetricsQuery.refetch(),
+      trendQuery.refetch(),
     ]);
     setTimeout(() => setIsRefreshing(false), 500);
-  }, [nodesQuery, serversQuery, appsQuery, usersQuery, healthQuery, activityQuery]);
+  }, [
+    nodesQuery,
+    serversQuery,
+    appsQuery,
+    usersQuery,
+    healthQuery,
+    activityQuery,
+    latestMetricsQuery,
+    trendQuery,
+  ]);
 
-  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const servers = useMemo(() => serversQuery.data ?? [], [serversQuery.data]);
-  const apps = useMemo(() => appsQuery.data ?? [], [appsQuery.data]);
-  const users = useMemo(() => usersQuery.data ?? [], [usersQuery.data]);
 
-  const checks: ApiHealthCheck[] = healthQuery.data?.checks ?? [];
+  const checks: ApiHealthCheck[] = useMemo(() => healthQuery.data?.checks ?? [], [healthQuery.data?.checks]);
   const failedChecks = useMemo(
     () => checks.filter((c: ApiHealthCheck) => c.status !== "ok" && c.status !== "warning"),
     [checks]
@@ -340,10 +501,6 @@ export function AdminOverview() {
         : [],
     [servers]
   );
-
-  // Unified Workload Totals
-  const totalWorkloads = servers.length + apps.length;
-  const totalRunningWorkloads = runningServers;
 
   // Actionable Failures & Attention Lane
   const failures = useMemo(() => {
@@ -471,28 +628,86 @@ export function AdminOverview() {
   const serverMemoryConfiguration = useMemo(() => reportedTotal(servers, "memoryMb"), [servers]);
   const serverDiskConfiguration = useMemo(() => reportedTotal(servers, "diskMb"), [servers]);
 
-  // Compute cores across nodes
-  const totalCores = useMemo(() => {
-    return Array.isArray(nodes)
-      ? nodes.reduce((acc, n) => acc + (n.cpuCores || n.cpuThreads || 8), 0)
-      : 24;
+  // Cores across nodes. Only nodes that report a core count are summed, and
+  // the reporting coverage travels with the number so the UI can say so.
+  const cores = useMemo(() => {
+    const values = nodes
+      .map((node) => node.cpuCores)
+      .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
+    return {
+      value: values.reduce((sum, value) => sum + value, 0),
+      reported: values.length,
+      total: nodes.length,
+    };
   }, [nodes]);
 
-  // Percentage calculations
-  const cpuPercent = 12;
-  const memoryPercent = useMemo(() => {
-    if (nodeMemoryCapacity.value > 0 && serverMemoryConfiguration.value > 0) {
-      return Math.min(100, Math.round((serverMemoryConfiguration.value / nodeMemoryCapacity.value) * 100));
-    }
-    return 28;
-  }, [nodeMemoryCapacity.value, serverMemoryConfiguration.value]);
+  /* ----------------------------------------------------------------- *
+   * Live utilization — from /monitoring/nodes/metrics, never invented.
+   * ----------------------------------------------------------------- */
 
-  const storagePercent = useMemo(() => {
-    if (nodeDiskCapacity.value > 0 && serverDiskConfiguration.value > 0) {
-      return Math.min(100, Math.round((serverDiskConfiguration.value / nodeDiskCapacity.value) * 100));
+  const latestMetrics = useMemo(() => latestMetricsQuery.data ?? [], [latestMetricsQuery.data]);
+  const metricsAvailable = isAvailable(latestMetricsQuery);
+
+  const cpuPercent = useMemo(
+    () => roundPercent(fleetMean(latestMetrics, (row) => row.cpuPercent)),
+    [latestMetrics]
+  );
+  const memoryPercent = useMemo(
+    () => roundPercent(fleetMean(latestMetrics, (row) => row.memoryPercent)),
+    [latestMetrics]
+  );
+  const storagePercent = useMemo(
+    () => roundPercent(fleetMean(latestMetrics, (row) => row.diskPercent)),
+    [latestMetrics]
+  );
+
+  const memoryUsed = useMemo(() => fleetSum(latestMetrics, (row) => row.memoryUsedMb), [latestMetrics]);
+  const memoryTotal = useMemo(() => fleetSum(latestMetrics, (row) => row.memoryTotalMb), [latestMetrics]);
+  const diskUsed = useMemo(() => fleetSum(latestMetrics, (row) => row.diskUsedMb), [latestMetrics]);
+  const diskTotal = useMemo(() => fleetSum(latestMetrics, (row) => row.diskTotalMb), [latestMetrics]);
+
+  /** Latest reported row for one node, or `undefined` when that node has none. */
+  const metricsByNode = useMemo(() => {
+    const map = new Map<string, NodeMetrics>();
+    for (const row of latestMetrics) {
+      const existing = map.get(row.nodeId);
+      if (!existing || Date.parse(row.observedAt) > Date.parse(existing.observedAt)) {
+        map.set(row.nodeId, row);
+      }
     }
-    return 34;
-  }, [nodeDiskCapacity.value, serverDiskConfiguration.value]);
+    return map;
+  }, [latestMetrics]);
+
+  /* ----------------------------------------------------------------- *
+   * Trend series — real history, with gaps left as gaps.
+   * ----------------------------------------------------------------- */
+
+  const trendSeries = useMemo(() => buildTrendSeries(trendQuery.data?.rows ?? [], 12), [trendQuery.data]);
+  const cpuSpark = useMemo(() => sparkSeries(trendSeries, (point) => point.cpu), [trendSeries]);
+  const memorySpark = useMemo(() => sparkSeries(trendSeries, (point) => point.memory), [trendSeries]);
+  const storageSpark = useMemo(() => sparkSeries(trendSeries, (point) => point.storage), [trendSeries]);
+  const trendHasData = trendSeries.some(
+    (point) => point.cpu !== undefined || point.memory !== undefined || point.storage !== undefined
+  );
+
+  const timeRangeLabel =
+    timeRange === "1h"
+      ? "Last 1 hour"
+      : timeRange === "6h"
+        ? "Last 6 hours"
+        : timeRange === "7d"
+          ? "Last 7 days"
+          : "Last 24 hours";
+
+  /* ----------------------------------------------------------------- *
+   * Control-plane checks. `checkVerdict` keeps "Unavailable",
+   * "Not reported" and a real status from collapsing into "Healthy".
+   * ----------------------------------------------------------------- */
+
+  const healthAvailable = isAvailable(healthQuery);
+  const databaseVerdict = checkVerdict(healthAvailable, findCheck(healthQuery.data, "database"));
+  const queueVerdict = checkVerdict(healthAvailable, findCheck(healthQuery.data, "queue"));
+
 
   // Per-node memory allocation chart data
   const nodeResourceData = useMemo(
@@ -531,6 +746,16 @@ export function AdminOverview() {
 
   const auditEvents = activityQuery.data ?? [];
 
+  // Freshness badge: the newest successful read across every source on the
+  // page. Zero means nothing has landed yet, which is not "just now".
+  const newestUpdate = Math.max(
+    nodesQuery.isSuccess ? nodesQuery.dataUpdatedAt : 0,
+    serversQuery.isSuccess ? serversQuery.dataUpdatedAt : 0,
+    healthQuery.isSuccess ? healthQuery.dataUpdatedAt : 0,
+    latestMetricsQuery.isSuccess ? latestMetricsQuery.dataUpdatedAt : 0,
+    activityQuery.isSuccess ? activityQuery.dataUpdatedAt : 0
+  );
+
   return (
     <AdminPageLayout className="space-y-6">
       {/* ========================================================================= */}
@@ -544,10 +769,23 @@ export function AdminOverview() {
         </div>
         <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
           <span className="relative flex h-1.5 w-1.5">
-            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-emerald-400" />
+            {newestUpdate > 0 && !anyStale ? (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
+            ) : null}
+            <span
+              className={cn(
+                "relative inline-flex h-1.5 w-1.5 rounded-full",
+                newestUpdate === 0 ? "bg-slate-500" : anyStale ? "bg-amber-400" : "bg-emerald-400"
+              )}
+            />
           </span>
-          <span>Live · updated just now</span>
+          <span title={newestUpdate > 0 ? new Date(newestUpdate).toLocaleString() : undefined}>
+            {newestUpdate === 0
+              ? "Waiting for first read"
+              : anyStale
+                ? `Stale · last read ${relativeTime(newestUpdate)}`
+                : `Live · updated ${relativeTime(newestUpdate)}`}
+          </span>
         </div>
       </div>
 
@@ -599,7 +837,7 @@ export function AdminOverview() {
             <select
               aria-label="Select time range"
               value={timeRange}
-              onChange={(e) => setTimeRange(e.target.value)}
+              onChange={(e) => setTimeRange(e.target.value as MetricPeriod)}
               className="h-8 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-2.5 pr-7 text-xs font-medium text-slate-200 outline-none focus:border-[var(--focus)] appearance-none cursor-pointer hover:border-white/20"
             >
               <option value="1h">Last 1 hour</option>
@@ -644,24 +882,40 @@ export function AdminOverview() {
           <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
             <span className="flex items-center gap-1.5 text-sky-400">
               <CpuKpiChipIcon size={16} />
-              <span className="font-bold">CPU</span>
+              <span className="font-bold">CPU Allocated</span>
             </span>
-            <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold text-emerald-400">
-              <TrendingDown size={11} /> 4%
-            </span>
+            <DeltaPill delta={seriesDelta(cpuSpark)} />
           </div>
 
           <div className="mt-2.5 flex items-baseline justify-between">
             <div>
-              <span className="font-mono text-3xl font-bold tracking-tight text-sky-400">
-                {cpuPercent}%
-              </span>
+              {latestMetricsQuery.isError ? (
+                <NoReading className="text-base" />
+              ) : cpuPercent === undefined ? (
+                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                  {metricsAvailable ? "—" : "…"}
+                </span>
+              ) : (
+                <span className="font-mono text-3xl font-bold tracking-tight text-sky-400">{cpuPercent}%</span>
+              )}
               <p className="mt-1 font-mono text-xs text-slate-400">
-                {((totalCores * 0.12).toFixed(1))} / {totalCores || 24} cores
+                {latestMetricsQuery.isError
+                  ? "Allocation series unavailable"
+                  : cpuPercent === undefined
+                    ? metricsAvailable
+                      ? "No node reported CPU allocation"
+                      : "Reading allocation series…"
+                    : `Mean across ${latestMetrics.length} node${latestMetrics.length === 1 ? "" : "s"}${
+                        cores.reported > 0
+                          ? ` · ${cores.value} core${cores.value === 1 ? "" : "s"}${
+                              cores.reported < cores.total ? ` (${cores.reported}/${cores.total} reported)` : ""
+                            }`
+                          : " · cores not reported"
+                      }`}
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[8, 14, 10, 15, 12, 16, 12]} color={chart.sky} />
+              {cpuSpark ? <MiniSparkline data={cpuSpark} color={chart.sky} /> : null}
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-sky-500/40 via-sky-400/80 to-transparent" />
@@ -675,31 +929,34 @@ export function AdminOverview() {
           <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
             <span className="flex items-center gap-1.5 text-purple-400">
               <MemoryRamStickIcon size={16} />
-              <span className="font-bold">Memory</span>
+              <span className="font-bold">Memory Allocated</span>
             </span>
-            <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold text-emerald-400">
-              <TrendingDown size={11} /> 6%
-            </span>
+            <DeltaPill delta={seriesDelta(memorySpark)} />
           </div>
 
           <div className="mt-2.5 flex items-baseline justify-between">
             <div>
-              <span className="font-mono text-3xl font-bold tracking-tight text-purple-400">
-                {memoryPercent}%
-              </span>
+              {latestMetricsQuery.isError ? (
+                <NoReading className="text-base" />
+              ) : memoryPercent === undefined ? (
+                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                  {metricsAvailable ? "—" : "…"}
+                </span>
+              ) : (
+                <span className="font-mono text-3xl font-bold tracking-tight text-purple-400">{memoryPercent}%</span>
+              )}
               <p className="mt-1 font-mono text-xs text-slate-400">
-                {serversQuery.isError
-                  ? "Unavailable"
-                  : serversQuery.isLoading
-                  ? "…"
-                  : `${(serverMemoryConfiguration.value / 1024).toFixed(1)} / ${(
-                      (nodeMemoryCapacity.value || 40960) /
-                      1024
-                    ).toFixed(0)} GB`}
+                {latestMetricsQuery.isError
+                  ? "Allocation series unavailable"
+                  : memoryTotal.reported > 0
+                    ? `${(memoryUsed.value / 1024).toFixed(1)} / ${(memoryTotal.value / 1024).toFixed(0)} GB allocated`
+                    : metricsAvailable
+                      ? "No node reported memory allocation"
+                      : "Reading allocation series…"}
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[24, 28, 26, 32, 30, 27, 28]} color={chart.lightViolet} />
+              {memorySpark ? <MiniSparkline data={memorySpark} color={chart.lightViolet} /> : null}
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-purple-500/40 via-purple-400/80 to-transparent" />
@@ -713,31 +970,34 @@ export function AdminOverview() {
           <div className="flex items-center justify-between gap-2 text-xs font-semibold uppercase tracking-wider text-slate-400">
             <span className="flex items-center gap-1.5 text-orange-400">
               <StoragePlattersIcon size={16} />
-              <span className="font-bold">Storage</span>
+              <span className="font-bold">Storage Allocated</span>
             </span>
-            <span className="inline-flex items-center gap-0.5 font-mono text-[11px] font-semibold text-amber-400">
-              <TrendingUp size={11} /> 2%
-            </span>
+            <DeltaPill delta={seriesDelta(storageSpark)} />
           </div>
 
           <div className="mt-2.5 flex items-baseline justify-between">
             <div>
-              <span className="font-mono text-3xl font-bold tracking-tight text-orange-400">
-                {storagePercent}%
-              </span>
+              {latestMetricsQuery.isError ? (
+                <NoReading className="text-base" />
+              ) : storagePercent === undefined ? (
+                <span className="font-mono text-3xl font-bold tracking-tight text-slate-500">
+                  {metricsAvailable ? "—" : "…"}
+                </span>
+              ) : (
+                <span className="font-mono text-3xl font-bold tracking-tight text-orange-400">{storagePercent}%</span>
+              )}
               <p className="mt-1 font-mono text-xs text-slate-400">
-                {serversQuery.isError
-                  ? "Unavailable"
-                  : serversQuery.isLoading
-                  ? "…"
-                  : `${(serverDiskConfiguration.value / 1024).toFixed(0)} / ${(
-                      (nodeDiskCapacity.value || 954368) /
-                      1024
-                    ).toFixed(0)} GB`}
+                {latestMetricsQuery.isError
+                  ? "Allocation series unavailable"
+                  : diskTotal.reported > 0
+                    ? `${(diskUsed.value / 1024).toFixed(0)} / ${(diskTotal.value / 1024).toFixed(0)} GB allocated`
+                    : metricsAvailable
+                      ? "No node reported disk allocation"
+                      : "Reading allocation series…"}
               </p>
             </div>
             <div className="w-28 h-9 shrink-0">
-              <MiniSparkline data={[31, 32, 33, 33, 34, 33, 34]} color={chart.lightOrange} />
+              {storageSpark ? <MiniSparkline data={storageSpark} color={chart.lightOrange} /> : null}
             </div>
           </div>
           <div className="absolute inset-x-0 bottom-0 h-0.5 bg-gradient-to-r from-orange-500/40 via-orange-400/80 to-transparent" />
@@ -809,54 +1069,85 @@ export function AdminOverview() {
 
                 {/* Subsystem Health Progress Meters */}
                 <div className="mt-5 space-y-2.5 pt-3 border-t border-white/[0.06]">
+                  {/* An empty or unreachable inventory is not a full meter:
+                      with no beacons there is no ratio to report. */}
                   <SubsystemHealthMeter
                     icon={NodeHostIcon}
                     label="Nodes"
-                    valueText={`${onlineNodes}/${nodes.length} online`}
-                    percentage={nodes.length > 0 ? (onlineNodes / nodes.length) * 100 : 100}
-                    tone={onlineNodes === nodes.length && nodes.length > 0 ? "green" : nodes.length === 0 ? "neutral" : "yellow"}
+                    valueText={
+                      nodesQuery.isError
+                        ? "Unavailable"
+                        : !isAvailable(nodesQuery)
+                          ? "Loading…"
+                          : nodes.length === 0
+                            ? "No nodes registered"
+                            : `${onlineNodes}/${nodes.length} online`
+                    }
+                    percentage={ratioPct(onlineNodes, nodes.length, isAvailable(nodesQuery))}
+                    tone={inventoryTone(nodesQuery, nodes.length, onlineNodes)}
                     onClick={() => router.push("/admin/nodes")}
                   />
                   <SubsystemHealthMeter
                     icon={BeaconRadioTowerIcon}
                     label="Beacons"
-                    valueText={`${onlineNodes} healthy${
-                      degradedNodes.length > 0 ? ` (${degradedNodes.length} degraded)` : ""
-                    } of ${nodes.length}`}
-                    percentage={nodes.length > 0 ? (onlineNodes / nodes.length) * 100 : 100}
-                    tone={onlineNodes === nodes.length && nodes.length > 0 ? "green" : nodes.length === 0 ? "neutral" : "yellow"}
+                    valueText={
+                      nodesQuery.isError
+                        ? "Unavailable"
+                        : !isAvailable(nodesQuery)
+                          ? "Loading…"
+                          : nodes.length === 0
+                            ? "No beacons enrolled"
+                            : `${onlineNodes} healthy${
+                                degradedNodes.length > 0 ? ` (${degradedNodes.length} degraded)` : ""
+                              } of ${nodes.length}`
+                    }
+                    percentage={ratioPct(onlineNodes, nodes.length, isAvailable(nodesQuery))}
+                    tone={inventoryTone(nodesQuery, nodes.length, onlineNodes)}
                     onClick={() => router.push("/admin/nodes")}
                   />
                   <SubsystemHealthMeter
                     icon={ApplicationsCubeIcon}
                     label="Workloads"
-                    valueText={`${runningServers} running`}
-                    percentage={servers.length > 0 ? (runningServers / servers.length) * 100 : 0}
-                    tone={runningServers > 0 ? "green" : "neutral"}
+                    valueText={
+                      serversQuery.isError
+                        ? "Unavailable"
+                        : !isAvailable(serversQuery)
+                          ? "Loading…"
+                          : servers.length === 0
+                            ? "No workloads"
+                            : `${runningServers}/${servers.length} running`
+                    }
+                    percentage={ratioPct(runningServers, servers.length, isAvailable(serversQuery))}
+                    tone={inventoryTone(serversQuery, servers.length, runningServers)}
                     onClick={() => router.push("/admin/servers")}
                   />
                   <SubsystemHealthMeter
                     icon={HealthECGIcon}
                     label="Control Plane"
-                    valueText={healthQuery.isError ? "Unavailable" : "Healthy"}
-                    percentage={healthQuery.isError ? 0 : 100}
-                    tone={healthQuery.isError ? "red" : "green"}
+                    valueText={
+                      healthQuery.isError ? "Unavailable" : !healthAvailable ? "Checking…" : "Reachable"
+                    }
+                    percentage={healthQuery.isError ? null : healthAvailable ? 100 : null}
+                    tone={healthQuery.isError ? "danger" : healthAvailable ? "ok" : "unknown"}
                     onClick={() => router.push("/admin/health")}
                   />
+                  {/* Both of these report their own absence: an unreachable
+                      /health and a /health that omits the check are distinct
+                      from a passing check, and neither may read as healthy. */}
                   <SubsystemHealthMeter
                     icon={DatabaseCylinderIcon}
                     label="Database Engine"
-                    valueText={checks.find((c) => c.name === "database")?.status === "ok" ? "Healthy" : "Degraded"}
-                    percentage={checks.find((c) => c.name === "database")?.status === "ok" ? 100 : 40}
-                    tone={checks.find((c) => c.name === "database")?.status === "ok" ? "green" : "red"}
+                    valueText={databaseVerdict.label}
+                    percentage={verdictPct(databaseVerdict)}
+                    tone={databaseVerdict.tone}
                     onClick={() => router.push("/admin/databases")}
                   />
                   <SubsystemHealthMeter
                     icon={ActivityWaveIcon}
                     label="Queue / Workers"
-                    valueText={checks.find((c) => c.name === "queue")?.status === "ok" ? "Healthy" : "Healthy"}
-                    percentage={100}
-                    tone="green"
+                    valueText={queueVerdict.label}
+                    percentage={verdictPct(queueVerdict)}
+                    tone={queueVerdict.tone}
                     onClick={() => router.push("/admin/activity")}
                   />
                 </div>
@@ -870,19 +1161,45 @@ export function AdminOverview() {
                   <div className="flex items-center gap-2">
                     <TrendingUp size={16} className="text-sky-400" />
                     <div>
-                      <h3 className="text-sm font-bold text-slate-100">Capacity Trend</h3>
-                      <p className="text-[11px] text-slate-400">Resource usage across all nodes</p>
+                      <h3 className="text-sm font-bold text-slate-100">Allocation Trend</h3>
+                      <p className="text-[11px] text-slate-400">
+                        Allocated share of node capacity, averaged across nodes — not measured host load
+                      </p>
                     </div>
                   </div>
                   <span className="rounded border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-400">
-                    Last 24 hours
+                    {timeRangeLabel}
                   </span>
                 </div>
 
-                {/* Multi-line Recharts curve */}
+                {/* Multi-line Recharts curve over real metric history */}
                 <div className="mt-4 h-44 w-full">
+                  {trendQuery.isError ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-red-500/20 bg-red-500/[0.04] px-4 text-center">
+                      <p className="text-xs font-semibold text-red-300">Metric history unavailable</p>
+                      <p className="text-[11px] text-slate-400">
+                        {trendQuery.error instanceof Error ? trendQuery.error.message : "The series could not be read."}
+                      </p>
+                    </div>
+                  ) : nodes.length === 0 ? (
+                    <div className="flex h-full items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center text-[11px] text-slate-500">
+                      No nodes are registered, so there is no allocation history to plot.
+                    </div>
+                  ) : trendQuery.isPending ? (
+                    <div className="flex h-full items-center justify-center rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center text-[11px] text-slate-500">
+                      Reading metric history…
+                    </div>
+                  ) : !trendHasData ? (
+                    <div className="flex h-full flex-col items-center justify-center gap-1 rounded-lg border border-white/[0.06] bg-white/[0.01] px-4 text-center">
+                      <p className="text-xs font-semibold text-slate-300">No readings in this window</p>
+                      <p className="text-[11px] text-slate-500">
+                        The control plane recorded no allocation samples for {timeRangeLabel.toLowerCase()}. This is
+                        missing history, not idle hosts.
+                      </p>
+                    </div>
+                  ) : (
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={TREND_24H_DATA} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}>
+                    <AreaChart data={trendSeries} margin={{ top: 10, right: 5, left: -20, bottom: 0 }}>
                       <defs>
                         <linearGradient id="cpuGrad" x1="0" y1="0" x2="0" y2="1">
                           <stop offset="5%" stopColor={chart.blue} stopOpacity={0.3} />
@@ -912,23 +1229,48 @@ export function AdminOverview() {
                       <Area type="monotone" dataKey="storage" stroke={chart.orange} strokeWidth={2} fill="url(#storageGrad)" />
                     </AreaChart>
                   </ResponsiveContainer>
+                  )}
                 </div>
 
-                {/* Trend Legend */}
+                {/* Legend carries the latest recorded allocation, or a dash when
+                    no node reported that metric. */}
                 <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-white/[0.06] pt-2.5 text-[11px] font-mono">
                   <span className="flex items-center gap-1.5 text-slate-300">
-                    <span className="h-2 w-2 rounded-full bg-sky-400" /> CPU 12%
+                    <span className="h-2 w-2 rounded-full bg-sky-400" /> CPU{" "}
+                    {cpuPercent === undefined ? <span className="text-slate-500">—</span> : `${cpuPercent}%`}
                   </span>
                   <span className="flex items-center gap-1.5 text-slate-300">
-                    <span className="h-2 w-2 rounded-full bg-purple-400" /> Memory 28%
+                    <span className="h-2 w-2 rounded-full bg-purple-400" /> Memory{" "}
+                    {memoryPercent === undefined ? <span className="text-slate-500">—</span> : `${memoryPercent}%`}
                   </span>
                   <span className="flex items-center gap-1.5 text-slate-300">
-                    <span className="h-2 w-2 rounded-full bg-orange-400" /> Storage 34%
-                  </span>
-                  <span className="flex items-center gap-1.5 text-slate-300">
-                    <span className="h-2 w-2 rounded-full bg-cyan-400" /> Network 18%
+                    <span className="h-2 w-2 rounded-full bg-orange-400" /> Storage{" "}
+                    {storagePercent === undefined ? <span className="text-slate-500">—</span> : `${storagePercent}%`}
                   </span>
                 </div>
+
+                {/* The fleet series is a client fan-out; incomplete coverage is
+                    stated rather than silently averaged away. */}
+                {trendQuery.data &&
+                (trendQuery.data.failedNodeIds.length > 0 || trendQuery.data.skippedNodeIds.length > 0) ? (
+                  <p className="mt-2 text-[11px] leading-5 text-amber-300/80">
+                    Partial series:{" "}
+                    {trendQuery.data.failedNodeIds.length > 0
+                      ? `${trendQuery.data.failedNodeIds.length} node${
+                          trendQuery.data.failedNodeIds.length === 1 ? "" : "s"
+                        } failed to return history`
+                      : null}
+                    {trendQuery.data.failedNodeIds.length > 0 && trendQuery.data.skippedNodeIds.length > 0
+                      ? "; "
+                      : null}
+                    {trendQuery.data.skippedNodeIds.length > 0
+                      ? `${trendQuery.data.skippedNodeIds.length} node${
+                          trendQuery.data.skippedNodeIds.length === 1 ? "" : "s"
+                        } beyond the fan-out cap were not queried`
+                      : null}
+                    .
+                  </p>
+                ) : null}
               </div>
             </div>
           </div>
@@ -944,7 +1286,11 @@ export function AdminOverview() {
                     <div>
                       <h3 className="text-sm font-bold text-slate-100">Workloads</h3>
                       <p className="text-[11px] text-slate-400">
-                        {servers.filter((s) => s.status !== "running").length} stopped · 0 pending
+                        {serversQuery.isError
+                          ? "Inventory unavailable"
+                          : `${servers.length} total · ${
+                              servers.filter((s) => s.status !== "running").length
+                            } not running`}
                       </p>
                     </div>
                   </div>
@@ -988,7 +1334,10 @@ export function AdminOverview() {
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-semibold text-slate-200">{server.name}</p>
                           <p className="truncate text-[10px] font-mono text-slate-500">
-                            {server.node || "Ubuntu Demo Node"} · {server.memoryMb || 2048} MiB
+                            {server.node || "node not reported"} ·{" "}
+                            {typeof server.memoryMb === "number" && Number.isFinite(server.memoryMb)
+                              ? `${server.memoryMb} MiB`
+                              : "memory not set"}
                           </p>
                         </div>
                         <Pill
@@ -1021,7 +1370,11 @@ export function AdminOverview() {
                         <span className="text-[10px] font-mono text-slate-500 uppercase tracking-wider">Infrastructure</span>
                       </div>
                       <p className="text-[11px] text-slate-400">
-                        {nodes.length} node{nodes.length === 1 ? "" : "s"}
+                        {nodesQuery.isError
+                          ? "Inventory unavailable"
+                          : !isAvailable(nodesQuery)
+                            ? "Loading…"
+                            : `${nodes.length} node${nodes.length === 1 ? "" : "s"}`}
                       </p>
                     </div>
                   </div>
@@ -1037,6 +1390,15 @@ export function AdminOverview() {
 
                 {/* Nodes Content */}
                 <div className="mt-4 space-y-3">
+                  {nodesQuery.isError ? (
+                    <p className="text-xs text-red-300">
+                      Beacon inventory unavailable — node state cannot be shown.
+                    </p>
+                  ) : !isAvailable(nodesQuery) ? (
+                    <p className="text-xs text-slate-500">Reading beacon inventory…</p>
+                  ) : nodes.length === 0 ? (
+                    <p className="text-xs text-slate-500">No beacons are enrolled yet.</p>
+                  ) : null}
                   {nodes.slice(0, 1).map((node) => (
                     <div
                       key={node.id}
@@ -1052,42 +1414,70 @@ export function AdminOverview() {
                             )}
                           />
                           <span className="truncate text-xs font-bold text-slate-200">{node.name}</span>
-                          <span className="font-mono text-[10px] text-slate-400">
-                            {node.fqdn || "192.168.1.10"}
-                          </span>
+                          {node.fqdn ? (
+                            <span className="truncate font-mono text-[10px] text-slate-400">{node.fqdn}</span>
+                          ) : null}
                         </div>
-                        <span className="rounded border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-300">
-                          {hasHealthyPersistedHeartbeat(node) ? "Online" : "Degraded"}
+                        <span
+                          className={cn(
+                            "rounded border px-2 py-0.5 font-mono text-[10px] font-semibold",
+                            hasHealthyPersistedHeartbeat(node)
+                              ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-300"
+                              : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+                          )}
+                        >
+                          {hasHealthyPersistedHeartbeat(node) ? "Online" : node.heartbeatState || "Unknown"}
                         </span>
                       </div>
 
-                      {/* Gauges */}
-                      <div className="mt-3 grid grid-cols-4 gap-2 text-center font-mono text-[10px]">
-                        <div className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5">
-                          <span className="text-slate-500 block">CPU</span>
-                          <span className="font-bold text-sky-400">12%</span>
-                        </div>
-                        <div className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5">
-                          <span className="text-slate-500 block">Mem</span>
-                          <span className="font-bold text-purple-400">28%</span>
-                        </div>
-                        <div className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5">
-                          <span className="text-slate-500 block">Disk</span>
-                          <span className="font-bold text-orange-400">34%</span>
-                        </div>
-                        <div className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5">
-                          <span className="text-slate-500 block">Net</span>
-                          <span className="font-bold text-cyan-400">18%</span>
-                        </div>
-                      </div>
+                      {/* Gauges — this node's own latest metric row, which the
+                          control plane derives from its capacity snapshot. These
+                          are allocated shares, not measured load. A node that has
+                          not reported shows a dash, not a number. */}
+                      {(() => {
+                        const row = metricsByNode.get(node.id);
+                        const gauges = [
+                          { label: "CPU", value: roundPercent(row?.cpuPercent), tint: "text-sky-400" },
+                          { label: "Mem", value: roundPercent(row?.memoryPercent), tint: "text-purple-400" },
+                          { label: "Disk", value: roundPercent(row?.diskPercent), tint: "text-orange-400" },
+                        ];
+                        return (
+                          <>
+                            <p className="mt-3 font-mono text-[10px] uppercase tracking-wider text-slate-500">
+                              Allocated
+                            </p>
+                            <div className="mt-1.5 grid grid-cols-3 gap-2 text-center font-mono text-[10px]">
+                              {gauges.map((gauge) => (
+                                <div
+                                  className="rounded border border-white/[0.04] bg-white/[0.02] p-1.5"
+                                  key={gauge.label}
+                                >
+                                  <span className="block text-slate-500">{gauge.label}</span>
+                                  <span className={cn("font-bold", gauge.value === undefined ? "text-slate-500" : gauge.tint)}>
+                                    {gauge.value === undefined ? "—" : `${gauge.value}%`}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
 
-                      {/* Footer Metadata */}
-                      <div className="mt-3 flex items-center justify-between border-t border-white/[0.04] pt-2 text-[10px] font-mono text-slate-400">
-                        <span>Uptime: 4d 12h</span>
-                        <span>Runtime: Docker</span>
-                        <span>Workloads: {servers.length}</span>
-                        <span>Region: {node.region || "Home"}</span>
-                      </div>
+                            {/* Footer carries only what the control plane
+                                reports for this node. */}
+                            <div className="mt-3 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-t border-white/[0.04] pt-2 text-[10px] font-mono text-slate-400">
+                              <span>
+                                Workloads: {servers.filter((server) => server.nodeId === node.id).length}
+                              </span>
+                              <span>Region: {node.region || "not set"}</span>
+                              <span className="text-slate-500">
+                                {row
+                                  ? `Metrics ${relativeTime(row.observedAt)}`
+                                  : latestMetricsQuery.isError
+                                    ? "Metrics unavailable"
+                                    : "No metrics reported"}
+                              </span>
+                            </div>
+                          </>
+                        );
+                      })()}
                     </div>
                   ))}
                 </div>
@@ -1137,79 +1527,66 @@ export function AdminOverview() {
             {!attentionCollapsed ? (
               pendingAttention === 0 ? (
                 <div className="mt-4 space-y-3">
-                  <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/[0.03] p-3 text-xs leading-5 text-emerald-200/90">
-                    <p className="font-semibold text-emerald-300 mb-0.5">All systems operational</p>
-                    <p>
-                      No open issues — fleet heartbeat, workloads and control-plane checks are healthy. See{" "}
-                      <button
-                        type="button"
-                        className="underline font-semibold hover:text-emerald-100"
-                        onClick={() => router.push("/admin/health")}
-                      >
-                        Health
-                      </button>{" "}
-                      for deep diagnostics.
-                    </p>
-                  </div>
-
-                  {/* Informational Network Events */}
-                  <div className="space-y-2 pt-2 border-t border-white/[0.04]">
-                    <div
-                      onClick={() => router.push("/admin/nodes")}
-                      className="flex items-start justify-between gap-2 text-xs p-1.5 -mx-1.5 rounded hover:bg-white/[0.04] cursor-pointer transition"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0" />
-                        <div>
-                          <p className="font-semibold text-slate-200 text-[11px]">High disk usage</p>
-                          <p className="text-[10px] text-slate-400">Ubuntu Demo Node</p>
-                        </div>
-                      </div>
-                      <span className="font-mono text-[10px] text-slate-500 shrink-0">12m ago</span>
+                  {/* An empty failure list only means "nothing operational" when
+                      every source that could report a failure was readable. */}
+                  {overallStatus === "unavailable" ? (
+                    <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3 text-xs leading-5 text-amber-100/90">
+                      <p className="mb-0.5 font-semibold text-amber-300">Nothing to report — and nothing verified</p>
+                      <p>
+                        One or more sources could not be read, so this list is not evidence of a healthy fleet. See{" "}
+                        <button
+                          className="font-semibold underline hover:text-amber-100"
+                          onClick={() => router.push("/admin/health")}
+                          type="button"
+                        >
+                          Health
+                        </button>{" "}
+                        for which checks are missing.
+                      </p>
                     </div>
-
-                    <div
-                      onClick={() => router.push("/admin/servers")}
-                      className="flex items-start justify-between gap-2 text-xs p-1.5 -mx-1.5 rounded hover:bg-white/[0.04] cursor-pointer transition"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400 mt-1.5 shrink-0" />
-                        <div>
-                          <p className="font-semibold text-slate-200 text-[11px]">Memory usage above 80%</p>
-                          <p className="text-[10px] text-slate-400">Game Server · gs-1</p>
-                        </div>
-                      </div>
-                      <span className="font-mono text-[10px] text-slate-500 shrink-0">28m ago</span>
+                  ) : (
+                    <div className="rounded-xl border border-emerald-500/15 bg-emerald-500/[0.03] p-3 text-xs leading-5 text-emerald-200/90">
+                      <p className="mb-0.5 font-semibold text-emerald-300">No open issues</p>
+                      <p>
+                        Fleet heartbeat, workloads and the control-plane checks that reported are all passing. See{" "}
+                        <button
+                          className="font-semibold underline hover:text-emerald-100"
+                          onClick={() => router.push("/admin/health")}
+                          type="button"
+                        >
+                          Health
+                        </button>{" "}
+                        for deep diagnostics.
+                      </p>
                     </div>
+                  )}
 
-                    <div
-                      onClick={() => router.push("/admin/nodes")}
-                      className="flex items-start justify-between gap-2 text-xs p-1.5 -mx-1.5 rounded hover:bg-white/[0.04] cursor-pointer transition"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-sky-400 mt-1.5 shrink-0" />
-                        <div>
-                          <p className="font-semibold text-slate-200 text-[11px]">New node connected</p>
-                          <p className="text-[10px] text-slate-400">forge-node-2</p>
+                  {/* Warnings are not failures, but they are real and belong
+                      here. Nothing is listed when nothing is reported. */}
+                  {warningChecks.length > 0 ? (
+                    <div className="space-y-2 border-t border-white/[0.04] pt-2">
+                      {warningChecks.slice(0, 4).map((check) => (
+                        <div
+                          className="-mx-1.5 flex items-start justify-between gap-2 rounded p-1.5 text-xs transition hover:bg-white/[0.04] cursor-pointer"
+                          key={check.name}
+                          onClick={() => router.push("/admin/health")}
+                        >
+                          <div className="flex min-w-0 items-start gap-2">
+                            <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-amber-400" />
+                            <div className="min-w-0">
+                              <p className="truncate text-[11px] font-semibold text-slate-200 capitalize">
+                                {check.name.replace(/_/g, " ")}
+                              </p>
+                              <p className="truncate text-[10px] text-slate-400">
+                                {check.notificationMessage || check.label || "Reported a warning without a message."}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="shrink-0 font-mono text-[10px] text-amber-300/80">warning</span>
                         </div>
-                      </div>
-                      <span className="font-mono text-[10px] text-slate-500 shrink-0">1h ago</span>
+                      ))}
                     </div>
-
-                    <div
-                      onClick={() => router.push("/admin/databases")}
-                      className="flex items-start justify-between gap-2 text-xs p-1.5 -mx-1.5 rounded hover:bg-white/[0.04] cursor-pointer transition"
-                    >
-                      <div className="flex items-start gap-2 min-w-0">
-                        <span className="h-1.5 w-1.5 rounded-full bg-sky-400 mt-1.5 shrink-0" />
-                        <div>
-                          <p className="font-semibold text-slate-200 text-[11px]">Backup completed</p>
-                          <p className="text-[10px] text-slate-400">Database · db-1</p>
-                        </div>
-                      </div>
-                      <span className="font-mono text-[10px] text-slate-500 shrink-0">2h ago</span>
-                    </div>
-                  </div>
+                  ) : null}
                 </div>
               ) : (
                 <ul className="mt-4 max-h-[220px] divide-y divide-white/[0.06] overflow-auto rounded-xl border border-white/[0.08] bg-black/30">
@@ -1257,8 +1634,14 @@ export function AdminOverview() {
               </button>
             </div>
 
-            {auditEvents.length === 0 ? (
-              <p className="mt-4 text-xs text-slate-500">No recent changes.</p>
+            {activityQuery.isError ? (
+              <p className="mt-4 text-xs text-amber-300/80">
+                The audit feed could not be read, so recent changes are unknown.
+              </p>
+            ) : activityQuery.isPending ? (
+              <p className="mt-4 text-xs text-slate-500">Reading audit feed…</p>
+            ) : auditEvents.length === 0 ? (
+              <p className="mt-4 text-xs text-slate-500">No audit events recorded.</p>
             ) : (
               <div className="mt-4 divide-y divide-white/[0.04]">
                 {auditEvents.slice(0, 4).map((event) => (
@@ -1279,7 +1662,9 @@ export function AdminOverview() {
                       </div>
                     </div>
                     <span className="font-mono text-[10px] text-slate-500 shrink-0">
-                      {event.createdAt ? new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "just now"}
+                      {event.createdAt
+                        ? new Date(event.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+                        : "—"}
                     </span>
                   </div>
                 ))}
@@ -1418,7 +1803,7 @@ export function AdminOverview() {
             </thead>
             <tbody className="divide-y divide-white/[0.04]">
               {auditEvents.length > 0 ? (
-                auditEvents.slice(0, 4).map((evt, idx) => (
+                auditEvents.slice(0, 6).map((evt, idx) => (
                   <tr
                     key={evt.id || idx}
                     onClick={() => router.push("/admin/operations")}
@@ -1427,89 +1812,38 @@ export function AdminOverview() {
                     <td className="py-2.5 font-mono text-slate-400">
                       {evt.createdAt
                         ? new Date(evt.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
-                        : "12:14 AM"}
+                        : "—"}
                     </td>
                     <td className="py-2.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-sky-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                        <span>Deploy</span>
+                      {/* Category comes from the action, not from a fixed label. */}
+                      <span className="inline-flex items-center gap-1.5 rounded-full border border-slate-500/30 bg-slate-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-slate-300">
+                        <span className="h-1.5 w-1.5 rounded-full bg-slate-400" />
+                        <span>{evt.action.split(/[._]/)[0] || "audit"}</span>
                       </span>
                     </td>
                     <td className="py-2.5 font-semibold text-slate-300 capitalize">
-                      {evt.action.includes("server") ? "Server" : "Node"}
+                      {evt.targetType || evt.resource || "—"}
                     </td>
                     <td className="py-2.5 text-slate-400">
-                      <span className="text-slate-200 font-medium">{evt.action.replace(/_/g, " ")} executed</span>
+                      <span className="text-slate-200 font-medium">{evt.action.replace(/_/g, " ")}</span>
                       {evt.actorEmail ? ` by ${evt.actorEmail}` : ""}
                     </td>
                     <td className="py-2.5 text-right font-mono text-slate-500">
-                      {idx === 0 ? "2m ago" : idx === 1 ? "6m ago" : idx === 2 ? "15m ago" : "34m ago"}
+                      {relativeTime(evt.createdAt) ?? "—"}
                     </td>
                   </tr>
                 ))
               ) : (
-                <>
-                  <tr
-                    onClick={() => router.push("/admin/operations")}
-                    className="hover:bg-white/[0.04] cursor-pointer transition"
-                  >
-                    <td className="py-2.5 font-mono text-slate-400">12:14 AM</td>
-                    <td className="py-2.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-emerald-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-                        <span>Info</span>
-                      </span>
-                    </td>
-                    <td className="py-2.5 font-semibold text-slate-300">Node</td>
-                    <td className="py-2.5 text-slate-400">Health check passed for Ubuntu Demo Node</td>
-                    <td className="py-2.5 text-right font-mono text-slate-500">2m ago</td>
-                  </tr>
-                  <tr
-                    onClick={() => router.push("/admin/operations")}
-                    className="hover:bg-white/[0.04] cursor-pointer transition"
-                  >
-                    <td className="py-2.5 font-mono text-slate-400">12:10 AM</td>
-                    <td className="py-2.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-sky-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-sky-400" />
-                        <span>Deploy</span>
-                      </span>
-                    </td>
-                    <td className="py-2.5 font-semibold text-slate-300">Deployment</td>
-                    <td className="py-2.5 text-slate-400">Deployment started: coolify-app (v2.4.1)</td>
-                    <td className="py-2.5 text-right font-mono text-slate-500">6m ago</td>
-                  </tr>
-                  <tr
-                    onClick={() => router.push("/admin/operations")}
-                    className="hover:bg-white/[0.04] cursor-pointer transition"
-                  >
-                    <td className="py-2.5 font-mono text-slate-400">12:01 AM</td>
-                    <td className="py-2.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-cyan-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-cyan-400" />
-                        <span>Success</span>
-                      </span>
-                    </td>
-                    <td className="py-2.5 font-semibold text-slate-300">Backup</td>
-                    <td className="py-2.5 text-slate-400">Backup completed: db-1</td>
-                    <td className="py-2.5 text-right font-mono text-slate-500">15m ago</td>
-                  </tr>
-                  <tr
-                    onClick={() => router.push("/admin/operations")}
-                    className="hover:bg-white/[0.04] cursor-pointer transition"
-                  >
-                    <td className="py-2.5 font-mono text-slate-400">11:42 PM</td>
-                    <td className="py-2.5">
-                      <span className="inline-flex items-center gap-1.5 rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-0.5 font-mono text-[10px] font-semibold text-amber-300">
-                        <span className="h-1.5 w-1.5 rounded-full bg-amber-400" />
-                        <span>Warning</span>
-                      </span>
-                    </td>
-                    <td className="py-2.5 font-semibold text-slate-300">Server</td>
-                    <td className="py-2.5 text-slate-400">Memory usage above 80%: gs-1</td>
-                    <td className="py-2.5 text-right font-mono text-slate-500">34m ago</td>
-                  </tr>
-                </>
+                /* One row, stating which of the three it is. Never sample events. */
+                <tr>
+                  <td className="py-4 text-xs text-slate-500" colSpan={5}>
+                    {activityQuery.isError
+                      ? "The audit feed could not be read. Recent infrastructure events are unknown — this is not an idle fleet."
+                      : activityQuery.isPending
+                      ? "Reading audit feed…"
+                      : "No audit events have been recorded."}
+                  </td>
+                </tr>
               )}
             </tbody>
           </table>
@@ -1632,3 +1966,4 @@ export function AdminOverview() {
     </AdminPageLayout>
   );
 }
+

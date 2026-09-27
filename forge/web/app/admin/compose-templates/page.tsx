@@ -301,7 +301,7 @@ export default function ComposeTemplatesPage() {
             <DialogTitle>{editing ? "Edit template" : "New template"}</DialogTitle>
             <DialogDescription>Define the compose document and the parameters operators fill in on deploy.</DialogDescription>
           </DialogHeader>
-          <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          <div className="ui-dialog-body space-y-4">
             <div className="grid gap-3 sm:grid-cols-2">
               <Input label="Name" value={draft.name} onChange={(v) => setDraft((d) => ({ ...d, name: v }))} placeholder="PostgreSQL + PgBouncer" />
               <Input label="Category" value={draft.category} onChange={(v) => setDraft((d) => ({ ...d, category: v }))} placeholder="Databases" />
@@ -392,7 +392,7 @@ export default function ComposeTemplatesPage() {
               </div>
             )}
           </div>
-          <DialogFooter className="border-t border-white/[0.06] px-6 py-4">
+          <DialogFooter>
             <Btn tone="ghost" onClick={() => setModalOpen(false)}>Cancel</Btn>
             <Btn tone="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending || !canSave}>
               {saveMutation.isPending ? "Saving…" : editing ? "Save changes" : "Create template"}
@@ -408,7 +408,7 @@ export default function ComposeTemplatesPage() {
             <DialogTitle>Deploy “{deploying?.name}”</DialogTitle>
             <DialogDescription>Fill in the template parameters, then create a new stack.</DialogDescription>
           </DialogHeader>
-          <div className="flex-1 space-y-4 overflow-y-auto px-6 py-4">
+          <div className="ui-dialog-body space-y-4">
             <Input label="Stack name" value={deployName} onChange={setDeployName} placeholder="my-postgres-prod" />
             <label className="block text-sm font-medium text-slate-300">
               <span className="mb-1.5 block">Target node</span>
@@ -454,7 +454,7 @@ export default function ComposeTemplatesPage() {
               </div>
             )}
           </div>
-          <DialogFooter className="border-t border-white/[0.06] px-6 py-4">
+          <DialogFooter>
             <Btn tone="ghost" onClick={() => setDeploying(null)}>Cancel</Btn>
             <Btn tone="primary" onClick={() => instantiateMutation.mutate()} disabled={instantiateMutation.isPending || !canDeploy}>
               <Rocket className="h-4 w-4" /> {instantiateMutation.isPending ? "Deploying…" : "Deploy stack"}

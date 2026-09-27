@@ -190,7 +190,6 @@ export function BeaconWorkspace() {
   return (
     <div className="space-y-5">
       <AdminPageHeader
-        breadcrumb="Infrastructure / Beacons"
         title={node.name}
         description={[
           node.fqdn ?? node.baseUrl ?? "—",

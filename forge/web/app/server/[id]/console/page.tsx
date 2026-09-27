@@ -4,5 +4,6 @@ import { ConsoleView } from "@/components/server/console-view";
 import { ServerConsoleLayout } from "@/components/server/server-console-layout";
 
 export default function ServerConsolePage() {
-  return <ServerConsoleLayout activeTab="console">{(server) => <ConsoleView server={server} />}</ServerConsoleLayout>;
+  // The tab is named "terminal"; its route segment is the older "console".
+  return <ServerConsoleLayout activeTab="terminal">{(server) => <ConsoleView server={server} />}</ServerConsoleLayout>;
 }

@@ -71,6 +71,15 @@ export function triggerBackup(serverId: string, ignored?: string[]): Promise<{ u
 
 export { createBackup } from './servers';
 
-export function cleanupExpiredBackups(serverId: string): Promise<{ ok: boolean; cleaned: number }> {
-  return postJSON<{ ok: boolean; cleaned: number }>(`/servers/${encodeURIComponent(serverId)}/backups/cleanup`);
+/**
+ * Applies retention (age limit and count limit) to one server's backups.
+ *
+ * The response field is `deleted`. This used to be typed as `cleaned`, which is
+ * what the installation-wide sweep returns — that handler was registered on
+ * this same path and shadowed by the per-server one, so the type described a
+ * route that never answered and `result.cleaned` was always undefined.
+ * The global sweep now lives at POST /admin/backups/cleanup.
+ */
+export function cleanupServerBackups(serverId: string): Promise<{ ok: boolean; deleted: number }> {
+  return postJSON<{ ok: boolean; deleted: number }>(`/servers/${encodeURIComponent(serverId)}/backups/cleanup`);
 }

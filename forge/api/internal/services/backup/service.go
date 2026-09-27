@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -687,58 +688,83 @@ func (s *Service) CreateVolumeBackup(ctx context.Context, req CreateVolumeBackup
 	return backup, nil
 }
 
+// CleanupExpiredBackups sweeps retention across every enabled policy and every
+// backup the store has marked expired. It returns the number of backups it
+// actually deleted from both storage and the database.
+//
+// A partial sweep reports both: the count of real deletions and a joined error
+// naming what failed. It used to swallow every failure and return
+// (cleaned, nil) — a store-less service reported success for a sweep it could
+// not perform, a failed ListAllEnabledPolicies skipped the whole policy pass
+// silently, and a DeleteBackup that left the database row behind still counted
+// the backup as cleaned. Callers (schedule_runner and the admin cleanup route)
+// had no way to tell a clean sweep from a completely failed one.
 func (s *Service) CleanupExpiredBackups(ctx context.Context) (int64, error) {
 	if s.store == nil {
-		return 0, nil
+		return 0, fmt.Errorf("backup cleanup: store unavailable")
 	}
 	var cleaned int64
+	var problems []error
 
 	policies, err := s.ListAllEnabledPolicies(ctx)
-	if err == nil {
-		for _, p := range policies {
-			backups, listErr := s.store.ListBackups(ctx, p.ServerID, 1, 1000)
-			if listErr != nil {
-				continue
-			}
-			for _, b := range backups {
-				if b.Status != "completed" || b.IsLocked {
-					continue
-				}
-				if b.CreatedAt.Before(time.Now().AddDate(0, 0, -p.RetentionDays)) {
-					if delErr := s.DeleteBackupFromStorage(ctx, b.ServerID, b.Name, p.Storage); delErr != nil {
-						continue
-					}
-					s.store.DeleteBackup(ctx, b.ServerID, b.Name, nil)
-					cleaned++
-				}
-			}
-		}
+	if err != nil {
+		problems = append(problems, fmt.Errorf("list enabled policies: %w", err))
 	}
-
-	expired, listErr := s.store.ListExpiredBackups(ctx)
-	if listErr == nil {
-		for _, b := range expired {
+	for _, p := range policies {
+		backups, listErr := s.store.ListBackups(ctx, p.ServerID, 1, 1000)
+		if listErr != nil {
+			problems = append(problems, fmt.Errorf("list backups for server %s: %w", p.ServerID, listErr))
+			continue
+		}
+		for _, b := range backups {
 			if b.Status != "completed" || b.IsLocked {
 				continue
 			}
-			storage := s.defaultAdapter
-			var receipt StorageReceipt
-			if len(b.StorageReceipt) > 0 {
-				if json.Unmarshal(b.StorageReceipt, &receipt) == nil && receipt.Adapter != "" {
-					storage = receipt.Adapter
-				}
-			}
-			if delErr := s.DeleteBackupFromStorage(ctx, b.ServerID, b.Name, storage); delErr != nil {
+			if !b.CreatedAt.Before(time.Now().AddDate(0, 0, -p.RetentionDays)) {
 				continue
 			}
+			if delErr := s.DeleteBackupFromStorage(ctx, b.ServerID, b.Name, p.Storage); delErr != nil {
+				problems = append(problems, fmt.Errorf("delete %s/%s from storage %s: %w", b.ServerID, b.Name, p.Storage, delErr))
+				continue
+			}
+			// Storage is already gone at this point, so a database failure
+			// leaves a row pointing at a deleted archive. That is a failure to
+			// report, not a deletion to count.
 			if dbErr := s.store.DeleteBackup(ctx, b.ServerID, b.Name, nil); dbErr != nil {
+				problems = append(problems, fmt.Errorf("delete backup record %s/%s: %w", b.ServerID, b.Name, dbErr))
 				continue
 			}
 			cleaned++
 		}
 	}
 
-	return cleaned, nil
+	expired, listErr := s.store.ListExpiredBackups(ctx)
+	if listErr != nil {
+		problems = append(problems, fmt.Errorf("list expired backups: %w", listErr))
+	}
+	for _, b := range expired {
+		if b.Status != "completed" || b.IsLocked {
+			continue
+		}
+		storage := s.defaultAdapter
+		var receipt StorageReceipt
+		if len(b.StorageReceipt) > 0 {
+			if json.Unmarshal(b.StorageReceipt, &receipt) == nil && receipt.Adapter != "" {
+				storage = receipt.Adapter
+			}
+		}
+		if delErr := s.DeleteBackupFromStorage(ctx, b.ServerID, b.Name, storage); delErr != nil {
+			problems = append(problems, fmt.Errorf("delete expired %s/%s from storage %s: %w", b.ServerID, b.Name, storage, delErr))
+			continue
+		}
+		if dbErr := s.store.DeleteBackup(ctx, b.ServerID, b.Name, nil); dbErr != nil {
+			problems = append(problems, fmt.Errorf("delete expired backup record %s/%s: %w", b.ServerID, b.Name, dbErr))
+			continue
+		}
+		cleaned++
+	}
+
+	return cleaned, errors.Join(problems...)
 }
 
 func (s *Service) EnforceRetentionPolicy(ctx context.Context, serverID string, policy store.BackupPolicy) error {

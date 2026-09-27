@@ -67,7 +67,7 @@ export default function SocialProvidersPage() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader title="Social Login Providers" sub="Configure real Discord OAuth, Steam OpenID, and Authentik OAuth settings. This page does not test or claim provider connectivity." />
+      <SectionHeader title="Single Sign-On" sub="Discord OAuth, Steam OpenID and Authentik OAuth sign-in providers. This page does not test or claim provider connectivity." />
       <Card>
         <CardHeader title={`${providers.length} providers`} icon={Globe} />
         {query.isLoading ? (

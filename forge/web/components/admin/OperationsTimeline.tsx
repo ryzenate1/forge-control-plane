@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 import { GenerationFencedDots, StateLanesBadge } from "@/components/shared/generation-fenced-dot";
 import { fetchOperationsTimeline, type OperationsTimelineItem } from "@/lib/api/operations";
 import { statusTone as centralStatusTone } from "@/lib/api/status";
+import { toneStyles } from "@/components/ui/forge/status";
 
 function kindIcon(kind: string) {
   switch (kind) {
@@ -43,12 +44,7 @@ function kindTone(kind: string) {
 }
 
 function statusTone(status: string) {
-  const tone = centralStatusTone(status, "deployment");
-  if (tone === "green") return "border-emerald-500/30 bg-emerald-500/10 text-emerald-300";
-  if (tone === "red") return "border-red-500/30 bg-red-500/10 text-red-300";
-  if (tone === "yellow") return "border-amber-500/30 bg-amber-500/10 text-amber-300";
-  if (tone === "blue") return "border-sky-500/30 bg-sky-500/10 text-sky-300";
-  return "border-[var(--line)] bg-[var(--surface-raised)] text-[var(--text-subtle)]";
+  return toneStyles[centralStatusTone(status, "deployment")].chip;
 }
 
 function formatTime(iso: string) {

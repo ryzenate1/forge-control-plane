@@ -1,8 +1,16 @@
 "use client";
 
+/**
+ * Compound dialog driven by a context provider.
+ *
+ * All chrome comes from the canonical `.ui-dialog-*` classes, so this and
+ * `ForgeDialog` render identically. New code should prefer `ForgeDialog` from
+ * `@/components/ui/forge`, which also brings focus trapping and scroll lock.
+ */
+
+import { X } from "lucide-react";
 import * as React from "react";
 import { cn } from "@/lib/utils";
-import { X } from "lucide-react";
 
 interface DialogContextValue {
   open: boolean;
@@ -22,11 +30,8 @@ function Dialog({ open, onOpenChange, children }: {
   onOpenChange: (open: boolean) => void;
   children: React.ReactNode;
 }) {
-  return (
-    <DialogContext.Provider value={{ open, onOpenChange }}>
-      {children}
-    </DialogContext.Provider>
-  );
+  const value = React.useMemo(() => ({ open, onOpenChange }), [open, onOpenChange]);
+  return <DialogContext.Provider value={value}>{children}</DialogContext.Provider>;
 }
 
 function DialogTrigger({ children, asChild }: {
@@ -44,7 +49,7 @@ function DialogTrigger({ children, asChild }: {
     });
   }
   return (
-    <button type="button" onClick={() => onOpenChange(true)}>
+    <button onClick={() => onOpenChange(true)} type="button">
       {children}
     </button>
   );
@@ -66,23 +71,18 @@ function DialogContent({ className, children, ...props }: React.HTMLAttributes<H
 
   return (
     <div
-      className="fixed inset-0 z-50 grid place-items-center overflow-y-auto bg-black/70 p-4 backdrop-blur-md sm:p-6"
+      className="ui-dialog-layer"
       onClick={(e) => { if (e.target === e.currentTarget) onOpenChange(false); }}
+      role="presentation"
     >
-      <div
-        className={cn(
-          "relative flex max-h-[88vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-[var(--line)] bg-[var(--surface-raised)] shadow-[var(--shadow-dialog)]",
-          className
-        )}
-        {...props}
-      >
+      <div aria-modal="true" className={cn("ui-dialog", className)} role="dialog" {...props}>
         <button
-          type="button"
+          aria-label="Close"
+          className="ui-icon-button absolute right-3 top-3 z-10"
           onClick={() => onOpenChange(false)}
-          className="ui-icon-button absolute right-4 top-4"
+          type="button"
         >
-          <X className="h-4 w-4" />
-          <span className="sr-only">Close</span>
+          <X aria-hidden="true" className="size-4" />
         </button>
         {children}
       </div>
@@ -91,21 +91,19 @@ function DialogContent({ className, children, ...props }: React.HTMLAttributes<H
 }
 
 function DialogHeader({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return <div className={cn("flex flex-col space-y-1.5 text-left", className)} {...props} />;
+  return <div className={cn("ui-dialog-header flex-col items-stretch pr-12 text-left", className)} {...props} />;
 }
 
 function DialogTitle({ className, ...props }: React.HTMLAttributes<HTMLHeadingElement>) {
-  return <h2 className={cn("text-[15px] font-bold tracking-tight text-[var(--text)]", className)} {...props} />;
+  return <h2 className={cn("ui-dialog-title", className)} {...props} />;
 }
 
 function DialogDescription({ className, ...props }: React.HTMLAttributes<HTMLParagraphElement>) {
-  return <p className={cn("text-[13px] leading-5 text-[var(--text-subtle)]", className)} {...props} />;
+  return <p className={cn("ui-dialog-description", className)} {...props} />;
 }
 
 function DialogFooter({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) {
-  return (
-    <div className={cn("flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2", className)} {...props} />
-  );
+  return <div className={cn("ui-dialog-footer", className)} {...props} />;
 }
 
 Dialog.displayName = "Dialog";

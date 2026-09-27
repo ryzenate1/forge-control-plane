@@ -35,6 +35,20 @@ export const queryKeys = {
       artifacts: () => [...queryKeys.backups.admin.all, "artifacts"] as const,
       restores: () => [...queryKeys.backups.admin.all, "restores"] as const,
       status: () => [...queryKeys.backups.admin.all, "status"] as const,
+      /**
+       * Restic / Kopia engine surface (/admin/backup-engines). Nested under the
+       * admin backup prefix so `invalidateBackups` reaches it too.
+       *
+       * Snapshot keys are per-repository because listing snapshots invokes the
+       * engine CLI against one repository — there is no fleet-wide snapshot
+       * read to cache under a single key.
+       */
+      engines: {
+        all: ["admin", "backups", "engines"] as const,
+        repositories: () => [...queryKeys.backups.admin.engines.all, "repositories"] as const,
+        snapshots: (repoId: string) => [...queryKeys.backups.admin.engines.all, "snapshots", repoId] as const,
+        restores: (repoId: string) => [...queryKeys.backups.admin.engines.all, "restores", repoId] as const,
+      },
     },
   },
   domains: {
@@ -43,6 +57,37 @@ export const queryKeys = {
     byServer: (serverId: string | "all") => [...queryKeys.domains.all, serverId] as const,
     detail: (id: string) => [...queryKeys.domains.all, "detail", id] as const,
   },
+  /**
+   * Operational telemetry read by the admin Overview / Monitoring / Health
+   * experiences. These three pages read the same sources, so they must agree on
+   * the keys: a disagreement means one page shows a cached reading the others
+   * have already refreshed, which is a stale-data-presented-as-live defect.
+   */
+  health: {
+    all: ["health"] as const,
+    /** Control-plane diagnostic report — GET /health */
+    report: () => [...queryKeys.health.all, "report"] as const,
+    /** Live health-check runner targets — GET /target-health/targets */
+    targets: () => [...queryKeys.health.all, "targets"] as const,
+  },
+  monitoring: {
+    all: ["monitoring"] as const,
+    /** Latest reported row per node — GET /monitoring/nodes/metrics (no nodeId) */
+    latest: () => [...queryKeys.monitoring.all, "latest"] as const,
+    /** Observability summary — GET /monitoring/summary */
+    summary: () => [...queryKeys.monitoring.all, "summary"] as const,
+    /** Per-node history — GET /monitoring/nodes/metrics?nodeId=… */
+    history: (scope: string, period: string) =>
+      [...queryKeys.monitoring.all, "history", scope, period] as const,
+  },
+  activity: {
+    all: ["activity"] as const,
+    admin: (limit: number) => [...queryKeys.activity.all, "admin", limit] as const,
+    audit: () => [...queryKeys.activity.all, "audit"] as const,
+  },
+  reservations: { all: ["reservations"] as const },
+  recovery: { all: ["recovery"] as const },
+  users: { all: ["users"] as const },
 } as const;
 
 /**
