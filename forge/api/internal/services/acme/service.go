@@ -37,6 +37,13 @@ const (
 	ProviderBuyPass            CertificateProvider = "buypass"
 	ProviderGoogleTrust        CertificateProvider = "google-trust"
 
+	// Certificates the operator supplied themselves. Forge stores and serves
+	// them but has no way to reissue them, so they are never ACME-renewable.
+	// ProviderManual comes from POST /certificates/upload, ProviderCustom from
+	// POST /certificates (the proxy-domain-bound import).
+	ProviderManual CertificateProvider = "manual"
+	ProviderCustom CertificateProvider = "custom"
+
 	ChallengeTypeHTTP01 = "http-01"
 	ChallengeTypeDNS01  = "dns-01"
 
@@ -46,6 +53,24 @@ const (
 	buyPassURL          = "https://api.buypass.com/acme/directory"
 	googleTrustURL      = "https://dv.acme-v02.api.pki.goog/directory"
 )
+
+// IsACMEProvider reports whether a stored certificate's provider identifies an
+// ACME CA that Forge can order a replacement from.
+//
+// directoryURL falls back to Let's Encrypt for any string it does not
+// recognise, so this cannot be a "not manual" check: an unknown provider must
+// be treated as non-renewable rather than silently pointed at Let's Encrypt.
+// An empty provider is renewable because IssueCertificate defaults it to
+// ProviderLetsEncrypt, so rows written before that default was applied are
+// genuinely Let's Encrypt certificates.
+func IsACMEProvider(provider CertificateProvider) bool {
+	switch provider {
+	case "", ProviderLetsEncrypt, ProviderLetsEncryptStaging, ProviderZeroSSL, ProviderBuyPass, ProviderGoogleTrust:
+		return true
+	default:
+		return false
+	}
+}
 
 type DNSProviderFactory func(providerName string, credentials map[string]string) (challenge.Provider, error)
 
@@ -326,6 +351,15 @@ func (s *Service) RenewCertificate(ctx context.Context, certID string) (store.Ce
 	if err != nil {
 		return store.Certificate{}, err
 	}
+	// An operator-supplied certificate has no ACME order behind it. Renewing it
+	// here would place a fresh order against whatever CA directoryURL falls back
+	// to and then overwrite the operator's own certificate and key with the
+	// result — replacing, for example, a corporate-CA certificate with a Let's
+	// Encrypt one without anyone asking. Refuse instead; the operator uploads a
+	// replacement through POST /certificates/upload.
+	if !IsACMEProvider(cert.Provider) {
+		return store.Certificate{}, fmt.Errorf("certificate provider %q is not ACME-issued and cannot be renewed automatically; upload a replacement certificate instead", cert.Provider)
+	}
 	if cert.PrivateKey == "" {
 		return store.Certificate{}, errors.New("private key not available for renewal")
 	}
@@ -422,6 +456,14 @@ func (s *Service) runAutoRenewal(ctx context.Context) {
 	}
 
 	for _, cert := range certs {
+		// FindExpiringCertificates selects on auto_renew and expires_at only, so
+		// an operator-supplied certificate that was stored with auto_renew set
+		// lands in this set on every cycle. Skip it here rather than letting
+		// RenewCertificate reject it and log a failure every pass.
+		if !IsACMEProvider(cert.Provider) {
+			s.logger.Warn("acme: skipping auto-renewal for operator-supplied certificate", "certId", cert.ID, "provider", cert.Provider)
+			continue
+		}
 		if cert.PrivateKey == "" {
 			s.logger.Warn("acme: skipping renewal for cert without private key", "certId", cert.ID)
 			continue

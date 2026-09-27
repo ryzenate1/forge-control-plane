@@ -95,7 +95,8 @@ func registerForgefileRoutes(protected fiber.Router, cfg Config, svc *forgefile.
 		return c.JSON(fiber.Map{"data": result})
 	})
 
-	// GET /forgefile/:slug — read a stored manifest.
+	// GET /forgefile/:slug — read a stored manifest. Registered last so the
+	// static /forgefile/validate path above resolves to its own handler.
 	ff.Get("/:slug", func(c *fiber.Ctx) error {
 		slug := c.Params("slug")
 		manifest, version, updatedAt, err := svc.GetManifest(c.Context(), slug)
@@ -109,4 +110,29 @@ func registerForgefileRoutes(protected fiber.Router, cfg Config, svc *forgefile.
 			"manifest":  manifest,
 		})
 	})
+}
+
+// extractManifestBody yields raw forge.yaml bytes from either a raw YAML body
+// or a {"content": "<yaml text>"} JSON wrapper. The dashboard's editor sends
+// the JSON form; CI and curl callers send the file itself.
+func extractManifestBody(c *fiber.Ctx) ([]byte, error) {
+	ct := c.Get("Content-Type")
+	body := c.Body()
+	if strings.Contains(ct, "application/json") {
+		var wrapper struct {
+			Content string `json:"content"`
+		}
+		body = []byte(strings.TrimSpace(string(body)))
+		if len(body) == 0 {
+			return nil, fiber.NewError(fiber.StatusBadRequest, "forge.yaml content is required")
+		}
+		if err := c.BodyParser(&wrapper); err != nil || strings.TrimSpace(wrapper.Content) == "" {
+			return nil, fiber.NewError(fiber.StatusBadRequest, `send {"content":"<forge.yaml text>"} or a raw forge.yaml body`)
+		}
+		return []byte(wrapper.Content), nil
+	}
+	if len(body) == 0 {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "forge.yaml content is required")
+	}
+	return body, nil
 }

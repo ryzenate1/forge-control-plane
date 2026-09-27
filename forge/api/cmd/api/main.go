@@ -1248,7 +1248,13 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("create catalog service: %w", err)
 		}
-		forgefileSvc = forgefile.NewService(db, apphostingSvc, slogLogger, env("PANEL_BASE_DOMAIN", ""))
+		// FORGEFILE_BASE_DOMAIN is the var the dashboard documents and the
+		// forgefile package declares (forgefile.BaseDomainEnv); it was only
+		// ever read by a route registrar whose forgefile routes were shadowed,
+		// so setting it changed nothing about the links a manifest apply
+		// produced. PANEL_BASE_DOMAIN stays the fallback for deployments that
+		// set only that one.
+		forgefileSvc = forgefile.NewService(db, apphostingSvc, slogLogger, env(forgefile.BaseDomainEnv, env("PANEL_BASE_DOMAIN", "")))
 		dbSvcProv = services.NewDatabaseServiceProvisioner(db, daemonClient, env("BEACON_BASE_URL", "http://127.0.0.1:9090"), env("DAEMON_NODE_TOKEN", ""), env("DOCKER_HOST", "127.0.0.1"), masterKeyring)
 		dbBackupSvc = dbbackupsvc.New(db, dbbackupsvc.NewLocalStorage(env("DB_BACKUP_STORAGE_DIR", ".dev-data/db-backups")))
 		tmSvc = trafficmanager.NewWithPersistence(db, db, db, db, caddyProxy, outboxPub)
