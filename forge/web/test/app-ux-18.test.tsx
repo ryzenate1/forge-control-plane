@@ -113,6 +113,18 @@ describe("statusTone centralization via lib/api/status.ts", () => {
     expect(statusTone("down", "nomad")).toBe("danger");
   });
 
+  it("discovery endpoint health keeps unknown distinct from inactive", () => {
+    // Discovery genuinely reports `unknown` until a heartbeat touches an
+    // endpoint, so unknown has to survive as unknown rather than collapsing
+    // into the neutral "inactive" chip an absent table entry would give.
+    expect(statusTone("healthy", "discovery")).toBe("ok");
+    expect(statusTone("unhealthy", "discovery")).toBe("danger");
+    expect(statusTone("unknown", "discovery")).toBe("unknown");
+    expect(statusTone("draining", "discovery")).toBe("warn");
+    expect(statusTone("something_new", "discovery")).toBe("unknown");
+    expect(statusTone("", "discovery")).toBe("unknown");
+  });
+
   it("no page keeps a private status-tone table", () => {
     // Each of these shipped its own map, and each disagreed with the canonical
     // vocabulary somewhere: an unreadable status rendered as a confident
@@ -126,12 +138,19 @@ describe("statusTone centralization via lib/api/status.ts", () => {
       "../app/admin/cron-jobs/page.tsx",
       "../components/admin/AdminUpgrade.tsx",
       "../components/admin/beacon-workspace.tsx",
+      // AdminDiscovery kept STATUS_COLORS and read `[status] ?? ""`, which lands
+      // on Pill's neutral default; the revisions page fell back to
+      // `statusConfig.pending`, rendering an unreadable status as work in flight.
+      "../components/admin/AdminDiscovery.tsx",
+      "../app/admin/deployments/[id]/revisions/page.tsx",
     ];
     for (const rel of shadowed) {
       const src = readFileSync(resolve(__dirname, rel), "utf8");
       expect(src, rel).not.toMatch(/^(?:const|function)\s+(?:statusTone|healthTone|stateTone)\b/m);
-      // A local map keyed on colour words is the tell, whatever it is called.
+      // A local map keyed on colour words is the tell, whatever it is called —
+      // whether the colour is the value directly or wrapped in an object.
       expect(src, rel).not.toMatch(/Record<string,\s*"(?:green|red|yellow|blue)"/);
+      expect(src, rel).not.toMatch(/Record<string,\s*\{[^}]*"(?:green|red|yellow|blue)"/);
     }
   });
 });

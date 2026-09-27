@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, CheckCircle2, Plus, Save, Tags as TagsIcon, Trash2 } from "lucide-react";
+import { AlertCircle, CheckCircle2, Plus, Tags as TagsIcon, Trash2 } from "lucide-react";
 import {
   createTag,
   deleteTag,

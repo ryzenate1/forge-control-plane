@@ -13,7 +13,6 @@ import {
   type SFTPNodeConfig,
 } from "@/lib/api/sftp";
 import { fetchNodes } from "@/lib/api";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -32,7 +31,6 @@ import {
 } from "./admin-ui";
 
 export function AdminSftp() {
-  const t = useT();
   const { toast } = useToast();
   const qc = useQueryClient();
 

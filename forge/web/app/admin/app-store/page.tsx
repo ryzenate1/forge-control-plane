@@ -50,7 +50,6 @@ export default function AppStorePage() {
   const [showInstallForm, setShowInstallForm] = useState(false);
   const [showUninstallConfirm, setShowUninstallConfirm] = useState<string | null>(null);
   const [uninstallForce, setUninstallForce] = useState(false);
-  const [upgradeTarget, setUpgradeTarget] = useState<string | null>(null);
   const [confirm, renderConfirm] = useConfirm();
   const queryClient = useQueryClient();
   const { toast } = useAppToast();
@@ -119,7 +118,6 @@ export default function AppStorePage() {
     retry: retryTransientMutation,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["app-store"] });
-      setUpgradeTarget(null);
       toast({ title: "App upgraded", tone: "success" });
     },
     onError: (err: Error) => toast({ title: err.message, tone: "error" }),

@@ -28,7 +28,6 @@ import {
   fetchBackupStorageProviders,
   fetchBackupSystemStatus,
   type BackupConfiguration,
-  type BackupJob,
   type CreateBackupJobRequest,
   type BackupArtifact,
   type BackupRestore,

@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useQuery } from "@tanstack/react-query";
 import { Boxes, Plus } from "lucide-react";
 import { fetchApps, typeLabel, type ApiApp } from "@/lib/api/apps";
-import { Card, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { Card, SectionHeader } from "@/components/admin/admin-ui";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 import { SearchInput } from "@/components/ui/primitives";
 import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";

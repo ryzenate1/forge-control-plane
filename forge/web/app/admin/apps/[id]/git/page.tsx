@@ -4,7 +4,7 @@ import { use, useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, GitBranch, GitCommit,
+  GitBranch, GitCommit,
   RefreshCw, Copy, Check, Globe, Link,
 } from "lucide-react";
 import {

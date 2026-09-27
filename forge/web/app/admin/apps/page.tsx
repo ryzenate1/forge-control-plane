@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useRouter } from "next/navigation";
 import {
-  Box, Container, FileText, GitBranch, Layers, Plus,
+  FileText, Layers, Plus,
   Power, RefreshCw, RotateCcw, Square,
   Terminal, Trash2,
 } from "lucide-react";

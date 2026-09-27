@@ -4,10 +4,10 @@ import { useState, useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, CheckCircle, Clock, History, RotateCcw, XCircle, AlertCircle,
+  CheckCircle, Clock, History, RotateCcw, XCircle, AlertCircle,
 } from "lucide-react";
 import { fetchJSON } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { formatDate } from "@/lib/utils";
 
 type DeploymentRecord = {

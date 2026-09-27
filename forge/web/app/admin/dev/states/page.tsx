@@ -4,7 +4,6 @@ import { useState } from "react";
 import { notFound, useRouter } from "next/navigation";
 import { AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
 import {
-  ArrowLeft,
   Bug,
   ChevronDown,
   ChevronUp,
@@ -14,7 +13,6 @@ import {
   Rocket,
   Server,
 } from "lucide-react";
-import Link from "next/link";
 import { Button } from "@/components/ui/primitives";
 import { PanelCard } from "@/components/ui/panel-card";
 import {

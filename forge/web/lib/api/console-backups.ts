@@ -1,4 +1,4 @@
-import { deleteJSON, fetchJSON, patchJSON, postJSON, putJSON } from "./http";
+import { deleteJSON, fetchJSON, patchJSON, postJSON } from "./http";
 
 export interface BackupPolicy {
   id: string;

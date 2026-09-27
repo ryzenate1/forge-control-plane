@@ -7,7 +7,7 @@ import { Database, Plus } from "lucide-react";
 import { Card, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
 import { SearchInput } from "@/components/ui/primitives";
-import { listDatabaseServices, type DatabaseService } from "@/lib/api/database-services";
+import { listDatabaseServices } from "@/lib/api/database-services";
 
 /**
  * /console/databases — customer-facing database instances overview.

@@ -205,6 +205,19 @@ export const DATABASE_STATUS_INVENTORY: Record<string, StatusTone> = {
   deleting: "danger",
 };
 
+// Service discovery: endpoint health as the reaper and beacon heartbeats report
+// it. `unknown` is a first-class value here — discovery genuinely does not know
+// an endpoint's health until a heartbeat touches it — so it must keep the
+// unknown treatment rather than collapsing into the neutral "inactive" chip.
+export const DISCOVERY_STATUS_INVENTORY: Record<string, StatusTone> = {
+  healthy: "ok",
+  unhealthy: "danger",
+  unknown: "unknown",
+  // A draining endpoint is being taken out of rotation deliberately, but it is
+  // not serving either: the operator needs to see it, not be alarmed by it.
+  draining: "warn",
+};
+
 export type StatusKind =
   | "app"
   | "deployment"
@@ -215,7 +228,8 @@ export type StatusKind =
   | "server-deployment"
   | "nomad"
   | "incus"
-  | "database";
+  | "database"
+  | "discovery";
 
 const KIND_TABLES: Record<StatusKind, ReadonlyArray<Record<string, StatusTone>>> = {
   app: [APP_STATUS_TONE, DEPLOYMENT_STATUS_TONE],
@@ -228,6 +242,7 @@ const KIND_TABLES: Record<StatusKind, ReadonlyArray<Record<string, StatusTone>>>
   nomad: [NOMAD_STATUS_INVENTORY, DEPLOYMENT_STATUS_TONE],
   incus: [INCUS_STATUS_INVENTORY, APP_STATUS_TONE],
   database: [DATABASE_STATUS_INVENTORY, APP_STATUS_TONE],
+  discovery: [DISCOVERY_STATUS_INVENTORY, APP_STATUS_TONE],
 };
 
 /**
@@ -301,6 +316,11 @@ export function nomadStatusTone(status: string | null | undefined): StatusTone {
 /** Incus instance statuses and cluster member state. */
 export function incusStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "incus");
+}
+
+/** Service-discovery endpoint health. */
+export function discoveryStatusTone(status: string | null | undefined): StatusTone {
+  return statusTone(status, "discovery");
 }
 
 /** Managed database service statuses. */

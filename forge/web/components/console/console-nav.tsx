@@ -17,7 +17,6 @@ import {
   workloadTabs,
   workloadTabGroups,
   workloadTabHref,
-  type ConsoleNavItem,
   type WorkloadTabId,
 } from "@/components/console/console-registry";
 

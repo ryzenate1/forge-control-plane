@@ -160,7 +160,11 @@ export function ResourceLimitsView({ server }: { server?: ApiServer }) {
   // otherwise be a fresh array identity on every render, and the effect that
   // seeds the drafts would then re-run forever.
   const processes = useMemo(() => limitsQuery.data?.processes ?? [], [limitsQuery.data]);
-  const health = limitsQuery.data?.health ?? [];
+  // Memoised off `data` for the same reason as `processes` above: `health` feeds
+  // two dependency arrays, so a fresh `[]` identity each render rebuilt the
+  // process map and recomputed the aggregate verdict on every single render —
+  // on a 15s-refetching view.
+  const health = useMemo(() => limitsQuery.data?.health ?? [], [limitsQuery.data]);
   const observations = limitsQuery.data?.observations ?? [];
   const rollback = limitsQuery.data?.rollback ?? null;
   const healthByProcess = useMemo(() => new Map(health.map((state) => [state.processType, state])), [health]);

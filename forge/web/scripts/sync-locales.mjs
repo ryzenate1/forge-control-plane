@@ -21,17 +21,6 @@ function load(file) {
   return JSON.parse(readFileSync(join(LANG_DIR, file), "utf8"));
 }
 
-function countKeys(obj) {
-  let n = 0;
-  const walk = (o) => {
-    for (const v of Object.values(o)) {
-      if (v && typeof v === "object" && !Array.isArray(v)) walk(v);
-      else n += 1;
-    }
-  };
-  walk(obj);
-  return n;
-}
 
 /**
  * Rebuild `target` to match `template`'s structure and key order, keeping

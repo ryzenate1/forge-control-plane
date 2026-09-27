@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { Info, X, ShieldCheck, Layers, Network, Activity } from "lucide-react";
+import { Info } from "lucide-react";
 import { Dialog, Button } from "@/components/ui/primitives";
 import { cn } from "@/lib/utils";
 

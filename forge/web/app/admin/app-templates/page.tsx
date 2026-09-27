@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, Plus, Pencil, Trash2, Layers,
+  Plus, Pencil, Trash2, Layers,
 } from "lucide-react";
 import { AdminPageLayout, Btn, Card, CardHeader, Input, SectionHeader, Pill, cn, Modal, ModalFooter } from "@/components/admin/admin-ui";
 import { type AppType, type AppTemplate, type AppPort } from "@/lib/api/apps";

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Activity, AlertTriangle, ArrowRightLeft, Clock, Database, HardDrive, Search, ShieldAlert, Workflow } from "lucide-react";
+import { Activity, AlertTriangle, ArrowRightLeft, Clock, HardDrive, Search, ShieldAlert, Workflow } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { GenerationFencedDots, StateLanesBadge } from "@/components/shared/generation-fenced-dot";
 import { fetchOperationsTimeline, type OperationsTimelineItem } from "@/lib/api/operations";

@@ -16,7 +16,6 @@ import {
   cleanupCrossNodeIngressStale,
   fetchCrossNodeIngressStats,
 } from "@/lib/api/crossnode";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -35,7 +34,6 @@ import {
 type Tab = "health" | "resolver" | "ingress";
 
 export function AdminCrossnode() {
-  const t = useT();
   const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("health");
 

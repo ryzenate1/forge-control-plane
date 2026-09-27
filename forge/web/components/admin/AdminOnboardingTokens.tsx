@@ -12,7 +12,6 @@ import {
   type OnboardingToken,
 } from "@/lib/api/onboarding";
 import { fetchNodes } from "@/lib/api";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { OfflineBanner } from "@/components/shared/states-offline";
@@ -36,7 +35,6 @@ function ttlLabel(hours: number): string {
 }
 
 export function AdminOnboardingTokens() {
-  const t = useT();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [, renderConfirm] = useConfirm();

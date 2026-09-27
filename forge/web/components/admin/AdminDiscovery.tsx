@@ -23,26 +23,25 @@ import {
   addPrivateCIDR,
   removePrivateCIDR,
   type DiscoveryEndpoint,
-  type DiscoveryEndpointSet,
   type DiscoveryEndpointStatus,
-  type NetworkVisibilityView,
   type PolicyView,
 } from "@/lib/api/discovery";
 import { fetchNodes } from "@/lib/api";
+import { discoveryStatusTone } from "@/lib/api/status";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
-  AdminFormSection, AdminSelect, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader,
+  AdminSelect, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader,
 } from "./admin-ui";
 
 type Tab = "endpoints" | "services" | "visibility" | "policy" | "reachability" | "manage";
 
-const STATUS_COLORS: Record<string, string> = {
-  healthy: "bg-green-500/10 text-green-400",
-  unhealthy: "bg-red-500/10 text-red-400",
-  unknown: "bg-slate-500/10 text-slate-400",
-  draining: "bg-yellow-500/10 text-yellow-400",
-};
+// STATUS_COLORS used to live here. It was keyed on raw Tailwind colours and read
+// `STATUS_COLORS[status] ?? ""` at four call sites — and Pill defaults to the
+// neutral chip, so an endpoint health value this table did not know rendered as
+// a confident "inactive" rather than as unread. It also drew `unknown` in plain
+// slate, indistinguishable from a deliberately idle endpoint. discoveryStatusTone
+// keeps unknown in the dashed unknown treatment.
 
 const NETWORK_COLORS: Record<string, string> = {
   public: "bg-cyan-500/10 text-cyan-400",
@@ -51,9 +50,7 @@ const NETWORK_COLORS: Record<string, string> = {
 };
 
 export function AdminDiscovery() {
-  const { toast } = useToast();
   const qc = useQueryClient();
-  const [confirm, renderConfirm] = useConfirm();
   const [tab, setTab] = useState<Tab>("endpoints");
   const [filterService, setFilterService] = useState("");
   const [filterNodeId, setFilterNodeId] = useState("");
@@ -67,7 +64,6 @@ export function AdminDiscovery() {
   const visibilityQuery = useQuery({ queryKey: ["discovery-visibility"], queryFn: fetchNetworkVisibility });
   const reaperQuery = useQuery({ queryKey: ["discovery-reaper"], queryFn: fetchReaperStats });
   const policyQuery = useQuery({ queryKey: ["discovery-policy"], queryFn: fetchDiscoveryPolicy });
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
 
   const endpoints = useMemo(() => endpointsQuery.data ?? [], [endpointsQuery.data]);
   const services = useMemo(() => servicesQuery.data ?? [], [servicesQuery.data]);
@@ -92,7 +88,13 @@ export function AdminDiscovery() {
 
       <div className="rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-200">
         <span className="font-semibold">Beacon liveness:</span> each beacon registers a <code className="rounded bg-white/10 px-1">beacon</code> endpoint on first heartbeat and touches <code>LastHeartbeat</code> every 30s. The stale reaper marks endpoints <span className="font-mono">unhealthy</span> after <code className="rounded bg-white/10 px-1">3m</code> without a touch (draining endpoints skipped). Ensure beacons send <code className="rounded bg-white/10 px-1">endpoints[]</code> liveness in <code className="rounded bg-white/10 px-1">POST /nodes/:id/heartbeat</code>.
-        <span className="ml-2">Reaper: {reaper ? `${reaper.count} reaped, interval ${reaper.interval / 1e9}s, lastRun ${reaper.lastRun ?? "never"}` : "loading…"}</span>
+        {/* A failed reaper query used to render "loading…" indefinitely, which
+            tells the operator to wait for something that is never coming. */}
+        <span className="ml-2">Reaper: {reaper
+          ? `${reaper.count} reaped, interval ${reaper.interval / 1e9}s, lastRun ${reaper.lastRun ?? "never"}`
+          : reaperQuery.isError
+            ? `unavailable — ${(reaperQuery.error as Error)?.message ?? "request failed"}`
+            : "loading…"}</span>
       </div>
 
       <AdminTabs tabs={[
@@ -163,7 +165,7 @@ export function AdminDiscovery() {
                             <tr key={e.id} className="border-t border-white/[0.04]">
                               <td className="pr-2 py-1">{e.nodeId}</td>
                               <td className="pr-2 font-mono">{e.address}:{e.port}</td>
-                              <td><Pill className={STATUS_COLORS[e.status] ?? ""}>{e.status}</Pill></td>
+                              <td><Pill tone={discoveryStatusTone(e.status)}>{e.status}</Pill></td>
                               <td>{e.replicaIndex}</td>
                             </tr>
                           ))}
@@ -210,7 +212,7 @@ export function AdminDiscovery() {
                                   <td>{ev.nodeId}</td>
                                   <td className="font-mono">{ev.address}:{ev.port} {ev.protocol}</td>
                                   <td><Pill className={NETWORK_COLORS[ev.network] ?? ""}>{ev.network}</Pill></td>
-                                  <td><Pill className={STATUS_COLORS[ev.status] ?? ""}>{ev.status}</Pill></td>
+                                  <td><Pill tone={discoveryStatusTone(ev.status)}>{ev.status}</Pill></td>
                                   <td className="text-slate-400">{ev.lastSeen ? new Date(ev.lastSeen).toLocaleString() : "—"}</td>
                                 </tr>
                               ))}
@@ -238,7 +240,6 @@ export function AdminDiscovery() {
         <DiscoveryManageCard />
       )}
 
-      {renderConfirm()}
     </div>
   );
 }
@@ -270,7 +271,7 @@ function EndpointRow({ ep }: { ep: DiscoveryEndpoint }) {
       <td className="px-3 py-2 font-mono text-xs text-white">{ep.serviceName}{ep.tenantId ? `/${ep.tenantId}` : ""}</td>
       <td className="px-3 py-2 font-mono text-xs">{ep.address}:{ep.port}/{ep.protocol}</td>
       <td className="px-3 py-2 text-xs">{ep.nodeId.slice(0, 8)}<span className="text-slate-500"> {ep.nodeName}</span></td>
-      <td className="px-3 py-2"><Pill className={STATUS_COLORS[ep.status] ?? ""}>{ep.status}</Pill>{stale && <span className="ml-1 text-[10px] text-amber-300">stale {ageSec}s</span>}</td>
+      <td className="px-3 py-2"><Pill tone={discoveryStatusTone(ep.status)}>{ep.status}</Pill>{stale && <span className="ml-1 text-[10px] text-amber-300">stale {ageSec}s</span>}</td>
       <td className="px-3 py-2 text-xs text-slate-400">{ep.lastHeartbeat ? new Date(ep.lastHeartbeat).toLocaleString() : "—"}</td>
       <td className="px-3 py-2 text-right space-x-1">
         <Btn size="sm" tone="ghost" disabled={hbMut.isPending} onClick={() => hbMut.mutate()}>Touch</Btn>
@@ -283,8 +284,8 @@ function EndpointRow({ ep }: { ep: DiscoveryEndpoint }) {
 }
 
 function NodeViewCard() {
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const [nodeId, setNodeId] = useState("");
+  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const q = useQuery({ queryKey: ["node-view", nodeId], queryFn: () => fetchNodeNetworkView(nodeId), enabled: !!nodeId });
   return (
     <Card>
@@ -301,7 +302,7 @@ function NodeViewCard() {
                 {q.data.endpoints.length > 0 && (
                   <table className="w-full text-xs">
                     <thead><tr className="text-left text-slate-500"><th>ID</th><th>Address</th><th>Status</th></tr></thead>
-                    <tbody>{q.data.endpoints.map(e => <tr key={e.id} className="border-t border-white/[0.04]"><td className="font-mono">{e.id.slice(0, 8)}…</td><td className="font-mono">{e.address}:{e.port}</td><td><Pill className={STATUS_COLORS[e.status] ?? ""}>{e.status}</Pill></td></tr>)}</tbody>
+                    <tbody>{q.data.endpoints.map(e => <tr key={e.id} className="border-t border-white/[0.04]"><td className="font-mono">{e.id.slice(0, 8)}…</td><td className="font-mono">{e.address}:{e.port}</td><td><Pill tone={discoveryStatusTone(e.status)}>{e.status}</Pill></td></tr>)}</tbody>
                   </table>
                 )}
                 {q.data.reachability && q.data.reachability.length > 0 && (
@@ -434,6 +435,7 @@ function ReachabilityCard() {
 function DiscoveryManageCard() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const [regService, setRegService] = useState("my-service");
   const [regNode, setRegNode] = useState("");
   const [regAddr, setRegAddr] = useState("10.0.0.1");
@@ -441,7 +443,6 @@ function DiscoveryManageCard() {
   const [fetchId, setFetchId] = useState("");
   const [resolveService, setResolveService] = useState("beacon");
   const [resolveTenant, setResolveTenant] = useState("");
-  const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const reaperQuery = useQuery({ queryKey: ["discovery-reaper"], queryFn: fetchReaperStats });
 
   const registerMut = useMutation({

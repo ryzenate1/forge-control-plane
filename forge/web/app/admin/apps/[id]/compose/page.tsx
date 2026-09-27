@@ -4,7 +4,7 @@ import { useState, use } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "next/navigation";
 import {
-  ArrowLeft, Container, Power, RefreshCw, RotateCcw,
+  Container, Power, RefreshCw, RotateCcw,
   Square, FileText,
 } from "lucide-react";
 import {

@@ -9,7 +9,6 @@ import {
   createDomainSecurityHeaders,
   updateDomainSecurityHeaders,
   deleteDomainSecurityHeaders,
-  type SecurityHeaderConfig,
   type UpdateSecurityHeadersInput,
 } from "@/lib/api/security";
 import {
@@ -34,7 +33,6 @@ import {
   Input,
   Modal,
   ModalFooter,
-  AdminTabs,
   EmptyState,
 } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";

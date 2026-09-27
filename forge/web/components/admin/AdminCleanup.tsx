@@ -3,7 +3,6 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, RefreshCw, Trash2, Clock, Database, Layers } from "lucide-react";
 import { inspectCleanup, runCleanup } from "@/lib/api/cleanup";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { OfflineBanner } from "@/components/shared/states-offline";
@@ -20,7 +19,6 @@ import {
 } from "./admin-ui";
 
 export function AdminCleanup() {
-  const t = useT();
   const { toast } = useToast();
   const qc = useQueryClient();
   const [confirm, renderConfirm] = useConfirm();

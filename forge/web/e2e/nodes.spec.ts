@@ -95,6 +95,12 @@ test.describe('Critical Journey: Node Connection & Management', () => {
     await expect(page.getByText(/test node 1/i)).toBeVisible({ timeout: 8000 });
     // health may be called, but navigation should remain stable
     await expect(page).toHaveURL(/\/admin\/nodes/);
+    // healthCalls was counted here and never asserted, so the test could not
+    // actually fail on the thing it is named after. Health refreshes on a 30s
+    // interval, so two page loads should produce single digits; an upper bound
+    // this loose cannot flake but still catches a refetch loop, which would
+    // run to hundreds.
+    expect(healthCalls).toBeLessThan(20);
   });
 
   test('empty nodes state shows empty-state guidance', async ({ page }) => {

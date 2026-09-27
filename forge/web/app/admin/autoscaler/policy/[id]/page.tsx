@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useToast } from '@/components/ui/toast';
 import { useParams, useRouter } from 'next/navigation';
-import { ArrowLeft, BarChart3, Play, Trash2, Zap } from 'lucide-react';
+import { BarChart3, Play, Trash2, Zap } from 'lucide-react';
 import { fetchJSON, putJSON, postJSON, deleteJSON } from '@/lib/api';
 import {
   Btn,

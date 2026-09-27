@@ -5,28 +5,13 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import {
-  Activity, ArrowLeft, CheckCircle, GitCommit, Layers, RefreshCw,
+  Activity, CheckCircle, GitCommit, Layers, RefreshCw,
   RotateCcw, Server, XOctagon,
 } from "lucide-react";
 import { fetchJSON, postJSON } from "@/lib/api";
 import { fetchDeployment, rollbackToPrevious, cancelDeployment } from "@/lib/api/deployments";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader } from "@/components/admin/admin-ui";
 
-type Deployment = {
-  id: string;
-  serverId: string;
-  image: string;
-  strategy: string;
-  status: string;
-  targetGroup?: string;
-  healthCheckPath?: string;
-  healthCheckPort?: number;
-  currentRevisionId?: string;
-  rolloutStrategy?: string;
-  createdAt: string;
-  completedAt?: string;
-  error?: string;
-};
 
 type TimelineEvent = {
   id: string;

@@ -5,27 +5,13 @@ import { useToast } from "@/components/ui/toast";
 import { useParams, useRouter } from "next/navigation";
 import { useState, useMemo } from "react";
 import {
-  ArrowLeft, ArrowRightLeft, GitCommit, History, Layers,
+  ArrowRightLeft, GitCommit, History, Layers,
   Package, RefreshCw, RotateCcw, Search, ShieldAlert,
 } from "lucide-react";
 import { compareRevisions, fetchDeploymentRevisions, rollbackToRevision } from "@/lib/api/deployments";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { deploymentStatusTone } from "@/lib/api/status";
 
-type Revision = {
-  id: string;
-  deploymentId: string;
-  revisionNumber: number;
-  imageRef: string;
-  composeManifestRef: string;
-  gitCommitSha: string;
-  configHash: string;
-  status: string;
-  deployedAt?: string;
-  description: string;
-  metadata?: Record<string, unknown>;
-  createdAt: string;
-  updatedAt: string;
-};
 
 type RevisionDiff = {
   fromRevisionId: number;
@@ -33,12 +19,12 @@ type RevisionDiff = {
   changes: { field: string; oldValue: string; newValue: string }[];
 };
 
-const statusConfig: Record<string, { tone: "green" | "yellow" | "neutral" | "red" }> = {
-  active: { tone: "green" },
-  pending: { tone: "yellow" },
-  superseded: { tone: "neutral" },
-  failed: { tone: "red" },
-};
+// statusConfig used to live here, keyed on colour words, and the call site read
+// `statusConfig[rev.status] ?? statusConfig.pending` — so a revision status this
+// page could not interpret was rendered as work in flight, telling the operator
+// something was being deployed when we had no idea what the revision was. Its
+// `pending: yellow` also drew a queued revision as a warning.
+// deploymentStatusTone knows all four states and yields `unknown` for the rest.
 
 export default function DeploymentRevisionsPage() {
   const params = useParams();
@@ -218,7 +204,6 @@ export default function DeploymentRevisionsPage() {
           <div className="relative pl-8 pr-4 py-4">
             <div className="absolute left-4 top-0 bottom-0 w-px bg-white/[0.06]" />
             {Array.isArray(revisions) && revisions.map((rev, idx) => {
-              const cfg = statusConfig[rev.status] ?? statusConfig.pending;
               const isActive = rev.status === "active";
               const canRollback = !isActive && idx > 0;
               return (
@@ -235,7 +220,7 @@ export default function DeploymentRevisionsPage() {
                         <span className="text-sm font-semibold text-slate-200">
                           Rev #{rev.revisionNumber}
                         </span>
-                        <Pill tone={cfg.tone}>{rev.status}</Pill>
+                        <Pill tone={deploymentStatusTone(rev.status)}>{rev.status}</Pill>
                         {rev.gitCommitSha && (
                           <span className="flex items-center gap-1 text-[10px] font-mono text-slate-500">
                             <GitCommit size={10} />

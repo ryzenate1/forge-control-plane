@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, AlertTriangle, Cpu, HardDrive, Network, RefreshCw, Search, Zap, Layers, History, GitCompare } from "lucide-react";
+import { AlertTriangle, Cpu, RefreshCw, Zap, Layers, History, GitCompare } from "lucide-react";
 import {
   fetchCapabilities,
   fetchCapability,
@@ -12,7 +12,6 @@ import {
   type NodeCapability,
 } from "@/lib/api/capabilities";
 import { fetchNodes } from "@/lib/api";
-import { useT } from "@/components/TranslationProvider";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -32,9 +31,6 @@ import {
 type Tab = "inventory" | "detail" | "drift";
 
 export function AdminCapabilities() {
-  const t = useT();
-  const { toast } = useToast();
-  const qc = useQueryClient();
   const [tab, setTab] = useState<Tab>("inventory");
   const [offset, setOffset] = useState(0);
   const limit = 20;

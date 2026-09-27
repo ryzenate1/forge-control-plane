@@ -4,7 +4,7 @@ import { useEffect, useState, useRef } from "react";
 import { Check, X, Loader2, Clock, AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDeploymentSteps } from "@/hooks/useDeploymentSteps";
-import type { DeploymentStep } from "@/lib/api/deployments";
+import type {} from "@/lib/api/deployments";
 
 interface DeploymentProgressProps {
   deploymentId: string;

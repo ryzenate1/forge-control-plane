@@ -1,7 +1,7 @@
 "use client";
 
 import { AlertTriangle, CloudOff, Cog, RefreshCw, ServerCrash, WifiOff } from "lucide-react";
-import { cn } from "@/lib/utils";
+import {} from "@/lib/utils";
 import { ApiError } from "@/lib/api/http";
 
 // --- Helpers to classify errors without hiding behind empty arrays ---

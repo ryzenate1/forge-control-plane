@@ -34,7 +34,6 @@ export default function EggVariablesPage() {
     enabled: Boolean(eggId),
   });
 
-  const nest = nestQuery.data;
   const egg = eggQuery.data;
 
   // Two dynamic segments, both named on the shell's single trail: the nest

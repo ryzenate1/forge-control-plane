@@ -4,7 +4,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Globe } from "lucide-react";
 import { Card, SectionHeader } from "@/components/admin/admin-ui";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";
-import { fetchAdminProxyDomains, type ProxyDomain } from "@/lib/api/proxy-domains";
+import { fetchAdminProxyDomains } from "@/lib/api/proxy-domains";
 
 /**
  * /console/domains — customer-facing domains overview.

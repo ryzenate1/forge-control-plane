@@ -7,7 +7,7 @@ import {
   Activity, BarChart3, Cpu, GanttChart, HardDrive, Network, Plus, Trash2, Zap, Server, Settings2,
 } from "lucide-react";
 import { fetchJSON, postJSON, putJSON, deleteJSON } from "@/lib/api";
-import {AdminPageHeader, AdminPageLayout, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, cn, AdminLoadingState, AdminErrorState} from "@/components/admin/admin-ui";
+import {AdminPageHeader, AdminPageLayout, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, cn, AdminErrorState} from "@/components/admin/admin-ui";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 

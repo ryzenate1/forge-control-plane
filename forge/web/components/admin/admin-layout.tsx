@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import type { ReactNode } from "react";
-import { AdminPageLayout as AdminFrame, Card, SectionHeader, cn } from "./admin-ui";
+import { AdminPageLayout as AdminFrame, Card, SectionHeader } from "./admin-ui";
 
 /**
  * Compatibility shim over the canonical admin page frame.

@@ -7,7 +7,7 @@
 // When INSTALLER_WORKFLOW_ENABLED=0, Forge still surfaces workflow rows (DB→UI) but defers execution;
 // the WS manager below documents the flow and remains usable once the flag is enabled.
 
-import { connectServerWebSocket, fetchWSTicket, serverWebSocketURL } from "@/lib/api";
+import { connectServerWebSocket, serverWebSocketURL } from "@/lib/api";
 import { WebSocketManager } from "@/lib/api/ws";
 
 export function installWebSocketURL(serverId: string): string {
