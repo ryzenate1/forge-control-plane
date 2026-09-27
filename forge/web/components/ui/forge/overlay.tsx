@@ -21,10 +21,39 @@ import { type ForgeTone, toneStyles } from "./status";
 const FOCUSABLE =
   'a[href],button:not([disabled]),textarea:not([disabled]),input:not([disabled]),select:not([disabled]),[tabindex]:not([tabindex="-1"])';
 
+/**
+ * Fields an operator would type into, in document order.
+ *
+ * Preferred over {@link FOCUSABLE} when deciding where an overlay opens: the
+ * dismiss control is the first focusable element in the dialog chrome, so
+ * matching on FOCUSABLE alone opened every form dialog with the caret parked
+ * on the X instead of in the first field.
+ */
+const FIELD_FOCUSABLE =
+  'input:not([disabled]):not([readonly]):not([type="hidden"]):not([type="checkbox"]):not([type="radio"]),textarea:not([disabled]):not([readonly]),select:not([disabled])';
+
 /** Escape-to-close, focus trap, focus restore and scroll lock for one overlay. */
 function useOverlayBehaviour(open: boolean, onClose: () => void) {
   const containerRef = React.useRef<HTMLDivElement>(null);
   const restoreRef = React.useRef<HTMLElement | null>(null);
+
+  /*
+   * Call sites pass `onClose` as an inline arrow, so its identity changes on
+   * every render of the host page. While it was in the effect's dependency
+   * list, the trap was torn down and rebuilt on each of those renders: the
+   * cleanup handed focus back to whatever opened the overlay and the re-run
+   * then stole it to the first focusable element. Typing into a controlled
+   * field re-renders the host on the first keystroke, so every character after
+   * it was dropped — in the browser as well as under test.
+   *
+   * The keydown handler reads the latest callback through this ref instead, so
+   * the effect runs once per open/close and the caret stays where the operator
+   * put it.
+   */
+  const onCloseRef = React.useRef(onClose);
+  React.useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
 
   React.useEffect(() => {
     if (!open) return;
@@ -36,8 +65,14 @@ function useOverlayBehaviour(open: boolean, onClose: () => void) {
     const focusFirst = () => {
       const container = containerRef.current;
       if (!container) return;
+      // This runs a frame after the overlay mounts, by which time the operator
+      // may already be typing. Taking focus back from them would discard the
+      // input they have entered, so an overlay that already holds focus is
+      // left alone.
+      if (container.contains(document.activeElement)) return;
       const target =
         container.querySelector<HTMLElement>("[data-autofocus]") ??
+        container.querySelector<HTMLElement>(FIELD_FOCUSABLE) ??
         container.querySelector<HTMLElement>(FOCUSABLE) ??
         container;
       target.focus();
@@ -47,7 +82,7 @@ function useOverlayBehaviour(open: boolean, onClose: () => void) {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         event.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (event.key !== "Tab") return;
@@ -78,7 +113,7 @@ function useOverlayBehaviour(open: boolean, onClose: () => void) {
       document.body.style.overflow = previousOverflow;
       restoreRef.current?.focus?.();
     };
-  }, [open, onClose]);
+  }, [open]);
 
   return containerRef;
 }
