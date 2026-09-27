@@ -59,6 +59,56 @@ func TestGetWebSocketAllowedOrigins_MergesPanelAndCORS(t *testing.T) {
 	assertContains("https://panel.example.com")
 }
 
+// TestGetWebSocketAllowedOrigins_NeverEmpty covers the case the wildcard test
+// above cannot reach: production with nothing configured.
+//
+// An empty allow-list is not a closed door. gofiber/contrib/websocket turns an
+// empty Config.Origins into []string{"*"} and then accepts every origin, so
+// returning zero entries here would open exactly the cross-origin WS hole this
+// builder exists to prevent — and it would do so precisely when the operator
+// configured no origins, and also when they set API_WS_ALLOWED_ORIGINS="*" in
+// production, since that entry is stripped and leaves the list empty.
+func TestGetWebSocketAllowedOrigins_NeverEmpty(t *testing.T) {
+	t.Setenv("API_WS_ALLOWED_ORIGINS", "")
+	t.Setenv("API_CORS_ALLOWED_ORIGINS", "")
+	t.Setenv("PANEL_URL", "")
+	t.Setenv("APP_URL", "")
+
+	prod := Config{AppEnv: "production"}
+	allowed := getWebSocketAllowedOrigins(prod)
+	if len(allowed) == 0 {
+		t.Fatal("empty allow-list lets the websocket middleware default to \"*\"; must return a deny sentinel")
+	}
+	if allowed[0] == "*" {
+		t.Fatalf("first entry must not be the wildcard, got %v", allowed)
+	}
+	for _, a := range allowed {
+		// A browser-sent Origin is scheme://host[:port]; `null` is sent by
+		// sandboxed iframes and file:// pages and so must not be the sentinel.
+		if strings.Contains(a, "//") || strings.EqualFold(a, "null") {
+			t.Fatalf("deny sentinel %q could match a real Origin header", a)
+		}
+	}
+
+	// A lone wildcard in production is stripped, which is what makes the list
+	// empty — the sentinel has to hold that case too.
+	t.Setenv("API_WS_ALLOWED_ORIGINS", "*")
+	allowed = getWebSocketAllowedOrigins(prod)
+	if len(allowed) == 0 || allowed[0] == "*" {
+		t.Fatalf("stripped wildcard must leave a deny sentinel, got %v", allowed)
+	}
+
+	// Once a real origin is configured the sentinel must not linger and start
+	// shadowing it as Origins[0].
+	t.Setenv("API_WS_ALLOWED_ORIGINS", "https://panel.example.com")
+	allowed = getWebSocketAllowedOrigins(prod)
+	for _, a := range allowed {
+		if a == wsOriginDenyAll {
+			t.Fatalf("deny sentinel must not appear alongside real origins: %v", allowed)
+		}
+	}
+}
+
 // TestWebSocketOriginEnforcement_ViaFiberWSConfig pins the surviving origin
 // guard. NOTE: the validateWebSocketOrigin / wsOriginMiddleware /
 // wsUpgraderOrigins helpers were removed — per-request origin decisions are no

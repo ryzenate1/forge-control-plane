@@ -77,8 +77,30 @@ func getWebSocketAllowedOrigins(cfg Config) []string {
 		add("http://127.0.0.1:3002")
 	}
 
+	// Returning an empty list is not "allow nothing" — it is "allow everything".
+	// gofiber/contrib/websocket replaces an empty Config.Origins with []string{"*"}
+	// and then short-circuits its origin check on Origins[0] == "*", so every
+	// origin is accepted. That inverts this whole function: in production with no
+	// PANEL_URL, no APP_URL and no CORS allow-list there is nothing to add, and
+	// setting API_WS_ALLOWED_ORIGINS="*" is *stripped* above — so the branch
+	// written to close the hole is the one that opens it widest.
+	//
+	// An unmatchable sentinel keeps the list non-empty and non-wildcard. It can
+	// never equal a browser-sent Origin (those are scheme://host[:port], and
+	// `null` — which sandboxed iframes and file:// pages really do send — is
+	// deliberately not it), so an unconfigured production panel refuses every
+	// cross-origin upgrade instead of accepting all of them.
+	if len(origins) == 0 {
+		return []string{wsOriginDenyAll}
+	}
+
 	return origins
 }
+
+// wsOriginDenyAll is the fail-closed sentinel for an empty websocket origin
+// allow-list. It is compared for equality against the request's Origin header
+// and cannot match any value a browser will send.
+const wsOriginDenyAll = "forge:deny-all-websocket-origins"
 
 func requireRealtimeServices(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
