@@ -6,7 +6,8 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { LogOut, AlertTriangle, Menu, X, Search, ChevronDown, ChevronRight, CheckCircle2, Clock, User } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { fetchCurrentUser, logout, fetchHealthStatus, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
+import { fetchCurrentUser, logout, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
+import { useHealthQuery } from "@/lib/admin/telemetry";
 import { API_BASE_URL } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
@@ -205,12 +206,10 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
   });
   const user = userQuery.data === null ? null : userQuery.data ?? currentUser;
 
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: fetchHealthStatus,
-    staleTime: 30_000,
-    retry: 1,
-  });
+  // Canonical health report — see the note in AdminOverview. The shell wraps
+  // every admin page, so a bare ["health"] key here meant the shell badge and
+  // the page below it could show different verdicts for the same endpoint.
+  const healthQuery = useHealthQuery();
 
   const notificationsQuery = useQuery({
     queryKey: ["notification-logs", "recent"],

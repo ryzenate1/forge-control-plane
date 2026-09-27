@@ -30,7 +30,6 @@ import {
   fetchAdminActivity,
   fetchAllNodes,
   fetchAllServers,
-  fetchHealthStatus,
 } from "@/lib/api";
 import {
   getNodeMetrics,
@@ -43,6 +42,7 @@ import {
   findCheck,
   isAvailable,
   relativeTime,
+  useHealthQuery,
   useNodeMetricsHistoryQuery,
 } from "@/lib/admin/telemetry";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
@@ -221,13 +221,8 @@ export function AdminMonitoring() {
     refetchIntervalInBackground: false,
     retry: 2,
   });
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: fetchHealthStatus,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-    retry: 2,
-  });
+  // See the note in AdminOverview: one canonical key for the health report.
+  const healthQuery = useHealthQuery();
   const activityQuery = useQuery({
     queryKey: ["admin-activity", { limit: 8 }],
     queryFn: () => fetchAdminActivity({ limit: 8 }),

@@ -23,6 +23,7 @@ import {
   StoragePlattersIcon,
   SystemHealthOperationalIcon,
   SystemHealthAlertIcon,
+  SystemHealthUnknownIcon,
   NodeHostIcon,
   BeaconRadioTowerIcon,
   ApplicationsCubeIcon,
@@ -44,7 +45,6 @@ import {
   fetchAdminAudit,
   fetchAllNodes,
   fetchAllServers,
-  fetchHealthStatus,
   fetchUsers,
   type ApiAdminAuditEvent,
   type ApiHealthCheck,
@@ -58,6 +58,12 @@ import {
   findCheck,
   isAvailable,
   relativeTime,
+  // The canonical accessor-based sum. This page carried its own copy keyed on
+  // a field name, and that copy returned 0 for "nothing reported" where the
+  // canonical one returns undefined — the zero-for-unknown the telemetry
+  // layer exists to prevent.
+  reportedTotal,
+  useHealthQuery,
   useLatestNodeMetricsQuery,
   useNodeMetricsHistoryQuery,
 } from "@/lib/admin/telemetry";
@@ -172,20 +178,6 @@ function QueryError({
       ) : null}
     </div>
   );
-}
-
-function reportedTotal(
-  records: Array<ApiNode | ApiServer>,
-  field: "memoryMb" | "diskMb"
-) {
-  const values = records
-    .map((record) => record[field])
-    .filter((value): value is number => typeof value === "number" && Number.isFinite(value));
-  return {
-    value: values.reduce((sum, value) => sum + value, 0),
-    reported: values.length,
-    total: records.length,
-  };
 }
 
 function hasHealthyPersistedHeartbeat(node: ApiNode) {
@@ -387,13 +379,11 @@ export function AdminOverview() {
     retry: 2,
   });
 
-  const healthQuery = useQuery({
-    queryKey: ["health"],
-    queryFn: fetchHealthStatus,
-    retry: 2,
-    refetchInterval: 30_000,
-    refetchIntervalInBackground: false,
-  });
+  // Canonical control-plane health report. Must not be re-declared with a bare
+  // ["health"] key: that cached separately from queryKeys.health.report(), so
+  // Overview, Monitoring and Health each held their own copy of the same
+  // endpoint on different refetch clocks and could disagree about live state.
+  const healthQuery = useHealthQuery();
 
   const activityQuery = useQuery<ApiAdminAuditEvent[]>({
     queryKey: ["admin-audit"],
@@ -571,6 +561,23 @@ export function AdminOverview() {
 
   // Overall Status Truth Engine
   const { overallStatus, overallTitle, overallTone } = useMemo(() => {
+    // Before the sources have answered, every list this verdict reads is
+    // empty — not because the fleet is clean but because nothing has been
+    // looked at yet. Falling through to "All systems operational" on first
+    // paint asserted a healthy platform the page had no evidence for, and
+    // it stayed on screen for the whole first fetch. An unanswered source
+    // is unknown, never OK.
+    if (
+      (healthQuery.isPending && !healthQuery.isError) ||
+      (nodesQuery.isPending && !nodesQuery.isError) ||
+      (serversQuery.isPending && !serversQuery.isError)
+    ) {
+      return {
+        overallStatus: "unknown",
+        overallTitle: "Checking control-plane state…",
+        overallTone: "unknown" as const,
+      };
+    }
     if (healthQuery.isError || nodesQuery.isError || serversQuery.isError) {
       return {
         overallStatus: "unavailable",
@@ -611,6 +618,9 @@ export function AdminOverview() {
       overallTone: "green" as const,
     };
   }, [
+    healthQuery.isPending,
+    nodesQuery.isPending,
+    serversQuery.isPending,
     healthQuery.isError,
     nodesQuery.isError,
     serversQuery.isError,
@@ -623,10 +633,10 @@ export function AdminOverview() {
   ]);
 
   // Capacity calculations
-  const nodeMemoryCapacity = useMemo(() => reportedTotal(nodes, "memoryMb"), [nodes]);
-  const nodeDiskCapacity = useMemo(() => reportedTotal(nodes, "diskMb"), [nodes]);
-  const serverMemoryConfiguration = useMemo(() => reportedTotal(servers, "memoryMb"), [servers]);
-  const serverDiskConfiguration = useMemo(() => reportedTotal(servers, "diskMb"), [servers]);
+  const nodeMemoryCapacity = useMemo(() => reportedTotal(nodes, (node) => node.memoryMb), [nodes]);
+  const nodeDiskCapacity = useMemo(() => reportedTotal(nodes, (node) => node.diskMb), [nodes]);
+  const serverMemoryConfiguration = useMemo(() => reportedTotal(servers, (server) => server.memoryMb), [servers]);
+  const serverDiskConfiguration = useMemo(() => reportedTotal(servers, (server) => server.diskMb), [servers]);
 
   // Cores across nodes. Only nodes that report a core count are summed, and
   // the reporting coverage travels with the number so the UI can say so.
@@ -1022,7 +1032,9 @@ export function AdminOverview() {
                       className="shrink-0 cursor-pointer transition-transform hover:scale-105"
                       title="View System Health"
                     >
-                      {overallTone === "green" ? (
+                      {overallTone === "unknown" ? (
+                        <SystemHealthUnknownIcon size={38} />
+                      ) : overallTone === "green" ? (
                         <SystemHealthOperationalIcon size={38} />
                       ) : (
                         <SystemHealthAlertIcon size={38} />
@@ -1032,19 +1044,26 @@ export function AdminOverview() {
                       <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                         System Health
                       </div>
+                      {/*
+                        The headline used to carry its own `isLoading` string
+                        while the icon and colour beside it still rendered the
+                        green operational badge. All three now read the one
+                        verdict, so the card cannot say "checking" in emerald
+                        under a tick.
+                      */}
                       <h2
                         className={cn(
                           "text-base font-bold tracking-tight",
-                          overallTone === "green"
+                          overallTone === "unknown"
+                            ? "text-slate-300"
+                            : overallTone === "green"
                             ? "text-emerald-300"
                             : overallTone === "yellow"
                             ? "text-amber-300"
                             : "text-red-300"
                         )}
                       >
-                        {healthQuery.isLoading
-                          ? "Loading control-plane state…"
-                          : overallTitle}
+                        {overallTitle}
                       </h2>
                     </div>
                   </div>
@@ -1528,8 +1547,16 @@ export function AdminOverview() {
               pendingAttention === 0 ? (
                 <div className="mt-4 space-y-3">
                   {/* An empty failure list only means "nothing operational" when
-                      every source that could report a failure was readable. */}
-                  {overallStatus === "unavailable" ? (
+                      every source that could report a failure was readable. It
+                      is equally not evidence while those sources are still
+                      being read, so both cases stay out of the green panel —
+                      with copy that distinguishes "not yet" from "could not". */}
+                  {overallStatus === "unknown" ? (
+                    <div className="rounded-xl border border-white/[0.08] bg-white/[0.02] p-3 text-xs leading-5 text-slate-300">
+                      <p className="mb-0.5 font-semibold text-slate-200">Nothing to report yet</p>
+                      <p>Still reading nodes, servers and health checks. This list is not complete until they answer.</p>
+                    </div>
+                  ) : overallStatus === "unavailable" ? (
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3 text-xs leading-5 text-amber-100/90">
                       <p className="mb-0.5 font-semibold text-amber-300">Nothing to report — and nothing verified</p>
                       <p>
@@ -1692,7 +1719,7 @@ export function AdminOverview() {
                 ? "Unavailable"
                 : serversQuery.isLoading
                 ? "…"
-                : serverMemoryConfiguration.reported > 0
+                : serverMemoryConfiguration.value !== undefined
                 ? `${serverMemoryConfiguration.value.toLocaleString()} MiB`
                 : "Not reported"}
             </p>
@@ -1709,7 +1736,7 @@ export function AdminOverview() {
                 ? "unavailable"
                 : nodesQuery.isLoading
                 ? "…"
-                : nodeMemoryCapacity.reported > 0
+                : nodeMemoryCapacity.value !== undefined
                 ? `${nodeMemoryCapacity.value.toLocaleString()} MiB across ${nodeMemoryCapacity.reported}/${nodeMemoryCapacity.total} beacons`
                 : "not reported"}
             </div>
@@ -1728,7 +1755,7 @@ export function AdminOverview() {
                 ? "Unavailable"
                 : serversQuery.isLoading
                 ? "…"
-                : serverDiskConfiguration.reported > 0
+                : serverDiskConfiguration.value !== undefined
                 ? `${serverDiskConfiguration.value.toLocaleString()} MiB`
                 : "Not reported"}
             </p>
@@ -1745,7 +1772,7 @@ export function AdminOverview() {
                 ? "unavailable"
                 : nodesQuery.isLoading
                 ? "…"
-                : nodeDiskCapacity.reported > 0
+                : nodeDiskCapacity.value !== undefined
                 ? `${nodeDiskCapacity.value.toLocaleString()} MiB across ${nodeDiskCapacity.reported}/${nodeDiskCapacity.total} beacons`
                 : "not reported"}
             </div>

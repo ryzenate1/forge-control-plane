@@ -30,7 +30,6 @@ import {
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import {
   fetchAdminActivity,
-  fetchHealthStatus,
   fetchNodes,
   fetchRecoveryPlans,
   fetchReservations,
@@ -39,7 +38,7 @@ import {
 } from "@/lib/api";
 import { Btn, EmptyState, Pill, cn } from "./admin-ui";
 import { LiveHealthChecks } from "./LiveHealthChecks";
-import { relativeTime } from "@/lib/admin/telemetry";
+import { relativeTime, useHealthQuery } from "@/lib/admin/telemetry";
 
 type MonitorSection =
   | "infrastructure"
@@ -212,7 +211,9 @@ export function AdminHealth({
   const [selected, setSelected] = useState<MonitorSection>(initialSection);
 
   const poll = { refetchInterval: 30_000, refetchIntervalInBackground: false } as const;
-  const healthQuery = useQuery({ queryKey: ["health"], queryFn: fetchHealthStatus, ...poll });
+  // Canonical health report — see the note in AdminOverview. The bare
+  // ["health"] key this used cached separately from queryKeys.health.report().
+  const healthQuery = useHealthQuery();
   const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes, ...poll });
   const serversQuery = useQuery({ queryKey: ["servers"], queryFn: fetchServers, ...poll });
   const reservationsQuery = useQuery({ queryKey: ["reservations"], queryFn: fetchReservations, retry: false, ...poll });

@@ -491,6 +491,31 @@ export const SystemHealthAlertIcon: FC<IconProps> = ({ size = 28, className, ...
   </svg>
 );
 
+// ─── 22a. System Health Unknown Circular Badge ─────────────────────────────
+/**
+ * The verdict is not in yet, or could not be read.
+ *
+ * Deliberately not the operational badge: a green tick before the sources
+ * have answered is a claim the panel cannot support. Deliberately not the
+ * alert badge either — nothing is known to be wrong, so an alarm would be
+ * just as untrue in the other direction.
+ */
+export const SystemHealthUnknownIcon: FC<IconProps> = ({ size = 28, className, ...props }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 32 32"
+    fill="none"
+    xmlns="http://www.w3.org/2000/svg"
+    className={className}
+    {...props}
+  >
+    <circle cx="16" cy="16" r="14" stroke={chart.unknown} strokeWidth="2.5" strokeOpacity="0.4" />
+    <circle cx="16" cy="16" r="10" fill={chart.unknown} />
+    <path d="M12 16H20" stroke={chart.onColor} strokeWidth="2.2" strokeLinecap="round" />
+  </svg>
+);
+
 // ─── 23. Globe Grid for Regions / Domains ──────────────────────────────────
 export const GlobeGridIcon: FC<IconProps> = ({ size = 16, strokeWidth = 1.75, className, ...props }) => (
   <svg
