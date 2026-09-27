@@ -49,7 +49,6 @@ import {
   type ApiAdminAuditEvent,
   type ApiHealthCheck,
   type ApiNode,
-  type ApiServer,
 } from "@/lib/api";
 import { fetchApps } from "@/lib/api/apps";
 import type { MetricPeriod, NodeMetrics } from "@/lib/api/monitoring";
@@ -62,7 +61,9 @@ import {
   // a field name, and that copy returned 0 for "nothing reported" where the
   // canonical one returns undefined — the zero-for-unknown the telemetry
   // layer exists to prevent.
+  REFRESH,
   reportedTotal,
+  sourceState,
   useHealthQuery,
   useLatestNodeMetricsQuery,
   useNodeMetricsHistoryQuery,
@@ -560,31 +561,45 @@ export function AdminOverview() {
   const pendingAttention = failures.length;
 
   // Overall Status Truth Engine
+  // Every source this verdict reads, and why each one cannot be read when it
+  // cannot. A 403 is "restricted" rather than "unavailable": the platform is
+  // fine, this account just may not look at it.
+  const verdictSources = useMemo(
+    () => [
+      { label: "Control-plane diagnostics", state: sourceState(healthQuery, REFRESH.health) },
+      { label: "Node inventory", state: sourceState(nodesQuery, REFRESH.inventory) },
+      { label: "Server inventory", state: sourceState(serversQuery, REFRESH.inventory) },
+    ],
+    [healthQuery, nodesQuery, serversQuery],
+  );
+
+  const blindSpots = useMemo(
+    () =>
+      verdictSources
+        .filter((source) => source.state.status !== "ready")
+        .map((source) =>
+          source.state.status === "restricted"
+            ? `${source.label} are not visible to your account`
+            : source.state.status === "error"
+              ? `${source.label} unavailable: ${source.state.message ?? "request failed"}`
+              : `${source.label} still loading`,
+        ),
+    [verdictSources],
+  );
+
   const { overallStatus, overallTitle, overallTone } = useMemo(() => {
-    // Before the sources have answered, every list this verdict reads is
-    // empty — not because the fleet is clean but because nothing has been
-    // looked at yet. Falling through to "All systems operational" on first
-    // paint asserted a healthy platform the page had no evidence for, and
-    // it stayed on screen for the whole first fetch. An unanswered source
-    // is unknown, never OK.
-    if (
-      (healthQuery.isPending && !healthQuery.isError) ||
-      (nodesQuery.isPending && !nodesQuery.isError) ||
-      (serversQuery.isPending && !serversQuery.isError)
-    ) {
-      return {
-        overallStatus: "unknown",
-        overallTitle: "Checking control-plane state…",
-        overallTone: "unknown" as const,
-      };
-    }
-    if (healthQuery.isError || nodesQuery.isError || serversQuery.isError) {
-      return {
-        overallStatus: "unavailable",
-        overallTitle: "Control plane partially unreachable",
-        overallTone: "red" as const,
-      };
-    }
+    // Order matters, and it is not the obvious one.
+    //
+    // A failure this page HAS read must outrank a source it has not. The
+    // earlier version returned "Checking control-plane state…" the moment any
+    // one query was pending, which meant a critical check already reported as
+    // failed was hidden behind a spinner for a node list that had nothing to
+    // do with it. Suppressing a known problem is as untruthful as inventing a
+    // healthy one, so what is known is reported first.
+    //
+    // Only once nothing bad is known does an unread source decide the verdict:
+    // an empty failure list is evidence of health exactly as far as the
+    // sources behind it were readable, and no further. `unknown`, never `ok`.
     if (
       failedChecks.length > 0 ||
       offlineNodes.length > 0 ||
@@ -595,7 +610,7 @@ export function AdminOverview() {
         overallStatus: "failed",
         overallTitle:
           offlineNodes.length > 0
-            ? `${offlineNodes.length} nodes offline`
+            ? `${offlineNodes.length} ${offlineNodes.length === 1 ? "node" : "nodes"} offline`
             : "Attention required",
         overallTone: "red" as const,
       };
@@ -612,18 +627,28 @@ export function AdminOverview() {
         overallTone: "yellow" as const,
       };
     }
+    if (blindSpots.length > 0) {
+      // "Still loading" and "could not be read" are both unknown, but they ask
+      // different things of the operator: one is wait, the other is act.
+      const loadingOnly = verdictSources.every(
+        (source) => source.state.status === "ready" || source.state.status === "loading",
+      );
+      return {
+        overallStatus: loadingOnly ? "unknown" : "unavailable",
+        overallTitle: loadingOnly
+          ? "Checking control-plane state…"
+          : "Platform status incomplete",
+        overallTone: "unknown" as const,
+      };
+    }
     return {
       overallStatus: "ok",
       overallTitle: "All systems operational",
       overallTone: "green" as const,
     };
   }, [
-    healthQuery.isPending,
-    nodesQuery.isPending,
-    serversQuery.isPending,
-    healthQuery.isError,
-    nodesQuery.isError,
-    serversQuery.isError,
+    blindSpots.length,
+    verdictSources,
     failedChecks.length,
     warningChecks.length,
     offlineNodes.length,
@@ -1560,7 +1585,19 @@ export function AdminOverview() {
                     <div className="rounded-xl border border-amber-500/20 bg-amber-500/[0.04] p-3 text-xs leading-5 text-amber-100/90">
                       <p className="mb-0.5 font-semibold text-amber-300">Nothing to report — and nothing verified</p>
                       <p>
-                        One or more sources could not be read, so this list is not evidence of a healthy fleet. See{" "}
+                        These sources could not be read, so this list is not evidence of a healthy fleet:
+                      </p>
+                      {/* Named, not summarised as "one or more sources". The
+                          operator's next step differs entirely depending on
+                          whether a source is failing or simply not theirs to
+                          see, and only the reason tells them which. */}
+                      <ul className="mt-1 list-disc space-y-0.5 pl-4">
+                        {blindSpots.map((spot) => (
+                          <li key={spot}>{spot}</li>
+                        ))}
+                      </ul>
+                      <p className="mt-1">
+                        See{" "}
                         <button
                           className="font-semibold underline hover:text-amber-100"
                           onClick={() => router.push("/admin/health")}

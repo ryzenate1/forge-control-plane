@@ -195,8 +195,11 @@ describe("AdminOverview — mocked API", () => {
 
     renderWithQuery(<AdminOverview />);
 
-    // Overall becomes critical — shows offline count and failures text
-    expect(await screen.findByText(/nodes offline/)).toBeInTheDocument();
+    // Overall becomes critical — shows offline count and failures text.
+    // Singular: this fixture has one offline node, and the headline says so.
+    // Asserted exactly rather than as /nodes? offline/ so a regression back to
+    // "1 nodes offline" fails here.
+    expect(await screen.findByText("1 node offline")).toBeInTheDocument();
     expect(screen.getByText(/Node heartbeat failure/)).toBeInTheDocument();
     // affected node appears in attention group
     expect(screen.getByText("beta")).toBeInTheDocument();
@@ -663,7 +666,6 @@ describe("AdminServers page", () => {
   });
 
   it("opens the detail modal with live KPIs, info rows and power actions", async () => {
-    const { mockFetchByUrl } = await import("@/test/fetch-mock");
     const server = {
       id: "s1", name: "alpha-mc", description: "Test server.", status: "running",
       desiredState: "running", actualState: "running", nodeId: "n1", node: "node-a",

@@ -98,6 +98,9 @@ compile_check.*
 # =============================================================================
 backups/
 scratch/
+# `scratch/` does not match `.scratch/` — a dotted variant got tracked and
+# eleven files of migration debris were committed before anyone noticed.
+.scratch/
 servers/
 
 # Redis test artifacts

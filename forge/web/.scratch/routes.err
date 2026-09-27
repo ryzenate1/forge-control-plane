@@ -1,4 +1,0 @@
-
-routes: 1262
-register fns with known callsite: 127
-duplicate registrations: 59
