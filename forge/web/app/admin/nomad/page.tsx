@@ -16,6 +16,7 @@ import {
   type NomadJob,
   type NomadNode,
 } from "@/lib/api/nomad";
+import { nomadStatusTone } from "@/lib/api/status";
 import { AdminPageLayout, AdminTabs, Btn, Card, CardHeader, Modal, Pill, SectionHeader, Textarea, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 
@@ -28,26 +29,6 @@ const TABS = [
 
 type Tab = (typeof TABS)[number]["id"];
 
-function statusTone(status?: string): "green" | "yellow" | "red" | "neutral" {
-  switch (status) {
-    case "running":
-    case "successful":
-    case "active":
-    case "ready":
-      return "green";
-    case "dead":
-    case "stopped":
-    case "complete":
-    case "inactive":
-      return "neutral";
-    case "failed":
-    case "lost":
-    case "unhealthy":
-      return "red";
-    default:
-      return "yellow";
-  }
-}
 
 export default function NomadAdminPage() {
   const [tab, setTab] = useState<Tab>("jobs");
@@ -110,7 +91,7 @@ export default function NomadAdminPage() {
                   {(jobsQ.data ?? []).length === 0 ? <tr><td colSpan={4} className="py-8 text-center text-sm text-slate-500">No jobs.</td></tr> : (jobsQ.data as NomadJob[]).map((j) => (
                     <tr key={j.ID} className="hover:bg-white/[0.02]">
                       <td className="px-4 py-3 font-mono text-xs text-slate-200">{j.Name || j.ID}</td>
-                      <td className="px-4 py-3"><Pill tone={statusTone(j.Status)}>{j.Status || "—"}</Pill></td>
+                      <td className="px-4 py-3"><Pill tone={nomadStatusTone(j.Status)}>{j.Status || "—"}</Pill></td>
                       <td className="px-4 py-3 text-xs text-slate-400">{j.Type || "service"}</td>
                       <td className="px-4 py-3">
                         <Btn size="sm" tone="danger" disabled={pending || j.Status === "stopped"} loading={stopMut.isPending} onClick={() => stopMut.mutate(j.ID)} title="Stop job"><Square size={12} /> Stop</Btn>
@@ -137,7 +118,7 @@ export default function NomadAdminPage() {
                       <td className="px-4 py-3 font-mono text-xs text-slate-200">{a.ID.slice(0, 8)}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{a.JobID || "—"}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{a.TaskGroup || "—"}</td>
-                      <td className="px-4 py-3"><Pill tone={statusTone(a.ClientStatus)}>{a.ClientStatus || "—"}</Pill></td>
+                      <td className="px-4 py-3"><Pill tone={nomadStatusTone(a.ClientStatus)}>{a.ClientStatus || "—"}</Pill></td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{a.NodeID ? a.NodeID.slice(0, 8) : "—"}</td>
                     </tr>
                   ))}
@@ -160,7 +141,7 @@ export default function NomadAdminPage() {
                     <tr key={n.ID} className="hover:bg-white/[0.02]">
                       <td className="px-4 py-3 font-mono text-xs text-slate-200">{n.Name || n.ID.slice(0, 8)}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{n.HTTPAddr || "—"}</td>
-                      <td className="px-4 py-3"><Pill tone={statusTone(n.Status)}>{n.Status || "—"}{n.Drain ? " · draining" : ""}</Pill></td>
+                      <td className="px-4 py-3"><Pill tone={nomadStatusTone(n.Status)}>{n.Status || "—"}{n.Drain ? " · draining" : ""}</Pill></td>
                       <td className="px-4 py-3 text-xs text-slate-400">{n.Version || "—"}</td>
                       <td className="px-4 py-3">
                         <Btn size="sm" tone={n.Drain ? "success" : "warning"} disabled={pending} loading={drainMut.isPending} onClick={() => drainMut.mutate({ id: n.ID, drain: !n.Drain })} title={n.Drain ? "Mark eligible" : "Start drain"}>{n.Drain ? "Eligible" : "Drain"}</Btn>
@@ -186,7 +167,7 @@ export default function NomadAdminPage() {
                     <tr key={d.ID} className="hover:bg-white/[0.02]">
                       <td className="px-4 py-3 font-mono text-xs text-slate-200">{d.ID.slice(0, 8)}</td>
                       <td className="px-4 py-3 font-mono text-xs text-slate-400">{d.JobID || "—"}</td>
-                      <td className="px-4 py-3"><Pill tone={statusTone(d.Status)}>{d.Status || "—"}</Pill></td>
+                      <td className="px-4 py-3"><Pill tone={nomadStatusTone(d.Status)}>{d.Status || "—"}</Pill></td>
                       <td className="px-4 py-3 text-xs text-slate-400">{d.DesiredStatus || "—"}</td>
                     </tr>
                   ))}

@@ -140,6 +140,8 @@ export function resolveTone(input: string | null | undefined): ForgeTone {
     case "ready":
     case "connected":
     case "passed":
+    // Beacon's per-subsystem health probes report "good".
+    case "good":
       return "ok";
     case "warn":
     case "warning":
@@ -149,6 +151,9 @@ export function resolveTone(input: string | null | undefined): ForgeTone {
     case "stale":
     case "drift":
     case "partial":
+    // Beacon reports a subsystem under pressure but still serving as
+    // "elevated".
+    case "elevated":
       return "warn";
     case "danger":
     case "error":

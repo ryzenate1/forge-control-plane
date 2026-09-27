@@ -21,6 +21,7 @@ import {
   type IncusProfile,
   type IncusStoragePool,
 } from "@/lib/api/incus";
+import { incusStatusTone } from "@/lib/api/status";
 import { AdminPageLayout, AdminTabs, Btn, Card, CardHeader, Input, Modal, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 
@@ -34,22 +35,6 @@ const TABS = [
 
 type Tab = (typeof TABS)[number]["id"];
 
-function statusTone(status: string): "green" | "yellow" | "red" | "neutral" {
-  switch (status) {
-    case "Running":
-    case "online":
-      return "green";
-    case "Stopped":
-    case "Frozen":
-    case "offline":
-      return "neutral";
-    case "Error":
-    case "Failure":
-      return "red";
-    default:
-      return "yellow";
-  }
-}
 
 export default function IncusAdminPage() {
   const [tab, setTab] = useState<Tab>("instances");
@@ -132,7 +117,7 @@ export default function IncusAdminPage() {
                     return (
                       <tr key={`${i.project ?? "default"}/${i.name}`} className="hover:bg-white/[0.02]">
                         <td className="px-4 py-3 font-mono text-xs text-slate-200">{i.name}</td>
-                        <td className="px-4 py-3"><Pill tone={statusTone(i.status)}>{i.status}</Pill></td>
+                        <td className="px-4 py-3"><Pill tone={incusStatusTone(i.status)}>{i.status}</Pill></td>
                         <td className="px-4 py-3 text-xs text-slate-400">{i.instanceType || "container"}</td>
                         <td className="px-4 py-3 text-xs text-slate-400">{(i.profiles ?? []).join(", ") || "—"}</td>
                         <td className="px-4 py-3">
@@ -211,7 +196,7 @@ export default function IncusAdminPage() {
                     <tr key={pool.name} className="hover:bg-white/[0.02]">
                       <td className="px-4 py-3 font-mono text-xs text-slate-200">{pool.name}</td>
                       <td className="px-4 py-3 text-xs text-slate-400">{pool.driver || "—"}</td>
-                      <td className="px-4 py-3"><Pill tone={statusTone(pool.status || "unknown")}>{pool.status || "—"}</Pill></td>
+                      <td className="px-4 py-3"><Pill tone={incusStatusTone(pool.status || "unknown")}>{pool.status || "—"}</Pill></td>
                     </tr>
                   ))}
                 </tbody>

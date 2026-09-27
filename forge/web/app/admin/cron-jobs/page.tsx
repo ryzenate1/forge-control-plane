@@ -17,16 +17,16 @@ import {
   type CronJob,
   type CreateCronJobInput,
 } from "@/lib/api/cron-jobs";
+import { deploymentStatusTone } from "@/lib/api/status";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 function statusPill(status: string) {
-  const tones: Record<string, "green" | "red" | "yellow" | "neutral"> = {
-    running: "yellow",
-    success: "green",
-    failed: "red",
-    cancelled: "neutral",
-  };
-  return <Pill tone={tones[status] ?? "neutral"}>{status}</Pill>;
+  // This carried its own table with `running: "yellow"` — a job doing exactly
+  // what it was scheduled to do, rendered as a warning — and fell back to
+  // `neutral`, so a status we could not read showed as a settled "inactive".
+  // deploymentStatusTone knows all four run states and yields `unknown` for
+  // anything else.
+  return <Pill tone={deploymentStatusTone(status)}>{status}</Pill>;
 }
 
 const presetSchedules = [

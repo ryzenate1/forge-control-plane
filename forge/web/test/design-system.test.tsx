@@ -222,7 +222,13 @@ describe("design tokens: semantic groups exist", () => {
     expect(tw).toContain('fault: "var(--fault)"');
     // shadow/radius
     expect(tw).toContain('card: "var(--shadow-card)"');
-    expect(tw).toContain('sm: "var(--radius-sm)"');
+    // The radius scale is flatter than Tailwind's default (4/6/8/12): `sm` is
+    // the tightest corner and `lg` the card corner. What matters here is that
+    // every step resolves through a token, not which alias holds which step.
+    expect(tw).toContain('sm: "var(--radius-xs)"');
+    expect(tw).toContain('md: "var(--radius-sm)"');
+    expect(tw).toContain('lg: "var(--radius)"');
+    expect(tw).toContain('full: "var(--radius-full)"');
     // ensure no raw bg hex slipped into tailwind config outside comments
     const hardcodedInTw = tw.match(/"#[0-9a-fA-F]{3,8}"/g) ?? [];
     // No quoted hex outside comments — tokens are all var(--*)

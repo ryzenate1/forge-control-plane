@@ -1,15 +1,16 @@
 "use client";
 
 import {
-  AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, Copy, Info, LoaderCircle, Search, TriangleAlert, X,
+  AlertCircle, Check, CheckCircle2, ChevronLeft, ChevronRight, Copy, Info, LoaderCircle, Search, TriangleAlert,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
-  forwardRef, useEffect, useId, useRef, useState,
+  forwardRef, useId, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
+import { ForgeDialog } from "./forge/overlay";
 
 import { Button as ButtonBase } from "./button";
 import { Input as InputBase } from "./input";

@@ -29,8 +29,9 @@ import { NodeDetailView } from "./AdminNodes";
 import {
   fetchNode, fetchNodeAllocations, fetchNodeCapacity, fetchNodeLifecycle,
   fetchNodeServers, fetchNodeSystemInformation,
-  type ApiAllocation, type ApiNode, type ApiServer,
+  type ApiAllocation, type ApiServer,
 } from "@/lib/api";
+import { resolveTone, type ForgeTone } from "@/components/ui/forge/status";
 
 type Tab = "overview" | "workloads" | "network" | "capacity" | "hardware" | "firewall" | "terminal" | "maintenance";
 
@@ -70,28 +71,62 @@ function heartbeatAge(iso?: string): string {
   return `${Math.round(m / 60)}h ago`;
 }
 
-function healthTone(value?: string): "green" | "yellow" | "red" | "neutral" {
-  switch ((value ?? "").toLowerCase()) {
-    case "healthy": case "ok": case "good": return "green";
-    case "warning": case "degraded": case "elevated": return "yellow";
-    case "critical": case "failing": case "unhealthy": return "red";
-    default: return "neutral";
-  }
+// healthTone and stateTone used to live here.
+//
+// healthTone ended in `neutral`, so a subsystem Beacon had not reported
+// rendered in the same grey as a deliberately idle one — a reading we do not
+// have, shown as a reading. Its call sites now use resolveTone, which yields
+// `unknown` for exactly that case.
+//
+// stateTone had no call sites: it was a dead third copy of the node verdict,
+// and a weaker one (it called maintenance and draining `neutral`). The
+// canonical version is nodeStatus in lib/admin/telemetry.ts.
+
+/**
+ * Total capacity from an allocated/available pair.
+ *
+ * Both halves have to be present for the sum to mean anything: adding a
+ * reported "allocated" to an absent "available" would understate the host's
+ * size and overstate how full it is.
+ */
+function capacityTotal(allocated?: number, available?: number): number | undefined {
+  if (typeof allocated !== "number" || !Number.isFinite(allocated)) return undefined;
+  if (typeof available !== "number" || !Number.isFinite(available)) return undefined;
+  return allocated + available;
 }
 
-function stateTone(node: ApiNode): "green" | "yellow" | "red" | "neutral" {
-  const actual = node.actualState ?? "unknown";
-  if (actual === "online") return "green";
-  if (actual === "degraded") return "yellow";
-  if (actual === "offline") return "red";
-  return "neutral";
-}
-
-/** Allocated-vs-total capacity bar. */
+/**
+ * Allocated-vs-total capacity bar.
+ *
+ * `used` and `total` are optional because the node may not have reported its
+ * capacity yet — and an empty bar reading "0 / 0, 0% allocated" is the most
+ * reassuring thing this component could possibly draw for a host it has heard
+ * nothing from. A capacity we do not have is rendered as not reported, never as
+ * zero.
+ */
 function CapacityBar({ label, used, total, unit, icon: Icon }: {
-  label: string; used: number; total: number; unit: string; icon?: typeof Cpu;
+  label: string; used?: number; total?: number; unit: string; icon?: typeof Cpu;
 }) {
-  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  const known = typeof used === "number" && Number.isFinite(used)
+    && typeof total === "number" && Number.isFinite(total) && total > 0;
+
+  if (!known) {
+    return (
+      <div>
+        <div className="mb-1 flex items-center justify-between text-xs">
+          <span className="flex items-center gap-1.5 text-slate-400">{Icon ? <Icon size={12} /> : null}{label}</span>
+          <span className="font-mono text-slate-500">not reported</span>
+        </div>
+        {/* Dashed rather than empty: an unfilled solid track is hard to tell
+            apart from a genuine 0%. No role="progressbar" — there is no value
+            to announce, so a screen reader is told the figure is missing. */}
+        <div aria-hidden="true" className="h-1.5 rounded-full border border-dashed border-white/[0.12]" />
+        <div className="mt-0.5 text-right text-[10px] text-slate-500">Awaiting capacity from this node</div>
+      </div>
+    );
+  }
+
+  const pct = Math.min(100, Math.round((used / total) * 100));
   const tone = pct >= 90 ? "bg-red-500" : pct >= 70 ? "bg-amber-400" : "bg-emerald-500";
   return (
     <div>
@@ -108,9 +143,17 @@ function CapacityBar({ label, used, total, unit, icon: Icon }: {
 }
 
 function VitalsCard({ label, value, tone, icon: Icon }: {
-  label: string; value: string; tone: "green" | "yellow" | "red" | "neutral"; icon?: typeof Cpu;
+  label: string; value: string; tone: ForgeTone; icon?: typeof Cpu;
 }) {
-  const toneRing = tone === "green" ? "text-emerald-400" : tone === "yellow" ? "text-amber-400" : tone === "red" ? "text-red-400" : "text-slate-400";
+  // `unknown` and `neutral` share the grey family but are not the same claim:
+  // neutral is an idle subsystem, unknown is one we have no reading for. The
+  // dimmer grey keeps an unreported vital from reading as a settled one.
+  const toneRing = tone === "ok" ? "text-emerald-400"
+    : tone === "warn" ? "text-amber-400"
+    : tone === "danger" ? "text-red-400"
+    : tone === "info" || tone === "pending" ? "text-sky-400"
+    : tone === "unknown" ? "text-slate-500"
+    : "text-slate-400";
   return (
     <Card className="flex items-center gap-3 p-4">
       {Icon ? <Icon size={16} className={cn("shrink-0", toneRing)} /> : null}
@@ -208,15 +251,15 @@ export function BeaconWorkspace() {
 
       {/* Live vitals — answers "is this machine healthy?" before anything else */}
       <div className="grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
-        <VitalsCard label="CPU" value={lifecycle?.health.cpu ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={healthTone(lifecycle?.health.cpu)} icon={Cpu} />
-        <VitalsCard label="Memory" value={lifecycle?.health.memory ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={healthTone(lifecycle?.health.memory)} icon={MemoryStick} />
-        <VitalsCard label="Disk" value={lifecycle?.health.disk ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={healthTone(lifecycle?.health.disk)} icon={HardDrive} />
-        <VitalsCard label="Network" value={lifecycle?.health.network ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={healthTone(lifecycle?.health.network)} icon={Wifi} />
-        <VitalsCard label="Runtime" value={lifecycle?.health.runtime ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={healthTone(lifecycle?.health.runtime)} icon={Boxes} />
+        <VitalsCard label="CPU" value={lifecycle?.health.cpu ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={resolveTone(lifecycle?.health.cpu)} icon={Cpu} />
+        <VitalsCard label="Memory" value={lifecycle?.health.memory ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={resolveTone(lifecycle?.health.memory)} icon={MemoryStick} />
+        <VitalsCard label="Disk" value={lifecycle?.health.disk ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={resolveTone(lifecycle?.health.disk)} icon={HardDrive} />
+        <VitalsCard label="Network" value={lifecycle?.health.network ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={resolveTone(lifecycle?.health.network)} icon={Wifi} />
+        <VitalsCard label="Runtime" value={lifecycle?.health.runtime ?? (lifecycleQuery.isError ? "Offline" : "Probing…")} tone={resolveTone(lifecycle?.health.runtime)} icon={Boxes} />
         <VitalsCard
           label="Health score"
           value={healthScore ? `${healthScore.total}/100` : lifecycleQuery.isError ? "Offline" : "Probing…"}
-          tone={healthScore ? (healthScore.total >= 80 ? "green" : healthScore.total >= 50 ? "yellow" : "red") : "neutral"}
+          tone={healthScore ? (healthScore.total >= 80 ? "ok" : healthScore.total >= 50 ? "warn" : "danger") : "unknown"}
           icon={ShieldQuestion}
         />
       </div>
@@ -262,9 +305,13 @@ export function BeaconWorkspace() {
                 <button type="button" className="text-xs text-slate-400 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-400" onClick={() => setTab("capacity")}>Details <ChevronRight size={10} className="inline" /></button>
               </div>
               <div className="space-y-4">
-                <CapacityBar label="Memory" used={capacity?.allocated_memory ?? 0} total={(capacity?.available_memory ?? 0) + (capacity?.allocated_memory ?? 0)} unit="MiB" icon={MemoryStick} />
-                <CapacityBar label="Disk" used={capacity?.allocated_disk ?? 0} total={(capacity?.available_disk ?? 0) + (capacity?.allocated_disk ?? 0)} unit="MiB" icon={HardDrive} />
-                <CapacityBar label="CPU" used={capacity?.allocated_cpu ?? 0} total={(capacity?.available_cpu ?? 0) + (capacity?.allocated_cpu ?? 0)} unit="%" icon={Cpu} />
+                {/* No `?? 0`: coercing an unreported figure to zero drew a
+                    0%-allocated bar for a node that had not answered, which
+                    reads as abundant free capacity. Pass the absent value
+                    through and let CapacityBar say it is not reported. */}
+                <CapacityBar label="Memory" used={capacity?.allocated_memory} total={capacityTotal(capacity?.allocated_memory, capacity?.available_memory)} unit="MiB" icon={MemoryStick} />
+                <CapacityBar label="Disk" used={capacity?.allocated_disk} total={capacityTotal(capacity?.allocated_disk, capacity?.available_disk)} unit="MiB" icon={HardDrive} />
+                <CapacityBar label="CPU" used={capacity?.allocated_cpu} total={capacityTotal(capacity?.allocated_cpu, capacity?.available_cpu)} unit="%" icon={Cpu} />
               </div>
             </Card>
             <Card className="p-4">

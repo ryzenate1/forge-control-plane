@@ -81,7 +81,10 @@ describe("nodeStatus", () => {
     for (const subject of [node({}), node({ actualState: "unknown" })]) {
       const verdict = nodeStatus(subject);
       expect(verdict.label).toBe("Unknown");
-      expect(verdict.tone).toBe("neutral");
+      // `unknown`, not `neutral`: the canonical vocabulary gives an absent
+      // reading its own grey/dashed treatment so it can never be mistaken for
+      // a plain, healthy value.
+      expect(verdict.tone).toBe("unknown");
       expect(verdict.expected).toBe(false);
     }
   });

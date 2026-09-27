@@ -16,14 +16,8 @@ import {
   unlinkDatabaseServiceFromServer,
   listDatabaseServices,
 } from "@/lib/api/database-services";
+import { databaseStatusTone } from "@/lib/api/status";
 
-const statusTone: Record<string, "green" | "red" | "yellow" | "neutral"> = {
-  running: "green",
-  stopped: "red",
-  failed: "red",
-  provisioning: "yellow",
-  deleting: "yellow",
-};
 
 const engineLabels: Record<string, string> = {
   postgresql: "PostgreSQL",
@@ -128,7 +122,7 @@ function ServerDatabaseView({ serverId }: { serverId: string }) {
                 <tr key={svc.id} className="hover:bg-white/[0.02]">
                   <td className="px-4 py-3 font-medium text-slate-200">{svc.name || svc.id.slice(0, 8)}</td>
                   <td className="px-4 py-3"><Pill tone="blue">{engineLabels[svc.type] || svc.type} {svc.version}</Pill></td>
-                  <td className="px-4 py-3"><Pill tone={statusTone[svc.status] || "neutral"}>{svc.status}</Pill></td>
+                  <td className="px-4 py-3"><Pill tone={databaseStatusTone(svc.status)}>{svc.status}</Pill></td>
                   <td className="px-4 py-3 font-mono text-xs text-slate-400">{svc.memoryMb}MB</td>
                   <td className="px-4 py-3">
                     {isAdmin && svc.connectionString ? (

@@ -75,8 +75,10 @@ const DEPLOYMENT_STATUS_TONE: Record<string, StatusTone> = {
   deploying: "pending",
   cloning: "pending",
   pushing: "pending",
-  queued: "warn",
-  pending: "warn",
+  // Waiting is not a warning: a queued or pending deployment has nothing wrong
+  // with it, so it reads in the dedicated `pending` tone rather than amber.
+  queued: "pending",
+  pending: "pending",
   awaiting_health: "warn",
   health_checking: "pending",
   degraded: "warn",
@@ -86,7 +88,7 @@ const DEPLOYMENT_STATUS_TONE: Record<string, StatusTone> = {
   deleting: "danger",
   restoring: "pending",
   draining: "warn",
-  planned: "warn",
+  planned: "pending",
 };
 
 // Compose: the 9 inventoried states. DEPLOYMENT_STATUS_TONE already covers
@@ -148,6 +150,61 @@ export const SERVER_DEPLOYMENT_INVENTORY: Record<string, StatusTone> = {
   failed: "danger",
 };
 
+// Nomad: job `Status`, allocation `ClientStatus` and node `Status` share one
+// table because the admin page renders all three through one pill. Nomad emits
+// these lowercase; statusTone lowercases anyway, which is itself a fix — the
+// page's own copy of this map used a case-sensitive switch.
+export const NOMAD_STATUS_INVENTORY: Record<string, StatusTone> = {
+  running: "ok",
+  successful: "ok",
+  active: "ok",
+  ready: "ok",
+  // An intentionally stopped job reads `dead`, and a finished batch allocation
+  // reads `complete`: both are observed, inactive states rather than faults.
+  dead: "neutral",
+  stopped: "neutral",
+  complete: "neutral",
+  inactive: "neutral",
+  pending: "pending",
+  initializing: "pending",
+  // A drained or ineligible node is not broken, but it is not taking work
+  // either — that needs an operator's attention, not a red alarm.
+  draining: "warn",
+  ineligible: "warn",
+  failed: "danger",
+  lost: "danger",
+  unhealthy: "danger",
+  // A node that stopped answering is a fault, not an idle machine.
+  down: "danger",
+};
+
+// Incus: instance `status` (Running/Stopped/Frozen/Error) and cluster member
+// state (Online/Offline).
+export const INCUS_STATUS_INVENTORY: Record<string, StatusTone> = {
+  running: "ok",
+  online: "ok",
+  stopped: "neutral",
+  frozen: "neutral",
+  // A cluster member that has gone offline is a fault. The admin page's own
+  // copy of this map filed it next to Stopped, which rendered a lost member in
+  // the same grey as an instance the operator had deliberately shut down.
+  offline: "danger",
+  error: "danger",
+  failure: "danger",
+};
+
+// Managed database services: 5 states.
+export const DATABASE_STATUS_INVENTORY: Record<string, StatusTone> = {
+  running: "ok",
+  // Stopped is a state the operator chose. The services page's own copy of this
+  // map had it as danger, so every deliberately stopped database rendered in
+  // the same red as one that had crashed.
+  stopped: "neutral",
+  failed: "danger",
+  provisioning: "pending",
+  deleting: "danger",
+};
+
 export type StatusKind =
   | "app"
   | "deployment"
@@ -155,7 +212,10 @@ export type StatusKind =
   | "preview"
   | "source"
   | "build"
-  | "server-deployment";
+  | "server-deployment"
+  | "nomad"
+  | "incus"
+  | "database";
 
 const KIND_TABLES: Record<StatusKind, ReadonlyArray<Record<string, StatusTone>>> = {
   app: [APP_STATUS_TONE, DEPLOYMENT_STATUS_TONE],
@@ -165,6 +225,9 @@ const KIND_TABLES: Record<StatusKind, ReadonlyArray<Record<string, StatusTone>>>
   source: [SOURCE_STATUS_INVENTORY, DEPLOYMENT_STATUS_TONE],
   build: [BUILD_STATUS_INVENTORY, DEPLOYMENT_STATUS_TONE],
   "server-deployment": [SERVER_DEPLOYMENT_INVENTORY, DEPLOYMENT_STATUS_TONE],
+  nomad: [NOMAD_STATUS_INVENTORY, DEPLOYMENT_STATUS_TONE],
+  incus: [INCUS_STATUS_INVENTORY, APP_STATUS_TONE],
+  database: [DATABASE_STATUS_INVENTORY, APP_STATUS_TONE],
 };
 
 /**
@@ -228,6 +291,21 @@ export function buildStatusTone(status: string | null | undefined): StatusTone {
 /** Server deployment statuses. */
 export function serverDeploymentStatusTone(status: string | null | undefined): StatusTone {
   return statusTone(status, "server-deployment");
+}
+
+/** Nomad job, allocation and node statuses. */
+export function nomadStatusTone(status: string | null | undefined): StatusTone {
+  return statusTone(status, "nomad");
+}
+
+/** Incus instance statuses and cluster member state. */
+export function incusStatusTone(status: string | null | undefined): StatusTone {
+  return statusTone(status, "incus");
+}
+
+/** Managed database service statuses. */
+export function databaseStatusTone(status: string | null | undefined): StatusTone {
+  return statusTone(status, "database");
 }
 
 /** @deprecated Same as {@link statusTone}; kept for existing call sites. */

@@ -1,6 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -9,7 +7,7 @@ import { statusTone, deploymentStatusTone, appStatusTone } from "@/lib/api/statu
 import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";
 import { renderWithQuery } from "@/test/render";
 import { APP_TYPE_ICONS } from "@/lib/app-type-icons";
-import { DEPLOYMENT_STEPS_POLL_INTERVAL_MS, DEPLOYMENT_STEPS_MAX_DURATION_MS, isDeploymentStepsTerminal, useDeploymentSteps } from "@/hooks/useDeploymentSteps";
+import { DEPLOYMENT_STEPS_POLL_INTERVAL_MS, DEPLOYMENT_STEPS_MAX_DURATION_MS, isDeploymentStepsTerminal } from "@/hooks/useDeploymentSteps";
 import { restartComposeStack } from "@/lib/api/compose";
 
 // Mock next/navigation for tab routing tests
@@ -25,45 +23,116 @@ vi.mock("next/navigation", () => ({
 
 describe("statusTone centralization via lib/api/status.ts", () => {
   it("maps app statuses to correct tones via single statusTone", () => {
-    expect(statusTone("running", "app")).toBe("green");
-    expect(statusTone("failed", "app")).toBe("red");
-    expect(statusTone("deploying", "app")).toBe("blue");
-    expect(statusTone("stopping", "app")).toBe("yellow");
+    expect(statusTone("running", "app")).toBe("ok");
+    expect(statusTone("failed", "app")).toBe("danger");
+    expect(statusTone("deploying", "app")).toBe("pending");
+    expect(statusTone("stopping", "app")).toBe("warn");
     expect(statusTone("stopped", "app")).toBe("neutral");
     // default kind is app
-    expect(statusTone("running")).toBe("green");
+    expect(statusTone("running")).toBe("ok");
   });
 
   it("maps deployment statuses via same function with kind=deployment", () => {
-    expect(statusTone("completed", "deployment")).toBe("green");
-    expect(statusTone("failed", "deployment")).toBe("red");
-    expect(statusTone("pending", "deployment")).toBe("yellow");
-    expect(statusTone("running", "deployment")).toBe("blue");
+    expect(statusTone("completed", "deployment")).toBe("ok");
+    expect(statusTone("failed", "deployment")).toBe("danger");
+    expect(statusTone("pending", "deployment")).toBe("pending");
+    expect(statusTone("running", "deployment")).toBe("pending");
     expect(statusTone("canceled", "deployment")).toBe("neutral");
     expect(statusTone("cancelled", "deployment")).toBe("neutral");
   });
 
   it("deploymentStatusTone is backward-compatible wrapper", () => {
-    expect(deploymentStatusTone("completed")).toBe("green");
-    expect(deploymentStatusTone("failed")).toBe("red");
+    expect(deploymentStatusTone("completed")).toBe("ok");
+    expect(deploymentStatusTone("failed")).toBe("danger");
   });
 
   it("appStatusTone alias works", () => {
-    expect(appStatusTone("running")).toBe("green");
+    expect(appStatusTone("running")).toBe("ok");
   });
 
   it("DeployStatusBadge uses centralized statusTone (no local divergence)", () => {
     const { container } = renderWithQuery(<DeployStatusBadge status="running" type="app" />);
     expect(container.textContent?.toLowerCase()).toContain("running");
-    // Pill tone should be green for running -> check class or text
-    // Badge renders with Pill tone green, we verify no error thrown and tone mapping is via statusTone
     const { container: c2 } = renderWithQuery(<DeployStatusBadge status="failed" type="deployment" />);
     expect(c2.textContent?.toLowerCase()).toContain("failed");
   });
 
-  it("unknown statuses fallback to neutral", () => {
-    expect(statusTone("unknown_status", "app")).toBe("neutral");
-    expect(statusTone("weird", "deployment")).toBe("neutral");
+  it("a status we cannot interpret is unknown, never neutral", () => {
+    // `neutral` is a reading — the thing is idle. `unknown` means we have no
+    // reading at all. Collapsing the second into the first renders a confident
+    // grey "inactive" chip for data we never understood.
+    expect(statusTone("unknown_status", "app")).toBe("unknown");
+    expect(statusTone("weird", "deployment")).toBe("unknown");
+  });
+
+  it("a missing or empty status is unknown", () => {
+    expect(statusTone(null)).toBe("unknown");
+    expect(statusTone(undefined)).toBe("unknown");
+    expect(statusTone("")).toBe("unknown");
+    expect(statusTone("   ")).toBe("unknown");
+  });
+
+  it("statusTone is the only statusTone reachable from the api barrel", () => {
+    // `lib/api/apps.ts` used to export a second, colour-word `statusTone` that
+    // won the `export *` race in `lib/api.ts`, so importing from "@/lib/api"
+    // silently got the wrong vocabulary.
+    const appsSrc = readFileSync(resolve(__dirname, "../lib/api/apps.ts"), "utf8");
+    expect(appsSrc).not.toMatch(/export function statusTone/);
+    expect(appsSrc).not.toMatch(/export function deploymentStatusTone/);
+    const barrelSrc = readFileSync(resolve(__dirname, "../lib/api.ts"), "utf8");
+    expect(barrelSrc).toContain("export * from './api/status'");
+  });
+
+  it("nomad, incus and database statuses resolve through the canonical tables", () => {
+    // Case-insensitively: Incus reports "Running"/"Frozen" capitalised, and the
+    // page's own copy of this map used a case-sensitive switch.
+    expect(statusTone("Running", "incus")).toBe("ok");
+    expect(statusTone("Frozen", "incus")).toBe("neutral");
+    expect(statusTone("Error", "incus")).toBe("danger");
+    expect(statusTone("running", "nomad")).toBe("ok");
+    expect(statusTone("dead", "nomad")).toBe("neutral");
+    expect(statusTone("lost", "nomad")).toBe("danger");
+    expect(statusTone("provisioning", "database")).toBe("pending");
+    // Every domain inherits the unknown rule.
+    for (const kind of ["nomad", "incus", "database"] as const) {
+      expect(statusTone("something_new_from_the_backend", kind)).toBe("unknown");
+      expect(statusTone(undefined, kind)).toBe("unknown");
+    }
+  });
+
+  it("a state the operator chose is not a fault, and a lost one is", () => {
+    // These three were wrong in the page-local copies this replaced: a
+    // deliberately stopped database rendered in the same red as a crashed one,
+    // and an Incus cluster member that had gone offline rendered in the same
+    // grey as an instance the operator had shut down on purpose.
+    expect(statusTone("stopped", "database")).toBe("neutral");
+    expect(statusTone("failed", "database")).toBe("danger");
+    expect(statusTone("offline", "incus")).toBe("danger");
+    // A drained Nomad node needs attention but is not broken.
+    expect(statusTone("draining", "nomad")).toBe("warn");
+    expect(statusTone("down", "nomad")).toBe("danger");
+  });
+
+  it("no page keeps a private status-tone table", () => {
+    // Each of these shipped its own map, and each disagreed with the canonical
+    // vocabulary somewhere: an unreadable status rendered as a confident
+    // "inactive", a running cron job as a warning, an unrecognised upgrade plan
+    // as in progress. The tables live in lib/api/status.ts now.
+    const shadowed = [
+      "../app/admin/nomad/page.tsx",
+      "../app/admin/incus/page.tsx",
+      "../app/server/[id]/databases/services/page.tsx",
+      "../app/server/[id]/git/page.tsx",
+      "../app/admin/cron-jobs/page.tsx",
+      "../components/admin/AdminUpgrade.tsx",
+      "../components/admin/beacon-workspace.tsx",
+    ];
+    for (const rel of shadowed) {
+      const src = readFileSync(resolve(__dirname, rel), "utf8");
+      expect(src, rel).not.toMatch(/^(?:const|function)\s+(?:statusTone|healthTone|stateTone)\b/m);
+      // A local map keyed on colour words is the tell, whatever it is called.
+      expect(src, rel).not.toMatch(/Record<string,\s*"(?:green|red|yellow|blue)"/);
+    }
   });
 });
 

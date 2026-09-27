@@ -11,6 +11,7 @@ import {
   createGitDeploymentHook,
   deleteGitDeploymentHook,
 } from "@/lib/api/git-deployments";
+import { deploymentStatusTone } from "@/lib/api/status";
 import type { GitDeploymentHook } from "@/lib/api/git-deployments";
 import { errorMessage } from "@/lib/utils";
 import { ConfirmDialog, EmptyState, StatusPill } from "@/components/ui/primitives";
@@ -20,11 +21,6 @@ import { useOptionalServerContext } from "@/components/server/server-context";
 const DEPLOYMENTS_KEY = ["git-deployments"] as const;
 const HOOKS_KEY = ["git-deployment-hooks"] as const;
 
-const statusTone: Record<string, "neutral" | "success" | "warning" | "danger"> = {
-  success: "success",
-  failed: "danger",
-  building: "warning",
-};
 
 export default function GitDeployPage() {
   const params = useParams();
@@ -165,7 +161,7 @@ export default function GitDeployPage() {
                         {d.branch} @ <span className="font-mono">{d.commitSha.slice(0, 8)}</span> — {new Date(d.createdAt).toLocaleString()}
                       </p>
                     </div>
-                    <StatusPill tone={statusTone[d.status] ?? "neutral"}>
+                    <StatusPill tone={deploymentStatusTone(d.status)}>
                       {d.status}
                     </StatusPill>
                   </div>

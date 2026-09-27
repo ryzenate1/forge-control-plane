@@ -50,6 +50,11 @@ head_() { printf '\n%s=== %s ===%s\n' "$CYAN" "$1" "$NC"; }
 
 port_open() { nc -z 127.0.0.1 "$1" >/dev/null 2>&1; }
 
+# PID of whatever is listening on a port, or empty if nothing is. An open port
+# is not evidence that *our* process opened it, so anything that reports a tier
+# as started has to compare this against the pid we spawned.
+port_owner() { lsof -nP -iTCP:"$1" -sTCP:LISTEN -t 2>/dev/null | head -1; }
+
 # Start a process in its own session so it outlives this script and whatever
 # terminal invoked it.
 spawn_detached() {
@@ -74,6 +79,61 @@ wait_port() {
         sleep 1; i=$((i + 1))
     done
     return 1
+}
+
+# Wait for the tier named $1 to serve $2, and confirm the listener belongs to
+# the process we just spawned.
+#
+# `wait_port` alone cannot tell "our server came up" from "an orphan from an
+# earlier run still owns the port". That distinction matters: a dev server that
+# lost the bind keeps serving the code and config it loaded at *its* start, so
+# the operator edits a file, sees the old output, and has no way to know why.
+# Exit codes: 0 ours, 2 someone else's, 3 nothing listening.
+confirm_listener() {
+    local name=$1 port=$2 tries=${3:-30}
+    local pidfile="$PID_DIR/$name.pid" ours owner
+    ours="$(cat "$pidfile" 2>/dev/null || true)"
+
+    local i=0
+    while [ "$i" -lt "$tries" ]; do
+        # Our own process dying is conclusive; stop waiting out the timeout.
+        if [ -n "$ours" ] && ! kill -0 "$ours" 2>/dev/null; then break; fi
+        port_open "$port" && break
+        sleep 1; i=$((i + 1))
+    done
+
+    port_open "$port" || return 3
+    owner="$(port_owner "$port")"
+    # No lsof reading is not a mismatch: report success rather than inventing a
+    # conflict we cannot actually see.
+    [ -z "$owner" ] && return 0
+    [ -n "$ours" ] && [ "$owner" = "$ours" ] && return 0
+
+    # npm spawns next as a child, so the listener is usually in our process
+    # group rather than our pid itself.
+    local owner_pgid ours_pgid
+    owner_pgid="$(ps -o pgid= -p "$owner" 2>/dev/null | tr -d ' ')"
+    ours_pgid="$(ps -o pgid= -p "$ours" 2>/dev/null | tr -d ' ')"
+    if [ -n "$owner_pgid" ] && [ "$owner_pgid" = "$ours_pgid" ]; then return 0; fi
+
+    LISTENER_OWNER="$owner"
+    return 2
+}
+
+# Report a tier's startup from what is actually listening.
+report_listener() {
+    local name=$1 port=$2 tries=$3 label=$4 logname=$5
+    confirm_listener "$name" "$port" "$tries"
+    local rc=$? owner
+    owner="$(port_owner "$port")"
+    case $rc in
+        0) ok "$label${owner:+ (pid $owner)}" ;;
+        2) fail "Port ${port} is held by pid ${LISTENER_OWNER}, which is not the ${name} we just started."
+           info "That process serves its own older code and config. Stop it first:"
+           info "  kill ${LISTENER_OWNER} && $0 restart"
+           return 2 ;;
+        *) warn "${name} has not opened port ${port} yet; see $LOG_DIR/$logname" ; return 3 ;;
+    esac
 }
 
 load_secrets() {
@@ -153,13 +213,14 @@ start_api() {
     spawn_detached api "$ROOT/forge/api" "$ROOT/forge/api/api"
 
     info "Waiting for migrations and startup..."
-    if wait_port "$API_PORT" 300; then
-        ok "API on http://localhost:${API_PORT}/api/v1 (pid $(cat "$PID_DIR/api.pid"))"
-    else
-        fail "API did not open port ${API_PORT}; see $LOG_DIR/api.log"
-        tail -20 "$LOG_DIR/api.log" || true
-        exit 1
+    if report_listener api "$API_PORT" 300 \
+        "API on http://localhost:${API_PORT}/api/v1" api.log; then
+        return 0
     fi
+    # The API is what everything else talks to, so a wrong or missing listener
+    # here is fatal rather than a warning.
+    tail -20 "$LOG_DIR/api.log" || true
+    exit 1
 }
 
 start_beacon() {
@@ -241,22 +302,52 @@ PLIST
 start_web() {
     head_ "Forge Web"
     spawn_detached web "$ROOT/forge/web" npm run dev
-    if wait_port "$WEB_PORT" 120; then
-        ok "Web on http://localhost:${WEB_PORT} (pid $(cat "$PID_DIR/web.pid"))"
-    else
-        warn "Web is still compiling; see $LOG_DIR/web.log"
-    fi
+    report_listener web "$WEB_PORT" 120 \
+        "Web on http://localhost:${WEB_PORT}" web.log || true
 }
 
+# Stop the process recorded for a tier. Exit codes: 0 signalled, 1 no pidfile,
+# 2 pidfile present but the process was already gone.
 kill_pidfile() {
     local name=$1 file="$PID_DIR/$1.pid"
-    [ -f "$file" ] || return 0
-    local pid; pid="$(cat "$file")"
+    [ -f "$file" ] || return 1
+    local pid; pid="$(cat "$file")" rc=2
     if kill -0 "$pid" 2>/dev/null; then
         # npm spawns next as a child; take down the whole process group.
         kill -TERM -"$(ps -o pgid= "$pid" | tr -d ' ')" 2>/dev/null || kill -TERM "$pid" 2>/dev/null || true
+        rc=0
     fi
     rm -f "$file"
+    return $rc
+}
+
+# Stop a tier and report what actually happened.
+#
+# The pidfile is a record of what we last started, not of what is running now:
+# a dev server can be replaced, re-bind, or outlive the pidfile that named it.
+# Killing the recorded pid and printing "stopped" therefore claims work that may
+# not have been done — and leaves an orphan serving stale code on the port. The
+# port is the ground truth, so it is what gets checked and reported.
+stop_tier() {
+    local name=$1 port=$2 label=$3 rc owner
+    kill_pidfile "$name"; rc=$?
+
+    local i=0
+    while [ "$i" -lt 10 ] && port_open "$port"; do sleep 1; i=$((i + 1)); done
+
+    if port_open "$port"; then
+        owner="$(port_owner "$port")"
+        fail "${label} is still listening on ${port}${owner:+ (pid $owner)} after stop."
+        info "It is not the process ${0##*/} recorded, so it was started outside this script."
+        [ -n "$owner" ] && info "  kill ${owner}"
+        return 1
+    fi
+
+    case $rc in
+        0) ok "${label} stopped" ;;
+        1) info "${label} was not running (no pidfile)" ;;
+        2) info "${label} was not running (recorded process already gone)" ;;
+    esac
 }
 
 cmd_start() {
@@ -281,8 +372,8 @@ cmd_start() {
 cmd_stop() {
     head_ "Stopping"
     launchctl bootout "gui/$UID/$BEACON_LABEL" 2>/dev/null && ok "Beacon unloaded" || warn "Beacon was not loaded"
-    kill_pidfile api; ok "API stopped"
-    kill_pidfile web; ok "Web stopped"
+    stop_tier api "$API_PORT" "API" || true
+    stop_tier web "$WEB_PORT" "Web" || true
     info "PostgreSQL and Redis are left running (brew services stop ${PG_FORMULA} redis)"
     echo
 }
@@ -290,8 +381,16 @@ cmd_stop() {
 cmd_status() {
     head_ "Status"
     for entry in "PostgreSQL:$DB_PORT" "Redis:$REDIS_PORT" "API:$API_PORT" "Beacon:$BEACON_PORT" "Web:$WEB_PORT"; do
-        local name=${entry%%:*} port=${entry##*:}
-        if port_open "$port"; then ok "$name listening on $port"; else fail "$name not listening on $port"; fi
+        local name=${entry%%:*} port=${entry##*:} owner
+        if port_open "$port"; then
+            # The pid is printed because "something is listening" and "the
+            # process this script started is listening" are different facts,
+            # and only the second one means the port serves current code.
+            owner="$(port_owner "$port")"
+            ok "$name listening on $port${owner:+ (pid $owner)}"
+        else
+            fail "$name not listening on $port"
+        fi
     done
     echo
     launchctl print "gui/$UID/$BEACON_LABEL" 2>/dev/null \

@@ -18,6 +18,7 @@ import {
 } from "@/components/admin/admin-ui";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { formatDate } from "@/lib/utils";
+import { deploymentStatusTone } from "@/lib/api/status";
 import {
   checkForUpgrades,
   listUpgradePlans,
@@ -31,15 +32,12 @@ import {
 
 const COMPONENTS = ["api", "web", "beacon", "database"];
 
-function planTone(status: string): "green" | "red" | "yellow" | "blue" | "neutral" {
-  switch (status) {
-    case "completed": return "green";
-    case "failed": return "red";
-    case "rolled_back": return "yellow";
-    case "pending": return "neutral";
-    default: return "blue";
-  }
-}
+// planTone used to live here. Its default branch returned "blue", so an
+// upgrade-plan status this UI did not recognise was rendered as in progress —
+// claiming an upgrade was under way on no evidence. Its "pending" was neutral,
+// which read as idle rather than queued. deploymentStatusTone covers the plan
+// states and returns `unknown` for the rest.
+const planTone = deploymentStatusTone;
 
 export function AdminUpgrade() {
   const qc = useQueryClient();
