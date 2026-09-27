@@ -21,6 +21,11 @@ API_PORT=8080
 WEB_PORT=3000
 BEACON_PORT=9090
 
+# Set by any tier that did not come up. The start continues — one dead tier is
+# not a reason to withhold the others — but the banner and the exit code must
+# not describe a stack that is only partly running as ready.
+STACK_DEGRADED=0
+
 PG_FORMULA=postgresql@16
 BEACON_LABEL=com.gamepanel.beacon
 PLIST="$HOME/Library/LaunchAgents/$BEACON_LABEL.plist"
@@ -355,14 +360,48 @@ start_beacon() {
 </plist>
 PLIST
 
+    # bootout is not synchronous. launchd can still be tearing the old agent
+    # down when bootstrap runs, and bootstrap then fails with
+    # "5: Input/output error" because the label is still present in the domain.
+    # Wait for the label to actually disappear before loading the new plist.
     launchctl bootout "gui/$UID/$BEACON_LABEL" 2>/dev/null || true
-    launchctl bootstrap "gui/$UID" "$PLIST"
+    local i=0
+    while [ "$i" -lt 10 ] && launchctl print "gui/$UID/$BEACON_LABEL" >/dev/null 2>&1; do
+        sleep 1; i=$((i + 1))
+    done
 
-    if wait_port "$BEACON_PORT" 30; then
-        ok "Beacon on http://localhost:${BEACON_PORT}/health (launchd: $BEACON_LABEL)"
-    else
-        warn "Beacon has not opened port ${BEACON_PORT} yet; see $LOG_DIR/beacon.log"
+    # A beacon that will not load must not abort the rest of the stack. This
+    # bootstrap was unguarded under `set -e`, so a single EIO from launchctl
+    # killed cmd_start before start_web ever ran: one unloadable agent took the
+    # whole dashboard down with it, and the API and UI paths do not need beacon
+    # to be worth serving. Failures are reported and the start continues.
+    local boot_err
+    if boot_err="$(launchctl bootstrap "gui/$UID" "$PLIST" 2>&1)"; then
+        if wait_port "$BEACON_PORT" 30; then
+            ok "Beacon on http://localhost:${BEACON_PORT}/health (launchd: $BEACON_LABEL)"
+        else
+            warn "Beacon has not opened port ${BEACON_PORT} yet; see $LOG_DIR/beacon.log"
+            STACK_DEGRADED=1
+        fi
+        return 0
     fi
+
+    STACK_DEGRADED=1
+    if port_open "$BEACON_PORT"; then
+        # Something is still serving the port. That is not this load succeeding:
+        # it is the previous agent running the binary it loaded at its own start,
+        # so a rebuild is not live and saying "ok" here would be a lie.
+        warn "Beacon could not be reloaded: ${boot_err:-launchctl bootstrap failed}"
+        warn "The previous agent is still serving port ${BEACON_PORT} with the code it started with."
+        info "To pick up the rebuilt binary:"
+        info "  launchctl bootout gui/$UID/$BEACON_LABEL && $0 start"
+    else
+        fail "Beacon did not load: ${boot_err:-launchctl bootstrap failed}"
+        info "Continuing without beacon — the API and dashboard still work, but no"
+        info "workload can be started or inspected on this host."
+        info "  see $LOG_DIR/beacon.log"
+    fi
+    return 0
 }
 
 start_web() {
@@ -427,15 +466,33 @@ cmd_start() {
     start_beacon
     start_web
 
-    head_ "Ready"
-    printf '  %-16s %s\n' "Web dashboard" "http://localhost:${WEB_PORT}"
-    printf '  %-16s %s\n' "Forge API" "http://localhost:${API_PORT}/api/v1"
-    printf '  %-16s %s\n' "API health" "http://localhost:${API_PORT}/api/v1/health/ready"
-    printf '  %-16s %s\n' "Beacon health" "http://localhost:${BEACON_PORT}/health"
-    printf '  %-16s %s\n' "PostgreSQL" "127.0.0.1:${DB_PORT}"
-    printf '  %-16s %s\n' "Redis" "127.0.0.1:${REDIS_PORT}"
+    # The banner is a claim about what is serving, so it is built from what is
+    # actually listening. Printing a flat "Ready" with a Beacon health URL under
+    # it while beacon failed to load tells the operator to go look at something
+    # that is not there.
+    if [ "$STACK_DEGRADED" -ne 0 ]; then
+        head_ "Started with problems"
+    else
+        head_ "Ready"
+    fi
+    local tier
+    for tier in "Web dashboard:$WEB_PORT:http://localhost:${WEB_PORT}" \
+                "Forge API:$API_PORT:http://localhost:${API_PORT}/api/v1" \
+                "API health:$API_PORT:http://localhost:${API_PORT}/api/v1/health/ready" \
+                "Beacon health:$BEACON_PORT:http://localhost:${BEACON_PORT}/health" \
+                "PostgreSQL:$DB_PORT:127.0.0.1:${DB_PORT}" \
+                "Redis:$REDIS_PORT:127.0.0.1:${REDIS_PORT}"; do
+        local label=${tier%%:*} rest=${tier#*:}
+        local port=${rest%%:*} value=${rest#*:}
+        if port_open "$port"; then
+            printf '  %-16s %s\n' "$label" "$value"
+        else
+            printf '  %-16s %s (not listening)\n' "$label" "$value"
+        fi
+    done
     printf '\n  Demo login: admin@example.com / admin123\n'
     printf '  Logs: %s\n\n' "$LOG_DIR"
+    [ "$STACK_DEGRADED" -eq 0 ]
 }
 
 cmd_stop() {
