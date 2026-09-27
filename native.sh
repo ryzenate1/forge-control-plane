@@ -245,7 +245,10 @@ ensure_databases() {
     head_ "PostgreSQL and Redis (native Homebrew services)"
 
     if ! port_open "$DB_PORT"; then
-        brew services start "$PG_FORMULA" >/dev/null
+        # Unguarded, a brew failure aborted the script here under `set -e` and
+        # the diagnostic below never printed. Postgres really is fatal, so the
+        # exit stays — but it should say why.
+        brew services start "$PG_FORMULA" >/dev/null || true
         wait_port "$DB_PORT" 30 || { fail "PostgreSQL did not start on $DB_PORT"; exit 1; }
     fi
     ok "PostgreSQL on 127.0.0.1:$DB_PORT"
@@ -268,16 +271,32 @@ ensure_databases() {
 
     if ! port_open "$REDIS_PORT"; then
         brew services start redis >/dev/null 2>&1 || true
-        wait_port "$REDIS_PORT" 20 || warn "Redis did not start; API will run without a cache"
+        wait_port "$REDIS_PORT" 20 || true
     fi
-    port_open "$REDIS_PORT" && ok "Redis on 127.0.0.1:$REDIS_PORT"
+    # This was `port_open "$REDIS_PORT" && ok "..."` as the function's last
+    # command, which made a missing Redis the function's exit status: under
+    # `set -e` cmd_start then died here, silently, before start_api — so the
+    # line right above deliberately downgrading Redis to a warning could never
+    # take effect, and an optional cache took the entire stack with it.
+    if port_open "$REDIS_PORT"; then
+        ok "Redis on 127.0.0.1:$REDIS_PORT"
+    else
+        warn "Redis is not running; the API will run without a cache."
+        STACK_DEGRADED=1
+    fi
 }
 
 start_api() {
     head_ "Forge API"
     require_free_port api "$API_PORT" || return 0
     info "Building..."
-    (cd "$ROOT/forge/api" && go build -o api ./cmd/api)
+    # A bare subshell here aborted the script with no message under `set -e`,
+    # which looks identical to a clean exit. Say what failed. Still fatal: the
+    # alternative is spawning the previous build and calling it this one.
+    if ! (cd "$ROOT/forge/api" && go build -o api ./cmd/api); then
+        fail "API build failed; refusing to start the previously built binary."
+        exit 1
+    fi
 
     # Migrations resolve relative to the working directory. A first run applies
     # 200+ migrations before the listener opens, so allow several minutes.
