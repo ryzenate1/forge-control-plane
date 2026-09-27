@@ -3,6 +3,10 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PID_DIR="$ROOT/.dev-pids"
+# Canonical ports + recorded runtime overrides.
+# shellcheck disable=SC1091
+[ -f "$ROOT/scripts/dev/ports.env" ] && . "$ROOT/scripts/dev/ports.env"
+[ -f "$ROOT/.dev-data/ports.env" ] && . "$ROOT/.dev-data/ports.env"
 DB_PORT="${DB_PORT:-5432}"
 REDIS_PORT="${REDIS_PORT:-6379}"
 API_PORT="${API_PORT:-8080}"
@@ -34,7 +38,9 @@ docker_available() {
     fi
     sleep 1
   done
-  kill -9 "$pid" >/dev/null 2>&1 || true
+  # Never kill -9: this is our own short-lived `docker info` probe, so a plain
+  # TERM suffices; -9 on a shared PID namespace risks hitting a recycled PID.
+  kill "$pid" >/dev/null 2>&1 || true
   wait "$pid" >/dev/null 2>&1 || true
   return 1
 }
@@ -70,7 +76,7 @@ pid_line api
 if command -v docker >/dev/null 2>&1; then
   printf "\nDocker services:\n"
   if docker_available; then
-    (cd "$ROOT/deploy" && docker compose ps 2>/dev/null || true)
+    (cd "$ROOT/infra" && docker compose ps 2>/dev/null || true)
   else
     printf "  Docker daemon is not reachable. Start Docker Desktop or use native mode.\n"
   fi

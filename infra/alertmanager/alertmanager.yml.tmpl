@@ -1,0 +1,45 @@
+# Alertmanager configuration TEMPLATE — rendered by scripts/gen-alertmanager.sh
+# into infra/alertmanager/alertmanager.yml (git-ignored). Do not edit the
+# generated file by hand; re-run the script after changing env values.
+#
+# Why a template: prom/alertmanager:v0.27.0 does NOT support environment
+# expansion in its config (there is no --config.expand-env flag), so receiver
+# endpoints must be rendered from ALERTMANAGER_* variables before startup.
+#
+# Usage (from infra/ or repo root):
+#   ALERTMANAGER_ADMIN_EMAIL=ops@example.com \
+#   ALERTMANAGER_SMTP_HOST=smtp.example.com \
+#   ALERTMANAGER_SMTP_USER=alertmanager \
+#   ALERTMANAGER_SMTP_PASS=secret \
+#   ./scripts/gen-alertmanager.sh [output-file]
+#
+# With no variables set the output is identical in behavior to the previous
+# static config: a single valid blackhole `default` receiver.
+
+global:
+  resolve_timeout: 5m
+@@SMTP_GLOBAL@@
+
+templates:
+  - "/etc/alertmanager/templates/*.tmpl"
+
+route:
+  group_by: ["alertname", "severity"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 1h
+  # Deliver to email/webhook when configured; otherwise alerts are acked and
+  # dropped by the blackhole default receiver (service still boots cleanly).
+  receiver: "@@ROOT_RECEIVER@@"
+  routes:
+    - match:
+        severity: critical
+      receiver: "@@CRITICAL_RECEIVER@@"
+    - match:
+        severity: warning
+      receiver: "@@WARNING_RECEIVER@@"
+
+receivers:
+  # Always present so the routing tree is valid with zero configuration.
+  - name: "default"
+@@SMTP_RECEIVER@@@@WEBHOOK_RECEIVER@@

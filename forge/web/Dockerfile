@@ -8,19 +8,57 @@ RUN npm ci
 FROM node:20-alpine AS build
 WORKDIR /src
 ARG API_INTERNAL_URL=http://api:8080
+ARG NEXT_PUBLIC_API_URL=/api/v1
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
+ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NODE_OPTIONS="--max-old-space-size=4096"
 COPY --from=deps /src/node_modules ./node_modules
+COPY --from=deps /src/forge/web/node_modules ./forge/web/node_modules
 COPY . .
-RUN npm --workspace @forge/web run build
+RUN npm --workspace @forge/web run lint && \
+    npm --workspace @forge/web run typecheck && \
+    npm --workspace @forge/web test && \
+    npm --workspace @forge/web run build
 
 FROM node:20-alpine AS runner
+
+LABEL maintainer="GamePanel Team" \
+      version="1.0.0" \
+      description="Forge Web - GamePanel Next.js dashboard" \
+      org.opencontainers.image.source="https://github.com/gamepanel/forge" \
+      org.opencontainers.image.title="Forge Web" \
+      org.opencontainers.image.description="GamePanel Next.js dashboard" \
+      security.nonroot="true" \
+      security.readonly-rootfs="true"
+
 WORKDIR /app
 ENV NODE_ENV=production
 ENV HOSTNAME=0.0.0.0
 ENV PORT=3000
+ENV NEXT_TELEMETRY_DISABLED=1
+ENV NEXT_PUBLIC_API_URL=/api/v1
+
+RUN apk upgrade --no-cache && \
+    rm -rf /usr/local/lib/node_modules/npm /usr/local/bin/npm /usr/local/bin/npx
+
 COPY --from=build /src/forge/web/.next/standalone ./
 COPY --from=build /src/forge/web/.next/static ./forge/web/.next/static
-USER node
+COPY --from=build /src/forge/web/public ./forge/web/public
+# The /api/i18n/[locale] route and lib/get-translation.ts load JSON from the
+# repo-root `lang/` catalog at request time (not bundled imports), so the
+# files must exist in the standalone runner at /app/lang.
+COPY --from=build /src/lang ./lang
+
+RUN addgroup -S appgroup && adduser -S appuser -G appgroup && \
+    chown -R appuser:appgroup /app
+
+USER appuser
+
 EXPOSE 3000
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD wget -q -O /dev/null http://127.0.0.1:3000/ || exit 1
+
+STOPSIGNAL SIGTERM
+
 CMD ["node", "forge/web/server.js"]

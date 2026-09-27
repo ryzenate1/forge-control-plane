@@ -1,77 +1,421 @@
 #!/usr/bin/env bash
-# Generate a production environment file with strong random secrets.
-# Usage: ./gen-env.sh [output_path]
-#   default output_path: .env.production
-
+# ======================================================================
+# gen-env.sh — GamePanel Production .env Generator
+#
+# Generates a complete production .env file with cryptographically
+# random secrets, plus Docker secret files in infra/secrets/ that match the
+# .env values (used by compose.secrets.yml).  Can run interactively or
+# silently.
+#
+# Usage:
+#   ./gen-env.sh [output-path]              interactive
+#   ./gen-env.sh --silent [output-path]     silent (all random)
+#
+# Preset any variable via environment (e.g. PANEL_DOMAIN=x.example.com).
+# Idempotent: safe to run multiple times (overwrites existing file).
+#
+# Requirements: openssl, bash 4+
+# ======================================================================
 set -euo pipefail
 
-OUTPUT_PATH="${1:-.env.production}"
+# ---- Paths & Mode ----------------------------------------------------------
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT="${1:-"$SELF_DIR/.env"}"
+SILENT=false
 
-new_secret() {
-    local bytes="${1:-32}"
-    openssl rand -hex "$bytes"
-}
-
-new_uuid() {
-    local hex
-    hex="$(new_secret 16)"
-    printf '%s-%s-%s-%s-%s\n' \
-        "${hex:0:8}" "${hex:8:4}" "${hex:12:4}" "${hex:16:4}" "${hex:20:12}"
-}
-
-api_secret="$(new_secret 32)"
-app_key="$(new_secret 32)"
-node_token_id="$(new_secret 8)"
-node_token_secret="$(new_secret 32)"
-node_token="$node_token_id.$node_token_secret"
-node_id="$(new_uuid)"
-postgres_password="$(new_secret 24)"
-grafana_password="$(new_secret 24)"
-master_key="$(new_secret 32)"
-
-if [ -z "${PANEL_DOMAIN:-}" ]; then
-    panel_domain="panel.example.com"
-    echo "WARNING: PANEL_DOMAIN not set; using placeholder '$panel_domain'." >&2
-else
-    panel_domain="$PANEL_DOMAIN"
+if [ "${1:-}" = "--silent" ]; then
+    SILENT=true
+    OUTPUT="${2:-"$SELF_DIR/.env"}"
 fi
 
-cat > "$OUTPUT_PATH" <<EOF
+# ---- Helpers ---------------------------------------------------------------
+rand_base64() { openssl rand -base64 32 | tr -d '\n'; }
+rand_hex()    { openssl rand -hex "${1:-32}"; }
+rand_hex24()  { rand_hex 24; }
+rand_hex16()  { rand_hex 16; }
+rand_hex8()   { rand_hex 8; }
+make_token()  { echo "$(rand_hex8).$(rand_hex32)"; }
+make_uuid()   { local h; h="$(rand_hex 16)"; echo "${h:0:8}-${h:8:4}-${h:12:4}-${h:16:4}-${h:20:12}"; }
+rand_hex32()  { rand_hex 32; }
+
+# ---- Interactive Prompts ---------------------------------------------------
+if [ "$SILENT" = false ]; then
+    cat <<WELCOME
+=== GamePanel .env Generator ===
+Output: $OUTPUT
+Press Enter to accept defaults (shown in brackets).
+Leave secrets blank for random generation.
+
+WELCOME
+
+    read -r -p "Panel domain [panel.example.com]: " PANEL_DOMAIN
+    PANEL_DOMAIN="${PANEL_DOMAIN:-panel.example.com}"
+
+    read -r -p "PostgreSQL database name [gamepanel]: " PG_DB
+    PG_DB="${PG_DB:-gamepanel}"
+    read -r -p "PostgreSQL username [gamepanel]: " PG_USER
+    PG_USER="${PG_USER:-gamepanel}"
+    read -r -s -p "PostgreSQL password [random]: " PG_PASSWORD
+    echo ""
+
+    read -r -p "Grafana admin user [admin]: " GF_USER
+    GF_USER="${GF_USER:-admin}"
+    read -r -s -p "Grafana admin password [random]: " GF_PASSWORD
+    echo ""
+
+    read -r -p "Mail driver (smtp/sendmail/log) [log]: " MAIL_DRIVER
+    MAIL_DRIVER="${MAIL_DRIVER:-log}"
+
+    read -r -p "Backup adapter (local/s3) [local]: " BK_ADAPTER
+    BK_ADAPTER="${BK_ADAPTER:-local}"
+
+    read -r -p "AWS region (blank to skip): " AWS_REGION
+
+    read -r -p "Traefik ACME email (for Let's Encrypt, blank to skip): " TRAEFIK_ACME_EMAIL
+
+    read -r -p "Alertmanager admin email (blank to skip): " ALERTMANAGER_ADMIN_EMAIL
+
+    read -r -p "Alertmanager webhook URL (Slack/Discord, blank to skip): " ALERTMANAGER_WEBHOOK_URL
+
+    echo ""
+    echo "Generating secrets..."
+else
+    PANEL_DOMAIN="${PANEL_DOMAIN:-panel.example.com}"
+    PG_DB="${PG_DB:-gamepanel}"
+    PG_USER="${PG_USER:-gamepanel}"
+    GF_USER="${GF_USER:-admin}"
+    MAIL_DRIVER="${MAIL_DRIVER:-log}"
+    BK_ADAPTER="${BK_ADAPTER:-local}"
+    AWS_REGION="${AWS_REGION:-}"
+    TRAEFIK_ACME_EMAIL="${TRAEFIK_ACME_EMAIL:-}"
+    ALERTMANAGER_ADMIN_EMAIL="${ALERTMANAGER_ADMIN_EMAIL:-}"
+    ALERTMANAGER_WEBHOOK_URL="${ALERTMANAGER_WEBHOOK_URL:-}"
+fi
+
+# ---- Generate Random Secrets -----------------------------------------------
+: "${PG_PASSWORD:=$(rand_base64)}"
+: "${GF_PASSWORD:=$(rand_hex24)}"
+
+POSTGRES_PASSWORD="$PG_PASSWORD"
+POSTGRES_DB="$PG_DB"
+POSTGRES_USER="$PG_USER"
+: "${REDIS_PASSWORD:=$(rand_base64)}"
+# URL-encode the password: base64 output contains +/= which are meaningful in
+# a URL (a raw '+' becomes a space, '/' splits the path). quote_plus keeps
+# DATABASE_URL parseable for any generated secret.
+PG_PASSWORD_ENC="$(python3 -c 'import sys, urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))' "$POSTGRES_PASSWORD")"
+DATABASE_URL="postgres://${PG_USER}:${PG_PASSWORD_ENC}@postgres:5432/${PG_DB}?sslmode=require"
+
+API_AUTH_SECRET="$(rand_base64)"
+APP_KEY="base64:$(rand_base64)"
+FORGE_MASTER_KEY="$(rand_base64)"
+CRYPTO_KEY="$(rand_base64)"
+NODE_ID="$(make_uuid)"
+NODE_TOKEN="$(make_token)"
+GRAFANA_ADMIN_USER="$GF_USER"
+GRAFANA_ADMIN_PASSWORD="$GF_PASSWORD"
+SOKETI_APP_KEY="$(rand_hex16)"
+SOKETI_APP_SECRET="$(rand_hex32)"
+METRICS_TOKEN="$(rand_base64)"
+DAEMON_SFTP_HOST_KEY_PASSPHRASE="$(rand_base64)"
+
+# ---- Release / Image Tag ----------------------------------------------------
+# compose.yml pins every image (forge-api, forge-web, beacon, docs) to
+# ${TAG}. Default to the nearest git tag when available, otherwise "dev".
+# Preset TAG in the environment to pin a specific release.
+if [ -z "${TAG:-}" ]; then
+    if git_tag="$(git -C "$SELF_DIR/.." describe --tags --always 2>/dev/null)" && [ -n "$git_tag" ]; then
+        # Docker image tags allow only [A-Za-z0-9._-]; sanitize the
+        # git describe output (branch names may contain slashes).
+        TAG="$(printf '%s' "$git_tag" | sed -e 's/[^A-Za-z0-9._-]/-/g' -e 's/^-*//' -e 's/-*$//')"
+        if [ -z "$TAG" ]; then
+            TAG="dev"
+        fi
+    else
+        TAG="dev"
+    fi
+fi
+
+# ---- Write Output File -----------------------------------------------------
+mkdir -p "$(dirname "$OUTPUT")"
+# Never silently clobber an existing env file — keep a timestamped backup so
+# a re-run cannot destroy the only copy of production secrets.
+if [ -f "$OUTPUT" ]; then
+    cp -p "$OUTPUT" "${OUTPUT}.bak.$(date -u +%Y%m%dT%H%M%SZ)"
+    cp -p "$OUTPUT" "${OUTPUT}.bak"
+    echo "Backed up existing $OUTPUT to ${OUTPUT}.bak"
+fi
+# Quote secrets for the .env file: bare KEY=VALUE lines break when a value
+# contains spaces, '#', '$' or quotes (user-supplied passwords can). Double
+# quotes are stripped by compose dotenv parsing and by the bootstrap
+# restricted parser, so quoting is round-trip safe. Escape \ and " first.
+env_quote() { local v="$1"; v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
+q_POSTGRES_PASSWORD="$(env_quote "$POSTGRES_PASSWORD")"
+q_DATABASE_URL="$(env_quote "$DATABASE_URL")"
+q_REDIS_PASSWORD="$(env_quote "$REDIS_PASSWORD")"
+q_API_AUTH_SECRET="$(env_quote "$API_AUTH_SECRET")"
+q_APP_KEY="$(env_quote "$APP_KEY")"
+q_FORGE_MASTER_KEY="$(env_quote "$FORGE_MASTER_KEY")"
+q_NODE_TOKEN="$(env_quote "$NODE_TOKEN")"
+q_SFTP_PASSPHRASE="$(env_quote "$DAEMON_SFTP_HOST_KEY_PASSPHRASE")"
+q_GRAFANA_PASSWORD="$(env_quote "$GRAFANA_ADMIN_PASSWORD")"
+q_METRICS_TOKEN="$(env_quote "$METRICS_TOKEN")"
+q_SOKETI_KEY="$(env_quote "$SOKETI_APP_KEY")"
+q_SOKETI_SECRET="$(env_quote "$SOKETI_APP_SECRET")"
+q_CRYPTO_KEY="$(env_quote "$CRYPTO_KEY")"
+cat > "$OUTPUT" <<ENV
+# =====================================================================
+# GamePanel Production Environment
 # Auto-generated by gen-env.sh on $(date -u +"%Y-%m-%dT%H:%M:%SZ")
-# Review before use. NEVER commit this file.
-# Demo seeding is disabled and production startup is fail-closed on secrets.
-APP_ENV=production
-API_ADDR=:8080
-API_AUTH_SECRET=$api_secret
-APP_KEY=$app_key
-DATABASE_URL=postgres://gamepanel:$postgres_password@postgres:5432/gamepanel?sslmode=disable
+# WARNING: This file contains secrets — NEVER commit it to version
+# control.  Keep it secure and restricted (chmod 600).
+# =====================================================================
+# Quick Start:
+#   1. Review PANEL_URL, DAEMON_NODE_ID, DAEMON_NODE_TOKEN,
+#      PANEL_API_URL and DAEMON_SFTP_BIND_ADDR.
+#   2. Run:
+#      docker compose -f compose.yml -f compose.production.yml \\
+#          --env-file .env up -d
+#   3. Complete the /setup wizard, then restart daemon + monitoring
+#      with the assigned DAEMON_NODE_ID.
+# =====================================================================
+
+# =====================================================================
+# --- Release / Image Tag ---
+# Pins forge-api, forge-web, beacon and docs images to one release.
+# =====================================================================
+TAG=${TAG}
+
+# =====================================================================
+# --- Database (PostgreSQL) ---
+# =====================================================================
+POSTGRES_DB=${POSTGRES_DB}
+POSTGRES_USER=${POSTGRES_USER}
+POSTGRES_PASSWORD=${q_POSTGRES_PASSWORD}
+DATABASE_URL=${q_DATABASE_URL}
+POSTGRES_BACKUP_HOST_DIR=/var/backups/gamepanel/postgres
+POSTGRES_BACKUP_INTERVAL_SECONDS=86400
+POSTGRES_BACKUP_RETENTION_DAYS=14
+
+# =====================================================================
+# --- Redis ---
+# =====================================================================
 REDIS_ADDR=redis:6379
-PANEL_URL=https://$panel_domain
-PANEL_API_URL=http://api:8080/api/v1
-BEACON_PANEL_API_URL=https://$panel_domain/api/v1
-DAEMON_ADDR=:9090
-DAEMON_DATA_DIR=/srv/game-panel/servers
-GAME_SERVERS_HOST_DIR=/srv/game-panel/servers
-DAEMON_NODE_ID=$node_id
-DAEMON_NODE_TOKEN=$node_token
-DAEMON_SFTP_ADDR=:2022
-DAEMON_ALLOW_MOCK_RUNTIME=false
+REDIS_PASSWORD=${q_REDIS_PASSWORD}
+
+# =====================================================================
+# --- Soketi / WebSocket (optional — requires compose.realtime.yml) ---
+# =====================================================================
+SOKETI_APP_ID=gamepanel
+SOKETI_APP_KEY=${q_SOKETI_KEY}
+SOKETI_APP_SECRET=${q_SOKETI_SECRET}
+SOKETI_METRICS_PORT=9601
+
+# =====================================================================
+# --- Panel URL ---
+# =====================================================================
+PANEL_URL=https://${PANEL_DOMAIN}
+
+# =====================================================================
+# --- API Configuration ---
+# =====================================================================
+API_ADDR=:8080
+API_AUTH_SECRET=${q_API_AUTH_SECRET}
+APP_KEY=${q_APP_KEY}
+APP_ENV=production
 LOAD_BALANCER_ENABLED=true
 LOAD_BALANCER_BIND_HOST=
 LOAD_BALANCER_PORT_MIN=30000
 LOAD_BALANCER_PORT_MAX=30100
-POSTGRES_DB=gamepanel
-POSTGRES_USER=gamepanel
-POSTGRES_PASSWORD=$postgres_password
-GRAFANA_ADMIN_USER=admin
-GRAFANA_ADMIN_PASSWORD=$grafana_password
-BACKUP_ADAPTER=local
 
-# Encryption at Rest (Required when DATABASE_URL is set)
-FORGE_MASTER_KEY=$master_key
+# =====================================================================
+# --- Encryption at Rest ---
+# FORGE_MASTER_KEY must be exactly 32 bytes, base64 or base64url
+# encoded.  If lost, ALL encrypted data becomes permanently
+# unrecoverable.
+# =====================================================================
+FORGE_MASTER_KEY=${q_FORGE_MASTER_KEY}
 FORGE_MASTER_KEY_ID=primary
-EOF
+FORGE_PREVIOUS_MASTER_KEYS=
+FORGE_ALLOW_EPHEMERAL_MASTER_KEY=false
 
+# =====================================================================
+# --- Daemon / Node Token ---
+# Format: <token_id>.<secret>
+# Generate a new token from the panel web UI after deployment.
+# =====================================================================
+DAEMON_NODE_TOKEN=${q_NODE_TOKEN}
+DAEMON_SFTP_HOST_KEY_PASSPHRASE=${q_SFTP_PASSPHRASE}
+DAEMON_UPGRADE_PUBLIC_KEY=${DAEMON_UPGRADE_PUBLIC_KEY:-}
 
-chmod 600 "$OUTPUT_PATH"
-echo "Wrote production environment template to $OUTPUT_PATH"
+# =====================================================================
+# --- Daemon (Beacon) Configuration ---
+# =====================================================================
+DAEMON_ADDR=:9090
+DAEMON_SFTP_ADDR=:2022
+DAEMON_SFTP_BIND_ADDR=0.0.0.0:2022
+DAEMON_DATA_DIR=/srv/game-panel/servers
+GAME_SERVERS_HOST_DIR=/srv/game-panel/servers
+DAEMON_NODE_ID=${NODE_ID}
+DAEMON_ALLOW_MOCK_RUNTIME=false
+PANEL_API_URL=https://${PANEL_DOMAIN}/api/v1
+
+# =====================================================================
+# --- AWS Node Bootstrap (optional) ---
+# Uncomment and fill in to enable auto-scaling of beacon nodes.
+# =====================================================================
+#AWS_REGION=
+#AWS_ACCESS_KEY_ID=
+#AWS_SECRET_ACCESS_KEY=
+#AWS_SUBNET_ID=
+#AWS_SECURITY_GROUP_IDS=sg-0123456789abcdef0
+#AWS_IAM_INSTANCE_PROFILE=gamepanel-beacon
+DAEMON_IMAGE=ghcr.io/gamepanel/beacon:${TAG}
+API_IMAGE=ghcr.io/gamepanel/forge-api:${TAG}
+WEB_IMAGE=ghcr.io/gamepanel/forge-web:${TAG}
+METRICS_TOKEN=${q_METRICS_TOKEN}
+METRICS_TOKEN_FILE=./.metrics-token
+
+# =====================================================================
+# --- Grafana ---
+# =====================================================================
+GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
+GRAFANA_ADMIN_PASSWORD=${q_GRAFANA_PASSWORD}
+
+# =====================================================================
+# --- Backup Adapter ---
+# =====================================================================
+BACKUP_ADAPTER=${BK_ADAPTER}
+#S3_BUCKET=my-game-panel-backups
+#S3_REGION=us-east-1
+#S3_ACCESS_KEY_ID=
+#S3_SECRET_ACCESS_KEY=
+#S3_ENDPOINT=https://s3.amazonaws.com
+#S3_PREFIX=panel/
+#S3_USE_PATH_STYLE=true
+#S3_BACKUP_BUCKET=my-game-panel-backups
+#S3_BACKUP_REGION=us-east-1
+#S3_BACKUP_ACCESS_KEY_ID=
+#S3_BACKUP_SECRET_ACCESS_KEY=
+#S3_BACKUP_PREFIX=postgres
+
+# =====================================================================
+# --- Email / SMTP ---
+# =====================================================================
+MAIL_MAILER=${MAIL_DRIVER}
+MAIL_HOST=127.0.0.1
+MAIL_PORT=587
+MAIL_ENCRYPTION=tls
+MAIL_USERNAME=
+MAIL_PASSWORD=
+MAIL_FROM_ADDRESS=noreply@${PANEL_DOMAIN}
+MAIL_FROM_NAME=GamePanel
+
+# =====================================================================
+# --- Database Connection Pool ---
+# =====================================================================
+# Applied to the pgxpool by store.applyPoolEnvOverrides. Anything set in
+# DATABASE_URL (pool_max_conns, pool_max_conn_lifetime,
+# pool_max_conn_idle_time) wins over these. Lifetime and idle time are in
+# seconds. DB_MAX_IDLE_CONNS is not emitted: pgxpool has no idle ceiling to
+# map it onto, so it was a knob wired to nothing.
+DB_MAX_OPEN_CONNS=25
+DB_CONN_MAX_LIFETIME=3600
+DB_CONN_MAX_IDLE_TIME=1800
+
+# =====================================================================
+# --- Logging ---
+# =====================================================================
+LOG_LEVEL=info
+LOG_FORMAT=text
+LOG_OUTPUT=stdout
+
+# =====================================================================
+# --- Internal Service URLs ---
+# =====================================================================
+API_INTERNAL_URL=http://api:8080
+BEACON_BASE_URL=http://127.0.0.1:9090
+
+# =====================================================================
+# --- Alertmanager (monitoring alerts) ---
+# =====================================================================
+ALERTMANAGER_SMTP_HOST=
+ALERTMANAGER_SMTP_PORT=587
+ALERTMANAGER_SMTP_USER=
+ALERTMANAGER_SMTP_PASS=
+ALERTMANAGER_SMTP_FROM=noreply@${PANEL_DOMAIN}
+ALERTMANAGER_ADMIN_EMAIL=${ALERTMANAGER_ADMIN_EMAIL}
+ALERTMANAGER_WEBHOOK_URL=${ALERTMANAGER_WEBHOOK_URL}
+
+# =====================================================================
+# --- TLS / ACME Configuration (required for compose.tls.yml) ---
+# =====================================================================
+TRAEFIK_ACME_EMAIL=${TRAEFIK_ACME_EMAIL}
+TRAEFIK_CERTIFICATE_RESOLVER=letsencrypt
+PANEL_DOMAIN=${PANEL_DOMAIN}
+API_DOMAIN=api.${PANEL_DOMAIN}
+
+# =====================================================================
+# --- Directory Paths (mounts) ---
+# =====================================================================
+PLUGINS_DIR=
+LANGS_DIR=/lang
+MIGRATIONS_DIR=/migrations
+BATCH2_MIGRATIONS_DIR=/batch2-migrations
+
+# =====================================================================
+# --- Extra Keys ---
+# CRYPTO_KEY is a general-purpose encryption key.  Uncomment below if
+# your deployment requires it (not used by the default compose stack).
+# =====================================================================
+#CRYPTO_KEY=${q_CRYPTO_KEY}
+ENV
+
+chmod 600 "$OUTPUT"
+# No trailing newline: Prometheus credentials_file sends the file verbatim,
+# so a newline becomes part of the bearer token and auth fails.
+printf '%s' "$METRICS_TOKEN" > "$(dirname "$OUTPUT")/.metrics-token"
+chmod 600 "$(dirname "$OUTPUT")/.metrics-token"
+
+# ---- Docker Secrets Files ---------------------------------------------------
+# compose.secrets.yml mounts these files as Docker secrets. Values are kept
+# in sync with the plain environment variables above, because the forge API,
+# beacon daemon, and web frontend read secrets via os.Getenv only (the
+# postgres image is the one consumer of the *_FILE mechanism).
+SECRETS_DIR="$SELF_DIR/secrets"
+mkdir -p "$SECRETS_DIR"
+write_secret() {
+    printf '%s' "$1" > "$SECRETS_DIR/$2"
+    chmod 600 "$SECRETS_DIR/$2"
+}
+write_secret "$POSTGRES_PASSWORD" "postgres_password.secret"
+write_secret "$FORGE_MASTER_KEY" "forge_master_key.secret"
+write_secret "$NODE_TOKEN" "daemon_node_token.secret"
+write_secret "$API_AUTH_SECRET" "api_auth_secret.secret"
+write_secret "$APP_KEY" "app_key.secret"
+
+# ---- Validate Required Variables -------------------------------------------
+missing=0
+required_vars="TAG POSTGRES_PASSWORD DATABASE_URL API_AUTH_SECRET APP_KEY FORGE_MASTER_KEY DAEMON_NODE_TOKEN DAEMON_SFTP_HOST_KEY_PASSPHRASE METRICS_TOKEN GRAFANA_ADMIN_PASSWORD PANEL_URL DAEMON_NODE_ID REDIS_PASSWORD"
+
+for var in $required_vars; do
+    line=$(grep -E "^(#)?${var}=" "$OUTPUT" 2>/dev/null || true)
+    if [ -z "$line" ]; then
+        echo "ERROR: $var is missing from $OUTPUT" >&2
+        missing=$((missing + 1))
+        continue
+    fi
+    val=$(echo "$line" | cut -d= -f2-)
+    if [ -z "$val" ]; then
+        echo "ERROR: $var is empty in $OUTPUT" >&2
+        missing=$((missing + 1))
+    fi
+done
+
+if [ "$missing" -gt 0 ]; then
+    echo "FATAL: $missing required variable(s) missing or empty." >&2
+    exit 1
+fi
+
+echo "OK: $(echo "$required_vars" | wc -w | tr -d ' ') required variables present and non-empty."
+echo "Generated: $OUTPUT"

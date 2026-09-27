@@ -1,0 +1,52 @@
+name: Production Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        default: "production"
+        type: choice
+        options:
+          - "production"
+          - "staging"
+      version:
+        description: "Docker image tag or release to deploy"
+        required: true
+        default: "latest"
+      rollback:
+        description: "Perform rollback to previous deployment"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+
+      - name: Validate Deployment Configuration
+        # Workflow inputs are attacker-controllable text: never interpolate them
+        # into the script body. Pass them through the environment and quote the
+        # expansions instead.
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_ROLLBACK: ${{ inputs.rollback }}
+        run: |
+          echo "Deploying version ${INPUT_VERSION} to ${INPUT_ENVIRONMENT}"
+          if [ "${INPUT_ROLLBACK}" = "true" ]; then
+            echo "Rollback flag is ENABLED"
+          fi
+          test -f infra/compose.yml
+          test -f infra/compose.production.yml
+          test -f scripts/deploy/deploy.sh
+          bash -n scripts/deploy/deploy.sh
+          echo "Deployment script and compose configs verified."

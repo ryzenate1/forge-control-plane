@@ -37,10 +37,13 @@ fi
 # --- Configuration ---
 PANEL_USER="gamepanel"
 DB_NAME="gamepanel"
-DB_PASS="$(openssl rand -hex 16)"
-API_SECRET="$(openssl rand -hex 32)"
-NODE_TOKEN="$(openssl rand -hex 32)"
-MASTER_KEY="$(openssl rand -hex 32)"
+DB_PASS="$(openssl rand -base64 32 | tr -d '\n')"
+API_SECRET="$(openssl rand -base64 32 | tr -d '\n')"
+NODE_TOKEN="$(openssl rand -hex 8).$(openssl rand -hex 32)"
+# 32 random bytes, base64-encoded (matches FORGE_MASTER_KEY contract:
+# exactly 32 bytes base64/base64url). Never hex — the API rejects it.
+MASTER_KEY="$(openssl rand -base64 32 | tr -d '\n')"
+REDIS_PASS="$(openssl rand -base64 32 | tr -d '\n')"
 INSTALL_DIR="/opt/gamepanel"
 
 API_PORT=8080
@@ -100,6 +103,24 @@ fi
 
 systemctl enable redis-server
 systemctl start redis-server
+# Require authentication: an unauthenticated localhost Redis accepts commands
+# from any local user/process. Persist requirepass and restart.
+if ! grep -qsE '^[[:space:]]*requirepass' /etc/redis/redis.conf 2>/dev/null; then
+    # Escape backslash and double-quote for the redis.conf line.
+    _rp_esc="${REDIS_PASS//\\/\\\\}"
+    _rp_esc="${_rp_esc//\"/\\\"}"
+    if [ -w /etc/redis/redis.conf ]; then
+        printf '\n# Managed by deploy-prod.sh — Forge API auth\nrequirepass "%s"\n' "$_rp_esc" >> /etc/redis/redis.conf
+        systemctl restart redis-server
+    else
+        warn "Cannot write /etc/redis/redis.conf — set requirepass manually, then restart redis-server"
+    fi
+fi
+if REDISCLI_AUTH="$REDIS_PASS" redis-cli ping 2>/dev/null | grep -q PONG; then
+    info "Redis AUTH verified (requirepass active)"
+else
+    warn "Redis AUTH check failed — verify requirepass in /etc/redis/redis.conf and that REDIS_PASSWORD matches"
+fi
 info "Redis service running (systemd)"
 
 # ============================================================
@@ -185,12 +206,17 @@ fi
 # ============================================================
 header "Creating environment config"
 
+DB_PASS_ENC="$(python3 -c 'import sys,urllib.parse; print(urllib.parse.quote_plus(sys.argv[1]))' "$DB_PASS")"
+
 cat > "${INSTALL_DIR}/.env" << EOF
 # GamePanel Production Configuration
 # Generated: $(date -Iseconds)
+# Permissions: 0600 ${PANEL_USER}:${PANEL_USER}. Never print or log this file.
 
 # Database (native PostgreSQL - NOT Docker)
-DATABASE_URL=postgres://${PANEL_USER}:${DB_PASS}@localhost:5432/${DB_NAME}?sslmode=disable
+# sslmode=require: configure PostgreSQL with SSL (ssl=on + certs) before use.
+# A `disable` value would send the DB password in cleartext.
+DATABASE_URL=postgres://${PANEL_USER}:${DB_PASS_ENC}@localhost:5432/${DB_NAME}?sslmode=require
 
 # API
 API_ADDR=:${API_PORT}
@@ -198,14 +224,16 @@ API_AUTH_SECRET=${API_SECRET}
 APP_ENV=production
 MIGRATIONS_DIR=${INSTALL_DIR}/migrations
 
-# Redis (native - NOT Docker)
+# Redis (native - NOT Docker, AUTH required — see requirepass above)
 REDIS_ADDR=localhost:6379
+REDIS_PASSWORD=${REDIS_PASS}
 
 # Daemon
 DAEMON_NODE_TOKEN=${NODE_TOKEN}
 API_DEMO_MODE=false
 
 # Encryption at Rest (Required when DATABASE_URL is set)
+# 32 bytes base64 — loss = permanent data loss.
 FORGE_MASTER_KEY=${MASTER_KEY}
 FORGE_MASTER_KEY_ID=primary
 EOF
@@ -305,10 +333,10 @@ echo -e "  ${CYAN}API${NC}            Native Go binary  port ${API_PORT}"
 echo -e "  ${CYAN}Frontend${NC}       Node.js           port ${FRONTEND_PORT}"
 echo -e "  ${CYAN}Docker${NC}         Game servers ONLY"
 echo ""
-echo "  Credentials saved to: ${INSTALL_DIR}/.env"
-echo "  DB Password: ${DB_PASS}"
-echo "  API Secret:  ${API_SECRET}"
-echo "  Node Token:  ${NODE_TOKEN}"
+echo "  Credentials saved to: ${INSTALL_DIR}/.env (mode 600, owner ${PANEL_USER})"
+echo "  Secrets are never printed to the console or logs."
+echo "  Retrieve them with: sudo cat ${INSTALL_DIR}/.env"
+echo "  Back up ${INSTALL_DIR}/.env offline — loss of FORGE_MASTER_KEY = permanent data loss."
 echo ""
 echo "  Commands:"
 echo "    systemctl status forge-api"
@@ -316,6 +344,6 @@ echo "    systemctl status plane-frontend"
 echo "    journalctl -u forge-api -f"
 echo "    journalctl -u plane-frontend -f"
 echo ""
-echo -e "  ${YELLOW}SAVE THESE CREDENTIALS - they won't be shown again!${NC}"
+echo -e "  ${YELLOW}Back up ${INSTALL_DIR}/.env now (offline, chmod 600). It will not be shown again.${NC}"
 echo ""
 ""

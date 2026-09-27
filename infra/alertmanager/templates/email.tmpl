@@ -1,0 +1,58 @@
+{{ define "email.html" -}}
+<html>
+<body>
+<h1>{{ .Status | title }}</h1>
+<h2>Alert: {{ .GroupLabels.alertname }}</h2>
+<p><strong>Summary:</strong> {{ .CommonAnnotations.summary }}</p>
+<p><strong>Description:</strong> {{ .CommonAnnotations.description }}</p>
+{{ if .Alerts -}}
+<h3>Alerts ({{ len .Alerts }})</h3>
+<table border="1" cellpadding="5" cellspacing="0">
+<tr><th>Labels</th><th>Annotations</th><th>Started At</th></tr>
+{{ range .Alerts -}}
+<tr>
+  <td>
+    {{ range $name, $value := .Labels -}}
+    <strong>{{ $name }}:</strong> {{ $value }}<br>
+    {{ end }}
+  </td>
+  <td>
+    {{ range $name, $value := .Annotations -}}
+    <strong>{{ $name }}:</strong> {{ $value }}<br>
+    {{ end }}
+  </td>
+  <td>{{ .StartsAt }}</td>
+</tr>
+{{ end -}}
+</table>
+{{ end -}}
+<hr>
+<small>Alertmanager &middot; GamePanel</small>
+</body>
+</html>
+{{- end }}
+
+{{ define "email.text" -}}
+Status: {{ .Status | title }}
+Alert: {{ .GroupLabels.alertname }}
+
+Summary: {{ .CommonAnnotations.summary }}
+Description: {{ .CommonAnnotations.description }}
+
+{{ if .Alerts -}}
+Alerts ({{ len .Alerts }}):
+{{ range .Alerts -}}
+  Labels:
+  {{ range $name, $value := .Labels -}}
+    {{ $name }}: {{ $value }}
+  {{ end }}
+  Annotations:
+  {{ range $name, $value := .Annotations -}}
+    {{ $name }}: {{ $value }}
+  {{ end }}
+  Started: {{ .StartsAt }}
+{{ end }}
+{{ end -}}
+---
+Alertmanager &middot; GamePanel
+{{- end }}

@@ -1,0 +1,78 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: docs
+  namespace: gamepanel
+  labels:
+    app: gamepanel
+    component: docs
+spec:
+  ports:
+    - port: 3000
+      targetPort: 3000
+      name: http
+  selector:
+    app: gamepanel
+    component: docs
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: docs
+  namespace: gamepanel
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: gamepanel
+      component: docs
+  template:
+    metadata:
+      labels:
+        app: gamepanel
+        component: docs
+    spec:
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: docs
+          image: ghcr.io/anomalyco/gamepanel/docs:latest
+          imagePullPolicy: Always
+          securityContext:
+            runAsNonRoot: true
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+          ports:
+            - containerPort: 3000
+              name: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          env:
+            - name: API_INTERNAL_URL
+              value: "http://api:8080"
+          volumeMounts:
+            - name: temp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 3000
+            initialDelaySeconds: 20
+            periodSeconds: 10
+      volumes:
+        - name: temp
+          emptyDir: {}

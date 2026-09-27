@@ -1,0 +1,38 @@
+# Traefik file-provider dynamic config (mounted by compose.tls.yml at
+# /etc/traefik/dynamic). The directory previously shipped only a .gitkeep, so
+# the file provider watched an empty directory and no middleware/TLS defaults
+# existed. This baseline defines the security headers + TLS options referenced
+# by the compose labels; routers can attach `gamepanel-headers@file`.
+http:
+  middlewares:
+    gamepanel-headers:
+      headers:
+        customRequestHeaders:
+          X-Forwarded-Proto: "https"
+        customResponseHeaders:
+          X-Content-Type-Options: "nosniff"
+          X-Frame-Options: "DENY"
+          Referrer-Policy: "strict-origin-when-cross-origin"
+          Permissions-Policy: "geolocation=(), microphone=(), camera=()"
+          Strict-Transport-Security: "max-age=31536000; includeSubDomains"
+        contentSecurityPolicy: "default-src 'self'; script-src 'self' 'unsafe-eval'; style-src 'self' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'"
+        stsSeconds: 31536000
+        stsIncludeSubdomains: true
+        stsPreload: false
+    web-redirect:
+      redirectScheme:
+        scheme: "https"
+        permanent: true
+
+tls:
+  options:
+    default:
+      minVersion: "VersionTLS12"
+      cipherSuites:
+        - "TLS_ECDHE-ECDSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_ECDHE-RSA_WITH_AES_128_GCM_SHA256"
+        - "TLS_ECDHE-ECDSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE-RSA_WITH_AES_256_GCM_SHA384"
+        - "TLS_ECDHE-ECDSA_WITH_CHACHA20_POLY1305"
+        - "TLS_ECDHE-RSA_WITH_CHACHA20_POLY1305"
+      sniStrict: true

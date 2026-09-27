@@ -1,10 +1,41 @@
 # Forge Control Plane — Docker Compose
 # Copy .env.example to .env and set every required value before use.
 # Demo seeding is disabled by default and cannot be enabled in production.
+# Apply logging overrides with: docker compose -f compose.yml -f compose.logging.yml --env-file .env up -d
 
 services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy:v0.4.2
+    restart: unless-stopped
+    environment:
+      CONTAINERS: "1"
+      IMAGES: "1"
+      NETWORKS: "1"
+      VOLUMES: "1"
+      INFO: "1"
+      VERSION: "1"
+      PING: "1"
+      POST: "1"
+      BUILD: "0"
+      EXEC: "0"
+      AUTH: "0"
+      SECRETS: "0"
+      SERVICES: "0"
+      SWARM: "0"
+      SYSTEM: "0"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    networks:
+      - backend
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
   postgres:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-gamepanel}
@@ -19,28 +50,99 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 30s
     networks:
-      - backend
+      backend:
+        aliases:
+          - pgdb.internal
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   redis:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     image: redis:7-alpine
-    command: ["redis-server", "--appendonly", "yes"]
+    # $$ defers expansion to the container shell so REDIS_PASSWORD is read
+    # from the service environment at runtime (compose parse-time splicing
+    # would split passwords containing spaces and leak them into `config`).
+    command: >
+      sh -c 'exec redis-server --appendonly yes $${REDIS_PASSWORD:+--requirepass "$$REDIS_PASSWORD"}'
     expose:
       - "6379"
+    environment:
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in .env}"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "sh", "-c", "REDISCLI_AUTH=$$REDIS_PASSWORD redis-cli ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s
     networks:
-      - backend
+      backend:
+        aliases:
+          - redis.internal
     volumes:
       - redis-data:/data
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "redis"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   postgres-backup:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
     image: postgres:16-alpine
+    user: "10001:10001"
     environment:
       PGHOST: postgres
       PGDATABASE: ${POSTGRES_DB:-gamepanel}
@@ -48,6 +150,20 @@ services:
       PGPASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
       POSTGRES_BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}
       POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+      PUSHGATEWAY_URL: ${PUSHGATEWAY_URL:-http://pushgateway:9091}
+      S3_BACKUP_BUCKET: ${S3_BACKUP_BUCKET:-}
+      S3_BACKUP_REGION: ${S3_BACKUP_REGION:-}
+      S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-}
+      S3_BACKUP_SECRET_ACCESS_KEY: ${S3_BACKUP_SECRET_ACCESS_KEY:-}
+      S3_BACKUP_PREFIX: ${S3_BACKUP_PREFIX:-postgres}
+    healthcheck:
+      # Probe the backup target with this service's own PG* credentials.
+      # (The previous check referenced POSTGRES_USER/POSTGRES_DB, which are
+      # unset in this container and silently defaulted to 'postgres'.)
+      test: ["CMD-SHELL", "pg_isready -h $${PGHOST:-postgres} -U $${PGUSER:-gamepanel} -d $${PGDATABASE:-gamepanel}"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
     entrypoint: ["/bin/sh", "/usr/local/bin/gamepanel-postgres-backup"]
     volumes:
       - ./postgres-backup.sh:/usr/local/bin/gamepanel-postgres-backup:ro
@@ -57,9 +173,30 @@ services:
         condition: service_healthy
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres-backup"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   api:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    image: ${API_IMAGE:-ghcr.io/gamepanel/forge-api:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ..
       dockerfile: forge/api/Dockerfile
@@ -69,25 +206,29 @@ services:
     environment:
       API_ADDR: ${API_ADDR:-:8080}
       APP_ENV: ${APP_ENV:-development}
+      APP_VERSION: ${APP_VERSION:-0.1.0}
       API_AUTH_SECRET: "${API_AUTH_SECRET:?Set API_AUTH_SECRET in infra/.env}"
       APP_KEY: "${APP_KEY:?Set APP_KEY in infra/.env}"
       DATABASE_URL: "${DATABASE_URL:?Set DATABASE_URL in infra/.env}"
       FORGE_MASTER_KEY: "${FORGE_MASTER_KEY:?Set FORGE_MASTER_KEY in infra/.env}"
       FORGE_MASTER_KEY_ID: ${FORGE_MASTER_KEY_ID:-primary}
       FORGE_PREVIOUS_MASTER_KEYS: ${FORGE_PREVIOUS_MASTER_KEYS:-}
-      FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "false"
+      FORGE_ALLOW_EPHEMERAL_MASTER_KEY: "${FORGE_ALLOW_EPHEMERAL_MASTER_KEY:-false}"
       MIGRATIONS_DIR: /migrations
       LANGS_DIR: /lang
       REDIS_ADDR: ${REDIS_ADDR:-redis:6379}
+      REDIS_PASSWORD: "${REDIS_PASSWORD:?Set REDIS_PASSWORD in infra/.env}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
+      METRICS_TOKEN: "${METRICS_TOKEN:?Set METRICS_TOKEN in infra/.env}"
       PANEL_URL: ${PANEL_URL:-http://localhost:3000}
-      API_SEED_DEMO: "false"
+      API_SEED_DEMO: "${API_SEED_DEMO:-false}"
       LOAD_BALANCER_ENABLED: ${LOAD_BALANCER_ENABLED:-false}
       LOAD_BALANCER_BIND_HOST: ${LOAD_BALANCER_BIND_HOST:-}
       LOAD_BALANCER_PORT_MIN: ${LOAD_BALANCER_PORT_MIN:-30000}
       LOAD_BALANCER_PORT_MAX: ${LOAD_BALANCER_PORT_MAX:-30100}
+      CADDY_ADMIN_ADDR: ${CADDY_ADMIN_ADDR:-caddy:2019}
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     depends_on:
       postgres:
         condition: service_healthy
@@ -97,28 +238,65 @@ services:
       test: ["CMD", "/api", "--healthcheck"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 5
+      start_period: 60s
     networks:
-      - frontend
-      - backend
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 512M
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "forge-api"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   daemon:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    image: ${DAEMON_IMAGE:-ghcr.io/gamepanel/beacon:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ../beacon
     env_file:
       - path: .env
         required: false
     environment:
+      DOCKER_HOST: tcp://docker-proxy:2375
       DAEMON_ADDR: ${DAEMON_ADDR:-:9090}
       APP_ENV: ${APP_ENV:-development}
       DAEMON_DATA_DIR: ${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      DAEMON_BACKUP_DIR: ${DAEMON_BACKUP_DIR:-/srv/game-panel/servers/.beacon/backups}
+      BEACON_DATABASE_PATH: ${BEACON_DATABASE_PATH:-/srv/game-panel/servers/.beacon/beacon.db}
       DAEMON_NODE_ID: "${DAEMON_NODE_ID:?Set DAEMON_NODE_ID in infra/.env}"
       DAEMON_NODE_TOKEN: "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in infra/.env}"
-      PANEL_API_URL: ${PANEL_API_URL:-http://api:8080/api/v1}
-      DAEMON_SFTP_ADDR: ${DAEMON_SFTP_ADDR:-:2022}
+      DAEMON_SFTP_HOST_KEY_PASSPHRASE: "${DAEMON_SFTP_HOST_KEY_PASSPHRASE:?Set DAEMON_SFTP_HOST_KEY_PASSPHRASE in infra/.env}"
+      DAEMON_UPGRADE_PUBLIC_KEY: "${DAEMON_UPGRADE_PUBLIC_KEY:-}"
+      PANEL_API_URL: "${PANEL_API_URL:?Set an HTTPS PANEL_API_URL in infra/.env}"
+      # Single SFTP bind variable. The daemon resolves the listen address from
+      # DAEMON_SFTP_BIND_ADDR only (see beacon/cmd/daemon/main.go); the legacy
+      # DAEMON_SFTP_ADDR alias is not set here to avoid split-brain configs.
+      DAEMON_SFTP_BIND_ADDR: ${DAEMON_SFTP_BIND_ADDR:-127.0.0.1:2022}
       DAEMON_ALLOW_MOCK_RUNTIME: ${DAEMON_ALLOW_MOCK_RUNTIME:-false}
       DAEMON_ALLOW_INSECURE_NO_AUTH: "false"
+      METRICS_TOKEN: "${METRICS_TOKEN:?Set METRICS_TOKEN in infra/.env}"
       BACKUP_ADAPTER: ${BACKUP_ADAPTER:-local}
       S3_BUCKET: ${S3_BUCKET:-}
       S3_REGION: ${S3_REGION:-}
@@ -128,33 +306,66 @@ services:
       S3_PREFIX: ${S3_PREFIX:-}
       S3_USE_PATH_STYLE: ${S3_USE_PATH_STYLE:-true}
     ports:
-      - "9090:9090"
-      - "2022:2022"
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:2022:2022"
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      # Beacon controls the host Docker daemon, so this must be the same
-      # absolute host path inside and outside the Beacon container. A named
-      # volume is not visible at this path to sibling game containers.
-      - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}
+      - ${GAME_SERVERS_HOST_DIR:-/srv/game-panel/servers}:${DAEMON_DATA_DIR:-/srv/game-panel/servers}:Z
+    depends_on:
+      docker-proxy:
+        condition: service_started
     healthcheck:
       test: ["CMD", "/daemon", "--healthcheck"]
       interval: 10s
       timeout: 5s
-      retries: 12
+      retries: 5
+      start_period: 30s
     networks:
-      - frontend
-      - backend
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "2"
+          memory: 1G
+        reservations:
+          cpus: "0.5"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "beacon"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   prometheus:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: prom/prometheus:v2.55.1
     command:
       - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.retention.time=15d"
     ports:
-      - "9091:9090"
+      - "127.0.0.1:9091:9090"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9090/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - ${METRICS_TOKEN_FILE:-./.metrics-token}:/run/secrets/metrics_token:ro
       - prometheus-data:/prometheus
     depends_on:
       api:
@@ -163,45 +374,371 @@ services:
         condition: service_healthy
     networks:
       - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "prometheus"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
   alertmanager:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: prom/alertmanager:v0.27.0
+    # NOTE: prom/alertmanager has no --config.expand-env flag (v0.27.0).
+    # Receiver endpoints are baked in by scripts/gen-alertmanager.sh from
+    # ALERTMANAGER_* vars before startup; do not re-add the flag.
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
     ports:
-      - "9093:9093"
+      - "127.0.0.1:9093:9093"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9093/-/healthy"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      ALERTMANAGER_SMTP_HOST: ${ALERTMANAGER_SMTP_HOST:-}
+      ALERTMANAGER_SMTP_PORT: ${ALERTMANAGER_SMTP_PORT:-587}
+      ALERTMANAGER_SMTP_USER: ${ALERTMANAGER_SMTP_USER:-}
+      ALERTMANAGER_SMTP_PASS: ${ALERTMANAGER_SMTP_PASS:-}
+      ALERTMANAGER_SMTP_FROM: ${ALERTMANAGER_SMTP_FROM:-noreply@gamepanel.local}
+      ALERTMANAGER_ADMIN_EMAIL: ${ALERTMANAGER_ADMIN_EMAIL:-}
+      ALERTMANAGER_WEBHOOK_URL: ${ALERTMANAGER_WEBHOOK_URL:-}
     volumes:
-      - ./alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Rendered by scripts/gen-alertmanager.sh from
+      # infra/alertmanager/alertmanager.yml.tmpl (see its header). The legacy
+      # ./alertmanager.yml static copy is not used by the stack.
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/templates:/etc/alertmanager/templates:ro
       - alertmanager-data:/alertmanager
     networks:
       - backend
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "alertmanager"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  postgres-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prometheuscommunity/postgres-exporter:v0.15.0
+    environment:
+      PGHOST: postgres
+      PGDATABASE: ${POSTGRES_DB:-gamepanel}
+      PGUSER: ${POSTGRES_USER:-gamepanel}
+      PGPASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
+      PGPORT: "5432"
+      PGSSLMODE: prefer
+    expose:
+      - "9187"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9187/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "postgres-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  redis-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: oliver006/redis_exporter:v1.66.0
+    expose:
+      - "9121"
+    environment:
+      # redis_exporter defaults to redis://localhost:6379; point it at the
+      # compose `redis` service explicitly (auth via REDIS_PASSWORD).
+      REDIS_ADDR: "redis://redis:6379"
+      REDIS_PASSWORD: "${REDIS_PASSWORD}"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9121/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "redis-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # Backs the PostgresBackupStale alert: postgres-backup pushes
+  # backup_last_success_seconds here when PUSHGATEWAY_URL is set.
+  pushgateway:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prom/pushgateway:v1.9.0
+    expose:
+      - "9091"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "pushgateway"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Backs the DiskSpaceLow alert (node_filesystem_* metrics).
+  node-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prom/node-exporter:v1.8.2
+    expose:
+      - "9100"
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "node-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   grafana:
     restart: unless-stopped
+    stop_grace_period: 30s
     image: grafana/grafana:11.3.0
     environment:
       GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?Set GRAFANA_ADMIN_PASSWORD in infra/.env}"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_INSTALL_PLUGINS: ""
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
     volumes:
       - grafana-data:/var/lib/grafana
       - ./grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
     depends_on:
-      - prometheus
+      prometheus:
+        condition: service_healthy
+    networks:
+      frontend:
+      backend:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 256M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "grafana"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
+
+  caddy:
+    restart: unless-stopped
+    init: true
+    stop_grace_period: 30s
+    image: caddy:2.9.1-alpine
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    environment:
+      # Bind the admin API to loopback only — it is unauthenticated, so exposing
+      # it on 0.0.0.0:2019 would let every container on `frontend`/`backend`
+      # rewrite the gateway config. This matches the `admin` directive in the
+      # Caddyfile and infra/compose.caddy.production.yml. Containers that need to
+      # drive the admin API must be reachable via `localhost` inside the Caddy
+      # container (e.g. a shared network namespace / admin sidecar), not via
+      # `caddy:2019`.
+      CADDY_ADMIN: "127.0.0.1:2019"
+    command: caddy run --config /etc/caddy/Caddyfile --adapter caddyfile
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://127.0.0.1:2019/config/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     networks:
       - frontend
       - backend
-
-
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"
+          memory: 256M
+        reservations:
+          cpus: "0.1"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "caddy"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
 
   web:
     restart: unless-stopped
+    init: true
+    stop_grace_period: 60s
+    image: ${WEB_IMAGE:-ghcr.io/gamepanel/forge-web:${TAG:?Set TAG in .env to a specific release}}
     build:
       context: ..
       dockerfile: forge/web/Dockerfile
@@ -211,12 +748,44 @@ services:
       - path: .env
         required: false
     ports:
-      - "3000:3000"
+      # Loopback only: the public entrypoint for the web console is Caddy/Traefik
+      # on 80/443, never a raw 0.0.0.0:3000 publish.
+      - "127.0.0.1:3000:3000"
     depends_on:
       api:
         condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ > /dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
     networks:
-      - frontend
+      frontend:
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 128M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "forge-web"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+    tmpfs:
+      - /tmp
 
 volumes:
   postgres-data:
@@ -224,6 +793,8 @@ volumes:
   prometheus-data:
   alertmanager-data:
   grafana-data:
+  caddy-data:
+  caddy-config:
 
 networks:
   frontend:
