@@ -459,7 +459,7 @@ export function AdminHealth({
       <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
         <div>
           <h1 className="text-2xl sm:text-3xl font-bold tracking-tight text-slate-100 flex items-center gap-2.5">
-            <span>Health</span>
+            <span>Diagnostics</span>
             <PageInfoDisclosure
               title="Health Diagnostics & Verification"
               eyebrow="Control Plane Verification"

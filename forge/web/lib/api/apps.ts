@@ -557,26 +557,11 @@ export function statusLabel(status: AppStatus | string | null | undefined): stri
   return status.replace(/_/g, " ");
 }
 
-export function statusTone(status: AppStatus | string | null | undefined): "green" | "red" | "yellow" | "blue" | "neutral" {
-  switch (status) {
-    case "running": return "green";
-    case "stopped": return "neutral";
-    case "deploying": case "pending": case "installing": case "starting": case "restarting": return "blue";
-    case "stopping": return "yellow";
-    case "failed": return "red";
-    default: return "neutral";
-  }
-}
-
-export function deploymentStatusTone(status: DeploymentStatus | string | null | undefined): "green" | "red" | "yellow" | "blue" | "neutral" {
-  switch (status) {
-    case "completed": return "green";
-    case "failed": return "red";
-    case "canceled": return "neutral";
-    case "running": return "blue";
-    case "pending": return "yellow";
-    default: return "neutral";
-  }
-}
+// `statusTone` and `deploymentStatusTone` used to live here, returning colour
+// words and defaulting an unrecognised status to "neutral". They had no
+// importers, but `lib/api.ts` does `export * from './api/apps'` while *not*
+// exporting `./api/status` — so `import { statusTone } from "@/lib/api"`
+// resolved to these instead of the real ones. Both now live only in
+// `lib/api/status.ts`; import from there.
 
 export { fetchDnsProviders } from "./dns";

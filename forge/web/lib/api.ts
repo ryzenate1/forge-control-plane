@@ -10,6 +10,9 @@ export {
 } from './api/backup';
 export * from './api/backup-engine';
 export * from './api/types';
+// The status vocabulary. Exported here so `@/lib/api` cannot resolve
+// `statusTone` to anything but the canonical one.
+export * from './api/status';
 export * from './api/apps';
 export * from './api/app-store';
 export * from './api/compose';

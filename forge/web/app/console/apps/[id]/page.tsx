@@ -30,10 +30,10 @@ import {
   startApp,
   stopApp,
   triggerDeploy,
-  statusTone,
   typeLabel,
   type ApiAppDetail,
 } from "@/lib/api/apps";
+import { statusTone } from "@/lib/api/status";
 import { Btn, Card, CardHeader, EmptyState, Pill, SectionHeader, cn } from "@/components/admin/admin-ui";
 import { DeployStatusBadge, LogViewer } from "@/components/admin/AdminAppsShared";
 import { LoadingSpinner } from "@/components/ui/loading-skeleton";

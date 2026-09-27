@@ -167,7 +167,7 @@ export function Switch({ checked, onCheckedChange, label, disabled = false }: { 
   const id = useId();
   return (
     <label className={cn("inline-flex items-center gap-2.5 text-xs", disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer")} htmlFor={id}>
-      <span className="uppercase tracking-wide text-text-muted">{label}</span>
+      <span className="t-eyebrow text-text-subtle">{label}</span>
       <button aria-checked={checked} aria-label={typeof label === "string" ? label : undefined} className={cn("relative h-5 w-9 rounded-full border transition-colors", checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong")} disabled={disabled} id={id} onClick={() => onCheckedChange(!checked)} role="switch" type="button">
         <span className={cn("absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked && "translate-x-4")} />
       </button>
@@ -235,16 +235,16 @@ export function ResourceBar({ icon: Icon, label, current, limit, unit = "" }: { 
     <div className="flex items-center gap-2" title={`${label}: ${used === null ? "no reading" : `${used}${unit}`} / ${limitText}`}>
       <Icon aria-hidden="true" className={cn("h-3.5 w-3.5 shrink-0", alarm ? "text-danger" : "text-text-muted")} />
       {!limitKnown ? (
-        <span className="text-[10px] text-text-muted">Unavailable</span>
+        <span className="text-meta text-text-muted">Unavailable</span>
       ) : unlimited ? (
-        <span className="text-[10px] text-text-muted">Unlimited</span>
+        <span className="text-meta text-text-muted">Unlimited</span>
       ) : (
         <div className="flex flex-1 items-center gap-2">
           <ProgressBar className="flex-1" label={`${label} usage`} value={percent} />
           {percent === null ? (
-            <span className="min-w-[3ch] text-right font-mono text-[10px] text-unknown" title="No reading available">—</span>
+            <span className="min-w-[3ch] text-right font-mono text-meta text-unknown" title="No reading available">—</span>
           ) : (
-            <span className={cn("min-w-[3ch] text-right font-mono text-[10px]", alarm ? "font-bold text-danger" : "text-text-muted")}>{Math.round(percent)}%</span>
+            <span className={cn("min-w-[3ch] text-right font-mono text-meta", alarm ? "font-semibold text-danger" : "text-text-subtle")}>{Math.round(percent)}%</span>
           )}
         </div>
       )}
@@ -255,7 +255,7 @@ export function ResourceBar({ icon: Icon, label, current, limit, unit = "" }: { 
 export function Table({ children, label, className }: { children: ReactNode; label: string; className?: string }) {
   return (
     <div className="overflow-x-auto">
-      <table aria-label={label} className={cn("w-full text-left text-sm", className)}>{children}</table>
+      <table aria-label={label} className={cn("ui-table", className)}>{children}</table>
     </div>
   );
 }
@@ -264,10 +264,10 @@ export function Pagination({ page, pageCount, onPageChange, label = "Pagination"
   const current = Math.min(Math.max(page, 1), Math.max(pageCount, 1));
   if (pageCount <= 1) return null;
   return (
-    <nav aria-label={label} className="mt-6 flex items-center justify-between rounded-lg border border-line bg-surface-card p-3">
-      <Button disabled={current <= 1} onClick={() => onPageChange(current - 1)} size="sm" variant="ghost"><ChevronLeft className="h-4 w-4" />Previous</Button>
-      <span className="text-sm text-text-muted">Page {current} of {pageCount}</span>
-      <Button disabled={current >= pageCount} onClick={() => onPageChange(current + 1)} size="sm" variant="ghost">Next<ChevronRight className="h-4 w-4" /></Button>
+    <nav aria-label={label} className="mt-4 flex items-center justify-between rounded-lg border border-line bg-overlay-subtle px-2.5 py-2">
+      <Button disabled={current <= 1} onClick={() => onPageChange(current - 1)} size="sm" variant="ghost"><ChevronLeft className="size-3.5" />Previous</Button>
+      <span className="text-meta text-text-subtle">Page {current} of {pageCount}</span>
+      <Button disabled={current >= pageCount} onClick={() => onPageChange(current + 1)} size="sm" variant="ghost">Next<ChevronRight className="size-3.5" /></Button>
     </nav>
   );
 }
@@ -290,61 +290,26 @@ export function EmptyState({ icon, title, description, action }: { icon?: ReactN
   return (
     <div className="ui-empty">
       <div className="ui-empty-icon">{icon}</div>
-      <h3 className="mt-3 text-sm font-semibold text-text">{title}</h3>
-      <p className="mt-1 max-w-md text-sm leading-6 text-text-muted">{description}</p>
+      <h3 className="t-section mt-3">{title}</h3>
+      <p className="mt-1 max-w-prose text-xs leading-5 text-text-subtle">{description}</p>
       {action ? <div className="mt-4">{action}</div> : null}
     </div>
   );
 }
 
+/**
+ * Modal shell. Delegates to {@link ForgeDialog}, so this and every other Forge
+ * dialog share one focus trap, one scroll lock, one Escape/backdrop contract
+ * and one set of chrome. `closeAction` is kept as the prop name because ~40 call
+ * sites pass it.
+ */
 export function Dialog({ open, title, description, children, closeAction, className }: {
   open: boolean; title: ReactNode; description?: string; children: ReactNode; closeAction: () => void; className?: string;
 }) {
-  const dialogRef = useRef<HTMLDivElement>(null);
-  const closeRef = useRef(closeAction);
-  const titleId = useId();
-  const descriptionId = useId();
-  closeRef.current = closeAction;
-
-  useEffect(() => {
-    if (!open) return;
-    const previouslyFocused = document.activeElement as HTMLElement | null;
-    const dialog = dialogRef.current;
-    dialog?.querySelector<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href]")?.focus();
-
-    const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { closeRef.current(); return; }
-      if (event.key !== "Tab" || !dialog) return;
-      const focusable = Array.from(dialog.querySelectorAll<HTMLElement>("button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href]"));
-      if (!focusable.length) return;
-      const first = focusable[0];
-      const last = focusable[focusable.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-
-    document.addEventListener("keydown", onKeyDown);
-    return () => {
-      document.removeEventListener("keydown", onKeyDown);
-      if (previouslyFocused && document.contains(previouslyFocused)) previouslyFocused.focus();
-    };
-  }, [open]);
-
-  if (!open) return null;
-
   return (
-    <div className="ui-dialog-layer" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) closeAction(); }}>
-      <div ref={dialogRef} aria-describedby={description ? descriptionId : undefined} aria-labelledby={titleId} aria-modal="true" className={cn("ui-dialog", className)} role="dialog">
-        <div className="ui-dialog-header">
-          <div className="min-w-0">
-            <h2 className="ui-dialog-title" id={titleId}>{title}</h2>
-            {description ? <p className="ui-dialog-description" id={descriptionId}>{description}</p> : null}
-          </div>
-          <button aria-label="Close dialog" className="ui-icon-button shrink-0" onClick={closeAction} type="button"><X className="h-4 w-4" /></button>
-        </div>
-        <div className="ui-dialog-body">{children}</div>
-      </div>
-    </div>
+    <ForgeDialog className={className} description={description} onClose={closeAction} open={open} title={title}>
+      {children}
+    </ForgeDialog>
   );
 }
 
@@ -352,11 +317,18 @@ export function ConfirmDialog({ open, title, description, confirmLabel = "Confir
   open: boolean; title: string; description: string; confirmLabel?: string; destructive?: boolean; loading?: boolean; closeAction: () => void; confirmAction: () => void;
 }) {
   return (
-    <Dialog closeAction={closeAction} description={description} open={open} title={title}>
-      <div className="flex justify-end gap-2">
-        <Button disabled={loading} onClick={closeAction} variant="ghost">Cancel</Button>
-        <Button loading={loading} onClick={confirmAction} variant={destructive ? "danger" : "primary"}>{confirmLabel}</Button>
-      </div>
-    </Dialog>
+    <ForgeDialog
+      description={description}
+      footer={
+        <>
+          <Button disabled={loading} onClick={closeAction} variant="ghost">Cancel</Button>
+          <Button loading={loading} onClick={confirmAction} variant={destructive ? "danger" : "primary"}>{confirmLabel}</Button>
+        </>
+      }
+      onClose={closeAction}
+      open={open}
+      size="sm"
+      title={title}
+    />
   );
 }
