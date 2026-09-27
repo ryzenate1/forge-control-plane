@@ -409,8 +409,8 @@ type NodePatch struct {
 	DaemonConnect      *int
 	CPUOverallocate    *int
 	Tags               *[]string
-	SchedulerType      *string           `json:"schedulerType,omitempty"`
-	SchedulerConfig    *json.RawMessage  `json:"schedulerConfig,omitempty"`
+	SchedulerType      *string          `json:"schedulerType,omitempty"`
+	SchedulerConfig    *json.RawMessage `json:"schedulerConfig,omitempty"`
 }
 
 type NodeHeartbeatRequest struct {
@@ -506,21 +506,26 @@ type Server struct {
 	Threads              string             `json:"threads"`
 	OOMDisabled          bool               `json:"oomDisabled"`
 	DockerImage          string             `json:"dockerImage"`
-	StartupCommand       string             `json:"startupCommand"`
-	PrimaryAllocationID  *string            `json:"primaryAllocationId,omitempty"`
-	ConfigSyncPending    bool               `json:"configSyncPending"`
-	ConfigSyncError      *string            `json:"configSyncError,omitempty"`
-	Node                 string             `json:"node"`
-	NodeID               string             `json:"nodeId,omitempty"`
-	SFTPHost             string             `json:"sftpHost,omitempty"`
-	SFTPPort             int                `json:"sftpPort,omitempty"`
-	Owner                string             `json:"owner"`
-	OwnerID              string             `json:"ownerId,omitempty"`
-	Template             string             `json:"template"`
-	InstalledAt          *time.Time         `json:"installedAt,omitempty"`
-	SkipScripts          bool               `json:"skipScripts"`
-	DockerLabels         map[string]string  `json:"dockerLabels,omitempty"`
-	Permissions         []string           `json:"permissions,omitempty"`
+	// RuntimeProvider is the engine this workload is dispatched to. It is stored
+	// per server so placement can refuse an engine the chosen node does not run
+	// rather than quietly building a container on whatever the node happens to
+	// have; it is also reported so the UI can show the truth about a workload.
+	RuntimeProvider     string            `json:"runtimeProvider"`
+	StartupCommand      string            `json:"startupCommand"`
+	PrimaryAllocationID *string           `json:"primaryAllocationId,omitempty"`
+	ConfigSyncPending   bool              `json:"configSyncPending"`
+	ConfigSyncError     *string           `json:"configSyncError,omitempty"`
+	Node                string            `json:"node"`
+	NodeID              string            `json:"nodeId,omitempty"`
+	SFTPHost            string            `json:"sftpHost,omitempty"`
+	SFTPPort            int               `json:"sftpPort,omitempty"`
+	Owner               string            `json:"owner"`
+	OwnerID             string            `json:"ownerId,omitempty"`
+	Template            string            `json:"template"`
+	InstalledAt         *time.Time        `json:"installedAt,omitempty"`
+	SkipScripts         bool              `json:"skipScripts"`
+	DockerLabels        map[string]string `json:"dockerLabels,omitempty"`
+	Permissions         []string          `json:"permissions,omitempty"`
 
 	// Generation is a monotonically increasing counter incremented on each
 	// recovery/evacuation. A server with a lower generation is stale and must
@@ -1518,7 +1523,7 @@ const (
 	NodeHeartbeatStateSuspected   NodeHeartbeatState = "suspected"
 	NodeHeartbeatStateUnreachable NodeHeartbeatState = "unreachable"
 	NodeHeartbeatStateOffline     NodeHeartbeatState = "offline"
-	NodeHeartbeatStateRecovering   NodeHeartbeatState = "recovering"
+	NodeHeartbeatStateRecovering  NodeHeartbeatState = "recovering"
 	NodeHeartbeatStateReconciling NodeHeartbeatState = "reconciling"
 )
 
@@ -1751,12 +1756,12 @@ const (
 	RecoveryItemStatusExecuting RecoveryItemStatus = "executing"
 	RecoveryItemStatusCompleted RecoveryItemStatus = "completed"
 	// Restored means backup data was restored, but no live migration was run.
-	RecoveryItemStatusRestored  RecoveryItemStatus = "restored"
-	RecoveryItemStatusCancelled RecoveryItemStatus = "cancelled"
-	RecoveryItemStatusFailed    RecoveryItemStatus = "failed"
-	RecoveryItemStatusSkipped         RecoveryItemStatus = "skipped"
+	RecoveryItemStatusRestored       RecoveryItemStatus = "restored"
+	RecoveryItemStatusCancelled      RecoveryItemStatus = "cancelled"
+	RecoveryItemStatusFailed         RecoveryItemStatus = "failed"
+	RecoveryItemStatusSkipped        RecoveryItemStatus = "skipped"
 	RecoveryItemStatusAwaitingBeacon RecoveryItemStatus = "awaiting_beacon"
-	RecoveryItemStatusHealthGating  RecoveryItemStatus = "health_gating"
+	RecoveryItemStatusHealthGating   RecoveryItemStatus = "health_gating"
 )
 
 type RecoveryItem struct {
@@ -1844,29 +1849,29 @@ type ReservedCapacity struct {
 type PlacementIntentStatus string
 
 const (
-	PlacementIntentStatusPending   PlacementIntentStatus = "pending"
+	PlacementIntentStatusPending    PlacementIntentStatus = "pending"
 	PlacementIntentStatusCompleting PlacementIntentStatus = "completing"
-	PlacementIntentStatusCompleted PlacementIntentStatus = "completed"
-	PlacementIntentStatusFailed    PlacementIntentStatus = "failed"
-	PlacementIntentStatusExpired   PlacementIntentStatus = "expired"
+	PlacementIntentStatusCompleted  PlacementIntentStatus = "completed"
+	PlacementIntentStatusFailed     PlacementIntentStatus = "failed"
+	PlacementIntentStatusExpired    PlacementIntentStatus = "expired"
 	PlacementIntentStatusRolledBack PlacementIntentStatus = "rolled_back"
 )
 
 type PlacementIntent struct {
-	ID            string                 `json:"id"`
-	ServerID      string                 `json:"serverId,omitempty"`
-	NodeID        string                 `json:"nodeId"`
-	AllocationID  string                 `json:"allocationId,omitempty"`
-	ReservationID string                 `json:"reservationId,omitempty"`
-	CPU           int                    `json:"cpu"`
-	MemoryMB      int                    `json:"memoryMb"`
-	DiskMB        int                    `json:"diskMb"`
-	Status        PlacementIntentStatus  `json:"status"`
-	Error         string                 `json:"error,omitempty"`
-	CreatedAt     time.Time              `json:"createdAt"`
-	UpdatedAt     time.Time              `json:"updatedAt"`
-	ConfirmedAt   *time.Time             `json:"confirmedAt,omitempty"`
-	ExpiredAt     *time.Time             `json:"expiredAt,omitempty"`
+	ID            string                `json:"id"`
+	ServerID      string                `json:"serverId,omitempty"`
+	NodeID        string                `json:"nodeId"`
+	AllocationID  string                `json:"allocationId,omitempty"`
+	ReservationID string                `json:"reservationId,omitempty"`
+	CPU           int                   `json:"cpu"`
+	MemoryMB      int                   `json:"memoryMb"`
+	DiskMB        int                   `json:"diskMb"`
+	Status        PlacementIntentStatus `json:"status"`
+	Error         string                `json:"error,omitempty"`
+	CreatedAt     time.Time             `json:"createdAt"`
+	UpdatedAt     time.Time             `json:"updatedAt"`
+	ConfirmedAt   *time.Time            `json:"confirmedAt,omitempty"`
+	ExpiredAt     *time.Time            `json:"expiredAt,omitempty"`
 }
 
 // Desired State types

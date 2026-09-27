@@ -467,7 +467,9 @@ export function AdminTr({ children, onClick, className }: { children?: React.Rea
     </tr>
   );
 }
-export function AdminTd({ children, className }: { children?: React.ReactNode; className?: string }) { return <td className={cn("px-4 py-3 text-slate-200", className)}>{children}</td>; }
+// title carries a tooltip for cells that truncate their content, so the full
+// value stays reachable when the column is too narrow to show it.
+export function AdminTd({ children, className, title }: { children?: React.ReactNode; className?: string; title?: string }) { return <td className={cn("px-4 py-3 text-slate-200", className)} title={title}>{children}</td>; }
 
 export const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100";
 

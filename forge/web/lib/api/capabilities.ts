@@ -97,3 +97,28 @@ export function probeCapabilities(nodeId: string): Promise<ProbeResult> {
     {},
   ).then((r) => r as ProbeResult);
 }
+
+/**
+ * One runtime engine as the control plane actually reports it.
+ *
+ * `available` means an adapter is registered *and* some node can serve it, so a
+ * create form can offer the engine without lying about what would happen if it
+ * were chosen. `reason` explains every refusal.
+ */
+export type WorkloadKind = {
+  provider: string;
+  description: string;
+  supported: boolean;
+  experimental: boolean;
+  registered: boolean;
+  available: boolean;
+  reason?: string;
+  capabilities?: Record<string, boolean>;
+  nodes: Array<{ id: string; name: string; state: string; eligible: boolean }>;
+};
+
+export function fetchWorkloadKinds(): Promise<WorkloadKind[]> {
+  return fetchJSON<{ data: WorkloadKind[] } | WorkloadKind[]>("/workload-kinds").then((r) =>
+    Array.isArray(r) ? r : (r.data ?? []),
+  );
+}

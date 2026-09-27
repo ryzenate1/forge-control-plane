@@ -106,6 +106,8 @@ export type ApiServer = {
   transferError?: string;
   createdAt?: string;
   dockerImage?: string;
+  /** Engine this workload is dispatched to (docker, podman, kvm, …). */
+  runtimeProvider?: string;
   startupCommand?: string;
   configSyncPending?: boolean;
   configSyncError?: string;

@@ -112,6 +112,7 @@ import (
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	upgradesvc "gamepanel/forge/internal/services/upgrade"
+	"gamepanel/forge/internal/services/vaultprovider"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/webhook"
 	"gamepanel/forge/internal/services/zerodowntime"
@@ -294,6 +295,7 @@ func run() error {
 		bkSvc              *backup.Service
 		bkWorker           *backup.Worker
 		dnsSvc             *dnssvc.Service
+		vaultSvc           *vaultprovider.Service
 		acmeSvc            *acmesvc.Service
 		domainSvc          *domains.Service
 		buildSvc           *buildsvc.Service
@@ -1132,6 +1134,16 @@ func run() error {
 		if err != nil {
 			return fmt.Errorf("create dns service: %w", err)
 		}
+		vaultSvc, err = vaultprovider.New(db)
+		if err != nil {
+			return fmt.Errorf("create vault provider service: %w", err)
+		}
+		// Install the Vault reference resolver into the environment-variable
+		// resolution path so a `vault:<connection-id>/<path>#<field>` value is
+		// fetched live from the named connection at deploy time. It is only
+		// consulted for values carrying the reference prefix; everything else is
+		// passed through exactly as before.
+		db.SetVaultResolver(vaultSvc.ResolveIfReference)
 		caddyProxy := trafficmanager.NewCaddyReverseProxy(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
 		caddyTLS = trafficmanager.NewCaddyTLSManager(env("CADDY_ADMIN_ADDR", "127.0.0.1:2019"))
 		acmeSvc = acmesvc.New(db, slogLogger)
@@ -1622,6 +1634,7 @@ func run() error {
 		BackupSvc:                  bkSvc,
 		BackupEngineService:        backupEngineSvc,
 		DNSService:                 dnsSvc,
+		VaultService:               vaultSvc,
 		AcmeService:                acmeSvc,
 		DomainService:              domainSvc,
 		BuildService:               buildSvc,

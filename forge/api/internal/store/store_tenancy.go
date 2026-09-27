@@ -554,7 +554,7 @@ func (s *Store) ListServersForOrg(ctx context.Context, orgID string, page, perPa
 
 	countQuery := `SELECT count(*) FROM servers WHERE org_id = $1`
 	baseQuery := `
-		SELECT s.id::text, s.name, COALESCE(s.description, ''), s.status, s.desired_state::text, s.actual_state::text, s.config_sync_pending, s.suspended, s.transferring, s.transfer_target_node_id::text, s.transfer_state, s.transfer_error, s.transfer_run_token::text, s.memory_mb, s.cpu_shares, s.disk_mb, n.name, u.email, e.name
+		SELECT s.id::text, s.name, COALESCE(s.description, ''), s.status, s.desired_state::text, s.actual_state::text, s.config_sync_pending, s.suspended, s.transferring, s.transfer_target_node_id::text, s.transfer_state, s.transfer_error, s.transfer_run_token::text, s.memory_mb, s.cpu_shares, s.disk_mb, n.name, u.email, e.name, COALESCE(s.runtime_provider, 'docker')
 		FROM servers s
 		JOIN nodes n ON n.id = s.node_id
 		JOIN users u ON u.id = s.owner_id
@@ -590,7 +590,7 @@ func (s *Store) ListServersForOrg(ctx context.Context, orgID string, page, perPa
 	servers := []Server{}
 	for rows.Next() {
 		var server Server
-		if err := rows.Scan(&server.ID, &server.Name, &server.Description, &server.Status, &server.DesiredState, &server.ActualState, &server.ConfigSyncPending, &server.Suspended, &server.Transferring, &server.TransferTargetNodeID, &server.TransferState, &server.TransferError, &server.TransferRunToken, &server.MemoryMB, &server.CPUShares, &server.DiskMB, &server.Node, &server.Owner, &server.Template); err != nil {
+		if err := rows.Scan(&server.ID, &server.Name, &server.Description, &server.Status, &server.DesiredState, &server.ActualState, &server.ConfigSyncPending, &server.Suspended, &server.Transferring, &server.TransferTargetNodeID, &server.TransferState, &server.TransferError, &server.TransferRunToken, &server.MemoryMB, &server.CPUShares, &server.DiskMB, &server.Node, &server.Owner, &server.Template, &server.RuntimeProvider); err != nil {
 			return nil, 0, err
 		}
 		servers = append(servers, server)

@@ -326,6 +326,7 @@ export function OverviewView({ server }: { server?: ApiServer }) {
             )}
             <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-slate-500">
               <span title={node?.fqdn ?? node?.name}>Node: <span className="font-mono text-slate-300">{node?.name ?? server?.node ?? "—"}</span></span>
+              <span title="Runtime engine this workload is dispatched to">Engine: <span className="font-mono text-slate-300">{server?.runtimeProvider || "unknown"}</span></span>
               <span title={statsLive && stats ? `Uptime ${stats.uptime}s reported by the beacon` : "Uptime is reported by the beacon while the server runs"}>Uptime: <span className="font-mono text-slate-300">{statsLive && stats ? formatUptime(stats.uptime) : "—"}</span></span>
               <span>Version: <span className="font-mono text-slate-300">{versionValue ?? imageShort}</span></span>
               <span>Last activity: <span className="font-mono text-slate-300">{lastActivityAt ? timeAgo(lastActivityAt) : "—"}</span></span>

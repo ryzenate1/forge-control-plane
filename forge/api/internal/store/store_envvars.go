@@ -6,11 +6,48 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
+
+// vaultResolverMu guards vaultResolver, an optional hook that lets a higher
+// layer (the vaultprovider service) resolve external secret-store references
+// while the control plane builds a deployment environment, without importing
+// that package into the store layer (which would be an import cycle). It is
+// nil by default, in which case resolution is bit-identical to a build without
+// the Vault feature.
+var (
+	vaultResolverMu sync.RWMutex
+	vaultResolver   func(ctx context.Context, value string) (string, bool, error)
+)
+
+// SetVaultResolver registers a resolver consulted for every plaintext
+// environment-variable value in ResolveEnvironmentVariables. The hook returns
+// (resolved, isReference, error): isReference is false when the value is not a
+// Vault reference and should be passed through unchanged; when it is true, the
+// resolved secret (or a fail-closed error) is used instead. Pass nil to clear a
+// previously registered resolver.
+func (s *Store) SetVaultResolver(fn func(ctx context.Context, value string) (string, bool, error)) {
+	vaultResolverMu.Lock()
+	vaultResolver = fn
+	vaultResolverMu.Unlock()
+}
+
+// resolveVaultReference invokes the registered resolver, if any. When no
+// resolver is configured it reports ("", false, nil) so callers pass the value
+// through untouched. A resolve error is never swallowed.
+func resolveVaultReference(ctx context.Context, value string) (string, bool, error) {
+	vaultResolverMu.RLock()
+	hook := vaultResolver
+	vaultResolverMu.RUnlock()
+	if hook == nil {
+		return "", false, nil
+	}
+	return hook(ctx, value)
+}
 
 type EnvironmentVariable struct {
 	ID             string    `json:"id"`
@@ -311,7 +348,20 @@ func (s *Store) ResolveEnvironmentVariables(ctx context.Context, orgID, projectI
 				result[key] = plain
 			} else {
 				// Plaintext fallback stored when encryption was unavailable for a
-				// non-sensitive value at write time.
+				// non-sensitive value at write time. This is also the single seam
+				// where an external secret-store (Vault) reference is detected and
+				// resolved live. When no resolver is configured, or the value is
+				// not a reference, it passes through unchanged (bit-identical to
+				// prior behavior).
+				if resolved, isRef, refErr := resolveVaultReference(ctx, encrypted); isRef {
+					if refErr != nil {
+						// An unresolvable reference is never reported as success.
+						rows.Close()
+						return nil, refErr
+					}
+					result[key] = resolved
+					continue
+				}
 				result[key] = encrypted
 			}
 		}

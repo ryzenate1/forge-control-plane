@@ -57,6 +57,7 @@ import (
 	fencingsvc "gamepanel/forge/internal/services/fencing"
 	"gamepanel/forge/internal/services/forgefile"
 	gitsvc "gamepanel/forge/internal/services/git"
+	gitpushsvc "gamepanel/forge/internal/services/gitpush"
 	"gamepanel/forge/internal/services/gitprovider"
 	"gamepanel/forge/internal/services/health"
 	healthchecksvc "gamepanel/forge/internal/services/healthcheckrunner"
@@ -94,6 +95,7 @@ import (
 	"gamepanel/forge/internal/services/tenancy"
 	"gamepanel/forge/internal/services/trafficmanager"
 	upgradesvc "gamepanel/forge/internal/services/upgrade"
+	"gamepanel/forge/internal/services/vaultprovider"
 	"gamepanel/forge/internal/services/webauthn"
 	"gamepanel/forge/internal/services/zerodowntime"
 	"gamepanel/forge/internal/store"
@@ -184,6 +186,7 @@ type Config struct {
 	CaddyTLS                   *trafficmanager.CaddyTLSManager
 	DomainService              *domains.Service
 	DNSService                 *dnssvc.Service
+	VaultService               *vaultprovider.Service
 	DBContainerService         *dbprovisioner.DBContainerService
 	DatabaseServiceProvisioner *services.DatabaseServiceProvisioner
 	DBBackupService            *dbbackupsvc.Service
@@ -193,6 +196,10 @@ type Config struct {
 	GitDeployService           *gitsvc.DeployService
 	GitDeployMgmtService       *gitsvc.DeploymentManagementService
 	GitProviderService         *gitprovider.Service
+	// GitPushService backs the Dokku-style "git push to deploy" flow: it owns
+	// the per-app bare repository record and the HMAC-verified receive hook.
+	// Nil-safe: without it the routes do not register.
+	GitPushService *gitpushsvc.Service
 	ComposeService             *composesvc.Service
 	ComposeTemplateService     *composetemplatessvc.Service
 	BuildService               *build.Service
@@ -2317,6 +2324,11 @@ func NewServer(cfg Config) *fiber.App {
 	// Git webhook endpoints (public, verified by HMAC signatures)
 	registerGitWebhookRoutes(v1, cfg)
 
+	// Git-push deploy hook (public by design: it is called by a repository's
+	// post-receive hook on a node, which has no session; the HMAC of the raw
+	// body against the app's shared secret is the only credential).
+	registerGitPushWebhookRoutes(v1, cfg)
+
 	// Set panel origin for CSRF validation
 	v1.Use(func(c *fiber.Ctx) error {
 		if cfg.PanelURL != "" {
@@ -2567,6 +2579,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerDBDiagnosticRoutes(protected, cfg)
 	registerManagedDatabaseRoutes(protected, cfg, mutationLimiter)
 	registerGitRoutes(protected, cfg, adminIPAccess, mutationLimiter)
+	registerGitPushRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	RegisterGitDeploymentRoutes(protected, cfg, mutationLimiter)
 	registerBuildRoutes(protected, cfg, cfg.BuildService, mutationLimiter)
 	registerBuildpackRoutes(protected, cfg, cfg.BuildpackService, mutationLimiter)

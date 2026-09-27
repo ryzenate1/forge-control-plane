@@ -42,6 +42,7 @@ export {
 } from './api/tenancy';
 export * from './api/retry-client';
 export * from './api/dns';
+export * from './api/vault-provider';
 export * from './api/firewall';
 export * from './api/builds';
 export * from './api/cron-jobs';

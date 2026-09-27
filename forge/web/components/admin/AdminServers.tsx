@@ -18,6 +18,7 @@ import {
   cancelServerTransfer, deleteServer, fetchServerTransferStatus, suspendServer, transferServer, unsuspendServer, reinstallServer, updateServer,
   sendPowerSignal,
 } from "@/lib/api";
+import { fetchWorkloadKinds } from "@/lib/api/capabilities";
 import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
 import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea, cn } from "./admin-ui";
 import { DashActionButton, DashHeader, InfoCard, KpiGrid, QuickActionsCard, TrendChart, type KpiDatum, type QuickAction } from "./dashboard-cards";
@@ -646,6 +647,15 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
   const [cpuShares, setCpuShares] = useState("1024");
   const [diskMb, setDiskMb] = useState("10240");
   const [runtimeProvider, setRuntimeProvider] = useState("docker");
+  // Engine availability comes from the control plane, which derives it from the
+  // registered adapters and the runtimes nodes actually report. A local list
+  // would drift and offer engines that fail the moment they are chosen.
+  const kindsQuery = useQuery({
+    queryKey: ["workload-kinds"],
+    queryFn: fetchWorkloadKinds,
+    staleTime: 60_000,
+    retry: 1,
+  });
   const availableAllocations = allocations.filter((allocation) => !allocation.server && (!nodeId || allocation.node === nodeId));
   const templateOptions = [
     ...templates.map((template) => ({
@@ -758,39 +768,43 @@ function CreateServerModal({ users, nodes, allocations, templates, eggs, regions
 
         <div>
           <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Runtime Engine</label>
-          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              { id: "docker", label: "Docker", available: true, experimental: false },
-              { id: "podman", label: "Podman", available: true, experimental: false },
-              { id: "kubernetes", label: "Kubernetes", available: true, experimental: false },
-              { id: "containerd", label: "Containerd", available: false, experimental: false, reason: "Build tag not in shipped binary" },
-              { id: "firecracker", label: "Firecracker (microVM)", available: false, experimental: true, reason: "Requires build tag + kernel on node" },
-              { id: "lxc", label: "LXC", available: false, experimental: true, reason: "Not implemented in Beacon" },
-              { id: "kvm", label: "KVM/QEMU", available: false, experimental: true, reason: "Not implemented in Beacon" },
-            ].map((rt) => (
-              <button
-                key={rt.id}
-                type="button"
-                disabled={!rt.available}
-                onClick={() => rt.available && setRuntimeProvider(rt.id)}
-                className={cn(
-                  "flex flex-col items-start gap-0.5 rounded-lg border p-3 text-left transition-all",
-                  runtimeProvider === rt.id
-                    ? "border-red-400/60 bg-red-500/10 text-red-200"
-                    : rt.available
-                      ? "border-white/[0.06] bg-white/[0.02] text-slate-300 hover:border-white/20"
-                      : "cursor-not-allowed border-white/[0.04] bg-white/[0.01] text-slate-600",
-                )}
-              >
-                <span className="text-xs font-semibold">{rt.label}</span>
-                {rt.available ? (
-                  <span className="text-[10px] text-emerald-400">Available</span>
-                ) : (
-                  <span className="text-[10px] text-amber-400">{rt.experimental ? "Experimental" : "Unavailable"}{rt.reason ? ` \u2014 ${rt.reason}` : ""}</span>
-                )}
-              </button>
-            ))}
-          </div>
+          {kindsQuery.isPending ? (
+            <p className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 text-xs text-slate-400" role="status">Checking which engines the control plane can dispatch to…</p>
+          ) : kindsQuery.isError ? (
+            <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-xs text-amber-200" role="alert">Engine availability could not be verified, so no runtime is offered. Retry to load it rather than guessing.</p>
+          ) : kindsQuery.data.length === 0 ? (
+            <p className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3 text-xs text-slate-400">The control plane reported no runtime engines.</p>
+          ) : (
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {kindsQuery.data.map((kind) => {
+                const eligibleNodes = kind.nodes.filter((node) => node.eligible).length;
+                return (
+                  <button
+                    key={kind.provider}
+                    type="button"
+                    disabled={!kind.available}
+                    onClick={() => kind.available && setRuntimeProvider(kind.provider)}
+                    title={kind.description}
+                    className={cn(
+                      "flex flex-col items-start gap-0.5 rounded-lg border p-3 text-left transition-all",
+                      runtimeProvider === kind.provider
+                        ? "border-red-400/60 bg-red-500/10 text-red-200"
+                        : kind.available
+                          ? "border-white/[0.06] bg-white/[0.02] text-slate-300 hover:border-white/20"
+                          : "cursor-not-allowed border-white/[0.04] bg-white/[0.01] text-slate-600",
+                    )}
+                  >
+                    <span className="text-xs font-semibold capitalize">{kind.provider}</span>
+                    {kind.available ? (
+                      <span className="text-[10px] text-emerald-400">Available · {eligibleNodes} eligible node{eligibleNodes === 1 ? "" : "s"}</span>
+                    ) : (
+                      <span className="text-[10px] text-amber-400">{kind.experimental ? "Experimental" : "Unavailable"}{kind.reason ? ` \u2014 ${kind.reason}` : ""}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
 
         <div>

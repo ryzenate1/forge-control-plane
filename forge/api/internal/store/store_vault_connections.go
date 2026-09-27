@@ -277,6 +277,17 @@ func (s *Store) UpdateVaultConnection(ctx context.Context, id string, req Update
 	if err != nil {
 		return VaultConnection{}, err
 	}
+	// Read the current credential envelopes verbatim. A nil credential pointer
+	// means "leave the stored envelope untouched" (mirroring UpdateEnvironment-
+	// Variable's empty-value-preserves-secret rule), so an edit that only flips a
+	// name or the enabled flag can never wipe a working Vault credential.
+	var tokenEnv, secretEnv string
+	if err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(token_encrypted,''), COALESCE(secret_id_encrypted,'')
+		FROM vault_connections WHERE id::text = $1
+	`, existing.ID).Scan(&tokenEnv, &secretEnv); err != nil {
+		return VaultConnection{}, err
+	}
 
 	name := existing.Name
 	if req.Name != nil {
@@ -323,12 +334,10 @@ func (s *Store) UpdateVaultConnection(ctx context.Context, id string, req Update
 	}
 
 	// Credentials: a nil pointer keeps the existing envelope; a non-nil pointer
-	// replaces it (empty string clears). Always re-encrypt with the canonical AAD
+	// replaces it (empty string clears). Always encrypt with the canonical AAD
 	// derived from existing.ID (the DB id::text), never the caller-supplied id.
 	tokenAAD := secretAAD(vaultConnectionsTable, existing.ID, "token")
-	secretAADField := secretAAD(vaultConnectionsTable, existing.ID, "secret_id")
-	tokenEnv := mustReencrypt(existing.Token, tokenAAD, s)
-	secretEnv := mustReencrypt(existing.SecretID, secretAADField, s)
+	secretIDAAD := secretAAD(vaultConnectionsTable, existing.ID, "secret_id")
 	roleID := existing.RoleID
 	if req.RoleID != nil {
 		roleID = strings.TrimSpace(*req.RoleID)
@@ -341,7 +350,7 @@ func (s *Store) UpdateVaultConnection(ctx context.Context, id string, req Update
 		tokenEnv = enc
 	}
 	if req.SecretID != nil {
-		enc, err := s.encryptVaultCredential(strings.TrimSpace(*req.SecretID), secretAADField)
+		enc, err := s.encryptVaultCredential(strings.TrimSpace(*req.SecretID), secretIDAAD)
 		if err != nil {
 			return VaultConnection{}, err
 		}
@@ -375,25 +384,6 @@ func (s *Store) UpdateVaultConnection(ctx context.Context, id string, req Update
 		return VaultConnection{}, err
 	}
 	return s.safeVaultConnection(ctx, existing.ID)
-}
-
-// mustReencrypt re-seals an existing decrypted credential under its canonical
-// AAD so that unrelated updates still rotate the ciphertext to the active key.
-// On encryption-unavailable it preserves the existing plaintext-derived envelope
-// only when the credential is already empty; a present credential failing to
-// re-seal is surfaced by the caller through the safe-read path rather than
-// silently dropping it.
-func mustReencrypt(existingPlain, aad string, s *Store) string {
-	if existingPlain == "" {
-		return ""
-	}
-	enc, err := s.encryptSecret(existingPlain, aad)
-	if err != nil {
-		// Leaving the prior envelope untouched keeps a transient keyring hiccup
-		// from destroying a stored credential; a hard failure surfaces on next read.
-		return ""
-	}
-	return enc
 }
 
 // safeVaultConnection reads a connection and returns it with credentials
