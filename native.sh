@@ -120,6 +120,71 @@ confirm_listener() {
     return 2
 }
 
+# Refuse to start a tier whose port is already taken, *before* spawning it.
+#
+# report_listener already detects a foreign listener and says the right thing —
+# but it runs after spawn_detached, and for the web tier that is too late to
+# matter. `next dev` clears the manifests in .next as it boots and only then
+# discovers the port is taken and exits, so a doomed second start leaves the
+# server that is still serving :3000 with a gutted .next and every route
+# answering 500 with `ENOENT routes-manifest.json`. A healthy process's build
+# directory must not be destroyed by one that could never have started.
+#
+# If anything at all is listening, the spawn is doomed regardless of who owns
+# the port, so refusing costs nothing that could have worked. That is why an
+# unidentifiable listener refuses here rather than being waved through the way
+# confirm_listener waves it through: there, a missing lsof reading must not
+# invent a conflict; here, the conflict is already proven by the open port and
+# only the owner's name is unknown.
+#
+# Exit codes: 0 free to start, 1 already running as ours, 2 held by another.
+guard_port() {
+    local name=$1 port=$2
+    # Always reset: a stale value from an earlier tier would otherwise be
+    # reported as this tier's port holder.
+    LISTENER_OWNER=""
+    port_open "$port" || return 0
+
+    local owner ours owner_pgid ours_pgid
+    owner="$(port_owner "$port")"
+    ours="$(cat "$PID_DIR/$name.pid" 2>/dev/null || true)"
+    LISTENER_OWNER="$owner"
+
+    if [ -n "$owner" ] && [ -n "$ours" ]; then
+        if [ "$owner" = "$ours" ]; then return 1; fi
+        # npm spawns next as a child, so our listener is usually in our process
+        # group rather than our pid itself.
+        owner_pgid="$(ps -o pgid= -p "$owner" 2>/dev/null | tr -d ' ')"
+        ours_pgid="$(ps -o pgid= -p "$ours" 2>/dev/null | tr -d ' ')"
+        if [ -n "$owner_pgid" ] && [ "$owner_pgid" = "$ours_pgid" ]; then return 1; fi
+    fi
+
+    return 2
+}
+
+# Guard a tier's port and report why it is not being started. Returns non-zero
+# when the caller must skip the spawn.
+require_free_port() {
+    local name=$1 port=$2
+    guard_port "$name" "$port"
+    local rc=$? who
+    # lsof can decline to name the holder; say so rather than printing an empty
+    # pid or claiming a pid we do not have.
+    if [ -n "$LISTENER_OWNER" ]; then who="pid $LISTENER_OWNER"; else who="an unidentified process"; fi
+    case $rc in
+        0) return 0 ;;
+        1) ok "${name} is already running on port ${port} (${who})"
+           info "Use '$0 restart' to pick up code or config changes."
+           return 1 ;;
+        *) fail "Port ${port} is held by ${who}, which is not a ${name} this script started."
+           info "Not starting a second ${name}: it would lose the bind, and a doomed"
+           info "'next dev' wipes .next out from under the process still serving the port."
+           info "Stop the holder first:"
+           info "  kill ${LISTENER_OWNER:-<pid>} && $0 start"
+           return 1 ;;
+    esac
+}
+
 # Report a tier's startup from what is actually listening.
 report_listener() {
     local name=$1 port=$2 tries=$3 label=$4 logname=$5
@@ -205,6 +270,7 @@ ensure_databases() {
 
 start_api() {
     head_ "Forge API"
+    require_free_port api "$API_PORT" || return 0
     info "Building..."
     (cd "$ROOT/forge/api" && go build -o api ./cmd/api)
 
@@ -301,6 +367,9 @@ PLIST
 
 start_web() {
     head_ "Forge Web"
+    # Checked before the spawn, not after: a doomed `next dev` wipes .next on
+    # its way out and takes the running server's manifests with it.
+    require_free_port web "$WEB_PORT" || return 0
     spawn_detached web "$ROOT/forge/web" npm run dev
     report_listener web "$WEB_PORT" 120 \
         "Web on http://localhost:${WEB_PORT}" web.log || true
