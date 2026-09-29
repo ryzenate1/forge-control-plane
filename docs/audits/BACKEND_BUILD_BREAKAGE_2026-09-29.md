@@ -286,16 +286,34 @@ The spec for this is already in the file (`ReplicaSpec` carries
 `CPU`/`MemoryMB`/`DiskMB`, and `state.apply()` at `:157` already debits exactly
 those three values), so populating it during D3's rewrite is a small change.
 
-### L3 — Nit: `gofmt` drift
+### L3 — `gofmt` drift (the nit is small; the remedy is not)
 
 `forge/api/internal/placement/replica.go:16` — `RequiredNode string` is not
-column-aligned with its neighbours in the struct. `make format` will fix it;
-flagged only so it is not mistaken for a manual edit later.
+column-aligned with its neighbours in the struct. `internal/http/realtime.go`
+and `internal/http/server.go` carry the same drift, outside the lines the fixes
+touched. Flagged only so it is not mistaken for a manual edit later, and
+deliberately kept out of the build-fix commits: reformatting untouched lines
+would have buried the actual repairs in noise.
 
-Wider than first recorded: `internal/http/realtime.go` and
-`internal/http/server.go` carry the same drift, outside the lines the fixes
-touched. Deliberately left out of the build-fix commits — reformatting
-untouched lines would have buried the actual repairs in noise.
+**Do not reach for `make format` as the remedy without choosing to.** Measured
+on this branch, `gofmt -l -s` reports **124 files in `forge/api` and 2 in
+`beacon`**, and `scripts/dev/format.sh` additionally runs `prettier --write`
+across all of `forge/web` and `packages/*`. The fix for a three-file alignment
+nit is therefore a 126-file Go rewrite plus an unbounded frontend rewrite. Note
+the `-s`: it applies gofmt's simplifications, so the result is not purely
+whitespace.
+
+Two measurements narrow it slightly. The drifted file set is identical with and
+without `-s` (124 either way in `forge/api`), so `-s` widens what changes inside
+those files but not which files change. And `goimports` is not installed here,
+so `format.sh` takes its fallback branch and will not reorder imports. The
+prettier half could not be sized at all: `prettier` is absent from local
+`node_modules` and `registry.npmjs.org` is denied by the sandbox proxy.
+
+This is a whole-branch formatting decision, not part of this breakage. It wants
+its own commit, taken when no other work is in flight — running it while other
+sessions hold uncommitted changes in the same checkout would rewrite files
+underneath them.
 
 ---
 
@@ -450,7 +468,7 @@ must be propagated.
 | D6 | `client.Headers("Origin")` | committed `b7df85e` |
 | D7 | `cfg.AcmeService` threaded to the registrar | committed `b7df85e` |
 | D8 | `ResolveTargetHost` returns 404 `ErrNoTarget` / 502, never a guessed host | committed `b7df85e` |
-| L3 | `gofmt` drift in `replica.go`, `realtime.go`, `server.go` | outstanding — needs `make format` |
+| L3 | `gofmt` drift in `replica.go`, `realtime.go`, `server.go` | open by decision — `make format` is a 126-file sweep, see L3 |
 
 The work was split across two commits because it was authored concurrently by
 two sessions sharing this checkout. Both used path-scoped commits, so neither
