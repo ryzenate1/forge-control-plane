@@ -4,6 +4,7 @@
 **Branch:** `mvp-4` (HEAD `bce7085`, working tree clean)
 **Severity:** Blocker — neither Go module compiles
 **Scope:** `forge/api`, `beacon`. Frontend not implicated.
+**Status:** Corrected and partly remediated — read §8 before relying on §1.
 
 ---
 
@@ -13,14 +14,21 @@ Both Go modules on `mvp-4` fail to compile. This is committed breakage, not
 uncommitted work-in-progress: the tree is clean and `HEAD` itself is broken.
 
 ```
-cd forge/api && go build ./...   → exit 1 (5 errors, 3 packages)
+cd forge/api && go build ./...   → exit 1 (5 errors reported, 3 packages reached)
 cd beacon    && go build ./...   → exit 1 (1 error,  1 package)
 ```
+
+Those five are what the compiler *reports*, which is not the blast radius. `go
+build` abandons a package whose dependencies failed to type-check, so while
+`crossnode`, `scheduler` and `placement` were broken, `internal/http` was never
+examined — and it holds three further errors of its own, from the same commit.
+The true API figure is **8 errors across 4 packages**; see the addendum (§8),
+which supersedes the counts in this section.
 
 Consequently `make build`, `make test`, `make api-test` and `make beacon-test`
 are all blocked, and CI on this branch cannot be green.
 
-All five API errors and the one Beacon error trace to the **last two commits**,
+Every API error and the one Beacon error trace to the **last two commits**,
 both of which are bulk working-tree snapshots:
 
 | Commit | Date | Subject |
@@ -291,20 +299,24 @@ flagged only so it is not mistaken for a manual edit later.
 Two consecutive bulk snapshot commits — `7389900` and `bce7085`, both titled
 "chore: commit working tree …" — were committed without a compile.
 
-The changes they carry are not sloppy in intent. All four are defensible
-hardenings, three of them directly serving rules in `AGENTS.md`:
+The changes they carry are not sloppy in intent. Every one is a defensible
+hardening, and most serve rules stated in `AGENTS.md`:
 
 - delete a hand-rolled int formatter in favour of `strconv.Itoa` (D1)
 - make "unknown" representable rather than encoding it as zero (D2)
 - give replica placement a single request-scoped working set so an explanation
   cannot describe a winner the engine would not pick (D3)
 - bound a Beacon probe so it cannot outlive shutdown (D5)
+- validate the WebSocket `Origin` header against the allow-list (D6)
+- thread the ACME service explicitly instead of reaching for an ambient one (D7)
+- let host resolution **fail** rather than return a bare string (D8) — this is
+  "never report success for work not performed" applied exactly as written
 
 The failure is uniformly one of **incomplete application**: each migration
 updated part of its blast radius. D1 and D2 converted one file and missed a
-sibling in the same package; D3 updated a caller and not its callee; D5 wrote
-new code against an API whose signature was never checked. A single
-`go build ./...` in either module would have caught all five.
+sibling in the same package; D3, D7 and D8 changed a signature and left a call
+site behind; D5 and D6 wrote new code against an API whose signature was never
+checked. A single `go build ./...` in either module would have caught all nine.
 
 **Process gap:** `go build ./...` on both modules is not currently enforced
 before commit on this branch. Given `go.work` spans both modules, one
@@ -351,7 +363,11 @@ breakage; the two are not the same problem.
 
 - `go build ./...` on both modules, with `GOCACHE` redirected — exit 1 each.
 - `go vet ./...` on both modules — same four defect classes, no additional
-  production-code errors beyond D1–D5.
+  production-code errors beyond D1–D5. **This was a ceiling on what the
+  toolchain could see, not a clean bill of health.** `vet` type-checks per
+  package and skips any package whose dependencies fail, so `internal/http`
+  went unexamined here for the same reason `go build` skipped it (§8). Neither
+  command can report the size of a cascade while the cascade is still in place.
 - `git log -L` line-blame on each failing line to attribute the introducing commit.
 - `git show <commit>^:<path>` on each file to confirm the pre-change state
   compiled, establishing all five as regressions rather than pre-existing breakage.
@@ -367,6 +383,99 @@ breakage; the two are not the same problem.
 
 ---
 
-*Analysis only — no code changed. The working tree was clean before this report
-and remains clean; the temporary worktree used for the `mvp-3` attempt was
-removed.*
+## 8. Addendum — corrections and remediation status
+
+*Added 2026-09-29, after remediation began. §§1–7 are the original analysis;
+where this section contradicts them, this section is correct.*
+
+### 8.1 The error count in §1 understated the breakage
+
+§1 quoted "5 errors, 3 packages" for `forge/api`. That was the compiler's
+output, and the compiler could not see further: both `go build` and `go vet`
+skip a package whose dependencies fail to type-check. `internal/http` imports
+`internal/services/crossnode`, `internal/scheduler` **and**
+`internal/placement` — all three broken — so it was never examined. It
+type-checked for the first time only after D1–D4 were fixed, and produced three
+more errors immediately.
+
+| Module | Packages broken | Errors |
+| --- | --- | --- |
+| `forge/api` | 4 | 8 |
+| `beacon` | 1 | 1 |
+| **Total** | **5** | **9** |
+
+The general lesson: **a reported compile-error count is a lower bound, not a
+measurement, until the build is green.** An audit that quotes one should say so
+rather than presenting it as scope.
+
+### 8.2 D6–D8 — `internal/http`, hidden behind the cascade
+
+All three are `7389900` regressions, attributed exactly as D1–D5 were —
+`git log -L` on the signature line plus `git show 7389900^:<path>` for the
+pre-change shape. None is pre-existing breakage.
+
+**D6 — `realtime.go`: `Get` called on a WebSocket connection.**
+`*fiberws.Conn` has no `Get` method. `7389900` added WebSocket origin
+validation; at `7389900^` the file read no `Origin` header off the connection at
+all, so this is new code written against the wrong accessor — the same failure
+mode as D5. Fix: `client.Headers("Origin")`.
+
+**D7 — `server.go`: call site left at the previous arity.** `7389900` gave
+`registerCertificateRoutesExt` a third parameter, `svc *acme.Service`, and did
+not update its single call. Fix: pass `cfg.AcmeService`.
+
+**D8 — `handlers_crossnode.go`: single-value assignment from a two-value call.**
+`7389900` changed `(*Resolver).ResolveTargetHost` from returning `string` to
+returning `(string, error)` and left `host := resolver.ResolveTargetHost(…)`
+in place. This is the most consequential of the three, because the signature
+change *is* the `AGENTS.md` rule that resolution must be able to fail rather
+than hand back a bare host — and this handler is the caller that has to act on
+it. Silencing the error with `_` would compile and defeat the change; the error
+must be propagated.
+
+### 8.3 Remediation status
+
+| Defect | Fix | State |
+| --- | --- | --- |
+| D1 | `strconv.Itoa` + import in `ingress_sync.go` | committed `29d1600` |
+| D2 + L1 | `&totalMem` **and** `&totalCPU` in nomad `GetResources` | committed `29d1600` |
+| D5 | explicit stop-watch goroutine in `probeContext` | committed `29d1600` |
+| D3 + L2 | `placeSingleReplica` on `*replicaPlacementState`; `Reserved` populated | done, uncommitted |
+| D4 | unused `internal/runtime` import dropped | done, uncommitted |
+| D6 | `client.Headers("Origin")` | done, uncommitted |
+| D7 | `cfg.AcmeService` threaded to the registrar | done, uncommitted |
+| D8 | `ResolveTargetHost` error propagated | done, uncommitted |
+| L3 | `gofmt` drift at `replica.go` | outstanding — needs `make format` |
+
+`29d1600` carries D1, D2+L1 and D5 only. It makes **`beacon` build clean on its
+own**; it does not make `forge/api` build, because the remaining five fixes were
+authored concurrently in the same checkout by other sessions and were
+deliberately excluded rather than swept into a commit whose contents had not
+been verified line by line.
+
+**Current state, with those uncommitted changes in the tree:**
+
+```
+cd forge/api && go build ./...   → exit 0
+cd beacon    && go build ./...   → exit 0
+```
+
+`make test` still has no clean signal on this branch. Two sandbox limits block
+it here and neither is a code defect:
+
+- `httptest` cannot bind a listener (`listen tcp6 [::1]:0: bind: operation not
+  permitted`), which fails `crossnode/TestGatewayReloadFailure` and
+  `beacon/internal/remote/TestClientRejectsNon2xxResponses`.
+- `internal/placement` cannot build its test binary: `stretchr/testify` has
+  only `.mod` metadata in the local module cache, and both remedies are denied
+  (module-cache writes, and `proxy.golang.org`).
+
+Of what could run, `crossnode` passed 14 of 15. A full `make test` outside the
+sandbox is still the first real post-`7389900` signal, and §6's warning stands:
+expect further drift.
+
+---
+
+*§§1–7 were analysis only, written against a clean tree. §8 records the
+corrections found during remediation and the commit state as of writing. The
+temporary worktree used for the `mvp-3` attempt was removed.*
