@@ -26,7 +26,7 @@ import {
 } from "@/lib/api/firewall";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { AdminFormSection, AdminSelect, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, cn } from "./admin-ui";
+import { AdminFormSection, AdminSelect, AdminTabs, AdminPageLayout, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminLoadingState, AdminErrorState, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 
 type FirewallTab = "rules" | "forwards";
 
@@ -36,7 +36,9 @@ export function AdminFirewall() {
   const nodesQuery = useQuery({ queryKey: ["nodes"], queryFn: fetchNodes });
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
   const [nodeId, setNodeId] = useState("");
-  const activeNodeId = nodeId || (nodes.length > 0 ? nodes[0].id : "");
+  // Require an explicit node selection: falling back to nodes[0] silently
+  // targets a host the operator did not choose.
+  const activeNodeId = nodeId;
 
   const statusQuery = useQuery({
     queryKey: ["firewall-status", activeNodeId],
@@ -88,15 +90,27 @@ export function AdminFirewall() {
   const selectedNode = nodes.find((n) => n.id === activeNodeId);
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title="Firewall"
-        sub="Manage firewall rules and port forwards on host nodes."
+        sub="Firewall rules and port forwarding."
+        action={
+          <div className="flex gap-2">
+            <Btn size="sm" tone="ghost" disabled={!activeNodeId} onClick={() => setShowQuickOpen(true)} className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]">
+              <Network size={12} /> Quick Open Port
+            </Btn>
+            <Btn size="sm" tone="primary" disabled={!activeNodeId} onClick={() => (tab === "forwards" ? setShowAddForward(true) : setShowAddRule(true))} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
+              <Plus size={14} /> {tab === "forwards" ? "Add Forward" : "Add Rule"}
+            </Btn>
+          </div>
+        }
       />
 
       <div className="flex flex-wrap items-center gap-4">
-        <AdminSelect label="Node" value={nodeId} onChange={setNodeId} placeholder="Auto-select first node" options={Array.isArray(nodes) ? nodes.map((n) => ({ value: n.id, label: n.name })) : []} />
-        {statusLoading ? (
+        <AdminSelect label="Node" value={nodeId} onChange={setNodeId} placeholder="Select a node\u2026" options={Array.isArray(nodes) ? nodes.map((n) => ({ value: n.id, label: n.name })) : []} />
+        {!activeNodeId ? (
+          <Pill tone="neutral">Select a node to manage</Pill>
+        ) : statusLoading ? (
           <Pill tone="neutral">Loading status…</Pill>
         ) : statusError ? (
           <Pill tone="red">Status error</Pill>
@@ -131,6 +145,10 @@ export function AdminFirewall() {
         )}
       </div>
 
+      {!activeNodeId ? (
+        <EmptyState icon={Shield} title="No node selected" message="Select a node above to view firewall rules and port forwards." />
+      ) : (
+      <>
       <AdminTabs tabs={[{ id: "rules", label: "Firewall Rules" }, { id: "forwards", label: "Port Forwards" }]} active={tab} onChange={(id) => setTab(id as FirewallTab)} />
 
       {tab === "rules" && (
@@ -139,41 +157,19 @@ export function AdminFirewall() {
             <CardHeader
               title="Rules"
               icon={Shield}
-              action={
-                <div className="flex gap-2">
-                  <Btn size="sm" tone="ghost" onClick={() => setShowQuickOpen(true)} className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]">
-                    <Network size={12} /> Quick Open Port
-                  </Btn>
-                  <Btn size="sm" tone="primary" onClick={() => setShowAddRule(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
-                    <Plus size={14} /> Add Rule
-                  </Btn>
-                </div>
-              }
             />
             {rulesQuery.isLoading ? (
-              <div className="p-8 text-center text-sm text-slate-500">Loading rules…</div>
+              <div className="p-4"><AdminLoadingState label="Loading rules\u2026" /></div>
             ) : rulesQuery.isError ? (
               <div className="p-4">
-                <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-                  Could not load rules: {rulesQuery.error instanceof Error ? rulesQuery.error.message : "Unknown error"}
-                </div>
+                <AdminErrorState message={rulesQuery.error instanceof Error ? rulesQuery.error.message : "Could not load rules"} retry={() => void rulesQuery.refetch()} />
               </div>
             ) : !Array.isArray(rules) || rules.length === 0 ? (
-              <EmptyState icon={Shield} message="No firewall rules." />
+              <EmptyState icon={Shield} title="No firewall rules" message="No firewall rules on this node." />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                      <th className="px-4 py-3">Port</th>
-                      <th className="px-4 py-3">Protocol</th>
-                      <th className="px-4 py-3">Source</th>
-                      <th className="px-4 py-3">Action</th>
-                      <th className="px-4 py-3">Description</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <AdminTable label="Firewall rules">
+                <AdminTHead><AdminTh>Port</AdminTh><AdminTh>Protocol</AdminTh><AdminTh>Source</AdminTh><AdminTh>Action</AdminTh><AdminTh>Description</AdminTh><AdminTh></AdminTh></AdminTHead>
+                <AdminTBody>
                     {Array.isArray(rules) && rules.map((rule) => (
                       <RuleRow
                         key={rule.id}
@@ -182,9 +178,8 @@ export function AdminFirewall() {
                         onEdit={() => setEditingRule(rule)}
                       />
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                </AdminTBody>
+              </AdminTable>
             )}
           </Card>
         </div>
@@ -196,55 +191,39 @@ export function AdminFirewall() {
             <CardHeader
               title="Port Forwards"
               icon={Network}
-              action={
-                <Btn size="sm" tone="primary" onClick={() => setShowAddForward(true)}>
-                  <Plus size={14} /> Add Forward
-                </Btn>
-              }
             />
             {forwardsQuery.isLoading ? (
-              <div className="p-8 text-center text-sm text-slate-500">Loading forwards…</div>
+              <div className="p-4"><AdminLoadingState label="Loading forwards\u2026" /></div>
             ) : forwardsQuery.isError ? (
               <div className="p-4">
-                <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-                  Could not load forwards: {forwardsQuery.error instanceof Error ? forwardsQuery.error.message : "Unknown error"}
-                </div>
+                <AdminErrorState message={forwardsQuery.error instanceof Error ? forwardsQuery.error.message : "Could not load forwards"} retry={() => void forwardsQuery.refetch()} />
               </div>
             ) : !Array.isArray(forwards) || forwards.length === 0 ? (
-              <EmptyState icon={Network} message="No port forwards." />
+              <EmptyState icon={Network} title="No port forwards" message="No port forwards on this node." />
             ) : (
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                      <th className="px-4 py-3">From Port</th>
-                      <th className="px-4 py-3">To Port</th>
-                      <th className="px-4 py-3">To IP</th>
-                      <th className="px-4 py-3">Protocol</th>
-                      <th className="px-4 py-3">Description</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
+              <AdminTable label="Port forwards">
+                <AdminTHead><AdminTh>From Port</AdminTh><AdminTh>To Port</AdminTh><AdminTh>To IP</AdminTh><AdminTh>Protocol</AdminTh><AdminTh>Description</AdminTh><AdminTh></AdminTh></AdminTHead>
+                <AdminTBody>
                     {Array.isArray(forwards) && forwards.map((pf) => (
                       <ForwardRow key={pf.id} forward={pf} nodeId={activeNodeId} />
                     ))}
-                  </tbody>
-                </table>
-              </div>
+                </AdminTBody>
+              </AdminTable>
             )}
           </Card>
         </div>
       )}
+      </>
+      )}
 
-      {showAddRule && (
+      {showAddRule && activeNodeId && (
         <AddRuleModal
           nodeId={activeNodeId}
           onClose={() => setShowAddRule(false)}
         />
       )}
 
-      {editingRule && (
+      {editingRule && activeNodeId && (
         <EditRuleModal
           rule={editingRule}
           nodeId={activeNodeId}
@@ -252,20 +231,20 @@ export function AdminFirewall() {
         />
       )}
 
-      {showAddForward && (
+      {showAddForward && activeNodeId && (
         <AddForwardModal
           nodeId={activeNodeId}
           onClose={() => setShowAddForward(false)}
         />
       )}
 
-      {showQuickOpen && (
+      {showQuickOpen && activeNodeId && (
         <QuickOpenPortModal
           nodeId={activeNodeId}
           onClose={() => setShowQuickOpen(false)}
         />
       )}
-    </div>
+    </AdminPageLayout>
   );
 }
 
@@ -281,27 +260,23 @@ function RuleRow({ rule, nodeId, onEdit }: { rule: FirewallRule; nodeId: string;
     onError: (error) => toast({ tone: "error", title: "Delete failed", message: error instanceof Error ? error.message : "Could not delete rule" }),
   });
 
-  const actionColor = rule.action === "allow"
-    ? "text-emerald-400"
-    : rule.action === "deny"
-      ? "text-red-400"
-      : "text-slate-300";
-
   return (
-    <tr className="border-b border-white/[0.04] transition hover:bg-white/[0.02]">
-      <td className="px-4 py-3 font-mono text-xs">{rule.port ?? "—"}</td>
-      <td className="px-4 py-3 text-xs uppercase">{rule.protocol ?? "—"}</td>
-      <td className="px-4 py-3 font-mono text-xs">{rule.sourceIp ?? "—"}</td>
-      <td className={cn("px-4 py-3 text-xs font-semibold", actionColor)}>{rule.action ?? "—"}</td>
-      <td className="px-4 py-3 text-xs text-slate-400">{rule.description ?? "—"}</td>
-      <td className="px-4 py-3 text-right space-x-2">
+    <AdminTr>
+      <AdminTd className="font-mono text-xs">{rule.port ?? "—"}</AdminTd>
+      <AdminTd className="text-xs uppercase">{rule.protocol ?? "—"}</AdminTd>
+      <AdminTd className="font-mono text-xs">{rule.sourceIp ?? "—"}</AdminTd>
+      <AdminTd><Pill tone={rule.action === "allow" ? "green" : rule.action === "deny" ? "red" : "neutral"}>{rule.action ?? "—"}</Pill></AdminTd>
+      <AdminTd className="text-xs text-slate-400">{rule.description ?? "—"}</AdminTd>
+      <AdminTd>
+        <div className="flex justify-end gap-2">
         <Btn size="sm" tone="ghost" onClick={onEdit}>Edit</Btn>
         <Btn size="sm" tone="danger" disabled={deleteMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: "Delete this firewall rule?", description: rule.description ?? `Rule for ${rule.protocol} on port ${rule.port}. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(); })(); }}>
           {deleteMut.isPending ? "…" : <Trash2 size={14} />}
         </Btn>
+        </div>
         {renderConfirm()}
-      </td>
-    </tr>
+      </AdminTd>
+    </AdminTr>
   );
 }
 
@@ -318,19 +293,21 @@ function ForwardRow({ forward, nodeId }: { forward: PortForward; nodeId: string 
   });
 
   return (
-    <tr className="border-b border-white/[0.04] transition hover:bg-white/[0.02]">
-      <td className="px-4 py-3 font-mono text-xs">{forward.fromPort}</td>
-      <td className="px-4 py-3 font-mono text-xs">{forward.toPort}</td>
-      <td className="px-4 py-3 font-mono text-xs">{forward.toIp}</td>
-      <td className="px-4 py-3 text-xs uppercase">{forward.protocol ?? "—"}</td>
-      <td className="px-4 py-3 text-xs text-slate-400">{forward.description ?? "—"}</td>
-      <td className="px-4 py-3 text-right">
+    <AdminTr>
+      <AdminTd className="font-mono text-xs">{forward.fromPort}</AdminTd>
+      <AdminTd className="font-mono text-xs">{forward.toPort}</AdminTd>
+      <AdminTd className="font-mono text-xs">{forward.toIp}</AdminTd>
+      <AdminTd className="text-xs uppercase">{forward.protocol ?? "—"}</AdminTd>
+      <AdminTd className="text-xs text-slate-400">{forward.description ?? "—"}</AdminTd>
+      <AdminTd>
+        <div className="flex justify-end">
         <Btn size="sm" tone="danger" disabled={deleteMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: "Delete this port forward?", description: `Forwarding ${forward.fromPort} → ${forward.toIp}:${forward.toPort} will be removed. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(); })(); }}>
           {deleteMut.isPending ? "…" : <Trash2 size={14} />}
         </Btn>
+        </div>
         {renderConfirm()}
-      </td>
-    </tr>
+      </AdminTd>
+    </AdminTr>
   );
 }
 
@@ -495,7 +472,7 @@ function QuickOpenPortModal({ nodeId, onClose }: { nodeId: string; onClose: () =
   const validationError = !port ? "Port is required." : Number(port) < 1 || Number(port) > 65535 ? "Port must be 1-65535." : null;
 
   return (
-    <Modal title="Quick Open Port" description="POST /host/firewall/port" onClose={onClose}>
+    <Modal title="Quick Open Port" onClose={onClose}>
       <form className="space-y-4" onSubmit={(e) => { e.preventDefault(); if (!validationError) openMut.mutate(); }}>
         <AdminFormSection title="Open Port">
           <Input label="Port" value={port} onChange={setPort} type="number" placeholder="e.g. 25565" required />
@@ -504,7 +481,7 @@ function QuickOpenPortModal({ nodeId, onClose }: { nodeId: string; onClose: () =
             { value: "udp", label: "UDP" },
             { value: "both", label: "TCP+UDP" },
           ]} />
-          <p className="text-xs text-slate-400">Wires <code className="font-mono">openFirewallPort({`{port, protocol}`})</code> → POST /host/firewall/port?nodeId={nodeId || "auto"}. The daemon applies an allow rule directly.</p>
+          <p className="text-xs text-slate-400">Opens an allow rule for the selected node directly.</p>
         </AdminFormSection>
         {validationError && <p className="text-sm text-red-300">{validationError}</p>}
         {openMut.error && <p className="text-sm text-red-300">{openMut.error instanceof Error ? openMut.error.message : "Failed to open port."}</p>}

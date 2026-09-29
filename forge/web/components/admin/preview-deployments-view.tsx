@@ -388,7 +388,7 @@ export function PreviewDeploymentsView({ projectId: fixedProjectId, className }:
     <div className={className}>
       <SectionHeader
         title="Preview Environments"
-        sub="Ephemeral preview deployments with their own subdomain, scoped to a project. Created by a pull-request webhook or by hand, destroyed when the branch lands, closes, or expires."
+        sub="Ephemeral per-branch environments scoped to a project."
         action={projectId ? <Btn onClick={() => setShowCreate(true)}><GitBranch size={14} /> New preview</Btn> : undefined}
       />
 

@@ -13,7 +13,8 @@ import {
 } from "@/components/shared";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { Pagination } from "@/components/ui/primitives";
-import { AdminLoadingState, EmptyState, SectionHeader } from "@/components/admin/admin-ui";
+import { adminPageGuides } from "@/components/admin/admin-page-guides";
+import { AdminErrorState, AdminLoadingState, AdminPageLayout, EmptyState, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import * as appStoreApi from "@/lib/api/app-store";
@@ -228,23 +229,24 @@ export default function AppStorePage() {
   }
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <OfflineBanner onRetry={refreshData} />
       <SectionHeader
         title="App Store"
-        sub="Browse, install, and manage pre-built applications."
+        sub="Browse and install pre-built applications"
+        info={adminPageGuides.appStore}
         action={
           <div className="flex flex-wrap items-center gap-2">
             <button
               onClick={() => { setView("browse"); setSelectedApp(null); setAppsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "browse" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-slate-100" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
             >
               <Grid3X3 className="mr-1.5 inline-block h-4 w-4" />
               Browse
             </button>
             <button
               onClick={() => { setView("installed"); setSelectedApp(null); setInstallsPage(1); }}
-              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
+              className={cn("rounded-lg border px-4 py-2 text-sm font-medium transition-colors", view === "installed" ? "border-[color-mix(in_srgb,var(--brand)_70%,transparent)] bg-[var(--brand)] text-slate-100" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]")}
             >
               <Package className="mr-1.5 inline-block h-4 w-4" />
               Installed ({installs.length})
@@ -294,7 +296,10 @@ export default function AppStorePage() {
 
       {view === "browse" && !selectedApp && (
         <>
-          {/* Filters */}
+          {/* Filter toolbar (store-exception): search + category sit between the
+              header and the grid because they drive debounced server-side
+              queries over the third-party template catalog, not a Card-bound
+              local list. Layout stays header -> filters -> content. */}
           <div className="flex flex-wrap items-center gap-3">
             <div className="relative flex-1 max-w-xs">
               <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-400" />
@@ -310,7 +315,7 @@ export default function AppStorePage() {
               <button
                 key={c.key}
                 onClick={() => { setCategory(c.key); setAppsPage(1); }}
-                className={cn("rounded-full px-3 py-1 text-xs font-medium transition-colors", category === c.key ? "bg-[var(--brand)] text-white" : "bg-white/5 text-slate-400 hover:bg-white/10")}
+                className={cn("rounded-full px-3 py-1 text-xs font-medium transition-colors", category === c.key ? "bg-[var(--brand)] text-slate-100" : "bg-white/5 text-slate-400 hover:bg-white/10")}
               >
                 {c.label}
               </button>
@@ -320,6 +325,8 @@ export default function AppStorePage() {
           {/* App Grid */}
           {appsQuery.isLoading ? (
             <SkeletonList rows={4} columns={3} />
+          ) : appsQuery.isError ? (
+            <AdminErrorState message={appsQuery.error instanceof Error ? appsQuery.error.message : "Could not load the app catalog."} retry={() => void appsQuery.refetch()} />
           ) : !Array.isArray(apps) || apps.length === 0 ? (
             <EmptyState icon={Package} title="No apps found" message="Try adjusting your search or filter" />
           ) : (
@@ -368,6 +375,8 @@ export default function AppStorePage() {
         <>
           {installsQuery.isLoading ? (
             <SkeletonList rows={4} columns={3} />
+          ) : installsQuery.isError ? (
+            <AdminErrorState message={installsQuery.error instanceof Error ? installsQuery.error.message : "Could not load installed apps."} retry={() => void installsQuery.refetch()} />
           ) : !Array.isArray(installs) || installs.length === 0 ? (
             <EmptyState icon={Package} title="No apps installed" message="Browse the app store and install your first app" />
           ) : (
@@ -383,7 +392,7 @@ export default function AppStorePage() {
                       <p className="font-medium text-white">{inst.name}</p>
                       <StatusBadge status={inst.status} />
                     </div>
-                    <p className="text-xs text-slate-400">
+                    <p className="font-mono text-xs text-slate-400">
                       {inst.appKey} v{inst.appVersion}
                     </p>
                   </div>
@@ -440,7 +449,7 @@ export default function AppStorePage() {
         />
       )}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }
 
@@ -457,7 +466,7 @@ function AppDetailView({
 }) {
   return (
     <div className="rounded-xl border border-white/10 bg-white/[0.03] p-6">
-      <button onClick={onBack} className="mb-4 flex items-center gap-1 text-sm text-slate-300 hover:text-white">
+      <button onClick={onBack} className="mb-4 flex items-center gap-1 text-sm text-slate-300 hover:text-slate-200">
         <ChevronLeft className="h-4 w-4" />
         Back to browse
       </button>
@@ -470,7 +479,7 @@ function AppDetailView({
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-bold text-white">{app.name}</h2>
             {isInstalled && install && <StatusBadge status={install.status} />}
-            {!isInstalled && <span className="rounded-full bg-white/5 px-2.5 py-0.5 text-[11px] text-slate-400">v{app.version}</span>}
+            {!isInstalled && <span className="rounded-full bg-white/5 px-2.5 py-0.5 font-mono text-[11px] text-slate-400">v{app.version}</span>}
           </div>
           <p className="mt-1 text-sm text-slate-300">{app.shortDesc}</p>
           <div className="mt-3 flex flex-wrap gap-2">
@@ -525,7 +534,7 @@ function AppDetailView({
         </div>
         <div className="rounded-lg bg-white/5 px-4 py-3">
           <p className="text-xs text-slate-400">Category</p>
-          <p className="font-medium capitalize text-white">{app.category}</p>
+          <p className="font-medium capitalize text-slate-100">{app.category}</p>
         </div>
       </div>
 
@@ -540,9 +549,9 @@ function AppDetailView({
         <div className="mt-4 rounded-lg border border-white/10 bg-white/[0.02] p-4">
           <h3 className="mb-2 text-sm font-semibold text-slate-300">Install Details</h3>
           <div className="grid gap-2 text-sm sm:grid-cols-2">
-            <div><span className="text-slate-400">Name:</span> <span className="text-slate-300">{install.name}</span></div>
+            <div><span className="text-slate-400">Name:</span> <span className="font-mono text-slate-300">{install.name}</span></div>
             <div><span className="text-slate-400">Status:</span> <StatusBadge status={install.status} /></div>
-            <div><span className="text-slate-400">Version:</span> <span className="text-slate-300">v{install.appVersion}</span></div>
+            <div><span className="text-slate-400">Version:</span> <span className="font-mono text-slate-300">v{install.appVersion}</span></div>
             {install.errorMessage && <div className="col-span-2 text-rose-400">Error: {install.errorMessage}</div>}
           </div>
         </div>

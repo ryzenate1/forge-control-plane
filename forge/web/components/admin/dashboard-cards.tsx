@@ -3,6 +3,7 @@
 import { useId, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Pill, cn } from "./admin-ui";
+import { toneStyles } from "@/components/ui/forge/status";
 import { chart } from "@/lib/design-tokens";
 
 export type PillTone = "neutral" | "green" | "red" | "yellow" | "blue";
@@ -28,22 +29,22 @@ export function DashHeader({ icon: Icon, eyebrow, title, pill, description, tags
   actions?: ReactNode;
 }) {
   return (
-    <div className="overflow-hidden rounded-2xl border border-white/[0.08] bg-white/[0.015]">
+    <div className="overflow-hidden rounded-2xl border border-line bg-overlay-subtle">
       <div className="flex flex-wrap items-start gap-4 p-5">
-        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
+        <span aria-hidden="true" className="grid h-14 w-14 shrink-0 place-items-center rounded-xl border border-line bg-overlay-strong text-text-subtle">
           <Icon size={26} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-red-400">{eyebrow}</p>
+          <p className="t-meta font-bold uppercase tracking-[0.14em] text-text-subtle">{eyebrow}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-bold tracking-tight text-white">{title}</h2>
+            <h2 className="text-xl font-bold tracking-tight text-text">{title}</h2>
             {pill ? <Pill tone={pill.tone}>{pill.label}</Pill> : null}
           </div>
-          {description ? <p className="mt-1 max-w-2xl truncate text-xs text-slate-400" title={description}>{description}</p> : null}
+          {description ? <p className="mt-1 max-w-2xl text-xs leading-5 text-text-subtle">{description}</p> : null}
           {tags && tags.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {tags.map((t) => (
-                <span key={t} className="rounded-md border border-white/[0.08] bg-white/[0.03] px-2 py-0.5 font-mono text-[10px] text-slate-400" title={t}>{t}</span>
+                <span key={t} className="rounded-md border border-line bg-overlay-subtle px-2 py-0.5 font-mono text-[10px] text-text-subtle" title={t}>{t}</span>
               ))}
             </div>
           ) : null}
@@ -51,8 +52,8 @@ export function DashHeader({ icon: Icon, eyebrow, title, pill, description, tags
             <dl className="mt-3 flex flex-wrap gap-x-6 gap-y-1.5 text-[11px]">
               {meta.map((m) => (
                 <div key={m.label} className="flex items-center gap-1.5">
-                  <dt className="text-slate-500">{m.label}</dt>
-                  <dd className="font-semibold text-slate-200" title={m.title}>{m.value}</dd>
+                  <dt className="text-text-muted">{m.label}</dt>
+                  <dd className="font-semibold text-text" title={m.title}>{m.value}</dd>
                 </div>
               ))}
             </dl>
@@ -76,8 +77,8 @@ export function DashActionButton({ label, icon: Icon, onClick, disabled, pending
   const cls = cn(
     "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40",
     tone === "brand"
-      ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] text-slate-100 hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_12%,transparent)]"
-      : "border-white/10 bg-white/[0.04] text-slate-200 hover:bg-white/[0.08]"
+      ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] text-text hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_12%,transparent)]"
+      : "border-line bg-overlay-subtle text-text hover:bg-[var(--surface-hover)]"
   );
   const inner = <><Icon size={12} />{pending ? "…" : label}</>;
   if (href) return <a className={cls} href={href} target="_blank" rel="noreferrer">{inner}</a>;
@@ -105,17 +106,13 @@ export interface KpiDatum {
 export function Sparkline({ data, color }: { data: number[]; color: string }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `dash-${uid}`;
+  // A series needs two points before it has a shape. Draw a flat rule rather
+  // than a curve: an earlier version emitted a hardcoded rising path here, so
+  // every KPI with no history looked like it was climbing.
   if (data.length < 2) {
     return (
       <svg viewBox="0 0 120 34" className="h-full w-full" aria-hidden="true">
-        <defs>
-          <linearGradient id={`${gid}-g`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.22} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6 L 120,34 L 0,34 Z" fill={`url(#${gid}-g)`} />
-        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" opacity={0.5} />
+        <line x1="0" y1="26" x2="120" y2="26" stroke={color} strokeWidth={1.5} strokeDasharray="4 4" opacity={0.35} />
       </svg>
     );
   }
@@ -146,20 +143,20 @@ export function Sparkline({ data, color }: { data: number[]; color: string }) {
 
 export function KpiCard({ kpi }: { kpi: KpiDatum }) {
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm">
-      <div className="flex items-center gap-2 text-xs font-semibold text-slate-200">
+    <div className="rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm">
+      <div className="flex items-center gap-2 text-xs font-semibold text-text">
         <kpi.icon size={15} className={kpi.iconClass} />
         <span>{kpi.title}</span>
         {kpi.live ? (
-          <span className="ml-auto flex items-center gap-1 font-mono text-[10px] font-normal text-emerald-400">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />live
+          <span className={cn("ml-auto flex items-center gap-1 font-mono text-[10px] font-normal", toneStyles.ok.fg)}>
+            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", toneStyles.ok.dot)} />live
           </span>
         ) : null}
       </div>
       <div className="mt-2 flex items-end justify-between gap-2">
         <div className="min-w-0">
-          <p className={cn("font-mono text-xl font-bold", kpi.value ? (kpi.valueClass ?? "text-slate-100") : "text-slate-100")}>{kpi.value ?? "— —"}</p>
-          <p className="mt-0.5 max-w-36 truncate text-[11px] text-slate-500" title={kpi.sub}>{kpi.sub}</p>
+          <p className={cn("font-mono text-xl font-bold", kpi.value ? (kpi.valueClass ?? "text-text") : toneStyles.unknown.fg)}>{kpi.value ?? "Not reported"}</p>
+          <p className="mt-0.5 max-w-36 truncate text-[11px] text-text-muted" title={kpi.sub}>{kpi.sub}</p>
         </div>
         {kpi.trend ? (
           <div className="h-9 w-24 shrink-0 overflow-hidden sm:w-28">
@@ -168,7 +165,7 @@ export function KpiCard({ kpi }: { kpi: KpiDatum }) {
         ) : null}
       </div>
       {kpi.bar != null ? (
-        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-white/10">
+        <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-overlay-strong">
           <div className="h-full rounded-full transition-all" style={{ width: `${Math.min(100, Math.max(0, kpi.bar))}%`, backgroundColor: kpi.color }} />
         </div>
       ) : null}
@@ -196,15 +193,15 @@ export function InfoCard({ icon: Icon, title, rows, action, wide }: {
   wide?: boolean;
 }) {
   return (
-    <div className={cn("rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm", wide && "xl:col-span-3")}>
-      <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100">
-        <Icon size={15} className="text-slate-400" /> {title}
+    <div className={cn("rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm", wide && "xl:col-span-3")}>
+      <h3 className="flex items-center gap-2 text-sm font-bold text-text">
+        <Icon size={15} className="text-text-subtle" /> {title}
         {action ? <span className="ml-auto">{action}</span> : null}
       </h3>
-      <dl className="mt-2 divide-y divide-white/[0.05]">
+      <dl className="mt-2 divide-y divide-line">
         {rows.map(([label, value]) => (
           <div key={label} className="flex items-start justify-between gap-3 py-2">
-            <dt className="shrink-0 text-xs text-slate-500">{label}</dt>
+            <dt className="shrink-0 text-xs text-text-muted">{label}</dt>
             <dd className="min-w-0 text-right text-xs">{value}</dd>
           </div>
         ))}
@@ -233,8 +230,8 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
   wide?: boolean;
 }) {
   return (
-    <div className={cn("rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm", wide && "xl:col-span-2")}>
-      <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100"><Icon size={15} className="text-slate-400" /> {title}</h3>
+    <div className={cn("rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm", wide && "xl:col-span-2")}>
+      <h3 className="flex items-center gap-2 text-sm font-bold text-text"><Icon size={15} className="text-text-subtle" /> {title}</h3>
       <div className="mt-3 grid grid-cols-2 gap-2">
         {actions.map(({ label, hint, icon: ActionIcon, href, onSelect, highlight }) => (
           href ? (
@@ -242,18 +239,18 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
               key={label}
               href={href}
               className={cn(
-                "group flex items-center gap-2.5 rounded-xl border p-3 transition hover:bg-white/[0.05]",
+                "group flex items-center gap-2.5 rounded-xl border p-3 transition hover:bg-[var(--surface-hover)]",
                 highlight
                   ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)]"
-                  : "border-white/[0.07] bg-white/[0.02] hover:border-white/20"
+                  : "border-line bg-overlay-subtle hover:border-line-strong"
               )}
             >
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-300 transition group-hover:text-white">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition group-hover:text-text">
                 <ActionIcon size={15} />
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-xs font-bold text-slate-200">{label}</span>
-                <span className="block truncate text-[10px] text-slate-500">{hint}</span>
+                <span className="block truncate text-xs font-bold text-text">{label}</span>
+                <span className="block truncate text-[10px] text-text-muted">{hint}</span>
               </span>
             </a>
           ) : (
@@ -261,14 +258,14 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
               key={label}
               type="button"
               onClick={onSelect}
-              className="group flex items-center gap-2.5 rounded-xl border border-white/[0.07] bg-white/[0.02] p-3 text-left transition hover:border-white/20 hover:bg-white/[0.05]"
+              className="group flex items-center gap-2.5 rounded-xl border border-line bg-overlay-subtle p-3 text-left transition hover:border-line-strong hover:bg-[var(--surface-hover)]"
             >
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-300 transition group-hover:text-white">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition group-hover:text-text">
                 <ActionIcon size={15} />
               </span>
               <span className="min-w-0">
-                <span className="block truncate text-xs font-bold text-slate-200">{label}</span>
-                <span className="block truncate text-[10px] text-slate-500">{hint}</span>
+                <span className="block truncate text-xs font-bold text-text">{label}</span>
+                <span className="block truncate text-[10px] text-text-muted">{hint}</span>
               </span>
             </button>
           )
@@ -302,13 +299,13 @@ export function TrendChart({ icon: Icon, title, subtitle, live, series, emptyHin
   const ready = series.some((s) => s.values.length >= 2);
   const max = Math.max(1, ...series.flatMap((s) => s.values));
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm xl:col-span-3">
-      <h3 className="flex items-center gap-2 text-sm font-bold text-slate-100">
-        <Icon size={15} className="text-slate-400" /> {title}
-        {subtitle ? <span className="font-normal text-slate-500">{subtitle}</span> : null}
+    <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm xl:col-span-3">
+      <h3 className="flex items-center gap-2 text-sm font-bold text-text">
+        <Icon size={15} className="text-text-subtle" /> {title}
+        {subtitle ? <span className="font-normal text-text-muted">{subtitle}</span> : null}
         {live ? (
-          <span className="ml-auto flex items-center gap-1 font-mono text-[10px] font-normal text-emerald-400">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />live
+          <span className={cn("ml-auto flex items-center gap-1 font-mono text-[10px] font-normal", toneStyles.ok.fg)}>
+            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", toneStyles.ok.dot)} />live
           </span>
         ) : null}
       </h3>
@@ -325,14 +322,14 @@ export function TrendChart({ icon: Icon, title, subtitle, live, series, emptyHin
           </svg>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11px]">
             {series.map((s) => (
-              <span key={s.key} className="flex items-center gap-1.5 text-slate-300">
+              <span key={s.key} className="flex items-center gap-1.5 text-text-subtle">
                 <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label} {s.display}
               </span>
             ))}
           </div>
         </div>
       ) : (
-        <p className="mt-3 rounded-lg border border-dashed border-white/10 bg-black/20 p-6 text-center text-xs text-slate-500">
+        <p className="mt-3 rounded-lg border border-dashed border-line bg-overlay-subtle p-6 text-center text-xs text-text-muted">
           {loading ? "Connecting to live telemetry…" : emptyHint}
         </p>
       )}

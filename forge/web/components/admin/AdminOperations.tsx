@@ -28,7 +28,9 @@ import {
   type ApiRecoveryPlan,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
-import { AdminConfirmDialog, AdminPageHeader, Btn, Card, CardHeader, EmptyState, Input, Pill } from "./admin-ui";
+import { AdminConfirmDialog, AdminErrorState, AdminPageHeader, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, Btn, Card, CardHeader, EmptyState, Input, Pill } from "./admin-ui";
+import { adminPageGuides } from "./admin-page-guides";
+import { deploymentStatusTone } from "@/lib/api/status";
 import { TableSkeleton } from "@/components/ui/loading-skeleton";
 import { listRecentInstallWorkflows, executeInstallWorkflow } from "@/lib/api/installer";
 import { createInstallWSManager } from "@/lib/api/install-ws";
@@ -40,13 +42,6 @@ type OperationFeedback = { tone: "success" | "error"; message: string } | null;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unknown error";
-}
-
-function statusTone(status: string): "green" | "red" | "yellow" | "blue" {
-  if (["completed", "restored"].includes(status)) return "green";
-  if (["failed", "cancelled"].includes(status)) return "red";
-  if (["planned", "pending", "planning"].includes(status)) return "yellow";
-  return "blue";
 }
 
 function MigrationActions({ migration, onAction, executorAvailable }: { migration: ApiMigration; onAction: () => void; executorAvailable?: boolean }) {
@@ -73,13 +68,13 @@ function MigrationActions({ migration, onAction, executorAvailable }: { migratio
 }
 
 function RecoveryPlanDetails({ plan }: { plan: ApiRecoveryPlan }) {
-  if (plan.items.length === 0) return <p className="mt-2 text-xs text-slate-500">No workloads were included in this recovery plan.</p>;
+  if (plan.items.length === 0) return <p className="mt-2 text-xs text-[var(--text-muted)]">No workloads were included in this recovery plan.</p>;
 
   return <div className="mt-3 space-y-2">{plan.items.map((item) => (
-    <div className="rounded border border-white/[0.06] p-2.5 text-xs" key={item.id}>
-      <div className="flex items-center justify-between gap-2"><code>{item.serverId}</code><Pill tone={statusTone(item.status)}>{item.status}</Pill></div>
-      <p className="mt-1 text-slate-500">{item.sourceNodeId} → {item.targetNodeId || "No target assigned"}</p>
-      {item.sourceBackupName && <p className="mt-1 text-slate-500">Backup: {item.sourceBackupName}</p>}
+    <div className="rounded border border-[var(--line)] p-2.5 text-xs" key={item.id}>
+      <div className="flex items-center justify-between gap-2"><code>{item.serverId}</code><Pill tone={deploymentStatusTone(item.status)}>{item.status}</Pill></div>
+      <p className="mt-1 text-[var(--text-muted)]">{item.sourceNodeId} → {item.targetNodeId || "No target assigned"}</p>
+      {item.sourceBackupName && <p className="mt-1 text-[var(--text-muted)]">Backup: {item.sourceBackupName}</p>}
       {item.reason && <p className="mt-1 text-amber-300">{item.reason}</p>}
     </div>
   ))}</div>;
@@ -88,6 +83,9 @@ function RecoveryPlanDetails({ plan }: { plan: ApiRecoveryPlan }) {
 export function AdminOperations() {
   const { toast } = useToast();
   const qc = useQueryClient();
+  // Operations lists poll every 10s: migrations, recovery plans and installer
+  // workflows are operator-watched queues, so they tick faster than the 30s
+  // backup/cron surfaces.
   const migrations = useQuery({ queryKey: ["migrations"], queryFn: fetchMigrations, refetchInterval: 10_000 });
   const recoveries = useQuery({ queryKey: ["recovery"], queryFn: fetchRecoveryPlans, refetchInterval: 10_000 });
   const nodes = useNodesQuery();
@@ -187,11 +185,14 @@ export function AdminOperations() {
 
   const startEvacuationDisabled = !executorAvailable || executeEvacuationMut.isPending;
 
+  // Breadcrumbs come from the AdminShell registry trail; width comes from the
+  // AdminPageLayout in app/admin/operations/page.tsx.
   return <div className="space-y-6">
-    <AdminPageHeader title="Operations" description="Control-plane operations: preview evacuation capacity, save explicit plans, then start or recover workloads safely." />
-    <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-      <span className="font-semibold text-slate-300">OPERATIONS</span> · <span className="font-semibold text-slate-200">Operations</span> — evacuation & migration execution with capacity preview vs <code className="font-mono text-[11px]">Migrations & Recovery</code> at <code className="font-mono">/admin/migrations</code> and <code className="font-mono">Reconciliation</code> at <code className="font-mono">/admin/reconciliation</code>. Uses <code className="font-mono">POST /evacuations</code> + executor planning; planning-only when runtime unavailable.
-    </div>
+    <AdminPageHeader
+      title="Operations"
+      description="Control-plane operation history and manual controls."
+      info={adminPageGuides.operations}
+    />
     {feedback && <div className={`mb-4 rounded-lg border p-3 text-sm ${feedback.tone === "error" ? "border-red-700/30 bg-red-900/10 text-red-300" : "border-emerald-700/30 bg-emerald-900/10 text-emerald-300"}`} role={feedback.tone === "error" ? "alert" : "status"}>{feedback.message}</div>}
 
     {!executorAvailable && executorStatus.isSuccess && (
@@ -202,8 +203,8 @@ export function AdminOperations() {
 
     <div className="grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Create migration record" icon={ArrowRightLeft} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Server<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
-        <label className="text-sm text-slate-300">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-[var(--text-subtle)]">Server<select className="mt-1 h-9 w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3" value={serverId} onChange={(event) => setServerId(event.target.value)}><option value="">Select server…</option>{(servers.data ?? []).map((server) => <option key={server.id} value={server.id}>{server.name}</option>)}</select></label>
+        <label className="text-sm text-[var(--text-subtle)]">Target node (optional; planner may choose)<select className="mt-1 h-9 w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3" value={targetNodeId} onChange={(event) => setTargetNodeId(event.target.value)}><option value="">Automatic</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Btn disabled={!serverId || migrationMut.isPending} onClick={() => migrationMut.mutate()}>{migrationMut.isPending && <Loader2 size={14} className="animate-spin" />}{migrationMut.isPending ? "Creating migration plan…" : "Create migration plan"}</Btn>
         {migrationMut.error && (
           <div className="rounded border border-red-700/30 bg-red-900/10 p-3 text-xs text-red-200">
@@ -214,7 +215,7 @@ export function AdminOperations() {
       </div></Card>
 
       <Card><CardHeader title="Evacuation / recovery planning" icon={RotateCcw} /><div className="grid gap-3 p-4">
-        <label className="text-sm text-slate-300">Affected node<select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <label className="text-sm text-[var(--text-subtle)]">Affected node<select className="mt-1 h-9 w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3" value={nodeId} onChange={(event) => { setNodeId(event.target.value); setEvacuation(null); }}><option value="">Select node…</option>{(nodes.data ?? []).map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Input label="Recovery reason" value={reason} onChange={setReason} placeholder="For example: node is unavailable" />
         <div className="flex flex-wrap gap-2">
           <Btn tone="ghost" disabled={!nodeId || previewMut.isPending} onClick={() => previewMut.mutate()}>{previewMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Eye size={13} />}{previewMut.isPending ? "Loading preview…" : "Preview evacuation"}</Btn>
@@ -238,16 +239,16 @@ export function AdminOperations() {
     <InstallerStreamingManager executionEnabled={Boolean(installerQ.data?.executionEnabled)} />
 
     {displayedEvacuation && <div className="mt-5"><Card><CardHeader title={displayedEvacuation.preview ? "Evacuation preview" : "Evacuation plan"} icon={Workflow} /><div className="p-4 text-sm">
-      <div className="mb-3 flex flex-wrap items-center gap-2 text-slate-400">
+      <div className="mb-3 flex flex-wrap items-center gap-2 text-[var(--text-subtle)]">
         <span>{displayedEvacuation.items.length} affected workload(s)</span>
-        <Pill tone={statusTone(displayedEvacuation.plan.status)}>{displayedEvacuation.plan.status}</Pill>
+        <Pill tone={deploymentStatusTone(displayedEvacuation.plan.status)}>{displayedEvacuation.plan.status}</Pill>
         {displayedEvacuation.preview && <span className="text-xs">Preview only — no plan has been saved.</span>}
       </div>
       <div className="mb-3 grid grid-cols-2 gap-3 text-xs sm:grid-cols-4">
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Affected node</span><p className="font-semibold">{displayedEvacuation.plan.nodeId}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Eligible workloads</span><p className="font-semibold text-emerald-300">{eligibleItems.length}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Blocked workloads</span><p className="font-semibold text-red-300">{blockedItems.length}</p></div>
-        <div className="rounded border border-white/[0.06] p-2"><span className="text-slate-500">Destination nodes</span><p className="font-semibold">{eligibleTargets.length > 0 ? eligibleTargets.join(", ") : "None"}</p></div>
+        <div className="rounded border border-[var(--line)] p-2"><span className="text-[var(--text-muted)]">Affected node</span><p className="font-semibold">{displayedEvacuation.plan.nodeId}</p></div>
+        <div className="rounded border border-[var(--line)] p-2"><span className="text-[var(--text-muted)]">Eligible workloads</span><p className="font-semibold text-emerald-300">{eligibleItems.length}</p></div>
+        <div className="rounded border border-[var(--line)] p-2"><span className="text-[var(--text-muted)]">Blocked workloads</span><p className="font-semibold text-red-300">{blockedItems.length}</p></div>
+        <div className="rounded border border-[var(--line)] p-2"><span className="text-[var(--text-muted)]">Destination nodes</span><p className="font-semibold">{eligibleTargets.length > 0 ? eligibleTargets.join(", ") : "None"}</p></div>
       </div>
       {blockedItems.length > 0 && (
         <div className="mb-3 rounded border border-red-700/30 bg-red-950/10 p-2 text-xs text-red-200">
@@ -260,18 +261,46 @@ export function AdminOperations() {
       {!displayedEvacuation.preview && <div className="mb-3 flex flex-wrap items-center gap-3">
         {displayedEvacuation.plan.status === "pending" && <Btn tone="warning" disabled={startEvacuationDisabled} onClick={() => setEvacuationStartConfirmOpen(true)} title={executorAvailable ? undefined : "Workload transfer runtime not available"}>{executeEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeEvacuationMut.isPending ? "Starting evacuation…" : "Start evacuation"}</Btn>}
         {displayedEvacuation.plan.status === "running" && <Btn tone="danger" disabled={cancelEvacuationMut.isPending} onClick={() => setEvacuationCancelConfirmOpen(true)}>{cancelEvacuationMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Ban size={13} />}{cancelEvacuationMut.isPending ? "Cancelling evacuation…" : "Cancel evacuation"}</Btn>}
-        {displayedEvacuation.plan.status === "running" && <span className="text-xs text-slate-500">{settledItems}/{displayedEvacuation.items.length} workloads settled ({evacuationProgress}%)</span>}
+        {displayedEvacuation.plan.status === "running" && <span className="text-xs text-[var(--text-muted)]">{settledItems}/{displayedEvacuation.items.length} workloads settled ({evacuationProgress}%)</span>}
       </div>}
       {displayedEvacuation.plan.status === "running" && <div className="mb-3 h-1.5 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${evacuationProgress}%` }} /></div>}
-      <div className="mt-3 space-y-2">{displayedEvacuation.items.map((item) => <div key={item.id} className="rounded border border-white/[0.06] p-3"><div className="flex items-center justify-between gap-3"><code>{item.serverId}</code><Pill tone={item.eligible ? statusTone(item.status) : "red"}>{item.eligible ? item.status : "Blocked"}</Pill></div><p className="mt-1 text-xs text-slate-500">{item.sourceNodeId} → {item.targetNodeId || "No eligible target"}</p>{item.reason && <p className="mt-1 text-xs text-slate-500">{item.reason}</p>}{item.error && <p className="mt-1 text-xs text-red-300">{item.error}</p>}{item.migrationId && <p className="mt-1 font-mono text-xs text-slate-500">Migration: {item.migrationId}</p>}</div>)}</div>
+      <div className="mt-3 space-y-2">{displayedEvacuation.items.map((item) => <div key={item.id} className="rounded border border-[var(--line)] p-3"><div className="flex items-center justify-between gap-3"><code>{item.serverId}</code><Pill tone={item.eligible ? deploymentStatusTone(item.status) : "red"}>{item.eligible ? item.status : "Blocked"}</Pill></div><p className="mt-1 text-xs text-[var(--text-muted)]">{item.sourceNodeId} → {item.targetNodeId || "No eligible target"}</p>{item.reason && <p className="mt-1 text-xs text-[var(--text-muted)]">{item.reason}</p>}{item.error && <p className="mt-1 text-xs text-red-300">{item.error}</p>}{item.migrationId && <p className="mt-1 font-mono text-xs text-[var(--text-muted)]">Migration: {item.migrationId}</p>}</div>)}</div>
     </div></Card></div>}
 
     <div className="mt-5 grid gap-5 xl:grid-cols-2">
       <Card><CardHeader title="Migration history" icon={ArrowRightLeft} />
-        {migrations.isLoading ? <TableSkeleton rows={3} /> : migrations.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load migrations: {migrations.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void migrations.refetch()}>Retry</Btn></div></div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} message="No migrations." /> : <div className="divide-y divide-white/[0.04]">{(migrations.data ?? []).map((migration) => <div className="flex items-center justify-between gap-3 p-4" key={migration.id}><div><p className="font-mono text-xs">{migration.serverId}</p><p className="text-xs text-slate-500">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</p>{migration.progress != null && <div className="mt-1.5 h-1.5 w-32 overflow-hidden rounded-full bg-white/[0.06]"><div className="h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${migration.progress}%` }} /></div>}</div><div className="flex items-center gap-2">{migration.progress != null && <span className="text-xs text-slate-500">{migration.progress}%</span>}<Pill tone={statusTone(migration.status)}>{migration.status}</Pill><MigrationActions migration={migration} executorAvailable={executorAvailable} onAction={() => void refreshOperations()} /></div></div>)}</div>}
+        {migrations.isLoading ? <TableSkeleton rows={3} /> : migrations.isError ? <div className="p-4"><AdminErrorState message={`Could not load migrations: ${migrations.error.message}`} retry={() => void migrations.refetch()} /></div> : (migrations.data ?? []).length === 0 ? <EmptyState icon={ArrowRightLeft} title="No migrations" message="No migration plans have been created yet." /> : (
+          <AdminTable label="Migration history">
+            <AdminTHead>
+              <AdminTh>Server</AdminTh>
+              <AdminTh>Route</AdminTh>
+              <AdminTh>Progress</AdminTh>
+              <AdminTh>Status</AdminTh>
+              <AdminTh><span /></AdminTh>
+            </AdminTHead>
+            <AdminTBody>
+              {(migrations.data ?? []).map((migration) => (
+                <AdminTr key={migration.id}>
+                  <AdminTd className="font-mono text-xs">{migration.serverId}</AdminTd>
+                  <AdminTd className="text-xs text-[var(--text-subtle)]">{migration.sourceNodeId} → {migration.targetNodeId}{migration.error || migration.failureReason ? ` · ${migration.error ?? migration.failureReason}` : ""}</AdminTd>
+                  <AdminTd>
+                    {migration.progress != null ? (
+                      <span className="flex items-center gap-2">
+                        <span className="h-1.5 w-32 overflow-hidden rounded-full bg-white/[0.06]"><span className="block h-full rounded-full bg-emerald-500 transition-all" style={{ width: `${migration.progress}%` }} /></span>
+                        <span className="text-xs text-[var(--text-muted)]">{migration.progress}%</span>
+                      </span>
+                    ) : <span className="text-[var(--text-muted)]">—</span>}
+                  </AdminTd>
+                  <AdminTd><Pill tone={deploymentStatusTone(migration.status)}>{migration.status}</Pill></AdminTd>
+                  <AdminTd><MigrationActions migration={migration} executorAvailable={executorAvailable} onAction={() => void refreshOperations()} /></AdminTd>
+                </AdminTr>
+              ))}
+            </AdminTBody>
+          </AdminTable>
+        )}
       </Card>
       <Card><CardHeader title="Recovery plans" icon={AlertTriangle} />
-        {recoveries.isLoading ? <TableSkeleton rows={3} /> : recoveries.isError ? <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load recovery plans: {recoveries.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void recoveries.refetch()}>Retry</Btn></div></div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} message="No recovery plans." /> : <div className="divide-y divide-white/[0.04]">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-slate-500">{plan.reason}</p><p className="mt-1 text-xs text-slate-500">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={statusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => setRecoveryStartConfirmOpen(plan.id)} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => setRecoveryCancelConfirmOpen(plan.id)} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
+        {recoveries.isLoading ? <TableSkeleton rows={3} /> : recoveries.isError ? <div className="p-4"><AdminErrorState message={`Could not load recovery plans: ${recoveries.error.message}`} retry={() => void recoveries.refetch()} /></div> : (recoveries.data ?? []).length === 0 ? <EmptyState icon={AlertTriangle} title="No recovery plans" message="No recovery plans have been created yet." /> : <div className="divide-y divide-[var(--line)]">{(recoveries.data ?? []).map((plan) => <div className="p-4" key={plan.id}><div className="flex items-center justify-between gap-3"><div><p className="font-mono text-xs">{plan.nodeId}</p><p className="text-xs text-[var(--text-muted)]">{plan.reason}</p><p className="mt-1 text-xs text-[var(--text-muted)]">{plan.items.length} workload(s)</p></div><div className="flex flex-wrap items-center justify-end gap-2"><Pill tone={deploymentStatusTone(plan.status)}>{plan.status}</Pill>{plan.status === "planned" && <Btn size="sm" tone="warning" onClick={() => setRecoveryStartConfirmOpen(plan.id)} disabled={startRecoveryMut.isPending}>{startRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Play size={12} />} Start</Btn>}{!terminalStatuses.includes(plan.status) && <Btn size="sm" tone="danger" onClick={() => setRecoveryCancelConfirmOpen(plan.id)} disabled={cancelRecoveryMut.isPending}>{cancelRecoveryMut.isPending ? <Loader2 size={12} className="animate-spin" /> : <Ban size={12} />} Cancel</Btn>}</div></div><RecoveryPlanDetails plan={plan} /></div>)}</div>}
       </Card>
     </div>
 
@@ -279,17 +308,17 @@ export function AdminOperations() {
       <Card>
         <CardHeader title="Recovery plan details" icon={AlertTriangle} />
         <div className="space-y-3 p-4">
-          <label className="block text-sm text-slate-300">Plan
-            <select className="mt-1 h-9 w-full rounded border border-white/10 bg-[var(--surface-input)] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
+          <label className="block text-sm text-[var(--text-subtle)]">Plan
+            <select className="mt-1 h-9 w-full rounded border border-[var(--line)] bg-[var(--surface-input)] px-3" value={selectedRecoveryPlanId ?? ""} onChange={(event) => setSelectedRecoveryPlanId(event.target.value || null)}>
               <option value="">Select a recovery plan…</option>
               {(recoveries.data ?? []).map((plan) => <option key={plan.id} value={plan.id}>{plan.nodeId} — {plan.status}</option>)}
             </select>
           </label>
-          {recoveryPlanQuery.isLoading && <p className="text-xs text-slate-500">Loading recovery plan details…</p>}
+          {recoveryPlanQuery.isLoading && <p className="text-xs text-[var(--text-muted)]">Loading recovery plan details…</p>}
           {recoveryPlanQuery.isError && <p className="text-xs text-red-300">Recovery plan details could not be loaded.</p>}
           {recoveryPlanQuery.data && <>
-            <div className="rounded border border-white/[0.06] p-3 text-sm">
-              <div className="flex flex-wrap items-center justify-between gap-2"><span>{recoveryPlanQuery.data.reason}</span><Pill tone={statusTone(recoveryPlanQuery.data.status)}>{recoveryPlanQuery.data.status}</Pill></div>
+            <div className="rounded border border-[var(--line)] p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2"><span>{recoveryPlanQuery.data.reason}</span><Pill tone={deploymentStatusTone(recoveryPlanQuery.data.status)}>{recoveryPlanQuery.data.status}</Pill></div>
               <RecoveryPlanDetails plan={recoveryPlanQuery.data} />
             </div>
             {recoveryPlanQuery.data.status === "planned" && <Btn tone="warning" disabled={executeRecoveryMut.isPending} onClick={() => setRecoveryPlanDetailsStartConfirmOpen(true)}>{executeRecoveryMut.isPending ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}{executeRecoveryMut.isPending ? "Starting recovery…" : "Start from plan details"}</Btn>}
@@ -327,7 +356,7 @@ export function AdminOperations() {
                 <td className="px-4 py-3">
                   <div className="flex gap-1">
                     {wf.steps?.map((s) => (
-                      <span key={s.id} title={`${s.name}: ${s.status}`} className={`h-2 w-2 rounded-full ${s.status === "completed" ? "bg-emerald-500" : s.status === "running" ? "bg-blue-500 animate-pulse" : s.status === "failed" ? "bg-red-500" : "bg-slate-600"}`}/>
+                      <span key={s.id} title={`${s.name}: ${s.status}`} className={`h-2 w-2 rounded-full ${s.status === "completed" ? "bg-emerald-500" : s.status === "running" ? "bg-blue-500 animate-pulse" : s.status === "failed" ? "bg-red-500" : "bg-[var(--text-muted)]"}`}/>
                     ))}
                   </div>
                 </td>

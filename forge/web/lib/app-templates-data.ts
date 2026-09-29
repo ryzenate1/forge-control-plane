@@ -53,16 +53,48 @@ export const DEFAULT_APP_TEMPLATES: AppTemplate[] = [
   },
 ];
 
-export function loadUserTemplates(): AppTemplate[] {
-  if (typeof window === "undefined") return [];
+/** Result of reading the browser-local template store.
+ *
+ * `error` is non-null when the stored value could not be read or parsed. The
+ * page must show that instead of rendering an empty list, because an unreadable
+ * store is not the same as a store with no templates in it (the operator's own
+ * templates would otherwise silently disappear). */
+export type StoredTemplatesResult = {
+  templates: AppTemplate[];
+  error: string | null;
+};
+
+export function readStoredTemplates(): StoredTemplatesResult {
+  if (typeof window === "undefined") return { templates: [], error: null };
+  const raw = window.localStorage.getItem(STORAGE_KEY);
+  if (raw === null || raw === "") return { templates: [], error: null };
   try {
-    const value: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? "[]");
-    return Array.isArray(value) ? value as AppTemplate[] : [];
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) {
+      return { templates: [], error: `Stored templates at ${STORAGE_KEY} are not a list, so they could not be loaded.` };
+    }
+    const parsed = value as AppTemplate[];
+    // An element that cannot be a template (no id/name) means the store was
+    // written by something else or is truncated. Say so rather than showing a
+    // shorter list than the operator saved.
+    const usable = parsed.filter((entry) => entry && typeof entry.id === "string" && typeof entry.name === "string");
+    const dropped = parsed.length - usable.length;
+    return {
+      templates: usable,
+      error: dropped > 0
+        ? `${dropped} stored ${dropped === 1 ? "entry is" : "entries are"} malformed and were not loaded.`
+        : null,
+    };
   } catch {
-    return [];
+    return { templates: [], error: `Stored templates at ${STORAGE_KEY} could not be read (corrupted JSON).` };
   }
 }
 
+export function loadUserTemplates(): AppTemplate[] {
+  return readStoredTemplates().templates;
+}
+
+/** Throws on quota/serialization failure; callers must surface it. */
 export function saveUserTemplates(templates: AppTemplate[]): void {
   if (typeof window === "undefined") return;
   window.localStorage.setItem(STORAGE_KEY, JSON.stringify(templates));

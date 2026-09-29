@@ -30,10 +30,11 @@ import {
   type NodeMetrics,
 } from "@/lib/api/monitoring";
 import {
+  REFRESH,
   checkVerdict,
   findCheck,
   isAvailable,
-  relativeTime,
+  sourceState,
   summaryIsTrustworthy,
   useActivityQuery,
   useHealthQuery,
@@ -42,9 +43,11 @@ import {
   useNodeMetricsHistoryQuery,
   useNodesQuery,
   useServersQuery,
+  worstSourceState,
 } from "@/lib/admin/telemetry";
-import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
-import { Card, Pill, cn } from "@/components/admin/admin-ui";
+import { AdminPageToolbar } from "./admin-page-toolbar";
+import { AdminPageLayout, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, SectionHeader, Btn, Card, Pill, cn } from "@/components/admin/admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
 import { resolveTone, toneStyles, type ToneInput } from "@/components/ui/forge/status";
 import {
   CpuKpiChipIcon,
@@ -361,23 +364,16 @@ export function AdminMonitoring() {
     URL.revokeObjectURL(url);
   }, [history, period]);
 
-  // `note` states what the number is, not how it is trending. The pills here
-  // used to read "fleet avg" / "configured" / "allocated" / "traffic" in
-  // success green on every card, which looked like four positive deltas.
-  // Freshness of the page as a whole: the newest successful read across the
-  // queries that feed it, or the reason there isn't one.
-  const pageFresh = useMemo((): { label: string; tone: "live" | "stale" | "loading" | "error" } => {
-    const sources = [nodesQuery, serversQuery, healthQuery, latestQuery];
-    if (sources.every((q) => q.isError)) return { label: "No source responding", tone: "error" };
-    const newest = sources.reduce((max, q) => (q.dataUpdatedAt > max ? q.dataUpdatedAt : max), 0);
-    if (newest === 0) return { label: "Loading…", tone: "loading" };
-    const rel = relativeTime(newest) ?? "at an unknown time";
-    const anyError = sources.some((q) => q.isError);
-    if (anyError) return { label: `Partial · read ${rel}`, tone: "stale" };
-    // Queries refresh on a 30s interval; beyond twice that the view is stale.
-    const stale = Date.now() - newest > 75_000;
-    return { label: stale ? `Stale · read ${rel}` : `Live · read ${rel}`, tone: stale ? "stale" : "live" };
-  }, [nodesQuery, serversQuery, healthQuery, latestQuery]);
+  const pageState = useMemo(
+    () =>
+      worstSourceState([
+        sourceState(nodesQuery, REFRESH.inventory),
+        sourceState(serversQuery, REFRESH.inventory),
+        sourceState(healthQuery, REFRESH.health),
+        sourceState(latestQuery, REFRESH.telemetry),
+      ]),
+    [nodesQuery, serversQuery, healthQuery, latestQuery],
+  );
 
   const kpiCards = [
     { key: "cpu" as MetricKey, title: "CPU ALLOCATED", icon: CpuKpiChipIcon, color: chart.sky, note: "allocation" },
@@ -386,103 +382,38 @@ export function AdminMonitoring() {
   ];
 
   return (
-    <div className="space-y-6">
-      {/* ========================================================================= */}
-      {/* ZONE 1: BREADCRUMB, HEADER & GLOBAL ACTIONS                                */}
-      {/* ========================================================================= */}
-      <div className="flex items-center justify-between text-xs text-slate-400">
-        <div className="flex items-center gap-2">
-          <span>Command</span>
-          <span className="text-slate-600">/</span>
-          <span className="font-semibold text-slate-200">Monitoring</span>
-        </div>
-        {/* Freshness, from the queries themselves. This badge used to read
-            "Live · updated just now" unconditionally — including while the
-            first fetch was still in flight and after one had failed. */}
-        <div className="flex items-center gap-1.5 font-mono text-[11px] text-slate-500">
-          <span className="relative flex h-1.5 w-1.5">
-            {pageFresh.tone === "live" ? (
-              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-400 opacity-60" />
-            ) : null}
-            <span
-              className={cn(
-                "relative inline-flex h-1.5 w-1.5 rounded-full",
-                pageFresh.tone === "live" && "bg-emerald-400",
-                pageFresh.tone === "stale" && "bg-amber-400",
-                pageFresh.tone === "error" && "bg-red-400",
-                pageFresh.tone === "loading" && "bg-slate-500",
-              )}
-            />
-          </span>
-          <span>{pageFresh.label}</span>
-        </div>
+    <AdminPageLayout>
+      <div className="flex items-center justify-end">
+        <FreshnessBadge state={pageState} />
       </div>
 
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between border-b border-[var(--line)] pb-5">
-        <div>
-          <h1 className="flex items-center gap-2.5 text-2xl font-bold tracking-tight text-slate-100 sm:text-3xl">
-            <span>Monitoring</span>
-            <PageInfoDisclosure
-              title="Fleet allocation over time"
-              eyebrow="Architecture & Semantics"
-              description="Monitoring shows what happens over time. The control plane derives each node_metrics row from that node's capacity snapshot, so the CPU / memory / disk series are allocated shares of capacity, not measured host load. Charts stay empty (never zero) until rows exist for the selected window."
-              sections={[
-                {
-                  title: "Where data comes from",
-                  icon: BarChart3,
-                  content:
-                    "GET /monitoring/nodes/metrics returns per-node history (nodeId + limit + since) or the latest row per node. Fleet charts fan out across nodes and merge by timestamp, and say when a node is missing from the merge. Network byte counters are written as zero by the collector, so no network series is shown. Summary, health and activity come from /monitoring/summary, /health and /admin/activity.",
-                },
-                {
-                  title: "Monitoring vs Health vs Overview",
-                  icon: HeartPulse,
-                  content:
-                    "Monitoring = trends over time. Health = what is wrong right now. Overview = fleet snapshot and capacity. Use the time selector to adjust the telemetry window.",
-                },
-              ]}
-            />
-          </h1>
-          <p className="mt-1 text-sm text-slate-400">
-            Allocation trends across your nodes and workloads, alongside current fleet and platform state.
-          </p>
-        </div>
-
-        {/* Global Toolbar Controls */}
-        <div className="flex items-center gap-2 shrink-0 sm:self-center">
-          <div className="relative">
-            <select
-              aria-label="Select time range"
-              value={period}
-              onChange={(e) => setPeriod(e.target.value as MetricPeriod)}
-              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-slate-200 shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
-            >
-              <option value="1h">Last 1 hour</option>
-              <option value="6h">Last 6 hours</option>
-              <option value="24h">Last 24 hours</option>
-              <option value="7d">Last 7 days</option>
-              <option value="30d">Last 30 days</option>
-            </select>
-            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
-          </div>
-          <button
-            type="button"
-            aria-label="Refresh monitoring data"
-            onClick={handleRefresh}
-            className="flex h-8 w-8 items-center justify-center rounded-md border border-[var(--line)] bg-[var(--surface)] text-slate-300 transition hover:bg-white/[0.06] hover:text-slate-100 focus:outline-none focus:ring-1 focus:ring-[var(--brand)] disabled:opacity-50"
-          >
-            <RefreshCw size={13} className={isRefreshing ? "animate-spin text-sky-400" : ""} />
-          </button>
-          <button
-            type="button"
-            onClick={handleExport}
-            disabled={!hasTelemetry}
-            className="inline-flex h-8 items-center gap-1.5 rounded-md bg-[var(--brand)] px-3 text-xs font-semibold text-white shadow-sm transition hover:bg-[var(--brand-hover)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Download size={14} />
-            <span>Export</span>
-          </button>
-        </div>
-      </div>
+      <SectionHeader
+        title="Monitoring"
+        sub="Platform, node and workload health dashboards"
+        info={{
+          title: "Fleet allocation over time",
+          triggerLabel: "About Monitoring",
+          eyebrow: "Architecture & Semantics",
+          description: "Monitoring shows what happens over time. The control plane derives each node_metrics row from that node's capacity snapshot, so the CPU / memory / disk series are allocated shares of capacity, not measured host load. Charts stay empty (never zero) until rows exist for the selected window.",
+          sections: [
+            {
+              title: "Where data comes from",
+              icon: BarChart3,
+              content:
+                "GET /monitoring/nodes/metrics returns per-node history (nodeId + limit + since) or the latest row per node. Fleet charts fan out across nodes and merge by timestamp, and say when a node is missing from the merge. Network byte counters are written as zero by the collector, so no network series is shown. Summary, health and activity come from /monitoring/summary, /health and /admin/activity.",
+            },
+            {
+              title: "Monitoring vs Health vs Overview",
+              icon: HeartPulse,
+              content:
+                "Monitoring = trends over time. Health = what is wrong right now. Overview = fleet snapshot and capacity. Use the time selector to adjust the telemetry window.",
+            },
+          ],
+        }}
+        action={<AdminPageToolbar range={{ value: period, onChange: (value) => setPeriod(value as MetricPeriod), options: PERIODS.map((item) => ({ value: item.value, label: `Last ${item.label}` })) }} onRefresh={handleRefresh} refreshing={isRefreshing} refreshLabel="Refresh monitoring data">
+            <Btn size="sm" onClick={handleExport} disabled={!hasTelemetry}><Download size={14} /> Export</Btn>
+          </AdminPageToolbar>}
+      />
 
       {/* Filter toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -610,8 +541,9 @@ export function AdminMonitoring() {
         </div>
       ) : null}
       {historyQuery.isError ? (
-        <div className="rounded-xl border border-red-500/25 bg-red-950/20 p-3 text-xs text-red-200">
-          Telemetry query failed: {(historyQuery.error as Error)?.message ?? "unknown error"} — latest state below still loads from its own queries.
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-950/20 p-3 text-xs text-red-200" role="alert">
+          <span>Telemetry query failed: {(historyQuery.error as Error)?.message ?? "unknown error"} — latest state below still loads from its own queries.</span>
+          <Btn size="sm" tone="ghost" onClick={() => void historyQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
 
@@ -1170,7 +1102,7 @@ export function AdminMonitoring() {
           {summaryQuery.data.unacknowledgedAlerts} unacknowledged alert{(summaryQuery.data.unacknowledgedAlerts ?? 0) > 1 ? "s" : ""} in the alert pipeline.
         </p>
       ) : null}
-    </div>
+    </AdminPageLayout>
   );
 }
 

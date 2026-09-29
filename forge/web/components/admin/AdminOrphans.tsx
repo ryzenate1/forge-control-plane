@@ -4,37 +4,83 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertCircle, Database, RefreshCw, Server } from "lucide-react";
 import { fetchOrphanRemediations, resolveDatabaseOrphanRemediation, resolveServerOrphanRemediation } from "@/lib/api";
-import { toast } from "@/components/ui/sonner";
+import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { Btn, Card, CardHeader, Pill, AdminSelect, SectionHeader } from "./admin-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { formatDate } from "@/lib/utils";
+import { FreshnessBadge } from "./telemetry-ui";
+import {
+  AdminErrorState,
+  AdminLoadingState,
+  AdminPageLayout,
+  AdminSelect,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Pill,
+  SectionHeader,
+} from "./admin-ui";
 
+/**
+ * The failed-deletion queue.
+ *
+ * Read the name carefully: this page is *not* an orphan scanner. It renders the
+ * `server_orphan_remediations` / `database_orphan_remediations` rows that the
+ * control plane writes when a force-delete could not be completed on the daemon.
+ * There is no discovery endpoint anywhere in the API that looks for resources
+ * with no owning record (`lib/api/drain.ts:60` returns a hardcoded `[]` for
+ * exactly that reason), so an empty list evidences only "no failed deletion was
+ * reported". Rendering it as "no orphans exist" would be a never-run check
+ * dressed up as a clean one. The sidebar label and description still promise a
+ * scan; that copy lives in the frozen `admin-registry.ts` and is reported upward.
+ */
 export function AdminOrphans() {
   const qc = useQueryClient();
+  const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const [status, setStatus] = useState<"pending" | "resolved">("pending");
-  const q = useQuery({ queryKey: ["orphan-remediations", status], queryFn: () => fetchOrphanRemediations(status) });
-  const serverRemediations = useMemo(() => Array.isArray(q.data?.serverRemediations) ? q.data!.serverRemediations : [], [q.data]);
-  const databaseRemediations = useMemo(() => Array.isArray(q.data?.databaseRemediations) ? q.data!.databaseRemediations : [], [q.data]);
+  const q = useQuery({
+    queryKey: ["orphan-remediations", status],
+    queryFn: () => fetchOrphanRemediations(status),
+    retry: false,
+  });
+  const serverRemediations = useMemo(
+    () => (Array.isArray(q.data?.serverRemediations) ? q.data!.serverRemediations : []),
+    [q.data],
+  );
+  const databaseRemediations = useMemo(
+    () => (Array.isArray(q.data?.databaseRemediations) ? q.data!.databaseRemediations : []),
+    [q.data],
+  );
   const resolveDB = useMutation({
     mutationFn: resolveDatabaseOrphanRemediation,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["orphan-remediations"] }); toast.success("Database orphan remediation resolved"); },
-    onError: (e: Error) => toast.error(e.message || "Could not resolve database remediation"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orphan-remediations"] });
+      toast({ tone: "success", title: "Database remediation marked resolved" });
+    },
+    onError: (e: Error) => toast({ tone: "error", title: "Could not resolve database remediation", message: e.message }),
   });
   const resolveSrv = useMutation({
     mutationFn: resolveServerOrphanRemediation,
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["orphan-remediations"] }); toast.success("Server orphan remediation resolved"); },
-    onError: (e: Error) => toast.error(e.message || "Could not resolve server remediation"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["orphan-remediations"] });
+      toast({ tone: "success", title: "Server remediation marked resolved" });
+    },
+    onError: (e: Error) => toast({ tone: "error", title: "Could not resolve server remediation", message: e.message }),
   });
 
+  const nothingTracked = serverRemediations.length === 0 && databaseRemediations.length === 0;
+
   return (
-    <div className="mx-auto w-full max-w-[1280px] space-y-6">
+    <AdminPageLayout>
       <SectionHeader
-        title="Orphan Remediation"
-        sub="Force-deleted servers and databases that could not be removed remotely are tracked here. Resolve after manually confirming remote cleanup is complete."
+        status={<FreshnessBadge state={sourceState(q)} />}
+        sub="Servers and databases whose remote deletion failed and are waiting for manual cleanup. Nothing on this page scans for orphans — an empty queue means no failed deletion has been reported, not that the fleet has none."
         action={
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex flex-wrap items-end gap-2">
             <AdminSelect
-              label=""
+              label="Queue status"
               value={status}
               onChange={(v) => setStatus(v as "pending" | "resolved")}
               options={[
@@ -42,7 +88,7 @@ export function AdminOrphans() {
                 { value: "resolved", label: "Resolved" },
               ]}
             />
-            <Btn size="sm" tone="ghost" onClick={() => void q.refetch()} disabled={q.isFetching}>
+            <Btn size="sm" tone="ghost" ariaLabel="Refresh the failed-deletion queue" onClick={() => void q.refetch()} disabled={q.isFetching}>
               <RefreshCw size={13} className={q.isFetching ? "animate-spin" : ""} /> {q.isFetching ? "Refreshing…" : "Refresh"}
             </Btn>
           </div>
@@ -50,89 +96,156 @@ export function AdminOrphans() {
       />
 
       {q.isLoading ? (
-        <div className="mt-6 rounded-xl border border-[var(--line)] p-8 text-center text-sm text-[var(--text-subtle)]">Loading remediation tasks…</div>
+        <AdminLoadingState label="Loading the failed-deletion queue…" />
       ) : q.isError ? (
-        <div className="mt-6 rounded-xl border border-red-500/20 bg-red-950/10 p-4 text-sm text-red-200 flex items-start justify-between gap-4">
-          <span>Could not load orphan remediation tasks: {q.error.message}</span>
-          <Btn size="sm" tone="ghost" onClick={() => void q.refetch()}>Retry</Btn>
-        </div>
+        <AdminErrorState
+          message={`Could not load the failed-deletion queue: ${q.error instanceof Error ? q.error.message : "request failed"}. The queue state is unknown — this is not an empty queue.`}
+          retry={() => void q.refetch()}
+        />
       ) : (
-        <div className="mt-6 space-y-6">
-          <Card className="overflow-hidden">
-            <CardHeader title="Server resources" icon={Server} />
-            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
-              <Server size={14} /> Server orphans <Pill>{serverRemediations.length}</Pill> <span className="ml-auto font-normal normal-case tracking-normal text-[11px] text-slate-500">server_orphan_remediations {status}</span>
-            </div>
-            {serverRemediations.length === 0 ? (
-              <div className="px-5 py-8 text-center text-sm text-slate-300">No {status} server orphan remediation tasks.</div>
-            ) : (
-              <div className="divide-y divide-white/[0.06]">
-                {serverRemediations.map((r) => {
-                  const isResolving = resolveSrv.isPending && (resolveSrv.variables as string) === r.id;
-                  return (
-                    <div key={r.id} className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-sm text-slate-200">Server {r.serverId}</span>
-                          <Pill tone={r.status === "pending" ? "yellow" : "green"}>{r.status}</Pill>
-                        </div>
-                        <p className="mt-1 break-all font-mono text-xs text-slate-400">Node: {r.nodeUrl}</p>
-                        <p className="mt-2 break-words text-xs text-red-200">{r.daemonError}</p>
-                        <p className="mt-2 text-xs text-slate-400">Reported {new Date(r.createdAt).toLocaleString()}</p>
-                      </div>
-                      {r.status === "pending" ? (
-                        <Btn size="sm" tone="ghost" disabled={resolveSrv.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Mark server ${r.serverId} as resolved?`, description: "Only do this after confirming its remote resource has been cleaned up.", confirmLabel: "Mark resolved" })) resolveSrv.mutate(r.id); })(); }}>
-                          {isResolving ? "Resolving…" : "Mark resolved"}
-                        </Btn>
-                      ) : <span className="text-xs text-slate-400">Resolved {r.resolvedAt ? new Date(r.resolvedAt).toLocaleString() : ""}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
-          <Card className="overflow-hidden">
-            <CardHeader title="Database resources" icon={Database} />
-            <div className="flex items-center gap-2 border-b border-white/[0.06] bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)] px-5 py-3 text-xs font-semibold uppercase tracking-widest text-slate-400">
-              <Database size={14} /> Database orphans <Pill>{databaseRemediations.length}</Pill> <span className="ml-auto font-normal normal-case tracking-normal text-[11px] text-slate-500">database_orphan_remediations {status}</span>
-            </div>
-            {databaseRemediations.length === 0 ? (
-              <div className="px-5 py-8 text-center text-sm text-slate-300">No {status} database orphan remediation tasks.</div>
-            ) : (
-              <div className="divide-y divide-white/[0.06]">
-                {databaseRemediations.map((r) => {
-                  const isResolving = resolveDB.isPending && (resolveDB.variables as string) === r.id;
-                  return (
-                    <div key={r.id} className="flex flex-col gap-3 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-mono text-sm text-slate-200">{r.database}</span>
-                          <Pill tone={r.status === "pending" ? "yellow" : "green"}>{r.status}</Pill>
-                        </div>
-                        <p className="mt-1 break-all font-mono text-xs text-slate-400">{r.engine} · {r.host}:{r.port} · {r.username}@{r.remote}</p>
-                        <p className="mt-2 break-words text-xs text-red-200">{r.reason}</p>
-                        <p className="mt-2 text-xs text-slate-400">Reported {new Date(r.createdAt).toLocaleString()}</p>
-                      </div>
-                      {r.status === "pending" ? (
-                        <Btn size="sm" tone="ghost" disabled={resolveDB.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Mark ${r.database} as resolved?`, description: "Only do this after confirming its remote resource has been cleaned up.", confirmLabel: "Mark resolved" })) resolveDB.mutate(r.id); })(); }}>
-                          {isResolving ? "Resolving…" : "Mark resolved"}
-                        </Btn>
-                      ) : <span className="text-xs text-slate-400">Resolved {r.resolvedAt ? new Date(r.resolvedAt).toLocaleString() : ""}</span>}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Card>
-
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/20 bg-amber-950/10 p-3 text-xs text-amber-200">
-            <AlertCircle size={14} className="mt-0.5 shrink-0" />
-            <span>Resolving marks the row as <code className="rounded bg-white/10 px-1">resolved</code> and appends an <code className="rounded bg-white/10 px-1">audit_events</code> row (target_type=orphan_remediation). It does not retry daemon deletion — clean the remote host first.</span>
+        <div className="space-y-6">
+          <div className="ui-alert ui-alert-warning flex items-start gap-2">
+            <AlertCircle aria-hidden="true" className="mt-0.5 shrink-0" size={14} />
+            <span>
+              This is a <strong className="font-semibold">failure queue</strong>, not a scan. Forge records a row here only
+              when a force-delete could not be completed on the daemon. No endpoint searches the fleet for resources without an
+              owning record, so counts below describe reported failures — they cannot tell you whether orphans exist.
+            </span>
           </div>
+
+          {nothingTracked ? (
+            <EmptyState
+              icon={AlertCircle}
+              title={status === "pending" ? "No failed deletions reported" : "No resolved deletions"}
+              message={
+                status === "pending"
+                  ? "No server or database deletion has been reported as failed. Unreported is not the same as none: orphan discovery does not exist, so nothing here has been checked."
+                  : "No remediation has been marked resolved yet."
+              }
+            />
+          ) : (
+            <div className="space-y-6">
+              <Card>
+                <CardHeader
+                  title="Server deletions that failed"
+                  icon={Server}
+                  action={<Pill tone={serverRemediations.length > 0 ? "yellow" : "neutral"}>{serverRemediations.length}</Pill>}
+                />
+                {serverRemediations.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-text-subtle">
+                    No {status} server deletion failures reported.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-line">
+                    {serverRemediations.map((r) => {
+                      const isResolving = resolveSrv.isPending && (resolveSrv.variables as string) === r.id;
+                      return (
+                        <div key={r.id} className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-sm text-text">Server {r.serverId}</span>
+                              <Pill tone={r.status === "pending" ? "yellow" : "green"}>{r.status}</Pill>
+                            </div>
+                            <p className="mt-1 break-all font-mono text-meta text-text-subtle">Node: {r.nodeUrl || "not reported"}</p>
+                            <p className="mt-2 break-words text-meta text-danger">{r.daemonError || "No daemon error was reported."}</p>
+                            <p className="mt-2 text-meta text-text-muted">Reported {formatDate(r.createdAt, "a date that was not reported")}</p>
+                          </div>
+                          {r.status === "pending" ? (
+                            <Btn
+                              size="sm"
+                              tone="ghost"
+                              disabled={resolveSrv.isPending}
+                              onClick={() => {
+                                void (async () => {
+                                  const ok = await confirm({
+                                    title: `Mark server ${r.serverId} as resolved?`,
+                                    description: "This only closes the queue row. It does not retry the deletion or touch the remote host — confirm the remote resource has already been cleaned up.",
+                                    confirmLabel: "Mark resolved",
+                                  });
+                                  if (ok) resolveSrv.mutate(r.id);
+                                })();
+                              }}
+                            >
+                              {isResolving ? "Resolving…" : "Mark resolved"}
+                            </Btn>
+                          ) : (
+                            <span className="text-meta text-text-muted">Resolved {formatDate(r.resolvedAt, "not reported")}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+
+              <Card>
+                <CardHeader
+                  title="Database deletions that failed"
+                  icon={Database}
+                  action={<Pill tone={databaseRemediations.length > 0 ? "yellow" : "neutral"}>{databaseRemediations.length}</Pill>}
+                />
+                {databaseRemediations.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-sm text-text-subtle">
+                    No {status} database deletion failures reported.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-line">
+                    {databaseRemediations.map((r) => {
+                      const isResolving = resolveDB.isPending && (resolveDB.variables as string) === r.id;
+                      return (
+                        <div key={r.id} className="flex flex-col gap-3 px-4 py-4 lg:flex-row lg:items-center lg:justify-between">
+                          <div className="min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-mono text-sm text-text">{r.database}</span>
+                              <Pill tone={r.status === "pending" ? "yellow" : "green"}>{r.status}</Pill>
+                            </div>
+                            <p className="mt-1 break-all font-mono text-meta text-text-subtle">
+                              {r.engine} · {r.host}:{r.port} · {r.username}@{r.remote}
+                            </p>
+                            <p className="mt-2 break-words text-meta text-danger">{r.reason || "No reason was reported."}</p>
+                            <p className="mt-2 text-meta text-text-muted">Reported {formatDate(r.createdAt, "a date that was not reported")}</p>
+                          </div>
+                          {r.status === "pending" ? (
+                            <Btn
+                              size="sm"
+                              tone="ghost"
+                              disabled={resolveDB.isPending}
+                              onClick={() => {
+                                void (async () => {
+                                  const ok = await confirm({
+                                    title: `Mark ${r.database} as resolved?`,
+                                    description: "This only closes the queue row. It does not retry the deletion — confirm the remote database has already been dropped.",
+                                    confirmLabel: "Mark resolved",
+                                  });
+                                  if (ok) resolveDB.mutate(r.id);
+                                })();
+                              }}
+                            >
+                              {isResolving ? "Resolving…" : "Mark resolved"}
+                            </Btn>
+                          ) : (
+                            <span className="text-meta text-text-muted">Resolved {formatDate(r.resolvedAt, "not reported")}</span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </Card>
+            </div>
+          )}
+
+          <Card className="p-4">
+            <p className="text-meta leading-6 text-text-subtle">
+              Marking a row resolved records the resolution and an audit entry. It does <strong className="font-semibold text-text">not</strong> retry
+              the daemon deletion, so clean the remote host first. The automatic reaper for stale placements and allocations is a
+              different job and lives at{" "}
+              <a className="font-medium text-[var(--brand)] hover:underline" href="/admin/cleanup">Cleanup</a>.
+            </p>
+          </Card>
         </div>
       )}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

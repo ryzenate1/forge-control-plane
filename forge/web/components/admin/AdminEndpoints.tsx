@@ -2,29 +2,45 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Box, Plus, Trash2, ExternalLink } from "lucide-react";
+import { AlertCircle, Boxes, Plus, Trash2, ArrowUpRight } from "lucide-react";
 import { ApiError, createEndpoint, deleteEndpoint, fetchEndpoints } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
-  AdminFormSection, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, PermissionDeniedState, Pill, SectionHeader,
+  AdminFormSection, AdminPageLayout, AdminSelect, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, PermissionDeniedState, Pill, SectionHeader, AdminLoadingState, AdminErrorState,
 } from "./admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import Link from "next/link";
 
-const EP_TYPE_COLORS: Record<string, string> = {
-  docker: "bg-blue-500/10 text-blue-400",
-  swarm: "bg-orange-500/10 text-orange-400",
-  kubernetes: "bg-purple-500/10 text-purple-400",
-  edge: "bg-green-500/10 text-green-400",
+// Status and type chips go through `Pill tone`, never a call-site class map: a
+// value these tables did not know used to render as a borderless, colourless
+// chip containing the raw wire word. `resolveTone` maps an unrecognised status
+// to `unknown`, which is a visible grey chip and an honest one.
+const EP_TYPE_TONE: Record<string, "blue" | "yellow" | "neutral" | "info" | "green"> = {
+  docker: "blue",
+  swarm: "yellow",
+  kubernetes: "info",
+  edge: "green",
 };
 
-const STATUS_COLORS: Record<string, string> = {
-  online: "bg-green-500/10 text-green-400",
-  degraded: "bg-yellow-500/10 text-yellow-400",
-  offline: "bg-red-500/10 text-red-400",
-  unknown: "bg-slate-500/10 text-slate-400",
-  provisioning: "bg-cyan-500/10 text-cyan-400",
+const EP_STATUS_TONE: Record<string, "green" | "yellow" | "red" | "unknown" | "info"> = {
+  online: "green",
+  degraded: "yellow",
+  offline: "red",
+  provisioning: "info",
+  unknown: "unknown",
 };
+
+/** `reachable` is a probe result, not a boolean fact: an endpoint nobody probed
+ *  is unknown, and unknown must not read as an outage. */
+function Reachability({ value }: { value?: boolean }) {
+  if (value === true) return <Pill tone="green">Reachable</Pill>;
+  if (value === false) return <Pill tone="red">Unreachable</Pill>;
+  return <Pill tone="unknown">Not probed</Pill>;
+}
+
+const URL_SHAPE = /^https?:\/\/[^\s/]+(:\d+)?(\/.*)?$/i;
 
 export function AdminEndpoints() {
   const { toast } = useToast();
@@ -41,6 +57,16 @@ export function AdminEndpoints() {
   const [url, setUrl] = useState("");
   const [formError, setFormError] = useState<string | null>(null);
 
+  // An edge/direct API endpoint is an address a daemon will dial, so the shape is
+  // checked here rather than failing as a connection error later.
+  const urlRequired = connMode !== "edge";
+  const trimmedUrl = url.trim();
+  const urlError = trimmedUrl && !URL_SHAPE.test(trimmedUrl)
+    ? "Enter a full endpoint URL, for example https://docker.example.com:2375."
+    : urlRequired && !trimmedUrl
+      ? "This connection mode needs the endpoint URL."
+      : "";
+
   const createMut = useMutation({
     mutationFn: () =>
       createEndpoint({
@@ -48,7 +74,7 @@ export function AdminEndpoints() {
         description: description.trim(),
         endpointType: epType,
         connectionMode: connMode,
-        url: url.trim() || undefined,
+        url: trimmedUrl || undefined,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["infra-endpoints"] });
@@ -59,6 +85,7 @@ export function AdminEndpoints() {
       setConnMode("direct");
       setUrl("");
       setFormError(null);
+      toast({ tone: "success", title: "Endpoint created" });
     },
     onError: (e: Error) => {
       setFormError(e.message || "Failed to create endpoint");
@@ -67,130 +94,116 @@ export function AdminEndpoints() {
 
   const deleteMut = useMutation({
     mutationFn: deleteEndpoint,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["infra-endpoints"] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["infra-endpoints"] });
+      toast({ tone: "success", title: "Endpoint removed" });
+    },
     onError: (e: Error) => toast({ tone: "error", title: "Failed to delete endpoint", message: e.message }),
   });
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
-        title="Endpoints"
-        sub="Logical endpoint inventory and beacon groupings for traffic routing and network ingress."
-        action={<Btn tone="primary" onClick={() => { setName(""); setDescription(""); setEpType("docker"); setConnMode("direct"); setUrl(""); setFormError(null); setModal("create"); }}><Plus size={14} /> New Endpoint</Btn>}
+        status={<FreshnessBadge state={sourceState(endpointsQuery)} />}
+        action={<Btn onClick={() => { setName(""); setDescription(""); setEpType("docker"); setConnMode("direct"); setUrl(""); setFormError(null); setModal("create"); }} tone="primary"><Plus size={14} /> New Endpoint</Btn>}
       />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-        <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Networking</span> primary: <code className="font-mono text-[11px]">Endpoints</code> · <code className="font-mono">Domains</code> · <code className="font-mono">Services/Traffic/LB</code> — plus <span className="font-semibold">Advanced</span> <code className="font-mono">Discovery/Gateways/Cross-Node/DNS/ACME/Certs/Firewall/mTLS</code>. Chain: Domains → DNS → Cert/TLS → Route → Workload. This inventory groups beacons for routing — for per-beacon detail see <code className="font-mono">/admin/nodes/[id]</code>.
-      </div>
+      <p className="ui-hint">
+        These are container-runtime API endpoints — the Docker, Swarm, Kubernetes or edge host this
+        panel talks to. They are not the public service endpoints a workload is reached on; those are
+        under Domains, Traffic and Load Balancer.
+      </p>
 
       <Card>
-        <CardHeader title="All endpoints" icon={Box} />
-        {endpointsQuery.isLoading ? (
-          <div className="py-10 text-center text-sm text-slate-500">Loading</div>
+        <CardHeader title="All endpoints" icon={Boxes} />
+        {endpointsQuery.isPending ? (
+          <div className="p-4"><AdminLoadingState label="Loading endpoints…" /></div>
         ) : endpointsQuery.isError ? (
           endpointsQuery.error instanceof ApiError && endpointsQuery.error.status === 403 ? (
-            <div className="p-4">
-              <PermissionDeniedState />
-            </div>
+            <div className="p-4"><PermissionDeniedState message="Viewing the endpoint inventory needs the infrastructure read scope." /></div>
           ) : (
-          <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-              <span>Could not load endpoints: {endpointsQuery.error.message}</span>
-              <Btn size="sm" tone="ghost" onClick={() => void endpointsQuery.refetch()}>Retry</Btn>
+            <div className="p-4">
+              <AdminErrorState
+                message={endpointsQuery.error instanceof Error ? `Endpoints could not be loaded: ${endpointsQuery.error.message}` : "Endpoints could not be loaded"}
+                retry={() => void endpointsQuery.refetch()}
+              />
             </div>
-          </div>
           )
-        ) : !Array.isArray(endpoints) || endpoints.length === 0 ? (
-          <EmptyState icon={Box} title="No endpoints yet" message="Create your first infrastructure endpoint to group nodes." />
+        ) : endpoints.length === 0 ? (
+          <EmptyState icon={Boxes} title="No endpoints yet" message="No infrastructure endpoint is registered. Create one to group nodes for routing." />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-slate-700/50 text-left text-xs uppercase tracking-wider text-slate-500">
-                <th className="px-4 py-3 font-medium">Name</th>
-                <th className="px-4 py-3 font-medium">Type</th>
-                <th className="px-4 py-3 font-medium">Connection</th>
-                <th className="px-4 py-3 font-medium">Status</th>
-                <th className="px-4 py-3 font-medium">Reachable</th>
-                <th className="px-4 py-3 font-medium">Version</th>
-                <th className="px-4 py-3 font-medium w-20"></th>
-              </tr>
-            </thead>
-            <tbody>
-              {Array.isArray(endpoints) && endpoints.map((ep) => (
-                <tr key={ep.id} className="border-b border-slate-800/50 transition-colors hover:bg-slate-800/30">
-                  <td className="px-4 py-3">
-                    <Link href={`/admin/endpoints/${ep.id}`} className="font-medium text-white hover:text-slate-300 transition-colors">
+          <AdminTable label="Infrastructure endpoints">
+            <AdminTHead><AdminTh>Name</AdminTh><AdminTh>Type</AdminTh><AdminTh>Connection</AdminTh><AdminTh>Status</AdminTh><AdminTh>Reachable</AdminTh><AdminTh>Version</AdminTh><AdminTh></AdminTh></AdminTHead>
+            <AdminTBody>
+              {endpoints.map((ep) => (
+                <AdminTr key={ep.id}>
+                  <AdminTd>
+                    <Link className="flex items-center gap-1 font-medium text-text hover:underline" href={`/admin/endpoints/${ep.id}`}>
                       {ep.name}
-                      <ExternalLink size={12} className="inline ml-1 opacity-40" />
+                      <ArrowUpRight aria-hidden="true" size={12} className="opacity-50" />
                     </Link>
-                    {ep.description && <div className="text-xs text-slate-500 mt-0.5">{ep.description}</div>}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Pill className={EP_TYPE_COLORS[ep.endpointType] ?? ""}>{ep.endpointType}</Pill>
-                  </td>
-                  <td className="px-4 py-3 text-slate-300">{ep.connectionMode}</td>
-                  <td className="px-4 py-3">
-                    <Pill className={STATUS_COLORS[ep.status] ?? ""}>{ep.status}</Pill>
-                  </td>
-                  <td className="px-4 py-3">
-                    {ep.reachable ? (
-                      <span className="text-green-400">Yes</span>
-                    ) : (
-                      <span className="text-red-400">No</span>
-                    )}
-                  </td>
-                  <td className="px-4 py-3 text-slate-400">{ep.version || "-"}</td>
-                  <td className="px-4 py-3">
-                    <button
-                      onClick={() => { void (async () => { if (await confirm({ title: `Delete endpoint "${ep.name}"?`, description: "The endpoint will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(ep.id); })(); }}
-                      className="rounded p-1 text-slate-500 hover:bg-red-500/10 hover:text-red-400 transition-colors"
-                      title="Delete"
+                    {ep.description && <div className="mt-0.5 text-xs text-text-subtle">{ep.description}</div>}
+                  </AdminTd>
+                  <AdminTd><Pill tone={EP_TYPE_TONE[ep.endpointType] ?? "neutral"}>{ep.endpointType || "Type not reported"}</Pill></AdminTd>
+                  <AdminTd className="text-text-subtle">{ep.connectionMode || "Not reported"}</AdminTd>
+                  <AdminTd><Pill tone={EP_STATUS_TONE[ep.status] ?? "unknown"}>{ep.status || "Status not reported"}</Pill></AdminTd>
+                  <AdminTd><Reachability value={ep.reachable} /></AdminTd>
+                  <AdminTd className="text-xs text-text-subtle">{ep.version || "Not reported"}</AdminTd>
+                  <AdminTd className="text-right">
+                    <Btn
+                      ariaLabel={`Delete endpoint ${ep.name}`}
+                      disabled={deleteMut.isPending}
+                      loading={deleteMut.isPending && deleteMut.variables === ep.id}
+                      onClick={() => { void (async () => { if (await confirm({ title: `Delete endpoint "${ep.name}"?`, description: "Nodes this endpoint manages stop being reachable through it, and any workload placed on them loses its control path until the endpoint is re-added. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(ep.id); })(); }}
+                      size="sm"
+                      tone="danger"
                     >
                       <Trash2 size={14} />
-                    </button>
-                  </td>
-                </tr>
+                    </Btn>
+                  </AdminTd>
+                </AdminTr>
               ))}
-            </tbody>
-          </table>
+            </AdminTBody>
+          </AdminTable>
         )}
       </Card>
 
       {modal === "create" && (
-        <Modal title="New Endpoint" onClose={() => setModal(null)}>
+        <Modal onClose={() => setModal(null)} title="New Endpoint">
           <div className="space-y-4">
-          {formError && (
-            <div className="flex items-center gap-2 rounded-md border border-red-500/20 bg-red-500/5 p-2.5 text-sm text-red-300">
-              <AlertCircle size={14} /> {formError}
-            </div>
-          )}
-          <AdminFormSection title="Endpoint Details">
-            <Input label="Name *" value={name} onChange={setName} placeholder="Production Cluster" />
-            <Input label="Description" value={description} onChange={setDescription} placeholder="Primary production environment" />
-            <div className="grid grid-cols-2 gap-3">
-              <AdminSelect label="Type" value={epType} onChange={setEpType} options={[
-                { value: "docker", label: "Docker" },
-                { value: "swarm", label: "Swarm" },
-                { value: "kubernetes", label: "Kubernetes" },
-                { value: "edge", label: "Edge" },
-              ]} />
-              <AdminSelect label="Connection Mode" value={connMode} onChange={setConnMode} options={[
-                { value: "direct", label: "Direct" },
-                { value: "tunnel", label: "Tunnel" },
-                { value: "edge", label: "Edge" },
-              ]} />
-            </div>
-            <Input label="URL" value={url} onChange={setUrl} placeholder="https://docker.example.com:2375" />
-          </AdminFormSection>
+            {formError && (
+              <div className="ui-alert ui-alert-danger">
+                <AlertCircle aria-hidden="true" size={14} /> <span>{formError}</span>
+              </div>
+            )}
+            <AdminFormSection title="Endpoint Details">
+              <Input label="Name" onChange={setName} placeholder="Production Cluster" required value={name} />
+              <Input label="Description" onChange={setDescription} placeholder="Primary production environment" value={description} />
+              <div className="grid grid-cols-2 gap-3">
+                <AdminSelect label="Type" onChange={setEpType} options={[
+                  { value: "docker", label: "Docker" },
+                  { value: "swarm", label: "Swarm" },
+                  { value: "kubernetes", label: "Kubernetes" },
+                  { value: "edge", label: "Edge" },
+                ]} value={epType} />
+                <AdminSelect label="Connection Mode" onChange={setConnMode} options={[
+                  { value: "direct", label: "Direct — dial the URL from this panel" },
+                  { value: "tunnel", label: "Tunnel — dial the URL through a node" },
+                  { value: "edge", label: "Edge — no URL, served by a beacon" },
+                ]} value={connMode} />
+              </div>
+              <Input label={connMode === "edge" ? "URL (not used for edge endpoints)" : "URL"} onChange={setUrl} placeholder="https://docker.example.com:2375" value={url} />
+              {urlError ? <p className="text-xs text-danger">{urlError}</p> : null}
+            </AdminFormSection>
           </div>
           <ModalFooter
+            confirmLabel={createMut.isPending ? "Creating…" : "Create"}
+            disabled={createMut.isPending || !name.trim() || !!urlError}
             onCancel={() => setModal(null)}
             onConfirm={() => createMut.mutate()}
-            confirmLabel="Create"
-            disabled={createMut.isPending}
           />
         </Modal>
       )}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

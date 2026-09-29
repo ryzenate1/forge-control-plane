@@ -1,12 +1,9 @@
 "use client";
 
 import { AdminEndpointDetail } from "@/components/admin/AdminEndpointDetail";
-import { AdminPageLayout } from "@/components/admin/admin-ui";
 
+// Frame belongs to the component; wrapping it in AdminPageLayout again nested two
+// frames and two spacing scales (see AdminFirewall's bare wrapper).
 export default function AdminEndpointDetailPage() {
-  return (
-    <AdminPageLayout>
-      <AdminEndpointDetail />
-    </AdminPageLayout>
-  );
+  return <AdminEndpointDetail />;
 }

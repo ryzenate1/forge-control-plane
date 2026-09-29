@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bell, Globe, Mail, MessageSquare, Plus, Send, Trash2, Zap } from "lucide-react";
+import { Bell, Globe, Mail, MessageSquare, Plus, Send, Trash2, Zap, Eye, EyeOff } from "lucide-react";
 import {
   createEngineChannel,
   deleteEngineChannel,
@@ -20,8 +20,15 @@ import {
 } from "@/lib/api/notifications";
 import {
   AdminFormSection,
+  AdminSection,
   AdminSelect,
+  AdminTable,
   AdminTabs,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminTr,
   Btn,
   Card,
   CardHeader,
@@ -30,12 +37,12 @@ import {
   Modal,
   ModalFooter,
   Pill,
-  SectionHeader,
   Textarea,
 } from "./admin-ui";
+import { DataState, FreshnessBadge, Reading } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { TableSkeleton } from "@/components/ui/loading-skeleton";
 
 const CHANNEL_ICONS: Record<NotificationChannelType, typeof Bell> = {
   slack: MessageSquare,
@@ -116,10 +123,23 @@ function parseHeaders(raw: string): Record<string, string> {
   return JSON.parse(trimmed) as Record<string, string>;
 }
 
-function channelScope(ch: EngineChannel): { label: string; tone: "neutral" | "blue" | "yellow" } {
-  if (ch.orgId) return { label: "Org", tone: "yellow" };
-  if (!ch.userId) return { label: "Global", tone: "blue" };
-  return { label: "Mine", tone: "neutral" };
+/**
+ * Who owns the channel.
+ *
+ * The API serialises `userId`/`orgId` with `omitempty`
+ * (`forge/api/internal/store/store_notification_channels.go:33-35`), so a
+ * platform-global channel (NULL owner) and a record that simply did not report
+ * an owner arrive as the same absent field. Only the first two cases can be
+ * claimed; the third must not be dressed up as "Global".
+ */
+function channelScope(ch: EngineChannel): { label: string; tone: "warn" | "neutral" | "unknown"; note?: string } {
+  if (ch.orgId) return { label: "Org", tone: "warn" };
+  if (ch.userId) return { label: "Mine", tone: "neutral" };
+  return {
+    label: "Owner not reported",
+    tone: "unknown",
+    note: "A channel with no owner is platform-global, but the API omits an absent owner and an unreported owner identically.",
+  };
 }
 
 export function NotificationsManager() {
@@ -128,6 +148,9 @@ export function NotificationsManager() {
   const [confirmDialog, renderConfirm] = useConfirm();
   const [tab, setTab] = useState("channels");
   const [form, setForm] = useState<FormState | null>(null);
+  // Credentials come back from this API in cleartext, so the edit form hides
+  // them by default and only shows them on an explicit request.
+  const [reveal, setReveal] = useState(false);
 
   const channelsQuery = useQuery({
     queryKey: ["notifications-engine", "channels"],
@@ -219,10 +242,12 @@ export function NotificationsManager() {
   });
 
   function openCreate() {
+    setReveal(false);
     setForm({ ...BLANK_FORM });
   }
 
   function openEdit(ch: EngineChannel) {
+    setReveal(false);
     const cfg = (ch.config ?? {}) as Record<string, unknown>;
     setForm({
       editId: ch.id,
@@ -255,29 +280,29 @@ export function NotificationsManager() {
     return [...groups.entries()];
   }, [catalogEvents]);
 
-  const loading = channelsQuery.isLoading || catalogQuery.isLoading || subscriptionsQuery.isLoading;
+  const loading = channelsQuery.isPending || catalogQuery.isPending || subscriptionsQuery.isPending;
 
   return (
-    <div className="space-y-6">
-      <SectionHeader
-        title="Notifications Engine"
-        sub="Configure Discord, Telegram, Slack, email and webhook channels, then pick the events each channel should receive. Templated messages are rendered and fanned out by the server."
-        action={
-          <div className="flex gap-2">
-            <Btn
-              tone="ghost"
-              onClick={() => testAllMut.mutate()}
-              disabled={testAllMut.isPending || channels.length === 0}
-            >
-              <Zap size={14} /> {testAllMut.isPending ? "Testing…" : "Test all"}
-            </Btn>
-            <Btn onClick={openCreate}>
-              <Plus size={14} /> Add channel
-            </Btn>
-          </div>
-        }
-      />
-
+    <AdminSection
+      description="Your own channels and the ones your admin role can see, served by /notifications/channels. The console below this one is a different backend (/notification-channels) with its own records — a channel created here does not appear there."
+      title="Notification engine"
+      action={
+        <div className="flex flex-wrap items-center gap-2">
+          <FreshnessBadge state={sourceState(channelsQuery)} />
+          <Btn
+            tone="ghost"
+            onClick={() => testAllMut.mutate()}
+            disabled={testAllMut.isPending || channels.length === 0}
+            title={channels.length === 0 ? "No channels to test" : "Send a test through every enabled channel"}
+          >
+            <Zap size={14} /> {testAllMut.isPending ? "Testing…" : "Test all"}
+          </Btn>
+          <Btn onClick={openCreate}>
+            <Plus size={14} /> Add channel
+          </Btn>
+        </div>
+      }
+    >
       <AdminTabs
         tabs={[
           { id: "channels", label: "Channels", icon: Bell },
@@ -285,67 +310,84 @@ export function NotificationsManager() {
         ]}
         active={tab}
         onChange={setTab}
+        label="Notification engine sections"
       />
 
-      {loading ? (
-        <TableSkeleton rows={4} />
-      ) : tab === "channels" ? (
-        <Card>
-          <CardHeader title="Channels" icon={Bell} />
-          {channels.length === 0 ? (
-            <EmptyState icon={Bell} title="No channels yet" message="Create a Discord, Telegram, Slack, email or webhook channel to start receiving event notifications." />
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-xs uppercase tracking-wider text-slate-500">
-                    <th className="px-4 py-3">Channel</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="px-4 py-3">Scope</th>
-                    <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3">Events</th>
-                    <th className="px-4 py-3" />
-                  </tr>
-                </thead>
-                <tbody>
+      <div className="mt-4 space-y-4">
+        {tab === "channels" ? (
+          <Card>
+            <CardHeader title="Channels" icon={Bell} />
+            <DataState
+              emptyMessage="Create a Discord, Telegram, Slack, email or webhook channel to start receiving event notifications."
+              emptyTitle="No channels yet"
+              isEmpty={channels.length === 0}
+              loadingLabel="Loading channels…"
+              onRetry={() => void channelsQuery.refetch()}
+              state={sourceState(channelsQuery)}
+            >
+              <AdminTable label="Notification channels">
+                <AdminTHead>
+                  <AdminTh>Channel</AdminTh>
+                  <AdminTh>Type</AdminTh>
+                  <AdminTh>Scope</AdminTh>
+                  <AdminTh>Status</AdminTh>
+                  <AdminTh>Events</AdminTh>
+                  <AdminTh className="text-right">Actions</AdminTh>
+                </AdminTHead>
+                <AdminTBody>
                   {channels.map((ch) => {
                     const Icon = CHANNEL_ICONS[ch.type] ?? Bell;
                     const scope = channelScope(ch);
+                    const subscriptionsUnavailable = subscriptionsQuery.isError;
                     const subCount = subscriptions.filter((sub) => sub.channelId === ch.id).length;
+                    const toggling = toggleMut.isPending && toggleMut.variables?.id === ch.id;
                     return (
-                      <tr key={ch.id} className="border-b border-white/[0.04] last:border-0">
-                        <td className="px-4 py-3 font-medium text-slate-100">{ch.name}</td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center gap-1.5 text-slate-300">
-                            <Icon size={14} /> {CHANNEL_LABELS[ch.type] ?? ch.type}
+                      <AdminTr key={ch.id}>
+                        <AdminTd className="font-medium text-text">{ch.name}</AdminTd>
+                        <AdminTd>
+                          <span className="inline-flex items-center gap-1.5 text-text-subtle">
+                            <Icon size={14} aria-hidden="true" /> {CHANNEL_LABELS[ch.type] ?? ch.type}
                           </span>
-                        </td>
-                        <td className="px-4 py-3">
-                          <Pill tone={scope.tone}>{scope.label}</Pill>
-                        </td>
-                        <td className="px-4 py-3">
-                          <button
-                            type="button"
+                        </AdminTd>
+                        <AdminTd>
+                          <Pill tone={scope.tone} >{scope.label}</Pill>
+                          {scope.note ? <span className="mt-1 block max-w-prose text-[11px] leading-5 text-text-muted">{scope.note}</span> : null}
+                        </AdminTd>
+                        <AdminTd>
+                          <Btn
+                            ariaLabel={`${ch.enabled ? "Disable" : "Enable"} ${ch.name}`}
+                            disabled={toggling}
+                            loading={toggling}
+                            size="sm"
+                            tone="ghost"
                             onClick={() => toggleMut.mutate({ id: ch.id, enabled: !ch.enabled })}
-                            className="cursor-pointer"
-                            title={ch.enabled ? "Click to disable" : "Click to enable"}
                           >
-                            <Pill tone={ch.enabled ? "green" : "neutral"}>{ch.enabled ? "Enabled" : "Disabled"}</Pill>
-                          </button>
-                        </td>
-                        <td className="px-4 py-3 text-slate-400">{subCount}</td>
-                        <td className="px-4 py-3">
+                            {ch.enabled ? "Enabled" : "Disabled"}
+                          </Btn>
+                        </AdminTd>
+                        <AdminTd>
+                          {subscriptionsUnavailable
+                            ? <Reading reason="Subscriptions could not be read" value={undefined} />
+                            : subCount}
+                        </AdminTd>
+                        <AdminTd>
                           <div className="flex justify-end gap-1">
-                            <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(ch.id)} disabled={testMut.isPending}>
+                            <Btn
+                              size="sm"
+                              tone="ghost"
+                              loading={testMut.isPending && testMut.variables === ch.id}
+                              onClick={() => testMut.mutate(ch.id)}
+                              disabled={testMut.isPending}
+                            >
                               <Send size={14} /> Test
                             </Btn>
-                            <Btn size="sm" tone="ghost" onClick={() => openEdit(ch)}>
+                            <Btn size="sm" tone="ghost" onClick={() => openEdit(ch)} ariaLabel={`Edit ${ch.name}`}>
                               Edit
                             </Btn>
-                            <button
-                              type="button"
-                              className="text-red-400 hover:text-red-300"
-                              title="Delete channel"
+                            <Btn
+                              ariaLabel={`Delete ${ch.name}`}
+                              size="sm"
+                              tone="danger"
                               onClick={() => {
                                 void (async () => {
                                   const ok = await confirmDialog({
@@ -359,94 +401,111 @@ export function NotificationsManager() {
                               }}
                             >
                               <Trash2 size={14} />
-                            </button>
+                            </Btn>
                           </div>
-                        </td>
-                      </tr>
+                        </AdminTd>
+                      </AdminTr>
                     );
                   })}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </Card>
-      ) : (
-        <div className="space-y-4">
-          {channels.length === 0 ? (
-            <Card>
-              <EmptyState icon={Zap} title="No channels to subscribe" message="Create a channel first, then wire it to events here." />
-            </Card>
-          ) : groupedEvents.length === 0 ? (
-            <TableSkeleton rows={3} />
-          ) : (
-            groupedEvents.map(([category, categoryEvents]) => (
-              <Card key={category}>
-                <CardHeader title={category.charAt(0).toUpperCase() + category.slice(1)} icon={Zap} />
-                <div className="overflow-x-auto p-1">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-white/[0.06] text-left text-xs uppercase tracking-wider text-slate-500">
-                        <th className="px-4 py-3">Event</th>
-                        {channels.map((ch) => (
-                          <th key={ch.id} className="px-3 py-3 text-center font-medium normal-case tracking-normal">
-                            <span className="inline-flex items-center gap-1 text-slate-300" title={ch.name}>
-                              {CHANNEL_ICONS[ch.type] ? (() => {
-                                const Icon = CHANNEL_ICONS[ch.type] ?? Bell;
-                                return <Icon size={13} />;
-                              })() : null}
-                              <span className="max-w-[9rem] truncate">{ch.name}</span>
-                            </span>
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {categoryEvents.map((event) => (
-                        <tr key={event.type} className="border-b border-white/[0.04] last:border-0">
-                          <td className="px-4 py-3">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span className="font-mono text-xs text-slate-200">{event.type}</span>
-                              <Pill tone={SEVERITY_TONES[event.severity] ?? "neutral"}>{event.severity}</Pill>
-                            </div>
-                            <p className="mt-0.5 text-xs text-slate-500">{event.description}</p>
-                          </td>
-                          {channels.map((ch) => {
-                            const { subscribed, subscriptionId } = headerCellState(event, ch);
-                            const pending = subscribeMut.isPending || unsubscribeMut.isPending;
-                            return (
-                              <td key={ch.id} className="px-3 py-3 text-center">
-                                <input
-                                  type="checkbox"
-                                  className="h-4 w-4 cursor-pointer accent-[var(--brand)] disabled:cursor-not-allowed"
-                                  checked={subscribed}
-                                  disabled={pending || !ch.enabled}
-                                  aria-label={`${subscribed ? "Unsubscribe" : "Subscribe"} ${ch.name} from ${event.type}`}
-                                  onChange={() => {
-                                    if (subscribed && subscriptionId) {
-                                      unsubscribeMut.mutate(subscriptionId);
-                                    } else {
-                                      subscribeMut.mutate({ channelId: ch.id, eventType: event.type });
-                                    }
-                                  }}
-                                />
-                              </td>
-                            );
-                          })}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                </AdminTBody>
+              </AdminTable>
+            </DataState>
+          </Card>
+        ) : (
+          <div className="space-y-4">
+            <DataState
+              emptyMessage="Create a channel first, then wire it to events here."
+              emptyTitle="No channels to subscribe"
+              isEmpty={channels.length === 0}
+              loadingLabel="Loading channels…"
+              onRetry={() => void channelsQuery.refetch()}
+              state={sourceState(channelsQuery)}
+            >
+              <DataState
+                emptyMessage="The event catalogue returned no events."
+                emptyTitle="No events in the catalogue"
+                isEmpty={groupedEvents.length === 0}
+                loadingLabel="Loading event catalogue…"
+                onRetry={() => void catalogQuery.refetch()}
+                state={sourceState(catalogQuery)}
+              >
+                <div className="space-y-4">
+                  {groupedEvents.map(([category, categoryEvents]) => (
+                    <Card key={category}>
+                      <CardHeader title={category.charAt(0).toUpperCase() + category.slice(1)} icon={Zap} />
+                      <div className="p-1">
+                        <AdminTable label={`Event subscriptions by ${category}`}>
+                          <AdminTHead>
+                            <AdminTh>Event</AdminTh>
+                            {channels.map((ch) => (
+                              <AdminTh key={ch.id} className="text-center font-medium normal-case">
+                                <span className="inline-flex items-center gap-1 text-text-subtle">
+                                  {(() => {
+                                    const Icon = CHANNEL_ICONS[ch.type] ?? Bell;
+                                    return <Icon size={13} aria-hidden="true" />;
+                                  })()}
+                                  <span className="max-w-[9rem] truncate">{ch.name}</span>
+                                </span>
+                              </AdminTh>
+                            ))}
+                          </AdminTHead>
+                          <AdminTBody>
+                            {categoryEvents.map((event) => (
+                              <AdminTr key={event.type}>
+                                <AdminTd>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="font-mono text-xs text-text">{event.type}</span>
+                                    <Pill tone={SEVERITY_TONES[event.severity] ?? "neutral"}>{event.severity}</Pill>
+                                  </div>
+                                  <p className="mt-0.5 text-xs text-text-subtle">{event.description}</p>
+                                </AdminTd>
+                                {channels.map((ch) => {
+                                  const { subscribed, subscriptionId } = headerCellState(event, ch);
+                                  const pending = subscribeMut.isPending || unsubscribeMut.isPending;
+                                  return (
+                                    <AdminTd key={ch.id} className="text-center">
+                                      <input
+                                        type="checkbox"
+                                        className="h-4 w-4 cursor-pointer accent-[var(--brand)] disabled:cursor-not-allowed"
+                                        checked={subscribed}
+                                        disabled={pending || !ch.enabled}
+                                        title={!ch.enabled ? `${ch.name} is disabled` : undefined}
+                                        aria-label={`${subscribed ? "Unsubscribe" : "Subscribe"} ${ch.name} from ${event.type}`}
+                                        onChange={() => {
+                                          if (subscribed && subscriptionId) {
+                                            unsubscribeMut.mutate(subscriptionId);
+                                          } else {
+                                            subscribeMut.mutate({ channelId: ch.id, eventType: event.type });
+                                          }
+                                        }}
+                                      />
+                                    </AdminTd>
+                                  );
+                                })}
+                              </AdminTr>
+                            ))}
+                          </AdminTBody>
+                        </AdminTable>
+                      </div>
+                    </Card>
+                  ))}
                 </div>
-              </Card>
-            ))
-          )}
-        </div>
-      )}
+              </DataState>
+            </DataState>
+            {subscriptionsQuery.isError ? (
+              <p className="text-[11px] leading-5 text-warn" role="alert">
+                Subscriptions could not be read, so the checkboxes below may not match what the server has.
+              </p>
+            ) : null}
+            {loading ? <p className="text-[11px] text-text-muted" role="status">Loading…</p> : null}
+          </div>
+        )}
+      </div>
 
       {form ? (
         <Modal
           title={form.editId ? "Edit channel" : "New notification channel"}
-          description="Configuration is encrypted at rest and validated before saving."
+          description="The destination is validated by the server on save and again at send time; webhook URLs must be HTTPS and are SSRF-checked."
           onClose={() => setForm(null)}
         >
           <div className="space-y-5">
@@ -466,7 +525,7 @@ export function NotificationsManager() {
                   placeholder="Ops Discord alerts"
                 />
               </div>
-              <label className="flex items-center gap-2 text-sm text-slate-300">
+              <label className="flex items-center gap-2 text-sm text-text">
                 <input
                   type="checkbox"
                   className="h-4 w-4 accent-[var(--brand)]"
@@ -477,7 +536,12 @@ export function NotificationsManager() {
               </label>
             </AdminFormSection>
 
-            <AdminFormSection title="Destination" description="Values are re-validated by the server (HTTPS-only, SSRF-checked) on save and at send time.">
+            <AdminFormSection title="Destination" description="This API returns stored credentials to your session in full — they are masked here for the screen, not for the wire. The server re-validates the destination on save and at send time.">
+              <div className="flex justify-end">
+                <Btn size="sm" tone="ghost" ariaLabel={reveal ? "Hide credential values" : "Show credential values"} onClick={() => setReveal((value) => !value)}>
+                  {reveal ? <EyeOff size={14} /> : <Eye size={14} />} {reveal ? "Hide" : "Show"} values
+                </Btn>
+              </div>
               {form.type === "slack" || form.type === "discord" ? (
                 <Input
                   label="Webhook URL"
@@ -485,6 +549,8 @@ export function NotificationsManager() {
                   onChange={(value) => setForm({ ...form, webhookUrl: value })}
                   placeholder="https://hooks.discord.com/…"
                   mono
+                  type={reveal ? "text" : "password"}
+                  autoComplete="off"
                 />
               ) : form.type === "telegram" ? (
                 <div className="grid gap-4 sm:grid-cols-2">
@@ -494,6 +560,8 @@ export function NotificationsManager() {
                     onChange={(value) => setForm({ ...form, botToken: value })}
                     placeholder="123456:ABC-def…"
                     mono
+                    type={reveal ? "text" : "password"}
+                    autoComplete="off"
                   />
                   <Input
                     label="Chat ID"
@@ -518,6 +586,8 @@ export function NotificationsManager() {
                     onChange={(value) => setForm({ ...form, url: value })}
                     placeholder="https://example.com/hooks/forge"
                     mono
+                    type={reveal ? "text" : "password"}
+                    autoComplete="off"
                   />
                   <Textarea
                     label="Custom headers (JSON)"
@@ -555,6 +625,6 @@ export function NotificationsManager() {
       ) : null}
 
       {renderConfirm()}
-    </div>
+    </AdminSection>
   );
 }

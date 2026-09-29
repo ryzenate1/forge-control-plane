@@ -7,11 +7,13 @@ import { createApiKey, deleteApiKey, fetchAdminScopes, fetchApiKeys, verifyBeare
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { copySecret } from "@/lib/clipboard";
-import { AdminFormSection, Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from "./admin-ui";
-import { TableSkeleton } from "@/components/ui/loading-skeleton";
+import { AdminErrorState, AdminFormSection, AdminIconButton, AdminLoadingState, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Pill, SectionHeader, cn } from "./admin-ui";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { formatDate } from "@/lib/utils";
 
 function errorMessage(error: unknown, fallback: string) {
-  return error instanceof Error ? error.message : fallback;
+  return error instanceof Error && error.message ? error.message : fallback;
 }
 
 function scopeGroups(scopes: Record<string, string>) {
@@ -23,26 +25,24 @@ function scopeGroups(scopes: Record<string, string>) {
   }, {});
 }
 
+/** `read`/`write`/`delete` alone told you nothing about *which* resource the
+ * scope covered; the full `servers.delete` string is the identifier, so it is
+ * what the chip shows. Colour still comes from a tone name, never a class. */
 function ScopeLabel({ scope }: { scope: string }) {
-  const parts = scope.split(".");
-  const action = parts[1] ?? scope;
-  const colors: Record<string, string> = {
-    read: "bg-emerald-700/30 text-emerald-300",
-    write: "bg-amber-700/30 text-amber-300",
-    delete: "bg-rose-700/30 text-rose-300",
-  };
-  return (
-    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-mono ${colors[action] ?? "bg-slate-700/40 text-slate-300"}`}>
-      {scope}
-    </span>
-  );
+  const action = scope.split(".")[1] ?? "";
+  const tone: "ok" | "warn" | "danger" | "neutral" =
+    action === "read" ? "ok" : action === "write" ? "warn" : action === "delete" ? "danger" : "neutral";
+  return <Pill tone={tone}>{scope}</Pill>;
 }
+
+type Verification = { state: "pending" | "ok" | "failed"; message: string };
 
 export function AdminApiKeys() {
   const qc = useQueryClient();
   const { toast } = useToast();
-  const { data: keysData = [], isLoading } = useQuery({ queryKey: ["api-keys"], queryFn: fetchApiKeys });
-  const keys = useMemo(() => Array.isArray(keysData) ? keysData : [], [keysData]);
+  const keysQuery = useQuery({ queryKey: ["api-keys"], queryFn: fetchApiKeys });
+  const { isLoading, isError, error: keysError, refetch: refetchKeys, isSuccess } = keysQuery;
+  const keys = useMemo(() => (Array.isArray(keysQuery.data) ? keysQuery.data : []), [keysQuery.data]);
   const scopesQuery = useQuery({ queryKey: ["admin-scopes"], queryFn: fetchAdminScopes });
   const groupedScopes = scopeGroups(scopesQuery.data ?? {});
 
@@ -52,13 +52,11 @@ export function AdminApiKeys() {
   const [newToken, setNewToken] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
   const [tokenMasked, setTokenMasked] = useState(false);
-  const [verification, setVerification] = useState<string>("");
+  const [verification, setVerification] = useState<Verification | null>(null);
   const [confirm, renderConfirm] = useConfirm();
 
   const toggleScope = (scope: string) => {
-    setSelectedScopes((prev) =>
-      prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]
-    );
+    setSelectedScopes((prev) => (prev.includes(scope) ? prev.filter((s) => s !== scope) : [...prev, scope]));
   };
 
   const toggleGroup = (scopes: string[]) => {
@@ -70,14 +68,8 @@ export function AdminApiKeys() {
     }
   };
 
-  const selectAll = () => {
-    setSelectedScopes(["*"]);
-  };
-
-  const clearAll = () => {
-    setSelectedScopes([]);
-  };
-
+  const selectAll = () => setSelectedScopes(["*"]);
+  const clearAll = () => setSelectedScopes([]);
   const isFullAccess = selectedScopes.includes("*");
 
   const createMut = useMutation({
@@ -92,12 +84,20 @@ export function AdminApiKeys() {
       setDesc("");
       setSelectedScopes([]);
       setShowScopes(false);
-      setVerification("");
+      setCopied(false);
+      setTokenMasked(false);
       if (key.token) {
         setNewToken(key.token);
+        // The verify call is a second network round-trip. It gets its own
+        // state: pending is not success, and a failure must not render inside
+        // the emerald "key created" panel the way it used to.
+        setVerification({ state: "pending", message: "Verifying the token authenticates…" });
         verifyBearerToken(key.token)
-          .then((user) => setVerification(`Verified: token authenticated as ${user.email}.`))
-          .catch((error) => setVerification(error instanceof Error ? error.message : "Token verification failed."));
+          .then((user) => setVerification({ state: "ok", message: `Verified: the token authenticated as ${user.email}.` }))
+          .catch((error) => setVerification({ state: "failed", message: errorMessage(error, "Token verification failed.") }));
+      } else {
+        setNewToken(null);
+        setVerification({ state: "failed", message: "The key was created but the response carried no token to copy." });
       }
     },
     onError: (error) => toast({ tone: "error", title: "API key could not be created", message: errorMessage(error, "Please try again.") }),
@@ -122,7 +122,13 @@ export function AdminApiKeys() {
 
   const requestRevoke = (key: ApiKey) => {
     void (async () => {
-      if (await confirm({ title: "Revoke API key?", description: `"${key.description || "Unnamed key"}" will stop working immediately. This action cannot be undone.`, danger: true, confirmLabel: "Revoke" })) deleteMut.mutate(key.id);
+      // `lastUsedAt` is `omitempty` on a pointer, so an absent value is the
+      // server reporting "never used" — saying so here is what stops a revoke
+      // from surprising an operator who has a live integration on the key.
+      const usage = key.lastUsedAt
+        ? `Last used ${formatDate(key.lastUsedAt, "an unknown time")}, so a client may still be calling with it.`
+        : "This key has never been used, but a client that has not called yet still holds it.";
+      if (await confirm({ title: "Revoke API key?", description: `"${key.description || "Unnamed key"}" (prefix ${key.tokenPrefix || "unknown"}) stops authenticating immediately for every client using it. ${usage} The secret is not recoverable and this cannot be undone.`, danger: true, confirmLabel: "Revoke" })) deleteMut.mutate(key.id);
     })();
   };
 
@@ -137,137 +143,190 @@ export function AdminApiKeys() {
     };
   }, []);
 
-  return (
-    <div>
-       <SectionHeader title="Application API Keys" sub="Scoped API tokens with granular permissions." />
+  const createBlockedReason = desc.trim() === ""
+    ? "Give the key a description so you can recognise which client uses it."
+    : selectedScopes.length === 0
+      ? "Select at least one permission, or Full Access."
+      : null;
 
-      <div className="grid gap-6 lg:grid-cols-2">
+  return (
+    <AdminPageLayout>
+      {/* Title, subtitle and glyph resolve from admin-registry.ts in the frame.
+          The list is on-demand, so say how old the reading is instead of leaving
+          revocation-sensitive rows undated. */}
+      <SectionHeader status={<FreshnessBadge state={sourceState(keysQuery)} />} />
+
+      <div className="grid gap-5 lg:grid-cols-2">
         {/* Create form */}
         <Card>
           <CardHeader title="Create new API key" icon={KeyRound} />
-          <div className="p-4 space-y-4">
+          <div className="space-y-4 p-4">
             <AdminFormSection title="Description">
-            <Input label="Description" value={desc} onChange={setDesc} placeholder="My automation script" />
+              <Input label="Description" value={desc} onChange={setDesc} placeholder="My automation script" required />
             </AdminFormSection>
 
             <AdminFormSection title="Permissions">
-            {/* Scope selector */}
-            <div>
-              <button
-                type="button"
-                aria-expanded={showScopes}
-                aria-controls="api-key-scope-selector"
-                onClick={() => setShowScopes((visible) => !visible)}
-                className="flex w-full items-center justify-between rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-300 hover:border-white/20 transition"
-              >
-                <span>
-                  {isFullAccess
-                    ? "Full Access (*)"
-                    : selectedScopes.length === 0
-                      ? "Select permissions..."
-                      : `${selectedScopes.length} scope${selectedScopes.length !== 1 ? "s" : ""} selected`}
-                </span>
-                {showScopes ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              </button>
+              <div>
+                <button
+                  type="button"
+                  aria-expanded={showScopes}
+                  aria-controls="api-key-scope-selector"
+                  onClick={() => setShowScopes((visible) => !visible)}
+                  className="ui-input flex w-full items-center justify-between gap-2"
+                >
+                  <span>
+                    {isFullAccess
+                      ? "Full Access (*)"
+                      : selectedScopes.length === 0
+                        ? "Select permissions…"
+                        : `${selectedScopes.length} scope${selectedScopes.length !== 1 ? "s" : ""} selected`}
+                  </span>
+                  {showScopes ? <ChevronUp size={14} aria-hidden="true" /> : <ChevronDown size={14} aria-hidden="true" />}
+                </button>
 
-              {showScopes && (
-                <div id="api-key-scope-selector" className="mt-2 rounded-lg border border-white/10 bg-[var(--surface)] p-3 space-y-3 max-h-80 overflow-y-auto">
-                  {/* Quick actions */}
-                  <div className="flex gap-2 pb-2 border-b border-white/[0.06]">
-                    <button type="button" onClick={selectAll} className={`px-2 py-1 rounded text-xs transition ${isFullAccess ? "bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] text-[var(--brand)]" : "bg-white/5 text-slate-400 hover:text-white"}`}>
-                      Full Access (*)
-                    </button>
-                    <button type="button" onClick={clearAll} className="px-2 py-1 rounded text-xs bg-white/5 text-slate-400 hover:text-white transition">
-                      Clear All
-                    </button>
-                  </div>
+                {showScopes ? (
+                  <div id="api-key-scope-selector" className="mt-2 space-y-3 rounded-lg border border-line bg-surface p-3 max-h-80 overflow-y-auto">
+                    <div className="flex gap-2 border-b border-line pb-2">
+                      <button type="button" onClick={selectAll} aria-pressed={isFullAccess} className={cn("rounded px-2 py-1 text-xs transition", isFullAccess ? "ui-badge-brand ui-badge" : "ui-badge text-text-subtle hover:bg-overlay")}>
+                        Full Access (*)
+                      </button>
+                      <button type="button" onClick={clearAll} aria-pressed={selectedScopes.length === 0} className="ui-badge text-text-subtle hover:bg-overlay" disabled={selectedScopes.length === 0}>
+                        Clear All
+                      </button>
+                    </div>
 
-                  {!isFullAccess && scopesQuery.isPending ? (
-                    <p className="text-xs text-slate-400">Loading available permissions...</p>
-                  ) : !isFullAccess && scopesQuery.isError ? (
-                    <div className="flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-2 text-xs text-red-200"><span>Available permissions could not be loaded: {scopesQuery.error.message}</span><Btn size="sm" tone="ghost" type="button" onClick={() => void scopesQuery.refetch()}>Retry</Btn></div>
-                  ) : !isFullAccess && Object.entries(groupedScopes).map(([group, entries]) => {
-                    const scopes = entries.map(({ scope }) => scope);
-                    return (
-                      <div key={group}>
-                        <div className="flex items-center gap-2 mb-1.5">
-                          <button type="button" onClick={() => toggleGroup(scopes)} className="flex items-center gap-1.5 text-xs font-semibold text-slate-300 hover:text-white transition">
-                            <span className={`flex h-3 w-3 items-center justify-center rounded border ${scopes.every((scope) => selectedScopes.includes(scope)) ? "bg-[var(--brand)] border-[var(--brand)]" : "border-white/20"}`}>
-                              {scopes.every((scope) => selectedScopes.includes(scope)) && <Check size={8} className="text-white" />}
-                            </span>
-                            {group}
-                          </button>
-                        </div>
-                        <div className="flex flex-wrap gap-1.5 ml-5">
-                          {entries.map(({ scope, description }) => (
-                            <button key={scope} title={description} type="button" onClick={() => toggleScope(scope)} className={`rounded px-2 py-1 text-[11px] font-mono transition ${selectedScopes.includes(scope) ? "bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] text-[var(--brand)] border border-[color-mix(in_srgb,var(--brand)_30%,transparent)]" : "bg-white/5 text-slate-400 border border-white/[0.06] hover:border-white/20"}`}>
-                              {scope.split(".")[1]}
+                    {!isFullAccess && scopesQuery.isPending ? (
+                      <AdminLoadingState label="Loading available permissions…" />
+                    ) : !isFullAccess && scopesQuery.isError ? (
+                      <AdminErrorState message={`Available permissions could not be loaded: ${errorMessage(scopesQuery.error, "unknown error")}`} retry={() => void scopesQuery.refetch()} />
+                    ) : !isFullAccess && Object.entries(groupedScopes).map(([group, entries]) => {
+                      const scopes = entries.map(({ scope }) => scope);
+                      const groupChecked = scopes.every((scope) => selectedScopes.includes(scope));
+                      return (
+                        <div key={group}>
+                          <div className="mb-1.5 flex items-center gap-2">
+                            <button
+                              type="button"
+                              role="checkbox"
+                              aria-checked={groupChecked}
+                              onClick={() => toggleGroup(scopes)}
+                              className="flex items-center gap-1.5 text-xs font-semibold text-text transition-colors hover:text-brand focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                            >
+                              <span aria-hidden="true" className={cn("flex h-3.5 w-3.5 items-center justify-center rounded border", groupChecked ? "border-brand bg-brand text-white" : "border-line-strong")}>
+                                {groupChecked ? <Check size={9} /> : null}
+                              </span>
+                              {group}
+                              <span className="t-meta">
+                                {entries.filter(({ scope }) => selectedScopes.includes(scope)).length}/{entries.length}
+                              </span>
                             </button>
-                          ))}
+                          </div>
+                          <div className="ml-5 flex flex-wrap gap-1.5">
+                            {entries.map(({ scope, description }) => (
+                              <button
+                                key={scope}
+                                type="button"
+                                aria-pressed={selectedScopes.includes(scope)}
+                                title={description}
+                                onClick={() => toggleScope(scope)}
+                                className={cn(
+                                  "rounded border px-2 py-1 font-mono text-eyebrow transition",
+                                  selectedScopes.includes(scope)
+                                    ? "border-brand-line bg-brand-subtle text-brand"
+                                    : "border-line bg-overlay text-text-subtle hover:border-line-strong hover:text-text",
+                                )}
+                              >
+                                {scope}
+                              </button>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </div>
 
-            <div className="rounded-lg border border-amber-700/30 bg-amber-900/10 px-3 py-2 flex gap-2 text-xs text-amber-300">
-              <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-              <span>{isFullAccess ? "Full access keys can perform any action. Use cautiously." : "Select only the permissions your application needs."}</span>
-            </div>
+              <div className={cn("ui-alert", isFullAccess ? "ui-alert-danger" : "ui-alert-warning")}>
+                <AlertTriangle size={14} aria-hidden="true" className="mt-0.5 shrink-0" />
+                <span>{isFullAccess ? "Full access keys can perform any action the owning account can. Use cautiously." : "Select only the permissions your application needs."}</span>
+              </div>
             </AdminFormSection>
-            <Btn onClick={() => createMut.mutate()} disabled={desc.trim() === "" || selectedScopes.length === 0 || createMut.isPending}>
+            <Btn onClick={() => createMut.mutate()} disabled={createBlockedReason !== null || createMut.isPending} loading={createMut.isPending}>
               <Plus size={14} /> Create Key
             </Btn>
+            {createBlockedReason ? <p className="ui-hint">{createBlockedReason}</p> : null}
           </div>
 
           {newToken ? (
-            <div className="mx-4 mb-4 rounded-lg border border-emerald-700/40 bg-emerald-900/20 p-3">
-              <p className="text-xs text-emerald-300 font-semibold mb-2 flex items-center gap-1"><Check size={12} /> Key created - copy it now, it won&apos;t be shown again.</p>
+            <div className="mx-4 mb-4 space-y-2 rounded-lg border border-line bg-overlay-subtle p-3">
+              <p className="flex items-center gap-1 font-semibold text-text">
+                <Check size={12} aria-hidden="true" /> Key created — copy it now, it will not be shown again.
+              </p>
               <div className="flex items-center gap-2">
-                <code className="flex-1 rounded bg-[var(--surface)] px-2 py-1.5 text-xs text-emerald-200 font-mono break-all">{tokenMasked ? "••••••••••••••••••••••••" : newToken}</code>
-                <button aria-label={tokenMasked ? "Reveal API key" : "Hide API key"} onClick={() => setTokenMasked((masked) => !masked)} className="shrink-0 text-emerald-400 hover:text-emerald-200 transition" type="button">
-                  {tokenMasked ? <Eye size={16} /> : <EyeOff size={16} />}
-                </button>
-                <button aria-label="Copy API key" onClick={() => void copyToken()} className="shrink-0 text-emerald-400 hover:text-emerald-200 transition" type="button">
-                  {copied ? <Check size={16} /> : <Copy size={16} />}
-                </button>
+                <code className="ui-code-inline flex-1 break-all">{tokenMasked ? "••••••••••••••••••••••••" : newToken}</code>
+                <AdminIconButton label={tokenMasked ? "Reveal API key" : "Hide API key"} onClick={() => setTokenMasked((masked) => !masked)}>
+                  {tokenMasked ? <Eye size={14} /> : <EyeOff size={14} />}
+                </AdminIconButton>
+                <AdminIconButton label="Copy API key" onClick={() => void copyToken()}>
+                  {copied ? <Check size={14} /> : <Copy size={14} />}
+                </AdminIconButton>
               </div>
-              <p className="mt-2 text-xs text-slate-400">Copied keys are wiped from the clipboard 15s after copying.</p>
-              {verification ? <p className="mt-2 text-xs text-emerald-200">{verification}</p> : <p className="mt-2 text-xs text-emerald-200">Verifying token authentication...</p>}
-              <p className="mt-2 text-xs text-slate-400">Scopes are enforced by the API. Use this token as an external Bearer token; routes outside the selected scopes return 403.</p>
+              <p className="ui-hint">Copied keys are wiped from the clipboard 15s after copying, and whenever this window loses focus.</p>
+              {verification ? (
+                <div
+                  aria-live="polite"
+                  role={verification.state === "failed" ? "alert" : "status"}
+                  className={cn("ui-alert", verification.state === "ok" ? "ui-alert-success" : verification.state === "failed" ? "ui-alert-danger" : "ui-alert-info")}
+                >
+                  <span>{verification.message}</span>
+                </div>
+              ) : null}
+              <p className="ui-hint">Scopes are enforced by the API. Use this token as an external Bearer token; routes outside the selected scopes return 403.</p>
             </div>
           ) : null}
         </Card>
 
         {/* Keys list */}
         <Card>
-          <CardHeader title="Existing keys" icon={Shield} />
+          <CardHeader title={isSuccess ? `Existing keys (${keys.length})` : "Existing keys"} icon={Shield} />
           {isLoading ? (
-            <TableSkeleton rows={3} />
-          ) : !keys || keys.length === 0 ? (
-            <EmptyState icon={KeyRound} message="No API keys yet." />
+            <div className="p-4"><AdminLoadingState label="Loading API keys…" /></div>
+          ) : isError ? (
+            <div className="p-4"><AdminErrorState message={errorMessage(keysError, "API keys could not be loaded.")} retry={() => void refetchKeys()} /></div>
+          ) : keys.length === 0 ? (
+            <EmptyState icon={KeyRound} title="No API keys" message="No API keys exist yet. Create one to enable programmatic access." />
           ) : (
-            <ul className="divide-y divide-white/[0.04]">
-              {Array.isArray(keys) && keys.map((key) => (
+            <ul className="divide-y divide-line">
+              {keys.map((key) => (
                 <li key={key.id} className="px-4 py-3">
                   <div className="flex items-start justify-between gap-3">
                     <div className="min-w-0 flex-1">
-                      <p className="text-sm font-medium text-slate-200">{key.description || <span className="text-slate-500">Unnamed key</span>}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        Created {new Date(key.createdAt).toLocaleDateString()}
-                        {key.lastUsedAt ? ` \u2022 Last used ${new Date(key.lastUsedAt).toLocaleDateString()}` : " \u2022 Never used"}
+                      <p className="text-sm font-medium text-text">{key.description || <span className="text-text-subtle">Unnamed key</span>}</p>
+                      {/* Only the prefix survives creation (the server stores a hash), so
+                          this is the one identifier that ties a row to a copied token. */}
+                      <p className="t-meta mt-0.5">
+                        Token{" "}
+                        <code className="ui-code-inline">{key.tokenPrefix ? `${key.tokenPrefix}••••` : "prefix not reported"}</code>
+                        {" · secret is not retrievable"}
                       </p>
-                      {key.scopes && key.scopes.length > 0 && (
-                        <div className="flex flex-wrap gap-1 mt-1.5">
+                      <p className="t-meta mt-0.5">
+                        Created {formatDate(key.createdAt, "Unknown")}
+                        {key.lastUsedAt ? ` · Last used ${formatDate(key.lastUsedAt, "Unknown")}` : " · Never used"}
+                      </p>
+                      {key.scopes && key.scopes.length > 0 ? (
+                        <div className="mt-1.5 flex flex-wrap gap-1">
                           {key.scopes.map((scope) => (
                             <ScopeLabel key={scope} scope={scope} />
                           ))}
                         </div>
+                      ) : (
+                        <p className="t-meta mt-0.5">No scopes recorded on this key</p>
                       )}
                     </div>
-                    <Btn size="sm" tone="danger" onClick={() => requestRevoke(key)} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
+                    <AdminIconButton label={`Revoke API key ${key.description || key.id}`} tone="danger" disabled={deleteMut.isPending} onClick={() => requestRevoke(key)}>
+                      <Trash2 size={14} />
+                    </AdminIconButton>
                   </div>
                 </li>
               ))}
@@ -276,6 +335,6 @@ export function AdminApiKeys() {
         </Card>
       </div>
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

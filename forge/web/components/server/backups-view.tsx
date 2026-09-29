@@ -34,9 +34,7 @@ export function BackupsView({ server }: { server?: ApiServer }) {
   const canDelete = hasServerPermission(access, "backup.delete");
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [backupName, setBackupName] = useState("");
   const [ignoredFiles, setIgnoredFiles] = useState("");
-  const [lockOnCreate, setLockOnCreate] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [currentPage, setCurrentPage] = useState(1);
   const [confirm, renderConfirm] = useConfirm();
@@ -49,15 +47,11 @@ export function BackupsView({ server }: { server?: ApiServer }) {
   const invalidate = () => void queryClient.invalidateQueries({ queryKey: ["server-backups", server?.id] });
   const createMutation = useMutation({ 
     mutationFn: () => createBackup(server?.id ?? "", {
-      name: backupName || undefined,
       ignored: ignoredFiles ? ignoredFiles.split(",").map(f => f.trim()).filter(f => f) : undefined,
-      is_locked: lockOnCreate || undefined
     }), 
     onSuccess: () => {
       invalidate();
-      setBackupName("");
       setIgnoredFiles("");
-      setLockOnCreate(false);
       setShowAdvanced(false);
       setCurrentPage(1);
     },
@@ -182,15 +176,9 @@ export function BackupsView({ server }: { server?: ApiServer }) {
       )}
       {showAdvanced && (
         <div className="rounded-xl bg-[var(--surface-raised)] px-4 py-4 space-y-3">
-          <div>
-            <label className="block text-sm font-semibold text-slate-100 mb-1">Backup Name (optional)</label>
-            <input 
-              className="w-full rounded-lg bg-[var(--surface)] border border-white/[0.1] px-3 py-2 text-sm text-slate-100 focus:outline-none focus:border-blue-500"
-              placeholder="Leave empty for auto-generated name"
-              value={backupName}
-              onChange={(e) => setBackupName(e.target.value)}
-              type="text"
-            />
+          <div className="rounded-lg border border-white/[0.08] bg-[var(--surface)] px-3 py-3">
+            <p className="text-sm font-semibold text-slate-100 mb-1">Backup Name</p>
+            <p className="text-xs text-[var(--text-muted)]">Forge generates the backup name when it starts the job. A custom name is not accepted by the control plane.</p>
           </div>
           <div>
             <label className="block text-sm font-semibold text-slate-100 mb-1">Ignored Files (comma-separated patterns)</label>
@@ -206,15 +194,6 @@ export function BackupsView({ server }: { server?: ApiServer }) {
           <div className="rounded-lg border border-white/[0.08] bg-[var(--surface)] px-3 py-3">
             <p className="text-sm font-semibold text-slate-100 mb-1">Storage Destination</p>
             <p className="text-xs text-[var(--text-muted)]">Custom storage destinations (S3, GCS, Azure) are not supported yet. Backups currently use the default node-local storage.</p>
-          </div>
-          <div className="flex items-center gap-2">
-            <input 
-              checked={lockOnCreate}
-              onChange={(e) => setLockOnCreate(e.target.checked)}
-              type="checkbox"
-              id="lock-backup"
-            />
-            <label htmlFor="lock-backup" className="text-sm font-semibold text-slate-100">Lock backup on creation</label>
           </div>
         </div>
       )}

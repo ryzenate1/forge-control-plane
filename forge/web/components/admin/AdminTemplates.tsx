@@ -2,16 +2,35 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Ban, Box, Cpu, FileCode, Gamepad2, HardDrive, Layers, Pencil, Plus, Terminal, Trash2 } from "lucide-react";
-import { createTemplate, deleteEgg, fetchTemplates, updateEgg, fetchNests, createEgg } from "@/lib/api";
+import { Archive, Ban, FileCode, Gamepad2, Layers, Pencil, Plus, Terminal, Trash2 } from "lucide-react";
+import { createEgg, deleteEgg, fetchTemplates, updateEgg, fetchNests } from "@/lib/api";
 import type { ApiEgg, ApiNest, UpdateEggInput } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, Textarea, StatsRow, AdminPageHeader, AdminPageLayout } from "./admin-ui";
+import {
+  AdminErrorState,
+  AdminIconButton,
+  AdminLoadingRows,
+  AdminPageLayout,
+  AdminSection,
+  AdminSelect,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  ModalFooter,
+  Pill,
+  SectionHeader,
+  Textarea,
+} from "./admin-ui";
+import { adminPageGuides } from "./admin-page-guides";
 import { EGG_TEMPLATES, type EggTemplateItem } from "@/lib/egg-templates";
-import { useSearchParams } from "next/navigation";
+import { useSearchParams, useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
-import { TableSkeleton } from "@/components/ui/loading-skeleton";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 const emptyForm = {
+  nestId: "",
   name: "",
   description: "",
   dockerImages: "",
@@ -25,24 +44,33 @@ const emptyForm = {
   fileDenylist: "",
 };
 
+function lines(value: string): string[] {
+  return value.split("\n").map((s) => s.trim()).filter(Boolean);
+}
+
+function messageOf(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : "The request could not be completed.";
+}
+
 export function AdminTemplates() {
   const qc = useQueryClient();
+  const router = useRouter();
   const templatesQuery = useQuery({ queryKey: ["templates"], queryFn: fetchTemplates });
-  const templates = useMemo(() => Array.isArray(templatesQuery.data) ? templatesQuery.data : [], [templatesQuery.data]);
-  const isLoading = templatesQuery.isLoading;
+  const templates = useMemo(() => (Array.isArray(templatesQuery.data) ? templatesQuery.data : []), [templatesQuery.data]);
 
   const searchParams = useSearchParams();
   const preselectedNestId = searchParams.get("nestId");
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
 
   const [showCreate, setShowCreate] = useState(false);
   const [editing, setEditing] = useState<ApiEgg | null>(null);
   const [form, setForm] = useState({ ...emptyForm });
-  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [formError, setFormError] = useState<string | null>(null);
   const [importTemplate, setImportTemplate] = useState<EggTemplateItem | null>(null);
 
   const nestsQuery = useQuery({ queryKey: ["nests"], queryFn: fetchNests });
-  const nests = useMemo(() => Array.isArray(nestsQuery.data) ? nestsQuery.data : [], [nestsQuery.data]);
+  const nests = useMemo(() => (Array.isArray(nestsQuery.data) ? nestsQuery.data : []), [nestsQuery.data]);
 
   const importEggMut = useMutation({
     mutationFn: (params: { nestId: string; template: EggTemplateItem }) => {
@@ -62,12 +90,13 @@ export function AdminTemplates() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["eggs"] });
+      qc.invalidateQueries({ queryKey: ["templates"] });
       qc.invalidateQueries({ queryKey: ["nests"] });
       setImportTemplate(null);
       toast({ tone: "success", title: "Egg imported", message: "Game template has been imported as an egg." });
     },
     onError: (err: Error) => {
-      toast({ tone: "error", title: "Import failed", message: err.message });
+      toast({ tone: "error", title: "Import failed", message: messageOf(err) });
     },
   });
 
@@ -77,6 +106,7 @@ export function AdminTemplates() {
 
   const openCreate = () => {
     resetForm();
+    setFormError(null);
     setShowCreate(true);
     setEditing(null);
   };
@@ -91,18 +121,20 @@ export function AdminTemplates() {
       ? (Array.isArray(tpl.config.features) ? (tpl.config.features as string[]).join("\n") : "")
       : "";
     setForm({
+      nestId: tpl.nestId ?? "",
       name: tpl.name ?? "",
       description: tpl.description ?? "",
       dockerImages: images.join("\n"),
       startupCommand: tpl.startup ?? tpl.startupCommand ?? "",
       stopCommand: (tpl.config?.stop as string) ?? "",
-      defaultMemory: String(tpl.defaultMemoryMb ?? 1024),
+      defaultMemory: String(tpl.defaultMemoryMb ?? ""),
       installContainer: tpl.installContainer ?? "",
       installEntrypoint: tpl.installEntrypoint ?? "",
       installScript: tpl.installScript ?? "",
       features: existingFeatures,
       fileDenylist: (tpl.fileDenylist ?? []).join("\n"),
     });
+    setFormError(null);
     setEditing(tpl);
     setShowCreate(false);
   };
@@ -110,37 +142,58 @@ export function AdminTemplates() {
   const closeModal = () => {
     setShowCreate(false);
     setEditing(null);
+    setFormError(null);
     resetForm();
   };
 
+  /** Every field the form collects is sent. The previous create path hit
+   * `POST /templates`, which files an egg into a nest literally named "Games"
+   * and accepts only name/image/startup/memory — eight of the twelve fields
+   * shown here were discarded server-side with no message (`store_templates.go`).
+   * `POST /eggs` is the resource this list actually reads (`GET /eggs`), and it
+   * takes the whole definition. */
   const createMut = useMutation({
-    mutationFn: () => {
-      const images = form.dockerImages.split("\n").map((s) => s.trim()).filter(Boolean);
-      return createTemplate({
-        name: form.name.trim(),
-        image: images[0] ?? "",
-        startupCommand: form.startupCommand.trim(),
-        defaultMemoryMb: parseInt(form.defaultMemory, 10) || 1024,
+    mutationFn: (values: typeof emptyForm) => {
+      const images = lines(values.dockerImages);
+      const features = lines(values.features);
+      const config: Record<string, unknown> = {};
+      if (values.stopCommand.trim()) config.stop = values.stopCommand.trim();
+      if (features.length > 0) config.features = features;
+      return createEgg({
+        nestId: values.nestId,
+        name: values.name.trim(),
+        description: values.description.trim(),
+        dockerImages: images,
+        startup: values.startupCommand.trim(),
+        config,
+        defaultMemoryMb: Number(values.defaultMemory),
+        installScript: values.installScript,
+        installContainer: values.installContainer.trim(),
+        installEntrypoint: values.installEntrypoint.trim(),
+        fileDenylist: lines(values.fileDenylist),
       });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["eggs"] });
+      qc.invalidateQueries({ queryKey: ["nests"] });
       closeModal();
+      toast({ tone: "success", title: "Definition created", message: "Saved as an egg in the nest you chose." });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to create template", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to create template", message: messageOf(err) }),
   });
 
   const updateMut = useMutation({
     mutationFn: () => {
       if (!editing) throw new Error("No template being edited");
-      const images = form.dockerImages.split("\n").map((s) => s.trim()).filter(Boolean);
-      const denylist = form.fileDenylist.split("\n").map((s) => s.trim()).filter(Boolean);
-      const features = form.features.split("\n").map((s) => s.trim()).filter(Boolean);
+      const images = lines(form.dockerImages);
+      const denylist = lines(form.fileDenylist);
+      const features = lines(form.features);
       const input: UpdateEggInput = {
         name: form.name.trim() || undefined,
         description: form.description.trim() || undefined,
         startup: form.startupCommand.trim() || undefined,
-        defaultMemoryMb: parseInt(form.defaultMemory, 10) || undefined,
+        defaultMemoryMb: Number(form.defaultMemory) || undefined,
         installContainer: form.installContainer.trim() || undefined,
         installEntrypoint: form.installEntrypoint.trim() || undefined,
         installScript: form.installScript.trim() || undefined,
@@ -168,128 +221,155 @@ export function AdminTemplates() {
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["templates"] });
+      qc.invalidateQueries({ queryKey: ["eggs"] });
       closeModal();
+      toast({ tone: "success", title: "Definition updated" });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to update template", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to update template", message: messageOf(err) }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteEgg(id),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["templates"] });
-      setDeletingId(null);
+      qc.invalidateQueries({ queryKey: ["eggs"] });
+      toast({ tone: "success", title: "Definition deleted" });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to delete template", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Delete failed", message: messageOf(err) }),
   });
 
-  const confirmDelete = (id: string) => {
-    if (deletingId === id) {
-      deleteMut.mutate(id);
-    } else {
-      setDeletingId(id);
-      setTimeout(() => setDeletingId((curr) => (curr === id ? null : curr)), 3000);
-    }
+  const requestDelete = (tpl: ApiEgg) => {
+    void (async () => {
+      const ok = await confirm({
+        title: `Delete “${tpl.name}”?`,
+        description:
+          "This deletes the egg definition. Servers already created from it keep running and keep their configuration. A definition still referenced by a server cannot be deleted — the API refuses, and those servers must be deleted or moved first.",
+        danger: true,
+        confirmLabel: "Delete definition",
+      });
+      if (ok) deleteMut.mutate(tpl.id);
+    })();
   };
+
+  const validateCreate = () => {
+    if (!form.name.trim()) return "A name is required.";
+    if (!form.nestId) return "Choose the nest this definition belongs to.";
+    const memory = Number(form.defaultMemory);
+    if (!Number.isInteger(memory) || memory <= 0) return "Default memory must be a whole number of MiB greater than 0.";
+    return null;
+  };
+
+  const nestOptions = nests.map((n) => ({ value: n.id, label: n.name }));
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader
-        title="Legacy Templates"
-        description="Legacy compatibility templates kept for imported installs. Browse the game catalog and import entries into your nests as eggs; new definitions belong in Service Definitions."
-        action={<Btn onClick={openCreate}><Plus size={14} /> New Template</Btn>}
+      <SectionHeader
+        info={adminPageGuides.compatibility}
+        action={
+          <Btn onClick={openCreate} disabled={nests.length === 0} title={nests.length === 0 ? "A nest must exist before a definition can be filed" : undefined}>
+            <Plus size={14} /> New Template
+          </Btn>
+        }
       />
 
-      <StatsRow items={[
-        { label: "Templates", value: templates?.length ?? 0, icon: Box, tone: "neutral" },
-      ]} />
+      <div className="ui-alert ui-alert-warning" role="note">
+        <span>
+          These are legacy compatibility projections of eggs. New definitions belong in{" "}
+          <button
+            type="button"
+            className="font-semibold underline underline-offset-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+            onClick={() => router.push("/admin/nests")}
+          >
+            Service Definitions
+          </button>
+          . Creating one here files an egg in the nest you choose, exactly as Service Definitions does.
+        </span>
+      </div>
 
       <Card>
-        <CardHeader title={`${templates?.length ?? 0} template${templates?.length !== 1 ? "s" : ""}`} icon={Box} />
-        {isLoading ? (
-          <TableSkeleton rows={4} />
-        ) : !templates || templates.length === 0 ? (
-          <EmptyState icon={Box} message="No templates configured. Create one to start deploying servers." />
+        <CardHeader
+          title={templatesQuery.data ? `${templates.length} definitions` : "Compatibility definitions"}
+          icon={Archive}
+        />
+        {templatesQuery.isLoading ? (
+          <AdminLoadingRows rows={4} label="Loading definitions…" />
+        ) : templatesQuery.isError ? (
+          <div className="p-4">
+            <AdminErrorState
+              message={`Definitions could not be listed: ${messageOf(templatesQuery.error)}`}
+              retry={() => void templatesQuery.refetch()}
+            />
+          </div>
+        ) : templates.length === 0 ? (
+          <EmptyState
+            icon={Archive}
+            title="No definitions returned"
+            message="The request succeeded and the list is empty. Import a bundled game template below, or create one in Service Definitions."
+          />
         ) : (
           <div className="grid gap-4 p-4 md:grid-cols-2 lg:grid-cols-3">
-            {Array.isArray(templates) && templates.map((tpl) => {
+            {templates.map((tpl) => {
               const images = tpl.dockerImages
                 ? (Array.isArray(tpl.dockerImages) ? tpl.dockerImages : Object.values(tpl.dockerImages))
                 : tpl.image
                   ? [tpl.image]
                   : [];
               const startupCmd = tpl.startup ?? tpl.startupCommand ?? "";
-              const varCount = tpl.variables?.length ?? 0;
-              const denyCount = tpl.fileDenylist?.length ?? 0;
+              const varCount = tpl.variables?.length;
+              const denyCount = tpl.fileDenylist?.length;
               return (
-                <div key={tpl.id} className="rounded-xl border border-white/[0.06] bg-[var(--surface-input)] p-4 space-y-3 hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)] transition">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-slate-100">{tpl.name}</h3>
+                <div key={tpl.id} className="space-y-3 rounded-xl border border-line bg-overlay-subtle p-4 transition hover:border-[color-mix(in_srgb,var(--brand)_30%,transparent)]">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="min-w-0 break-words text-sm font-semibold text-text">{tpl.name}</h3>
                     <Pill tone="neutral">template</Pill>
                   </div>
 
                   {tpl.description ? (
-                    <p className="text-xs text-slate-400 leading-relaxed line-clamp-2">{tpl.description}</p>
+                    <p className="text-xs leading-5 text-text-subtle">{tpl.description}</p>
                   ) : null}
 
                   <div className="space-y-2">
                     {images.length > 0 ? (
-                      <div className="flex items-start gap-2 text-xs text-slate-400">
-                        <HardDrive size={12} className="shrink-0 mt-0.5" />
-                        <div className="flex flex-wrap gap-1">
-                          {images.slice(0, 3).map((img, i) => (
-                            <span key={i} className="font-mono truncate max-w-[160px] block" title={img}>{img}</span>
-                          ))}
-                          {images.length > 3 ? <Pill tone="neutral">+{images.length - 3}</Pill> : null}
-                        </div>
+                      <div className="space-y-1">
+                        <p className="t-meta">{images.length} image{images.length !== 1 ? "s" : ""}</p>
+                        {images.slice(0, 3).map((img, i) => (
+                          <p key={`${img}-${i}`} className="flex items-start gap-1.5 font-mono text-xs text-text-subtle">
+                            <FileCode size={12} className="mt-0.5 shrink-0" />
+                            <span className="break-all">{img}</span>
+                          </p>
+                        ))}
+                        {images.length > 3 ? <Pill tone="neutral">+{images.length - 3} more</Pill> : null}
                       </div>
-                    ) : null}
+                    ) : <p className="t-meta">No images recorded</p>}
 
                     {startupCmd ? (
-                      <div className="flex items-center gap-2 text-xs text-slate-400">
-                        <Terminal size={12} className="shrink-0" />
-                        <span className="font-mono truncate" title={startupCmd}>{startupCmd}</span>
-                      </div>
+                      <p className="flex items-start gap-1.5 text-xs text-text-subtle">
+                        <Terminal size={12} className="mt-0.5 shrink-0" />
+                        <span className="break-all font-mono">{startupCmd}</span>
+                      </p>
                     ) : null}
 
                     {tpl.installContainer || tpl.installEntrypoint ? (
                       <div className="flex flex-wrap gap-1.5">
-                        {tpl.installContainer ? (
-                          <Pill tone="yellow">C: {tpl.installContainer}</Pill>
-                        ) : null}
-                        {tpl.installEntrypoint ? (
-                          <Pill tone="green">E: {tpl.installEntrypoint}</Pill>
-                        ) : null}
+                        {tpl.installContainer ? <Pill tone="yellow">Install container: {tpl.installContainer}</Pill> : null}
+                        {tpl.installEntrypoint ? <Pill tone="green">Install entrypoint: {tpl.installEntrypoint}</Pill> : null}
                       </div>
                     ) : null}
                   </div>
 
-                  <div className="flex items-center gap-4 pt-2 border-t border-white/[0.04] text-xs text-slate-500">
-                    {tpl.defaultMemoryMb ? (
-                      <span className="flex items-center gap-1"><Cpu size={11} /> {tpl.defaultMemoryMb} MB</span>
-                    ) : null}
-                    {varCount > 0 ? (
-                      <span className="flex items-center gap-1"><Layers size={11} /> {varCount} var{varCount !== 1 ? "s" : ""}</span>
-                    ) : null}
-                    {denyCount > 0 ? (
-                      <span className="flex items-center gap-1"><Ban size={11} /> {denyCount} denied</span>
-                    ) : null}
-                    {images.length > 0 ? (
-                      <span className="flex items-center gap-1"><FileCode size={11} /> {images.length} image{images.length !== 1 ? "s" : ""}</span>
-                    ) : null}
+                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-line pt-2 text-xs text-text-subtle">
+                    <span>{tpl.defaultMemoryMb ? `${tpl.defaultMemoryMb} MiB default` : "No default memory"}</span>
+                    {varCount !== undefined ? <span className="flex items-center gap-1"><Layers size={11} /> {varCount} variable{varCount !== 1 ? "s" : ""}</span> : null}
+                    {denyCount !== undefined ? <span className="flex items-center gap-1"><Ban size={11} /> {denyCount} denied pattern{denyCount !== 1 ? "s" : ""}</span> : null}
                   </div>
 
                   <div className="flex items-center gap-2 pt-1">
-                    <Btn size="sm" tone="subtle" onClick={() => openEdit(tpl)}>
+                    <Btn size="sm" tone="subtle" ariaLabel={`Edit ${tpl.name}`} onClick={() => openEdit(tpl)}>
                       <Pencil size={12} /> Edit
                     </Btn>
-                    <Btn
-                      size="sm"
-                      tone={deletingId === tpl.id ? "danger" : "subtle"}
-                      disabled={deleteMut.isPending && deletingId === tpl.id}
-                      onClick={() => confirmDelete(tpl.id)}
-                    >
-                      {deletingId === tpl.id ? <><Trash2 size={12} /> Confirm?</> : <><Trash2 size={12} /> Delete</>}
-                    </Btn>
+                    <AdminIconButton label={`Delete ${tpl.name}`} tone="danger" disabled={deleteMut.isPending} onClick={() => requestDelete(tpl)}>
+                      <Trash2 size={12} />
+                    </AdminIconButton>
                   </div>
                 </div>
               );
@@ -299,98 +379,147 @@ export function AdminTemplates() {
       </Card>
 
       {(showCreate || editing) ? (
-        <Modal title={editing ? `Edit ${editing.name}` : "Create Template"} onClose={closeModal} wide>
+        <Modal
+          title={editing ? `Edit ${editing.name}` : "Create definition"}
+          description="Every field below is written to the egg. Nothing is dropped on save."
+          onClose={closeModal}
+          wide
+        >
           <div className="grid gap-4 md:grid-cols-2">
-            <Input label="Template Name *" value={form.name} onChange={set("name")} placeholder="Minecraft Java" required />
-            <Input label="Default Memory (MB)" value={form.defaultMemory} onChange={set("defaultMemory")} placeholder="1024" type="number" />
+            <Input label="Name" value={form.name} onChange={set("name")} placeholder="Minecraft Java" required />
+            <Input label="Default memory (MiB)" value={form.defaultMemory} onChange={set("defaultMemory")} placeholder="1024" type="number" />
+
+            {editing ? (
+              <p className="ui-hint md:col-span-2">
+                This definition lives in nest{" "}
+                <span className="font-mono">{nests.find((n) => n.id === (editing.nestId ?? form.nestId))?.name ?? "unknown"}</span>.
+                Editing here cannot move it to another nest.
+              </p>
+            ) : nestsQuery.isLoading ? (
+              <div className="md:col-span-2"><AdminLoadingRows rows={1} label="Loading nests…" /></div>
+            ) : nestsQuery.isError ? (
+              <div className="md:col-span-2">
+                <AdminErrorState message={`Nests could not be loaded: ${messageOf(nestsQuery.error)}`} retry={() => void nestsQuery.refetch()} />
+              </div>
+            ) : nests.length === 0 ? (
+              <p className="ui-alert ui-alert-warning" role="alert">
+                <span>The nest list loaded successfully and is empty. Create a nest in Service Definitions first.</span>
+              </p>
+            ) : (
+              <div className="md:col-span-2">
+                <AdminSelect
+                  label="Nest"
+                  value={form.nestId}
+                  onChange={set("nestId")}
+                  placeholder="Choose a nest"
+                  options={nestOptions}
+                />
+                <p className="ui-hint mt-1.5">Nothing is selected for you — the nest decides where this definition is filed.</p>
+              </div>
+            )}
 
             <div className="md:col-span-2">
-              <Textarea label="Description" value={form.description} onChange={set("description")} rows={2} placeholder="Optional description for this template..." />
+              <Textarea label="Description" value={form.description} onChange={set("description")} rows={2} placeholder="Optional description for this definition" />
             </div>
 
-            <Textarea label="Docker Images (one per line)" value={form.dockerImages} onChange={set("dockerImages")} rows={3} placeholder="ghcr.io/pterodactyl/yolks:java_21" />
-            <Textarea label="Startup Command" value={form.startupCommand} onChange={set("startupCommand")} rows={3} placeholder="java -Xms128M -XX:MaxRAMPercentage=95.0 -jar {{SERVER_JARFILE}}" />
+            <Textarea label="Docker images (one per line)" value={form.dockerImages} onChange={set("dockerImages")} rows={3} placeholder="ghcr.io/pterodactyl/yolks:java_21" />
+            <Textarea label="Startup command" value={form.startupCommand} onChange={set("startupCommand")} rows={3} placeholder="java -Xms128M -XX:MaxRAMPercentage=95.0 -jar {{SERVER_JARFILE}}" />
 
-            <Input label="Stop Command" value={form.stopCommand} onChange={set("stopCommand")} placeholder="stop" mono />
-            <Input label="Install Container" value={form.installContainer} onChange={set("installContainer")} placeholder="ghcr.io/pterodactyl/installers:alpine" mono />
-            <Input label="Install Entrypoint" value={form.installEntrypoint} onChange={set("installEntrypoint")} placeholder="ash" mono />
-            <Textarea label="Install Script" value={form.installScript} onChange={set("installScript")} rows={4} placeholder="#!/bin/ash" />
+            <Input label="Stop command" value={form.stopCommand} onChange={set("stopCommand")} placeholder="stop" mono />
+            <Input label="Install container" value={form.installContainer} onChange={set("installContainer")} placeholder="ghcr.io/pterodactyl/installers:alpine" mono />
+            <Input label="Install entrypoint" value={form.installEntrypoint} onChange={set("installEntrypoint")} placeholder="ash" mono />
+            <Textarea label="Install script" value={form.installScript} onChange={set("installScript")} rows={4} placeholder="#!/bin/ash" />
 
             <div className="md:col-span-2">
-              <Textarea label="Features (one per line)" value={form.features} onChange={set("features")} rows={2} placeholder="eula&#10;java_version&#10;pid_limit" />
+              <Textarea label="Features (one per line)" value={form.features} onChange={set("features")} rows={2} placeholder={"eula\njava_version\npid_limit"} />
             </div>
             <div className="md:col-span-2">
-              <Textarea label="File Denylist (one per line)" value={form.fileDenylist} onChange={set("fileDenylist")} rows={2} placeholder="*.exe&#10;*.bat" />
+              <Textarea label="File denylist (one per line)" value={form.fileDenylist} onChange={set("fileDenylist")} rows={2} placeholder={"*.exe\n*.bat"} />
             </div>
+
+            {formError ? <div className="ui-alert ui-alert-danger md:col-span-2" role="alert"><span>{formError}</span></div> : null}
           </div>
           <ModalFooter
             onCancel={closeModal}
-            onConfirm={() => (editing ? updateMut : createMut).mutate()}
-            disabled={form.name.trim() === "" || createMut.isPending || updateMut.isPending}
-            confirmLabel={editing ? "Save Changes" : "Create Template"}
+            onConfirm={() => {
+              if (editing) {
+                const err = form.name.trim() ? null : "A name is required.";
+                if (err) { setFormError(err); return; }
+                updateMut.mutate();
+                return;
+              }
+              const err = validateCreate();
+              if (err) { setFormError(err); return; }
+              createMut.mutate(form);
+            }}
+            disabled={createMut.isPending || updateMut.isPending}
+            confirmLabel={editing ? (updateMut.isPending ? "Saving…" : "Save changes") : createMut.isPending ? "Creating…" : "Create definition"}
           />
         </Modal>
       ) : null}
 
-      {/* Game Template Catalog */}
-      <SectionHeader
+      <AdminSection
         title="Game Template Catalog"
-        sub="Pre-configured game server definitions. Import one into a nest to get started quickly."
-      />
-
+        description="Definitions bundled with this build of Forge — they ship with the product, they are not inventory from your infrastructure. Importing one creates an egg in the nest you choose."
+      >
       <Card>
-        <CardHeader title={`${EGG_TEMPLATES.length} game template${EGG_TEMPLATES.length !== 1 ? "s" : ""}`} icon={Gamepad2} />
+        <CardHeader title={`${EGG_TEMPLATES.length} bundled game template${EGG_TEMPLATES.length !== 1 ? "s" : ""}`} icon={Gamepad2} />
         <div className="grid gap-4 p-4 md:grid-cols-2 lg:grid-cols-3">
           {EGG_TEMPLATES.map((t) => (
-            <div key={t.id} className="rounded-xl border border-white/[0.06] bg-[var(--surface-input)] p-4 space-y-3 hover:border-white/20 transition">
+            <div key={t.id} className="space-y-3 rounded-xl border border-line bg-overlay-subtle p-4 transition hover:border-line-strong">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0 flex-1">
-                  <h3 className="text-sm font-semibold text-slate-100">{t.name}</h3>
-                  <p className="mt-0.5 line-clamp-2 text-xs text-slate-500">{t.description}</p>
+                  <h3 className="text-sm font-semibold text-text">{t.name}</h3>
+                  <p className="mt-0.5 text-xs leading-5 text-text-subtle">{t.description}</p>
                 </div>
                 <Pill tone="neutral">{t.game}</Pill>
               </div>
 
               <div className="space-y-2">
-                <div className="flex flex-wrap gap-1.5">
+                <div className="space-y-1">
                   {Object.entries(t.images).map(([label, img]) => (
-                    <span key={label} className="inline-flex items-center gap-1 rounded-md bg-white/[0.04] px-2 py-0.5 font-mono text-[10px] text-slate-500" title={img}>
-                      <HardDrive size={10} /> {label}
-                    </span>
+                    <p key={label} className="flex items-start gap-1.5 font-mono text-xs text-text-subtle">
+                      <FileCode size={11} className="mt-0.5 shrink-0" />
+                      <span className="break-all">{label}: {img}</span>
+                    </p>
                   ))}
                 </div>
                 {t.startup && (
-                  <div className="flex items-center gap-2 text-xs text-slate-400">
-                    <Terminal size={12} className="shrink-0" />
-                    <span className="font-mono truncate text-[11px]" title={t.startup}>{t.startup}</span>
-                  </div>
+                  <p className="flex items-start gap-1.5 text-xs text-text-subtle">
+                    <Terminal size={12} className="mt-0.5 shrink-0" />
+                    <span className="break-all font-mono">{t.startup}</span>
+                  </p>
                 )}
               </div>
 
-              <div className="flex items-center gap-3 pt-2 border-t border-white/[0.04] text-xs text-slate-500">
-                <span className="flex items-center gap-1"><Layers size={11} /> {t.env.length} var{t.env.length !== 1 ? "s" : ""}</span>
+              <div className="flex flex-wrap items-center gap-3 border-t border-line pt-2 text-xs text-text-subtle">
+                <span className="flex items-center gap-1"><Layers size={11} /> {t.env.length} variable{t.env.length !== 1 ? "s" : ""}</span>
                 <span className="flex items-center gap-1"><FileCode size={11} /> {t.features.length} feature{t.features.length !== 1 ? "s" : ""}</span>
               </div>
 
-              <Btn size="sm" onClick={() => setImportTemplate(t)}>
+              <Btn size="sm" ariaLabel={`Import ${t.name} as an egg`} onClick={() => setImportTemplate(t)}>
                 <Gamepad2 size={12} /> Import as Egg
               </Btn>
             </div>
           ))}
         </div>
       </Card>
+      </AdminSection>
 
-      {/* Import Game Template Modal */}
       {importTemplate ? (
         <ImportTemplateModal
           template={importTemplate}
           nests={nests}
+          nestsError={nestsQuery.isError ? messageOf(nestsQuery.error) : null}
+          nestsLoading={nestsQuery.isLoading}
           preselectedNestId={preselectedNestId}
           isPending={importEggMut.isPending}
           onImport={(nestId) => importEggMut.mutate({ nestId, template: importTemplate })}
           onClose={() => setImportTemplate(null)}
         />
       ) : null}
+
+      {renderConfirm()}
     </AdminPageLayout>
   );
 }
@@ -398,6 +527,8 @@ export function AdminTemplates() {
 function ImportTemplateModal({
   template,
   nests,
+  nestsError,
+  nestsLoading,
   preselectedNestId,
   isPending,
   onImport,
@@ -405,65 +536,74 @@ function ImportTemplateModal({
 }: {
   template: EggTemplateItem;
   nests: ApiNest[];
+  nestsError: string | null;
+  nestsLoading: boolean;
   preselectedNestId: string | null;
   isPending: boolean;
   onImport: (nestId: string) => void;
   onClose: () => void;
 }) {
-  const initialNest = preselectedNestId && nests.find((n) => n.id === preselectedNestId)
-    ? preselectedNestId
-    : nests.length > 0
-      ? nests[0].id
-      : "";
-  const [selectedNest, setSelectedNest] = useState(initialNest);
+  // Only honour an explicit `?nestId=` that names a real nest. Never fall back
+  // to `nests[0]`: picking the target for the operator is exactly the silent
+  // ambiguity AGENTS.md forbids.
+  const offeredDefault = preselectedNestId && nests.some((n) => n.id === preselectedNestId) ? preselectedNestId : "";
+  const [selectedNest, setSelectedNest] = useState(offeredDefault);
 
   return (
     <Modal title={`Import "${template.name}"`} onClose={onClose} wide>
       <div className="space-y-4">
         <div>
-          <h4 className="text-sm font-semibold text-slate-200 mb-1">{template.name}</h4>
-          <p className="text-xs text-slate-400">{template.description}</p>
+          <h3 className="text-sm font-semibold text-text">{template.name}</h3>
+          <p className="text-xs leading-5 text-text-subtle">{template.description}</p>
         </div>
 
         <div className="grid gap-4 sm:grid-cols-2">
           <div className="space-y-2">
-            <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Images</h4>
+            <h4 className="t-meta">Images</h4>
             <div className="space-y-1">
               {Object.entries(template.images).map(([label, img]) => (
-                <code key={label} className="block truncate rounded bg-white/[0.04] px-2 py-1 font-mono text-[11px] text-slate-300">{label}: {img}</code>
+                <p key={label} className="break-all rounded bg-overlay-subtle px-2 py-1 font-mono text-xs text-text-subtle">{label}: {img}</p>
               ))}
             </div>
           </div>
           <div className="space-y-2">
-            <h4 className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Variables ({template.env.length})</h4>
+            <h4 className="t-meta">Variables ({template.env.length})</h4>
             <div className="space-y-1">
               {template.env.slice(0, 5).map((v) => (
-                <div key={v.envVariable} className="flex items-center gap-2 text-[11px]">
-                  <code className="rounded bg-amber-500/10 px-1.5 py-0.5 font-mono text-amber-300">{v.envVariable}</code>
-                  <span className="truncate text-slate-500">{v.name}</span>
+                <div key={v.envVariable} className="flex items-start gap-2 text-xs">
+                  <code className="rounded bg-overlay px-1.5 py-0.5 font-mono text-text">{v.envVariable}</code>
+                  <span className="break-words text-text-subtle">{v.name}</span>
                 </div>
               ))}
               {template.env.length > 5 && (
-                <p className="text-[11px] text-slate-600">+{template.env.length - 5} more</p>
+                <p className="text-xs text-text-subtle">+{template.env.length - 5} more</p>
               )}
             </div>
           </div>
         </div>
 
-        <div className="border-t border-white/[0.06] pt-4">
-          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Target Nest</label>
-          {nests.length === 0 ? (
-            <p className="text-xs text-slate-400">No nests available. Create a nest first.</p>
+        <div className="border-t border-line pt-4">
+          {nestsLoading ? (
+            <AdminLoadingRows rows={1} label="Loading nests…" />
+          ) : nestsError ? (
+            <AdminErrorState message={`Nests could not be loaded: ${nestsError}`} />
+          ) : nests.length === 0 ? (
+            <p className="ui-hint">The nest list loaded successfully and is empty. Create a nest in Service Definitions first.</p>
           ) : (
-            <select
-              value={selectedNest}
-              onChange={(e) => setSelectedNest(e.target.value)}
-              className="w-full rounded-lg border border-white/[0.06] bg-[var(--surface)] px-3 py-2 text-sm text-slate-200 focus:border-red-400/70 focus:outline-none"
-            >
-              {nests.map((n) => (
-                <option key={n.id} value={n.id}>{n.name}</option>
-              ))}
-            </select>
+            <>
+              <AdminSelect
+                label="Target nest"
+                value={selectedNest}
+                onChange={setSelectedNest}
+                placeholder="Choose a nest"
+                options={nests.map((n) => ({ value: n.id, label: n.name }))}
+              />
+              <p className="ui-hint mt-1.5">
+                {offeredDefault
+                  ? "Preselected from the nest you came from; change it if that is not the target."
+                  : "Nothing is chosen for you — the import runs only against the nest you pick."}
+              </p>
+            </>
           )}
         </div>
       </div>
@@ -471,8 +611,10 @@ function ImportTemplateModal({
         onCancel={onClose}
         onConfirm={() => { if (selectedNest) onImport(selectedNest); }}
         disabled={!selectedNest || isPending}
-        confirmLabel={isPending ? "Importing..." : "Import Egg"}
+        confirmLabel={isPending ? "Importing…" : "Import Egg"}
       />
     </Modal>
   );
 }
+
+export default AdminTemplates;

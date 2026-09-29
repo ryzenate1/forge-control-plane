@@ -2,15 +2,36 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Globe, Plus, RotateCcw, Trash2 } from "lucide-react";
+import { Webhook, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, retryWebhookDelivery, type ApiWebhook, type ApiWebhookDelivery } from "@/lib/api";
-import { Input as SharedInput } from "@/components/ui/primitives";
 import { safeExternalUrl } from "@/lib/safe-url";
 import { chart } from "@/lib/design-tokens";
-import { AdminFormSection, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
-import { DashHeader } from "./dashboard-cards";
-import { TableSkeleton } from "@/components/ui/loading-skeleton";
+import {
+  AdminErrorState,
+  AdminFormSection,
+  AdminLoadingRows,
+  AdminSelect,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminTr,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  ModalFooter,
+  Pill,
+  SectionHeader,
+} from "./admin-ui";
+import { DataState } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
+import { errorMessage, formatDate } from "@/lib/utils";
 
 type Webhook = ApiWebhook;
 type WebhookResponse = Webhook[] | { data?: unknown; error?: unknown; message?: unknown };
@@ -35,10 +56,6 @@ function webhookEvents(events: unknown): string[] {
   return Array.isArray(events) ? events.filter((event): event is string => typeof event === "string") : [];
 }
 
-function errorMessage(error: unknown, fallback: string): string {
-  return error instanceof Error && error.message.trim() ? error.message : fallback;
-}
-
 function isValidUrl(str: string): boolean {
   try {
     const url = new URL(str);
@@ -47,6 +64,9 @@ function isValidUrl(str: string): boolean {
     return false;
   }
 }
+
+/** What `POST /webhooks/:id/test` answers: the delivery row it created (201). */
+type TestDeliveryAck = { id?: string; state?: string; eventName?: string };
 
 const AVAILABLE_EVENTS = [
   "server:created", "server:deleted",
@@ -62,6 +82,7 @@ const AVAILABLE_EVENTS = [
 export function AdminWebhooks() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
   const webhooksQuery = useQuery({
     queryKey: ["webhooks"],
     queryFn: async () => {
@@ -72,7 +93,6 @@ export function AdminWebhooks() {
   const webhooks = useMemo(() => webhooksQuery.data ?? [], [webhooksQuery.data]);
 
   const [showCreate, setShowCreate] = useState(false);
-  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -99,26 +119,42 @@ export function AdminWebhooks() {
 
   const createMut = useMutation({
     mutationFn: () => postJSON<Webhook>("/webhooks", { name, description, url, webhookType, enabled, secret, events, discordUsername, discordAvatarUrl, discordContent }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setShowCreate(false); resetForm(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setShowCreate(false); resetForm(); toast({ tone: "success", title: "Webhook created" }); },
+    onError: (error) => toast({ tone: "error", title: "Webhook could not be created", message: errorMessage(error, "The control plane rejected the request.") }),
   });
 
   const updateMut = useMutation({
     mutationFn: () => patchJSON<Webhook>(`/webhooks/${editId}`, { name, description, url, webhookType, enabled, secret, events, discordUsername, discordAvatarUrl, discordContent }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setEditId(null); resetForm(); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setEditId(null); resetForm(); toast({ tone: "success", title: "Webhook updated" }); },
+    onError: (error) => toast({ tone: "error", title: "Webhook could not be updated", message: errorMessage(error, "The control plane rejected the request.") }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteJSON(`/webhooks/${id}`),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); setDeleteConfirmId(null); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["webhooks"] }); toast({ tone: "success", title: "Webhook deleted" }); },
+    onError: (error) => toast({ tone: "error", title: "Webhook could not be deleted", message: errorMessage(error, "The control plane rejected the request.") }),
   });
 
+  /**
+   * `POST /webhooks/:id/test` does not deliver anything: it inserts a delivery
+   * row for the dispatcher to attempt later and answers 201 with that row
+   * (`forge/api/internal/http/handlers_admin.go:1773-1788`). The toast says so,
+   * names the row's state when the response carries one, and the failure path is
+   * reported — previously a 403/404/503 produced complete silence while a
+   * success toast claimed "Test delivery fired" for work that had not run.
+   */
   const testMut = useMutation({
-    mutationFn: (id: string) => postJSON<{ id: string; status: number }>(`/webhooks/${id}/test`, {}),
-    onSuccess: () => { toast({ tone: "success", title: "Test delivery fired", message: "Check the Deliveries view for the response." }); },
+    mutationFn: (id: string) => postJSON<TestDeliveryAck>(`/webhooks/${id}/test`, {}),
+    onSuccess: (ack) => {
+      void qc.invalidateQueries({ queryKey: ["webhook-deliveries"] });
+      toast({
+        tone: "success",
+        title: "Test delivery queued",
+        message: `Recorded${ack?.state ? ` as ${ack.state}` : ""} for the dispatcher to attempt. Open Deliveries for the outcome.`,
+      });
+    },
+    onError: (error) => toast({ tone: "error", title: "Test delivery could not be queued", message: errorMessage(error, "The control plane rejected the request.") }),
   });
-
-  // No "test" endpoint exists in the API (only CRUD + deliveries + retry), so
-  // the Test button was removed; use the Deliveries view to verify delivery.
 
   const openEdit = (wh: Webhook) => {
     setEditId(wh.id);
@@ -138,200 +174,293 @@ export function AdminWebhooks() {
     setEvents((prev) => prev.includes(ev) ? prev.filter((e) => e !== ev) : [...prev, ev]);
   };
 
+  const closeForm = () => { setShowCreate(false); setEditId(null); resetForm(); };
+
   return (
-    <div>
+    <div className="space-y-6">
       <SectionHeader
-        title="Webhooks"
-        sub="Event-driven webhook notifications with Discord embed support."
-        action={<Btn onClick={() => { resetForm(); setShowCreate(true); }}><Plus size={14} /> New Webhook</Btn>}
+        sub="Endpoints Forge POSTs event payloads to, with delivery history and manual retry for each one."
+        action={<Btn onClick={() => { resetForm(); setShowCreate(true); }}><Plus size={14} /> New webhook</Btn>}
+        info={{
+          title: "Webhooks",
+          triggerLabel: "About webhooks",
+          description: "What a webhook is here, and what the test button proves.",
+          sections: [
+            {
+              title: "Test queues, it does not deliver",
+              content: "Test creates a delivery row and returns it; a background dispatcher performs the attempt. A green toast means the request was recorded — read the Deliveries list for the HTTP status and any failure.",
+            },
+            {
+              title: "Signing secret",
+              content: "The secret is stored server-side and not returned in full after creation. Enter a value only to replace it; leaving the field untouched keeps what is stored.",
+            },
+            {
+              title: "Deleting a webhook",
+              content: "Removes the endpoint and stops every future delivery to it. Recorded delivery history for that endpoint is no longer reachable from this page.",
+            },
+          ],
+        }}
       />
 
       <Card>
-        <CardHeader title="Webhook List" icon={Globe} />
-        {webhooksQuery.isLoading ? (
-          <TableSkeleton />
-        ) : webhooksQuery.isError ? (
-          <div className="p-4"><div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><span>Could not load webhooks: {webhooksQuery.error.message}</span><Btn size="sm" tone="ghost" onClick={() => void webhooksQuery.refetch()}>Retry</Btn></div></div>
-        ) : !Array.isArray(webhooks) || webhooks.length === 0 ? (
-          <EmptyState icon={Globe} message="No webhooks configured." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                  <th className="px-4 py-3">Name</th>
-                  <th className="hidden sm:table-cell px-4 py-3">Type</th>
-                  <th className="hidden md:table-cell px-4 py-3">Events</th>
-                  <th className="hidden lg:table-cell px-4 py-3">URL</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3" />
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                  {Array.isArray(webhooks) && webhooks.map((wh) => (
-                  <tr key={wh.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 min-w-0 max-w-[160px] sm:max-w-none">
-                      <p className="font-medium text-slate-200 truncate">{wh.name}</p>
-                      {wh.description && <p className="text-xs text-slate-500 truncate">{wh.description}</p>}
-                    </td>
-                    <td className="hidden sm:table-cell px-4 py-3">
-                      <Pill tone={wh.webhookType === "discord" ? "blue" : "neutral"}>
-                        {wh.webhookType === "discord" ? "Discord" : "Regular"}
-                      </Pill>
-                    </td>
-                    <td className="hidden md:table-cell px-4 py-3">
-                      <div className="flex flex-wrap gap-1">
-                        {webhookEvents(wh.events).slice(0, 3).map((ev) => (
-                          <Pill key={ev} tone="neutral">{ev}</Pill>
-                        ))}
-                        {webhookEvents(wh.events).length > 3 && <span className="text-xs text-slate-500">+{webhookEvents(wh.events).length - 3}</span>}
-                      </div>
-                    </td>
-                    <td className="hidden lg:table-cell px-4 py-3 font-mono text-xs text-slate-400 max-w-[120px] xl:max-w-[200px] truncate">{wh.url}</td>
-                    <td className="px-4 py-3"><Pill tone={wh.enabled ? "green" : "yellow"}>{wh.enabled ? "Active" : "Disabled"}</Pill></td>
-                  <td className="px-4 py-3 whitespace-nowrap">
-                    <div className="flex items-center gap-1.5">
-                      <Btn size="sm" tone="ghost" onClick={() => setHistoryId(wh.id)}>Deliveries</Btn>
-                      <Btn size="sm" tone="ghost" onClick={() => openEdit(wh)}>Edit</Btn>
-                      <Btn size="sm" tone="ghost" onClick={() => testMut.mutate(wh.id)} disabled={testMut.isPending}>{testMut.isPending ? "Testing…" : "Test"}</Btn>
-                      <Btn size="sm" tone="danger" onClick={() => setDeleteConfirmId(wh.id)} disabled={deleteMut.isPending}><Trash2 size={12} /></Btn>
+        <CardHeader icon={Webhook} title="Webhook endpoints" />
+        <DataState
+          emptyMessage="No webhook endpoints are configured. Create one to receive platform events."
+          emptyTitle="No webhooks configured"
+          isEmpty={webhooks.length === 0}
+          loadingLabel="Loading webhooks…"
+          onRetry={() => void webhooksQuery.refetch()}
+          state={sourceState(webhooksQuery)}
+        >
+          <AdminTable label="Webhook endpoints">
+            <AdminTHead>
+              <AdminTh>Name</AdminTh>
+              <AdminTh>Type</AdminTh>
+              <AdminTh>Events</AdminTh>
+              <AdminTh>URL</AdminTh>
+              <AdminTh>Status</AdminTh>
+              <AdminTh className="text-right">Actions</AdminTh>
+            </AdminTHead>
+            <AdminTBody>
+              {webhooks.map((wh) => (
+                <AdminTr key={wh.id}>
+                  <AdminTd>
+                    <p className="font-medium text-text">{wh.name}</p>
+                    {wh.description ? <p className="text-meta text-text-subtle">{wh.description}</p> : null}
+                  </AdminTd>
+                  <AdminTd>
+                    <Pill tone={wh.webhookType === "discord" ? "info" : "neutral"}>
+                      {wh.webhookType === "discord" ? "Discord" : "Regular"}
+                    </Pill>
+                  </AdminTd>
+                  <AdminTd>
+                    <div className="flex flex-wrap gap-1">
+                      {webhookEvents(wh.events).slice(0, 3).map((ev) => (
+                        <Pill key={ev} tone="neutral">{ev}</Pill>
+                      ))}
+                      {webhookEvents(wh.events).length > 3 ? (
+                        <span className="text-[11px] text-text-muted">+{webhookEvents(wh.events).length - 3} more</span>
+                      ) : null}
+                      {webhookEvents(wh.events).length === 0 ? <span className="text-[11px] text-text-muted">No events subscribed</span> : null}
                     </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
+                  </AdminTd>
+                  {/* Always rendered and never truncated: the table scrolls, and a URL an
+                      operator may need to copy in full does not live only in a tooltip. */}
+                  <AdminTd className="max-w-64 break-all font-mono text-xs text-text-subtle">{wh.url}</AdminTd>
+                  <AdminTd><Pill tone={wh.enabled ? "ok" : "warn"}>{wh.enabled ? "Active" : "Disabled"}</Pill></AdminTd>
+                  <AdminTd className="text-right whitespace-nowrap">
+                    <div className="flex justify-end gap-1.5">
+                      <Btn ariaLabel={`Show deliveries for ${wh.name}`} onClick={() => setHistoryId(wh.id)} size="sm" tone="ghost">Deliveries</Btn>
+                      <Btn ariaLabel={`Edit ${wh.name}`} onClick={() => openEdit(wh)} size="sm" tone="ghost">Edit</Btn>
+                      <Btn
+                        ariaLabel={`Queue a test delivery to ${wh.name}`}
+                        disabled={testMut.isPending}
+                        loading={testMut.isPending && testMut.variables === wh.id}
+                        onClick={() => testMut.mutate(wh.id)}
+                        size="sm"
+                        tone="ghost"
+                      >Test</Btn>
+                      <Btn
+                        ariaLabel={`Delete ${wh.name}`}
+                        onClick={() => {
+                          void (async () => {
+                            const ok = await confirm({
+                              title: `Delete ${wh.name}?`,
+                              description: "The endpoint and its subscription to these events are removed: " +
+                                `${webhookEvents(wh.events).length || "no"} event subscription(s), and deliveries to ${wh.url} stop immediately. This cannot be undone.`,
+                              danger: true,
+                              confirmLabel: "Delete",
+                            });
+                            if (ok) deleteMut.mutate(wh.id);
+                          })();
+                        }}
+                        size="sm"
+                        tone="danger"
+                      ><Trash2 size={12} /></Btn>
+                    </div>
+                  </AdminTd>
+                </AdminTr>
+              ))}
+            </AdminTBody>
+          </AdminTable>
+        </DataState>
       </Card>
-
-      {deleteConfirmId ? (
-        <Modal title="Delete Webhook" onClose={() => setDeleteConfirmId(null)}>
-          <div className="space-y-4">
-          <p className="text-sm text-slate-300">Are you sure you want to delete this webhook? This action cannot be undone.</p>
-          {deleteMut.isError ? <p className="text-sm text-red-300">{errorMessage(deleteMut.error, "Webhook could not be deleted.")}</p> : null}
-          </div>
-          <ModalFooter
-            onCancel={() => { setDeleteConfirmId(null); deleteMut.reset(); }}
-            onConfirm={() => deleteMut.mutate(deleteConfirmId)}
-            disabled={deleteMut.isPending}
-            confirmLabel="Delete"
-          />
-        </Modal>
-      ) : null}
 
       {historyId ? <WebhookDeliveryModal webhookId={historyId} onClose={() => setHistoryId(null)} /> : null}
 
       {(showCreate || editId) ? (
-        <Modal title={editId ? "Edit Webhook" : "Create Webhook"} onClose={() => { setShowCreate(false); setEditId(null); resetForm(); }}>
+        <Modal onClose={closeForm} title={editId ? "Edit webhook" : "Create webhook"}>
           <div className="space-y-4">
-            <AdminFormSection title="Webhook Details">
-              <Input label="Name" value={name} onChange={setName} placeholder="My Webhook" />
-              <Input label="Description" value={description} onChange={setDescription} placeholder="Optional description" />
+            <AdminFormSection title="Webhook details">
+              <Input label="Name" onChange={setName} placeholder="My webhook" value={name} />
+              <Input label="Description" onChange={setDescription} placeholder="Optional description" value={description} />
               <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Payload URL</label>
-                <SharedInput
-                  className="min-h-9 w-full bg-surface-card-header"
+                <Input
+                  label="Payload URL"
+                  onChange={setUrl}
                   placeholder="https://discord.com/api/webhooks/..."
                   value={url}
-                  onChange={(event) => setUrl(event.target.value)}
-                  aria-invalid={urlError ? true : undefined}
-                  aria-describedby={urlError ? "webhook-url-error" : undefined}
                 />
                 {urlError ? (
-                  <p id="webhook-url-error" className="ui-field-error mt-1" role="alert">{urlError}</p>
+                  <p className="ui-field-error mt-1" role="alert">{urlError}</p>
                 ) : null}
               </div>
-              <AdminSelect label="Type" value={webhookType} onChange={(v) => setWebhookType(v as "regular" | "discord")} options={[
-                { value: "regular", label: "Regular" },
-                { value: "discord", label: "Discord Embed" },
-              ]} />
-              <Input label="Signing Secret" value={secret} onChange={setSecret} type="password" placeholder={editId ? "Masked; replace to rotate" : "Optional secret"} autoComplete="off" />
-              <p className="text-xs text-slate-400">Secrets are masked after creation. Enter a new value to replace the current secret.</p>
-              <label className="flex items-center gap-3 text-sm text-slate-300 cursor-pointer">
-                <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[var(--brand)]" />
+              <AdminSelect label="Type" onChange={(v) => setWebhookType(v as "regular" | "discord")} options={[
+                { value: "regular", label: "Regular JSON payload" },
+                { value: "discord", label: "Discord embed" },
+              ]} value={webhookType} />
+              <Input autoComplete="off" label="Signing secret" onChange={setSecret} placeholder={editId ? "leave unchanged to keep the stored secret" : "Optional secret"} type="password" value={secret} />
+              <label className="flex items-center gap-3 text-sm text-text">
+                <input checked={enabled} className="accent-[var(--brand)]" onChange={(e) => setEnabled(e.target.checked)} type="checkbox" />
                 Enabled
               </label>
             </AdminFormSection>
 
             {webhookType === "discord" && (
-              <AdminFormSection title="Discord Settings">
-                <Input label="Username Override" value={discordUsername} onChange={setDiscordUsername} placeholder="My Bot" />
-                <Input label="Avatar URL" value={discordAvatarUrl} onChange={setDiscordAvatarUrl} placeholder="https://..." />
-                <Input label="Content" value={discordContent} onChange={setDiscordContent} placeholder="Optional message content" />
-                <div className="rounded-lg bg-[var(--surface-raised)] p-3">
-                  <div className="flex items-center gap-2.5 mb-2">
+              <AdminFormSection title="Discord presentation">
+                <Input label="Username override" onChange={setDiscordUsername} placeholder="My bot" value={discordUsername} />
+                <Input label="Avatar URL" onChange={setDiscordAvatarUrl} placeholder="https://..." value={discordAvatarUrl} />
+                <Input label="Content" onChange={setDiscordContent} placeholder="Optional message content" value={discordContent} />
+                <div className="rounded-lg border border-line bg-overlay-subtle p-3">
+                  <div className="mb-2 flex items-center gap-2.5">
                     {safeDiscordAvatarUrl ? (
                       <span aria-label="Webhook avatar preview" className="h-6 w-6 rounded-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${safeDiscordAvatarUrl})` }} />
                     ) : (
-                      <div aria-hidden="true" className="h-6 w-6 rounded-full" style={{ backgroundColor: chart.discord }} />
+                      <span aria-hidden="true" className="h-6 w-6 rounded-full" style={{ backgroundColor: chart.discord }} />
                     )}
-                    <span className="text-sm font-medium text-[var(--text)] leading-none">{discordUsername || "Webhook"}</span>
-                    <span className="text-xs text-[var(--text-subtle)]">Today at 12:00</span>
+                    <span className="text-sm font-medium leading-none text-text">{discordUsername || "Webhook"}</span>
                   </div>
-                  {discordContent && <p className="text-sm leading-relaxed text-[var(--text)]">{discordContent}</p>}
-                  <div className="mt-2 rounded-lg border-l-[4px] bg-[var(--surface-raised)] p-3" style={{ borderLeftColor: chart.discord }}>
-                    <p className="text-sm font-semibold text-[var(--text)]">Event Notification</p>
-                    <p className="text-xs text-[var(--text-subtle)] mt-1">This is a preview of how the webhook will appear in Discord.</p>
-                    {events.length > 0 && <p className="text-xs text-[var(--text-subtle)] mt-1">Triggered on: {events.join(", ")}</p>}
+                  {discordContent ? <p className="text-sm leading-relaxed text-text">{discordContent}</p> : null}
+                  <div className="mt-2 rounded-lg border-l-4 bg-overlay-subtle p-3" style={{ borderLeftColor: chart.discord }}>
+                    <p className="text-sm font-semibold text-text">Event notification</p>
+                    <p className="mt-1 text-xs text-text-subtle">Preview of how a delivered message is presented in Discord.</p>
+                    {events.length > 0 ? <p className="mt-1 text-xs text-text-subtle">Triggered on: {events.join(", ")}</p> : <p className="mt-1 text-xs text-text-subtle">No events selected yet, so nothing would trigger this webhook.</p>}
                   </div>
                 </div>
               </AdminFormSection>
             )}
 
-            <AdminFormSection title="Events">
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2 max-h-32 sm:max-h-48 overflow-y-auto">
+            <AdminFormSection description="Select the events that create a delivery to this endpoint." title="Events">
+              <fieldset className="grid max-h-48 grid-cols-1 gap-2 overflow-y-auto sm:grid-cols-2 md:grid-cols-3">
+                <legend className="sr-only">Events delivered to this webhook</legend>
                 {AVAILABLE_EVENTS.map((ev) => (
-                  <label key={ev} className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2.5 text-sm text-slate-200 hover:bg-white/[0.03]">
-                    <input type="checkbox" checked={events.includes(ev)} onChange={() => toggleEvent(ev)} className="accent-[var(--brand)]" />
+                  <label className="flex cursor-pointer items-center gap-2.5 rounded-lg border border-line bg-overlay-subtle px-3 py-2.5 text-sm text-text" key={ev}>
+                    <input checked={events.includes(ev)} className="accent-[var(--brand)]" onChange={() => toggleEvent(ev)} type="checkbox" />
                     {ev}
                   </label>
                 ))}
-              </div>
+              </fieldset>
             </AdminFormSection>
-          {(editId ? updateMut.isError : createMut.isError) ? <p className="text-sm text-red-300">{errorMessage(editId ? updateMut.error : createMut.error, `Webhook could not be ${editId ? "updated" : "created"}.`)}</p> : null}
+            {(editId ? updateMut.isError : createMut.isError) ? (
+              <AdminErrorState message={errorMessage(editId ? updateMut.error : createMut.error, `The webhook could not be ${editId ? "updated" : "created"}.`)} />
+            ) : null}
           </div>
           <ModalFooter
-            onCancel={() => { setShowCreate(false); setEditId(null); resetForm(); }}
-            onConfirm={() => { if (urlError) return; if (editId) updateMut.mutate(); else createMut.mutate(); }}
-            disabled={name.trim() === "" || url.trim() === "" || Boolean(urlError) || (editId ? updateMut.isPending : createMut.isPending)}
             confirmLabel={editId ? "Save" : "Create"}
+            disabled={name.trim() === "" || url.trim() === "" || Boolean(urlError) || (editId ? updateMut.isPending : createMut.isPending)}
+            onCancel={closeForm}
+            onConfirm={() => { if (urlError) return; if (editId) updateMut.mutate(); else createMut.mutate(); }}
           />
         </Modal>
       ) : null}
+      {renderConfirm()}
     </div>
   );
 }
 
 function WebhookDeliveryModal({ webhookId, onClose }: { webhookId: string; onClose: () => void }) {
   const qc = useQueryClient();
+  const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
   const query = useQuery({
     queryKey: ["webhook-deliveries", webhookId],
     queryFn: async () => responseList(await fetchWebhookDeliveries(webhookId) as DeliveryResponse, "webhook deliveries"),
   });
   const retryMut = useMutation({
     mutationFn: (deliveryId: string) => retryWebhookDelivery(webhookId, deliveryId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["webhook-deliveries", webhookId] }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["webhook-deliveries", webhookId] });
+      toast({ tone: "success", title: "Retry queued", message: "The dispatcher performs the attempt; watch this list for the outcome." });
+    },
+    onError: (error) => toast({ tone: "error", title: "Retry could not be queued", message: errorMessage(error, "The control plane rejected the request.") }),
   });
   const deliveries = query.data ?? [];
   const failedCount = deliveries.filter((d) => d.state === "failed").length;
+  const state = sourceState(query);
 
-  return <Modal title="Webhook Delivery History" description="Failed deliveries can be retried manually. Pending deliveries are also retried by the backend dispatcher." onClose={onClose} wide className="max-w-6xl">
+  return <Modal description="Failed deliveries can be retried here; the backend dispatcher also retries pending ones." onClose={onClose} title="Delivery history" wide>
     <div className="space-y-4">
-    <DashHeader
-      icon={Globe}
-      eyebrow="Webhook"
-      title="Delivery History"
-      meta={[
-        { label: "Deliveries", value: query.isLoading ? "…" : String(deliveries.length) },
-        { label: "Failed", value: query.isLoading ? "…" : String(failedCount) },
-      ]}
-    />
-    {query.isLoading ? <p className="text-sm text-slate-500">Loading delivery history...</p> : null}
-    {query.isError ? <p className="text-sm text-red-300">{errorMessage(query.error, "Delivery history could not be loaded.")}</p> : null}
-    {!query.isLoading && !query.isError && deliveries.length === 0 ? <EmptyState icon={Globe} message="No deliveries recorded."/> : null}
-    {!query.isLoading && !query.isError && Array.isArray(deliveries) && deliveries.length > 0 ? <div className="max-h-[60vh] overflow-auto"><div className="overflow-x-auto"><table className="w-full text-xs"><thead><tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500"><th className="px-3 py-2.5">Created</th><th className="px-3 py-2.5">Event</th><th className="px-3 py-2.5">State</th><th className="hidden sm:table-cell px-3 py-2.5">HTTP</th><th className="px-3 py-2.5">Attempts</th><th className="hidden md:table-cell px-3 py-2.5">Failure</th><th className="px-3 py-2.5" /></tr></thead><tbody>{Array.isArray(deliveries) && deliveries.map((delivery) => <tr className="border-b border-white/[0.04]" key={delivery.id}><td className="px-3 py-2.5 whitespace-nowrap">{new Date(delivery.createdAt).toLocaleString()}</td><td className="px-3 py-2.5 font-mono max-w-[120px] truncate">{delivery.eventName}</td><td className="px-3 py-2.5"><Pill tone={delivery.state === "delivered" ? "green" : delivery.state === "failed" ? "red" : "yellow"}>{delivery.state}</Pill></td><td className="hidden sm:table-cell px-3 py-2.5">{delivery.responseStatus ?? "—"}</td><td className="px-3 py-2.5">{delivery.attempt}</td><td className="hidden md:table-cell px-3 py-2.5 text-red-300 max-w-[160px] truncate">{delivery.lastError ?? delivery.responseBodyExcerpt ?? "—"}</td><td className="px-3 py-2.5">{delivery.state === "failed" ? <Btn size="sm" tone="ghost" disabled={retryMut.isPending} onClick={() => retryMut.mutate(delivery.id)}><RotateCcw size={12} /> Retry</Btn> : null}</td></tr>)}</tbody></table></div></div> : null}
-    {retryMut.isError ? <p className="text-sm text-red-300">{errorMessage(retryMut.error, "Delivery could not be retried.")}</p> : null}
+      <p className="text-xs text-text-subtle" role="status">
+        {query.isPending
+          ? "Reading delivery history…"
+          : query.isError
+            ? "Counts unavailable — the delivery list could not be read."
+            : `${deliveries.length} recorded · ${failedCount} failed`}
+      </p>
+      {query.isPending ? <AdminLoadingRows cols={5} rows={4} label="Loading delivery history" /> : null}
+      {query.isError ? (
+        <AdminErrorState
+          message={`${errorMessage(query.error, "Delivery history could not be loaded.")} The list below is not known to be empty.`}
+          retry={() => void query.refetch()}
+        />
+      ) : null}
+      {!query.isPending && !query.isError && deliveries.length === 0 ? (
+        <EmptyState icon={Webhook} message="No delivery has been recorded for this endpoint. That means nothing has been queued to it, not that it has been verified." title="No deliveries recorded" />
+      ) : null}
+      {deliveries.length > 0 ? (
+        <AdminTable className="max-h-[60vh] overflow-auto" label="Deliveries for this webhook">
+          <AdminTHead>
+            <AdminTh>Created</AdminTh>
+            <AdminTh>Event</AdminTh>
+            <AdminTh>State</AdminTh>
+            <AdminTh>HTTP status</AdminTh>
+            <AdminTh>Attempts</AdminTh>
+            <AdminTh>Failure</AdminTh>
+            <AdminTh className="text-right">Action</AdminTh>
+          </AdminTHead>
+          <AdminTBody>
+            {deliveries.map((delivery) => (
+              <AdminTr key={delivery.id}>
+                <AdminTd className="whitespace-nowrap text-xs">{formatDate(delivery.createdAt, "Timestamp not reported")}</AdminTd>
+                <AdminTd className="max-w-40 break-all font-mono text-xs">{delivery.eventName}</AdminTd>
+                <AdminTd>
+                  <Pill tone={delivery.state === "delivered" ? "ok" : delivery.state === "failed" ? "danger" : "warn"}>
+                    {delivery.state}
+                  </Pill>
+                </AdminTd>
+                <AdminTd className="font-mono text-xs">{delivery.responseStatus ?? "—"}</AdminTd>
+                <AdminTd className="font-mono text-xs">{delivery.attempt}</AdminTd>
+                <AdminTd className="max-w-60 break-words text-xs text-text-subtle">
+                  {delivery.lastError ?? (delivery.state === "failed" ? "Failure reason not recorded" : "—")}
+                </AdminTd>
+                <AdminTd className="text-right">
+                  {delivery.state === "failed" ? (
+                    <Btn
+                      ariaLabel={`Queue a retry for the delivery to ${delivery.eventName}`}
+                      disabled={retryMut.isPending}
+                      loading={retryMut.isPending && retryMut.variables === delivery.id}
+                      onClick={() => {
+                        void (async () => {
+                          const ok = await confirm({
+                            title: "Retry this delivery?",
+                            description: "Queues another attempt against the same payload. The endpoint will receive the event again.",
+                            confirmLabel: "Retry",
+                          });
+                          if (ok) retryMut.mutate(delivery.id);
+                        })();
+                      }}
+                      size="sm"
+                      tone="ghost"
+                    ><RotateCcw size={12} /> Retry</Btn>
+                  ) : null}
+                </AdminTd>
+              </AdminTr>
+            ))}
+          </AdminTBody>
+        </AdminTable>
+      ) : null}
+      {state.refreshing && !query.isPending ? <p className="text-[11px] text-text-muted" role="status">Refreshing…</p> : null}
+      {renderConfirm()}
     </div>
   </Modal>;
 }

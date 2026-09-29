@@ -2,35 +2,93 @@
 
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AdminCard, AdminPageLayout } from "@/components/admin/admin-layout";
+import { Mail, Send, Truck, Zap } from "lucide-react";
+import {
+  AdminErrorState,
+  AdminSelect,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  SectionHeader,
+} from "@/components/admin/admin-ui";
+import { DataState, FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { AdminPageLayout } from "@/components/admin/admin-ui";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import * as mail from "@/lib/api/mail";
 import { sanitizeError } from "@/lib/sanitize";
 
-const DEFAULT_SETTINGS: mail.PanelMailSettings = {
+/**
+ * This page is the `/admin/mail/settings` surface.
+ *
+ * Platform Settings has a Mail tab that writes a *different* record
+ * (`/admin/settings/mail`, `handlers_settings_extras.go:25-57`) with a different
+ * field spelling and no `driver`. They must not share a cache key — the tab now
+ * uses `["panel-settings-mail"]`, so neither form can be filled from the other's
+ * read. Which of the two endpoints should exist at all is an API decision
+ * (see the impl report).
+ */
+export const MAIL_SETTINGS_QUERY_KEY = ["panel-mail-settings"] as const;
+
+type Fields = {
+  driver: string;
+  smtpHost: string;
+  smtpPort: string;
+  smtpEncryption: string;
+  smtpUsername: string;
+  smtpPassword: string;
+  mailFromAddress: string;
+  mailFromName: string;
+};
+
+const EMPTY: Fields = {
   driver: "smtp",
   smtpHost: "",
-  smtpPort: 587,
+  smtpPort: "587",
   smtpEncryption: "tls",
   smtpUsername: "",
   smtpPassword: "",
-  mailFromAddress: "noreply@example.com",
-  mailFromName: "Forge",
+  mailFromAddress: "",
+  mailFromName: "",
 };
 
-// The panel returns a masked placeholder for the write-only password, so the
-// editor is seeded field-by-field and blanks stay blanks (never the defaults).
-function withFallbacks(loaded: mail.PanelMailSettings | undefined): mail.PanelMailSettings {
-  if (!loaded) return DEFAULT_SETTINGS;
+/**
+ * Field-by-field hydration with **no invented defaults**.
+ *
+ * The old version fell back to `mailFromAddress: "noreply@example.com"` and
+ * `mailFromName: "Forge"` whenever the read had not answered, and Save posted the
+ * object verbatim — so a load failure followed by Save wrote a placeholder sender
+ * address into production mail. The only fallbacks kept are the two the server
+ * itself treats as its defaults, and Save stays disabled until a read succeeds.
+ */
+function fieldsFrom(loaded: mail.PanelMailSettings | undefined): Fields {
+  if (!loaded) return EMPTY;
   return {
-    driver: loaded.driver || DEFAULT_SETTINGS.driver,
-    smtpHost: loaded.smtpHost || "",
-    smtpPort: loaded.smtpPort || DEFAULT_SETTINGS.smtpPort,
-    smtpEncryption: loaded.smtpEncryption || DEFAULT_SETTINGS.smtpEncryption,
-    smtpUsername: loaded.smtpUsername || "",
-    smtpPassword: loaded.smtpPassword || "",
-    mailFromAddress: loaded.mailFromAddress || "",
-    mailFromName: loaded.mailFromName || "",
+    driver: loaded.driver || EMPTY.driver,
+    smtpHost: loaded.smtpHost ?? "",
+    smtpPort: loaded.smtpPort ? String(loaded.smtpPort) : "",
+    smtpEncryption: loaded.smtpEncryption || "",
+    smtpUsername: loaded.smtpUsername ?? "",
+    smtpPassword: loaded.smtpPassword ?? "",
+    mailFromAddress: loaded.mailFromAddress ?? "",
+    mailFromName: loaded.mailFromName ?? "",
+  };
+}
+
+function toPayload(fields: Fields): mail.PanelMailSettings {
+  return {
+    driver: fields.driver,
+    smtpHost: fields.smtpHost,
+    smtpPort: Number(fields.smtpPort),
+    smtpEncryption: fields.smtpEncryption,
+    smtpUsername: fields.smtpUsername,
+    // The API's masked sentinel is echoed back verbatim, which the handler
+    // interprets as "keep what you have" (handlers_mail_settings.go).
+    smtpPassword: fields.smtpPassword,
+    mailFromAddress: fields.mailFromAddress,
+    mailFromName: fields.mailFromName,
   };
 }
 
@@ -38,42 +96,45 @@ export function MailManager() {
   const queryClient = useQueryClient();
   // `draft` shadows the cached server values until a save is confirmed (or the
   // operator reloads), so an accepted write is always re-read from the panel.
-  const [draft, setDraft] = useState<mail.PanelMailSettings | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
+  const [draft, setDraft] = useState<Fields | null>(null);
+  const [dismissed, setDismissed] = useState(false);
   const [testRecipient, setTestRecipient] = useState("");
 
-  const settingsQuery = useQuery({
-    queryKey: ["panel-mail-settings"],
-    queryFn: mail.getMailSettings,
-  });
-  const triggersQuery = useQuery({
-    queryKey: ["panel-mail-triggers"],
-    queryFn: mail.listMailTriggers,
-  });
+  const settingsQuery = useQuery({ queryKey: MAIL_SETTINGS_QUERY_KEY, queryFn: mail.getMailSettings });
+  const triggersQuery = useQuery({ queryKey: ["panel-mail-triggers"], queryFn: mail.listMailTriggers });
 
-  const settings = draft ?? withFallbacks(settingsQuery.data);
-  const setSettings = (next: mail.PanelMailSettings) => setDraft(next);
-  const triggers = triggersQuery.data ?? [];
+  const loaded = !settingsQuery.data || Object.keys(settingsQuery.data).length === 0 ? undefined : settingsQuery.data;
+  const fields = draft ?? fieldsFrom(settingsQuery.data);
+  const setField = (key: keyof Fields, value: string) => setDraft({ ...fields, [key]: value });
 
   const loadError = settingsQuery.isError
     ? sanitizeError(settingsQuery.error instanceof Error ? settingsQuery.error.message : "Failed to load mail settings")
-    : triggersQuery.isError
-      ? sanitizeError(triggersQuery.error instanceof Error ? triggersQuery.error.message : "Failed to load mail triggers")
-      : null;
+    : null;
+  const triggersError = triggersQuery.isError
+    ? sanitizeError(triggersQuery.error instanceof Error ? triggersQuery.error.message : "Failed to load mail triggers")
+    : null;
 
+  const portInvalid = fields.smtpPort.trim() !== "" && (!Number.isInteger(Number(fields.smtpPort)) || Number(fields.smtpPort) < 1 || Number(fields.smtpPort) > 65535);
   const saveMut = useMutation({
-    mutationFn: async (next: mail.PanelMailSettings) => { const result = await mail.updateMailSettings(next); if (!result.ok) throw new Error("The server reported the mail settings update did not complete."); return result; },
+    mutationFn: async (next: mail.PanelMailSettings) => {
+      const result = await mail.updateMailSettings(next);
+      if (!result.ok) throw new Error("The server reported the mail settings update did not complete.");
+      return result;
+    },
     onSuccess: () => {
       setDraft(null);
-      setSuccess("Mail settings saved");
-      void queryClient.invalidateQueries({ queryKey: ["panel-mail-settings"] });
+      setDismissed(false);
+      void queryClient.invalidateQueries({ queryKey: MAIL_SETTINGS_QUERY_KEY });
     },
   });
 
   const testMut = useMutation({
-    mutationFn: async (recipient: string) => { const result = await mail.testMail(recipient); if (!result.ok) throw new Error(result.message || "The server reported the test email was not sent."); return result; },
-    onSuccess: (_result, recipient) => setSuccess(`Test email queued for ${recipient}`),
+    mutationFn: async (recipient: string) => {
+      const result = await mail.testMail(recipient);
+      if (!result.ok) throw new Error(result.message || "The server reported the test email was not sent.");
+      return result;
+    },
+    onSuccess: (_result, recipient) => setDismissed(false),
   });
 
   const actionError = saveMut.isError
@@ -82,155 +143,180 @@ export function MailManager() {
       ? sanitizeError(testMut.error instanceof Error ? testMut.error.message : "Test failed")
       : null;
 
+  const success = saveMut.isSuccess && !draft
+    ? "Mail settings saved and re-read from the control plane."
+    : testMut.isSuccess
+      ? `Test email queued for ${testRecipient.trim()}. Queued is not delivered — check the recipient's inbox or the mail log.`
+      : null;
+
   function reloadAll() {
     setDraft(null);
+    setDismissed(false);
+    saveMut.reset();
+    testMut.reset();
     void settingsQuery.refetch();
     void triggersQuery.refetch();
   }
 
-  function dismissError() {
-    setError(null);
-    setSuccess(null);
-    saveMut.reset();
-    testMut.reset();
-  }
-
-  function handleSave() {
-    setError(null);
-    setSuccess(null);
-    // If password is masked, keep original by sending masked value — backend preserves it
-    saveMut.mutate(settings);
-  }
-
-  function handleTest() {
-    const recipient = testRecipient.trim();
-    if (!recipient) {
-      setError("Recipient required");
-      return;
-    }
-    setError(null);
-    setSuccess(null);
-    testMut.mutate(recipient);
-  }
+  const dirty = draft !== null;
+  const passwordIsStored = fields.smtpPassword === mail.MAIL_MASKED_SECRET;
+  const smtpIncomplete = fields.driver === "smtp" && fields.smtpHost.trim() === "";
+  const canSave = Boolean(loaded) && !settingsQuery.isError && !portInvalid && fields.smtpHost.trim() !== "" && fields.mailFromAddress.trim() !== "";
+  const triggers = triggersQuery.data ?? [];
 
   return (
-    <AdminPageLayout
-      title="Mail Settings"
-      description="Panel SMTP configuration (GET/PUT /admin/mail/settings) and test delivery. Driver 'log' bypasses SMTP validation. Password is write-only; reads return a masked placeholder that preserves the stored value when echoed back."
-    >
+    <AdminPageLayout className="space-y-6">
+      <SectionHeader
+        sub="Outbound mail for the whole panel: the SMTP (or log-only) driver, the sender identity, a test delivery, and the triggers that decide which events send mail."
+        status={<FreshnessBadge state={sourceState(settingsQuery)} />}
+        action={
+          <Btn onClick={reloadAll} tone="ghost">Reload</Btn>
+        }
+        info={{
+          title: "Mail",
+          triggerLabel: "About mail settings",
+          description: "How this page reads, writes and tests outbound mail.",
+          sections: [
+            {
+              title: "Write-only password",
+              content: "The API returns a masked placeholder for the SMTP password. Echoing that placeholder back keeps the stored value; typing over it replaces it. Save is disabled until the settings have actually been read, so a failed load can never write defaults over a live configuration.",
+            },
+            {
+              title: "Driver log",
+              content: "With driver=log the panel does not open an SMTP connection at all: messages are written to the host log instead. Test delivery stays available, but no recipient will receive anything while this driver is selected.",
+            },
+            {
+              title: "Two mail surfaces",
+              content: "Platform Settings has its own Mail tab that writes a different record (/admin/settings/mail) and has no driver field. This page is /admin/mail/settings. Use one of them per deployment; they are separate documents with differently named fields.",
+            },
+            {
+              title: "Testing",
+              content: "A test queues a real message through the configured driver and reports what the queue accepted, not what the provider delivered. A green message here is not proof of an inbox.",
+            },
+          ],
+        }}
+      />
+
       <OfflineBanner onRetry={reloadAll} />
-      {(error || actionError || loadError) && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
-          <span>{error ?? actionError ?? loadError}</span>
-          <div className="flex items-center gap-2">
-            {(settingsQuery.isError || triggersQuery.isError) && (
-              <button onClick={reloadAll} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Retry</button>
-            )}
-            <button onClick={dismissError} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
-          </div>
+
+      {actionError ? <AdminErrorState message={actionError} retry={saveMut.isError ? () => saveMut.mutate(toPayload(fields)) : undefined} /> : null}
+      {loadError ? <AdminErrorState message={`${loadError} Saving is disabled until the stored settings can be read.`} retry={() => void settingsQuery.refetch()} /> : null}
+      {success && !dismissed ? (
+        <div className="ui-alert ui-alert-success flex-wrap items-center justify-between gap-3" role="status">
+          <span>{success}</span>
+          <Btn onClick={() => setDismissed(true)} size="sm" tone="ghost">Dismiss</Btn>
         </div>
-      )}
-      {success && (
-        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.09] p-4 text-sm text-emerald-200">
-          <span>{success}</span> <button onClick={() => setSuccess(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
-        </div>
-      )}
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
-        <AdminCard title="SMTP Configuration" description="Validated via mail.ValidateSettings: host required, port 1-65535, mail from must be valid address, encryption none|tls|ssl.">
-          {settingsQuery.isPending ? (
-            <div className="grid place-items-center rounded-xl border border-dashed border-[var(--line)] bg-black/10 p-6 text-sm text-[var(--text-subtle)]">Loading…</div>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-2">
+        <Card>
+          <CardHeader icon={Mail} title="SMTP configuration" />
+          <DataState
+            emptyMessage="The panel returned an empty settings document."
+            emptyTitle="Nothing stored yet"
+            isEmpty={Boolean(loaded) && !dirty && fields.smtpHost === ""}
+            loadingLabel="Reading mail settings…"
+            onRetry={() => void settingsQuery.refetch()}
+            state={sourceState(settingsQuery)}
+          >
+            <div className="space-y-4 p-4">
+              <div className="grid gap-3 sm:grid-cols-2">
                 <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Driver</label>
-                  <select value={settings.driver} onChange={(e) => setSettings({ ...settings, driver: e.target.value })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">
-                    <option value="smtp">smtp</option>
-                    <option value="log">log</option>
-                  </select>
+                  <AdminSelect
+                    label="Driver"
+                    onChange={(value) => setField("driver", value)}
+                    options={[{ label: "smtp — send through the host below", value: "smtp" }, { label: "log — write to the host log, send nothing", value: "log" }]}
+                    value={fields.driver}
+                  />
+                  {fields.driver === "log" ? (
+                    <p className="mt-1 text-[11px] leading-5 text-warn" role="status">
+                      Driver is <code className="font-mono">log</code>: outbound SMTP is bypassed and no message leaves this host, whatever the fields below say. Skip validation, and mail-dependent flows will appear to succeed without delivering.
+                    </p>
+                  ) : null}
                 </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Encryption</label>
-                  <select value={settings.smtpEncryption} onChange={(e) => setSettings({ ...settings, smtpEncryption: e.target.value })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">
-                    <option value="none">none</option>
-                    <option value="tls">tls (STARTTLS)</option>
-                    <option value="ssl">ssl (SMTPS)</option>
-                  </select>
-                </div>
+                <AdminSelect
+                  label="Encryption"
+                  onChange={(value) => setField("smtpEncryption", value)}
+                  options={[{ label: "None", value: "none" }, { label: "STARTTLS", value: "tls" }, { label: "Implicit TLS (SMTPS)", value: "ssl" }]}
+                  value={fields.smtpEncryption}
+                />
               </div>
-              <div className="grid grid-cols-3 gap-2">
-                <div className="col-span-2">
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">SMTP Host</label>
-                  <input value={settings.smtpHost} onChange={(e) => setSettings({ ...settings, smtpHost: e.target.value })} placeholder="smtp.example.com" className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
+              <div className="grid gap-3 sm:grid-cols-3">
+                <div className="sm:col-span-2">
+                  <Input label="SMTP host" onChange={(value) => setField("smtpHost", value)} placeholder="smtp.example.com" required value={fields.smtpHost} />
+                  {!fields.smtpHost.trim() ? <p className="mt-1 text-[11px] text-warn">Required by the server before saving.</p> : null}
                 </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Port</label>
-                  <input type="number" value={settings.smtpPort} onChange={(e) => setSettings({ ...settings, smtpPort: Number(e.target.value) })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-                </div>
+                <Input label="Port" onChange={(value) => setField("smtpPort", value)} type="number" value={fields.smtpPort} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Username</label>
-                  <input value={settings.smtpUsername} onChange={(e) => setSettings({ ...settings, smtpUsername: e.target.value })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Password</label>
-                  <input type="password" value={settings.smtpPassword} onChange={(e) => setSettings({ ...settings, smtpPassword: e.target.value })} placeholder="masked if set" className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-                </div>
+              {portInvalid ? <p className="text-[11px] text-warn" role="alert">Port must be a whole number between 1 and 65535.</p> : null}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <Input autoComplete="off" label="Username" onChange={(value) => setField("smtpUsername", value)} value={fields.smtpUsername} />
+                <Input autoComplete="new-password" label="Password" onChange={(value) => setField("smtpPassword", value)} placeholder={passwordIsStored ? "stored — leave as-is to keep it" : "not set"} type="password" value={fields.smtpPassword} />
+                <Input label="From address" onChange={(value) => setField("mailFromAddress", value)} required type="email" value={fields.mailFromAddress} />
+                <Input label="From name" onChange={(value) => setField("mailFromName", value)} value={fields.mailFromName} />
               </div>
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">From Address</label>
-                  <input value={settings.mailFromAddress} onChange={(e) => setSettings({ ...settings, mailFromAddress: e.target.value })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-                </div>
-                <div>
-                  <label className="text-xs font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">From Name</label>
-                  <input value={settings.mailFromName} onChange={(e) => setSettings({ ...settings, mailFromName: e.target.value })} className="w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-                </div>
-              </div>
-              <div className="flex gap-2">
-                <button onClick={handleSave} disabled={saveMut.isPending} aria-label="Save mail settings" className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-hover)] motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)]">{saveMut.isPending ? "Saving…" : "Save Settings"}</button>
-                <button onClick={reloadAll} aria-label="Reload mail settings" className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-4 py-2 text-sm text-[var(--text)] hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Reload</button>
+              <div className="flex flex-wrap items-center justify-end gap-2">
+                <span className="text-[11px] text-text-muted">{dirty ? "Unsaved changes" : "Matches the stored settings"}</span>
+                <Btn disabled={!canSave || saveMut.isPending || !dirty} loading={saveMut.isPending} onClick={() => saveMut.mutate(toPayload(fields))}>
+                  Save settings
+                </Btn>
+                <Btn onClick={reloadAll} tone="ghost">Reload</Btn>
               </div>
             </div>
-          )}
-        </AdminCard>
+          </DataState>
+        </Card>
 
         <div className="space-y-6">
-          <AdminCard title="Test Delivery" description="POST /admin/mail/test {recipient}. Queues via MailTriggerService worker or direct mail_outbox.">
-            <div className="flex gap-2">
-              <input value={testRecipient} onChange={(e) => setTestRecipient(e.target.value)} placeholder="recipient@example.com" className="flex-1 rounded-lg border border-[var(--line-strong)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text)] placeholder:text-[var(--text-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" />
-              <button onClick={handleTest} disabled={testMut.isPending} aria-label="Send test email" className="rounded-lg bg-[var(--surface-raised)] border border-[var(--line)] px-4 py-2 text-xs font-bold text-[var(--text)] hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">{testMut.isPending ? "Sending…" : "Send Test"}</button>
+          <Card>
+            <CardHeader icon={Send} title="Test delivery" />
+            <div className="space-y-3 p-4">
+              <div className="flex flex-wrap items-end gap-2">
+                <div className="min-w-48 flex-1">
+                  <Input label="Recipient" onChange={setTestRecipient} placeholder="operator@example.com" type="email" value={testRecipient} />
+                </div>
+                <Btn disabled={testMut.isPending || !testRecipient.trim() || smtpIncomplete} loading={testMut.isPending} onClick={() => testMut.mutate(testRecipient.trim())} title={smtpIncomplete ? "Set an SMTP host first, or switch the driver to log" : undefined}>
+                  Send test
+                </Btn>
+              </div>
+              <p className="text-[11px] leading-5 text-text-muted">
+                {fields.driver === "log"
+                  ? "Driver is log: this records the message in the host log and delivers nothing."
+                  : "Queues the message through the configured sender. The response reports what the queue accepted, not what the provider delivered."}
+              </p>
+              {testMut.isSuccess ? <p className="text-[11px] text-info" role="status">Queued for {testRecipient.trim()} — delivery is not confirmed by this response.</p> : null}
             </div>
-            <p className="mt-2 text-xs text-[var(--text-subtle)]">Sends subject “Test Email from {settings.mailFromName}” via SMTP sender with 15s timeout, TLS 1.2+, multipart alternative.</p>
-          </AdminCard>
+          </Card>
 
-          <AdminCard title="Mail Triggers" description="GET /admin/mail/triggers — registry of server/backup/account events mapped to templates.">
-            {triggersQuery.isError ? (
-              <p role="alert" className="text-sm text-red-200">Mail triggers could not be loaded — the list below is not known to be empty.</p>
-            ) : triggers.length === 0 ? (
-              <div className="flex flex-col items-center justify-center rounded-lg border border-dashed border-[var(--line)] bg-black/10 px-5 py-10 text-center">
-                <p className="text-sm font-semibold text-[var(--text)]">No triggers</p>
-                <p className="mt-1 text-sm text-[var(--text-subtle)]">No mail triggers registered.</p>
-              </div>
-            ) : (
-              <div className="grid gap-2">
-                {triggers.map((t) => (
-                  <div key={t.event} className="flex items-center justify-between rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2 text-xs motion-safe:transition-colors hover:bg-[var(--surface-hover)]">
-                    <div>
-                      <p className="font-bold text-[var(--text)]">{t.label}</p>
-                      <p className="font-mono text-[var(--text-subtle)]">{t.event} → {t.template}</p>
+          <Card>
+            <CardHeader icon={Zap} title="Mail triggers" />
+            <div className="p-4">
+              <DataState
+                emptyMessage="No mail triggers are registered with the control plane."
+                emptyTitle="No triggers"
+                isEmpty={triggers.length === 0}
+                loadingLabel="Loading triggers…"
+                onRetry={() => void triggersQuery.refetch()}
+                state={sourceState(triggersQuery)}
+              >
+                {triggersError ? <p className="mb-3 text-[11px] leading-5 text-warn" role="alert">The trigger list is only as current as the last successful read.</p> : null}
+                <div className="grid gap-2">
+                  {triggers.map((t) => (
+                    <div className="flex items-center justify-between gap-3 rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs" key={t.event}>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-text">{t.label}</p>
+                        <p className="truncate font-mono text-text-subtle">{t.event} → {t.template}</p>
+                      </div>
+                      <Truck aria-hidden="true" className="shrink-0 text-text-muted" size={14} />
                     </div>
-                    <span className="rounded-full border border-[var(--line)] bg-[var(--surface)] px-2 py-1 text-[11px] text-[var(--text-subtle)]">mail</span>
-                  </div>
-                ))}
-              </div>
-            )}
-            <button onClick={() => void triggersQuery.refetch()} className="mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-1.5 text-xs text-[var(--text)] hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Refresh Triggers</button>
-          </AdminCard>
+                  ))}
+                </div>
+              </DataState>
+            </div>
+          </Card>
         </div>
       </div>
+
+      {settingsQuery.isSuccess && !loaded ? <EmptyState icon={Mail} title="Empty settings document" message="The read succeeded but returned no fields, so nothing below is known to be configured." /> : null}
     </AdminPageLayout>
   );
 }

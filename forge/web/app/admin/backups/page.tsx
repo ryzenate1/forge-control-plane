@@ -1,89 +1,159 @@
 "use client";
 
-import { useState, useMemo } from 'react';
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Plus, MoreVertical, RefreshCw, Trash2, Lock, Unlock, Play, XCircle, RotateCcw, Download, Database, Server, AppWindow, Folder, RotateCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Archive, Database, Download, Folder, Lock, MoreVertical, Play, Plus, RefreshCw, RotateCcw, RotateCw, Server, ShieldCheck, Trash2, XCircle } from 'lucide-react';
 import { ForgeDropdownMenu } from '@/components/ui/forge/overlay';
-import { AdminPageLayout, AdminPageHeader, AdminTabs, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, AdminLoadingState, AdminErrorState, Pill } from '@/components/admin/admin-ui';
+import {
+  AdminErrorState,
+  AdminLoadingState,
+  AdminPageHeader,
+  AdminPageLayout,
+  AdminSelect,
+  AdminTable,
+  AdminTabs,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminTr,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  ModalFooter,
+  Pill,
+} from '@/components/admin/admin-ui';
+import { FreshnessBadge, MetricTile } from '@/components/admin/telemetry-ui';
+import { adminPageGuides } from '@/components/admin/admin-page-guides';
+import { sourceState, worstSourceState } from '@/lib/admin/telemetry';
+import { deploymentStatusTone } from '@/lib/api/status';
+import { formatBytes, formatDate } from '@/lib/utils';
 import { useToast } from '@/components/ui/toast';
 import { useConfirm } from '@/components/ui/confirm-dialog';
 import {
-  fetchBackupConfigs,
-  createBackupConfig,
-  updateBackupConfig,
-  deleteBackupConfig,
-  executeBackupConfig,
-  fetchBackupJobs,
-  createBackupJob,
+  artifactSizeBytes,
+  artifactVerification,
   cancelBackupJob,
-  deleteBackupJob,
-  fetchBackupArtifacts,
-  deleteBackupArtifact,
-  lockBackupArtifact,
-  unlockBackupArtifact,
-  downloadBackupArtifact,
-  fetchBackupRestores,
+  createBackupConfig,
+  createBackupJob,
   createRestore,
+  deleteBackupArtifact,
+  deleteBackupConfig,
+  deleteBackupJob,
   deleteBackupRestore,
+  downloadBackupArtifact,
+  executeBackupConfig,
+  fetchBackupArtifacts,
+  fetchBackupConfigs,
+  fetchBackupJobs,
+  fetchBackupRestores,
   fetchBackupStorageProviders,
   fetchBackupSystemStatus,
-  type BackupConfiguration,
-  type CreateBackupJobRequest,
+  lockBackupArtifact,
+  unlockBackupArtifact,
+  updateBackupConfig,
+  verifyBackupArtifact,
   type BackupArtifact,
-  type BackupRestore,
+  type BackupConfiguration,
+  type BackupJob,
+  type CreateBackupJobRequest,
+  type CreateRestoreInput,
   type StorageProvider,
 } from '@/lib/api/admin-backups';
 
-// Helper Functions
-const formatBytes = (bytes: number): string => {
-  if (bytes === 0) return '0 Bytes';
-  const k = 1024;
-  const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
-  return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+// Everything below reads `/admin/backups/*`, which this page polls every 30
+// seconds. Nothing here claims to be live: the header badge is derived from the
+// queries' own `dataUpdatedAt`, so an ageing or failed read says so.
+const ALL_KEY = ["admin", "backups"];
+const POLL_MS = 30_000;
+
+type BackupType = 'app' | 'volume' | 'database' | 'server';
+
+const backupTypeOptions = [
+  { value: 'app', label: 'App' },
+  { value: 'volume', label: 'Volume' },
+  { value: 'database', label: 'Database' },
+  { value: 'server', label: 'Server' },
+];
+
+const typeWord: Record<string, string> = {
+  app: 'app',
+  volume: 'volume',
+  database: 'database',
+  server: 'server',
+  manual: 'manual',
 };
 
-const formatDate = (dateString: string | null): string => {
-  if (!dateString) return 'N/A';
-  return new Date(dateString).toLocaleString();
-};
+/** A size the control plane never measured renders as such, never as "0 B". */
+function sizeCell(sizeBytes: number | null): string {
+  return sizeBytes === null ? 'Not measured' : formatBytes(sizeBytes);
+}
 
-const getStatusTone = (status: string): "green" | "red" | "yellow" | "neutral" | "blue" => {
-  switch (status) {
-    case 'completed':
-    case 'verified':
-    case 'restored':
-      return 'green';
-    case 'running':
-    case 'restoring':
-      return 'blue';
-    case 'enabled':
-      return 'green';
-    case 'disabled':
-      return 'neutral';
-    case 'pending':
-      return 'yellow';
-    case 'failed':
-    case 'cancelled':
-    case 'restore_failed':
-      return 'red';
-    default:
-      return 'neutral';
+type ProgressRow = Pick<BackupJob, 'status' | 'progressPercentage' | 'bytesProcessed' | 'totalBytes' | 'currentPhase' | 'errorMessage'>;
+
+/**
+ * Progress for a job/restore row.
+ *
+ * A `pending` row has not reported any work yet, so it is labelled "Not started"
+ * rather than given a measured `0%`. When a byte denominator exists it is shown,
+ * because "40%" without a total is not a claim an operator can act on.
+ */
+function ProgressCell({ row }: { row: ProgressRow }) {
+  if (row.status === 'completed') {
+    return <span className="text-text-subtle">Finished</span>;
   }
-};
+  if (row.status === 'failed' || row.status === 'cancelled') {
+    return <span className="text-text-subtle">{row.status === 'failed' ? 'Stopped by failure' : 'Cancelled'}</span>;
+  }
+  if (row.status !== 'running') {
+    return <span className="text-text-muted">Not started</span>;
+  }
+  const pct = Math.max(0, Math.min(100, Math.round(Number.isFinite(row.progressPercentage) ? row.progressPercentage : 0)));
+  const processed = row.bytesProcessed > 0 ? formatBytes(row.bytesProcessed) : null;
+  const total = typeof row.totalBytes === 'number' && row.totalBytes > 0 ? formatBytes(row.totalBytes) : null;
+  return (
+    <span className="block space-y-0.5">
+      <span className="block font-mono">{pct}%{row.currentPhase ? ` · ${row.currentPhase}` : ''}</span>
+      <span className="block text-text-muted">
+        {processed && total ? `${processed} of ${total}` : processed ?? 'No byte count reported'}
+      </span>
+    </span>
+  );
+}
 
-const backupTypeIcons: Record<string, React.ReactNode> = {
-  app: <AppWindow size={14} />,
-  volume: <Folder size={14} />,
-  database: <Database size={14} />,
-  server: <Server size={14} />,
-};
+/** The one target field the API requires for a given artifact type (`restore.go:218-223`). */
+function targetFieldFor(type: string): 'targetServerId' | 'targetAppId' | 'targetDatabaseId' | 'targetVolumeId' {
+  switch (type) {
+    case 'app': return 'targetAppId';
+    case 'database': return 'targetDatabaseId';
+    case 'volume': return 'targetVolumeId';
+    default: return 'targetServerId';
+  }
+}
 
-const getBackupTypeIcon = (type: string) => backupTypeIcons[type] ?? null;
+/** The artifact's own source resource — the natural default restore target. */
+function defaultTargetId(artifact: BackupArtifact): string {
+  const field = targetFieldFor(artifact.artifactType);
+  const sources = {
+    targetAppId: artifact.sourceAppId,
+    targetDatabaseId: artifact.sourceDatabaseId,
+    targetVolumeId: artifact.sourceVolumeId,
+    targetServerId: artifact.sourceServerId,
+  } as const;
+  return sources[field] ?? '';
+}
 
-// Hoisted modal components (module scope so parent re-renders never remount
-// them and wipe in-progress form state)
-function ConfigFormModal({ onClose, storageProviders: sp, initial, pending, onSubmit }: { onClose: () => void; storageProviders: StorageProvider[]; initial: BackupConfiguration | null; pending: boolean; onSubmit: (data: Partial<BackupConfiguration>) => void }) {
+function ConfigFormModal({ onClose, storageProviders: sp, initial, pending, onSubmit }: {
+  onClose: () => void;
+  storageProviders: StorageProvider[];
+  initial: BackupConfiguration | null;
+  pending: boolean;
+  onSubmit: (data: Partial<BackupConfiguration>) => void;
+}) {
   const [targetId, setTargetId] = useState(initial ? (initial.appId || initial.databaseId || initial.volumeId || initial.serverId || '') : '');
   const [volumeServerId, setVolumeServerId] = useState(initial?.serverId || '');
   const [formData, setFormData] = useState<Partial<BackupConfiguration>>(initial ? {
@@ -109,14 +179,11 @@ function ConfigFormModal({ onClose, storageProviders: sp, initial, pending, onSu
     enabled: true,
   });
 
+  const patch = (next: Partial<BackupConfiguration>) => setFormData(prev => ({ ...prev, ...next }));
+
   const handleSubmit = () => {
-    const backupType = formData.backupType || 'server';
-    const targetField = {
-      app: 'appId',
-      volume: 'volumeId',
-      database: 'databaseId',
-      server: 'serverId',
-    }[backupType];
+    const backupType = (formData.backupType || 'server') as BackupType;
+    const targetField = { app: 'appId', volume: 'volumeId', database: 'databaseId', server: 'serverId' }[backupType];
     onSubmit({
       ...formData,
       [targetField]: targetId.trim(),
@@ -125,52 +192,58 @@ function ConfigFormModal({ onClose, storageProviders: sp, initial, pending, onSu
   };
 
   return (
-    <Modal title={initial ? 'Edit Backup Configuration' : 'Create Backup Configuration'} onClose={onClose} description={initial ? 'Update how this backup configuration runs.' : 'Create a new backup configuration for scheduled or on-demand backups.'}>
+    <Modal description={initial ? 'Update how this policy runs.' : 'Create a policy for scheduled or on-demand backups.'} onClose={onClose} title={initial ? 'Edit backup policy' : 'Create backup policy'}>
       <div className="grid gap-4 md:grid-cols-2">
-        <Input label="Name *" value={formData.name || ''} onChange={(v) => setFormData({...formData, name: v})} />
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-300">Backup Type *</label>
-          <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100" value={formData.backupType} onChange={(e) => setFormData({...formData, backupType: e.target.value as 'app' | 'volume' | 'database' | 'server'})}>
-            <option value="app">App</option>
-            <option value="volume">Volume</option>
-            <option value="database">Database</option>
-            <option value="server">Server</option>
-          </select>
-        </div>
+        <Input label="Name *" value={formData.name || ''} onChange={(v) => patch({ name: v })} />
+        <AdminSelect
+          label="Backup type *"
+          value={formData.backupType || 'app'}
+          onChange={(v) => patch({ backupType: v as BackupType })}
+          options={backupTypeOptions}
+        />
         <div className="md:col-span-2">
-          <Input label="Description" value={formData.description || ''} onChange={(v) => setFormData({...formData, description: v})} />
+          <Input label="Description" value={formData.description || ''} onChange={(v) => patch({ description: v })} />
         </div>
-        <Input label="Target ID *" value={targetId} onChange={setTargetId} />
+        <Input label="Target ID *" mono value={targetId} onChange={setTargetId} />
         {formData.backupType === 'volume' && (
-          <Input label="Server ID *" value={volumeServerId} onChange={setVolumeServerId} />
+          <Input label="Server ID *" mono value={volumeServerId} onChange={setVolumeServerId} />
         )}
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-300">Storage Provider *</label>
-          <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100" value={formData.storageProvider} onChange={(e) => setFormData({...formData, storageProvider: e.target.value})}>
-            {Array.isArray(sp) && sp.map(p => (
-              <option key={p.id} value={p.name}>{p.name} ({p.type})</option>
-            ))}
-          </select>
+        <AdminSelect
+          label="Storage provider *"
+          value={formData.storageProvider || ''}
+          onChange={(v) => patch({ storageProvider: v })}
+          options={Array.isArray(sp) ? sp.map(p => ({ value: p.name, label: `${p.name} (${p.type})` })) : []}
+          placeholder={Array.isArray(sp) && sp.length === 0 ? 'No providers registered' : 'Select a provider…'}
+        />
+        <Input label="Max backups" type="number" value={String(formData.maxBackups ?? 10)} onChange={(v) => patch({ maxBackups: Number.parseInt(v, 10) || 0 })} />
+        <Input label="Retention days" type="number" value={String(formData.retentionDays ?? 30)} onChange={(v) => patch({ retentionDays: Number.parseInt(v, 10) || 0 })} />
+        <div className="md:col-span-2">
+          <Input label="Cron expression" mono value={formData.cronExpression || ''} onChange={(v) => patch({ cronExpression: v, isScheduled: v !== '' })} placeholder="0 0 * * *" />
+          <p className="mt-1 text-xs text-text-muted">
+            Leave empty for a manual-only policy. Five fields: minute hour day month weekday.
+          </p>
         </div>
-        <Input label="Max Backups" value={String(formData.maxBackups ?? 10)} onChange={(v) => setFormData({...formData, maxBackups: parseInt(v) || 0})} type="number" />
-        <Input label="Retention Days" value={String(formData.retentionDays ?? 30)} onChange={(v) => setFormData({...formData, retentionDays: parseInt(v) || 0})} type="number" />
-        <Input label="Cron Expression" value={formData.cronExpression || ''} onChange={(v) => setFormData({...formData, cronExpression: v, isScheduled: v !== ''})} placeholder="0 0 * * *" />
       </div>
-      <div className="flex items-center gap-4 mt-4">
-        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-          <input type="checkbox" checked={formData.compressionEnabled || false} onChange={(e) => setFormData({...formData, compressionEnabled: e.target.checked})} className="rounded border-white/20" />
+      <div className="mt-4 flex flex-wrap items-center gap-4">
+        <label className="flex items-center gap-2 text-sm text-text-subtle">
+          <input checked={formData.compressionEnabled || false} className="rounded border-line-strong" onChange={(e) => patch({ compressionEnabled: e.target.checked })} type="checkbox" />
           Compression
         </label>
-        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-          <input type="checkbox" checked={formData.encryptionEnabled || false} onChange={(e) => setFormData({...formData, encryptionEnabled: e.target.checked})} className="rounded border-white/20" />
+        <label className="flex items-center gap-2 text-sm text-text-subtle">
+          <input checked={formData.encryptionEnabled || false} className="rounded border-line-strong" onChange={(e) => patch({ encryptionEnabled: e.target.checked })} type="checkbox" />
           Encryption
         </label>
-        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-          <input type="checkbox" checked={formData.enabled || false} onChange={(e) => setFormData({...formData, enabled: e.target.checked})} className="rounded border-white/20" />
+        <label className="flex items-center gap-2 text-sm text-text-subtle">
+          <input checked={formData.enabled || false} className="rounded border-line-strong" onChange={(e) => patch({ enabled: e.target.checked })} type="checkbox" />
           Enabled
         </label>
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={handleSubmit} disabled={pending || !formData.name?.trim() || !targetId.trim() || (formData.backupType === 'volume' && !volumeServerId.trim())} confirmLabel={pending ? 'Saving...' : initial ? 'Save Changes' : 'Create Configuration'} />
+      <ModalFooter
+        onCancel={onClose}
+        onConfirm={handleSubmit}
+        disabled={pending || !formData.name?.trim() || !targetId.trim() || !formData.storageProvider?.trim() || (formData.backupType === 'volume' && !volumeServerId.trim())}
+        confirmLabel={pending ? 'Saving…' : initial ? 'Save changes' : 'Create policy'}
+      />
     </Modal>
   );
 }
@@ -183,12 +256,7 @@ function CreateJobModal({ onClose, pending, onSubmit }: { onClose: () => void; p
   const [description, setDescription] = useState('');
 
   const handleSubmit = () => {
-    const targetField = {
-      app: 'appId',
-      volume: 'volumeId',
-      database: 'databaseId',
-      server: 'serverId',
-    }[jobType];
+    const targetField = { app: 'appId', volume: 'volumeId', database: 'databaseId', server: 'serverId' }[jobType];
     onSubmit({
       name: name.trim(),
       jobType,
@@ -199,65 +267,145 @@ function CreateJobModal({ onClose, pending, onSubmit }: { onClose: () => void; p
   };
 
   return (
-    <Modal title="Create Backup Job" onClose={onClose} description="Create an on-demand backup for one application resource.">
+    <Modal description="Run one on-demand backup for a single resource." onClose={onClose} title="Create backup job">
       <div className="grid gap-4 md:grid-cols-2">
         <Input label="Name *" value={name} onChange={setName} />
-        <div>
-          <label className="mb-1.5 block text-sm font-medium text-slate-300">Backup Type *</label>
-          <select className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100" value={jobType} onChange={(e) => setJobType(e.target.value as CreateBackupJobRequest['jobType'])}>
-            <option value="app">App</option>
-            <option value="volume">Volume</option>
-            <option value="database">Database</option>
-            <option value="server">Server</option>
-          </select>
-        </div>
-        <Input label="Target ID *" value={targetId} onChange={setTargetId} />
+        <AdminSelect label="Backup type *" value={jobType} onChange={(v) => setJobType(v as CreateBackupJobRequest['jobType'])} options={backupTypeOptions} />
+        <Input label="Target ID *" mono value={targetId} onChange={setTargetId} />
         {jobType === 'volume' && (
-          <Input label="Server ID *" value={volumeServerId} onChange={setVolumeServerId} />
+          <Input label="Server ID *" mono value={volumeServerId} onChange={setVolumeServerId} />
         )}
         <div className="md:col-span-2">
           <Input label="Description" value={description} onChange={setDescription} />
         </div>
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={handleSubmit} disabled={pending || !name.trim() || !targetId.trim() || (jobType === 'volume' && !volumeServerId.trim())} confirmLabel={pending ? 'Creating...' : 'Create Job'} />
+      <ModalFooter
+        onCancel={onClose}
+        onConfirm={handleSubmit}
+        disabled={pending || !name.trim() || !targetId.trim() || (jobType === 'volume' && !volumeServerId.trim())}
+        confirmLabel={pending ? 'Creating…' : 'Create job'}
+      />
     </Modal>
   );
 }
 
-function RestoreModal({ onClose, artifact, pending, onSubmit }: { onClose: () => void; artifact: BackupArtifact | null; pending: boolean; onSubmit: (data: Partial<BackupRestore> & { artifactId: string }) => void }) {
-  const [formData, setFormData] = useState<Partial<BackupRestore> & { artifactId: string }>({
-    artifactId: artifact?.id || '',
-    restoreType: artifact?.artifactType || 'app',
-    triggeredBy: 'manual',
-  });
+/**
+ * Restore is the most destructive action in this slice: it writes stored backup
+ * data over a live workload. The dialog therefore
+ *   (a) states the artifact's real integrity verdict,
+ *   (b) collects the one target the API requires — without it the POST is
+ *       rejected with "exactly one target must be specified", which is what the
+ *       previous version of this form always did,
+ *   (c) maps its options onto the fields the server actually reads, and
+ *   (d) is confirmed with its blast radius before anything is posted.
+ * The menu never opens this dialog for an artifact whose last check failed.
+ */
+function RestoreModal({ artifact, onClose, pending, onSubmit }: {
+  artifact: BackupArtifact;
+  onClose: () => void;
+  pending: boolean;
+  onSubmit: (data: CreateRestoreInput) => void;
+}) {
+  const verdict = artifactVerification(artifact);
+  const targetField = targetFieldFor(artifact.artifactType);
+  const [targetId, setTargetId] = useState(defaultTargetId(artifact));
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
+  const [overwrite, setOverwrite] = useState(false);
+  const [snapshotFirst, setSnapshotFirst] = useState(true);
+
+  const size = artifactSizeBytes(artifact);
+  const canSubmit = targetId.trim().length > 0 && !pending;
 
   const handleSubmit = () => {
-    onSubmit(formData);
+    if (!canSubmit) return;
+    onSubmit({
+      artifactId: artifact.id,
+      restoreType: artifact.artifactType,
+      [targetField]: targetId.trim(),
+      name: name.trim() || undefined,
+      description: description.trim() || undefined,
+      triggeredBy: 'manual',
+      restoreOptions: {
+        overwriteExisting: overwrite,
+        createBackupBeforeRestore: snapshotFirst,
+      },
+    });
   };
 
   return (
-    <Modal title="Restore Backup" onClose={onClose} description={`Restore from backup artifact: ${artifact?.displayName || artifact?.name || ''}`}>
-      <div className="grid gap-4 md:grid-cols-2">
-        <Input label="Restore Name" value={formData.name || ''} onChange={(v) => setFormData({...formData, name: v})} placeholder={artifact ? `restore-${artifact.name}-${new Date().toISOString().slice(0, 10)}` : ''} />
-        <Input label="Restore Type" value={formData.restoreType || ''} onChange={() => {}} readOnly />
-        <div className="md:col-span-2">
-          <Input label="Description" value={formData.description || ''} onChange={(v) => setFormData({...formData, description: v})} placeholder="Optional description for this restore operation" />
+    <Modal description={`Restore “${artifact.displayName || artifact.name}” onto a live resource.`} onClose={onClose} title="Restore backup">
+      <div className="space-y-4">
+        <div className="rounded-lg border border-line bg-overlay-subtle p-3 text-xs leading-5">
+          <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+            <span className="font-semibold text-text">{artifact.displayName || artifact.name}</span>
+            <Pill tone="neutral">{typeWord[artifact.artifactType] ?? artifact.artifactType}</Pill>
+            <span className="text-text-muted">{artifact.storageProvider ? `Stored on ${artifact.storageProvider}` : 'Storage provider not reported'}</span>
+          </div>
+          <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
+            <div className="flex gap-2"><dt className="text-text-muted">Size</dt><dd className="font-mono text-text">{sizeCell(size)}</dd></div>
+            <div className="flex gap-2">
+              <dt className="text-text-muted">Integrity</dt>
+              <dd className="text-text">
+                {verdict.state === 'verified'
+                  ? `Verified${verdict.verifiedAt ? ` ${formatDate(verdict.verifiedAt)}` : ' (time not reported)'}`
+                  : verdict.state === 'failed'
+                    ? `Last check failed (${verdict.attempts} attempt${verdict.attempts === 1 ? '' : 's'})`
+                    : 'Never checked'}
+              </dd>
+            </div>
+          </dl>
+          {/* What the control plane actually does — restore.go:378-388. */}
+          <p className="mt-2 text-text-subtle">
+            Before writing, the control plane re-downloads and re-hashes this artifact and refuses the
+            restore if that check fails.
+          </p>
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <Input label={`${typeWord[artifact.artifactType] ?? 'target'} ID *`} mono onChange={setTargetId} value={targetId} />
+          <Input label="Restore name (optional)" onChange={setName} placeholder={`restore-${artifact.name}`} value={name} />
+          <div className="md:col-span-2">
+            <Input label="Description" onChange={setDescription} placeholder="Why this restore is running" value={description} />
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <label className="flex items-start gap-2 text-sm text-text-subtle">
+            <input checked={overwrite} className="mt-1 rounded border-line-strong" onChange={(e) => setOverwrite(e.target.checked)} type="checkbox" />
+            <span>
+              Overwrite existing files
+              <span className="mt-0.5 block text-xs text-text-muted">
+                Off: the restore stops if the target already holds data at the same paths.
+                On: matching files at the target are replaced.
+              </span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm text-text-subtle">
+            <input checked={snapshotFirst} className="mt-1 rounded border-line-strong" onChange={(e) => setSnapshotFirst(e.target.checked)} type="checkbox" />
+            <span>
+              Snapshot the target first
+              <span className="mt-0.5 block text-xs text-text-muted">
+                Captures the target&apos;s current data as a rollback artifact before writing. Recommended
+                while the target is live.
+              </span>
+            </span>
+          </label>
         </div>
       </div>
-      <div className="flex items-center gap-4 mt-4">
-        <label className="flex items-center gap-2 text-sm text-slate-300 cursor-pointer">
-          <input type="checkbox" checked={formData.overwrite || false} onChange={(e) => setFormData({...formData, overwrite: e.target.checked})} className="rounded border-white/20" />
-          Overwrite Existing
-        </label>
-      </div>
-      <ModalFooter onCancel={onClose} onConfirm={handleSubmit} disabled={pending} confirmLabel="Start Restore" />
+      <ModalFooter
+        confirmLabel={pending ? 'Starting…' : 'Restore now'}
+        destructive
+        disabled={!canSubmit}
+        onCancel={onClose}
+        onConfirm={handleSubmit}
+      />
     </Modal>
   );
 }
 
-// Main Component
 export default function BackupManagementPage() {
-  
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
@@ -270,117 +418,105 @@ export default function BackupManagementPage() {
   const [isRestoreOpen, setIsRestoreOpen] = useState(false);
   const [selectedArtifact, setSelectedArtifact] = useState<BackupArtifact | null>(null);
 
-  const ALL_KEY = ["admin", "backups"];
-
-  const backupConfigsQuery = useQuery({
-    queryKey: [...ALL_KEY, "configs"],
-    queryFn: fetchBackupConfigs,
-    refetchInterval: 30_000,
-  });
-
-  const backupJobsQuery = useQuery({
-    queryKey: [...ALL_KEY, "jobs"],
-    queryFn: fetchBackupJobs,
-    refetchInterval: 30_000,
-  });
-
-  const backupArtifactsQuery = useQuery({
-    queryKey: [...ALL_KEY, "artifacts"],
-    queryFn: fetchBackupArtifacts,
-    refetchInterval: 30_000,
-  });
-
-  const backupRestoresQuery = useQuery({
-    queryKey: [...ALL_KEY, "restores"],
-    queryFn: fetchBackupRestores,
-    refetchInterval: 30_000,
-  });
-
-  const storageProvidersQuery = useQuery({
-    queryKey: [...ALL_KEY, "storage-providers"],
-    queryFn: fetchBackupStorageProviders,
-    refetchInterval: 30_000,
-  });
-
-  const systemStatusQuery = useQuery({
-    queryKey: [...ALL_KEY, "status"],
-    queryFn: fetchBackupSystemStatus,
-    refetchInterval: 30_000,
-  });
+  const backupConfigsQuery = useQuery({ queryKey: [...ALL_KEY, "configs"], queryFn: fetchBackupConfigs, refetchInterval: POLL_MS });
+  const backupJobsQuery = useQuery({ queryKey: [...ALL_KEY, "jobs"], queryFn: fetchBackupJobs, refetchInterval: POLL_MS });
+  const backupArtifactsQuery = useQuery({ queryKey: [...ALL_KEY, "artifacts"], queryFn: fetchBackupArtifacts, refetchInterval: POLL_MS });
+  const backupRestoresQuery = useQuery({ queryKey: [...ALL_KEY, "restores"], queryFn: fetchBackupRestores, refetchInterval: POLL_MS });
+  const storageProvidersQuery = useQuery({ queryKey: [...ALL_KEY, "storage-providers"], queryFn: fetchBackupStorageProviders, refetchInterval: POLL_MS });
+  const systemStatusQuery = useQuery({ queryKey: [...ALL_KEY, "status"], queryFn: fetchBackupSystemStatus, refetchInterval: POLL_MS });
 
   const backupConfigs = useMemo(() => Array.isArray(backupConfigsQuery.data) ? backupConfigsQuery.data : [], [backupConfigsQuery.data]);
   const backupJobs = useMemo(() => Array.isArray(backupJobsQuery.data) ? backupJobsQuery.data : [], [backupJobsQuery.data]);
   const backupArtifacts = useMemo(() => Array.isArray(backupArtifactsQuery.data) ? backupArtifactsQuery.data : [], [backupArtifactsQuery.data]);
   const backupRestores = useMemo(() => Array.isArray(backupRestoresQuery.data) ? backupRestoresQuery.data : [], [backupRestoresQuery.data]);
   const storageProviders = useMemo(() => Array.isArray(storageProvidersQuery.data) ? storageProvidersQuery.data : [], [storageProvidersQuery.data]);
-  const systemStatus = systemStatusQuery.data ?? null;
+  const systemStatus = systemStatusQuery.data;
+
+  const freshness = worstSourceState([
+    sourceState(backupConfigsQuery, POLL_MS),
+    sourceState(backupJobsQuery, POLL_MS),
+    sourceState(backupArtifactsQuery, POLL_MS),
+    sourceState(backupRestoresQuery, POLL_MS),
+    sourceState(storageProvidersQuery, POLL_MS),
+    sourceState(systemStatusQuery, POLL_MS),
+  ]);
+
   const loading = backupConfigsQuery.isLoading || backupJobsQuery.isLoading || backupArtifactsQuery.isLoading || backupRestoresQuery.isLoading || storageProvidersQuery.isLoading || systemStatusQuery.isLoading;
-  const error = backupConfigsQuery.error || backupJobsQuery.error || backupArtifactsQuery.error || backupRestoresQuery.error || storageProvidersQuery.error || systemStatusQuery.error;
+  const aggregateError = backupConfigsQuery.error || backupJobsQuery.error || backupArtifactsQuery.error || backupRestoresQuery.error || storageProvidersQuery.error || systemStatusQuery.error;
 
   const invalidateAll = () => queryClient.invalidateQueries({ queryKey: ALL_KEY });
 
   const createConfigMut = useMutation({
     mutationFn: (data: Partial<BackupConfiguration>) => createBackupConfig(data),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup configuration created successfully" }); setIsCreateConfigOpen(false); setEditingConfig(null); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to create backup configuration" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup policy created" }); setIsCreateConfigOpen(false); setEditingConfig(null); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to create backup policy" }),
   });
 
   const updateConfigMut = useMutation({
     mutationFn: ({ id, data }: { id: string; data: Partial<BackupConfiguration> }) => updateBackupConfig(id, data),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup configuration updated" }); setIsCreateConfigOpen(false); setEditingConfig(null); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to update backup configuration" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup policy updated" }); setIsCreateConfigOpen(false); setEditingConfig(null); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to update backup policy" }),
   });
 
   const executeConfigMut = useMutation({
     mutationFn: (id: string) => executeBackupConfig(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup configuration executed successfully" }); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to execute backup configuration" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job started for this policy" }); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to start backup job" }),
   });
 
   const createJobMut = useMutation({
     mutationFn: (data: CreateBackupJobRequest) => createBackupJob(data),
-    onSuccess: () => {
-      invalidateAll();
-      toast({ tone: "success", title: "Backup job created successfully" });
-      setIsCreateJobOpen(false);
-    },
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job created" }); setIsCreateJobOpen(false); },
     onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to create backup job" }),
   });
 
   const deleteConfigMut = useMutation({
     mutationFn: (id: string) => deleteBackupConfig(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup configuration deleted successfully" }); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete backup configuration" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup policy deleted" }); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete backup policy" }),
   });
 
   const deleteJobMut = useMutation({
     mutationFn: (id: string) => deleteBackupJob(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job deleted successfully" }); },
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job deleted" }); },
     onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete backup job" }),
   });
 
   const cancelJobMut = useMutation({
     mutationFn: (id: string) => cancelBackupJob(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job cancelled successfully" }); },
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup job cancelled" }); },
     onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to cancel backup job" }),
   });
 
   const deleteArtifactMut = useMutation({
     mutationFn: (id: string) => deleteBackupArtifact(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup artifact deleted successfully" }); },
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup artifact deleted" }); },
     onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete backup artifact" }),
   });
 
   const lockArtifactMut = useMutation({
     mutationFn: (id: string) => lockBackupArtifact(id, 'Manual lock'),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup artifact locked successfully" }); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to lock backup artifact" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Artifact locked", message: "Retention pruning will skip it." }); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to lock artifact" }),
   });
 
   const unlockArtifactMut = useMutation({
     mutationFn: (id: string) => unlockBackupArtifact(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup artifact unlocked successfully" }); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to unlock backup artifact" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Artifact unlocked", message: "Retention pruning may expire it again." }); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to unlock artifact" }),
+  });
+
+  const verifyArtifactMut = useMutation({
+    mutationFn: (id: string) => verifyBackupArtifact(id),
+    onSuccess: () => {
+      invalidateAll();
+      toast({ tone: "success", title: "Integrity check passed", message: "Stored file re-hashed against its recorded digest." });
+    },
+    onError: (err) => toast({
+      tone: "error",
+      title: "Integrity check failed",
+      message: err instanceof Error ? err.message : "The artifact could not be re-hashed.",
+    }),
   });
 
   const downloadArtifactMut = useMutation({
@@ -394,121 +530,164 @@ export default function BackupManagementPage() {
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      return blob.size;
     },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to download backup artifact" }),
+    onSuccess: (bytes) => toast({ tone: "success", title: "Artifact downloaded", message: `${formatBytes(bytes)} received.` }),
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to download artifact" }),
   });
 
   const createRestoreMut = useMutation({
-    mutationFn: (data: Partial<BackupRestore> & { artifactId: string }) => createRestore(data),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Restore operation created successfully" }); setIsRestoreOpen(false); setSelectedArtifact(null); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to create restore operation" }),
+    mutationFn: (data: CreateRestoreInput) => createRestore(data),
+    onSuccess: (restore) => {
+      invalidateAll();
+      setIsRestoreOpen(false);
+      setSelectedArtifact(null);
+      if (restore.status === 'failed') {
+        toast({ tone: 'error', title: 'Restore failed', message: restore.errorMessage || 'See the restore record for the reason.' });
+      } else {
+        toast({ tone: 'success', title: 'Restore started', message: 'Follow progress in the Restores tab.' });
+        setActiveTab('restores');
+      }
+    },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to start restore" }),
   });
 
   const deleteRestoreMut = useMutation({
     mutationFn: (id: string) => deleteBackupRestore(id),
-    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Backup restore deleted successfully" }); },
-    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete backup restore" }),
+    onSuccess: () => { invalidateAll(); toast({ tone: "success", title: "Restore record deleted" }); },
+    onError: (err) => toast({ tone: "error", title: err instanceof Error ? err.message : "Failed to delete restore record" }),
   });
 
-  const handleSearch = (query: string) => setSearchQuery(query);
+  const needle = searchQuery.trim().toLowerCase();
 
-  const filteredConfigs = useMemo(() => Array.isArray(backupConfigs) ? backupConfigs.filter(config =>
-    config.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    config.description.toLowerCase().includes(searchQuery.toLowerCase())
-  ) : [], [backupConfigs, searchQuery]);
+  const filteredConfigs = useMemo(() => backupConfigs.filter(config =>
+    config.name.toLowerCase().includes(needle)
+    || (config.description ?? '').toLowerCase().includes(needle)
+    || (config.storageProvider ?? '').toLowerCase().includes(needle),
+  ), [backupConfigs, needle]);
 
-  const filteredJobs = useMemo(() => Array.isArray(backupJobs) ? backupJobs.filter(job =>
-    job.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    job.status.toLowerCase().includes(searchQuery.toLowerCase())
-  ) : [], [backupJobs, searchQuery]);
+  const filteredJobs = useMemo(() => backupJobs.filter(job =>
+    job.name.toLowerCase().includes(needle) || job.status.toLowerCase().includes(needle),
+  ), [backupJobs, needle]);
 
-  const filteredArtifacts = useMemo(() => Array.isArray(backupArtifacts) ? backupArtifacts.filter(artifact =>
-    artifact.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    artifact.displayName.toLowerCase().includes(searchQuery.toLowerCase())
-  ) : [], [backupArtifacts, searchQuery]);
+  const filteredArtifacts = useMemo(() => backupArtifacts.filter(artifact =>
+    artifact.name.toLowerCase().includes(needle)
+    || (artifact.displayName ?? '').toLowerCase().includes(needle)
+    || artifact.status.toLowerCase().includes(needle),
+  ), [backupArtifacts, needle]);
 
-  const filteredRestores = useMemo(() => Array.isArray(backupRestores) ? backupRestores.filter(restore =>
-    restore.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    restore.status.toLowerCase().includes(searchQuery.toLowerCase())
-  ) : [], [backupRestores, searchQuery]);
+  const filteredRestores = useMemo(() => backupRestores.filter(restore =>
+    restore.name.toLowerCase().includes(needle)
+    || restore.status.toLowerCase().includes(needle)
+    || (restore.artifactId ?? '').toLowerCase().includes(needle),
+  ), [backupRestores, needle]);
+
+  const artifactById = useMemo(() => {
+    const map = new Map<string, BackupArtifact>();
+    for (const artifact of backupArtifacts) map.set(artifact.id, artifact);
+    return map;
+  }, [backupArtifacts]);
 
   const renderStatusPill = (status: string) => (
-    <Pill tone={getStatusTone(status)}>{status}</Pill>
+    <Pill tone={deploymentStatusTone(status)}>{status}</Pill>
   );
 
-  const renderBackupTypePill = (type: string) => (
-    <Pill tone="blue" className="flex items-center gap-1">
-      {getBackupTypeIcon(type)}
-      {type}
-    </Pill>
-  );
-
-  const renderProgress = (progress: number) => (
-    <span className="text-xs text-slate-400">{Math.round(progress)}%</span>
-  );
+  const renderVerification = (artifact: BackupArtifact) => {
+    const verdict = artifactVerification(artifact);
+    if (verdict.state === 'verified') {
+      return (
+        <div className="space-y-0.5">
+          <Pill tone="ok">Verified</Pill>
+          <p className="text-text-muted">{verdict.verifiedAt ? formatDate(verdict.verifiedAt) : 'Time not reported'}</p>
+        </div>
+      );
+    }
+    if (verdict.state === 'failed') {
+      return (
+        <div className="space-y-0.5">
+          <Pill tone="danger">Check failed</Pill>
+          <p className="text-text-muted">{verdict.attempts} attempt{verdict.attempts === 1 ? '' : 's'}, none passed</p>
+        </div>
+      );
+    }
+    return (
+      <div className="space-y-0.5">
+        <Pill tone="unknown">Not checked</Pill>
+        <p className="text-text-muted">Run Verify to re-hash it</p>
+      </div>
+    );
+  };
 
   const renderOverview = () => (
     <div className="space-y-6">
-      {error && (
-        <AdminErrorState message={error instanceof Error ? error.message : 'Failed to fetch data'} retry={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} />
-      )}
-
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-            <Server size={12} /> Backup Configurations
-          </div>
-          <div className="text-2xl font-bold text-slate-100">{systemStatus?.backupConfigurations.total || 0}</div>
-          <p className="text-xs text-slate-500">{systemStatus?.backupConfigurations.scheduled || 0} scheduled, {systemStatus?.backupConfigurations.enabled || 0} enabled</p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-            <Database size={12} /> Backup Jobs
-          </div>
-          <div className="text-2xl font-bold text-slate-100">{systemStatus?.backupJobs.total || 0}</div>
-          <p className="text-xs text-slate-500">{systemStatus?.backupJobs.running || 0} running, {systemStatus?.backupJobs.pending || 0} pending</p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-            <Folder size={12} /> Backup Artifacts
-          </div>
-          <div className="text-2xl font-bold text-slate-100">{systemStatus?.backupArtifacts.total || 0}</div>
-          <p className="text-xs text-slate-500">{systemStatus?.backupArtifacts.verified || 0} verified, {systemStatus?.backupArtifacts.locked || 0} locked</p>
-        </Card>
-
-        <Card className="p-4">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-            <RotateCw size={12} /> Restore Operations
-          </div>
-          <div className="text-2xl font-bold text-slate-100">{systemStatus?.backupRestores.total || 0}</div>
-          <p className="text-xs text-slate-500">{systemStatus?.backupRestores.completed || 0} completed</p>
-        </Card>
+        <MetricTile
+          context={systemStatus ? `${systemStatus.backupConfigurations.scheduled} scheduled, ${systemStatus.backupConfigurations.enabled} enabled` : undefined}
+          kind="configured"
+          label="Backup policies"
+          missingReason={systemStatusQuery.isError ? 'The status read failed' : 'Waiting for the status read'}
+          state={sourceState(systemStatusQuery, POLL_MS)}
+          value={systemStatus?.backupConfigurations.total}
+        />
+        <MetricTile
+          context={systemStatus ? `${systemStatus.backupJobs.running} running, ${systemStatus.backupJobs.pending} pending` : undefined}
+          kind="derived"
+          label="Backup jobs"
+          missingReason={systemStatusQuery.isError ? 'The status read failed' : 'Waiting for the status read'}
+          state={sourceState(systemStatusQuery, POLL_MS)}
+          tone={systemStatus && systemStatus.backupJobs.failed > 0 ? 'warn' : undefined}
+          value={systemStatus?.backupJobs.total}
+        />
+        <MetricTile
+          context={systemStatus ? `${systemStatus.backupArtifacts.verified} verified, ${systemStatus.backupArtifacts.locked} locked` : undefined}
+          kind="derived"
+          label="Backup artifacts"
+          missingReason={systemStatusQuery.isError ? 'The status read failed' : 'Waiting for the status read'}
+          state={sourceState(systemStatusQuery, POLL_MS)}
+          value={systemStatus?.backupArtifacts.total}
+        />
+        <MetricTile
+          context={systemStatus ? `${systemStatus.backupRestores.completed} completed, ${systemStatus.backupRestores.failed} failed` : undefined}
+          kind="derived"
+          label="Restore operations"
+          missingReason={systemStatusQuery.isError ? 'The status read failed' : 'Waiting for the status read'}
+          state={sourceState(systemStatusQuery, POLL_MS)}
+          tone={systemStatus && systemStatus.backupRestores.failed > 0 ? 'warn' : undefined}
+          value={systemStatus?.backupRestores.total}
+        />
       </div>
 
       <Card>
-        <CardHeader title="Storage Providers" icon={Server} />
-        <div className="divide-y divide-white/[0.04]">
-          {Array.isArray(storageProviders) && storageProviders.map(provider => (
-            <div key={provider.id} className="flex items-center justify-between px-5 py-3">
-              <div className="flex items-center gap-2">
-                <span className="text-sm font-medium text-slate-200">{provider.name}</span>
-                <Pill tone="blue">{provider.type}</Pill>
-                {provider.isDefault && <Pill tone="green">Default</Pill>}
+        <CardHeader icon={Server} title="Storage providers" />
+        {storageProvidersQuery.isLoading ? (
+          <AdminLoadingState label="Loading storage providers…" />
+        ) : storageProvidersQuery.isError ? (
+          <div className="p-4">
+            <AdminErrorState message={`Storage providers could not be read: ${storageProvidersQuery.error.message}`} retry={() => void storageProvidersQuery.refetch()} />
+          </div>
+        ) : storageProviders.length === 0 ? (
+          <EmptyState icon={Server} message="No storage providers are registered, so a policy has nowhere to write." title="No storage providers" />
+        ) : (
+          <div className="divide-y divide-line">
+            {storageProviders.map(provider => (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-5 py-3" key={provider.id}>
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-text">{provider.name}</span>
+                  <Pill tone="neutral">{provider.type}</Pill>
+                  {provider.isDefault ? <Pill tone="ok">Default</Pill> : null}
+                </div>
+                <Pill tone={provider.enabled ? "ok" : "neutral"}>{provider.enabled ? 'Enabled' : 'Disabled'}</Pill>
               </div>
-              <Pill tone={provider.enabled ? "green" : "neutral"}>{provider.enabled ? 'Enabled' : 'Disabled'}</Pill>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
       </Card>
 
       <Card>
-        <CardHeader title="Quick Actions" />
+        <CardHeader title="Create" />
         <div className="flex flex-wrap gap-3 p-5">
-          <Btn onClick={() => setIsCreateConfigOpen(true)}><Plus size={14} /> Create Configuration</Btn>
-          <Btn tone="ghost" onClick={() => setIsCreateJobOpen(true)}><Plus size={14} /> Create Backup Job</Btn>
-          <Btn tone="ghost" onClick={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} disabled={loading}><RefreshCw size={14} /> Refresh Data</Btn>
+          <Btn onClick={() => setIsCreateConfigOpen(true)}><Plus size={14} /> New backup policy</Btn>
+          <Btn onClick={() => setIsCreateJobOpen(true)} tone="ghost"><Plus size={14} /> New backup job</Btn>
         </div>
       </Card>
     </div>
@@ -516,52 +695,83 @@ export default function BackupManagementPage() {
 
   const renderConfigurations = () => (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <Input label="" value={searchQuery} onChange={handleSearch} placeholder="Search configurations..." />
-        <Btn onClick={() => setIsCreateConfigOpen(true)}><Plus size={14} /> Create Configuration</Btn>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <Input label="Search policies" onChange={setSearchQuery} placeholder="Name, description or provider…" value={searchQuery} />
+        <Btn onClick={() => setIsCreateConfigOpen(true)}><Plus size={14} /> New policy</Btn>
       </div>
 
       <Card>
-        <CardHeader title="Backup Policies" />
+        <CardHeader title="Backup policies" />
         {backupConfigsQuery.isLoading ? (
-          <AdminLoadingState label="Loading configurations..." />
+          <AdminLoadingState label="Loading policies…" />
         ) : backupConfigsQuery.isError ? (
-          <AdminErrorState message={backupConfigsQuery.error.message} retry={() => void backupConfigsQuery.refetch()} />
-        ) : !Array.isArray(filteredConfigs) || filteredConfigs.length === 0 ? (
-          <EmptyState icon={Server} message="No backup policies found" />
+          <div className="p-4">
+            <AdminErrorState message={`Policies could not be read: ${backupConfigsQuery.error.message}`} retry={() => void backupConfigsQuery.refetch()} />
+          </div>
+        ) : filteredConfigs.length === 0 ? (
+          <EmptyState
+            icon={Server}
+            message={needle ? `No policy matches “${searchQuery}”.` : "No backup policies yet. A policy schedules backups for one resource."}
+            title={needle ? "No match" : "No backup policies"}
+          />
         ) : (
-          <AdminTable>
+          <AdminTable label="Backup policies">
             <AdminTHead>
               <AdminTh>Name</AdminTh>
               <AdminTh>Type</AdminTh>
               <AdminTh>Storage</AdminTh>
               <AdminTh>Schedule</AdminTh>
-              <AdminTh>Status</AdminTh>
+              <AdminTh>Last run</AdminTh>
+              <AdminTh>State</AdminTh>
               <AdminTh><span /></AdminTh>
             </AdminTHead>
             <AdminTBody>
               {filteredConfigs.map(config => (
                 <AdminTr key={config.id}>
                   <AdminTd className="font-medium">{config.name}</AdminTd>
-                  <AdminTd>{renderBackupTypePill(config.backupType)}</AdminTd>
-                  <AdminTd className="text-slate-400">{config.storageProvider}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">
+                  <AdminTd><Pill tone="neutral">{typeWord[config.backupType] ?? config.backupType}</Pill></AdminTd>
+                  <AdminTd className="text-text-subtle">{config.storageProvider || '—'}</AdminTd>
+                  <AdminTd className="text-xs text-text-subtle">
                     {config.isScheduled ? (
-                      <span>{config.cronExpression}{config.nextRunAt ? <span className="block text-slate-500">Next: {formatDate(config.nextRunAt)}</span> : null}</span>
+                      config.cronExpression ? (
+                        <span className="block">
+                          <span className="font-mono">{config.cronExpression}</span>
+                          <span className="block text-text-muted">
+                            {config.nextRunAt ? `Next: ${formatDate(config.nextRunAt)}` : 'No next run scheduled'}
+                          </span>
+                        </span>
+                      ) : <span className="text-warn">Scheduled with no cron expression</span>
+                    ) : <span>Manual</span>}
+                  </AdminTd>
+                  <AdminTd className="text-xs text-text-subtle">
+                    {config.lastRunAt ? (
+                      <span className="block space-y-0.5">
+                        <span className="block">{formatDate(config.lastRunAt)}</span>
+                        {config.lastStatus ? <Pill tone={deploymentStatusTone(config.lastStatus)}>{config.lastStatus}</Pill> : null}
+                        {config.lastError ? <span className="mt-0.5 block max-w-[16rem] break-words text-warn">{config.lastError}</span> : null}
+                      </span>
                     ) : (
-                      <span>Manual</span>
+                      <span className="text-text-muted">Never run</span>
                     )}
                   </AdminTd>
-                  <AdminTd>{renderStatusPill(config.enabled ? 'enabled' : 'disabled')}</AdminTd>
+                  <AdminTd>
+                    <Pill tone={config.enabled ? 'ok' : 'neutral'}>{config.enabled ? 'Enabled' : 'Disabled'}</Pill>
+                  </AdminTd>
                   <AdminTd>
                     <ForgeDropdownMenu
+                      items={[
+                        { id: "execute", icon: <Play className="h-4 w-4" />, label: executeConfigMut.isPending && executeConfigMut.variables === config.id ? "Starting…" : "Run now", onSelect: () => executeConfigMut.mutate(config.id) },
+                        { id: "edit", icon: <Server className="h-4 w-4" />, label: "Edit", onSelect: () => { setEditingConfig(config); setIsCreateConfigOpen(true); } },
+                        {
+                          id: "delete",
+                          icon: <Trash2 className="h-4 w-4" />,
+                          label: "Delete",
+                          tone: "danger",
+                          onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup policy "${config.name}"?`, description: "Scheduled backups from this policy will stop. Artifacts it already produced are kept. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteConfigMut.mutate(config.id); })(); },
+                        },
+                      ]}
                       label={`Actions for ${config.name}`}
                       trigger={<MoreVertical size={14} />}
-                      items={[
-                        { id: "execute", label: "Execute Now", icon: <Play className="h-4 w-4" />, onSelect: () => executeConfigMut.mutate(config.id) },
-                        { id: "edit", label: "Edit", icon: <Server className="h-4 w-4" />, onSelect: () => { setEditingConfig(config); setIsCreateConfigOpen(true); } },
-                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup configuration "${config.name}"?`, description: "Scheduled backups from this configuration will stop. Existing artifacts are kept. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteConfigMut.mutate(config.id); })(); } },
-                      ]}
                     />
                   </AdminTd>
                 </AdminTr>
@@ -575,47 +785,62 @@ export default function BackupManagementPage() {
 
   const renderJobs = () => (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <Input label="" value={searchQuery} onChange={handleSearch} placeholder="Search jobs..." />
-        <Btn onClick={() => setIsCreateJobOpen(true)}><Plus size={14} /> Create Job</Btn>
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <Input label="Search jobs" onChange={setSearchQuery} placeholder="Name or status…" value={searchQuery} />
+        <Btn onClick={() => setIsCreateJobOpen(true)}><Plus size={14} /> New job</Btn>
       </div>
 
       <Card>
-        <CardHeader title="Backup Jobs" />
+        <CardHeader title="Backup jobs" />
         {backupJobsQuery.isLoading ? (
-          <AdminLoadingState label="Loading jobs..." />
+          <AdminLoadingState label="Loading jobs…" />
         ) : backupJobsQuery.isError ? (
-          <AdminErrorState message={backupJobsQuery.error.message} retry={() => void backupJobsQuery.refetch()} />
-        ) : !Array.isArray(filteredJobs) || filteredJobs.length === 0 ? (
-          <EmptyState icon={Database} message="No backup jobs found" />
+          <div className="p-4">
+            <AdminErrorState message={`Jobs could not be read: ${backupJobsQuery.error.message}`} retry={() => void backupJobsQuery.refetch()} />
+          </div>
+        ) : filteredJobs.length === 0 ? (
+          <EmptyState
+            icon={Database}
+            message={needle ? `No job matches “${searchQuery}”.` : "No backup jobs yet. A job is one run of a policy, or one on-demand backup."}
+            title={needle ? "No match" : "No backup jobs"}
+          />
         ) : (
-          <AdminTable>
+          <AdminTable label="Backup jobs">
             <AdminTHead>
               <AdminTh>Name</AdminTh>
               <AdminTh>Type</AdminTh>
               <AdminTh>Status</AdminTh>
               <AdminTh>Progress</AdminTh>
-              <AdminTh>Triggered By</AdminTh>
-              <AdminTh>Created At</AdminTh>
+              <AdminTh>Triggered by</AdminTh>
+              <AdminTh>Created</AdminTh>
               <AdminTh><span /></AdminTh>
             </AdminTHead>
             <AdminTBody>
               {filteredJobs.map(job => (
                 <AdminTr key={job.id}>
                   <AdminTd className="font-medium">{job.name}</AdminTd>
-                  <AdminTd>{renderBackupTypePill(job.jobType)}</AdminTd>
-                  <AdminTd>{renderStatusPill(job.status)}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{renderProgress(job.progress)}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{job.triggeredBy}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{formatDate(job.createdAt)}</AdminTd>
+                  <AdminTd><Pill tone="neutral">{typeWord[job.jobType] ?? job.jobType}</Pill></AdminTd>
+                  <AdminTd>
+                    {renderStatusPill(job.status)}
+                    {job.errorMessage ? <span className="mt-0.5 block max-w-[18rem] break-words text-xs text-warn">{job.errorMessage}</span> : null}
+                  </AdminTd>
+                  <AdminTd className="text-xs text-text-subtle"><ProgressCell row={job} /></AdminTd>
+                  <AdminTd className="text-xs text-text-subtle">{job.triggeredBy || '—'}</AdminTd>
+                  <AdminTd className="text-xs text-text-subtle">{formatDate(job.createdAt, 'Not reported')}</AdminTd>
                   <AdminTd>
                     <ForgeDropdownMenu
+                      items={[
+                        ...(job.status === 'running' ? [{ id: "cancel", icon: <XCircle className="h-4 w-4" />, label: "Cancel", onSelect: () => cancelJobMut.mutate(job.id) }] : []),
+                        {
+                          id: "delete",
+                          icon: <Trash2 className="h-4 w-4" />,
+                          label: "Delete",
+                          tone: "danger",
+                          onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup job "${job.name}"?`, description: "The job record is removed. Artifacts it already produced are kept.", danger: true, confirmLabel: "Delete" })) deleteJobMut.mutate(job.id); })(); },
+                        },
+                      ]}
                       label={`Actions for ${job.name}`}
                       trigger={<MoreVertical size={14} />}
-                      items={[
-                        ...(job.status === 'running' ? [{ id: "cancel", label: "Cancel", icon: <XCircle className="h-4 w-4" />, onSelect: () => cancelJobMut.mutate(job.id) }] : []),
-                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup job "${job.name}"?`, description: "The job record will be permanently removed.", danger: true, confirmLabel: "Delete" })) deleteJobMut.mutate(job.id); })(); } },
-                      ]}
                     />
                   </AdminTd>
                 </AdminTr>
@@ -629,54 +854,90 @@ export default function BackupManagementPage() {
 
   const renderArtifacts = () => (
     <div className="space-y-4">
-      <Input label="" value={searchQuery} onChange={handleSearch} placeholder="Search artifacts..." />
+      <Input label="Search artifacts" onChange={setSearchQuery} placeholder="Name or status…" value={searchQuery} />
+
+      <p className="rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs leading-5 text-text-subtle">
+        These are artifacts of the classic backup pipeline (policies → jobs → artifacts). Restic and Kopia
+        engine snapshots are a separate system with their own repositories, and they are not listed here.
+        {' '}
+        <button className="text-text underline underline-offset-2" onClick={() => router.push('/admin/backups/engines')} type="button">
+          Open Backup Engines
+        </button>
+        .
+      </p>
 
       <Card>
-        <CardHeader title="Backup Artifacts" />
+        <CardHeader title="Backup artifacts" />
         {backupArtifactsQuery.isLoading ? (
-          <AdminLoadingState label="Loading artifacts..." />
+          <AdminLoadingState label="Loading artifacts…" />
         ) : backupArtifactsQuery.isError ? (
-          <AdminErrorState message={backupArtifactsQuery.error.message} retry={() => void backupArtifactsQuery.refetch()} />
-        ) : !Array.isArray(filteredArtifacts) || filteredArtifacts.length === 0 ? (
-          <EmptyState icon={Folder} message="No backup artifacts found" />
+          <div className="p-4">
+            <AdminErrorState message={`Artifacts could not be read: ${backupArtifactsQuery.error.message}`} retry={() => void backupArtifactsQuery.refetch()} />
+          </div>
+        ) : filteredArtifacts.length === 0 ? (
+          <EmptyState
+            icon={Folder}
+            message={needle ? `No artifact matches “${searchQuery}”.` : "No backup artifacts yet. A finished backup job produces one."}
+            title={needle ? "No match" : "No backup artifacts"}
+          />
         ) : (
-          <AdminTable>
+          <AdminTable label="Backup artifacts">
             <AdminTHead>
               <AdminTh>Name</AdminTh>
               <AdminTh>Type</AdminTh>
               <AdminTh>Storage</AdminTh>
               <AdminTh>Size</AdminTh>
               <AdminTh>Status</AdminTh>
-              <AdminTh>Verified</AdminTh>
-              <AdminTh>Locked</AdminTh>
+              <AdminTh>Integrity</AdminTh>
+              <AdminTh>Retention lock</AdminTh>
               <AdminTh><span /></AdminTh>
             </AdminTHead>
             <AdminTBody>
-              {filteredArtifacts.map(artifact => (
-                <AdminTr key={artifact.id}>
-                  <AdminTd className="font-medium">{artifact.displayName || artifact.name}</AdminTd>
-                  <AdminTd>{renderBackupTypePill(artifact.artifactType)}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{artifact.storageProvider}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{formatBytes(artifact.fileSize)}</AdminTd>
-                  <AdminTd>{renderStatusPill(artifact.status)}</AdminTd>
-                  <AdminTd className="text-xs">{artifact.isVerified ? <Pill tone="green">Yes</Pill> : <Pill>No</Pill>}</AdminTd>
-                  <AdminTd className="text-xs">{artifact.isLocked ? <Pill tone="yellow">Yes</Pill> : <Pill>No</Pill>}</AdminTd>
-                  <AdminTd>
-                    <ForgeDropdownMenu
-                      label={`Actions for ${artifact.displayName || artifact.name}`}
-                      trigger={<MoreVertical size={14} />}
-                      items={[
-                        { id: "download", label: "Download", icon: <Download className="h-4 w-4" />, onSelect: () => downloadArtifactMut.mutate({ id: artifact.id, name: artifact.name }) },
-                        ...(artifact.isLocked
-                          ? [{ id: "unlock", label: "Unlock", icon: <Unlock className="h-4 w-4" />, onSelect: () => unlockArtifactMut.mutate(artifact.id) }]
-                          : [{ id: "lock", label: "Lock", icon: <Lock className="h-4 w-4" />, onSelect: () => lockArtifactMut.mutate(artifact.id) }]),
-                        { id: "restore", label: "Restore", icon: <RotateCcw className="h-4 w-4" />, onSelect: () => { setSelectedArtifact(artifact); setIsRestoreOpen(true); } },
-                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup artifact "${artifact.displayName || artifact.name}"?`, description: "The stored backup file will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteArtifactMut.mutate(artifact.id); })(); } },
-                      ]}
-                    />
-                  </AdminTd>
-                </AdminTr>
-              ))}
+              {filteredArtifacts.map(artifact => {
+                const verdict = artifactVerification(artifact);
+                const size = artifactSizeBytes(artifact);
+                const restoreBlockReason = verdict.state === 'failed'
+                  ? 'Restore blocked: the last integrity check failed. Verify the artifact first.'
+                  : null;
+                return (
+                  <AdminTr key={artifact.id}>
+                    <AdminTd className="font-medium">{artifact.displayName || artifact.name}</AdminTd>
+                    <AdminTd><Pill tone="neutral">{typeWord[artifact.artifactType] ?? artifact.artifactType}</Pill></AdminTd>
+                    <AdminTd className="text-xs text-text-subtle">{artifact.storageProvider || '—'}</AdminTd>
+                    <AdminTd className="text-xs text-text-subtle">{sizeCell(size)}</AdminTd>
+                    <AdminTd>{renderStatusPill(artifact.status)}</AdminTd>
+                    <AdminTd className="text-xs">{renderVerification(artifact)}</AdminTd>
+                    <AdminTd className="text-xs">
+                      {artifact.isLocked ? <Pill tone="warn">Locked</Pill> : <span className="text-text-muted">Not locked</span>}
+                      {artifact.isLocked && artifact.lockReason ? <span className="mt-0.5 block max-w-[14rem] break-words text-text-muted">{artifact.lockReason}</span> : null}
+                    </AdminTd>
+                    <AdminTd>
+                      <ForgeDropdownMenu
+                        items={[
+                          { id: "verify", icon: <ShieldCheck className="h-4 w-4" />, label: verifyArtifactMut.isPending && verifyArtifactMut.variables === artifact.id ? "Verifying…" : "Verify now", disabled: verifyArtifactMut.isPending, onSelect: () => verifyArtifactMut.mutate(artifact.id) },
+                          { id: "download", icon: <Download className="h-4 w-4" />, label: downloadArtifactMut.isPending && downloadArtifactMut.variables?.id === artifact.id ? "Downloading…" : "Download", disabled: downloadArtifactMut.isPending, onSelect: () => downloadArtifactMut.mutate({ id: artifact.id, name: artifact.name }) },
+                          ...(artifact.isLocked
+                            ? [{ id: "unlock", icon: <RotateCw className="h-4 w-4" />, label: "Unlock", onSelect: () => unlockArtifactMut.mutate(artifact.id) }]
+                            : [{ id: "lock", icon: <Lock className="h-4 w-4" />, label: "Lock", onSelect: () => lockArtifactMut.mutate(artifact.id) }]),
+                          { id: "restore", icon: <RotateCcw className="h-4 w-4" />, label: 'Restore…', disabled: Boolean(restoreBlockReason), onSelect: () => { setSelectedArtifact(artifact); setIsRestoreOpen(true); } },
+                          {
+                            id: "delete",
+                            icon: <Trash2 className="h-4 w-4" />,
+                            label: "Delete",
+                            tone: "danger",
+                            onSelect: () => { void (async () => { if (await confirm({ title: `Delete backup artifact "${artifact.displayName || artifact.name}"?`, description: "The stored backup file is deleted from its storage provider. Other artifacts are untouched. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteArtifactMut.mutate(artifact.id); })(); },
+                          },
+                        ]}
+                        label={`Actions for ${artifact.displayName || artifact.name}`}
+                        trigger={<MoreVertical size={14} />}
+                      />
+                      {restoreBlockReason ? (
+                        <p className="mt-1 max-w-[16rem] text-[11px] leading-4 text-warn">{restoreBlockReason}</p>
+                      ) : null}
+                    </AdminTd>
+                  </AdminTr>
+                );
+              })}
             </AdminTBody>
           </AdminTable>
         )}
@@ -686,47 +947,75 @@ export default function BackupManagementPage() {
 
   const renderRestores = () => (
     <div className="space-y-4">
-      <Input label="" value={searchQuery} onChange={handleSearch} placeholder="Search restores..." />
+      <Input label="Search restores" onChange={setSearchQuery} placeholder="Name, status or artifact ID…" value={searchQuery} />
 
       <Card>
-        <CardHeader title="Restore Operations" />
+        <CardHeader title="Restore operations" />
         {backupRestoresQuery.isLoading ? (
-          <AdminLoadingState label="Loading restores..." />
+          <AdminLoadingState label="Loading restores…" />
         ) : backupRestoresQuery.isError ? (
-          <AdminErrorState message={backupRestoresQuery.error.message} retry={() => void backupRestoresQuery.refetch()} />
-        ) : !Array.isArray(filteredRestores) || filteredRestores.length === 0 ? (
-          <EmptyState icon={RotateCw} message="No restore operations found" />
+          <div className="p-4">
+            <AdminErrorState message={`Restores could not be read: ${backupRestoresQuery.error.message}`} retry={() => void backupRestoresQuery.refetch()} />
+          </div>
+        ) : filteredRestores.length === 0 ? (
+          <EmptyState
+            icon={RotateCw}
+            message={needle ? `No restore matches “${searchQuery}”.` : "No restores have been run from this pipeline."}
+            title={needle ? "No match" : "No restore operations"}
+          />
         ) : (
-          <AdminTable>
+          <AdminTable label="Restore operations">
             <AdminTHead>
               <AdminTh>Name</AdminTh>
+              <AdminTh>From artifact</AdminTh>
               <AdminTh>Type</AdminTh>
               <AdminTh>Status</AdminTh>
               <AdminTh>Progress</AdminTh>
-              <AdminTh>Triggered By</AdminTh>
-              <AdminTh>Created At</AdminTh>
+              <AdminTh>Triggered by</AdminTh>
+              <AdminTh>Created</AdminTh>
               <AdminTh><span /></AdminTh>
             </AdminTHead>
             <AdminTBody>
-              {filteredRestores.map(restore => (
-                <AdminTr key={restore.id}>
-                  <AdminTd className="font-medium">{restore.name}</AdminTd>
-                  <AdminTd>{renderBackupTypePill(restore.restoreType)}</AdminTd>
-                  <AdminTd>{renderStatusPill(restore.status)}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{renderProgress(restore.progress)}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{restore.triggeredBy}</AdminTd>
-                  <AdminTd className="text-xs text-slate-400">{formatDate(restore.createdAt)}</AdminTd>
-                  <AdminTd>
-                    <ForgeDropdownMenu
-                      label={`Actions for ${restore.name}`}
-                      trigger={<MoreVertical size={14} />}
-                      items={[
-                        { id: "delete", label: "Delete", icon: <Trash2 className="h-4 w-4" />, tone: "danger", onSelect: () => { void (async () => { if (await confirm({ title: `Delete restore record "${restore.name}"?`, description: "Only the record is removed; the artifact and restored resource are untouched.", danger: true, confirmLabel: "Delete" })) deleteRestoreMut.mutate(restore.id); })(); } },
-                      ]}
-                    />
-                  </AdminTd>
-                </AdminTr>
-              ))}
+              {filteredRestores.map(restore => {
+                const source = restore.artifactId ? artifactById.get(restore.artifactId) : undefined;
+                return (
+                  <AdminTr key={restore.id}>
+                    <AdminTd className="font-medium">{restore.name}</AdminTd>
+                    <AdminTd className="text-xs text-text-subtle">
+                      {restore.artifactId ? (
+                        <span className="block max-w-[16rem] truncate font-mono" title={source ? `${source.displayName || source.name} · ${restore.artifactId}` : `Artifact not in this list · ${restore.artifactId}`}>
+                          {source ? (source.displayName || source.name) : restore.artifactId}
+                        </span>
+                      ) : (
+                        <span className="text-text-muted">Artifact not reported</span>
+                      )}
+                    </AdminTd>
+                    <AdminTd><Pill tone="neutral">{typeWord[restore.restoreType] ?? restore.restoreType}</Pill></AdminTd>
+                    <AdminTd>
+                      {renderStatusPill(restore.status)}
+                      {restore.errorMessage ? <span className="mt-0.5 block max-w-[18rem] break-words text-xs text-warn">{restore.errorMessage}</span> : null}
+                    </AdminTd>
+                    <AdminTd className="text-xs text-text-subtle"><ProgressCell row={restore} /></AdminTd>
+                    <AdminTd className="text-xs text-text-subtle">{restore.triggeredBy || '—'}</AdminTd>
+                    <AdminTd className="text-xs text-text-subtle">{formatDate(restore.createdAt, 'Not reported')}</AdminTd>
+                    <AdminTd>
+                      <ForgeDropdownMenu
+                        items={[
+                          {
+                            id: "delete",
+                            icon: <Trash2 className="h-4 w-4" />,
+                            label: "Delete record",
+                            tone: "danger",
+                            onSelect: () => { void (async () => { if (await confirm({ title: `Delete restore record "${restore.name}"?`, description: "Only the record is removed; the artifact and the restored resource are untouched.", danger: true, confirmLabel: "Delete" })) deleteRestoreMut.mutate(restore.id); })(); },
+                          },
+                        ]}
+                        label={`Actions for ${restore.name}`}
+                        trigger={<MoreVertical size={14} />}
+                      />
+                    </AdminTd>
+                  </AdminTr>
+                );
+              })}
             </AdminTBody>
           </AdminTable>
         )}
@@ -742,19 +1031,51 @@ export default function BackupManagementPage() {
     { id: "restores", label: "Restores" },
   ];
 
+  // Search is scoped to one tab: a single shared string silently filtered all
+  // four lists, so typing in Policies changed the Jobs rows too.
+  const changeTab = (id: string) => { setActiveTab(id); setSearchQuery(''); };
+
+  const confirmRestore = (data: CreateRestoreInput) => {
+    const field = targetFieldFor(data.restoreType);
+    const targetId = (data[field] as string | undefined) ?? '';
+    void (async () => {
+      const ok = await confirm({
+        title: 'Restore this backup?',
+        description: `This writes the stored backup over the ${typeWord[data.restoreType] ?? data.restoreType} ${targetId}. `
+          + `${data.restoreOptions?.overwriteExisting ? 'Existing files at the target are replaced.' : 'The restore stops if the target already holds data at the same paths. '} `
+          + `${data.restoreOptions?.createBackupBeforeRestore ? 'A snapshot of the target is taken first, so this can be rolled back.' : 'No pre-restore snapshot was requested, so this cannot be rolled back.'}`,
+        danger: true,
+        confirmLabel: 'Start restore',
+      });
+      if (ok) createRestoreMut.mutate(data);
+    })();
+  };
+
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Backups"
-        description="Manage backup configurations, jobs, artifacts, and restore operations"
         action={
-          <Btn tone="ghost" onClick={() => queryClient.invalidateQueries({ queryKey: ALL_KEY })} disabled={loading}>
-            <RefreshCw size={14} /> Refresh
-          </Btn>
+          <div className="flex items-center gap-2">
+            <Btn disabled={loading} onClick={() => void invalidateAll()} tone="ghost">
+              <RefreshCw className={freshness.refreshing ? 'animate-spin' : undefined} size={14} /> Refresh
+            </Btn>
+            <Btn onClick={() => router.push('/admin/backups/engines')} tone="ghost">
+              <Archive size={14} /> Backup Engines
+            </Btn>
+          </div>
         }
+        info={adminPageGuides.backups}
+        status={<FreshnessBadge state={freshness} />}
       />
 
-      <AdminTabs active={activeTab} onChange={setActiveTab} tabs={tabs} />
+      {aggregateError ? (
+        <AdminErrorState
+          message={`One or more backup reads failed: ${aggregateError instanceof Error ? aggregateError.message : 'unknown error'}`}
+          retry={() => void invalidateAll()}
+        />
+      ) : null}
+
+      <AdminTabs active={activeTab} onChange={changeTab} tabs={tabs} />
 
       {activeTab === "overview" && renderOverview()}
       {activeTab === "policies" && renderConfigurations()}
@@ -762,17 +1083,33 @@ export default function BackupManagementPage() {
       {activeTab === "artifacts" && renderArtifacts()}
       {activeTab === "restores" && renderRestores()}
 
-      {isCreateConfigOpen && (
+      {isCreateConfigOpen ? (
         <ConfigFormModal
-          onClose={() => { setIsCreateConfigOpen(false); setEditingConfig(null); }}
-          storageProviders={storageProviders}
           initial={editingConfig}
-          pending={createConfigMut.isPending || updateConfigMut.isPending}
+          onClose={() => { setIsCreateConfigOpen(false); setEditingConfig(null); }}
           onSubmit={(data) => { if (editingConfig) updateConfigMut.mutate({ id: editingConfig.id, data }); else createConfigMut.mutate(data); }}
+          pending={createConfigMut.isPending || updateConfigMut.isPending}
+          storageProviders={storageProviders}
         />
-      )}
-      {isCreateJobOpen && <CreateJobModal onClose={() => setIsCreateJobOpen(false)} pending={createJobMut.isPending} onSubmit={(data) => createJobMut.mutate(data)} />}
-      {isRestoreOpen && <RestoreModal onClose={() => { setIsRestoreOpen(false); setSelectedArtifact(null); }} artifact={selectedArtifact} pending={createRestoreMut.isPending} onSubmit={(data) => createRestoreMut.mutate(data)} />}
+      ) : null}
+
+      {isCreateJobOpen ? (
+        <CreateJobModal
+          onClose={() => setIsCreateJobOpen(false)}
+          onSubmit={(data) => createJobMut.mutate(data)}
+          pending={createJobMut.isPending}
+        />
+      ) : null}
+
+      {isRestoreOpen && selectedArtifact ? (
+        <RestoreModal
+          artifact={selectedArtifact}
+          onClose={() => { setIsRestoreOpen(false); setSelectedArtifact(null); }}
+          onSubmit={confirmRestore}
+          pending={createRestoreMut.isPending}
+        />
+      ) : null}
+
       {renderConfirm()}
     </AdminPageLayout>
   );

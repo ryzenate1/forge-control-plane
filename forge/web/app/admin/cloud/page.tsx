@@ -2,10 +2,10 @@
 
 import { useState, useMemo } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, Cloud, Loader2, Plus, Server, Trash2 } from "lucide-react";
+import { Cloud, Server, Plus, Trash2, Building2, Link2 } from "lucide-react";
 import { deleteJSON, fetchJSON, fetchNodes, postJSON, type ApiNode } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminPageLayout, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type CloudProvider = {
@@ -105,26 +105,43 @@ export default function AdminCloudPage() {
   const canProvision = Boolean(provider && form.name.trim() && form.instanceType.trim() && form.image.trim());
 
   return (
-    <div className="space-y-6">
+    <AdminPageLayout>
       <SectionHeader
         title="Cloud Instances"
         sub="Provision cloud provider instances and bootstrap them as beacons automatically. Links cloud compute to Forge placement."
+        info={{
+          title: "Cloud instances",
+          triggerLabel: "About Cloud Instances",
+          eyebrow: "Architecture & Semantics",
+          description: "Provision cloud compute and bootstrap it as a Beacon node, linking provider instances to Forge placement.",
+          sections: [
+            {
+              title: "Providers and bootstrap",
+              icon: Building2,
+              content:
+                "A configured provider supplies region and credentials. Provisioning launches the instance, then cloud-init installs Docker and starts Beacon so the host appears under Nodes.",
+            },
+            {
+              title: "Links to placement",
+              icon: Link2,
+              content:
+                "Linked instances map to a panel node used for scheduling. Terminating destroys the remote instance permanently; the node record keeps its own lifecycle.",
+            },
+          ],
+        }}
         action={<Btn tone="primary" onClick={() => setShowProvision(true)}><Plus size={14} /> Provision Instance</Btn>}
       />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-2 text-xs leading-5 text-slate-400">
-        <span className="font-semibold text-slate-300">INFRA</span> · <span className="font-semibold text-slate-200">Cloud</span> is one of four INFRA surfaces — <code className="font-mono text-[11px]">Beacons</code> · <code className="font-mono">Networking</code> · <code className="font-mono">Storage</code> · <code className="font-mono">Cloud</code>. Provision via <code className="font-mono">POST /admin/cloud/provision</code> with <code className="font-mono">AWS_REGION</code> configured; bootstrap installs Docker + Beacon via cloud-init. See <code className="font-mono">/admin/nodes</code> for resulting beacons and <code className="font-mono">/admin/regions</code> for placement zones.
-      </div>
 
-      {providersQuery.isError ? <ApiError message={`Could not load providers: ${providersQuery.error.message}`} /> : null}
+      {providersQuery.isError ? <div className="p-4"><AdminErrorState message={providersQuery.error instanceof Error ? providersQuery.error.message : "Could not load providers."} retry={() => void providersQuery.refetch()} /></div> : null}
       <Card>
         <CardHeader title="Configured Providers" icon={Cloud} />
-        {providersQuery.isLoading ? <Loading /> : !Array.isArray(providers) || providers.length === 0 ? (
+        {providersQuery.isLoading ? <AdminLoadingState label="Loading providers…" /> : !Array.isArray(providers) || providers.length === 0 ? (
           <EmptyState icon={Cloud} message="No cloud provider is configured. Set AWS_REGION (or AWS_DEFAULT_REGION) and restart the API to enable AWS." />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-[var(--line)]">
             {Array.isArray(providers) && providers.map((item) => (
-              <button key={item.kind} type="button" onClick={() => setSelectedProvider(item.kind)} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-white/[0.02]">
-                <div><p className="text-sm font-medium text-slate-200">{item.name}</p><p className="text-xs text-slate-500">{item.kind.toUpperCase()} · {item.region ?? "region not reported"}</p></div>
+              <button key={item.kind} type="button" onClick={() => setSelectedProvider(item.kind)} className="flex w-full items-center justify-between px-4 py-3 text-left hover:bg-[var(--surface-hover)]">
+                <div><p className="text-sm font-medium text-[var(--text)]">{item.name}</p><p className="text-xs text-[var(--text-subtle)]">{item.kind.toUpperCase()} · {item.region ?? "region not reported"}</p></div>
                 <Pill tone={selectedProvider === item.kind ? "green" : "blue"}>{selectedProvider === item.kind ? "selected" : "configured"}</Pill>
               </button>
             ))}
@@ -134,33 +151,29 @@ export default function AdminCloudPage() {
 
       <Card>
         <CardHeader title="Provider Instances" icon={Server} />
-        {!selectedProvider ? <EmptyState icon={Server} message="Select a configured provider to load its instances." /> : instancesQuery.isLoading ? <Loading /> : instancesQuery.isError ? <ApiError message={`Could not load instances: ${instancesQuery.error.message}`} /> : !Array.isArray(instances) || instances.length === 0 ? <EmptyState icon={Server} message="No instances returned by this provider." /> : (
-          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500"><th className="px-4 py-3">Name</th><th className="px-4 py-3">Instance ID</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Region</th><th className="px-4 py-3">IP</th><th className="px-4 py-3">Panel node</th><th className="px-4 py-3">Status</th><th className="px-4 py-3" /></tr></thead><tbody className="divide-y divide-white/[0.04]">
-            {Array.isArray(instances) && instances.map((instance) => { const node = linkedNode(instance); return <tr key={instance.id} className="hover:bg-white/[0.02]"><td className="px-4 py-3 font-medium text-slate-200">{instance.name || "—"}</td><td className="px-4 py-3 font-mono text-xs text-slate-400">{instance.id}</td><td className="px-4 py-3 text-xs text-slate-400">{instance.instanceType}</td><td className="px-4 py-3 text-xs text-slate-400">{instance.region}</td><td className="px-4 py-3 font-mono text-xs text-slate-400">{instance.publicIp || instance.privateIp || "—"}</td><td className="px-4 py-3 text-xs text-slate-400">{node?.name ?? "Not linked"}</td><td className="px-4 py-3"><Pill tone={instance.status === "running" ? "green" : "yellow"}>{instance.status}</Pill></td><td className="px-4 py-3"><Btn size="sm" tone="danger" disabled={terminateMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Terminate ${instance.name || instance.id}?`, description: "The cloud instance will be permanently destroyed. This cannot be undone.", danger: true, confirmLabel: "Terminate" })) terminateMutation.mutate(instance); })(); }}><Trash2 size={12} /> Terminate</Btn></td></tr>; })}
+        {!selectedProvider ? <EmptyState icon={Server} message="Select a configured provider to load its instances." /> : instancesQuery.isLoading ? <AdminLoadingState label="Loading instances…" /> : instancesQuery.isError ? <div className="p-4"><AdminErrorState message={instancesQuery.error instanceof Error ? instancesQuery.error.message : "Could not load instances."} retry={() => void instancesQuery.refetch()} /></div> : !Array.isArray(instances) || instances.length === 0 ? <EmptyState icon={Server} message="No instances returned by this provider." /> : (
+          <div className="overflow-x-auto"><table className="w-full text-sm"><thead><tr className="border-b border-[var(--line)] text-left text-[10px] uppercase tracking-widest text-[var(--text-subtle)]"><th className="px-4 py-3">Name</th><th className="px-4 py-3">Instance ID</th><th className="px-4 py-3">Type</th><th className="px-4 py-3">Region</th><th className="px-4 py-3">IP</th><th className="px-4 py-3">Panel node</th><th className="px-4 py-3">Status</th><th className="px-4 py-3" /></tr></thead><tbody className="divide-y divide-[var(--line)]">
+            {Array.isArray(instances) && instances.map((instance) => { const node = linkedNode(instance); return <tr key={instance.id} className="hover:bg-[var(--surface-hover)]"><td className="px-4 py-3 font-medium text-[var(--text)]">{instance.name || "—"}</td><td className="px-4 py-3 font-mono text-xs text-[var(--text-subtle)]">{instance.id}</td><td className="px-4 py-3 text-xs text-[var(--text-subtle)]">{instance.instanceType}</td><td className="px-4 py-3 text-xs text-[var(--text-subtle)]">{instance.region}</td><td className="px-4 py-3 font-mono text-xs text-[var(--text-subtle)]">{instance.publicIp || instance.privateIp || "—"}</td><td className="px-4 py-3 text-xs text-[var(--text-subtle)]">{node?.name ?? "Not linked"}</td><td className="px-4 py-3"><Pill tone={instance.status === "running" ? "green" : "yellow"}>{instance.status}</Pill></td><td className="px-4 py-3"><Btn size="sm" tone="danger" disabled={terminateMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Terminate ${instance.name || instance.id}?`, description: "The cloud instance will be permanently destroyed. This cannot be undone.", danger: true, confirmLabel: "Terminate" })) terminateMutation.mutate(instance); })(); }}><Trash2 size={12} /> Terminate</Btn></td></tr>; })}
           </tbody></table></div>
         )}
       </Card>
 
       {showProvision ? <Modal title="Provision Provider Instance" onClose={() => setShowProvision(false)} wide><div className="space-y-4">
-        {!Array.isArray(providers) || providers.length === 0 ? <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] p-4 text-sm text-amber-100"><p className="font-semibold">Cloud provisioning needs a configured provider.</p><p className="mt-1 leading-6 text-amber-200/80">Configure provider credentials and a region on the API, then restart it. The provisioning form will become available here automatically.</p></div> : <label className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Provider</span><select value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)} className="h-10 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100"><option value="">Select provider…</option>{Array.isArray(providers) && providers.map((item) => <option key={item.kind} value={item.kind}>{item.name} ({item.region})</option>)}</select></label>}
+        {!Array.isArray(providers) || providers.length === 0 ? <div className="rounded-xl border border-amber-500/25 bg-amber-500/[0.07] p-4 text-sm text-amber-100"><p className="font-semibold">Cloud provisioning needs a configured provider.</p><p className="mt-1 leading-6 text-amber-200/80">Configure provider credentials and a region on the API, then restart it. The provisioning form will become available here automatically.</p></div> : <label className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Provider</span><select value={selectedProvider} onChange={(event) => setSelectedProvider(event.target.value)} className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)]"><option value="">Select provider…</option>{Array.isArray(providers) && providers.map((item) => <option key={item.kind} value={item.kind}>{item.name} ({item.region})</option>)}</select></label>}
         <Input label="Instance name" value={form.name} onChange={(value) => setForm({ ...form, name: value })} placeholder="game-node-1" />
         <Input label="Instance type" value={form.instanceType} onChange={(value) => setForm({ ...form, instanceType: value })} placeholder="t3.medium" />
         <Input label="Image ID" value={form.image} onChange={(value) => setForm({ ...form, image: value })} placeholder="ami-…" />
-        <div className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Configured region</span><p className="rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-400">{provider?.region ?? "Select a provider"}</p></div>
-        <label className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Bootstrap as panel node</span><select value={form.nodeId} onChange={(event) => setForm({ ...form, nodeId: event.target.value })} className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100"><option value="">Provision compute only</option>{Array.isArray(nodes) && nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
+        <div className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Configured region</span><p className="rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 py-2 text-sm text-[var(--text-subtle)]">{provider?.region ?? "Select a provider"}</p></div>
+        <label className="block text-sm"><span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Bootstrap as panel node</span><select value={form.nodeId} onChange={(event) => setForm({ ...form, nodeId: event.target.value })} className="h-9 w-full rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)]"><option value="">Provision compute only</option>{Array.isArray(nodes) && nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}</select></label>
         <Input label="Beacon container image" value={form.beaconImage} onChange={(value) => setForm({ ...form, beaconImage: value })} placeholder="ghcr.io/gamepanel/beacon:<release-tag>" />
         <Input label="Subnet ID (optional)" value={form.subnetId} onChange={(value) => setForm({ ...form, subnetId: value })} placeholder="subnet-…" />
         <Input label="Security group IDs (comma-separated)" value={form.securityGroupIds} onChange={(value) => setForm({ ...form, securityGroupIds: value })} placeholder="sg-…" />
         <Input label="IAM instance profile (optional)" value={form.iamInstanceProfile} onChange={(value) => setForm({ ...form, iamInstanceProfile: value })} placeholder="gamepanel-beacon" />
         <Input label="Root disk GB (optional)" type="number" value={form.diskGb} onChange={(value) => setForm({ ...form, diskGb: value })} placeholder="50" />
-        <p className="text-xs text-slate-400">When linked, Ubuntu cloud-init installs Docker and starts Beacon with the selected node credential. Use a private panel API URL and an IAM role for shared backup access.</p>
-        {provisionMutation.isError ? <ApiError message={`Provisioning failed: ${provisionMutation.error.message}`} /> : null}
+        <p className="text-xs text-[var(--text-subtle)]">When linked, Ubuntu cloud-init installs Docker and starts Beacon with the selected node credential. Use a private panel API URL and an IAM role for shared backup access.</p>
+        {provisionMutation.isError ? <div className="p-4"><AdminErrorState message={provisionMutation.error instanceof Error ? provisionMutation.error.message : "Provisioning failed."} retry={() => provisionMutation.mutate()} /></div> : null}
       </div><ModalFooter onCancel={() => setShowProvision(false)} onConfirm={() => provisionMutation.mutate()} confirmLabel={provisionMutation.isPending ? "Provisioning…" : "Provision"} disabled={!Array.isArray(providers) || providers.length === 0 || provisionMutation.isPending || !canProvision} /></Modal> : null}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }
-
-
-function Loading() { return <div className="p-8 text-center text-sm text-slate-500"><Loader2 size={16} className="mr-2 inline animate-spin" />Loading…</div>; }
-function ApiError({ message }: { message: string }) { return <div className="m-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200"><AlertCircle size={16} className="mt-0.5 shrink-0" />{message}</div>; }

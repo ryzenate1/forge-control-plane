@@ -1,179 +1,332 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ExternalLink, GitPullRequest, Play, Trash2 } from "lucide-react";
+import Link from "next/link";
 import {
-  ExternalLink, GitPullRequest, Play, Trash2,
-} from "lucide-react";
-import { fetchJSON, postJSON, unwrapList } from "@/lib/api";
-import { AdminPageHeader, AdminPageLayout, AdminToolbar, Btn, Card, CardHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
-import { formatDate } from "@/lib/utils";
+  cleanupPreview,
+  deployPreview,
+  fetchPreviewDeployments,
+  type PreviewDeployment,
+} from "@/lib/api/preview-deployments";
+import { statusLabel } from "@/lib/api/apps";
+import { previewStatusTone } from "@/lib/api/status";
+import {
+  AdminErrorState,
+  AdminLoadingRows,
+  AdminPageHeader,
+  AdminPageLayout,
+  AdminSection,
+  AdminSelect,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminToolbar,
+  AdminTr,
+  Btn,
+  Card,
+  EmptyState,
+  Input,
+  Pill,
+} from "@/components/admin/admin-ui";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { errorMessage, formatDate } from "@/lib/utils";
 
-type PreviewDeployment = {
-  id: string;
-  serverId: string;
-  serviceId?: string;
-  prNumber: number;
-  prTitle?: string;
-  prUrl?: string;
-  branch?: string;
-  repoOwner?: string;
-  repoName?: string;
-  commitSha?: string;
-  status: "deploying" | "running" | "stopped" | "failed" | "cleaned_up";
-  previewUrl?: string;
-  deploymentUrl?: string;
-  source: "github" | "gitlab";
-  uniqueSuffix?: string;
-  isIsolated: boolean;
-  createdBy?: string;
-  createdAt: string;
-  updatedAt: string;
-  cleanedAt?: string;
-};
+const POLL_MS = 15_000;
 
-const statusConfig: Record<string, { tone: "green" | "yellow" | "red" | "blue" | "neutral" }> = {
-  deploying: { tone: "neutral" },
-  running: { tone: "green" },
-  stopped: { tone: "yellow" },
-  failed: { tone: "red" },
-  cleaned_up: { tone: "neutral" },
-};
+/**
+ * The five states this API persists (`PreviewDeployment.status` is a union of
+ * exactly these in `lib/api/preview-deployments.ts`). The filter offers them
+ * rather than a hand-written guess, and colour comes from the shared
+ * `previewStatusTone` table — this page used to carry a private map that filed
+ * `deploying` as inactive grey (the same chip as `cleaned_up`) and an
+ * operator-intentional `stopped` as a warning, contradicting the shared table.
+ */
+const STATUSES: PreviewDeployment["status"][] = ["deploying", "running", "stopped", "failed", "cleaned_up"];
+
+/** `POST /:id/deploy` only acts on a run in `deploying` (`previewenv/service.go:311-321`). */
+function deployReason(preview: PreviewDeployment): string | undefined {
+  if (preview.status === "running") return "Already deployed.";
+  if (preview.status === "cleaned_up") return "Cleaned up — nothing left to deploy.";
+  if (preview.status !== "deploying") return `The control plane only starts a preview from “deploying”; this one is “${statusLabel(preview.status)}”.`;
+  return undefined;
+}
+
+function cleanupReason(preview: PreviewDeployment): string | undefined {
+  if (preview.status === "cleaned_up") return "Already cleaned up.";
+  return undefined;
+}
+
+function timeOrDash(value?: string | null): string {
+  // `formatDate`'s own fallback is "Never", which is a claim about an outcome;
+  // an absent timestamp here just has not been reported.
+  return value ? formatDate(value) : "—";
+}
 
 export default function AdminPreviewDeploymentsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
-  const [statusFilter, setStatusFilter] = useState<string>("");
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const [confirm, renderConfirm] = useConfirm();
+
+  const statusFilter = searchParams.get("status") ?? "";
+  const search = searchParams.get("q") ?? "";
+
+  const setParam = (key: string, value: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    if (value) params.set(key, value);
+    else params.delete(key);
+    const query = params.toString();
+    router.replace(query ? `/admin/preview-deployments?${query}` : "/admin/preview-deployments", { scroll: false });
+  };
+
+  const clearFilters = () => {
+    router.replace("/admin/preview-deployments", { scroll: false });
+  };
 
   const previewsQuery = useQuery({
     queryKey: ["admin", "preview-deployments"],
-    queryFn: async () => unwrapList(await fetchJSON<PreviewDeployment[]>("/admin/preview-deployments")),
-    refetchInterval: 15_000,
+    queryFn: () => fetchPreviewDeployments(),
+    refetchInterval: POLL_MS,
   });
 
   const deployMutation = useMutation({
-    mutationFn: (id: string) => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/deploy`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] }),
-    onError: (err) => toast({ tone: "error", title: "Failed to deploy preview", message: err instanceof Error ? err.message : "An error occurred" }),
+    mutationFn: (id: string) => deployPreview(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] });
+      toast({ tone: "success", title: "Preview deploy queued", message: "The environment is being deployed." });
+    },
+    onError: (err) =>
+      toast({ tone: "error", title: "Preview not deployed", message: errorMessage(err) }),
   });
 
   const cleanupMutation = useMutation({
-    mutationFn: (id: string) => postJSON(`/admin/preview-deployments/${encodeURIComponent(id)}/cleanup`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] }),
-    onError: (err) => toast({ tone: "error", title: "Failed to clean up preview", message: err instanceof Error ? err.message : "An error occurred" }),
+    mutationFn: (id: string) => cleanupPreview(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "preview-deployments"] });
+      toast({ tone: "success", title: "Preview cleaned up", message: "The environment has been torn down." });
+    },
+    onError: (err) =>
+      toast({ tone: "error", title: "Cleanup failed", message: errorMessage(err) }),
   });
 
-  const previews = useMemo(() => previewsQuery.data ?? [], [previewsQuery.data]);
+  const previews = useMemo(
+    () => (Array.isArray(previewsQuery.data) ? previewsQuery.data : []),
+    [previewsQuery.data],
+  );
 
   const filtered = useMemo(() => {
-    if (!Array.isArray(previews)) return [];
-    if (!statusFilter) return previews;
-    return previews.filter((p) => p.status === statusFilter);
-  }, [previews, statusFilter]);
+    const needle = search.trim().toLowerCase();
+    return previews.filter((p) => {
+      if (statusFilter && p.status !== statusFilter) return false;
+      if (!needle) return true;
+      return `${p.prNumber} ${p.prTitle ?? ""} ${p.branch ?? ""} ${p.repoOwner ?? ""}/${p.repoName ?? ""}`
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [previews, statusFilter, search]);
 
-  const statuses = ["deploying", "running", "stopped", "failed", "cleaned_up"];
+  const hasFilters = Boolean(statusFilter || search);
+  const known = previewsQuery.data !== undefined;
 
   return (
     <AdminPageLayout>
       <AdminPageHeader
-        title="Preview Deployments"
-        description="PR-based preview environments for your applications."
+        status={<FreshnessBadge state={sourceState(previewsQuery, POLL_MS)} />}
+        action={
+          <Btn tone="ghost" size="sm" onClick={() => router.push("/admin/preview-environments")}>
+            Preview Environments
+          </Btn>
+        }
       />
 
-      <Card>
-        <CardHeader title={`${filtered.length.toLocaleString()} preview${filtered.length === 1 ? "" : "s"}`} icon={GitPullRequest} />
-        <AdminToolbar>
-          <select
-            className="h-9 rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-xs text-slate-300 outline-none"
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-          >
-            <option value="">All Statuses</option>
-            {statuses.map((s) => (
-              <option key={s} value={s}>{s.replace(/_/g, " ")}</option>
-            ))}
-          </select>
-        </AdminToolbar>
+      <AdminToolbar>
+        <Input
+          label="Search previews"
+          placeholder="PR number, title, branch or repository"
+          value={search}
+          onChange={(v) => setParam("q", v)}
+        />
+        <AdminSelect
+          label="Status"
+          value={statusFilter}
+          onChange={(v) => setParam("status", v)}
+          placeholder="All statuses"
+          options={STATUSES.map((s) => ({ value: s, label: statusLabel(s) }))}
+        />
+        {hasFilters ? (
+          <Btn tone="ghost" size="sm" onClick={clearFilters}>
+            Clear filters
+          </Btn>
+        ) : null}
+      </AdminToolbar>
 
-        {previewsQuery.isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading preview deployments...</div>
-        ) : filtered.length === 0 ? (
-          <EmptyState icon={GitPullRequest} message="No preview deployments found." />
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                  <th className="px-4 py-3">PR</th>
-                  <th className="px-4 py-3">Title</th>
-                  <th className="px-4 py-3">Branch</th>
-                  <th className="px-4 py-3">Source</th>
-                  <th className="px-4 py-3">Status</th>
-                  <th className="px-4 py-3">Preview URL</th>
-                  <th className="px-4 py-3">Created</th>
-                  <th className="px-4 py-3"></th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+      <AdminSection
+        title="Preview deployments"
+        description={
+          known
+            ? hasFilters
+              ? `${filtered.length.toLocaleString()} of ${previews.length.toLocaleString()} preview deployments match these filters.`
+              : `${previews.length.toLocaleString()} preview deployment${previews.length === 1 ? "" : "s"} recorded on this control plane.`
+            : "Count not loaded."
+        }
+        action={previewsQuery.isFetching ? <span className="text-meta text-text-subtle">Refreshing…</span> : null}
+      >
+        <Card>
+          {previewsQuery.isPending ? (
+            <AdminLoadingRows cols={5} rows={4} label="Loading preview deployments…" />
+          ) : previewsQuery.isError ? (
+            <div className="p-4">
+              <AdminErrorState
+                message={`Preview deployments could not be loaded: ${errorMessage(previewsQuery.error)}`}
+                retry={() => void previewsQuery.refetch()}
+              />
+            </div>
+          ) : previews.length === 0 ? (
+            <EmptyState
+              icon={GitPullRequest}
+              title="No preview deployments"
+              message="No pull-request preview has been recorded yet. They are created by the preview webhook or by the project-scoped Preview Environments surface."
+            />
+          ) : filtered.length === 0 ? (
+            <EmptyState
+              icon={GitPullRequest}
+              title="No preview matches these filters"
+              message="Every recorded preview was filtered out. Clear the filters above to see all of them."
+            />
+          ) : (
+            <AdminTable label="Preview deployments">
+              <AdminTHead>
+                <AdminTh>PR</AdminTh>
+                <AdminTh>Title</AdminTh>
+                <AdminTh>Branch</AdminTh>
+                <AdminTh>Source</AdminTh>
+                <AdminTh>Status</AdminTh>
+                <AdminTh>Preview URL</AdminTh>
+                <AdminTh>Created</AdminTh>
+                <AdminTh>Actions</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
                 {filtered.map((p) => {
-                  const cfg = statusConfig[p.status] ?? statusConfig.deploying;
+                  const busy =
+                    (deployMutation.isPending && deployMutation.variables === p.id) ||
+                    (cleanupMutation.isPending && cleanupMutation.variables === p.id);
+                  const blocked = deployReason(p);
+                  const cleanupBlocked = cleanupReason(p);
                   return (
-                    <tr key={p.id} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs font-medium text-slate-200">#{p.prNumber}</td>
-                      <td className="px-4 py-3 text-xs text-slate-300 max-w-[200px] truncate">{p.prTitle || "—"}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{p.branch || "—"}</td>
-                      <td className="px-4 py-3">
-                        <Pill tone="neutral">{p.source}</Pill>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Pill tone={cfg.tone}>{p.status.replace(/_/g, " ")}</Pill>
-                      </td>
-                      <td className="px-4 py-3">
+                    <AdminTr key={p.id}>
+                      <AdminTd className="font-mono text-meta">
+                        <Link
+                          className="underline decoration-line-strong underline-offset-2 hover:text-text"
+                          href={`/admin/preview-deployments/${encodeURIComponent(p.id)}`}
+                        >
+                          #{p.prNumber.toLocaleString()}
+                          <span className="sr-only"> open this preview deployment</span>
+                        </Link>
+                      </AdminTd>
+                      <AdminTd className="max-w-56 text-sm">
+                        {p.prTitle ? (
+                          <span className="block break-words">{p.prTitle}</span>
+                        ) : (
+                          <span className="text-text-muted">No title recorded</span>
+                        )}
+                        {p.repoOwner ? (
+                          <span className="mt-0.5 block font-mono text-meta text-text-muted">
+                            {p.repoOwner}/{p.repoName}
+                          </span>
+                        ) : null}
+                      </AdminTd>
+                      <AdminTd className="font-mono text-meta">
+                        {p.branch || <span className="text-text-muted">Not reported</span>}
+                      </AdminTd>
+                      <AdminTd>
+                        <Pill tone="neutral">{statusLabel(p.source)}</Pill>
+                      </AdminTd>
+                      <AdminTd>
+                        <Pill tone={previewStatusTone(p.status)}>{statusLabel(p.status)}</Pill>
+                      </AdminTd>
+                      <AdminTd className="text-meta">
                         {p.previewUrl ? (
                           <a
+                            className="inline-flex items-center gap-1 text-brand underline underline-offset-2"
                             href={p.previewUrl}
+                            rel="noreferrer noopener"
                             target="_blank"
-                            rel="noopener noreferrer"
-                            className="flex items-center gap-1 text-xs text-red-300 hover:text-red-200"
                           >
-                            <ExternalLink size={12} /> View
+                            <ExternalLink aria-hidden="true" size={12} /> Open preview
                           </a>
-                        ) : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-500">{formatDate(p.createdAt)}</td>
-                      <td className="px-4 py-3">
-                        <div className="flex gap-1">
-                          {p.status === "deploying" && (
-                            <Btn size="sm" tone="primary" onClick={() => deployMutation.mutate(p.id)} disabled={deployMutation.isPending}>
-                              <Play size={12} /> Deploy
-                            </Btn>
-                          )}
-                          {p.status !== "cleaned_up" && (
-                            <Btn size="sm" tone="danger" onClick={() => cleanupMutation.mutate(p.id)} disabled={cleanupMutation.isPending}>
-                              <Trash2 size={12} /> Cleanup
-                            </Btn>
-                          )}
-                          {p.prUrl && (
+                        ) : (
+                          <span className="text-text-muted">Not available yet</span>
+                        )}
+                      </AdminTd>
+                      <AdminTd className="whitespace-nowrap text-meta">{timeOrDash(p.createdAt)}</AdminTd>
+                      <AdminTd>
+                        <div className="flex flex-wrap items-center gap-1">
+                          <Btn
+                            ariaLabel={`Deploy preview for PR ${p.prNumber}`}
+                            disabled={Boolean(blocked) || busy}
+                            loading={busy && deployMutation.variables === p.id}
+                            onClick={() => deployMutation.mutate(p.id)}
+                            size="sm"
+                            tone="primary"
+                          >
+                            <Play aria-hidden="true" size={12} /> Deploy
+                          </Btn>
+                          <Btn
+                            ariaLabel={`Clean up preview for PR ${p.prNumber}`}
+                            disabled={Boolean(cleanupBlocked) || busy}
+                            loading={busy && cleanupMutation.variables === p.id}
+                            onClick={() => void askCleanup(p)}
+                            size="sm"
+                            tone="danger"
+                          >
+                            <Trash2 aria-hidden="true" size={12} /> Cleanup
+                          </Btn>
+                          {p.prUrl ? (
                             <a
+                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-meta text-text-subtle underline decoration-line-strong underline-offset-2 hover:text-text"
                               href={p.prUrl}
+                              rel="noreferrer noopener"
                               target="_blank"
-                              rel="noopener noreferrer"
-                              className="inline-flex items-center gap-1 rounded-lg px-2 py-1 text-xs font-medium text-slate-400 hover:text-slate-200"
                             >
-                              <ExternalLink size={12} /> PR
+                              <ExternalLink aria-hidden="true" size={12} /> Pull request
                             </a>
-                          )}
+                          ) : null}
                         </div>
-                      </td>
-                    </tr>
+                        {blocked || cleanupBlocked ? (
+                          <p className="mt-1 text-meta text-text-muted">{blocked ?? cleanupBlocked}</p>
+                        ) : null}
+                      </AdminTd>
+                    </AdminTr>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </Card>
+              </AdminTBody>
+            </AdminTable>
+          )}
+        </Card>
+      </AdminSection>
+
+      {renderConfirm()}
     </AdminPageLayout>
   );
+
+  async function askCleanup(preview: PreviewDeployment) {
+    const ok = await confirm({
+      confirmLabel: "Clean up preview",
+      danger: true,
+      description: `The running environment for PR #${preview.prNumber}${
+        preview.branch ? ` (${preview.branch})` : ""
+      } is destroyed and its preview URL stops resolving.`,
+      title: "Clean up this preview?",
+    });
+    if (ok) cleanupMutation.mutate(preview.id);
+  }
 }

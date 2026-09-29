@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Database, Plus, Trash2, RotateCcw, FlaskConical, Layers, Server, Search, List, LayoutGrid, Rows3, FileText, History, KeyRound, RefreshCw, Power } from "lucide-react";
+import { Database, Plus, Trash2, RotateCcw, Layers, Server, Search, List, LayoutGrid, Rows3, FileText, History, KeyRound, RefreshCw, Power, LoaderCircle } from "lucide-react";
 import {
   listDatabaseServices,
   provisionDatabaseService,
@@ -22,19 +22,50 @@ import {
   type DatabaseServiceBackup,
   type DatabaseServiceCredential,
 } from "@/lib/api/database-services";
-import { Btn, EmptyState, Input, Modal, ModalFooter, SectionHeader, Pill, cn } from "@/components/admin/admin-ui";
+import { fetchDBEngines } from "@/lib/api/database-containers";
+import {
+  AdminErrorState,
+  AdminLoadingRows,
+  AdminLoadingState,
+  Btn,
+  EmptyState,
+  Input,
+  Modal,
+  ModalFooter,
+  Pill,
+  cn,
+} from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { statusTone } from "@/lib/api/status";
-import { StatusDot } from "@/components/ui/primitives";
+import { Pagination, StatusDot } from "@/components/ui/primitives";
+import { isAvailable, isPartial, reportedTotal } from "@/lib/admin/telemetry";
 import { formatBytes, formatDate } from "@/lib/utils";
-import { DbStatCards, type DbStat } from "./databases-overview";
+import { DbStatCards, resourcesLabel, type DbStat } from "./databases-overview";
 
-const selectCls = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:ring-2 focus:ring-[color-mix(in_srgb,var(--brand)_15%,transparent)]";
+const selectCls = "ui-input w-full";
+const labelCls = "ui-label mb-1.5 block";
+const filterSelectWrap = "flex flex-col justify-center rounded-lg border border-line bg-overlay-subtle px-3 py-1";
+const filterSelectCls = "h-6 cursor-pointer appearance-none border-0 bg-transparent pl-0 pr-8 text-xs text-text outline-none";
+
+/** `host:port` as reported — a stopped service reports an empty host and port 0. */
+function endpointLabel(svc: DatabaseService): string {
+  if (!svc.host) return "Endpoint not reported";
+  return svc.port ? `${svc.host}:${svc.port}` : svc.host;
+}
+
+/**
+ * A 0 read from Go means "never configured", not "configured as zero", so it is
+ * passed on as absent and {@link resourcesLabel} renders it as not reported.
+ */
+function serviceResources(svc: DatabaseService): string {
+  return resourcesLabel(svc.memoryMb || undefined, svc.cpuShares || undefined);
+}
 
 export function DatabaseServicesView() {
   const qc = useQueryClient();
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
   const [showProvision, setShowProvision] = useState(false);
   const [showTemplate, setShowTemplate] = useState(false);
   const [showTest, setShowTest] = useState(false);
@@ -55,9 +86,10 @@ export function DatabaseServicesView() {
   const filteredTemplates = templateFilter ? templates.filter((t) => t.type.toLowerCase().includes(templateFilter.toLowerCase()) || t.version.includes(templateFilter)) : templates;
 
   const statuses = useMemo(() => [...new Set(services.map((s) => s.status).filter(Boolean))].sort(), [services]);
-  const runningCount = useMemo(() => services.filter((s) => s.status?.toLowerCase() === "running").length, [services]);
-  const memorySum = useMemo(() => services.reduce((acc, s) => acc + (s.memoryMb ?? 0), 0), [services]);
-  const statsLoading = servicesQ.isLoading || templatesQ.isLoading;
+  /** Running as the status vocabulary reads it — the same rule as the row pill. */
+  const runningCount = useMemo(() => services.filter((s) => statusTone(s.status, "database") === "ok").length, [services]);
+  const servicesReady = isAvailable(servicesQ);
+  const templatesReady = isAvailable(templatesQ);
 
   function resetPage(update: () => void) {
     setPage(1);
@@ -87,16 +119,48 @@ export function DatabaseServicesView() {
   const currentPage = Math.min(page, totalPages);
   const visibleServices = sortedServices.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const hasActiveServiceFilters = Boolean(search.trim() || statusFilter !== "all");
+  /** Names the filtered denominator instead of presenting a subset as the total. */
+  const servicesRangeLabel = sortedServices.length === 0
+    ? "Nothing to show"
+    : `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, sortedServices.length)} of ${hasActiveServiceFilters ? `${sortedServices.length} matched of ${services.length} services (filtered)` : `${sortedServices.length} services`}`;
 
-  const stats: DbStat[] = [
-    { key: "total", label: "Services", icon: Database, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300", value: statsLoading ? "…" : services.length },
-    { key: "running", label: "Running", icon: Server, tile: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", value: statsLoading ? "…" : runningCount },
-    { key: "templates", label: "Templates", icon: Layers, tile: "border-sky-500/25 bg-sky-500/10 text-sky-300", value: statsLoading ? "…" : templates.length },
-    { key: "memory", label: "Memory", icon: Database, tile: "border-amber-500/25 bg-amber-500/10 text-amber-300", value: statsLoading ? "…" : `${memorySum} MB` },
-  ];
-
-  const filterSelectWrap = "relative flex flex-col justify-center rounded-lg border border-white/[0.08] bg-black/20 px-3 py-1";
-  const filterSelectCls = "h-6 cursor-pointer appearance-none border-0 bg-transparent pl-0 pr-8 text-xs text-slate-200 outline-none";
+  /**
+   * Tiles for the Services tab.
+   *
+   * `DbStat` has no `tile` field any more — `DbStatCards` renders one neutral token
+   * treatment for every tile, so the per-tile palette classes that were passing
+   * `tile:` here are gone and each tile carries a `hint` explaining the figure
+   * instead. Values are honest about their source: every tile renders `—` until the
+   * query it reads has reported, so an unreachable API can never show a confident
+   * zero, and memory sums only what services actually reported rather than
+   * counting an unmeasured service as 0 MB.
+   */
+  const stats: DbStat[] = useMemo(() => {
+    const memory = reportedTotal(services, (s) => s.memoryMb);
+    const servicesUnknown = <span className="text-text-muted" title="The database services query has not reported">—</span>;
+    const templatesUnknown = <span className="text-text-muted" title="The service templates query has not reported">—</span>;
+    return [
+      { key: "total", label: "Services", icon: Database, hint: "Database services known to this panel", value: servicesReady ? services.length : servicesUnknown },
+      { key: "running", label: "Running", icon: Server, hint: "Services the node reported as running", value: servicesReady ? runningCount : servicesUnknown },
+      { key: "templates", label: "Templates", icon: Layers, hint: "Templates a service can be provisioned from", value: templatesReady ? templates.length : templatesUnknown },
+      {
+        key: "memory",
+        label: "Memory Total",
+        icon: Database,
+        hint: "Sum of what the services reported",
+        value: servicesReady
+          ? (memory.value === undefined || memory.total === 0
+            ? <span className="text-text-muted" title="No database service reported a memory figure">—</span>
+            : (
+              <span title={isPartial(memory) ? `Only ${memory.reported} of ${memory.total} services reported memory` : undefined}>
+                {`${memory.value} MB`}
+                {isPartial(memory) ? <span className="ml-1 text-xs font-normal text-warn">partial</span> : null}
+              </span>
+            ))
+          : servicesUnknown,
+      },
+    ];
+  }, [servicesReady, templatesReady, services, templates, runningCount]);
 
   const restartMut = useMutation({
     mutationFn: async (id: string) => {
@@ -104,7 +168,7 @@ export function DatabaseServicesView() {
       if (!result.ok) throw new Error("The server reported the service restart did not complete.");
       return result;
     },
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["database-services"] }); toast({ tone: "success", title: "Service restart initiated — POST /admin/database-services/:id/restart" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["database-services"] }); toast({ tone: "success", title: "Service restart initiated", message: "The container is stopped and started again; connections drop while it does." }); },
     onError: (e: Error) => toast({ tone: "error", title: "Restart failed", message: e.message }),
   });
   const deleteMut = useMutation({
@@ -117,89 +181,167 @@ export function DatabaseServicesView() {
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
 
+  /**
+   * Deletion is destructive and irreversible, so it is acknowledged first and the
+   * dialog says what is torn down. It used to fire straight from the icon button.
+   */
+  async function requestDelete(svc: DatabaseService) {
+    const name = svc.name || svc.id.slice(0, 8);
+    const confirmed = await confirm({
+      title: `Delete ${name}?`,
+      description: `The ${svc.type} ${svc.version} service is stopped and its container, data volume and issued credentials are removed${svc.serverId ? ", and it is unlinked from the server it is attached to" : ""}. This cannot be undone.`,
+      danger: true,
+      confirmLabel: "Delete service",
+    });
+    if (confirmed) deleteMut.mutate(svc.id);
+  }
+
+  /** Restart cannot run on a service that is mid-provision or being deleted. */
+  function restartBlockReason(svc: DatabaseService): string | null {
+    if (svc.status === "provisioning") return "Cannot restart while the service is still provisioning";
+    if (svc.status === "deleting") return "Cannot restart — this service is being deleted";
+    return null;
+  }
+
+  /** Which operation this row has in flight, so only that row shows it. */
+  function rowPendingAction(id: string): "restart" | "delete" | null {
+    if (restartMut.isPending && restartMut.variables === id) return "restart";
+    if (deleteMut.isPending && deleteMut.variables === id) return "delete";
+    return null;
+  }
+
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="Database Services"
-        sub="Provisioned database services (PostgreSQL/MySQL/Redis/etc) — provision, restart, test connection, templates"
-        action={
-          <div className="flex flex-wrap gap-2">
-            <Btn tone="ghost" onClick={() => setShowTest(true)}><FlaskConical size={14} /> Test Connection</Btn>
-            <Btn tone="ghost" onClick={() => setShowTemplate(true)}><Layers size={14} /> New Template</Btn>
-            <Btn onClick={() => setShowProvision(true)}><Plus size={14} /> Provision Service</Btn>
-          </div>
-        }
-      />
+      {/* `<h2>` sub-heading, not a second `<h1>`. The Databases route owns the page
+          title. Also one primary action rather than three co-equal buttons: Provision
+          Service is the purpose of this tab, so "New template" moves to the template
+          card and "Test connection" to the filters row, and `FlaskConical` is no
+          longer used as an action glyph (the registry reserves it elsewhere). */}
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h2 className="t-title">Database Services</h2>
+          <p className="mt-0.5 max-w-prose text-meta text-text-subtle">
+            Service instances provisioned from a template — PostgreSQL, MySQL, Redis and the rest.
+            Each instance gets its own credentials, backups and logs here.
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
+          <Btn ariaLabel="Refresh database services" disabled={servicesQ.isFetching} onClick={() => void servicesQ.refetch()} tone="ghost">
+            <RefreshCw size={14} /> Refresh
+          </Btn>
+          <Btn onClick={() => setShowProvision(true)}><Plus size={14} /> Provision Service</Btn>
+        </div>
+      </div>
 
       <DbStatCards stats={stats} />
 
-      <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+      <div className="overflow-hidden rounded-xl border border-line bg-overlay-subtle">
         <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
-          <h2 className="flex items-center gap-2 text-sm font-bold text-slate-100"><Layers size={15} className="text-slate-400" /> Service Templates ({filteredTemplates.length})</h2>
-          <div className="w-full max-w-64"><Input placeholder="Filter type/version..." value={templateFilter} onChange={setTemplateFilter} /></div>
+          <h3 className="t-title flex items-center gap-2">
+            <Layers aria-hidden="true" size={15} className="text-text-subtle" /> Service Templates{" "}
+            <span className="font-normal text-text-subtle">
+              {templatesQ.data
+                ? `${filteredTemplates.length}${filteredTemplates.length !== templatesQ.data.length ? ` of ${templatesQ.data.length} (filtered)` : ""}`
+                : "—"}
+            </span>
+          </h3>
+          <div className="flex items-center gap-2">
+            <div className="w-full max-w-64"><Input label="Filter templates" onChange={setTemplateFilter} placeholder="Type or version…" value={templateFilter} /></div>
+            <Btn ariaLabel="Create a service template" onClick={() => setShowTemplate(true)} tone="ghost">
+              <Plus size={14} /> New template
+            </Btn>
+          </div>
         </div>
-        {templatesQ.isLoading ? (
-          <div className="py-6 text-center text-sm text-slate-400">Loading templates…</div>
+        {templatesQ.isPending ? (
+          <AdminLoadingState label="Loading service templates…" />
         ) : templatesQ.isError ? (
-          <div className="p-4 text-sm text-red-300">Failed to load templates: {(templatesQ.error as Error).message} <Btn size="sm" tone="ghost" onClick={() => void templatesQ.refetch()}>Retry</Btn></div>
+          <div className="p-4">
+            <AdminErrorState
+              message={`Could not load service templates: ${(templatesQ.error as Error).message}`}
+              retry={() => void templatesQ.refetch()}
+            />
+          </div>
         ) : filteredTemplates.length === 0 ? (
-          <EmptyState icon={Layers} title="No templates" message="No service templates yet. Create one to define default images/ports. GET /admin/database-service-templates" />
+          <EmptyState
+            icon={Layers}
+            message={templateFilter.trim()
+              ? `No templates match “${templateFilter.trim()}”. A template fixes the default image, port and resource floor for a type and version.`
+              : "No service templates defined yet. A template is the type and version a service is provisioned from — add one before provisioning."}
+            title={templateFilter.trim() ? "No matching templates" : "No service templates"}
+          />
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
-              <thead><tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500"><th className="px-4 py-3 font-medium">Type</th><th className="px-2 py-3 font-medium">Version</th><th className="px-2 py-3 font-medium">Image</th><th className="px-2 py-3 font-medium">Port</th><th className="px-2 py-3 font-medium">Min Mem</th></tr></thead>
-              <tbody className="divide-y divide-white/[0.04]">
+            <table aria-label="Database service templates" className="ui-table w-full text-xs">
+              <thead><tr className="border-b border-line-strong text-left"><th className="ui-th px-4 py-3 font-medium">Type</th><th className="ui-th px-2 py-3 font-medium">Version</th><th className="ui-th px-2 py-3 font-medium">Image</th><th className="ui-th px-2 py-3 font-medium">Port</th><th className="ui-th px-2 py-3 font-medium">Min memory</th></tr></thead>
+              <tbody className="divide-y divide-line">
                 {filteredTemplates.map((t) => (
-                  <tr key={t.id} className="transition hover:bg-white/[0.02]"><td className="px-4 py-3"><Pill tone="blue">{t.type}</Pill></td><td className="px-2 py-3 font-mono text-[11px] text-slate-300">{t.version}</td><td className="px-2 py-3 font-mono text-[11px] text-slate-400">{t.dockerImage}</td><td className="px-2 py-3 font-mono text-[11px] text-slate-400">{t.defaultPort}</td><td className="px-2 py-3 text-[11px] text-slate-400">{t.minMemoryMb} MB</td></tr>
+                  <tr className="transition hover:bg-overlay-subtle" key={t.id}>
+                    <td className="px-4 py-3"><Pill tone="info">{t.type}</Pill></td>
+                    <td className="px-2 py-3 font-mono text-meta text-text">{t.version}</td>
+                    <td className="px-2 py-3 font-mono text-meta text-text-subtle">{t.dockerImage || "—"}</td>
+                    <td className="px-2 py-3 font-mono text-meta text-text-subtle">{t.defaultPort ?? "—"}</td>
+                    <td className="px-2 py-3 text-meta text-text-subtle">{typeof t.minMemoryMb === "number" ? `${t.minMemoryMb} MB` : "Not reported"}</td>
+                  </tr>
                 ))}
               </tbody>
             </table>
           </div>
         )}
-        <p className="border-t border-white/[0.06] px-4 py-3 text-[11px] text-slate-500">Wires <code className="font-mono">listServiceTemplates</code> &amp; <code className="font-mono">createServiceTemplate</code> — POST /admin/database-service-templates</p>
+        <p className="border-t border-line px-4 py-3 text-meta text-text-muted">
+          A template is a default, not a running service. Editing one never changes services already
+          provisioned from it.
+        </p>
       </div>
 
       <div className="space-y-4">
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
-        <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2">
-          <Search size={13} className="shrink-0 text-slate-500" />
+        <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-line bg-overlay-subtle px-2.5 py-2 focus-within:border-line-strong">
+          <Search aria-hidden="true" size={13} className="shrink-0 text-text-muted" />
           <input
-            type="text"
+            type="search"
             value={search}
             onChange={(e) => resetPage(() => setSearch(e.target.value))}
             placeholder="Search services by name, type, status…"
             aria-label="Search services"
-            className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600"
+            className="w-full bg-transparent text-xs text-text outline-none placeholder:text-text-muted"
           />
         </label>
         <div className="flex flex-wrap items-center gap-2">
           <label className={filterSelectWrap}>
-            <span className="text-[10px] leading-3 text-slate-500">Status</span>
-            <select aria-label="Filter by status" value={statusFilter} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} className={filterSelectCls}>
+            <span className="text-meta leading-3 text-text-muted">Status</span>
+            <select aria-label="Filter services by status" value={statusFilter} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} className={filterSelectCls}>
               <option value="all">All</option>
               {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </label>
-          <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1" role="group" aria-label="View mode">
-            <button type="button" aria-label="Table view" aria-pressed={view === "table"} onClick={() => setView("table")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "table" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
-              <List size={14} /> Table
+          <div className="flex gap-1 rounded-lg border border-line bg-overlay-subtle p-1" role="group" aria-label="View mode">
+            <button type="button" aria-pressed={view === "table"} onClick={() => setView("table")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", view === "table" ? "border border-brand-line bg-brand-subtle text-text" : "border border-transparent text-text-muted hover:text-text")}>
+              <List aria-hidden="true" size={14} /> Table
             </button>
-            <button type="button" aria-label="Cards view" aria-pressed={view === "cards"} onClick={() => setView("cards")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "cards" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
-              <LayoutGrid size={14} /> Cards
+            <button type="button" aria-pressed={view === "cards"} onClick={() => setView("cards")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", view === "cards" ? "border border-brand-line bg-brand-subtle text-text" : "border border-transparent text-text-muted hover:text-text")}>
+              <LayoutGrid aria-hidden="true" size={14} /> Cards
             </button>
           </div>
+          <Btn ariaLabel="Test a database connection" onClick={() => setShowTest(true)} tone="ghost">Test connection</Btn>
           {hasActiveServiceFilters && (
-            <button type="button" onClick={() => { setSearch(""); setStatusFilter("all"); setPage(1); }} className="rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-400 transition hover:text-white">
-              Clear
+            <button type="button" onClick={() => { setSearch(""); setStatusFilter("all"); setPage(1); }} className="rounded-lg px-2.5 py-2 text-xs font-semibold text-text-subtle transition hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">
+              Clear filters
             </button>
           )}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-bold text-slate-100">Database Services ({sortedServices.length})</h2>
-        <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-xs text-slate-300">
-          <span className="text-[11px] text-slate-500">Sort by</span>
+        <h3 className="t-title">
+          Database services{" "}
+          <span className="font-normal text-text-subtle">
+            {servicesReady
+              ? (hasActiveServiceFilters ? `${sortedServices.length} of ${services.length} (filtered)` : `${services.length} service${services.length === 1 ? "" : "s"}`)
+              : "not reported"}
+          </span>
+        </h3>
+        <label className="flex items-center gap-2 rounded-lg border border-line bg-overlay-subtle px-2.5 py-1.5 text-xs text-text">
+          <span className="text-text-subtle">Sort by</span>
           <select aria-label="Sort services" value={sort} onChange={(e) => setSort(e.target.value)} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
             <option value="name-asc">Name (A → Z)</option>
             <option value="name-desc">Name (Z → A)</option>
@@ -209,141 +351,215 @@ export function DatabaseServicesView() {
         </label>
       </div>
 
-      {servicesQ.isLoading ? (
-        <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] py-10 text-center text-sm text-slate-400 shadow-sm">Loading services…</div>
+      {servicesQ.isPending ? (
+        <AdminLoadingState label="Loading database services…" />
       ) : servicesQ.isError ? (
-        <div className="rounded-xl border border-red-500/20 bg-red-950/10 p-4 text-sm text-red-200">Failed to load: {(servicesQ.error as Error).message} <Btn size="sm" tone="ghost" onClick={() => void servicesQ.refetch()}>Retry</Btn></div>
+        <AdminErrorState
+          message={`Could not load database services: ${servicesQ.error.message}`}
+          retry={() => void servicesQ.refetch()}
+        />
       ) : services.length === 0 ? (
-        <EmptyState icon={Database} title="No services" message="No database services provisioned. Use Provision Service — POST /admin/database-services" />
+        <EmptyState icon={Database} title="No services" message="No database services have been provisioned yet. Provision one to create a linkable database with its own credentials, backups and logs." />
       ) : sortedServices.length === 0 ? (
-        <EmptyState icon={Database} title="No matches" message="No services match these filters." />
+        <EmptyState icon={Database} title="No matches" message={`No service matches these filters out of ${services.length} read.`} />
       ) : view === "cards" ? (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {visibleServices.map((svc) => (
-            <ServiceCard
-              key={svc.id}
-              svc={svc}
-              onManage={() => setDetailSvc(svc)}
-              onRestart={() => restartMut.mutate(svc.id)}
-              onDelete={() => deleteMut.mutate(svc.id)}
-              restartPending={restartMut.isPending}
-              deletePending={deleteMut.isPending}
-            />
-          ))}
+        <div className="space-y-3">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {visibleServices.map((svc) => (
+              <ServiceCard
+                key={svc.id}
+                svc={svc}
+                onManage={() => setDetailSvc(svc)}
+                onRestart={() => void restartMut.mutate(svc.id)}
+                onDelete={() => void requestDelete(svc)}
+                pendingAction={rowPendingAction(svc.id)}
+                restartBlockReason={restartBlockReason(svc)}
+              />
+            ))}
+          </div>
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-overlay-subtle px-4 py-3 text-xs text-text-subtle">
+            <span>{servicesRangeLabel}</span>
+            <div className="flex items-center gap-2">
+              <Pagination label="Database services pagination" onPageChange={setPage} page={currentPage} pageCount={totalPages} />
+              <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none rounded border border-line bg-overlay px-2 py-1 font-mono outline-none">
+                <option value={10}>10 / page</option>
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+              </select>
+            </div>
+          </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-line bg-overlay-subtle">
           <div className="overflow-x-auto">
-            <table className="w-full text-xs">
+            <table aria-label="Database services" className="ui-table w-full">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
-                  <th className="px-4 py-3 font-medium">Name</th>
-                  <th className="px-2 py-3 font-medium">Type / Version</th>
-                  <th className="px-2 py-3 font-medium">Status</th>
-                  <th className="px-2 py-3 font-medium">Host : Port</th>
-                  <th className="px-2 py-3 font-medium">Memory</th>
-                  <th className="px-2 py-3 text-right font-medium">Actions</th>
+                <tr className="border-b border-line-strong text-left">
+                  <th className="ui-th px-4 py-3 font-medium">Name</th>
+                  <th className="ui-th px-2 py-3 font-medium">Type / Version</th>
+                  <th className="ui-th px-2 py-3 font-medium">Status</th>
+                  <th className="ui-th px-2 py-3 font-medium">Host : Port</th>
+                  <th className="ui-th px-2 py-3 font-medium">Resources</th>
+                  <th className="ui-th px-2 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {visibleServices.map((svc) => (
-                  <tr key={svc.id} className="transition hover:bg-white/[0.02]">
+                  <tr key={svc.id} className="transition hover:bg-overlay-subtle">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
-                          <Database size={14} />
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay text-text-subtle">
+                          <Database aria-hidden="true" size={14} />
                         </span>
                         <span className="min-w-0">
-                          <span className="block max-w-44 truncate text-xs font-bold text-slate-100" title={svc.name || svc.id}>{svc.name || svc.id.slice(0, 8)}</span>
-                          <span className="block font-mono text-[10px] text-slate-500">{svc.id.slice(0, 8)}</span>
+                          {/* The whole name is on screen; the id line is not its only copy. */}
+                          <span className="block break-words text-xs font-bold text-text">{svc.name || "Unnamed service"}</span>
+                          <span className="block font-mono text-meta text-text-muted">{svc.id.slice(0, 8)}</span>
                         </span>
                       </div>
                     </td>
                     <td className="px-2 py-3">
-                      <span className="block text-xs text-slate-200">{svc.type}</span>
-                      <span className="block font-mono text-[10px] text-slate-500">{svc.version}</span>
+                      <span className="block text-xs text-text">{svc.type}</span>
+                      <span className="block font-mono text-meta text-text-muted">{svc.version || "—"}</span>
                     </td>
                     <td className="px-2 py-3"><ServiceStatusDot status={svc.status} /></td>
-                    <td className="px-2 py-3 font-mono text-[11px] text-slate-300">{svc.host}:{svc.port}</td>
-                    <td className="px-2 py-3 text-[11px] text-slate-400">{svc.memoryMb} MB</td>
+                    <td className="px-2 py-3 font-mono text-meta text-text-subtle">{endpointLabel(svc)}</td>
+                    <td className="px-2 py-3 text-meta text-text-subtle">{serviceResources(svc)}</td>
                     <td className="px-2 py-3">
-                      <div className="flex items-center justify-end gap-1">
-                        <button disabled={false} onClick={() => setDetailSvc(svc)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-sky-200" title="Manage — logs, backups, credentials" type="button"><Rows3 size={14} /></button>
-                        <button disabled={restartMut.isPending} onClick={() => restartMut.mutate(svc.id)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-amber-200 disabled:opacity-40" title="Restart — POST /admin/database-services/:id/restart" type="button"><RotateCcw size={14} /></button>
-                        <button disabled={deleteMut.isPending} onClick={() => deleteMut.mutate(svc.id)} className="grid h-9 w-9 place-items-center rounded text-slate-400 hover:bg-white/[0.06] hover:text-red-200 disabled:opacity-40" title="Delete" type="button"><Trash2 size={14} /></button>
-                      </div>
+                      <ServiceActions
+                        svc={svc}
+                        onManage={() => setDetailSvc(svc)}
+                        onRestart={() => void restartMut.mutate(svc.id)}
+                        onDelete={() => void requestDelete(svc)}
+                        pendingAction={rowPendingAction(svc.id)}
+                        restartBlockReason={restartBlockReason(svc)}
+                      />
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3 text-xs text-slate-400">
-            <span>Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sortedServices.length)} of {sortedServices.length} services</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-xs text-text-subtle">
+            <span>{servicesRangeLabel}</span>
             <div className="flex items-center gap-2">
-              <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">‹</button>
-              <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
-              <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">›</button>
-              <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
-                <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
-                  <option value={10}>10 / page</option>
-                  <option value={20}>20 / page</option>
-                  <option value={50}>50 / page</option>
-                </select>
-              </label>
+              <Pagination label="Database services pagination" onPageChange={setPage} page={currentPage} pageCount={totalPages} />
+              <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none rounded border border-line bg-overlay px-2 py-1 font-mono outline-none">
+                <option value={10}>10 / page</option>
+                <option value={20}>20 / page</option>
+                <option value={50}>50 / page</option>
+              </select>
             </div>
           </div>
         </div>
       )}
-      <p className="text-[11px] text-slate-500">Wires <code className="font-mono">provisionDatabaseService</code>, <code className="font-mono">restartDatabaseService</code>, <code className="font-mono">testConnection</code>; Manage opens <code className="font-mono">getServiceLogs</code>, <code className="font-mono">listServiceBackups</code>/<code className="font-mono">restoreServiceBackup</code>, and the credentials section</p>
+      <p className="text-meta text-text-muted">
+        Manage opens the service’s logs, backups and credentials. Provisioning asks a node to create
+        the container, so a service can report <code className="ui-code-inline">failed</code> if the
+        node could not run it.
+      </p>
       </div>
 
       {detailSvc && <ServiceDetailModal svc={detailSvc} onClose={() => setDetailSvc(null)} />}
       {showProvision && <ProvisionModal onClose={() => setShowProvision(false)} onDone={() => { setShowProvision(false); qc.invalidateQueries({ queryKey: ["database-services"] }); }} />}
       {showTemplate && <TemplateModal onClose={() => setShowTemplate(false)} onDone={() => { setShowTemplate(false); qc.invalidateQueries({ queryKey: ["service-templates"] }); }} />}
       {showTest && <TestConnectionModal onClose={() => setShowTest(false)} />}
+      {renderConfirm()}
     </div>
   );
 }
 
 function ServiceStatusDot({ status }: { status: string }) {
-  return <StatusDot status={status} tone={statusTone(status)} />;
+  if (!status) return <span className="border-b border-dashed border-unknown-line text-unknown" title="The service reported no status">not reported</span>;
+  return <StatusDot status={status} tone={statusTone(status, "database")} />;
 }
 
-function ServiceCard({ svc, onManage, onRestart, onDelete, restartPending, deletePending }: {
+/**
+ * Row and card actions. Icon-only buttons carry an accessible name; the control
+ * that cannot run is disabled with the reason in its description rather than
+ * hidden; only the row with work in flight shows a spinner.
+ */
+function ServiceActions({ svc, onManage, onRestart, onDelete, pendingAction, restartBlockReason, layout = "row" }: {
   svc: DatabaseService;
   onManage: () => void;
   onRestart: () => void;
   onDelete: () => void;
-  restartPending: boolean;
-  deletePending: boolean;
+  pendingAction: "restart" | "delete" | null;
+  restartBlockReason: string | null;
+  layout?: "row" | "card";
+}) {
+  const name = svc.name || svc.id.slice(0, 8);
+  const base = "grid h-11 place-items-center rounded text-text-subtle transition-colors hover:bg-overlay-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] disabled:cursor-not-allowed disabled:opacity-40";
+  const sizing = layout === "card" ? "flex-1" : "w-11";
+  return (
+    <div className={cn("flex items-center gap-1", layout === "card" ? "justify-between" : "justify-end")}>
+      <button
+        aria-label={`Manage ${name} — logs, backups and credentials`}
+        className={cn(base, sizing, "hover:text-[var(--brand)]")}
+        onClick={onManage}
+        title={`Manage ${name} — logs, backups and credentials`}
+        type="button"
+      >
+        <Rows3 aria-hidden="true" size={14} />
+      </button>
+      <button
+        aria-label={`Restart ${name}`}
+        className={cn(base, sizing, "hover:text-text")}
+        disabled={pendingAction !== null || restartBlockReason !== null}
+        onClick={onRestart}
+        title={restartBlockReason ?? (pendingAction === "restart" ? "Restarting…" : `Restart ${name} — the container is stopped, then started`)}
+        type="button"
+      >
+        {pendingAction === "restart" ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} /> : <RotateCcw aria-hidden="true" size={14} />}
+      </button>
+      <button
+        aria-label={`Delete ${name}`}
+        className={cn(base, sizing, "hover:text-danger")}
+        disabled={pendingAction !== null}
+        onClick={onDelete}
+        title={pendingAction === "delete" ? "Deleting…" : `Delete ${name}`}
+        type="button"
+      >
+        <Trash2 aria-hidden="true" size={14} />
+      </button>
+    </div>
+  );
+}
+
+function ServiceCard({ svc, onManage, onRestart, onDelete, pendingAction, restartBlockReason }: {
+  svc: DatabaseService;
+  onManage: () => void;
+  onRestart: () => void;
+  onDelete: () => void;
+  pendingAction: "restart" | "delete" | null;
+  restartBlockReason: string | null;
 }) {
   return (
-    <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition hover:border-white/20">
+    <div className="rounded-xl border border-line bg-overlay-subtle p-4 transition hover:border-line-strong">
       <div className="flex items-start gap-3">
-        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
-          <Database size={18} />
+        <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-overlay text-text-subtle">
+          <Database aria-hidden="true" size={18} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="truncate text-sm font-bold text-slate-100" title={svc.name || svc.id}>{svc.name || svc.id.slice(0, 8)}</p>
-          <p className="font-mono text-[10px] text-slate-500">{svc.id.slice(0, 8)}</p>
+          <p className="break-words text-sm font-bold text-text">{svc.name || "Unnamed service"}</p>
+          <p className="font-mono text-meta text-text-muted">{svc.id.slice(0, 8)}</p>
         </div>
         <ServiceStatusDot status={svc.status} />
       </div>
-      <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-slate-400">
-        <p className="truncate">{svc.type}{svc.version ? ` ${svc.version}` : ""} · {svc.host}:{svc.port}</p>
-        <p className="truncate">{svc.memoryMb} MB</p>
+      <div className="mt-3 space-y-1 border-t border-line pt-3 font-mono text-meta text-text-subtle">
+        <p className="break-words">{svc.type}{svc.version ? ` ${svc.version}` : ""} · {endpointLabel(svc)}</p>
+        <p className="break-words">{serviceResources(svc)}</p>
       </div>
-      <div className="mt-3 flex gap-2">
-        <button type="button" onClick={onManage} title="Manage — logs, backups, credentials" className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-bold text-slate-200 transition hover:border-white/20 hover:text-sky-200">
-          <Rows3 size={14} /> Manage
-        </button>
-        <button type="button" disabled={restartPending} onClick={onRestart} title="Restart — POST /admin/database-services/:id/restart" className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-bold text-slate-200 transition hover:border-white/20 hover:text-amber-200 disabled:opacity-40">
-          <RotateCcw size={14} /> Restart
-        </button>
-        <button type="button" disabled={deletePending} onClick={onDelete} title="Delete" className="flex flex-1 items-center justify-center gap-1.5 rounded-lg border border-white/[0.08] px-3 py-2 text-xs font-bold text-slate-200 transition hover:border-white/20 hover:text-red-200 disabled:opacity-40">
-          <Trash2 size={14} /> Delete
-        </button>
+      <div className="mt-3 border-t border-line pt-3">
+        <ServiceActions
+          layout="card"
+          onManage={onManage}
+          onDelete={onDelete}
+          onRestart={onRestart}
+          pendingAction={pendingAction}
+          restartBlockReason={restartBlockReason}
+          svc={svc}
+        />
       </div>
     </div>
   );
@@ -352,50 +568,88 @@ function ServiceCard({ svc, onManage, onRestart, onDelete, restartPending, delet
 function ProvisionModal({ onClose, onDone }: { onClose: () => void; onDone: () => void }) {
   const { toast } = useToast();
   const [name, setName] = useState("");
-  const [type, setType] = useState("postgresql");
-  const [version, setVersion] = useState("16");
+  const [type, setType] = useState("");
+  const [version, setVersion] = useState("");
   const [memoryMb, setMemoryMb] = useState(256);
   const templatesQ = useQuery({ queryKey: ["service-templates"], queryFn: listServiceTemplates });
+  /**
+   * Engines and versions come from the API rather than a list written here,
+   * because `POST /admin/database-services` validates the pair against the same
+   * table (`store.SupportedDBEngines`) and rejects anything else.
+   */
+  const enginesQ = useQuery({ queryKey: ["db-engines"], queryFn: fetchDBEngines, staleTime: 300_000 });
+  const enginesReady = isAvailable(enginesQ);
+  const engineNames = useMemo(() => Object.keys(enginesQ.data ?? {}).sort(), [enginesQ.data]);
+  const activeType = type || engineNames[0] || "";
+  const versions = enginesQ.data?.[activeType] ?? [];
+  const activeVersion = version || versions[versions.length - 1] || "";
 
   const mut = useMutation({
-    mutationFn: () => provisionDatabaseService({ name: name || `db-${Date.now()}`, type, version, memoryMb }),
-    onSuccess: () => { toast({ tone: "success", title: "Database service provisioned — POST /admin/database-services" }); onDone(); },
+    mutationFn: () => provisionDatabaseService({ name: name.trim(), type: activeType, version: activeVersion, memoryMb }),
+    onSuccess: () => { toast({ tone: "success", title: "Provisioning started", message: "The service reports running once the node has created its container." }); onDone(); },
     onError: (e: Error) => toast({ tone: "error", title: "Provision failed", message: e.message }),
   });
 
   return (
-    <Modal title="Provision Database Service" description="POST /admin/database-services" onClose={onClose} wide>
+    <Modal description="Creates the service record, then asks a node to run the container" onClose={onClose} title="Provision Database Service" wide>
       <div className="space-y-4">
-        <Input label="Name (optional, auto if blank)" value={name} onChange={setName} placeholder="my-db-service" />
-        <div className="grid gap-4 sm:grid-cols-2">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
-            <select className={selectCls} value={type} onChange={(e) => { setType(e.target.value); const t = templatesQ.data?.filter((x) => x.type===e.target.value); if (t && t.length) setVersion(t[t.length-1].version); }}>
-              <option value="postgresql">postgresql</option>
-              <option value="mysql">mysql</option>
-              <option value="mariadb">mariadb</option>
-              <option value="redis">redis</option>
-              <option value="mongodb">mongodb</option>
-            </select>
-          </div>
-          <Input label="Version" value={version} onChange={setVersion} placeholder="16" />
-        </div>
-        <div>
-          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Memory MB</label>
-          <input type="number" className={selectCls} value={memoryMb} onChange={(e) => setMemoryMb(Number(e.target.value))} min={64} step={64} />
-        </div>
-        {templatesQ.data && templatesQ.data.length > 0 && (
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Templates selector — pick to autofill version/image</p>
-            <div className="flex flex-wrap gap-2">
-              {templatesQ.data.map((t) => (
-                <button key={t.id} type="button" onClick={() => { setType(t.type); setVersion(t.version); }} className={`rounded-full border px-3 py-1 text-xs ${type===t.type && version===t.version ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] text-white" : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.06]"}`}>{t.type}:{t.version} → {t.dockerImage}</button>
-              ))}
+        {!enginesQ.isPending && enginesQ.isError ? (
+          <AdminErrorState
+            message={`Could not read the supported engine list: ${enginesQ.error.message}. Provisioning needs it, because the server validates the engine and version you submit.`}
+            retry={() => void enginesQ.refetch()}
+          />
+        ) : !enginesReady ? (
+          <AdminLoadingState label="Reading the supported engine list…" />
+        ) : engineNames.length === 0 ? (
+          <AdminErrorState message="The API reported no supported database engines, so there is nothing to provision." retry={() => void enginesQ.refetch()} />
+        ) : (
+          <>
+            <Input label="Name (optional)" onChange={setName} placeholder="my-db-service" value={name} />
+            <div className="grid gap-4 sm:grid-cols-2">
+              <label className="block">
+                <span className={labelCls}>Type</span>
+                <select aria-label="Database type" className={cn(selectCls, "cursor-pointer")} onChange={(e) => { setType(e.target.value); setVersion(""); }} value={activeType}>
+                  {engineNames.map((e) => <option key={e} value={e}>{e}</option>)}
+                </select>
+              </label>
+              <label className="block">
+                <span className={labelCls}>Version</span>
+                <select aria-label="Database version" className={cn(selectCls, "cursor-pointer")} onChange={(e) => setVersion(e.target.value)} value={activeVersion}>
+                  {versions.map((v) => <option key={v} value={v}>{v}</option>)}
+                </select>
+              </label>
             </div>
-          </div>
+            <label className="block">
+              <span className={labelCls}>Memory (MB)</span>
+              <input aria-label="Memory in megabytes" className={selectCls} min={64} onChange={(e) => setMemoryMb(Number(e.target.value))} step={64} type="number" value={memoryMb} />
+              <span className="mt-1 block text-meta text-text-muted">A negative figure is rejected; a missing one defaults to 256 MB.</span>
+            </label>
+            {templatesReady && templatesQ.data.length > 0 && (
+              <div className="rounded-lg border border-line bg-overlay-subtle p-3">
+                <p className={labelCls}>Templates — pick one to use its type and version</p>
+                <div className="flex flex-wrap gap-2">
+                  {templatesQ.data.map((t) => (
+                    <button
+                      className={cn("rounded-full border px-3 py-1 text-meta transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", activeType === t.type && activeVersion === t.version ? "border-brand-line bg-brand-subtle text-text" : "border-line bg-overlay text-text-subtle hover:border-line-strong hover:text-text")}
+                      key={t.id}
+                      onClick={() => { setType(t.type); setVersion(t.version); }}
+                      type="button"
+                    >
+                      {t.type}:{t.version} → {t.dockerImage}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </>
         )}
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={() => mut.mutate()} disabled={mut.isPending || !type || !version} confirmLabel={mut.isPending ? "Provisioning…" : "Provision"} />
+      <ModalFooter
+        confirmLabel={mut.isPending ? "Provisioning…" : "Provision"}
+        disabled={mut.isPending || !enginesReady || !activeType || !activeVersion || !Number.isFinite(memoryMb) || memoryMb < 0}
+        onCancel={onClose}
+        onConfirm={() => mut.mutate()}
+      />
     </Modal>
   );
 }
@@ -411,25 +665,51 @@ function TemplateModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
 
   const mut = useMutation({
     mutationFn: () => createServiceTemplate({ type, version, dockerImage, defaultPort, defaultDatabase, minMemoryMb }),
-    onSuccess: () => { toast({ tone: "success", title: "Template created — POST /admin/database-service-templates" }); onDone(); },
+    onSuccess: () => { toast({ tone: "success", title: "Template created" }); onDone(); },
     onError: (e: Error) => toast({ tone: "error", title: "Create template failed", message: e.message }),
   });
+  /** The server rejects these outright, so say so before the attempt, not after. */
+  const missing = [!type && "type", !version.trim() && "version", !dockerImage.trim() && "docker image", !(defaultPort > 0) && "default port"].filter(Boolean) as string[];
 
   return (
-    <Modal title="Create Service Template" description="POST /admin/database-service-templates" onClose={onClose} wide>
+    <Modal description="A template fixes the image, port and minimum memory a provision request starts from" onClose={onClose} title="Create Service Template" wide>
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label><select className={selectCls} value={type} onChange={(e) => setType(e.target.value)}><option value="postgresql">postgresql</option><option value="mysql">mysql</option><option value="mariadb">mariadb</option><option value="redis">redis</option><option value="mongodb">mongodb</option></select></div>
-          <Input label="Version" value={version} onChange={setVersion} placeholder="16" />
+          <label className="block">
+            <span className={labelCls}>Type</span>
+            <select aria-label="Template type" className={cn(selectCls, "cursor-pointer")} onChange={(e) => setType(e.target.value)} value={type}>
+              <option value="postgresql">postgresql</option>
+              <option value="mysql">mysql</option>
+              <option value="mariadb">mariadb</option>
+              <option value="redis">redis</option>
+              <option value="mongodb">mongodb</option>
+            </select>
+          </label>
+          <Input label="Version" onChange={setVersion} placeholder="16" value={version} />
         </div>
-        <Input label="Docker Image" value={dockerImage} onChange={setDockerImage} placeholder="postgres:16-alpine" />
+        <Input label="Docker image" onChange={setDockerImage} placeholder="postgres:16-alpine" value={dockerImage} />
         <div className="grid gap-4 sm:grid-cols-3">
-          <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Default Port</label><input type="number" className={selectCls} value={defaultPort} onChange={(e) => setDefaultPort(Number(e.target.value))} /></div>
-          <Input label="Default DB" value={defaultDatabase} onChange={setDefaultDatabase} placeholder="postgres" />
-          <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Min Memory MB</label><input type="number" className={selectCls} value={minMemoryMb} onChange={(e) => setMinMemoryMb(Number(e.target.value))} /></div>
+          <label className="block">
+            <span className={labelCls}>Default port</span>
+            <input aria-label="Default port" className={selectCls} min={1} onChange={(e) => setDefaultPort(Number(e.target.value))} type="number" value={defaultPort} />
+          </label>
+          <Input label="Default database" onChange={setDefaultDatabase} placeholder="postgres" value={defaultDatabase} />
+          <label className="block">
+            <span className={labelCls}>Min memory (MB)</span>
+            <input aria-label="Minimum memory in megabytes" className={selectCls} min={0} onChange={(e) => setMinMemoryMb(Number(e.target.value))} type="number" value={minMemoryMb} />
+            <span className="mt-1 block text-meta text-text-muted">0 is accepted and defaults to 256 MB.</span>
+          </label>
         </div>
+        {missing.length > 0 && (
+          <p className="ui-alert ui-alert-warning" role="status">Required before this can be saved: {missing.join(", ")}.</p>
+        )}
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={() => mut.mutate()} disabled={mut.isPending || !type || !version || !dockerImage} confirmLabel={mut.isPending ? "Creating…" : "Create Template"} />
+      <ModalFooter
+        confirmLabel={mut.isPending ? "Creating…" : "Create Template"}
+        disabled={mut.isPending || missing.length > 0}
+        onCancel={onClose}
+        onConfirm={() => mut.mutate()}
+      />
     </Modal>
   );
 }
@@ -437,40 +717,64 @@ function TemplateModal({ onClose, onDone }: { onClose: () => void; onDone: () =>
 function TestConnectionModal({ onClose }: { onClose: () => void }) {
   const { toast } = useToast();
   const [host, setHost] = useState("127.0.0.1");
-  const [port, setPort] = useState("5432");
+  const [port, setPort] = useState("");
   const [engine, setEngine] = useState("postgresql");
-  const [username, setUsername] = useState("gamepanel");
+  const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [databaseName, setDatabaseName] = useState("postgres");
 
   const mut = useMutation({
     mutationFn: async () => {
-      const result = await testConnection({ host, port: Number(port), engine, username, password, databaseName });
+      const result = await testConnection({ host, port: Number(port) || 0, engine, username, password, databaseName });
       if (!result.ok) throw new Error(result.message || "The server reported the connection test did not succeed.");
       return result;
     },
-    onSuccess: (res) => toast({ tone: "success", title: res.message || "Connection successful — POST /admin/database-services/test-connection" }),
+    onSuccess: (res) => toast({ tone: "success", title: res.message || "Connection successful" }),
     onError: (e: Error) => toast({ tone: "error", title: "Test failed", message: e.message }),
   });
+  const missing = [!host.trim() && "host", !engine && "engine", !username.trim() && "username"].filter(Boolean) as string[];
 
   return (
-    <Modal title="Test Connection" description="POST /admin/database-services/test-connection" onClose={onClose} wide>
+    <Modal description="Connects with the credentials you enter and reports the result; nothing is saved" onClose={onClose} title="Test Connection" wide>
       <div className="space-y-4">
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Host" value={host} onChange={setHost} placeholder="127.0.0.1" />
-          <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Port</label><input className={selectCls} value={port} onChange={(e) => setPort(e.target.value)} placeholder="5432" /></div>
+          <Input label="Host" onChange={setHost} placeholder="127.0.0.1" value={host} />
+          <label className="block">
+            <span className={labelCls}>Port</span>
+            <input aria-label="Port" className={selectCls} onChange={(e) => setPort(e.target.value.replace(/[^0-9]/g, ""))} placeholder="Blank uses the engine default" value={port} />
+          </label>
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <div><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Engine</label><select className={selectCls} value={engine} onChange={(e) => setEngine(e.target.value)}><option value="postgresql">postgresql</option><option value="mysql">mysql</option><option value="mariadb">mariadb</option><option value="redis">redis</option><option value="mongodb">mongodb</option></select></div>
-          <Input label="Username" value={username} onChange={setUsername} />
+          <label className="block">
+            <span className={labelCls}>Engine</span>
+            <select aria-label="Engine" className={cn(selectCls, "cursor-pointer")} onChange={(e) => setEngine(e.target.value)} value={engine}>
+              <option value="postgresql">postgresql</option>
+              <option value="mysql">mysql</option>
+              <option value="mariadb">mariadb</option>
+              <option value="redis">redis</option>
+              <option value="mongodb">mongodb</option>
+            </select>
+          </label>
+          <Input label="Username" onChange={setUsername} value={username} />
         </div>
         <div className="grid gap-4 sm:grid-cols-2">
-          <Input label="Password" value={password} onChange={setPassword} type="password" placeholder="••••••••" />
-          <Input label="Database" value={databaseName} onChange={setDatabaseName} placeholder="postgres" />
+          <Input label="Password" onChange={setPassword} type="password" value={password} />
+          <Input label="Database" onChange={setDatabaseName} placeholder="postgres" value={databaseName} />
         </div>
-        <p className="text-xs text-slate-400">Tests <code className="font-mono">POST /admin/database-services/test-connection</code> — host/engine/username required, port defaults via defaultPortForEngine.</p>
+        <p className="text-meta text-text-muted">
+          Host, engine and username are required. A blank port uses the engine default: postgresql
+          5432, mysql and mariadb 3306, redis 6379, mongodb 27017.
+        </p>
+        {missing.length > 0 && (
+          <p className="ui-alert ui-alert-warning" role="status">Required before testing: {missing.join(", ")}.</p>
+        )}
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={() => mut.mutate()} disabled={mut.isPending || !host || !engine || !username} confirmLabel={mut.isPending ? "Testing…" : "Test Connection"} />
+      <ModalFooter
+        confirmLabel={mut.isPending ? "Testing…" : "Test Connection"}
+        disabled={mut.isPending || missing.length > 0}
+        onCancel={onClose}
+        onConfirm={() => mut.mutate()}
+      />
     </Modal>
   );
 }
@@ -512,7 +816,7 @@ function ServiceDetailModal({ svc, onClose }: { svc: DatabaseService; onClose: (
 
   const createBackupMut = useMutation({
     mutationFn: () => createServiceBackup(svc.id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["db-service-backups", svc.id] }); toast({ tone: "success", title: "Backup created — POST /admin/database-services/:id/backups" }); },
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["db-service-backups", svc.id] }); toast({ tone: "success", title: "Backup started", message: "It appears as running until the dump completes." }); },
     onError: (e: Error) => toast({ tone: "error", title: "Backup failed", message: e.message }),
   });
   const restoreMut = useMutation({
@@ -529,7 +833,7 @@ function ServiceDetailModal({ svc, onClose }: { svc: DatabaseService; onClose: (
     onSuccess: () => {
       setCredUser(""); setCredPass("");
       qc.invalidateQueries({ queryKey: ["db-service-credentials", svc.id] });
-      toast({ tone: "success", title: "Credential created — POST …/credentials" });
+      toast({ tone: "success", title: "Credential created" });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Create credential failed", message: e.message }),
   });
@@ -548,70 +852,75 @@ function ServiceDetailModal({ svc, onClose }: { svc: DatabaseService; onClose: (
   const creds: DatabaseServiceCredential[] = credsQ.data ?? [];
 
   return (
-    <Modal title={`Manage ${svc.name || svc.id.slice(0, 8)}`} description={`${svc.type} ${svc.version} · ${svc.host}:${svc.port} — logs, backups, credentials`} onClose={onClose} wide>
-      <div className="mb-4 flex gap-1 border-b border-white/[0.06]">
+    <Modal description={`${svc.type} ${svc.version} · ${endpointLabel(svc)} — logs, backups and credentials`} onClose={onClose} title={`Manage ${svc.name || svc.id.slice(0, 8)}`} wide>
+      <div className="mb-4 flex gap-1 border-b border-line" role="tablist" aria-label="Service sections">
         {detailTabs.map(({ id: tId, label, icon: Icon }) => (
-          <button key={tId} type="button" onClick={() => setSection(tId)} className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition", section === tId ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-slate-500 hover:text-slate-300")}>
-            <Icon size={12} /> {label}
+          <button key={tId} type="button" role="tab" aria-selected={section === tId} onClick={() => setSection(tId)} className={cn("-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]", section === tId ? "border-[var(--brand)] text-[var(--brand)]" : "border-transparent text-text-muted hover:text-text")}>
+            <Icon aria-hidden="true" size={12} /> {label}
           </button>
         ))}
       </div>
 
       {section === "logs" && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] text-slate-500">GET /admin/database-services/:id/logs — last 50 lines</p>
-            <Btn size="sm" tone="ghost" onClick={() => void logsQ.refetch()} disabled={logsQ.isFetching}><RefreshCw size={12} className={logsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
+          <div className="flex items-center justify-between gap-3">
+            <p className="text-meta text-text-muted">The last 50 lines the container produced; refreshed every 15 s.</p>
+            <Btn ariaLabel="Reload logs" size="sm" tone="ghost" onClick={() => void logsQ.refetch()} disabled={logsQ.isFetching}><RefreshCw aria-hidden="true" size={12} className={logsQ.isFetching ? "animate-spin" : undefined} /> Refresh</Btn>
           </div>
-          {logsQ.isLoading ? (
-            <div className="py-8 text-center text-sm text-slate-500">Loading logs…</div>
+          {logsQ.isPending ? (
+            <AdminLoadingState label="Loading logs…" />
           ) : logsQ.isError ? (
-            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(logsQ.error as Error).message}</div>
+            <AdminErrorState message={`Could not read the logs: ${logsQ.error.message}`} retry={() => void logsQ.refetch()} />
           ) : logs.length === 0 ? (
-            <EmptyState icon={FileText} title="No logs" message="Container produced no recent log lines." />
+            <EmptyState icon={FileText} title="No logs" message="The service has produced no log lines recently." />
           ) : (
-            <pre className="max-h-96 overflow-auto rounded-lg border border-white/[0.06] bg-[var(--canvas)] p-3 font-mono text-xs text-slate-400 whitespace-pre-wrap">{logs.join("\n")}</pre>
+            <pre className="max-h-96 overflow-auto rounded-lg border border-line bg-overlay p-3 font-mono text-xs whitespace-pre-wrap text-text-subtle">{logs.join("\n")}</pre>
           )}
         </div>
       )}
 
       {section === "backups" && (
         <div className="space-y-3">
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] text-slate-500">GET/POST /admin/database-services/:id/backups · restore via POST …/backups/:backupId/restore</p>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-meta text-text-muted">A restore replaces the data the service holds now.</p>
             <div className="flex gap-2">
-              <Btn size="sm" tone="ghost" onClick={() => void backupsQ.refetch()} disabled={backupsQ.isFetching}><RefreshCw size={12} className={backupsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
-              <Btn size="sm" onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}>{createBackupMut.isPending ? "Creating…" : "Create Backup"}</Btn>
+              <Btn ariaLabel="Reload backups" size="sm" tone="ghost" onClick={() => void backupsQ.refetch()} disabled={backupsQ.isFetching}><RefreshCw aria-hidden="true" size={12} className={backupsQ.isFetching ? "animate-spin" : undefined} /> Refresh</Btn>
+              <Btn size="sm" onClick={() => createBackupMut.mutate()} disabled={createBackupMut.isPending}>{createBackupMut.isPending ? "Starting…" : "Create Backup"}</Btn>
             </div>
           </div>
-          {backupsQ.isLoading ? (
-            <div className="py-8 text-center text-sm text-slate-500">Loading backups…</div>
+          {backupsQ.isPending ? (
+            <AdminLoadingState label="Loading backups…" />
           ) : backupsQ.isError ? (
-            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(backupsQ.error as Error).message}</div>
+            <AdminErrorState message={`Could not read backups: ${backupsQ.error.message}`} retry={() => void backupsQ.refetch()} />
           ) : backups.length === 0 ? (
-            <EmptyState icon={History} title="No backups" message="No backup history for this service yet." />
+            <EmptyState icon={History} title="No backups" message="No backup has been taken for this service yet." />
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
-              <table className="w-full text-xs">
+            <div className="overflow-x-auto rounded-lg border border-line">
+              <table aria-label="Service backups" className="ui-table w-full">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
-                    <th className="px-3 py-2 font-medium">Backup</th><th className="px-3 py-2 font-medium">Status</th><th className="px-3 py-2 font-medium">Size</th><th className="px-3 py-2 font-medium">Created</th><th className="px-3 py-2 text-right font-medium">Actions</th>
+                  <tr className="border-b border-line-strong text-left">
+                    <th className="ui-th px-3 py-2 font-medium">Backup</th><th className="ui-th px-3 py-2 font-medium">Status</th><th className="ui-th px-3 py-2 font-medium">Size</th><th className="ui-th px-3 py-2 font-medium">Created</th><th className="ui-th px-3 py-2 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {backups.map((b) => (
-                    <tr key={b.id}>
-                      <td className="px-3 py-2 font-mono text-[11px] text-slate-300" title={b.filePath || b.id}>{b.filePath ? b.filePath.split("/").pop() : b.id.slice(0, 8)}</td>
-                      <td className="px-3 py-2"><Pill tone={b.status === "completed" ? "green" : b.status === "failed" ? "red" : b.status === "running" || b.status === "creating" ? "blue" : "neutral"}>{b.status}</Pill></td>
-                      <td className="px-3 py-2 text-[11px] text-slate-400">{b.sizeBytes ? formatBytes(b.sizeBytes) : "—"}</td>
-                      <td className="px-3 py-2 text-[11px] text-slate-500">{formatDate(b.createdAt)}</td>
-                      <td className="px-3 py-2 text-right">
-                        <Btn size="sm" tone="ghost" disabled={b.status !== "completed" || restoreMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Restore backup ${b.id.slice(0, 8)}?`, description: `Current data in ${svc.name || svc.id} will be overwritten by this backup.`, danger: true, confirmLabel: "Restore" })) restoreMut.mutate(b.id); })(); }}>
-                          <Power size={12} /> Restore
-                        </Btn>
-                      </td>
-                    </tr>
-                  ))}
+                <tbody className="divide-y divide-line">
+                  {backups.map((b) => {
+                    const restorable = b.status === "completed";
+                    const label = b.filePath ? b.filePath.split("/").pop() : b.id;
+                    return (
+                      <tr key={b.id}>
+                        <td className="px-3 py-2 break-words font-mono text-meta text-text">{label}</td>
+                        <td className="px-3 py-2"><Pill tone={statusTone(b.status, "deployment")}>{b.status || "not reported"}</Pill></td>
+                        {/* An in-flight backup has no size yet; that is not a 0 B backup. */}
+                        <td className="px-3 py-2 text-meta text-text-subtle">{b.sizeBytes > 0 ? formatBytes(b.sizeBytes) : restorable ? "0 B" : "Not reported"}</td>
+                        <td className="px-3 py-2 text-meta text-text-muted">{formatDate(b.createdAt, "—")}</td>
+                        <td className="px-3 py-2 text-right">
+                          <Btn size="sm" tone="ghost" title={restorable ? `Restore ${label}` : `Only a completed backup can be restored — this one is ${b.status || "not reported"}`} disabled={!restorable || restoreMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Restore ${label}?`, description: `Everything currently in ${svc.name || svc.id.slice(0, 8)} is replaced by this backup, and the service is restarted while the restore runs.`, danger: true, confirmLabel: "Restore backup" })) restoreMut.mutate(b.id); })(); }}>
+                            <Power aria-hidden="true" size={12} /> Restore
+                          </Btn>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -621,55 +930,66 @@ function ServiceDetailModal({ svc, onClose }: { svc: DatabaseService; onClose: (
 
       {section === "credentials" && (
         <div className="space-y-4">
-          <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-3">
-            <p className="mb-2 text-xs font-semibold uppercase tracking-wider text-slate-400">Create credential — POST …/credentials</p>
+          <div className="rounded-lg border border-line bg-overlay-subtle p-3">
+            <p className={labelCls}>Create credential</p>
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
               <Input label="Username" value={credUser} onChange={setCredUser} placeholder="app_user" />
-              <Input label="Password" value={credPass} onChange={setCredPass} type="password" placeholder="••••••••" />
+              <Input label="Password" value={credPass} onChange={setCredPass} type="password" />
               <Input label="Database (optional grant)" value={credDb} onChange={setCredDb} placeholder={svc.databaseName || "db"} />
-              <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Permissions</label>
-                <select className={selectCls} value={credPerms} onChange={(e) => setCredPerms(e.target.value)}>
+              <label className="block">
+                <span className={labelCls}>Permissions</span>
+                <select aria-label="Credential permissions" className={cn(selectCls, "cursor-pointer")} value={credPerms} onChange={(e) => setCredPerms(e.target.value)}>
                   <option value="read-write">read-write</option>
                   <option value="read-only">read-only</option>
                 </select>
-              </div>
+              </label>
             </div>
-            <div className="mt-3 flex justify-end">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+              <p className="text-meta text-text-muted">
+                {!credUser.trim() || !credPass
+                  ? "Username and password are required — the server rejects the request without them."
+                  : credDb.trim() ? `Granted ${credPerms} on ${credDb.trim()}.` : `Created with ${credPerms} and no database grant.`}
+              </p>
               <Btn size="sm" onClick={() => createCredMut.mutate({ username: credUser.trim(), password: credPass, database: credDb.trim() || undefined, permissions: credPerms })} disabled={createCredMut.isPending || !credUser.trim() || !credPass}>
                 {createCredMut.isPending ? "Creating…" : "Create Credential"}
               </Btn>
             </div>
           </div>
-          <div className="flex items-center justify-between">
-            <p className="text-[11px] text-slate-500">GET /admin/database-services/:id/credentials — issued credentials (passwords stay server-side)</p>
-            <Btn size="sm" tone="ghost" onClick={() => void credsQ.refetch()} disabled={credsQ.isFetching}><RefreshCw size={12} className={credsQ.isFetching ? "animate-spin" : ""} /> Refresh</Btn>
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-meta text-text-muted">Passwords are never returned once issued — rotate rather than try to retrieve one.</p>
+            <Btn ariaLabel="Reload credentials" size="sm" tone="ghost" onClick={() => void credsQ.refetch()} disabled={credsQ.isFetching}><RefreshCw aria-hidden="true" size={12} className={credsQ.isFetching ? "animate-spin" : undefined} /> Refresh</Btn>
           </div>
-          {credsQ.isLoading ? (
-            <div className="py-8 text-center text-sm text-slate-500">Loading credentials…</div>
+          {credsQ.isPending ? (
+            <AdminLoadingState label="Loading credentials…" />
           ) : credsQ.isError ? (
-            <div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-300">{(credsQ.error as Error).message}</div>
+            <AdminErrorState message={`Could not read credentials: ${credsQ.error.message}`} retry={() => void credsQ.refetch()} />
           ) : creds.length === 0 ? (
-            <EmptyState icon={KeyRound} title="No credentials" message="No credentials issued for this service yet." />
+            <EmptyState icon={KeyRound} title="No credentials" message="No credential has been issued for this service yet." />
           ) : (
-            <div className="overflow-x-auto rounded-lg border border-white/[0.06]">
-              <table className="w-full text-xs">
+            <div className="overflow-x-auto rounded-lg border border-line">
+              <table aria-label="Service credentials" className="ui-table w-full">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
-                    <th className="px-3 py-2 font-medium">Username</th><th className="px-3 py-2 font-medium">Database</th><th className="px-3 py-2 font-medium">Permissions</th><th className="px-3 py-2 font-medium">Created</th><th className="px-3 py-2 font-medium">State</th><th className="px-3 py-2 text-right font-medium">Actions</th>
+                  <tr className="border-b border-line-strong text-left">
+                    <th className="ui-th px-3 py-2 font-medium">Username</th><th className="ui-th px-3 py-2 font-medium">Database</th><th className="ui-th px-3 py-2 font-medium">Permissions</th><th className="ui-th px-3 py-2 font-medium">Created</th><th className="ui-th px-3 py-2 font-medium">State</th><th className="ui-th px-3 py-2 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="divide-y divide-line">
                   {creds.map((cred) => (
                     <tr key={cred.id}>
-                      <td className="px-3 py-2 font-mono text-[11px] text-slate-200">{cred.username}</td>
-                      <td className="px-3 py-2 font-mono text-[11px] text-slate-400">{cred.databaseName || "—"}</td>
-                      <td className="px-3 py-2"><Pill tone={cred.permissions === "read-only" ? "blue" : "yellow"}>{cred.permissions}</Pill></td>
-                      <td className="px-3 py-2 text-[11px] text-slate-500">{formatDate(cred.createdAt)}</td>
-                      <td className="px-3 py-2"><Pill tone={cred.revokedAt ? "neutral" : "green"}>{cred.revokedAt ? "revoked" : "active"}</Pill></td>
+                      <td className="px-3 py-2 break-words font-mono text-meta text-text">{cred.username}</td>
+                      <td className="px-3 py-2 font-mono text-meta text-text-subtle">{cred.databaseName || "—"}</td>
+                      <td className="px-3 py-2"><Pill tone={cred.permissions === "read-only" ? "info" : "neutral"}>{cred.permissions || "not reported"}</Pill></td>
+                      <td className="px-3 py-2 text-meta text-text-muted">{formatDate(cred.createdAt, "—")}</td>
+                      <td className="px-3 py-2">
+                        {cred.revokedAt
+                          ? <Pill tone="neutral">revoked {formatDate(cred.revokedAt, "")}</Pill>
+                          : <Pill tone="ok">active</Pill>}
+                      </td>
                       <td className="px-3 py-2 text-right">
-                        {!cred.revokedAt && (
-                          <Btn size="sm" tone="danger" disabled={revokeCredMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Revoke ${cred.username}?`, description: "Apps relying on this credential will lose database access.", danger: true, confirmLabel: "Revoke" })) revokeCredMut.mutate(cred.id); })(); }}>
+                        {cred.revokedAt ? (
+                          <span className="text-meta text-text-muted">Revoked</span>
+                        ) : (
+                          <Btn size="sm" tone="danger" disabled={revokeCredMut.isPending} onClick={() => { void (async () => { if (await confirm({ title: `Revoke ${cred.username}?`, description: `Any app using this credential loses database access to ${cred.databaseName || "the service"} immediately; live connections may fail rather than reconnect.`, danger: true, confirmLabel: "Revoke credential" })) revokeCredMut.mutate(cred.id); })(); }}>
                             Revoke
                           </Btn>
                         )}

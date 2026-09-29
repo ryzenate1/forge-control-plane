@@ -21,7 +21,8 @@ import {
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import {  } from "@/lib/api";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import {
   DOCKER_EVENT_TYPES,
   MAX_DOCKER_EVENTS,
@@ -30,14 +31,15 @@ import {
 } from "@/lib/api/docker-events";
 
 /**
- * Live container-lifecycle timeline.
+ * Container-lifecycle timeline.
  *
  * Reads the cluster-wide feed that every Beacon node fills via
- * POST /api/remote/docker/events, so a container that was OOM-killed on node
- * "helix-2" shows up here within one beacon flush (5s) and one panel refetch
- * (5s). Rows are newest first and capped at MAX_DOCKER_EVENTS by design: the
- * feed is a "what just happened" view, and the admin activity log is the place
- * for history.
+ * POST /api/remote/docker/events. There is no socket: the panel *polls*
+ * GET /admin/docker/events every 5 seconds, so the worst-case delay from a
+ * container dying on node "helix-2" to a row appearing here is one beacon flush
+ * plus one poll. Rows are newest first and capped at MAX_DOCKER_EVENTS by
+ * design: the feed is a "what just happened" view, and the admin activity log is
+ * the place for history.
  */
 
 const REFRESH_INTERVAL_MS = 5_000;
@@ -153,6 +155,21 @@ function exitCodeOf(event: DockerEvent): string | null {
 /** Attributes already shown on the row itself, so the expansion omits them. */
 const HIDDEN_ATTRS = new Set(["name", "image", "id"]);
 
+const PARAM_KEYS = { node: "node", type: "type", search: "q", paused: "paused" } as const;
+
+/** Read the feed's filters out of the URL after mount (never during SSR, so the
+ *  first paint cannot mismatch the hydrated tree). */
+function readFilterParams(): { node: string; type: string; search: string; paused: boolean } {
+  if (typeof window === "undefined") return { node: "", type: "", search: "", paused: false };
+  const params = new URLSearchParams(window.location.search);
+  return {
+    node: params.get(PARAM_KEYS.node) ?? "",
+    type: params.get(PARAM_KEYS.type) ?? "",
+    search: params.get(PARAM_KEYS.search) ?? "",
+    paused: params.get(PARAM_KEYS.paused) === "1",
+  };
+}
+
 export function DockerEventsFeed({ className }: { className?: string }) {
   const [node, setNode] = useState("");
   const [type, setType] = useState("");
@@ -160,6 +177,31 @@ export function DockerEventsFeed({ className }: { className?: string }) {
   const [paused, setPaused] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [now, setNow] = useState<number | null>(null);
+
+  // Filters live in the URL, so a feed showing one node's OOMs can be pasted
+  // into an incident channel and the state survives a reload.
+  const [restoredFilters] = useState(readFilterParams);
+  useEffect(() => {
+    setNode(restoredFilters.node);
+    setType(restoredFilters.type);
+    setSearch(restoredFilters.search);
+    setPaused(restoredFilters.paused);
+  }, [restoredFilters]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const params = new URLSearchParams(window.location.search);
+    const write = (key: string, value: string) => {
+      if (value) params.set(key, value);
+      else params.delete(key);
+    };
+    write(PARAM_KEYS.node, node);
+    write(PARAM_KEYS.type, type);
+    write(PARAM_KEYS.search, search.trim() ? search : "");
+    write(PARAM_KEYS.paused, paused ? "1" : "");
+    const query = params.toString();
+    window.history.replaceState(null, "", query ? `${window.location.pathname}?${query}` : window.location.pathname);
+  }, [node, type, search, paused]);
 
   const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
@@ -194,6 +236,12 @@ export function DockerEventsFeed({ className }: { className?: string }) {
   // a new identity every render and defeat the filters below.
   const events = useMemo(() => query.data?.events ?? [], [query.data]);
 
+  const feedState = sourceState(query, paused ? undefined : REFRESH_INTERVAL_MS);
+
+  // Nodes that are not reporting cannot contribute rows, so "the feed is quiet"
+  // and "half the fleet is down" have to be distinguishable.
+  const inactiveNodes = useMemo(() => nodes.filter((item) => item.status !== "active"), [nodes]);
+
   const visible = useMemo(() => {
     if (!search.trim()) return events;
     const needle = search.toLowerCase();
@@ -222,7 +270,7 @@ export function DockerEventsFeed({ className }: { className?: string }) {
         <div className="flex items-center gap-1.5">
           <label
             htmlFor="docker-events-node"
-            className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-subtle)]"
+            className="text-meta font-semibold uppercase tracking-wider text-[var(--text-subtle)]"
           >
             Node
           </label>
@@ -245,7 +293,7 @@ export function DockerEventsFeed({ className }: { className?: string }) {
         <div className="flex items-center gap-1.5">
           <label
             htmlFor="docker-events-type"
-            className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-subtle)]"
+            className="text-meta font-semibold uppercase tracking-wider text-[var(--text-subtle)]"
           >
             Event
           </label>
@@ -307,20 +355,51 @@ export function DockerEventsFeed({ className }: { className?: string }) {
         <span>
           {query.isLoading
             ? "Loading…"
-            : `${visible.length} shown · ${query.data?.total ?? 0} stored`}
+            : `${visible.length} shown of ${events.length} loaded · ${query.data ? `${query.data.total} matched on the server` : "server count not read"}`}
         </span>
         {counts.failing > 0 ? <span className="text-[var(--danger)]">{counts.failing} failed/killed</span> : null}
         {counts.starting > 0 ? <span className="text-[var(--success)]">{counts.starting} started</span> : null}
-        <span className="inline-flex items-center gap-1">
+        {/* Connection vocabulary, derived from the query itself. The badge used to
+            pulse green and read "live 5s" while sitting next to its own error
+            banner, because it was keyed off `paused` and nothing else. */}
+        <span className="inline-flex items-center gap-1.5">
           <span
+            aria-hidden="true"
             className={cn(
               "h-1.5 w-1.5 rounded-full",
-              paused ? "bg-[var(--text-muted)]" : "animate-pulse bg-[var(--success)]",
+              feedState.status === "error"
+                ? "bg-[var(--danger)]"
+                : feedState.status === "restricted"
+                  ? "bg-[var(--warning)]"
+                  : paused
+                    ? "bg-[var(--text-muted)]"
+                    : feedState.stale
+                      ? "bg-[var(--warning)]"
+                      : "bg-[var(--success)]",
             )}
           />
-          {paused ? "paused" : `live ${REFRESH_INTERVAL_MS / 1000}s`}
+          {feedState.status === "error"
+            ? "Offline — the feed is not reading"
+            : feedState.status === "restricted"
+              ? "Permission restricted"
+              : paused
+                ? "Paused — not polling"
+                : feedState.status === "loading"
+                  ? "Connecting — first read pending"
+                  : feedState.stale
+                    ? "Stale — last poll did not return"
+                    : `Polling every ${REFRESH_INTERVAL_MS / 1000}s`}
         </span>
-        <span>· retained 30 days</span>
+        {paused ? null : <FreshnessBadge state={feedState} />}
+        {nodesQuery.isError ? (
+          <span className="text-[var(--warning)]">Node inventory unavailable — this feed cannot say which nodes are reporting.</span>
+        ) : nodesQuery.isSuccess && inactiveNodes.length > 0 ? (
+          <span className="text-[var(--warning)]">
+            {inactiveNodes.length} of {nodes.length} {nodes.length === 1 ? "node is" : "nodes are"} not active
+            {" "}({inactiveNodes.map((item) => item.name).join(", ")}) and reporting no events
+            {node ? "" : " to this feed"}.
+          </span>
+        ) : null}
       </div>
 
       {query.isError ? (
@@ -334,9 +413,9 @@ export function DockerEventsFeed({ className }: { className?: string }) {
 
       <div className="max-h-[62vh] overflow-y-auto rounded-xl border border-[var(--line)] bg-[var(--surface)] p-2">
         {query.isLoading ? (
-          <ul className="space-y-2" aria-hidden>
+          <ul aria-busy="true" aria-label="Loading container events" className="space-y-2" role="status">
             {[0, 1, 2, 3].map((row) => (
-              <li key={row} className="h-[46px] animate-pulse rounded-lg bg-white/[0.03]" />
+              <li aria-hidden="true" className="h-[46px] animate-pulse rounded-lg bg-white/[0.03]" key={row} />
             ))}
           </ul>
         ) : visible.length === 0 ? (
@@ -367,10 +446,11 @@ export function DockerEventsFeed({ className }: { className?: string }) {
         )}
       </div>
 
-      <p className="text-[11px] leading-4 text-[var(--text-muted)]">
-        Events are timestamped by the node that observed them, so a beacon whose clock drifts will appear
-        out of order. The panel keeps {MAX_DOCKER_EVENTS} rows in this view and prunes anything older than 30
-        days.
+      <p className="text-meta leading-4 text-[var(--text-muted)]">
+        Events are timestamped by the node that observed them, so a beacon whose clock drifts will appear out
+        of order. This view holds the newest {MAX_DOCKER_EVENTS} matching rows; older events stay in the
+        panel&apos;s store, whose retention window is enforced by the control plane and is not reported to this
+        page.
       </p>
     </div>
   );
@@ -410,7 +490,7 @@ function DockerEventRow({
       >
         <span
           className={cn(
-            "mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+            "mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full border px-2 py-0.5 text-eyebrow font-semibold uppercase tracking-wider",
             tone.badge,
           )}
         >
@@ -422,12 +502,12 @@ function DockerEventRow({
           <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
             <span className="truncate text-sm font-medium text-[var(--text)]">{displayName(event)}</span>
             {event.image ? (
-              <span className="truncate font-mono text-[11px] text-[var(--text-subtle)]">{event.image}</span>
+              <span className="truncate font-mono text-meta text-[var(--text-subtle)]">{event.image}</span>
             ) : null}
             {exitCode ? (
               <span
                 className={cn(
-                  "rounded border px-1 font-mono text-[10px]",
+                  "rounded border px-1 font-mono text-eyebrow",
                   exitCode === "0"
                     ? "border-[var(--line)] text-[var(--text-subtle)]"
                     : "border-[var(--danger-subtle)] bg-[var(--danger-subtle)] text-[var(--danger)]",
@@ -437,7 +517,7 @@ function DockerEventRow({
               </span>
             ) : null}
           </span>
-          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-[var(--text-subtle)]">
+          <span className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-meta text-[var(--text-subtle)]">
             <span className="inline-flex items-center gap-1">
               <Server size={10} />
               {nodeName}
@@ -450,7 +530,7 @@ function DockerEventRow({
         </span>
 
         <span
-          className="shrink-0 whitespace-nowrap font-mono text-[11px] text-[var(--text-subtle)]"
+          className="shrink-0 whitespace-nowrap font-mono text-meta text-[var(--text-subtle)]"
           title={isoText(event.timestamp)}
         >
           {relativeText(event.timestamp, now) || clockText(event.timestamp)}
@@ -459,7 +539,7 @@ function DockerEventRow({
 
       {expanded ? (
         <div className="mt-1 rounded-lg border border-dashed border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2">
-          <div className="flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-[var(--text-subtle)]">
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-meta text-[var(--text-subtle)]">
             <span>
               ingested <span className="font-mono text-[var(--text)]">{clockText(event.ingestedAt)}</span>
             </span>
@@ -468,15 +548,15 @@ function DockerEventRow({
             </span>
           </div>
           {attributes.length === 0 ? (
-            <div className="mt-1 text-[11px] text-[var(--text-muted)]">No actor attributes reported.</div>
+            <div className="mt-1 text-meta text-[var(--text-muted)]">No actor attributes reported.</div>
           ) : (
             <dl className="mt-2 grid grid-cols-1 gap-x-6 gap-y-1 sm:grid-cols-2">
               {attributes.map(([key, value]) => (
                 <div key={key} className="min-w-0">
-                  <dt className="truncate font-semibold uppercase tracking-wider text-[var(--text-muted)] text-[10px]">
+                  <dt className="truncate font-semibold uppercase tracking-wider text-[var(--text-muted)] text-eyebrow">
                     {key}
                   </dt>
-                  <dd className="break-all font-mono text-[11px] text-[var(--text)]">{value || "—"}</dd>
+                  <dd className="break-all font-mono text-meta text-[var(--text)]">{value || "—"}</dd>
                 </div>
               ))}
             </dl>

@@ -2,23 +2,38 @@
 
 import { useState, useMemo, useCallback } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { AlertCircle, ArrowDownUp, Copy, Edit3, Globe, Network, Plus, Server, Trash2 } from "lucide-react";
+import { AlertCircle, ArrowDownUp, Cable, Copy, Edit3, Network, Plus, Server, Trash2 } from "lucide-react";
 import type { ApiAllocation, ApiAllocationNode } from "@/lib/api";
 import { createAllocation, deleteAllocations, fetchAllocationNodes, fetchAllocations, setAdminAllocationAlias } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow } from "./admin-ui";
+import { AdminErrorState, AdminLoadingState, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow } from "./admin-ui";
 
 const EMPTY_NODES: ApiAllocationNode[] = [];
 const EMPTY_ALLOCATIONS: ApiAllocation[] = [];
 
 type SortKey = "node" | "ip" | "port" | "alias" | "server";
 
+function isIPv6Address(address: string): boolean {
+  if (!address.includes(":")) return false;
+  if (!/^[0-9a-fA-F:.]+$/.test(address)) return false;
+  // The previous branch was `includes(":") && /[0-9a-fA-F:.]+/`, which accepted
+  // `::`, `1:2:3` and `ffff:`. An allocation bound to a malformed address is
+  // invisible until traffic fails, so the shape is checked properly: at most one
+  // `::` elision, hextets of 1-4 hex digits, and eight groups when not elided.
+  if (address.split("::").length - 1 > 1) return false;
+  if (address.includes("::")) {
+    const groups = address.split(":").filter(Boolean);
+    return groups.length >= 1 && groups.length <= 7 && groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g));
+  }
+  const groups = address.split(":");
+  return groups.length === 8 && groups.every((g) => /^[0-9a-fA-F]{1,4}$/.test(g));
+}
+
 function validateCreateInput(ip: string, ports: string): string | null {
   const address = ip.trim();
   const isIPv4 = address.split(".").length === 4 && address.split(".").every((part) => /^\d+$/.test(part) && Number(part) <= 255);
-  const isIPv6 = address.includes(":") && /^[0-9a-fA-F:.]+$/.test(address);
-  if (!isIPv4 && !isIPv6) return "Enter a valid IPv4 or IPv6 address.";
+  if (!isIPv4 && !isIPv6Address(address)) return "Enter a valid IPv4 address (four octets) or a full IPv6 address.";
   const values = ports.trim().split(/[\s,]+/).filter(Boolean);
   if (values.length === 0) return "Enter at least one port.";
   let count = 0;
@@ -54,7 +69,10 @@ export function AdminAllocations() {
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [nodeId, setNodeId] = useState("");
-  const [ip, setIp] = useState("0.0.0.0");
+  // No default address: `0.0.0.0` was the initial value of a control whose help
+  // text says a specific IP limits exposure, so the widest exposure was the
+  // value an operator got without choosing it.
+  const [ip, setIp] = useState("");
   const [ports, setPorts] = useState("25565");
   const [containerPort, setContainerPort] = useState("");
   const [protocol, setProtocol] = useState<"tcp" | "udp">("tcp");
@@ -66,8 +84,14 @@ export function AdminAllocations() {
   const nodes = nodesQuery.data ?? EMPTY_NODES;
   const allocations = allocationsQuery.data ?? EMPTY_ALLOCATIONS;
 
+  // AGENTS.md: a request that omits the node must be rejected, not answered with
+  // the first node that happens to have credentials. Both the modal opening and
+  // the mutation used to fall back to `nodes[0]`.
   const createMut = useMutation({
-    mutationFn: () => createAllocation({ nodeId: nodeId || nodes[0]?.id || "", ip, ports, containerPort: containerPort ? Number(containerPort) : undefined, protocol, alias, notes }),
+    mutationFn: () => {
+      if (!nodeId) throw new Error("Select the node to bind this allocation on — no node was chosen.");
+      return createAllocation({ nodeId, ip: ip.trim(), ports, containerPort: containerPort ? Number(containerPort) : undefined, protocol, alias, notes });
+    },
     onSuccess: (created) => { qc.invalidateQueries({ queryKey: ["allocations"] }); setModal(false); setCreateError(null); toast({ tone: "success", title: `${created.length} allocation${created.length === 1 ? "" : "s"} created` }); },
     onError: (e: Error) => { setCreateError(e.message || "Unknown error"); toast({ tone: "error", title: "Failed to create allocations", message: e.message || "Unknown error" }); },
   });
@@ -143,9 +167,11 @@ export function AdminAllocations() {
   const confirmSingleDelete = (id: string) => confirmDelete([id]);
 
   const exportCSV = useCallback(() => {
-    const rows = filtered.map((a) => `"${a.node}","${a.ip}",${a.port},"${a.protocol ?? "tcp"}","${a.containerPort ?? ""}","${a.alias ?? ""}","${a.server ?? ""}"`).join("\n");
-    const text = `Node,IP,Port,Protocol,Container Port,Alias,Server\n${rows}`;
-    navigator.clipboard.writeText(text).then(() => toast({ tone: "success", title: "Copied to clipboard" }), () => toast({ tone: "error", title: "Failed to copy" }));
+    // Raw interpolation corrupted the file on any name containing a quote.
+    const esc = (value: string | number | undefined | null) => `"${String(value ?? "").replace(/"/g, '""')}"`;
+    const rows = filtered.map((a) => [esc(a.node), esc(a.ip), a.port, esc(a.protocol ?? "tcp"), a.containerPort ?? "", esc(a.alias ?? ""), esc(a.server ?? "")].join(","));
+    const text = `Node,IP,Port,Protocol,Container Port,Alias,Server\n${rows.join("\n")}`;
+    navigator.clipboard.writeText(text).then(() => toast({ tone: "success", title: `Copied ${filtered.length} allocation${filtered.length === 1 ? "" : "s"} to the clipboard`, message: "The rows currently matching your search and filters, as CSV text." }), () => toast({ tone: "error", title: "Failed to copy" }));
   }, [filtered, toast]);
 
   const SortIcon = ({ column }: { column: SortKey }) => {
@@ -153,38 +179,43 @@ export function AdminAllocations() {
     return <ArrowDownUp size={10} className={`ml-1 ${sortDir === "asc" ? "rotate-180" : ""} text-brand`} />;
   };
 
-  const selectStyle = "h-10 w-full rounded-lg border border-white/10 bg-surface-card-header px-3.5 text-sm text-slate-100 shadow-inner shadow-black/10 outline-none transition hover:border-white/20 focus:border-red-400/70 focus:ring-2 focus:ring-red-500/15";
+  const selectStyle = "h-10 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3.5 text-sm text-text outline-none transition hover:border-line-strong focus:border-brand focus:ring-2 focus:ring-brand/20";
 
-  const thClass = "sticky top-0 bg-surface-card-header px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-slate-400 cursor-pointer select-none group";
+  // `sticky top-0` was inert (no vertical scroll container), so it is gone; the
+  // header is now a button so sorting is keyboard-operable and disclosed.
+  const thClass = "bg-overlay-subtle px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider text-text-subtle select-none group";
+
+  // Counting a list that has not arrived yet is not a measurement: while the
+  // query is in flight or has failed the tiles read "—" / "Unavailable" instead
+  // of a zero the page never measured.
+  const statValue = (n: number) => (allocationsQuery.isPending ? "—" : allocationsQuery.isError ? "Unavailable" : n);
 
   return (
-    <div>
+    <AdminPageLayout>
       <SectionHeader
-        title="Allocations"
-        sub="IP:port bindings available to servers."
-        action={<Btn disabled={nodesQuery.isLoading || nodesQuery.isError} onClick={() => { setNodeId(nodes[0]?.id ?? ""); setCreateError(null); setModal(true); }}><Plus size={14} /> Create Allocations</Btn>}
+        action={<Btn disabled={nodesQuery.isPending || nodesQuery.isError || nodes.length === 0} title={nodesQuery.isError ? "Allocation nodes could not be loaded" : nodes.length === 0 ? "No nodes are available to bind an allocation to" : undefined} onClick={() => { setNodeId(""); setCreateError(null); setModal(true); }}><Plus size={14} /> Create Allocations</Btn>}
       />
 
       {nodesQuery.isError ? (
-        <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-          <span>Could not load allocation nodes: {nodesQuery.error.message}</span>
-          <Btn size="sm" tone="ghost" onClick={() => nodesQuery.refetch()}>Retry</Btn>
+        <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
+          <span>Could not load allocation nodes: {nodesQuery.error instanceof Error ? nodesQuery.error.message : "unknown error"}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void nodesQuery.refetch()}>Retry</Btn>
         </div>
       ) : null}
 
       <StatsRow items={[
-        { label: "Total", value: allocations.length, icon: Network, tone: "neutral" },
-        { label: "In use", value: used.length, icon: Server, tone: "blue" },
-        { label: "Free", value: free.length, icon: Globe, tone: "green" },
+        { label: "Total", value: statValue(allocations.length), icon: Network, tone: "neutral" },
+        { label: "In use", value: statValue(used.length), icon: Server, tone: "blue" },
+        { label: "Free", value: statValue(free.length), icon: Cable, tone: "green" },
       ]} />
 
       <div className="mb-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-[1fr_200px_180px_auto_auto]">
-        <Input value={search} onChange={setSearch} placeholder="Search by IP, port, node, server..." />
-        <select className={selectStyle} value={nodeFilter} onChange={(e) => { setNodeFilter(e.target.value); setSelectedIds([]); }}>
+        <Input aria-label="Search allocations by IP, port, node, server or alias" value={search} onChange={setSearch} placeholder="Search by IP, port, node, server..." />
+        <select aria-label="Filter by node" className={selectStyle} value={nodeFilter} onChange={(e) => { setNodeFilter(e.target.value); setSelectedIds([]); }}>
           <option value="all">All nodes</option>
           {nodes.map((node) => <option key={node.id} value={node.id}>{node.name}</option>)}
         </select>
-        <select className={selectStyle} value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as "all" | "free" | "used"); setSelectedIds([]); }}>
+        <select aria-label="Filter by assignment state" className={selectStyle} value={statusFilter} onChange={(e) => { setStatusFilter(e.target.value as "all" | "free" | "used"); setSelectedIds([]); }}>
           <option value="all">All allocations</option>
           <option value="free">Free only</option>
           <option value="used">In use only</option>
@@ -193,12 +224,12 @@ export function AdminAllocations() {
           <Trash2 size={13} /> {bulkDeleteMut.isPending ? "Deleting…" : `Delete (${selectedFreeIds.length})`}
         </Btn>
         <Btn tone="ghost" disabled={filtered.length === 0} onClick={exportCSV}>
-          <Copy size={13} /> Export
+          <Copy size={13} /> Copy as CSV
         </Btn>
       </div>
 
       {deleteError ? (
-        <div className="mb-4 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200" role="alert">
+        <div className="mb-4 flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
           <AlertCircle size={16} className="mt-0.5 shrink-0" />
           <span>Could not delete allocations: {deleteError}</span>
         </div>
@@ -209,81 +240,91 @@ export function AdminAllocations() {
           title={`All allocations${search ? ` (${filtered.length} of ${allocations.length})` : ""}`}
           icon={Network}
         />
-        {allocationsQuery.isLoading ? (
-          <EmptyState icon={Network} message="Loading allocations…" />
+        {allocationsQuery.isPending ? (
+          <div className="p-4"><AdminLoadingState label="Loading allocations…" /></div>
         ) : allocationsQuery.isError ? (
-          <div className="p-5">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-              <span>Could not load allocations: {allocationsQuery.error.message}</span>
-              <Btn size="sm" tone="ghost" onClick={() => allocationsQuery.refetch()}>Retry</Btn>
-            </div>
+          <div className="p-4">
+            <AdminErrorState
+              message={`Allocations could not be loaded: ${allocationsQuery.error instanceof Error ? allocationsQuery.error.message : "request error"}. This is a failed read, not an empty fleet.`}
+              retry={() => void allocationsQuery.refetch()}
+            />
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon={Network} message="No allocations found." />
+          <EmptyState
+            icon={Network}
+            message={search || statusFilter !== "all" || nodeFilter !== "all"
+              ? "No allocation matches the search and filters in effect. Clear them to see the rest."
+              : "No allocation has been recorded yet. Create one to bind an IP:port to a node."}
+            title={search || statusFilter !== "all" || nodeFilter !== "all" ? "No allocations match the filters" : "No allocations"}
+          />
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-white/[0.06]">
-                  <th className={thClass} onClick={() => toggleSort("node")}>
-                    Node <SortIcon column="node" />
+                <tr className="border-b border-line">
+                  <th className={thClass}>
+                    <button className="flex items-center font-semibold uppercase tracking-wider text-text-subtle hover:text-text" onClick={() => toggleSort("node")} type="button">Node <SortIcon column="node" /></button>
                   </th>
-                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <th className="bg-overlay-subtle px-4 py-3">
                     <input
                       type="checkbox"
                       checked={allVisibleFreeSelected}
                       onChange={toggleSelectAllVisible}
-                      className="h-4 w-4 cursor-pointer rounded border-white/20 bg-[var(--surface-input)] text-red-500 focus:ring-red-500/30"
+                      className="h-4 w-4 cursor-pointer rounded border-line bg-[var(--surface-input)] text-brand focus:ring-brand/30"
                       aria-label="Select all visible free allocations"
                       disabled={visibleFreeIds.length === 0}
+                      title={visibleFreeIds.length === 0 ? "No free allocation is visible to select" : undefined}
                     />
                   </th>
-                  <th className={thClass} onClick={() => toggleSort("ip")}>
-                    IP : Port / Protocol <SortIcon column="ip" />
-                  </th>
-                  <th className={thClass} onClick={() => toggleSort("alias")}>
-                    Alias <SortIcon column="alias" />
-                  </th>
-                  <th className={thClass} onClick={() => toggleSort("server")}>
-                    Server <SortIcon column="server" />
-                  </th>
-                  <th className="px-4 py-3 text-xs font-semibold uppercase tracking-wider text-slate-400" />
+                  {([
+                    ["ip", "IP / Port / Protocol"],
+                    ["alias", "Alias"],
+                    ["server", "Server"],
+                  ] as [SortKey, string][]).map(([key, label]) => (
+                    <th key={key} aria-sort={sortKey === key ? (sortDir === "asc" ? "ascending" : "descending") : "none"} className={thClass}>
+                      {/* Sorting was mouse-only (`cursor-pointer` on a `th` with no
+                          handler) and the active direction appeared only on hover. */}
+                      <button className="flex items-center font-semibold uppercase tracking-wider text-text-subtle hover:text-text" onClick={() => toggleSort(key)} type="button">{label} <SortIcon column={key} /></button>
+                    </th>
+                  ))}
+                  <th className="bg-overlay-subtle px-4 py-3" />
                 </tr>
               </thead>
               <tbody className="divide-y divide-white/[0.04]">
                 {filtered.map((alloc) => (
-                  <tr key={alloc.id} className="transition-colors hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 text-xs text-slate-400">{alloc.node}</td>
+                  <tr key={alloc.id} className="transition-colors hover:bg-overlay-subtle">
+                    <td className="px-4 py-3 text-xs text-text-subtle">{alloc.node}</td>
                     <td className="px-4 py-3">
                       <input
                         type="checkbox"
                         disabled={Boolean(alloc.server)}
                         checked={selectedIds.includes(alloc.id)}
                         onChange={() => toggleSelected(alloc.id)}
-                        className="h-4 w-4 cursor-pointer rounded border-white/20 bg-[var(--surface-input)] text-red-500 focus:ring-red-500/30 disabled:cursor-not-allowed disabled:opacity-30"
+                        className="h-4 w-4 cursor-pointer rounded border-line bg-[var(--surface-input)] text-brand focus:ring-brand/30 disabled:cursor-not-allowed disabled:opacity-30"
                         aria-label={`Select ${alloc.ip}:${alloc.port}`}
+                        title={alloc.server ? "Assigned to a server, so it cannot be deleted in bulk" : undefined}
                       />
                     </td>
                     <td className="px-4 py-3 font-mono text-sm whitespace-nowrap">
-                      <span className="text-slate-300">{alloc.ip}</span>
-                      <span className="text-slate-600">:</span>
+                      <span className="text-text">{alloc.ip}</span>
+                      <span className="text-text-muted">:</span>
                       <span className="text-brand font-bold">{alloc.port}</span>
-                      <span className="ml-2 inline-flex items-center gap-1 rounded bg-white/[0.04] px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-500">
+                      <span className="ml-2 inline-flex items-center gap-1 rounded bg-overlay-subtle px-1.5 py-0.5 text-[10px] font-bold uppercase text-text-subtle">
                         {alloc.protocol ?? "tcp"}
-                        {alloc.containerPort && alloc.containerPort !== alloc.port ? <span className="text-slate-600">→{alloc.containerPort}</span> : null}
+                        {alloc.containerPort && alloc.containerPort !== alloc.port ? <span className="text-text-muted">→{alloc.containerPort}</span> : null}
                       </span>
                     </td>
-                    <td className="px-4 py-3 text-xs text-slate-500 max-w-[200px] truncate">{alloc.alias || <span className="text-slate-600">—</span>}</td>
+                    <td className="px-4 py-3 text-xs text-text-subtle max-w-[200px] truncate" title={alloc.alias || undefined}>{alloc.alias || <span className="text-text-muted">Not named</span>}</td>
                     <td className="px-4 py-3">
                       {alloc.server
                         ? <Pill tone="blue">{alloc.server}</Pill>
-                        : <Pill tone="green">free</Pill>}
+                        : <Pill tone="neutral">Free</Pill>}
                     </td>
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
-                        <Btn size="sm" tone="ghost" onClick={() => openEdit(alloc)}><Edit3 size={12} /></Btn>
+                        <Btn ariaLabel={`Edit the alias of ${alloc.ip}:${alloc.port}`} size="sm" tone="ghost" onClick={() => openEdit(alloc)}><Edit3 size={12} /></Btn>
                         {!alloc.server && (
-                          <Btn size="sm" tone="danger" onClick={() => confirmSingleDelete(alloc.id)} disabled={bulkDeleteMut.isPending}>
+                          <Btn ariaLabel={`Delete the allocation ${alloc.ip}:${alloc.port}`} size="sm" tone="danger" onClick={() => confirmSingleDelete(alloc.id)} disabled={bulkDeleteMut.isPending}>
                             <Trash2 size={12} />
                           </Btn>
                         )}
@@ -300,17 +341,17 @@ export function AdminAllocations() {
       {editing ? (
         <Modal title="Edit Allocation Alias" onClose={() => { setEditing(null); setEditError(null); }}>
           <div className="space-y-4">
-            <div className="flex items-center gap-3 rounded-lg border border-white/[0.06] bg-surface-card-header p-4 font-mono text-sm">
-              <Network size={16} className="shrink-0 text-slate-500" />
-              <span className="text-slate-300">{editing.ip}</span>
-              <span className="text-slate-600">:</span>
+            <div className="flex items-center gap-3 rounded-lg border border-line bg-overlay-subtle p-4 font-mono text-sm">
+              <Network size={16} className="shrink-0 text-text-subtle" />
+              <span className="text-text">{editing.ip}</span>
+              <span className="text-text-muted">:</span>
               <span className="text-brand font-bold">{editing.port}</span>
               <Pill tone="neutral">{editing.protocol ?? "tcp"}</Pill>
-              {editing.server ? <Pill tone="neutral">{editing.server}</Pill> : <Pill tone="green">free</Pill>}
+              {editing.server ? <Pill tone="blue">{editing.server}</Pill> : <Pill tone="neutral">Free</Pill>}
             </div>
-            <Input label="Alias" value={editAlias} onChange={(value) => { setEditAlias(value); setEditError(null); }} placeholder="minecraft.example.com" />
+            <Input label="Alias" value={editAlias} onChange={(value) => { setEditAlias(value); setEditError(null); }} placeholder="A short name for this binding, e.g. minecraft-lobby" />
             {editError ? (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200" role="alert">
+              <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger" role="alert">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>Could not update alias: {editError}</span>
               </div>
@@ -329,38 +370,39 @@ export function AdminAllocations() {
         <Modal title="Create Allocations" onClose={() => { setModal(false); setCreateError(null); }} className="max-w-2xl">
           <div className="space-y-4">
           {nodesQuery.isError ? (
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-              <span>Could not load allocation nodes: {nodesQuery.error.message}</span>
-              <Btn size="sm" tone="ghost" onClick={() => nodesQuery.refetch()}>Retry</Btn>
+            <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
+              <span>Could not load allocation nodes: {nodesQuery.error instanceof Error ? nodesQuery.error.message : "unknown error"}</span>
+              <Btn size="sm" tone="ghost" onClick={() => void nodesQuery.refetch()}>Retry</Btn>
             </div>
           ) : null}
-            {/* Node Selection */}
+            {/* Node Selection — no pre-selected node. A public IP:port bound on
+                the wrong host is exactly the request that must not be guessed. */}
             <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Node</label>
-              <select className={selectStyle} value={nodeId} onChange={(e) => setNodeId(e.target.value)}>
-                {nodes.length === 0 ? <option value="">No nodes available</option> : null}
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle" htmlFor="allocation-node">Node</label>
+              <select aria-label="Node to bind the allocation on" className={selectStyle} id="allocation-node" value={nodeId} onChange={(e) => { setNodeId(e.target.value); setCreateError(null); }}>
+                <option value="">{nodesQuery.isPending ? "Loading nodes…" : nodes.length === 0 ? "No nodes available" : "Select a node"}</option>
                 {nodes.map((n) => <option key={n.id} value={n.id}>{n.name}</option>)}
               </select>
-              {nodesQuery.isLoading ? <p className="mt-1 text-xs text-slate-400">Loading nodes…</p> : nodes.length === 0 ? <p className="mt-1 text-xs text-amber-300">Create a node before adding allocations.</p> : null}
+              {!nodeId ? <p className="mt-1 text-xs text-text-subtle">{nodesQuery.isPending ? "Nodes are still loading." : nodes.length === 0 ? "Create a node before adding allocations." : "Choose which node owns this allocation — nothing is picked for you."}</p> : null}
             </div>
 
             {/* IP & Ports */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <Input label="IP address" value={ip} onChange={setIp} placeholder="0.0.0.0" mono />
-                <p className="mt-1.5 text-xs text-slate-400">Use <code className="text-slate-400">0.0.0.0</code> to bind on every interface, or a specific IP to limit exposure.</p>
+                <Input label="IP address" value={ip} onChange={setIp} placeholder="e.g. 10.0.4.21 — or 0.0.0.0 for every interface" mono />
+                <p className="mt-1.5 text-xs text-text-subtle"><code className="text-text-subtle">0.0.0.0</code> binds on every interface. Name a specific address unless the port is meant to be reachable on all of them.</p>
               </div>
               <div>
                 <Input label="Ports" value={ports} onChange={setPorts} placeholder="25565" mono />
-                <p className="mt-1.5 text-xs text-slate-400">Single port (<code className="text-slate-400">25565</code>), range (<code className="text-slate-400">25565-25580</code>), or comma list.</p>
+                <p className="mt-1.5 text-xs text-text-subtle">Single port (<code className="text-text-subtle">25565</code>), range (<code className="text-text-subtle">25565-25580</code>), or comma list.</p>
               </div>
             </div>
 
             {/* Protocol, Container Port, Alias, Notes */}
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Protocol</label>
-                <select className={selectStyle} value={protocol} onChange={(e) => setProtocol(e.target.value as "tcp" | "udp")}>
+                <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle" htmlFor="allocation-protocol">Protocol</label>
+                <select aria-label="Allocation protocol" className={selectStyle} id="allocation-protocol" value={protocol} onChange={(e) => setProtocol(e.target.value as "tcp" | "udp")}>
                   <option value="tcp">TCP</option>
                   <option value="udp">UDP</option>
                 </select>
@@ -371,7 +413,7 @@ export function AdminAllocations() {
             </div>
 
             {createError ? (
-              <div className="flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger" role="alert">
                 <AlertCircle size={14} className="mt-0.5 shrink-0" />
                 <span>{createError}</span>
               </div>
@@ -382,15 +424,16 @@ export function AdminAllocations() {
             onConfirm={() => {
               const validationError = validateCreateInput(ip, ports);
               if (validationError) { setCreateError(validationError); return; }
+              if (!nodeId) { setCreateError("Select the node to bind this allocation on."); return; }
               setCreateError(null);
               createMut.mutate();
             }}
-            disabled={!nodeId || ip.trim() === "" || ports.trim() === "" || createMut.isPending || nodesQuery.isLoading || nodesQuery.isError}
-            confirmLabel="Create"
+            disabled={!nodeId || ip.trim() === "" || ports.trim() === "" || !!validateCreateInput(ip, ports) || createMut.isPending || nodesQuery.isPending || nodesQuery.isError}
+            confirmLabel={createMut.isPending ? "Creating…" : "Create"}
           />
         </Modal>
       ) : null}
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }

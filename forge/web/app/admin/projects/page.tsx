@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { FolderKanban, Plus } from "lucide-react";
-import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState } from "@/components/admin/admin-ui";
+import { AdminErrorState, AdminLoadingState, AdminPageHeader, AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter } from "@/components/admin/admin-ui";
 import { fetchOrganizations, fetchProjects, createProject } from "@/lib/api/tenancy";
 import { useToast } from "@/components/ui/toast";
 
@@ -11,6 +11,7 @@ export default function AdminProjectsPage() {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [selectedOrg, setSelectedOrg] = useState<string>("");
+  const [open, setOpen] = useState(false);
   const [name, setName] = useState("");
   const [desc, setDesc] = useState("");
 
@@ -32,6 +33,7 @@ export default function AdminProjectsPage() {
     onSuccess: () => {
       setName("");
       setDesc("");
+      setOpen(false);
       toast({ tone: "success", title: "Project created" });
       void queryClient.invalidateQueries({ queryKey: ["projects", selectedOrg] });
     },
@@ -41,63 +43,56 @@ export default function AdminProjectsPage() {
   const safeOrgs = Array.isArray(orgsQuery.data) ? orgsQuery.data : [];
   const safeProjects = Array.isArray(projectsQuery.data) ? projectsQuery.data : [];
 
-  const handleCreate = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!name.trim() || !selectedOrg || createMut.isPending) return;
-    createMut.mutate();
-  };
-
   return (
     <AdminPageLayout>
-      <AdminPageHeader title="Projects" description="Manage projects within organizations" />
+      <AdminPageHeader action={<Btn onClick={() => setOpen(true)} disabled={!selectedOrg}><Plus size={14} /> New project</Btn>} />
+      {/* Disabled with the reason next to it, never hidden and never
+          enabled-and-lying: a project belongs to an organization, so there is
+          nowhere to create one until an organization is chosen. */}
+      {!selectedOrg ? (
+        <p className="ui-hint">New project is disabled until an organization is selected below — projects are created inside one organization.</p>
+      ) : null}
 
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-        <select value={selectedOrg} onChange={(e) => setSelectedOrg(e.target.value)} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
-          <option value="">Select organization...</option>
-          {safeOrgs.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
-        </select>
+      <div className="max-w-xl">
+        <AdminSelect label="Organization" value={selectedOrg} onChange={setSelectedOrg} placeholder={orgsQuery.isLoading ? "Loading organizations…" : "Select organization..."} options={safeOrgs.map((org) => ({ value: org.id, label: org.name }))} />
       </div>
 
-      {orgsQuery.isError && (
-        <div className="mb-4 flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-          <span>Could not load organizations: {orgsQuery.error instanceof Error ? orgsQuery.error.message : "unknown error"}</span>
-          <Btn size="sm" tone="ghost" onClick={() => void orgsQuery.refetch()}>Retry</Btn>
-        </div>
-      )}
-
-      {selectedOrg && (
-        <form onSubmit={handleCreate} className="mb-4 flex flex-col gap-2 sm:flex-row">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Project name" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-red-400/70" required />
-          <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="Description" className="w-full rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:outline-none focus:border-red-400/70 sm:w-48" />
-          <Btn type="submit" disabled={createMut.isPending}><Plus size={14} /> {createMut.isPending ? "Creating..." : "Create"}</Btn>
-        </form>
-      )}
+      {orgsQuery.isError ? (
+        <AdminErrorState message={orgsQuery.error instanceof Error ? orgsQuery.error.message : "Organizations could not be loaded."} retry={() => void orgsQuery.refetch()} />
+      ) : null}
 
       <Card>
-        <CardHeader title="All Projects" icon={FolderKanban} />
-        {!selectedOrg ? <EmptyState message="Select an organization to view projects" /> :
-         projectsQuery.isPending ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
+        <CardHeader title={selectedOrg && projectsQuery.isSuccess ? `Projects (${safeProjects.length})` : "Projects"} icon={FolderKanban} />
+        {!selectedOrg ? <EmptyState icon={FolderKanban} title="Select an organization" message="Select an organization to view its projects." /> :
+         projectsQuery.isLoading ? <div className="p-4"><AdminLoadingState label="Loading projects…" /></div> :
          projectsQuery.isError ? (
-           <div className="p-4">
-             <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-               <span>Could not load projects: {projectsQuery.error instanceof Error ? projectsQuery.error.message : "unknown error"}</span>
-               <Btn size="sm" tone="ghost" onClick={() => void projectsQuery.refetch()}>Retry</Btn>
-             </div>
-           </div>
+           <div className="p-4"><AdminErrorState message={projectsQuery.error instanceof Error ? projectsQuery.error.message : "Projects could not be loaded."} retry={() => void projectsQuery.refetch()} /></div>
          ) :
-         safeProjects.length === 0 ? <EmptyState message="No projects in this organization" /> :
-         <div className="divide-y divide-white/[0.06]">
-           {safeProjects.map((p) => (
-             <div key={p.id} className="flex items-center justify-between px-4 py-3">
-               <div>
-                 <span className="text-sm font-medium text-slate-200">{p.name}</span>
-                 {p.description && <span className="ml-2 text-xs text-slate-500">{p.description}</span>}
+         safeProjects.length === 0 ? <EmptyState icon={FolderKanban} title="No projects" message="This organization has no projects yet. Create one to group workloads." /> :
+         <div className="divide-y divide-line">
+           {safeProjects.map((proj) => (
+             <div key={proj.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+               <div className="min-w-0">
+                 <span className="text-sm font-medium text-text">{proj.name}</span>
+                 {proj.description ? <span className="ml-2 text-xs text-text-subtle">{proj.description}</span> : null}
                </div>
-               <span className="text-xs text-slate-500">{p.slug}</span>
+               <span className="font-mono text-xs text-text-subtle">{proj.slug}</span>
              </div>
            ))}
          </div>}
       </Card>
+
+      {open ? (
+        <Modal title="New project" onClose={() => setOpen(false)}>
+          <div className="space-y-4">
+            <AdminSelect label="Organization" value={selectedOrg} onChange={setSelectedOrg} placeholder="Select organization..." options={safeOrgs.map((org) => ({ value: org.id, label: org.name }))} />
+            <Input label="Project name" value={name} onChange={setName} placeholder="Project name" />
+            <Input label="Description" value={desc} onChange={setDesc} placeholder="Description" />
+            {createMut.isError ? <AdminErrorState message={createMut.error instanceof Error ? createMut.error.message : "Project could not be created."} retry={() => createMut.mutate()} /> : null}
+          </div>
+          <ModalFooter onCancel={() => setOpen(false)} onConfirm={() => createMut.mutate()} disabled={!name.trim() || !selectedOrg || createMut.isPending} confirmLabel={createMut.isPending ? "Creating…" : "Create project"} />
+        </Modal>
+      ) : null}
     </AdminPageLayout>
   );
 }

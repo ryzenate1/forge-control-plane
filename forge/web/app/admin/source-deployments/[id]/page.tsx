@@ -1,195 +1,396 @@
 "use client";
 
+import { useEffect, useMemo, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useRouter } from "next/navigation";
 import { useToast } from "@/components/ui/toast";
-import { getSourceDeployment, deploySourceDeployment, cancelSourceDeployment, deleteSourceDeployment, getDeploymentBuildLogs, type SourceDeployment, type BuildLog } from "@/lib/api/source-deployments";
-import { Play, XCircle, Trash2, GitBranch, ArrowLeft, RefreshCw, Loader2 } from "lucide-react";
-import { useEffect, useRef, useMemo } from "react";
-import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, Pill, cn } from "@/components/admin/admin-ui";
+import {
+  cancelSourceDeployment,
+  deleteSourceDeployment,
+  deploySourceDeployment,
+  getDeploymentBuildLogs,
+  getSourceDeployment,
+  type BuildLog,
+} from "@/lib/api/source-deployments";
+import { statusLabel } from "@/lib/api/apps";
+import { sourceStatusTone } from "@/lib/api/status";
+import { Play, XCircle, Trash2, RefreshCw } from "lucide-react";
+import {
+  AdminErrorState,
+  AdminLoadingState,
+  AdminPageHeader,
+  AdminPageLayout,
+  AdminSection,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  Btn,
+  Card,
+  EmptyState,
+  Pill,
+} from "@/components/admin/admin-ui";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
+import { errorMessage, formatDate } from "@/lib/utils";
 
+/** Terminal states per `handlers_source_deployments.go:220-223`. */
+const TERMINAL = new Set(["completed", "failed", "canceled"]);
 
+function repoName(repository: string): string {
+  const last = repository.split("/").pop() ?? repository;
+  return last.replace(/\.git$/i, "") || repository;
+}
+
+function Fact({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="min-w-0">
+      <dt className="text-meta uppercase tracking-wider text-text-muted">{label}</dt>
+      <dd className="mt-1 break-words text-sm text-text">{children}</dd>
+    </div>
+  );
+}
+
+/**
+ * Log stage colour came from a private ladder of `text-red-400` /
+ * `text-amber-400` / `text-emerald-400` / `text-slate-400`; it now uses the same
+ * tone vocabulary the rest of the admin uses.
+ */
+function stageClass(stage: string): string {
+  if (stage === "error" || stage === "failed") return "text-danger";
+  if (stage === "warning") return "text-warn";
+  if (stage === "success") return "text-ok";
+  return "text-text-subtle";
+}
 
 export default function SourceDeploymentDetailPage() {
   const params = useParams();
   const router = useRouter();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
   const logsEndRef = useRef<HTMLDivElement>(null);
   const id = params.id as string;
 
-  const { data: deployment, isLoading, refetch } = useQuery({
+  const deploymentQuery = useQuery({
     queryKey: ["sourceDeployment", id],
     queryFn: () => getSourceDeployment(id),
+    enabled: Boolean(id),
     refetchInterval: (query) => {
       const d = query.state.data;
-      if (d && !["completed", "failed", "canceled", "healthy", "unhealthy"].includes(d.status)) {
-        return 3000;
-      }
-      return false;
+      return d && !TERMINAL.has(d.status) && d.status !== "healthy" && d.status !== "unhealthy" ? 3_000 : false;
     },
   });
 
-  const { data: logs } = useQuery({
+  const deployment = deploymentQuery.data;
+  const isActive = Boolean(deployment && !TERMINAL.has(deployment.status));
+
+  const logsQuery = useQuery({
     queryKey: ["buildLogs", id],
     queryFn: () => getDeploymentBuildLogs(id),
-    refetchInterval: () => {
-      const d = queryClient.getQueryData<SourceDeployment>(["sourceDeployment", id]);
-      if (d && !["completed", "failed", "canceled", "healthy", "unhealthy"].includes(d.status)) {
-        return 3000;
-      }
-      return false;
-    },
+    enabled: Boolean(id),
+    refetchInterval: isActive ? 3_000 : false,
   });
 
-  const safeLogs = useMemo(() => Array.isArray(logs) ? logs : [], [logs]);
+  const logs = useMemo(() => (Array.isArray(logsQuery.data) ? logsQuery.data : []), [logsQuery.data]);
 
+  // Following the tail of a build is right; being dragged back down while reading
+  // an earlier line is not. Follow only when already at the bottom.
   useEffect(() => {
-    logsEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    const node = logsEndRef.current;
+    if (!node) return;
+    const container = node.parentElement;
+    if (!container) return;
+    const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 80;
+    if (nearBottom) node.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [logs]);
 
   const deployMutation = useMutation({
     mutationFn: () => deploySourceDeployment(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sourceDeployment", id] });
-      toast({ title: "Deployment triggered", tone: "success" });
+      toast({ tone: "success", title: "Build queued", message: "The deployment was queued for a rebuild." });
     },
-    onError: () => toast({ title: "Deploy failed", tone: "error" }),
+    onError: (err) => toast({ tone: "error", title: "Build not queued", message: errorMessage(err) }),
   });
 
   const cancelMutation = useMutation({
     mutationFn: () => cancelSourceDeployment(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["sourceDeployment", id] });
-      toast({ title: "Deployment canceled", tone: "success" });
+      toast({ tone: "success", title: "Deployment canceled" });
     },
-    onError: () => toast({ title: "Cancel failed", tone: "error" }),
+    onError: (err) => toast({ tone: "error", title: "Cancel failed", message: errorMessage(err) }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => deleteSourceDeployment(id),
     onSuccess: () => {
       router.push("/admin/source-deployments");
-      toast({ title: "Deployment deleted", tone: "success" });
+      toast({ tone: "success", title: "Source deployment removed" });
     },
-    onError: () => toast({ title: "Delete failed", tone: "error" }),
+    onError: (err) => toast({ tone: "error", title: "Delete failed", message: errorMessage(err) }),
   });
 
-  if (isLoading) {
-    return <AdminPageLayout><div className="p-6 text-center text-slate-400">Loading deployment...</div></AdminPageLayout>;
-  }
+  const heading = (
+    <AdminPageHeader
+      backAction={() => router.push("/admin/source-deployments")}
+      backLabel="Source Deployments"
+      description={
+        deployment
+          ? `${deployment.repository} · branch ${deployment.branch || "not reported"}`
+          : undefined
+      }
+      status={
+        deployment ? <FreshnessBadge state={sourceState(deploymentQuery, 3_000)} /> : undefined
+      }
+      title={deployment ? repoName(deployment.repository) : "Source deployment"}
+      action={
+        deployment
+          ? (() => {
+              const cancelBlocked = TERMINAL.has(deployment.status)
+                ? `Already ${statusLabel(deployment.status)} — the control plane refuses to cancel a deployment in a terminal state.`
+                : undefined;
+              return (
+                <div className="flex flex-wrap items-center gap-2">
+                  <Btn
+                    ariaLabel="Reload this deployment"
+                    disabled={deploymentQuery.isFetching}
+                    onClick={() => void deploymentQuery.refetch()}
+                    size="sm"
+                    tone="ghost"
+                  >
+                    <RefreshCw aria-hidden="true" size={14} />
+                  </Btn>
+                  <Pill tone={sourceStatusTone(deployment.status)}>
+                    {statusLabel(deployment.status) || "unknown"}
+                  </Pill>
+                  <Btn
+                    disabled={Boolean(cancelBlocked) || cancelMutation.isPending}
+                    loading={cancelMutation.isPending}
+                    onClick={() => void askCancel()}
+                    size="sm"
+                    tone="ghost"
+                  >
+                    <XCircle aria-hidden="true" size={14} /> Cancel
+                  </Btn>
+                  <Btn
+                    disabled={deployMutation.isPending}
+                    loading={deployMutation.isPending}
+                    onClick={() => deployMutation.mutate()}
+                    size="sm"
+                    tone="primary"
+                  >
+                    <Play aria-hidden="true" size={14} /> Deploy
+                  </Btn>
+                  <Btn
+                    ariaLabel="Delete this source deployment"
+                    disabled={deleteMutation.isPending}
+                    loading={deleteMutation.isPending}
+                    onClick={() => void askDelete()}
+                    size="sm"
+                    tone="danger"
+                  >
+                    <Trash2 aria-hidden="true" size={14} />
+                  </Btn>
+                  {cancelBlocked ? (
+                    <span className="w-full text-right text-meta text-text-muted">{cancelBlocked}</span>
+                  ) : null}
+                </div>
+              );
+            })()
+          : undefined
+      }
+    />
+  );
 
-  if (!deployment) {
+  if (deploymentQuery.isPending) {
     return (
-      <AdminPageLayout>
-        <div className="p-6 text-center">
-          <p className="opacity-60">Deployment not found.</p>
-          <Btn tone="ghost" onClick={() => router.push("/admin/source-deployments")}>
-            <ArrowLeft className="w-4 h-4 mr-2" /> Back
-          </Btn>
-        </div>
+      <AdminPageLayout className="max-w-4xl">
+        {heading}
+        <AdminLoadingState label="Loading this source deployment…" />
       </AdminPageLayout>
     );
   }
 
-  const isActive = !["completed", "failed", "canceled", "healthy", "unhealthy"].includes(deployment.status);
+  if (deploymentQuery.isError) {
+    return (
+      <AdminPageLayout className="max-w-4xl">
+        {heading}
+        <AdminErrorState
+          message={`This source deployment could not be read: ${errorMessage(deploymentQuery.error)}`}
+          retry={() => void deploymentQuery.refetch()}
+        />
+      </AdminPageLayout>
+    );
+  }
 
-  const toneMap: Record<string, "green" | "red" | "neutral" | "yellow"> = {
-    healthy: "green", completed: "green", failed: "red", canceled: "neutral",
-    pending: "yellow",
-  };
-
-  const logStageColor = (stage: string) => {
-    if (stage === "error") return "text-red-400";
-    if (stage === "warning") return "text-amber-400";
-    if (stage === "success") return "text-emerald-400";
-    return "text-slate-400";
-  };
+  if (!deployment) {
+    return (
+      <AdminPageLayout className="max-w-4xl">
+        {heading}
+        <EmptyState
+          message="The control plane answered this request and returned no source deployment for this id."
+          title="No source deployment with this id"
+        />
+      </AdminPageLayout>
+    );
+  }
 
   return (
     <AdminPageLayout className="max-w-4xl">
-      <AdminPageHeader
-        title={deployment.repository.split('/').pop()?.replace('.git', '') ?? "Deployment"}
-        description={`${deployment.repository} | ${deployment.branch}`}
-        backAction={() => router.push("/admin/source-deployments")}
-        backLabel="Source Deployments"
+      {heading}
+      {renderConfirm()}
+
+      <AdminSection description="Stored on the source deployment record; not a live measurement." title="Build and target">
+        <Card>
+          <dl className="grid grid-cols-2 gap-4 p-4 sm:grid-cols-3">
+            <Fact label="Build type">{statusLabel(deployment.buildType)}</Fact>
+            <Fact label="Build context">
+              {deployment.buildContext ? <span className="font-mono">{deployment.buildContext}</span> : "Not reported"}
+            </Fact>
+            <Fact label="Dockerfile path">
+              {deployment.dockerfilePath ? (
+                <span className="font-mono">{deployment.dockerfilePath}</span>
+              ) : (
+                "Not applicable for this build type"
+              )}
+            </Fact>
+            <Fact label="Auto-deploy on push">
+              {typeof deployment.autoDeploy === "boolean" ? (deployment.autoDeploy ? "Enabled" : "Disabled") : "Not reported"}
+            </Fact>
+            <Fact label="Registry">
+              {deployment.registry ? <span className="font-mono">{deployment.registry}</span> : "No registry recorded"}
+            </Fact>
+            <Fact label="Image tag">
+              {deployment.imageTag ? <span className="font-mono">{deployment.imageTag}</span> : "Not built yet"}
+            </Fact>
+            <Fact label="Server">
+              {deployment.serverId ? <span className="font-mono">{deployment.serverId}</span> : "No target recorded"}
+            </Fact>
+            <Fact label="Git provider">
+              {deployment.gitProviderId ? (
+                <span className="font-mono">{deployment.gitProviderId}</span>
+              ) : (
+                "None — cloned anonymously"
+              )}
+            </Fact>
+            <Fact label="Created by">{deployment.createdBy || "Not reported"}</Fact>
+            <Fact label="Health gate">
+              {deployment.healthCheckPath
+                ? `${deployment.healthCheckPath}${
+                    typeof deployment.healthCheckPort === "number" ? ` on port ${deployment.healthCheckPort}` : " (port not reported)"
+                  }${deployment.rollbackOnHealthFailure ? " · roll back on failure" : " · no rollback on failure"}`
+                : "No health check configured"}
+            </Fact>
+            <Fact label="Webhook">
+              {deployment.webhookUrl ? (
+                <a
+                  className="break-all text-brand underline underline-offset-2"
+                  href={deployment.webhookUrl}
+                  rel="noreferrer noopener"
+                  target="_blank"
+                >
+                  {deployment.webhookUrl}
+                </a>
+              ) : (
+                "No webhook recorded"
+              )}
+            </Fact>
+            <Fact label="Commit">
+              {deployment.commitHash ? (
+                <>
+                  <span className="font-mono">{deployment.commitHash}</span>
+                  {deployment.commitMessage ? (
+                    <span className="mt-1 block text-meta text-text-subtle">
+                      {deployment.commitMessage}
+                      {deployment.commitAuthor ? ` — ${deployment.commitAuthor}` : ""}
+                    </span>
+                  ) : null}
+                </>
+              ) : (
+                "No commit recorded"
+              )}
+            </Fact>
+          </dl>
+        </Card>
+      </AdminSection>
+
+      <AdminSection
         action={
-          <div className="flex items-center gap-2">
-            <Btn size="sm" tone="ghost" onClick={() => refetch()} ariaLabel="Refresh"><RefreshCw className="w-4 h-4" /></Btn>
-            <Pill tone={toneMap[deployment.status] ?? "neutral"}>{deployment.status}</Pill>
-            {isActive && (
-              <Btn size="sm" tone="ghost" onClick={() => cancelMutation.mutate()} disabled={cancelMutation.isPending}>
-                <XCircle className="w-4 h-4" /> Cancel
-              </Btn>
-            )}
-            <Btn size="sm" tone="primary" onClick={() => deployMutation.mutate()} disabled={deployMutation.isPending}>
-              <Play className="w-4 h-4" /> Deploy
-            </Btn>
-            <Btn size="sm" tone="danger" onClick={() => deleteMutation.mutate()} disabled={deleteMutation.isPending}>
-              <Trash2 className="w-4 h-4" />
-            </Btn>
-          </div>
+          logsQuery.isFetching ? <span className="text-meta text-text-subtle">Refreshing…</span> : undefined
         }
-      />
-
-      <Card>
-        <CardHeader title="Details" icon={GitBranch} />
-        <div className="grid grid-cols-2 gap-4 p-4 text-sm">
-          <div>
-            <span className="text-slate-400">Build Type:</span>{" "}
-            <span className="capitalize text-slate-200">{deployment.buildType}</span>
-          </div>
-          <div>
-            <span className="text-slate-400">Build Context:</span>{" "}
-            <span className="text-slate-200">{deployment.buildContext}</span>
-          </div>
-          {deployment.dockerfilePath && (
-            <div>
-              <span className="text-slate-400">Dockerfile Path:</span>{" "}
-              <span className="text-slate-200">{deployment.dockerfilePath}</span>
+        description={isActive ? "Polling every 3 s while the build is in flight." : "The build is not running, so the log is no longer polled."}
+        title="Build log"
+      >
+        <Card>
+          {logsQuery.isPending ? (
+            <AdminLoadingState label="Loading build log…" />
+          ) : logsQuery.isError ? (
+            <div className="p-4">
+              <AdminErrorState
+                message={`The build log could not be read: ${errorMessage(logsQuery.error)}`}
+                retry={() => void logsQuery.refetch()}
+              />
             </div>
-          )}
-          <div>
-            <span className="text-slate-400">Auto Deploy:</span>{" "}
-            <span className="text-slate-200">{deployment.autoDeploy ? "Enabled" : "Disabled"}</span>
-          </div>
-          {deployment.commitHash && (
-            <div className="col-span-2">
-              <span className="text-slate-400">Commit:</span>{" "}
-              <code className="text-xs bg-black/20 px-1 py-0.5 rounded text-slate-200">{deployment.commitHash.substring(0, 8)}</code>
-              {deployment.commitMessage && <span className="ml-2 text-slate-200">{deployment.commitMessage}</span>}
+          ) : logs.length === 0 ? (
+            <div className="p-4">
+              <EmptyState
+                message={
+                  isActive
+                    ? "The build is running and the log request has answered with no lines yet."
+                    : "The log request completed and returned no lines for this deployment."
+                }
+                title="No log lines"
+              />
             </div>
-          )}
-          {deployment.imageTag && (
-            <div className="col-span-2">
-              <span className="text-slate-400">Image:</span>{" "}
-              <code className="text-xs bg-black/20 px-1 py-0.5 rounded text-slate-200">{deployment.imageTag}</code>
-            </div>
-          )}
-        </div>
-      </Card>
-
-      <Card>
-        <CardHeader title="Build Logs" icon={Loader2} />
-        <div className="p-4 max-h-96 overflow-y-auto font-mono text-xs">
-          {safeLogs.length > 0 ? (
-            <>
-              {safeLogs.map((log: BuildLog) => (
-                <div key={log.id} className="py-1 flex gap-2">
-                  <span className={cn(logStageColor(log.stage), "shrink-0")}>[{log.stage}]</span>
-                  <span className="opacity-70 shrink-0">{new Date(log.createdAt).toLocaleTimeString()}</span>
-                  <span className="text-slate-300">{log.message}</span>
-                </div>
-              ))}
-              <div ref={logsEndRef} />
-            </>
           ) : (
-            <div className="text-center py-8 text-slate-400">
-              {isActive ? "Waiting for build logs..." : "No build logs available."}
-            </div>
+            <AdminTable label="Build log lines">
+              <AdminTHead>
+                <AdminTh>Stage</AdminTh>
+                <AdminTh>Time</AdminTh>
+                <AdminTh>Message</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
+                {logs.map((log: BuildLog) => (
+                  <AdminTr key={log.id}>
+                    <AdminTd className={`whitespace-nowrap font-mono text-meta ${stageClass(log.stage)}`}>
+                      {statusLabel(log.stage) || "log"}
+                    </AdminTd>
+                    <AdminTd className="whitespace-nowrap font-mono text-meta">
+                      {log.createdAt ? formatDate(log.createdAt) : "—"}
+                    </AdminTd>
+                    <AdminTd className="break-words text-meta">{log.message}</AdminTd>
+                  </AdminTr>
+                ))}
+              </AdminTBody>
+            </AdminTable>
           )}
-        </div>
-      </Card>
+          <div ref={logsEndRef} />
+        </Card>
+      </AdminSection>
     </AdminPageLayout>
   );
+
+  async function askCancel() {
+    const ok = await confirm({
+      confirmLabel: "Cancel deployment",
+      danger: true,
+      description: `The in-flight build for ${deployment!.repository} (${deployment!.branch}) is marked canceled. Anything already deployed to the server stays as it is.`,
+      title: "Cancel this build?",
+    });
+    if (ok) cancelMutation.mutate();
+  }
+
+  async function askDelete() {
+    const ok = await confirm({
+      confirmLabel: "Delete source deployment",
+      danger: true,
+      description: `${deployment!.repository} (${deployment!.branch}) is removed together with its whole build history. The deployed server and its running container are not undone by this.`,
+      title: "Delete this source deployment?",
+    });
+    if (ok) deleteMutation.mutate();
+  }
 }

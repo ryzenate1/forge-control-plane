@@ -10,7 +10,7 @@ import {
   listContainerFiles, readContainerFile,
   type DockerContainerInfo,
 } from "@/lib/api/docker";
-import { Btn, Card, EmptyState, Input, cn, AdminLoadingState } from "@/components/admin/admin-ui";
+import { Btn, Card, EmptyState, Input, cn, AdminLoadingState, AdminErrorState, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr } from "@/components/admin/admin-ui";
 import { ConfirmDialog, Pagination } from "@/components/ui/primitives";
 import { useToast } from "@/components/ui/toast";
 import { ContainerCreateModal } from "@/components/docker/container-create-modal";

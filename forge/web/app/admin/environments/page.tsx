@@ -1,18 +1,59 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Globe, Plus, Eye, EyeOff, History } from "lucide-react";
-import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Pill } from "@/components/admin/admin-ui";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Globe, History, KeyRound, Plus } from "lucide-react";
+import {
+  AdminErrorState,
+  AdminIconButton,
+  AdminLoadingState,
+  AdminPageHeader,
+  AdminPageLayout,
+  AdminSelect,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Pill,
+} from "@/components/admin/admin-ui";
 import { Dialog } from "@/components/ui/primitives";
-import { fetchOrganizations, fetchProjects, fetchEnvironments, createEnvironment, deleteEnvVar, fetchEnvVarRevisions, type EnvVarRevision } from "@/lib/api/tenancy";
-import { fetchEnvVars, createEnvVar, type EnvVarResponse } from "@/lib/api/env-vars";
+import { useConfirm } from "@/components/ui/confirm-dialog";
+import {
+  createEnvironment,
+  deleteEnvVar,
+  fetchEnvironments,
+  fetchEnvVarRevisions,
+  fetchOrganizations,
+  fetchProjects,
+  type EnvVarRevision,
+} from "@/lib/api/tenancy";
+import { createEnvVar, fetchEnvVars, type EnvVarResponse } from "@/lib/api/env-vars";
 import { useToast } from "@/components/ui/toast";
 import { environmentColorChoices } from "@/lib/design-tokens";
+import { errorMessage, formatDate } from "@/lib/utils";
+
+/**
+ * Secrets are encrypted at rest and `store.EnvironmentVariable.ValueEncrypted`
+ * is `json:"-"`, so the list endpoint never returns a value. The old page drew
+ * an Eye/EyeOff toggle that flipped local state and revealed nothing — an
+ * enabled control lying about what it did. There is now no reveal affordance:
+ * the row states plainly that the value is not returned. A reveal would need a
+ * real server endpoint (see the impl report).
+ */
+function ValueState({ sensitive }: { sensitive: boolean }) {
+  return (
+    <span className="font-mono text-eyebrow uppercase tracking-wider text-text-muted">
+      {sensitive ? "••••••••" : "—"} · value not returned
+    </span>
+  );
+}
 
 export default function AdminEnvironmentsPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
+  const [confirm, renderConfirm] = useConfirm();
+
   const [selectedOrg, setSelectedOrg] = useState("");
   const [selectedProject, setSelectedProject] = useState("");
   const [envName, setEnvName] = useState("");
@@ -22,18 +63,14 @@ export default function AdminEnvironmentsPage() {
   const [selectedEnv, setSelectedEnv] = useState("");
   const [varKey, setVarKey] = useState("");
   const [varValue, setVarValue] = useState("");
-  const [revealed, setRevealed] = useState<Record<string, boolean>>({});
   const [historyVar, setHistoryVar] = useState<EnvVarResponse | null>(null);
   const [revisions, setRevisions] = useState<EnvVarRevision[]>([]);
   const [revisionsLoading, setRevisionsLoading] = useState(false);
+  const [revisionsError, setRevisionsError] = useState<string | null>(null);
 
-  // Persisted data values — centralised in lib/design-tokens (environmentColorChoices)
   const colors = environmentColorChoices;
 
-  const orgsQuery = useQuery({
-    queryKey: ["organizations"],
-    queryFn: fetchOrganizations,
-  });
+  const orgsQuery = useQuery({ queryKey: ["organizations"], queryFn: fetchOrganizations });
 
   const projectsQuery = useQuery({
     queryKey: ["projects", selectedOrg],
@@ -58,8 +95,9 @@ export default function AdminEnvironmentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["environments", selectedProject] });
       setEnvName("");
+      toast({ tone: "success", title: "Environment created" });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to create environment", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to create environment", message: errorMessage(err) }),
   });
 
   const addVarMutation = useMutation({
@@ -69,7 +107,7 @@ export default function AdminEnvironmentsPage() {
       setVarKey("");
       setVarValue("");
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to add variable", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to add variable", message: errorMessage(err) }),
   });
 
   const deleteVarMutation = useMutation({
@@ -77,161 +115,257 @@ export default function AdminEnvironmentsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["env-vars", selectedEnv] });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: errorMessage(err) }),
   });
 
-  const handleCreateEnv = (e: React.FormEvent) => {
-    e.preventDefault();
+  const orgs = useMemo(() => (Array.isArray(orgsQuery.data) ? orgsQuery.data : []), [orgsQuery.data]);
+  const projects = useMemo(() => (Array.isArray(projectsQuery.data) ? projectsQuery.data : []), [projectsQuery.data]);
+  const environments = useMemo(() => (Array.isArray(environmentsQuery.data) ? environmentsQuery.data : []), [environmentsQuery.data]);
+  const envVars = useMemo(() => (Array.isArray(envVarsQuery.data) ? envVarsQuery.data : []), [envVarsQuery.data]);
+
+  const handleCreateEnv = (event: React.FormEvent) => {
+    event.preventDefault();
     if (!envName.trim() || !selectedProject) return;
     createEnvMutation.mutate();
   };
 
-  const handleAddVar = (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAddVar = (event: React.FormEvent) => {
+    event.preventDefault();
     if (!varKey.trim() || !selectedEnv) return;
     addVarMutation.mutate();
   };
 
-  const handleDeleteVar = (varId: string) => {
-    deleteVarMutation.mutate(varId);
+  // Deleting an environment variable changes what a deployment resolves. It goes
+  // through the shared confirm dialog like every other Access-group deletion.
+  const handleDeleteVar = async (v: EnvVarResponse) => {
+    const ok = await confirm({
+      title: `Delete ${v.key}?`,
+      description: `Version ${v.version} of this ${v.scope} variable will be removed. Workloads that resolve it will fall back to the value inherited from their parent scope, or to nothing. This cannot be undone.`,
+      danger: true,
+      confirmLabel: "Delete variable",
+    });
+    if (ok) deleteVarMutation.mutate(v.id);
   };
 
+  // A failed revision read must never look like "no history": the error is kept
+  // and rendered as an error with a retry.
   const openRevisions = async (v: EnvVarResponse) => {
     setHistoryVar(v);
+    setRevisions([]);
+    setRevisionsError(null);
     setRevisionsLoading(true);
     try {
       const data = await fetchEnvVarRevisions(v.id);
-      setRevisions(data ?? []);
-    } catch {
-      setRevisions([]);
+      setRevisions(Array.isArray(data) ? data : []);
+    } catch (err) {
+      setRevisionsError(errorMessage(err, "Revision history could not be loaded."));
     } finally {
       setRevisionsLoading(false);
     }
   };
 
-  const orgs = useMemo(() => orgsQuery.data ?? [], [orgsQuery.data]);
-  const projects = useMemo(() => projectsQuery.data ?? [], [projectsQuery.data]);
-  const environments = useMemo(() => environmentsQuery.data ?? [], [environmentsQuery.data]);
-  const envVars = useMemo(() => envVarsQuery.data ?? [], [envVarsQuery.data]);
+  const closeHistory = () => {
+    setHistoryVar(null);
+    setRevisions([]);
+    setRevisionsError(null);
+  };
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader title="Environments" description="Manage deployment environments and environment variables" />
+      <AdminPageHeader />
 
-      <div className="mb-4 flex flex-col gap-3 sm:flex-row">
-        <select value={selectedOrg} onChange={(e) => { setSelectedOrg(e.target.value); setSelectedProject(""); setSelectedEnv(""); }} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
-          <option value="">Select organization...</option>
-          {Array.isArray(orgs) && orgs.map((org) => <option key={org.id} value={org.id}>{org.name}</option>)}
-        </select>
-        <select value={selectedProject} onChange={(e) => { setSelectedProject(e.target.value); setSelectedEnv(""); }} className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white">
-          <option value="">Select project...</option>
-          {Array.isArray(projects) && projects.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+      <div className="grid gap-3 sm:grid-cols-2 lg:max-w-2xl">
+        <AdminSelect
+          label="Organization"
+          value={selectedOrg}
+          onChange={(v) => { setSelectedOrg(v); setSelectedProject(""); setSelectedEnv(""); }}
+          placeholder={orgsQuery.isLoading ? "Loading organizations…" : "Select organization"}
+          options={orgs.map((org) => ({ value: org.id, label: org.name }))}
+        />
+        <AdminSelect
+          label="Project"
+          value={selectedProject}
+          onChange={(v) => { setSelectedProject(v); setSelectedEnv(""); }}
+          placeholder={selectedOrg ? (projectsQuery.isLoading ? "Loading projects…" : "Select project") : "Select an organization first"}
+          options={projects.map((p) => ({ value: p.id, label: p.name }))}
+          disabled={!selectedOrg}
+        />
       </div>
 
-      {selectedProject && (
-        <form onSubmit={handleCreateEnv} className="mb-4 flex flex-wrap gap-2 items-end">
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">Name</label>
-            <input value={envName} onChange={(e) => setEnvName(e.target.value)} placeholder="e.g. production" className="rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-red-400/70 focus:outline-none" required />
-          </div>
-          <div>
-            <label className="block text-xs text-slate-500 mb-1">Color</label>
-            <div className="flex gap-1">
-              {colors.map((c) => (
-                <button key={c} type="button" onClick={() => setEnvColor(c)} className={`w-6 h-6 rounded-full border-2 ${envColor === c ? "border-white" : "border-transparent"}`} style={{ backgroundColor: c }} />
-              ))}
+      {orgsQuery.isError ? (
+        <AdminErrorState message={errorMessage(orgsQuery.error, "Organizations could not be loaded.")} retry={() => void orgsQuery.refetch()} />
+      ) : null}
+      {selectedOrg && projectsQuery.isError ? (
+        <AdminErrorState message={errorMessage(projectsQuery.error, "Projects could not be loaded.")} retry={() => void projectsQuery.refetch()} />
+      ) : null}
+
+      <Card>
+        <CardHeader title="Create environment" icon={Plus} />
+        <form className="space-y-4 p-4" onSubmit={handleCreateEnv}>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Input label="Name" value={envName} onChange={setEnvName} placeholder="e.g. production" required disabled={!selectedProject} />
+            <div>
+              <span className="ui-label mb-1.5 block">Colour</span>
+              <div className="flex gap-1.5" role="group" aria-label="Environment colour">
+                {colors.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    aria-label={`Use colour ${c}`}
+                    aria-pressed={envColor === c}
+                    onClick={() => setEnvColor(c)}
+                    className={envColor === c ? "h-6 w-6 rounded-full border-2 border-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" : "h-6 w-6 rounded-full border-2 border-transparent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"}
+                    style={{ backgroundColor: c }}
+                  />
+                ))}
+              </div>
             </div>
           </div>
-          <label className="flex items-center gap-2 text-sm text-slate-300">
-            <input type="checkbox" checked={envProtected} onChange={(e) => setEnvProtected(e.target.checked)} className="rounded" />
+          <label className="flex items-center gap-2 text-xs text-text-subtle">
+            <input type="checkbox" checked={envProtected} onChange={(e) => setEnvProtected(e.target.checked)} className="accent-[var(--brand)]" />
             Protected
           </label>
-          <Btn type="submit" loading={createEnvMutation.isPending}><Plus size={14} /> Create</Btn>
+          {/* Disabled with the reason visible, rather than hidden until a project
+              happens to be chosen. */}
+          {!selectedProject ? (
+            <p className="ui-hint">Select a project above — an environment belongs to exactly one project.</p>
+          ) : null}
+          <Btn type="submit" loading={createEnvMutation.isPending} disabled={!selectedProject || !envName.trim()}>
+            <Plus size={14} /> Create
+          </Btn>
+          {createEnvMutation.isError ? (
+            <AdminErrorState message={errorMessage(createEnvMutation.error, "Environment could not be created.")} />
+          ) : null}
         </form>
-      )}
+      </Card>
 
-      <div className="grid gap-6 lg:grid-cols-2">
+      <div className="grid gap-5 lg:grid-cols-2">
         <Card>
           <CardHeader title="Environments" icon={Globe} />
-          {!selectedProject ? <EmptyState message="Select a project" /> :
-           environmentsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
-           environmentsQuery.isError ? <div className="p-4 text-sm text-red-300">Could not load environments: {environmentsQuery.error instanceof Error ? environmentsQuery.error.message : "unknown error"}</div> :
-           !Array.isArray(environments) || environments.length === 0 ? <EmptyState message="No environments" /> :
-           <div className="divide-y divide-white/[0.06]">
-            {Array.isArray(environments) && environments.map((env) => (
-              <div
-                key={env.id}
-                className={`flex items-center justify-between px-4 py-3 cursor-pointer hover:bg-white/[0.02] ${selectedEnv === env.id ? "bg-red-500/10" : ""}`}
-                onClick={() => setSelectedEnv(env.id)}
-              >
-                <div className="flex items-center gap-2">
-                  <span className="w-3 h-3 rounded-full" style={{ backgroundColor: env.color }} />
-                  <span className="text-sm font-medium text-slate-200">{env.name}</span>
-                  {env.protected && <Pill tone="yellow">Protected</Pill>}
-                </div>
-              </div>
-            ))}
-          </div>}
+          {!selectedProject ? (
+            <EmptyState icon={Globe} title="Select a project" message="Environments are listed per project. Choose an organization and project above." />
+          ) : environmentsQuery.isLoading ? (
+            <div className="p-4"><AdminLoadingState label="Loading environments…" /></div>
+          ) : environmentsQuery.isError ? (
+            <div className="p-4"><AdminErrorState message={errorMessage(environmentsQuery.error, "Environments could not be loaded.")} retry={() => void environmentsQuery.refetch()} /></div>
+          ) : environments.length === 0 ? (
+            <EmptyState icon={Globe} title="No environments" message="This project has no environments yet. Create one above." />
+          ) : (
+            <div className="divide-y divide-line">
+              {environments.map((env) => (
+                <button
+                  key={env.id}
+                  type="button"
+                  aria-pressed={selectedEnv === env.id}
+                  onClick={() => setSelectedEnv(env.id)}
+                  className={`flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus)] ${selectedEnv === env.id ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"}`}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <span aria-hidden="true" className="h-3 w-3 shrink-0 rounded-full" style={{ backgroundColor: env.color }} />
+                    <span className="truncate text-sm font-medium text-text">{env.name}</span>
+                    {env.protected ? <Pill tone="warn">Protected</Pill> : null}
+                  </span>
+                  {selectedEnv === env.id ? <span className="t-meta shrink-0 text-brand">selected</span> : null}
+                </button>
+              ))}
+            </div>
+          )}
         </Card>
 
-        {selectedEnv && (
-          <Card>
-            <CardHeader title="Environment Variables" icon={Globe} action={
-              <span className="text-xs text-slate-500">{(Array.isArray(envVars) ? envVars : []).length} variables</span>
-            } />
-            <form onSubmit={handleAddVar} className="flex gap-2 p-3 border-b border-white/[0.06]">
-              <input value={varKey} onChange={(e) => setVarKey(e.target.value)} placeholder="KEY" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm font-mono text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none" required />
-              <input value={varValue} onChange={(e) => setVarValue(e.target.value)} placeholder="value" className="flex-1 rounded-lg border border-white/10 bg-black/30 px-3 py-1.5 text-sm text-white placeholder:text-gray-500 focus:border-[color-mix(in_srgb,var(--brand)_70%,transparent)] focus:outline-none" />
-              <Btn type="submit" loading={addVarMutation.isPending}><Plus size={14} /></Btn>
-            </form>
-            {envVarsQuery.isLoading ? <div className="p-6 text-sm text-slate-400">Loading...</div> :
-             envVarsQuery.isError ? <div className="p-4 text-sm text-red-300">Could not load variables: {envVarsQuery.error instanceof Error ? envVarsQuery.error.message : "unknown error"}</div> :
-             !Array.isArray(envVars) || envVars.length === 0 ? <EmptyState message="No environment variables" /> :
-             <div className="divide-y divide-white/[0.06]">
-              {Array.isArray(envVars) && envVars.map((v: EnvVarResponse) => (
-                <div key={v.id} className="flex items-center justify-between px-4 py-2.5">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-mono text-slate-200">{v.key}</span>
-                    <span className="text-xs text-slate-500">v{v.version}</span>
-                    {v.isSensitive && <Pill tone="yellow">Sensitive</Pill>}
-                  </div>
-                  <div className="flex items-center gap-2">
-                    <button onClick={() => setRevealed({ ...revealed, [v.id]: !revealed[v.id] })} className="text-slate-500 hover:text-slate-300" title={revealed[v.id] ? "Hide" : "Show"} type="button">
-                      {revealed[v.id] ? <EyeOff size={14} /> : <Eye size={14} />}
-                    </button>
-                    <button onClick={() => openRevisions(v)} className="text-slate-500 hover:text-[var(--brand)]" title="Revision history" type="button">
-                      <History size={14} />
-                    </button>
-                    <button onClick={() => handleDeleteVar(v.id)} className="text-red-500 hover:text-red-400 text-xs" type="button">Delete</button>
-                  </div>
+        <Card>
+          <CardHeader
+            title="Environment variables"
+            icon={KeyRound}
+            action={selectedEnv && envVarsQuery.isSuccess ? <span className="t-meta">{envVars.length} recorded</span> : null}
+          />
+          {!selectedEnv ? (
+            <EmptyState icon={KeyRound} title="Select an environment" message="Variables are listed per environment. Select one on the left." />
+          ) : (
+            <>
+              <form className="flex flex-wrap items-end gap-2 border-b border-line p-3" onSubmit={handleAddVar}>
+                <div className="min-w-40 flex-1">
+                  <Input label="Key" value={varKey} onChange={setVarKey} placeholder="EXAMPLE_KEY" required mono />
+                </div>
+                <div className="min-w-40 flex-1">
+                  <Input label="Value" value={varValue} onChange={setVarValue} placeholder="value" />
+                </div>
+                <Btn type="submit" loading={addVarMutation.isPending} disabled={!varKey.trim()} ariaLabel="Add variable">
+                  <Plus size={14} />
+                </Btn>
+              </form>
+              {addVarMutation.isError ? (
+                <div className="p-3"><AdminErrorState message={errorMessage(addVarMutation.error, "Variable could not be added.")} /></div>
+              ) : null}
+              {envVarsQuery.isLoading ? (
+                <div className="p-4"><AdminLoadingState label="Loading variables…" /></div>
+              ) : envVarsQuery.isError ? (
+                <div className="p-4"><AdminErrorState message={errorMessage(envVarsQuery.error, "Environment variables could not be loaded.")} retry={() => void envVarsQuery.refetch()} /></div>
+              ) : envVars.length === 0 ? (
+                <EmptyState icon={KeyRound} title="No environment variables" message="This environment has no variables of its own. Values inherited from the project are resolved at deploy time and are not listed here." />
+              ) : (
+                <div className="divide-y divide-line">
+                  {envVars.map((v) => (
+                    <div key={v.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+                      <span className="flex min-w-0 flex-wrap items-center gap-2">
+                        <span className="truncate font-mono text-xs text-text">{v.key}</span>
+                        <span className="t-meta">v{v.version}</span>
+                        {v.isSensitive ? <Pill tone="warn">Sensitive</Pill> : null}
+                      </span>
+                      <span className="flex shrink-0 items-center gap-2">
+                        <ValueState sensitive={Boolean(v.isSensitive)} />
+                        <AdminIconButton label={`Revision history for ${v.key}`} onClick={() => void openRevisions(v)}>
+                          <History size={14} />
+                        </AdminIconButton>
+                        <Btn
+                          size="sm"
+                          tone="ghost"
+                          ariaLabel={`Delete ${v.key}`}
+                          disabled={deleteVarMutation.isPending}
+                          onClick={() => void handleDeleteVar(v)}
+                        >
+                          Delete
+                        </Btn>
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </Card>
+      </div>
+
+      {historyVar ? (
+        <Dialog
+          open
+          className="max-w-lg"
+          title={`Revision history — ${historyVar.key}`}
+          description={`Version history for ${historyVar.key} (current v${historyVar.version}). Values are encrypted at rest and never returned by the API.`}
+          closeAction={closeHistory}
+        >
+          {revisionsLoading ? (
+            <AdminLoadingState label="Loading revisions…" />
+          ) : revisionsError ? (
+            <AdminErrorState message={revisionsError} retry={() => void openRevisions(historyVar)} />
+          ) : revisions.length === 0 ? (
+            <EmptyState icon={History} title="No revisions recorded" message="This variable has no stored revision history. Older values may predate revision recording." />
+          ) : (
+            <div className="divide-y divide-line rounded-lg border border-line">
+              {revisions.map((r) => (
+                <div key={r.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+                  <span className="flex items-center gap-2">
+                    <span className="ui-badge ui-badge-brand font-mono font-semibold">v{r.version}</span>
+                    {r.createdBy ? <span className="t-meta">by {r.createdBy}</span> : null}
+                  </span>
+                  <span className="t-meta">{formatDate(r.createdAt, "Unknown time")}</span>
                 </div>
               ))}
-            </div>}
-            {historyVar && (
-              <Dialog open={Boolean(historyVar)} title={`Revision History — ${historyVar.key}`} description={`Version history for ${historyVar.key} (current v${historyVar.version})`} closeAction={() => { setHistoryVar(null); setRevisions([]); }} className="max-w-lg">
-                {revisionsLoading ? (
-                  <div className="p-6 text-sm text-slate-400">Loading revisions...</div>
-                ) : revisions.length === 0 ? (
-                  <p className="p-4 text-sm text-slate-500">No revision history available.</p>
-                ) : (
-                  <div className="divide-y divide-white/[0.06] rounded-lg border border-white/10">
-                    {revisions.map((r) => (
-                      <div key={r.id} className="flex items-center justify-between px-4 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="rounded bg-[color-mix(in_srgb,var(--brand)_20%,transparent)] px-2 py-0.5 text-xs font-semibold text-[var(--brand)]">v{r.version}</span>
-                          {r.createdBy && <span className="text-xs text-slate-400">by {r.createdBy}</span>}
-                        </div>
-                        <span className="text-xs text-slate-500">{new Date(r.createdAt).toLocaleString()}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </Dialog>
-            )}
-          </Card>
-        )}
-      </div>
+            </div>
+          )}
+        </Dialog>
+      ) : null}
+
+      {renderConfirm()}
     </AdminPageLayout>
   );
 }

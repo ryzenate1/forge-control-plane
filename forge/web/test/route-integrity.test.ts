@@ -202,6 +202,18 @@ describe("admin navigation advertises only real routes", () => {
     expect(shadowing, `aliases shadowing real routes: ${shadowing.join(", ")}`).toEqual([]);
   });
 
+  it("every alias source is served by a real page, so no bookmark is a 404", () => {
+    // ADMIN_ALIAS_ROUTES is consulted by active-state and breadcrumb resolution
+    // only, so an alias *looks* like it works — the sidebar highlights the right
+    // row — even when nothing serves the URL. That gap let most of the map ship
+    // as dead links: a renamed section turned every old bookmark and deep link
+    // into a 404 behind a correctly-highlighted nav entry. Routing is not
+    // changed by the map, so the only thing that makes an alias load is a real
+    // redirect page under app/.
+    const dead = Object.keys(ADMIN_ALIAS_ROUTES).filter((alias) => !resolveRoute(alias));
+    expect(dead, `alias paths with no page: ${dead.join(", ")}`).toEqual([]);
+  });
+
   it("every group has a title and at least one item", () => {
     const empty = adminPageRegistry
       .filter((group) => !group.title || group.items.length === 0)

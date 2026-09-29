@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Globe, Eye, EyeOff, Save } from 'lucide-react';
+import { Fingerprint, Eye, EyeOff, Save, MessageCircle, Gamepad2, KeyRound, Plug } from 'lucide-react';
 import { fetchJSON, putJSON, type SocialProvider } from '@/lib/api';
-import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from '@/components/admin/admin-ui';
+import { AdminErrorState, AdminLoadingState, AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input } from '@/components/admin/admin-ui';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 
@@ -67,17 +67,24 @@ export default function SocialProvidersPage() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader title="Single Sign-On" sub="Discord OAuth, Steam OpenID and Authentik OAuth sign-in providers. This page does not test or claim provider connectivity." />
+      {/* Title, subtitle and the Fingerprint glyph come from admin-registry.ts:213.
+          The page used to restate the registry sentence and append its own
+          provider list + disclaimer; the disclaimer is now stated where it
+          matters — next to the action it qualifies. */}
+      <AdminPageHeader />
       <Card>
-        <CardHeader title={`${providers.length} providers`} icon={Globe} />
+        <CardHeader title={query.isSuccess ? `${providers.length} providers` : "Providers"} icon={Fingerprint} />
+        <p className="ui-hint border-b border-line px-4 pb-3">
+          Saving writes the credentials you enter. It does not contact the provider, so nothing here claims a working sign-in until a user completes that flow.
+        </p>
         {query.isLoading ? (
-          <div className="p-6 text-sm text-slate-500">Loading providers...</div>
+          <div className="p-4"><AdminLoadingState label="Loading providers…" /></div>
         ) : query.isError ? (
-          <div className="p-6 text-sm text-red-300">Failed to load social providers.</div>
+          <div className="p-4"><AdminErrorState message={query.error instanceof Error ? query.error.message : 'Social providers could not be loaded.'} retry={() => void query.refetch()} /></div>
         ) : providers.length === 0 ? (
-          <EmptyState icon={Globe} message="No social providers configured." />
+          <EmptyState icon={Fingerprint} title="No providers" message="No social providers are configured. Enable one below to offer SSO sign-in." />
         ) : (
-          <div className="divide-y divide-white/[0.04]">
+          <div className="divide-y divide-line">
             {providers.map((provider) => {
               const cfg = local[provider.name] ?? { enabled: provider.enabled, clientId: provider.clientId, clientSecret: '', issuerUrl: provider.issuerUrl ?? '' };
               return (
@@ -94,7 +101,7 @@ export default function SocialProvidersPage() {
           </div>
         )}
         {saveMut.isError ? (
-          <div className="border-t border-white/[0.06] p-4">
+          <div className="border-t border-line p-4">
             <Alert tone="error" title="Could not save provider">{saveMut.error instanceof Error ? saveMut.error.message : 'Try again after reviewing the provider credentials.'}</Alert>
           </div>
         ) : null}
@@ -116,7 +123,7 @@ function ProviderRow({
   saving: boolean;
 }) {
   const [showSecret, setShowSecret] = useState(false);
-  const iconMap: Record<string, string> = { discord: '💬', steam: '🎮', authentik: '🔑' };
+  const IconMap: Record<string, typeof Fingerprint> = { discord: MessageCircle, steam: Gamepad2, authentik: KeyRound };
   const isAuthentik = provider.name === 'authentik';
   const isSteam = provider.name === 'steam';
   const secretLabel = isSteam ? 'Steam Web API Key' : 'Client Secret';
@@ -124,17 +131,17 @@ function ProviderRow({
   return (
     <div className="p-4">
       <div className="mb-3 flex items-center gap-3">
-        <span className="text-lg">{iconMap[provider.name] ?? '🔌'}</span>
+        {(() => { const ProviderIcon = IconMap[provider.name] ?? Plug; return <ProviderIcon size={18} className="text-text-subtle" />; })()}
         <div className="flex-1">
-          <p className="font-semibold text-slate-200">{provider.displayName}</p>
-          <p className="text-xs text-slate-500">Provider key: {provider.name}</p>
+          <p className="font-semibold text-text">{provider.displayName}</p>
+          <p className="t-meta">Provider key: {provider.name}</p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[var(--brand)]" />
-          <span className="text-slate-300">Enabled</span>
+          <span className="text-text">Enabled</span>
         </label>
       </div>
-      <p className="mb-3 text-xs text-slate-500">
+      <p className="ui-hint mb-3">
         {isSteam
           ? 'Steam uses OpenID for sign-in and the Web API key only to retrieve the signed-in player profile.'
           : isAuthentik
@@ -153,7 +160,7 @@ function ProviderRow({
             placeholder={provider.hasClientSecret ? 'Stored securely — enter a new value to replace it' : secretLabel}
             autoComplete="off"
           />
-          <button type="button" aria-label={showSecret ? 'Hide secret' : 'Show secret'} className="absolute right-2 top-7 text-slate-400 hover:text-slate-200" onClick={() => setShowSecret(!showSecret)}>
+          <button type="button" aria-label={showSecret ? 'Hide secret' : 'Show secret'} className="absolute right-2 top-7 text-text-subtle hover:text-text" onClick={() => setShowSecret(!showSecret)}>
             {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}
           </button>
         </div>

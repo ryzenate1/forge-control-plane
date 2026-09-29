@@ -57,18 +57,18 @@ export function ScopeSwitcher() {
         aria-haspopup="menu"
         aria-label={`Current scope: ${primary}${secondary ? ` / ${secondary}` : ""}. Change scope`}
         onClick={() => setOpen((value) => !value)}
-        className="flex w-full items-center justify-between rounded-lg border border-[var(--line)] bg-white/[0.02] px-2.5 py-1.5 text-left transition-colors hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+        className="flex w-full items-center justify-between rounded-lg border border-line bg-overlay-subtle px-2.5 py-1.5 text-left transition-colors hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
       >
         <span className="flex min-w-0 items-center gap-2">
           <PlanetDefaultIcon size={16} className="shrink-0" />
           <span className="min-w-0">
-            <span className="block font-mono text-[9px] uppercase tracking-wider text-[var(--text-muted)]">
+            <span className="t-eyebrow block">
               {error ? "Scope" : "Project"}
             </span>
             <span
               className={cn(
                 "block truncate text-xs font-semibold",
-                activeProject ? "text-[var(--text)]" : "text-[var(--text-subtle)]",
+                activeProject ? "text-text" : "text-text-subtle",
               )}
             >
               {primary}
@@ -77,13 +77,13 @@ export function ScopeSwitcher() {
         </span>
         <span className="flex shrink-0 items-center gap-1">
           {secondary ? (
-            <span className="hidden max-w-[72px] truncate font-mono text-[10px] text-[var(--text-muted)] xl:inline">
+            <span className="hidden max-w-[72px] truncate font-mono text-eyebrow text-text-muted xl:inline">
               {secondary}
             </span>
           ) : null}
           <ChevronDown
             size={12}
-            className={cn("text-[var(--text-muted)] transition-transform", open && "rotate-180")}
+            className={cn("text-text-muted transition-transform", open && "rotate-180")}
           />
         </span>
       </button>
@@ -92,15 +92,15 @@ export function ScopeSwitcher() {
         <div
           role="menu"
           aria-label="Scope"
-          className="absolute bottom-full left-0 z-50 mb-1.5 w-full divide-y divide-[var(--line)] rounded-xl border border-[var(--line)] bg-[var(--surface-raised)] p-1.5 shadow-2xl"
+          className="absolute bottom-full left-0 z-50 mb-1.5 w-full divide-y divide-line rounded-lg border border-line bg-surface-raised p-1.5 shadow-popover"
         >
           {error ? (
             <div className="px-2 py-2" role="alert">
-              <p className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-300">
+              <p className="flex items-center gap-1.5 text-xs font-semibold text-warn">
                 <AlertTriangle size={12} />
                 Tenancy data unavailable
               </p>
-              <p className="mt-1 text-[10px] leading-relaxed text-[var(--text-muted)]">{error}</p>
+              <p className="ui-hint mt-1">{error}</p>
             </div>
           ) : null}
 
@@ -148,7 +148,7 @@ export function ScopeSwitcher() {
               type="button"
               role="menuitem"
               onClick={() => go("/admin/projects")}
-              className="rounded-lg px-2 py-1 text-left text-[11px] text-[var(--text-subtle)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="rounded-lg px-2 py-1 text-left text-xs text-text-subtle transition-colors hover:bg-overlay hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             >
               Manage projects…
             </button>
@@ -156,7 +156,7 @@ export function ScopeSwitcher() {
               type="button"
               role="menuitem"
               onClick={() => go("/admin/environments")}
-              className="rounded-lg px-2 py-1 text-left text-[11px] text-[var(--text-subtle)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="rounded-lg px-2 py-1 text-left text-xs text-text-subtle transition-colors hover:bg-overlay hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             >
               Manage environments…
             </button>
@@ -187,9 +187,9 @@ function ScopeSection({
 }) {
   return (
     <div className="py-1">
-      <p className="px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-[var(--text-muted)]">{title}</p>
+      <p className="t-eyebrow px-2 py-1">{title}</p>
       {items.length === 0 ? (
-        <p className="px-2 pb-1 text-[11px] text-[var(--text-muted)]">{emptyLabel}</p>
+        <p className="ui-hint px-2 pb-1">{emptyLabel}</p>
       ) : (
         <div className="max-h-40 space-y-0.5 overflow-y-auto scrollbar-thin">
           {items.map((item) => (
@@ -202,8 +202,8 @@ function ScopeSection({
               className={cn(
                 "flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
                 item.selected
-                  ? "bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] font-semibold text-[var(--text)]"
-                  : "text-[var(--text-subtle)] hover:bg-white/[0.06] hover:text-[var(--text)]",
+                  ? "bg-brand-subtle font-semibold text-text"
+                  : "text-text-subtle hover:bg-overlay hover:text-text",
               )}
             >
               <span className="flex min-w-0 items-center gap-1.5">
@@ -215,9 +215,9 @@ function ScopeSection({
                   />
                 ) : null}
                 <span className="truncate">{item.label}</span>
-                {item.locked ? <Lock size={10} className="shrink-0 text-[var(--text-muted)]" aria-label="Protected" /> : null}
+                {item.locked ? <Lock size={10} className="shrink-0 text-text-muted" aria-label="Protected environment" /> : null}
               </span>
-              {item.selected ? <Check size={12} className="shrink-0 text-[var(--brand)]" /> : null}
+              {item.selected ? <Check size={12} className="shrink-0 text-brand" /> : null}
             </button>
           ))}
         </div>

@@ -158,7 +158,7 @@ const PROVIDER_CARDS = [
   { id: "gitea", name: "Gitea", blurb: "Connect your Gitea instance to access repositories and setup webhooks." },
 ];
 
-import { AdminPageLayout, SectionHeader, AdminTabs } from "@/components/admin/admin-ui";
+import { AdminErrorState, AdminLoadingState, AdminPageLayout, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, AdminTabs, EmptyState, Modal, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 export default function GitPage() {
@@ -193,17 +193,35 @@ export default function GitPage() {
   const [showDocs, setShowDocs] = useState(false);
   const [repoCounts, setRepoCounts] = useState<Record<string, { count: number } | { error: string }>>({});
 
-  const { data: credentialsRaw } = useQuery<GitCredential[]>({
+  const {
+    data: credentialsRaw,
+    isLoading: credentialsLoading,
+    isError: credentialsError,
+    error: credentialsErr,
+    refetch: refetchCredentials,
+  } = useQuery<GitCredential[]>({
     queryKey: ["git-credentials"],
     queryFn: () => listGitCredentials(),
   });
 
-  const { data: providerTokensRaw } = useQuery<GitProviderToken[]>({
+  const {
+    data: providerTokensRaw,
+    isLoading: providersLoading,
+    isError: providersError,
+    error: providersErr,
+    refetch: refetchProviders,
+  } = useQuery<GitProviderToken[]>({
     queryKey: ["git-providers"],
     queryFn: () => listGitProviderTokens(),
   });
 
-  const { data: sourcesRaw } = useQuery<GitSource[]>({
+  const {
+    data: sourcesRaw,
+    isLoading: sourcesLoading,
+    isError: sourcesError,
+    error: sourcesErr,
+    refetch: refetchSources,
+  } = useQuery<GitSource[]>({
     queryKey: ["git-sources"],
     queryFn: () => listGitSources(),
   });
@@ -540,20 +558,30 @@ export default function GitPage() {
               </label>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[900px] text-sm">
-                <thead>
-                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                    <th className="px-4 py-2.5 font-medium sm:px-5">Name</th>
-                    <th className="px-4 py-2.5 font-medium">Provider</th>
-                    <th className="px-4 py-2.5 font-medium">Type</th>
-                    <th className="px-4 py-2.5 font-medium">Created</th>
-                    <th className="px-4 py-2.5 font-medium">Last used</th>
-                    <th className="px-4 py-2.5 font-medium">Status</th>
-                    <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.05]">
+            {credentialsLoading ? (
+              <div className="px-4 pb-4 sm:px-5">
+                <AdminLoadingState label="Loading credentials…" />
+              </div>
+            ) : credentialsError ? (
+              <div className="px-4 pb-4 sm:px-5">
+                <AdminErrorState
+                  message={credentialsErr instanceof Error ? credentialsErr.message : "Failed to load credentials"}
+                  retry={() => void refetchCredentials()}
+                />
+              </div>
+            ) : (
+            <>
+            <AdminTable label="Git credentials">
+              <AdminTHead>
+                <AdminTh>Name</AdminTh>
+                <AdminTh>Provider</AdminTh>
+                <AdminTh>Type</AdminTh>
+                <AdminTh>Created</AdminTh>
+                <AdminTh>Last used</AdminTh>
+                <AdminTh>Status</AdminTh>
+                <AdminTh className="text-right">Actions</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
                   {filteredCredentials.map((cred) => {
                     const meta = CRED_TYPE_META[cred.credentialType];
                     const TypeIcon = meta?.icon ?? Key;
@@ -561,8 +589,8 @@ export default function GitPage() {
                     const provider = stat.providers.length === 1 ? stat.providers[0] : undefined;
                     const active = stat.linked > 0;
                     return (
-                      <tr key={cred.id} className="transition hover:bg-white/[0.02]">
-                        <td className="px-4 py-3 sm:pl-5">
+                      <AdminTr key={cred.id}>
+                        <AdminTd>
                           <div className="flex items-center gap-3">
                             <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-300">
                               {provider ? <ProviderGlyph provider={provider} size={18} /> : <TypeIcon size={16} />}
@@ -572,8 +600,8 @@ export default function GitPage() {
                               <span className="block truncate text-[11px] text-slate-500">{cred.description || "—"}</span>
                             </span>
                           </div>
-                        </td>
-                        <td className="px-4 py-3">
+                        </AdminTd>
+                        <AdminTd>
                           {provider ? (
                             <span className="inline-flex items-center gap-1.5 text-xs text-slate-300">
                               <ProviderGlyph provider={provider} size={15} />
@@ -582,17 +610,17 @@ export default function GitPage() {
                           ) : (
                             <span className="text-xs text-slate-600" title="No linked repository source names a provider for this credential">—</span>
                           )}
-                        </td>
-                        <td className="px-4 py-3">
-                          <span className="inline-flex items-center rounded-md border border-white/10 bg-white/[0.03] px-2 py-1 text-[11px] text-slate-300">
+                        </AdminTd>
+                        <AdminTd>
+                          <Pill tone="neutral">
                             {credentialTypeLabel(cred.credentialType)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3">
+                          </Pill>
+                        </AdminTd>
+                        <AdminTd>
                           <span className="block text-xs text-slate-300">{formatDay(cred.createdAt)}</span>
                           <span className="block text-[11px] text-slate-500">{timeAgo(cred.createdAt)}</span>
-                        </td>
-                        <td className="px-4 py-3">
+                        </AdminTd>
+                        <AdminTd>
                           {stat.lastUsed ? (
                             <>
                               <span className="block text-xs text-slate-300">{formatDay(stat.lastUsed)}</span>
@@ -604,25 +632,11 @@ export default function GitPage() {
                               <span className="block text-[11px] text-slate-600">—</span>
                             </>
                           )}
-                        </td>
-                        <td className="px-4 py-3">
-                          {active ? (
-                            <span
-                              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[11px] font-medium text-emerald-300"
-                              title={`Linked to ${stat.linked} repository source${stat.linked === 1 ? "" : "s"}`}
-                            >
-                              <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> Active
-                            </span>
-                          ) : (
-                            <span
-                              className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-1 text-[11px] font-medium text-slate-400"
-                              title="Not linked to any repository source"
-                            >
-                              <span className="h-1.5 w-1.5 rounded-full bg-slate-500" /> Inactive
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right sm:pr-5">
+                        </AdminTd>
+                        <AdminTd>
+                          <Pill tone={active ? "green" : "neutral"}>{active ? "Active" : "Inactive"}</Pill>
+                        </AdminTd>
+                        <AdminTd className="text-right">
                           <div className="relative inline-block">
                             <button
                               type="button"
@@ -671,27 +685,32 @@ export default function GitPage() {
                               </>
                             )}
                           </div>
-                        </td>
-                      </tr>
+                        </AdminTd>
+                      </AdminTr>
                     );
                   })}
-                </tbody>
-              </table>
+              </AdminTBody>
+            </AdminTable>
               {filteredCredentials.length === 0 && (
-                <p className="px-5 py-6 text-center text-xs text-slate-500">
-                  {credentials.length === 0 ? "No credentials configured yet — add one to get started." : "No credentials match the current search."}
-                </p>
+                <div className="px-4 pb-4 sm:px-5">
+                  <EmptyState
+                    icon={Key}
+                    title={credentials.length === 0 ? "No credentials yet" : "No matches"}
+                    message={credentials.length === 0 ? "Add a credential above to connect a Git provider." : "No credentials match the current search."}
+                  />
+                </div>
               )}
-            </div>
+            </>
+            )}
 
             {showCreateCredential && (
-              <div className="border-t border-[var(--line)] p-4 sm:p-5">
+              <Modal title="New credential" description="Store an access token or deploy key for a Git provider." onClose={() => setShowCreateCredential(false)}>
                 <CredentialForm
                   onSubmit={(data) => createCredential.mutate(data)}
                   onCancel={() => setShowCreateCredential(false)}
                   loading={createCredential.isPending}
                 />
-              </div>
+              </Modal>
             )}
           </section>
 
@@ -799,11 +818,20 @@ export default function GitPage() {
             </div>
 
             <div className="mt-4 space-y-3">
-              {providerTokens.length === 0 && (
-                <p className="rounded-lg border border-dashed border-white/10 p-5 text-center text-xs text-slate-500">
-                  No providers connected yet — connect one to deploy from repositories.
-                </p>
-              )}
+              {providersLoading ? (
+                <AdminLoadingState label="Loading providers…" />
+              ) : providersError ? (
+                <AdminErrorState
+                  message={providersErr instanceof Error ? providersErr.message : "Failed to load providers"}
+                  retry={() => void refetchProviders()}
+                />
+              ) : providerTokens.length === 0 ? (
+                <EmptyState
+                  icon={Globe}
+                  title="No providers connected"
+                  message="Connect a provider above to deploy from its repositories."
+                />
+              ) : null}
 
               {providerTokens.map((pt) => (
                 <article key={pt.id} className="rounded-xl border border-[var(--line)] bg-white/[0.015] p-4">
@@ -927,7 +955,7 @@ export default function GitPage() {
             </div>
 
             {showConnectProvider && (
-              <div className="mt-4 border-t border-[var(--line)] pt-4">
+              <Modal title="Connect Git provider" description="Link a provider account with a personal access token." onClose={() => setShowConnectProvider(false)}>
                 <ProviderForm
                   key={connectPreset}
                   initialProvider={connectPreset}
@@ -936,7 +964,7 @@ export default function GitPage() {
                   onCancel={() => setShowConnectProvider(false)}
                   loading={connectProvider.isPending}
                 />
-              </div>
+              </Modal>
             )}
           </section>
         </div>
@@ -961,89 +989,94 @@ export default function GitPage() {
               </button>
             </div>
 
-            <div className="overflow-x-auto">
-              <table className="w-full min-w-[760px] text-sm">
-                <thead>
-                  <tr className="border-y border-[var(--line)] text-left text-[10px] uppercase tracking-[0.12em] text-slate-500">
-                    <th className="px-4 py-2.5 font-medium sm:px-5">Repository</th>
-                    <th className="px-4 py-2.5 font-medium">Branch</th>
-                    <th className="px-4 py-2.5 font-medium">Auto-deploy</th>
-                    <th className="px-4 py-2.5 font-medium">Last commit</th>
-                    <th className="px-4 py-2.5 text-right font-medium sm:pr-5">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.05]">
-                  {sources.map((src) => (
-                    <tr key={src.id} className="transition hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 sm:pl-5">
-                        <span className="block truncate font-mono text-xs font-medium text-slate-100">
-                          {src.repositoryOwner}/{src.repositoryName}
+            {sourcesLoading ? (
+              <div className="px-4 pb-4 sm:px-5">
+                <AdminLoadingState label="Loading repository sources…" />
+              </div>
+            ) : sourcesError ? (
+              <div className="px-4 pb-4 sm:px-5">
+                <AdminErrorState
+                  message={sourcesErr instanceof Error ? sourcesErr.message : "Failed to load repository sources"}
+                  retry={() => void refetchSources()}
+                />
+              </div>
+            ) : (
+            <AdminTable label="Repository sources">
+              <AdminTHead>
+                <AdminTh>Repository</AdminTh>
+                <AdminTh>Branch</AdminTh>
+                <AdminTh>Auto-deploy</AdminTh>
+                <AdminTh>Last commit</AdminTh>
+                <AdminTh className="text-right">Actions</AdminTh>
+              </AdminTHead>
+              <AdminTBody>
+                {sources.map((src) => (
+                  <AdminTr key={src.id}>
+                    <AdminTd>
+                      <span className="block truncate font-mono text-xs font-medium text-slate-100">
+                        {src.repositoryOwner}/{src.repositoryName}
+                      </span>
+                      <span className="mt-0.5 block text-[11px] capitalize text-slate-500">
+                        {src.provider || "—"}
+                        {src.webhookId ? "" : src.autoDeploy ? " · webhook missing" : ""}
+                      </span>
+                    </AdminTd>
+                    <AdminTd className="font-mono text-xs text-slate-300">{src.branch}</AdminTd>
+                    <AdminTd>
+                      <Pill tone={src.autoDeploy ? "green" : "neutral"}>{src.autoDeploy ? "On" : "Off"}</Pill>
+                      {src.autoDeploy && !src.webhookId && (
+                        <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-300" title={(src as GitSource).webhookSetupError || "provider webhook setup failed or token lacks webhook permission"}>
+                          <AlertTriangle size={12} /> No webhook
                         </span>
-                        <span className="mt-0.5 block text-[11px] capitalize text-slate-500">
-                          {src.provider || "—"}
-                          {src.webhookId ? "" : src.autoDeploy ? " · webhook missing" : ""}
-                        </span>
-                      </td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-300">{src.branch}</td>
-                      <td className="px-4 py-3">
-                        {src.autoDeploy ? (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-0.5 text-[11px] font-medium text-emerald-300">
-                            <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" /> On
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1.5 rounded-full border border-white/10 bg-white/[0.03] px-2.5 py-0.5 text-[11px] font-medium text-slate-400">
-                            <span className="h-1.5 w-1.5 rounded-full bg-slate-500" /> Off
-                          </span>
-                        )}
-                        {src.autoDeploy && !src.webhookId && (
-                          <span className="mt-1 flex items-center gap-1 text-[11px] text-amber-300" title={(src as GitSource).webhookSetupError || "provider webhook setup failed or token lacks webhook permission"}>
-                            <AlertTriangle size={12} /> No webhook
-                          </span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-xs text-slate-400">
-                        {src.lastCommitSha ? (
-                          <>
-                            <span className="block font-mono text-[11px] text-slate-300">{src.lastCommitSha.slice(0, 7)}</span>
-                            <span className="block max-w-56 truncate text-[11px] text-slate-500">{src.lastCommitMessage}</span>
-                          </>
-                        ) : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-right sm:pr-5">
-                        <div className="flex justify-end gap-1.5">
-                          {src.webhookUrl && (
-                            <button
-                              type="button"
-                              onClick={() => { navigator.clipboard.writeText(src.webhookUrl); toast({ tone: "success", title: "Webhook URL copied" }); }}
-                              className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
-                              title="Copy webhook URL"
-                              aria-label="Copy webhook URL"
-                            >
-                              <Link size={14} />
-                            </button>
-                          )}
+                      )}
+                    </AdminTd>
+                    <AdminTd className="text-xs text-slate-400">
+                      {src.lastCommitSha ? (
+                        <>
+                          <span className="block font-mono text-[11px] text-slate-300">{src.lastCommitSha.slice(0, 7)}</span>
+                          <span className="block max-w-56 truncate text-[11px] text-slate-500">{src.lastCommitMessage}</span>
+                        </>
+                      ) : "—"}
+                    </AdminTd>
+                    <AdminTd className="text-right">
+                      <div className="flex justify-end gap-1.5">
+                        {src.webhookUrl && (
                           <button
                             type="button"
-                            onClick={() => { void (async () => { if (await confirm({ title: "Remove this git source?", description: "The source deployment and its history will be removed. This cannot be undone.", danger: true, confirmLabel: "Remove" })) deleteSource.mutate(src.id); })(); }}
-                            className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-red-300 transition hover:bg-red-500/10"
-                            title="Remove source"
-                            aria-label={`Remove ${src.repositoryOwner}/${src.repositoryName}`}
+                            onClick={() => { navigator.clipboard.writeText(src.webhookUrl); toast({ tone: "success", title: "Webhook URL copied" }); }}
+                            className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
+                            title="Copy webhook URL"
+                            aria-label="Copy webhook URL"
                           >
-                            <Trash2 size={14} />
+                            <Link size={14} />
                           </button>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-              {sources.length === 0 && (
-                <p className="px-5 py-6 text-center text-xs text-slate-500">No repositories linked yet — link one to enable auto-deploy.</p>
-              )}
-            </div>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => { void (async () => { if (await confirm({ title: "Remove this git source?", description: "The source deployment and its history will be removed. This cannot be undone.", danger: true, confirmLabel: "Remove" })) deleteSource.mutate(src.id); })(); }}
+                          className="grid h-8 w-8 place-items-center rounded-lg border border-white/10 bg-white/[0.02] text-red-300 transition hover:bg-red-500/10"
+                          title="Remove source"
+                          aria-label={`Remove ${src.repositoryOwner}/${src.repositoryName}`}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </AdminTd>
+                  </AdminTr>
+                ))}
+              </AdminTBody>
+            </AdminTable>
+            )}
+            {sources.length === 0 && !sourcesLoading && !sourcesError && (
+              <EmptyState
+                icon={Database}
+                title="No repository sources"
+                message="Link a repository above to enable auto-deploy."
+              />
+            )}
 
             {showCreateSource && (
-              <div className="border-t border-[var(--line)] p-4 sm:p-5">
+              <Modal title="Link repository" description="Link a repository to drive auto-deploy webhooks and pipeline triggers." onClose={() => setShowCreateSource(false)}>
                 <SourceForm
                   credentials={credentials}
                   providerTokens={providerTokens}
@@ -1051,7 +1084,7 @@ export default function GitPage() {
                   onCancel={() => setShowCreateSource(false)}
                   loading={createSource.isPending}
                 />
-              </div>
+              </Modal>
             )}
           </section>
         </div>
@@ -1064,39 +1097,13 @@ export default function GitPage() {
 
 function GitDocsModal({ onClose }: { onClose: () => void }) {
   return (
-    <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-black/70 p-4 backdrop-blur-sm sm:p-6"
-      role="presentation"
-      onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onClose();
-      }}
+    <Modal
+      title="Git Integrations"
+      description="Credentials, providers, sources, and auto-deploy webhooks."
+      onClose={onClose}
+      wide
     >
-      <div
-        role="dialog"
-        aria-modal="true"
-        aria-label="Git Integrations documentation"
-        className="mx-auto w-full max-w-2xl overflow-hidden rounded-2xl border border-white/10 bg-[var(--surface)] shadow-2xl"
-      >
-        <div className="flex items-start justify-between gap-4 border-b border-white/[0.07] px-5 pb-4 pt-5 sm:px-6">
-          <div className="flex items-start gap-3">
-            <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/10 bg-white/[0.03] text-slate-300">
-              <BookOpen size={18} />
-            </span>
-            <div>
-              <h2 className="text-base font-bold text-white">Git Integrations</h2>
-              <p className="mt-0.5 text-xs text-slate-400">Credentials, providers, sources, and auto-deploy webhooks.</p>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close documentation"
-            className="grid h-8 w-8 shrink-0 place-items-center rounded-lg text-slate-400 transition hover:bg-white/[0.06] hover:text-white"
-          >
-            <X size={16} />
-          </button>
-        </div>
-        <div className="max-h-[70vh] space-y-5 overflow-y-auto px-5 py-5 text-sm leading-6 text-slate-300 sm:px-6">
+      <div className="space-y-5 text-sm leading-6 text-slate-300">
           <section>
             <h3 className="text-[13px] font-bold text-slate-100">Workflow</h3>
             <ol className="mt-2 list-decimal space-y-1.5 pl-5 text-xs text-slate-400">
@@ -1130,8 +1137,7 @@ function GitDocsModal({ onClose }: { onClose: () => void }) {
             </div>
           </section>
         </div>
-      </div>
-    </div>
+    </Modal>
   );
 }
 

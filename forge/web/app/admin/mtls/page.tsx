@@ -1,12 +1,35 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useToast } from "@/components/ui/toast";
-import { Shield, ShieldCheck, ShieldX, RefreshCw, Trash2, Plus, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
-import { fetchJSON, postJSON } from "@/lib/api";
-import { Card, CardHeader, EmptyState, StatsRow, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useToast } from "@/components/ui/toast";
+import { AlertTriangle, CheckCircle, Plus, RefreshCw, Shield, ShieldCheck, ShieldX, Trash2, XCircle } from "lucide-react";
+import { fetchJSON, postJSON } from "@/lib/api";
+import {
+  AdminErrorState,
+  AdminIconButton,
+  AdminLoadingState,
+  AdminLoadingRows,
+  AdminPageLayout,
+  AdminTable,
+  AdminTBody,
+  AdminTd,
+  AdminTh,
+  AdminTHead,
+  AdminTr,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Pill,
+  SectionHeader,
+  StatsRow,
+} from "@/components/admin/admin-ui";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { errorMessage, formatDate } from "@/lib/utils";
 
 type MTLSCert = {
   id: string;
@@ -22,324 +45,377 @@ type MTLSCert = {
 
 type MTLSCertListResponse = { data: MTLSCert[] };
 type MTLSCertResponse = { data: MTLSCert };
-type MTLSStatusResponse = { data: { caConfigured: boolean; serverCertCount: number; clientCertCount: number; activeCerts: number; revokedCount: number; caExpiresAt?: string } };
-type MTLSMigrationStatusResponse = { data: { caConfigured: boolean; nodesWithCerts: number; totalNodes: number; migrationEnabled: boolean; phase: string } };
+type MTLSStatusResponse = { data: { caConfigured: boolean; serverCertCount?: number; clientCertCount?: number; activeCerts?: number; revokedCount?: number; caExpiresAt?: string } };
+type MTLSMigrationStatusResponse = { data: { caConfigured?: boolean; nodesWithCerts?: number; totalNodes?: number; migrationEnabled?: boolean; phase?: string } };
+
+const EXPIRY_WARN_DAYS = 30;
+
+/** A count the API did not send is not a zero. `GetMTLSStatus` ignores its scan
+ * errors (`_ = s.db.QueryRow(...)`), so a missing field must read as unreported
+ * rather than as a measured 0. */
+function count(value: number | undefined) {
+  return typeof value === "number" && Number.isFinite(value) ? value : "Not reported";
+}
+
+function daysUntil(value?: string | null): number | null {
+  if (!value) return null;
+  const at = new Date(value).getTime();
+  if (!Number.isFinite(at)) return null;
+  return Math.round((at - Date.now()) / 86_400_000);
+}
+
+function certTone(cert: MTLSCert): "ok" | "warn" | "danger" {
+  if (cert.revokedAt) return "danger";
+  const days = daysUntil(cert.expiresAt);
+  if (days === null) return "warn";
+  if (days <= 0) return "danger";
+  if (days <= EXPIRY_WARN_DAYS) return "warn";
+  return "ok";
+}
+
+function certStatusText(cert: MTLSCert): string {
+  if (cert.revokedAt) return "Revoked";
+  const days = daysUntil(cert.expiresAt);
+  if (days === null) return "Expiry unknown";
+  if (days <= 0) return "Expired";
+  if (days <= EXPIRY_WARN_DAYS) return `Expiring in ${days}d`;
+  return "Valid";
+}
+
+const PHASE_LABELS: Record<string, string> = {
+  not_started: "Not started",
+  ca_ready: "CA ready",
+  partial: "In progress",
+  complete: "Complete",
+};
 
 export default function AdminMTLSPage() {
   const [confirm, renderConfirm] = useConfirm();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const [showGenerateCA, setShowGenerateCA] = useState(false);
-  const [caOrg, setCAOrg] = useState("GamePanel");
-  const [caCN, setCACN] = useState("GamePanel mTLS CA");
+  const [caOrg, setCAOrg] = useState("Forge");
+  const [caCN, setCACN] = useState("Forge mTLS CA");
 
-  const { data: statusData, isLoading: statusLoading, error: statusError } = useQuery({
+  const statusQuery = useQuery({
     queryKey: ["mtls-status"],
     queryFn: () => fetchJSON<MTLSStatusResponse>("/mtls/status"),
-    refetchInterval: 10000,
+    refetchInterval: 10_000,
   });
 
-  const { data: migrationData, isLoading: migrationLoading } = useQuery({
+  const migrationQuery = useQuery({
     queryKey: ["mtls-migration-status"],
     queryFn: () => fetchJSON<MTLSMigrationStatusResponse>("/mtls/migration/status"),
-    refetchInterval: 15000,
+    refetchInterval: 15_000,
   });
 
-  const { data: certsData } = useQuery({
+  const certsQuery = useQuery({
     queryKey: ["mtls-certs"],
     queryFn: () => fetchJSON<MTLSCertListResponse>("/mtls/certificates?limit=100"),
   });
 
-  const { data: caCertsData } = useQuery({
+  const caCertsQuery = useQuery({
     queryKey: ["mtls-certs-ca"],
     queryFn: () => fetchJSON<MTLSCertListResponse>("/mtls/certificates?type=ca"),
   });
 
   const generateCAMutation = useMutation({
-    mutationFn: () => postJSON<MTLSCertResponse>("/mtls/certificates/generate-ca", { organization: caOrg, commonName: caCN }),
+    mutationFn: () => postJSON<MTLSCertResponse>("/mtls/certificates/generate-ca", { organization: caOrg.trim(), commonName: caCN.trim() }),
     onSuccess: () => {
       setShowGenerateCA(false);
       queryClient.invalidateQueries({ queryKey: ["mtls-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs-ca"] });
+      toast({ tone: "success", title: "CA certificate generated" });
     },
+    onError: (err) => toast({ tone: "error", title: "CA generation failed", message: errorMessage(err) }),
   });
 
   const revokeMutation = useMutation({
-    mutationFn: async (id: string) => { const result = await postJSON<{ ok: boolean }>(`/mtls/certificates/${id}/revoke`); if (!result.ok) throw new Error("The server reported the revocation did not complete."); return result; },
+    mutationFn: async (id: string) => {
+      const result = await postJSON<{ ok: boolean }>(`/mtls/certificates/${id}/revoke`);
+      if (!result.ok) throw new Error("The server reported the revocation did not complete.");
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mtls-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs-ca"] });
     },
-    onError: (err) => toast({ tone: "error", title: "Failed to revoke certificate", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Failed to revoke certificate", message: errorMessage(err) }),
   });
 
   const migrationMutation = useMutation({
-    mutationFn: async () => { const result = await postJSON<{ ok: boolean }>("/mtls/migration/run"); if (!result.ok) throw new Error("The server reported the migration did not complete."); return result; },
+    mutationFn: async () => {
+      const result = await postJSON<{ ok: boolean }>("/mtls/migration/run");
+      if (!result.ok) throw new Error("The server reported the migration did not complete.");
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["mtls-migration-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-status"] });
       queryClient.invalidateQueries({ queryKey: ["mtls-certs"] });
     },
-    onError: (err) => toast({ tone: "error", title: "Migration failed", message: err instanceof Error ? err.message : "An error occurred" }),
+    onError: (err) => toast({ tone: "error", title: "Migration failed", message: errorMessage(err) }),
   });
 
-  const status = statusData?.data;
-  const migration = migrationData?.data;
-  const certs = certsData?.data || [];
-  const caCerts = caCertsData?.data || [];
+  const status = statusQuery.data?.data;
+  const migration = migrationQuery.data?.data;
+  const migrationEnabled = migration?.migrationEnabled === true;
+  const certs = Array.isArray(certsQuery.data?.data) ? certsQuery.data.data : [];
+  const caCerts = Array.isArray(caCertsQuery.data?.data) ? caCertsQuery.data.data : [];
+  const caExpiryDays = daysUntil(status?.caExpiresAt);
+
+  const revokeCert = async (cert: MTLSCert, kind: string) => {
+    const ok = await confirm({
+      title: `Revoke ${kind}?`,
+      description: `${cert.commonName} will stop being trusted immediately and cannot be un-revoked. Traffic that presents it — including a Beacon using its node identity — will fail mTLS until it is reissued.`,
+      danger: true,
+      confirmLabel: "Revoke",
+    });
+    if (ok) revokeMutation.mutate(cert.id);
+  };
+
+  const runMigration = async () => {
+    const ok = await confirm({
+      title: "Run the token-to-mTLS migration?",
+      description: "The control plane will issue mTLS certificates for the nodes it can reach and record them. Existing token-authenticated identities are left in place, but node agents may be reconfigured as they pick up the new identity.",
+      danger: true,
+      confirmLabel: "Run migration",
+    });
+    if (ok) migrationMutation.mutate();
+  };
 
   return (
-    <div className="space-y-6 p-6">
+    <AdminPageLayout>
       <SectionHeader
-        title="Private CA & mTLS"
-        sub="The private certificate authority and the mutual-TLS identities it issues for control plane to node-agent traffic."
         action={
-          <button
-            onClick={() => setShowGenerateCA(true)}
-            className="flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] transition"
-            type="button"
-          >
-            <Plus className="h-4 w-4" />
-            Generate CA
-          </button>
+          <div className="flex items-center gap-2">
+            <Btn tone="ghost" size="sm" onClick={() => void certsQuery.refetch()} loading={certsQuery.isFetching}>
+              <RefreshCw size={14} /> Refresh
+            </Btn>
+            <Btn size="sm" onClick={() => setShowGenerateCA((v) => !v)}>
+              <Plus size={14} /> Generate CA
+            </Btn>
+          </div>
         }
+        status={<FreshnessBadge state={sourceState(certsQuery, 30_000)} />}
       />
 
-      {showGenerateCA && (
+      {showGenerateCA ? (
         <Card>
-          <CardHeader title="Generate New CA Certificate" />
+          <CardHeader title="Generate new CA certificate" icon={Plus} />
           <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Organization</label>
-              <input
-                className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-slate-200"
-                value={caOrg}
-                onChange={(e) => setCAOrg(e.target.value)}
-                placeholder="GamePanel"
-              />
+            <div className="grid gap-3 sm:grid-cols-2">
+              <Input label="Organization" value={caOrg} onChange={setCAOrg} placeholder="Forge" required />
+              <Input label="Common name" value={caCN} onChange={setCACN} placeholder="Forge mTLS CA" required />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-300 mb-1">Common Name</label>
-              <input
-                className="w-full rounded-lg border border-white/[0.08] bg-white/[0.04] px-3 py-2 text-sm text-slate-200"
-                value={caCN}
-                onChange={(e) => setCACN(e.target.value)}
-                placeholder="GamePanel mTLS CA"
-              />
-            </div>
+            <p className="ui-hint">
+              These strings are written into every certificate this CA issues, and the control plane cannot rename them afterwards. The migration
+              runner uses its own built-in defaults, so check those before running it.
+            </p>
             <div className="flex gap-2">
-              <button
-                onClick={() => generateCAMutation.mutate()}
-                disabled={generateCAMutation.isPending}
-                className="rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] disabled:opacity-60 transition"
-                type="button"
+              <Btn
+                onClick={() => {
+                  void (async () => {
+                    const ok = await confirm({
+                      title: "Generate a new CA certificate?",
+                      description: `A CA "${caCN.trim()}" for organization "${caOrg.trim()}" will be created and trusted by every node that enrolls from now on.`,
+                      confirmLabel: "Generate",
+                    });
+                    if (ok) generateCAMutation.mutate();
+                  })();
+                }}
+                disabled={generateCAMutation.isPending || !caOrg.trim() || !caCN.trim()}
+                loading={generateCAMutation.isPending}
               >
-                {generateCAMutation.isPending ? "Generating..." : "Generate"}
-              </button>
-              <button
-                onClick={() => setShowGenerateCA(false)}
-                className="rounded-lg border border-white/[0.08] px-4 py-2 text-sm text-slate-300 hover:bg-white/[0.04] transition"
-                type="button"
-              >
-                Cancel
-              </button>
+                {generateCAMutation.isPending ? "Generating…" : "Generate"}
+              </Btn>
+              <Btn tone="ghost" onClick={() => setShowGenerateCA(false)}>Cancel</Btn>
             </div>
-            {generateCAMutation.isError && (
-              <p className="text-sm text-red-400">Error: {(generateCAMutation.error as Error)?.message}</p>
-            )}
+            {generateCAMutation.isError ? (
+              <AdminErrorState message={errorMessage(generateCAMutation.error, "CA generation failed.")} retry={() => generateCAMutation.mutate()} />
+            ) : null}
           </div>
         </Card>
-      )}
+      ) : null}
 
-      {statusLoading ? (
-        <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-6 text-center text-sm text-slate-400">Loading status...</div>
-      ) : statusError ? (
-        <div className="rounded-lg border border-red-700/30 bg-red-900/10 p-6 text-center text-sm text-red-300">Failed to load mTLS status</div>
+      {statusQuery.isLoading ? (
+        <AdminLoadingState label="Loading mTLS status…" />
+      ) : statusQuery.isError ? (
+        <AdminErrorState message={errorMessage(statusQuery.error, "mTLS status could not be loaded.")} retry={() => void statusQuery.refetch()} />
       ) : status ? (
         <StatsRow
           items={[
-            { label: "CA Configured", value: status.caConfigured ? "Yes" : "No", icon: status.caConfigured ? ShieldCheck : ShieldX, tone: status.caConfigured ? "green" : "red" },
-            { label: "Server Certs", value: status.serverCertCount ?? 0, icon: Shield },
-            { label: "Client Certs", value: status.clientCertCount ?? 0, icon: Shield },
-            { label: "Active Certs", value: status.activeCerts ?? 0, icon: CheckCircle, tone: "green" },
-            { label: "Revoked", value: status.revokedCount ?? 0, icon: XCircle, tone: "red" },
+            { label: "CA Configured", value: status.caConfigured ? "Yes" : "No", icon: status.caConfigured ? ShieldCheck : ShieldX, tone: status.caConfigured ? "ok" : "warn" },
+            { label: "Server Certs", value: count(status.serverCertCount), icon: Shield },
+            { label: "Client Certs", value: count(status.clientCertCount), icon: Shield },
+            { label: "Active Certs", value: count(status.activeCerts), icon: CheckCircle, tone: "ok" },
+            { label: "Revoked", value: count(status.revokedCount), icon: XCircle, tone: "danger" },
           ]}
         />
-      ) : null}
+      ) : (
+        <AdminErrorState message="The mTLS status endpoint returned no status. Nothing on this page is measured." retry={() => void statusQuery.refetch()} />
+      )}
 
-      {status?.caExpiresAt && (
+      {status?.caExpiresAt ? (
         <Card>
-          <CardHeader title="CA Certificate Expiry" />
-          <div className="flex items-center gap-3">
-            <AlertTriangle className="h-5 w-5 text-amber-400" />
-            <span className="text-sm text-slate-300">
-              CA expires at {new Date(status.caExpiresAt).toLocaleDateString()} ({Math.round((new Date(status.caExpiresAt).getTime() - Date.now()) / (1000 * 60 * 60 * 24))} days)
+          <CardHeader title="CA certificate expiry" icon={AlertTriangle} />
+          <div className="flex flex-wrap items-center gap-3">
+            <Pill tone={caExpiryDays === null ? "unknown" : caExpiryDays <= 0 ? "danger" : caExpiryDays <= EXPIRY_WARN_DAYS ? "warn" : "ok"}>
+              {caExpiryDays === null
+                ? "Expiry unreadable"
+                : caExpiryDays <= 0
+                  ? "Expired"
+                  : caExpiryDays <= EXPIRY_WARN_DAYS
+                    ? `Expires in ${caExpiryDays} days`
+                    : `Valid`}
+            </Pill>
+            <span className="text-xs text-text-subtle">
+              Issued CA expires {formatDate(status.caExpiresAt, "Unknown")} — {caExpiryDays === null ? "remaining days unreadable" : `${caExpiryDays} days remaining`} (this device&apos;s clock).
             </span>
           </div>
         </Card>
-      )}
-
-      {caCerts.length > 0 && (
-        <Card>
-          <CardHeader title="CA Certificates" />
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-slate-500">
-                <th className="pb-2 font-medium">Common Name</th>
-                <th className="pb-2 font-medium">Organization</th>
-                <th className="pb-2 font-medium">Serial</th>
-                <th className="pb-2 font-medium">Expires</th>
-                <th className="pb-2 font-medium">Status</th>
-                <th className="pb-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {caCerts.map((cert) => (
-                <tr key={cert.id} className="border-b border-white/[0.04] text-slate-300">
-                  <td className="py-3">{cert.commonName}</td>
-                  <td className="py-3">{cert.organization}</td>
-                  <td className="py-3 font-mono text-xs">{cert.serialNumber?.slice(0, 16)}...</td>
-                  <td className="py-3">{new Date(cert.expiresAt).toLocaleDateString()}</td>
-                  <td className="py-3">
-                    {cert.revokedAt ? (
-                      <Pill tone="red">Revoked</Pill>
-                    ) : new Date(cert.expiresAt) > new Date() ? (
-                      <Pill tone="green">Active</Pill>
-                    ) : (
-                      <Pill tone="red">Expired</Pill>
-                    )}
-                  </td>
-                  <td className="py-3">
-                    <button
-                      onClick={() => {
-                        void (async () => { if (await confirm({ title: "Revoke this CA certificate?", description: "Clients presenting this CA will no longer be trusted. This cannot be undone.", danger: true, confirmLabel: "Revoke" })) {
-                          revokeMutation.mutate(cert.id);
-                        } })();
-                      }}
-                      disabled={!!cert.revokedAt}
-                      className="text-red-400 hover:text-red-300 disabled:opacity-40 transition"
-                      title="Revoke"
-                      type="button"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </Card>
-      )}
+      ) : null}
 
       <Card>
-        <CardHeader title={`Node Certificates (${certs.length})`} />
-        {certs.length === 0 ? (
-          <EmptyState icon={Shield} title="No certificates" message="Generate a CA and node certificates to enable mTLS." />
+        <CardHeader title="CA certificates" icon={ShieldCheck} />
+        {caCertsQuery.isLoading ? (
+          <AdminLoadingRows rows={2} cols={5} label="Loading CA certificates" />
+        ) : caCertsQuery.isError ? (
+          <div className="p-4"><AdminErrorState message={errorMessage(caCertsQuery.error, "CA certificates could not be loaded.")} retry={() => void caCertsQuery.refetch()} /></div>
+        ) : caCerts.length === 0 ? (
+          <EmptyState icon={ShieldCheck} title="No CA certificate" message="No issuing certificate exists. Generate one to enable node mTLS enrolment." />
         ) : (
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-white/[0.06] text-left text-xs text-slate-500">
-                <th className="pb-2 font-medium">Type</th>
-                <th className="pb-2 font-medium">Common Name</th>
-                <th className="pb-2 font-medium">Node</th>
-                <th className="pb-2 font-medium">Expires</th>
-                <th className="pb-2 font-medium">Status</th>
-                <th className="pb-2 font-medium">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {certs.map((cert) => (
-                <tr key={cert.id} className="border-b border-white/[0.04] text-slate-300">
-                  <td className="py-3">
-                    <Pill tone={cert.certType === "ca" ? "yellow" : cert.certType === "server" ? "blue" : "neutral"}>
-                      {cert.certType}
-                    </Pill>
-                  </td>
-                  <td className="py-3">{cert.commonName}</td>
-                  <td className="py-3 font-mono text-xs">{cert.nodeId ? cert.nodeId.slice(0, 8) : "-"}</td>
-                  <td className="py-3">{new Date(cert.expiresAt).toLocaleDateString()}</td>
-                  <td className="py-3">
-                    {cert.revokedAt ? (
-                      <Pill tone="red">Revoked</Pill>
-                    ) : new Date(cert.expiresAt) > new Date() ? (
-                      <Pill tone="green">Active</Pill>
-                    ) : (
-                      <Pill tone="red">Expired</Pill>
-                    )}
-                  </td>
-                  <td className="py-3 flex gap-2">
-                    {!cert.revokedAt && (
-                      <button
-                        onClick={() => {
-                          void (async () => { if (await confirm({ title: "Revoke this client certificate?", description: "The client will no longer be able to authenticate with mTLS. This cannot be undone.", danger: true, confirmLabel: "Revoke" })) {
-                            revokeMutation.mutate(cert.id);
-                          } })();
-                        }}
-                        className="text-red-400 hover:text-red-300 transition"
-                        title="Revoke"
-                        type="button"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
-                    )}
-                  </td>
-                </tr>
+          <AdminTable label="CA certificates">
+            <AdminTHead>
+              <AdminTh>Common Name</AdminTh>
+              <AdminTh>Organization</AdminTh>
+              <AdminTh>Serial</AdminTh>
+              <AdminTh>Expires</AdminTh>
+              <AdminTh>Status</AdminTh>
+              <AdminTh className="text-right">Actions</AdminTh>
+            </AdminTHead>
+            <AdminTBody>
+              {caCerts.map((cert) => (
+                <AdminTr key={cert.id}>
+                  <AdminTd title={cert.commonName}>{cert.commonName}</AdminTd>
+                  <AdminTd>{cert.organization || "—"}</AdminTd>
+                  <AdminTd className="font-mono">{cert.serialNumber ? `${cert.serialNumber.slice(0, 16)}…` : "—"}</AdminTd>
+                  <AdminTd>{formatDate(cert.expiresAt, "Unknown")}</AdminTd>
+                  <AdminTd><Pill tone={certTone(cert)}>{certStatusText(cert)}</Pill></AdminTd>
+                  <AdminTd className="text-right">
+                    <div className="flex justify-end">
+                      <AdminIconButton label={`Revoke CA certificate ${cert.commonName}`} tone="danger" disabled={Boolean(cert.revokedAt)} onClick={() => void revokeCert(cert, "CA certificate")}>
+                        <Trash2 size={14} />
+                      </AdminIconButton>
+                    </div>
+                  </AdminTd>
+                </AdminTr>
               ))}
-            </tbody>
-          </table>
+            </AdminTBody>
+          </AdminTable>
         )}
       </Card>
 
       <Card>
-        <CardHeader title="Token-to-mTLS Migration" />
-        {migrationLoading ? (
-          <div className="text-sm text-slate-400">Loading migration status...</div>
-        ) : migration ? (
-          <div className="space-y-4">
-            <div className="grid grid-cols-3 gap-4">
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4 text-center">
-                <div className="text-2xl font-bold text-slate-200">{migration.totalNodes}</div>
-                <div className="text-xs text-slate-400">Total Nodes</div>
+        <CardHeader
+          title={certsQuery.isSuccess ? `Issued certificates (${certs.length})` : "Issued certificates"}
+          icon={Shield}
+        />
+        {certsQuery.isLoading ? (
+          <AdminLoadingRows rows={3} cols={5} label="Loading certificates" />
+        ) : certsQuery.isError ? (
+          <div className="p-4"><AdminErrorState message={errorMessage(certsQuery.error, "Certificates could not be loaded.")} retry={() => void certsQuery.refetch()} /></div>
+        ) : certs.length === 0 ? (
+          <EmptyState icon={Shield} title="No certificates issued yet" message="The certificate list loaded and is empty. Generate a CA, then issue node certificates to enable mTLS." />
+        ) : (
+          <AdminTable label="Issued certificates">
+            <AdminTHead>
+              <AdminTh>Type</AdminTh>
+              <AdminTh>Common Name</AdminTh>
+              <AdminTh>Node</AdminTh>
+              <AdminTh>Expires</AdminTh>
+              <AdminTh>Status</AdminTh>
+              <AdminTh className="text-right">Actions</AdminTh>
+            </AdminTHead>
+            <AdminTBody>
+              {certs.map((cert) => (
+                <AdminTr key={cert.id}>
+                  <AdminTd><Pill tone={cert.certType === "ca" ? "warn" : cert.certType === "server" ? "info" : "neutral"}>{cert.certType}</Pill></AdminTd>
+                  <AdminTd title={cert.commonName}>{cert.commonName}</AdminTd>
+                  <AdminTd className="font-mono">{cert.nodeId ? cert.nodeId.slice(0, 8) : "—"}</AdminTd>
+                  <AdminTd>{formatDate(cert.expiresAt, "Unknown")}</AdminTd>
+                  <AdminTd><Pill tone={certTone(cert)}>{certStatusText(cert)}</Pill></AdminTd>
+                  <AdminTd className="text-right">
+                    <div className="flex justify-end">
+                      {cert.revokedAt ? (
+                        <span className="t-meta">already revoked</span>
+                      ) : (
+                        <AdminIconButton label={`Revoke ${cert.certType} certificate ${cert.commonName}`} tone="danger" onClick={() => void revokeCert(cert, `${cert.certType} certificate`)}>
+                          <Trash2 size={14} />
+                        </AdminIconButton>
+                      )}
+                    </div>
+                  </AdminTd>
+                </AdminTr>
+              ))}
+            </AdminTBody>
+          </AdminTable>
+        )}
+      </Card>
+
+      <Card>
+        <CardHeader title="Token-to-mTLS migration" icon={RefreshCw} />
+        {migrationQuery.isLoading ? (
+          <div className="p-4"><AdminLoadingState label="Loading migration status…" /></div>
+        ) : migrationQuery.isError ? (
+          <div className="p-4"><AdminErrorState message={errorMessage(migrationQuery.error, "Migration status could not be loaded.")} retry={() => void migrationQuery.refetch()} /></div>
+        ) : (
+          <div className="space-y-4 p-4">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-3">
+              <div className="ui-well p-4 text-center">
+                <div className="t-readout">{typeof migration?.totalNodes === "number" ? migration.totalNodes : "Not reported"}</div>
+                <div className="t-meta mt-1">Total nodes</div>
               </div>
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4 text-center">
-                <div className="text-2xl font-bold text-green-400">{migration.nodesWithCerts}</div>
-                <div className="text-xs text-slate-400">Nodes with Certs</div>
+              <div className="ui-well p-4 text-center">
+                <div className="t-readout">{typeof migration?.nodesWithCerts === "number" ? migration.nodesWithCerts : "Not reported"}</div>
+                <div className="t-meta mt-1">Nodes with certs</div>
               </div>
-              <div className="rounded-lg border border-white/[0.06] bg-white/[0.02] p-4 text-center">
-                <div className="text-2xl font-bold text-slate-200">
-                  {migration.phase === "complete" ? "Complete" : migration.phase === "partial" ? "In Progress" : migration.phase === "ca_ready" ? "CA Ready" : "Not Started"}
-                </div>
-                <div className="text-xs text-slate-400">Phase</div>
+              <div className="ui-well p-4 text-center">
+                <div className="t-title">{migration?.phase ? PHASE_LABELS[migration.phase] ?? migration.phase : "Not reported"}</div>
+                <div className="t-meta mt-1">Phase</div>
               </div>
             </div>
 
-            {migration.phase !== "complete" && (
-              <button
-                onClick={() => migrationMutation.mutate()}
-                disabled={migrationMutation.isPending}
-                className="flex items-center gap-2 rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-bold text-white hover:bg-[var(--brand-dark)] disabled:opacity-60 transition"
-                type="button"
-              >
-                <RefreshCw className={`h-4 w-4 ${migrationMutation.isPending ? "animate-spin" : ""}`} />
-                {migrationMutation.isPending ? "Migrating..." : "Run Migration"}
-              </button>
-            )}
-
-            {migration.phase === "complete" && (
-              <div className="flex items-center gap-2 text-sm text-green-400">
-                <CheckCircle className="h-4 w-4" />
-                All nodes have mTLS certificates. You can now enable mTLS enforcement.
+            {migrationEnabled ? (
+              migration?.phase === "complete" ? (
+                <div className="ui-alert ui-alert-success">
+                  <CheckCircle aria-hidden="true" size={14} className="mt-0.5 shrink-0" />
+                  <span>Every reported node holds an mTLS certificate. Enforcement can be enabled for this fleet.</span>
+                </div>
+              ) : (
+                <Btn onClick={() => void runMigration()} disabled={migrationMutation.isPending} loading={migrationMutation.isPending}>
+                  <RefreshCw size={14} /> {migrationMutation.isPending ? "Migrating…" : "Run migration"}
+                </Btn>
+              )
+            ) : (
+              <div className="ui-alert ui-alert-warning">
+                <AlertTriangle aria-hidden="true" size={14} className="mt-0.5 shrink-0" />
+                <span>
+                  The control plane reports <code className="ui-code-inline">migrationEnabled: false</code> — no migration service is wired, so this
+                  action cannot run. Run Migration is disabled, not hidden.
+                </span>
               </div>
             )}
+            {migrationMutation.isError ? (
+              <AdminErrorState message={errorMessage(migrationMutation.error, "The migration run failed.")} />
+            ) : null}
           </div>
-        ) : (
-          <EmptyState icon={RefreshCw} title="Migration not available" message="Migration service is not configured." />
         )}
       </Card>
+
       {renderConfirm()}
-    </div>
+    </AdminPageLayout>
   );
 }
-

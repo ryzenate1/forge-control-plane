@@ -8,8 +8,58 @@ import {
   ShieldOff, SlidersHorizontal, Trash2, Zap,
 } from "lucide-react";
 import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapList } from "@/lib/api";
-import { AdminPageLayout, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { listTargetGroups } from "@/lib/api/loadbalancer";
+import { AdminErrorState, AdminLoadingState, AdminPageLayout, AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+
+const HTTP_METHODS = ["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE"];
+
+/** The policy config is one free-text JSON box for four different policy types,
+ *  so the shape each type expects is stated where it is typed rather than
+ *  discovered from a 400. */
+const CONFIG_HINT: Record<TrafficPolicy["type"], string> = {
+  rate_limit: 'e.g. {"requests_per_second": 100, "burst": 50}',
+  ip_whitelist: 'e.g. {"cidrs": ["203.0.113.0/24"]}',
+  ip_blacklist: 'e.g. {"cidrs": ["198.51.100.7/32"]}',
+  circuit_breaker: 'e.g. {"failure_threshold": 5, "recovery_seconds": 30}',
+};
+
+/** Parse before submit: an invalid box used to stay enabled and throw a sentinel
+ *  string from inside the mutation, which the toast then swallowed by matching
+ *  on the message. */
+function parsePolicyConfig(raw: string): Record<string, unknown> | string {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw || "{}"); }
+  catch { return "Config must be valid JSON."; }
+  if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) return "Config must be a JSON object, like {\"requests_per_second\": 100}.";
+  return parsed as Record<string, unknown>;
+}
+
+/** Keys that carry credentials must not be printed into a list row. */
+const SECRET_KEY = /(token|secret|key|password|credential|authorization)/i;
+function describeConfig(config: Record<string, unknown>): string {
+  const parts = Object.entries(config ?? {}).map(([k, v]) => {
+    if (SECRET_KEY.test(k)) return `${k}: ••••••`;
+    if (v === null || v === undefined) return `${k}: not set`;
+    if (typeof v === "object") return `${k}: ${JSON.stringify(v)}`;
+    return `${k}: ${String(v)}`;
+  });
+  return parts.length ? parts.join(", ") : "no settings";
+}
+
+/** `get,get,GET,foo` used to submit unchanged: no upper-casing, no de-duplication
+ *  and no check that the token is an HTTP method at all. */
+function normalizedMethods(value: string): string[] {
+  return [...new Set(value.split(",").map((m) => m.trim().toUpperCase()).filter(Boolean))];
+}
+function methodsError(value: string): string {
+  const list = normalizedMethods(value);
+  if (list.length === 0) return "List at least one HTTP method.";
+  const unknown = list.filter((m) => !HTTP_METHODS.includes(m));
+  return unknown.length ? `Not an HTTP method: ${unknown.join(", ")}.` : "";
+}
 
 type RouteRule = {
   id: string;
@@ -60,6 +110,7 @@ export default function AdminTrafficPage() {
   const [editingPolicy, setEditingPolicy] = useState<TrafficPolicy | null>(null);
   const [policyForm, setPolicyForm] = useState(defaultPolicyForm);
   const [policySearch, setPolicySearch] = useState("");
+  const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
 
   const routesQuery = useQuery({
     queryKey: ["admin", "traffic", "rules"],
@@ -83,76 +134,97 @@ export default function AdminTrafficPage() {
   );
 
   const createRouteMutation = useMutation({
-    mutationFn: () => postJSON("/admin/traffic/rules", { ...routeForm, methods: routeForm.methods.split(",").map((m) => m.trim()) }),
+    mutationFn: () => postJSON("/admin/traffic/rules", { ...routeForm, methods: normalizedMethods(routeForm.methods) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] });
       setShowCreateRoute(false);
       setRouteForm(defaultRouteForm);
+      toast({ tone: "success", title: "Route rule created" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to create route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updateRouteMutation = useMutation({
     mutationFn: () =>
-      putJSON(`/admin/traffic/rules/${encodeURIComponent(editingRoute!.id)}`, { ...routeForm, methods: routeForm.methods.split(",").map((m) => m.trim()) }),
+      putJSON(`/admin/traffic/rules/${encodeURIComponent(editingRoute!.id)}`, { ...routeForm, methods: normalizedMethods(routeForm.methods) }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] });
       setEditingRoute(null);
+      toast({ tone: "success", title: "Route rule updated" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to update route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteRouteMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/traffic/rules/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] }); toast({ tone: "success", title: "Route rule deleted" }); },
     onError: (err) => toast({ tone: "error", title: "Failed to delete route", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
-  const [policyConfigError, setPolicyConfigError] = useState<string | null>(null);
-
   const createPolicyMutation = useMutation({
-    mutationFn: () => {
-      let parsedConfig: Record<string, unknown>;
-      try { parsedConfig = JSON.parse(policyForm.config) as Record<string, unknown>; }
-      catch { setPolicyConfigError("Config must be valid JSON."); throw new Error("Invalid JSON config"); }
-      return postJSON("/admin/traffic/policies", { ...policyForm, config: parsedConfig });
-    },
+    mutationFn: () => postJSON("/admin/traffic/policies", { ...policyForm, config: parsePolicyConfig(policyForm.config) as Record<string, unknown> }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] });
       setShowCreatePolicy(false);
       setPolicyForm(defaultPolicyForm);
       setPolicyConfigError(null);
+      toast({ tone: "success", title: "Traffic policy created" });
     },
-    onError: (err) => { if (err instanceof Error && err.message === "Invalid JSON config") return; toast({ tone: "error", title: "Failed to create policy", message: err instanceof Error ? err.message : "An error occurred" }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create policy", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deletePolicyMutation = useMutation({
     mutationFn: (id: string) => deleteJSON(`/admin/traffic/policies/${encodeURIComponent(id)}`),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] }),
+    onSuccess: () => { queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] }); toast({ tone: "success", title: "Traffic policy deleted" }); },
     onError: (err) => toast({ tone: "error", title: "Failed to delete policy", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const updatePolicyMutation = useMutation({
-    mutationFn: () => {
-      let parsedConfig: Record<string, unknown>;
-      try { parsedConfig = JSON.parse(policyForm.config) as Record<string, unknown>; }
-      catch { setPolicyConfigError("Config must be valid JSON."); throw new Error("Invalid JSON config"); }
-      return putJSON(`/admin/traffic/policies/${encodeURIComponent(editingPolicy!.id)}`, { ...policyForm, config: parsedConfig });
-    },
+    mutationFn: () => putJSON(`/admin/traffic/policies/${encodeURIComponent(editingPolicy!.id)}`, { ...policyForm, config: parsePolicyConfig(policyForm.config) as Record<string, unknown> }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "policies"] });
       setEditingPolicy(null);
       setPolicyForm(defaultPolicyForm);
       setPolicyConfigError(null);
+      toast({ tone: "success", title: "Traffic policy updated" });
     },
-    onError: (err) => { if (err instanceof Error && err.message === "Invalid JSON config") return; toast({ tone: "error", title: "Failed to update policy", message: err instanceof Error ? err.message : "An error occurred" }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to update policy", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
+  // `POST /admin/traffic/sync` answers 204 with no body (handlers_trafficmanager.go:115),
+  // so there is no count to report and no way for this page to confirm what the
+  // gateway actually applied. It also never toasted on success, which made a
+  // sync indistinguishable from nothing happening.
   const syncRoutesMutation = useMutation({
     mutationFn: () => postJSON("/admin/traffic/sync"),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "traffic", "rules"] });
+      toast({ tone: "success", title: "Route sync requested", message: "The gateway was asked to reload its routes. It reports no result, so this page cannot confirm how many rules were applied." });
+    },
     onError: (err) => toast({ tone: "error", title: "Route sync failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
+
+  // Target groups are a Load Balancer resource; a route naming one that does not
+  // exist is accepted by the API and silently forwards nowhere, so the list is
+  // fetched and offered as a choice instead of a free-text field.
+  const groupsQuery = useQuery({ queryKey: ["admin", "load-balancer", "groups"], queryFn: () => listTargetGroups() });
+  const groupNames = useMemo(() => (groupsQuery.data ?? []).map((g) => g.name), [groupsQuery.data]);
+
+  // Everything the gateway would reject is caught before submit, not after.
+  const routeError =
+    !routeForm.path.trim() ? "A path is required, e.g. /api/v1/servers."
+      : !routeForm.path.trim().startsWith("/") ? "The path must start with /."
+        : !routeForm.targetGroup.trim() ? "Choose the target group this route forwards to."
+          : !Number.isInteger(routeForm.priority) || routeForm.priority < 0 ? "Priority must be a whole number of 0 or more."
+            : methodsError(routeForm.methods);
+
+  const groupsNote = groupsQuery.isError
+    ? "Target groups could not be loaded, so no list is available — type the group name."
+    : groupsQuery.isPending
+      ? "Loading target groups…"
+      : groupNames.length === 0
+        ? "No target group exists yet, so a route created here would forward nowhere. Create one under Load Balancer first."
+        : "";
 
   const tabs: Array<{ id: Tab; label: string }> = [
     { id: "routes", label: "Route Rules" },
@@ -162,11 +234,10 @@ export default function AdminTrafficPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        title="Traffic Policies"
-        sub="Route rules and traffic policies for the API gateway."
+        status={<FreshnessBadge state={sourceState(tab === "routes" ? routesQuery : policiesQuery)} />}
         action={
           <Btn tone="ghost" onClick={() => syncRoutesMutation.mutate()} disabled={syncRoutesMutation.isPending}>
-            <RefreshCw size={14} /> Sync Routes
+            <RefreshCw size={14} /> {syncRoutesMutation.isPending ? "Syncing…" : "Sync Routes"}
           </Btn>
         }
       />
@@ -185,39 +256,47 @@ export default function AdminTrafficPage() {
             }
           />
           <div className="flex items-center gap-3 p-4">
-            <Input placeholder="Search routes..." value={search} onChange={setSearch} />
+            <Input aria-label="Search route rules by path or target group" placeholder="Search routes..." value={search} onChange={setSearch} />
           </div>
-          {routesQuery.isLoading ? (
-            <div className="p-8 text-center text-sm text-slate-500">Loading routes...</div>
+          {routesQuery.isPending ? (
+            <div className="p-4"><AdminLoadingState label="Loading route rules…" /></div>
+          ) : routesQuery.isError ? (
+            <div className="p-4"><AdminErrorState message={`Route rules could not be loaded: ${routesQuery.error instanceof Error ? routesQuery.error.message : "request error"}. This is a failed read, not an empty gateway.`} retry={() => void routesQuery.refetch()} /></div>
           ) : filteredRoutes.length === 0 ? (
-            <EmptyState icon={Globe} message="No route rules configured." />
+            <EmptyState
+              icon={Globe}
+              message={search
+                ? `No route rule matches “${search}”.`
+                : "No route rule has been created. The gateway forwards only what is listed here."}
+              title={search ? "No routes match the search" : "No route rules"}
+            />
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                  <tr className="border-b border-line text-left text-xs uppercase tracking-widest text-text-subtle">
                     <th className="px-4 py-3">Path</th>
                     <th className="px-4 py-3">Target Group</th>
                     <th className="px-4 py-3">Priority</th>
                     <th className="px-4 py-3">Methods</th>
                     <th className="px-4 py-3">Status</th>
-                    <th className="px-4 py-3"></th>
+                    <th className="px-4 py-3"><span className="sr-only">Actions</span></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {Array.isArray(filteredRoutes) && filteredRoutes.map((rule) => (
-                    <tr key={rule.id} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-mono text-xs font-medium text-slate-200">{rule.path}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{rule.targetGroup}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{rule.priority}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{(rule.methods ?? ["ALL"]).join(", ")}</td>
+                <tbody className="divide-y divide-line">
+                  {filteredRoutes.map((rule) => (
+                    <tr key={rule.id} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs font-medium text-text" title={rule.path}>{rule.path}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle" title={rule.targetGroup}>{rule.targetGroup || <span className="text-warn">No target group named</span>}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{Number.isFinite(rule.priority) ? rule.priority : "Not set"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{(rule.methods ?? []).length ? rule.methods!.join(", ") : "Not recorded"}</td>
                       <td className="px-4 py-3">
-                        <Pill tone={rule.enabled ? "green" : "neutral"}>{rule.enabled ? "Active" : "Inactive"}</Pill>
+                        <Pill tone={rule.enabled ? "green" : "neutral"}>{rule.enabled ? "Enabled" : "Disabled"}</Pill>
                       </td>
                       <td className="px-4 py-3">
                         <div className="flex gap-1">
-                          <Btn size="sm" tone="ghost" onClick={() => { setEditingRoute(rule); setRouteForm({ ...rule, methods: (rule.methods ?? ["ALL"]).join(", ") }); }}>Edit</Btn>
-                          <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete route "${rule.path || rule.id.slice(0, 8)}"?`, description: `Traffic matching ${rule.path || "this route"} will stop being forwarded to ${rule.targetGroup}. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteRouteMutation.mutate(rule.id); })(); }}>
+                          <Btn ariaLabel={`Edit the route rule ${rule.path}`} size="sm" tone="ghost" onClick={() => { setEditingRoute(rule); setRouteForm({ ...rule, methods: (rule.methods ?? []).join(", ") }); }}>Edit</Btn>
+                          <Btn ariaLabel={`Delete the route rule ${rule.path}`} size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete route "${rule.path || rule.id.slice(0, 8)}"?`, description: `Traffic matching ${rule.path || "this route"} will stop being forwarded to ${rule.targetGroup || "its target group"}. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteRouteMutation.mutate(rule.id); })(); }}>
                             <Trash2 size={12} />
                           </Btn>
                         </div>
@@ -243,37 +322,43 @@ export default function AdminTrafficPage() {
             }
           />
           <div className="flex items-center gap-3 p-4">
-            <Input placeholder="Search policies..." value={policySearch} onChange={setPolicySearch} />
+            <Input aria-label="Search policies by name" placeholder="Search policies..." value={policySearch} onChange={setPolicySearch} />
           </div>
-          {policiesQuery.isLoading ? (
-            <div className="p-8 text-center text-sm text-slate-500">Loading policies...</div>
+          {policiesQuery.isPending ? (
+            <div className="p-4"><AdminLoadingState label="Loading traffic policies…" /></div>
+          ) : policiesQuery.isError ? (
+            <div className="p-4"><AdminErrorState message={`Traffic policies could not be loaded: ${policiesQuery.error instanceof Error ? policiesQuery.error.message : "request error"}. This is a failed read, not an unfiltered gateway.`} retry={() => void policiesQuery.refetch()} /></div>
           ) : filteredPolicies.length === 0 ? (
-            <EmptyState icon={Shield} message="No traffic policies configured." />
+            <EmptyState
+              icon={Shield}
+              message={policySearch ? `No traffic policy is named “${policySearch}”.` : "No traffic policy has been created. Rate limits and IP rules live here."}
+              title={policySearch ? "No policies match the search" : "No traffic policies"}
+            />
           ) : (
-            <div className="divide-y divide-white/[0.04]">
-              {Array.isArray(filteredPolicies) && filteredPolicies.map((p) => (
+            <div className="divide-y divide-line">
+              {filteredPolicies.map((p) => (
                 <div key={p.id} className="flex items-center justify-between px-4 py-3">
                   <div className="flex items-center gap-3">
                     {p.type === "rate_limit" ? (
-                      <SlidersHorizontal size={16} className="text-amber-400" />
+                      <SlidersHorizontal size={16} className="text-warn" />
                     ) : p.type === "ip_whitelist" ? (
-                      <ShieldCheck size={16} className="text-emerald-400" />
+                      <ShieldCheck size={16} className="text-ok" />
                     ) : p.type === "ip_blacklist" ? (
-                      <ShieldOff size={16} className="text-red-400" />
+                      <ShieldOff size={16} className="text-danger" />
                     ) : (
-                      <Zap size={16} className="text-slate-400" />
+                      <Zap size={16} className="text-text-subtle" />
                     )}
                     <div>
-                      <p className="text-sm font-medium text-slate-200">{p.name}</p>
-                      <p className="text-xs text-slate-500">
-                        {p.type.replace("_", " ")} — {Object.entries(p.config).map(([k, v]) => `${k}: ${v}`).join(", ")}
+                      <p className="text-sm font-medium text-text">{p.name}</p>
+                      <p className="text-xs text-text-subtle">
+                        {p.type.replace("_", " ")} — {describeConfig(p.config ?? {})}
                       </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
                     <Pill tone={p.enabled ? "green" : "neutral"}>{p.enabled ? "Enabled" : "Disabled"}</Pill>
-                    <Btn size="sm" tone="ghost" onClick={() => { setEditingPolicy(p); setPolicyForm({ type: p.type, name: p.name, config: JSON.stringify(p.config ?? {}, null, 2), enabled: p.enabled ?? true }); }}>Edit</Btn>
-                    <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: "Delete this traffic policy?", description: "The policy will be removed. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deletePolicyMutation.mutate(p.id); })(); }}>
+                    <Btn size="sm" tone="ghost" onClick={() => { setEditingPolicy(p); setPolicyConfigError(null); setPolicyForm({ type: p.type, name: p.name, config: JSON.stringify(p.config ?? {}, null, 2), enabled: p.enabled ?? true }); }}>Edit</Btn>
+                    <Btn ariaLabel={`Delete the traffic policy ${p.name}`} size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete the policy “${p.name}”?`, description: `Its ${p.type.replace("_", " ")} settings (${describeConfig(p.config ?? {})}) stop applying to matching traffic as soon as the gateway reloads. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deletePolicyMutation.mutate(p.id); })(); }}>
                       <Trash2 size={12} />
                     </Btn>
                   </div>
@@ -292,6 +377,9 @@ export default function AdminTrafficPage() {
           onSave={() => createRouteMutation.mutate()}
           onClose={() => { setShowCreateRoute(false); setRouteForm(defaultRouteForm); }}
           saving={createRouteMutation.isPending}
+          groupNames={groupNames}
+          groupsNote={groupsNote}
+          error={routeError}
         />
       )}
 
@@ -303,72 +391,39 @@ export default function AdminTrafficPage() {
           onSave={() => updateRouteMutation.mutate()}
           onClose={() => setEditingRoute(null)}
           saving={updateRouteMutation.isPending}
+          groupNames={groupNames}
+          groupsNote={groupsNote}
+          error={routeError}
         />
       )}
 
       {showCreatePolicy && (
         <Modal title="Create Traffic Policy" onClose={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}>
-          <div className="space-y-4">
-            <Input label="Name" value={policyForm.name} onChange={(v) => setPolicyForm({ ...policyForm, name: v })} placeholder="Rate limit API" />
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
-              <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
-                value={policyForm.type}
-                onChange={(e) => setPolicyForm({ ...policyForm, type: e.target.value as TrafficPolicy["type"] })}
-              >
-                <option value="rate_limit">Rate Limit</option>
-                <option value="ip_whitelist">IP Whitelist</option>
-                <option value="ip_blacklist">IP Blacklist</option>
-                <option value="circuit_breaker">Circuit Breaker</option>
-              </select>
-            </div>
-            <Input label="Config (JSON)" value={policyForm.config} onChange={(v) => setPolicyForm({ ...policyForm, config: v })} placeholder='{"requests_per_second": 100}' />
-            {policyConfigError ? <p className="text-sm text-red-300">{policyConfigError}</p> : null}
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <input type="checkbox" checked={policyForm.enabled} onChange={(e) => setPolicyForm({ ...policyForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
-              Enabled
-            </label>
-            <p className="text-xs text-slate-400">POST /admin/traffic/policies — backend persists via trafficmanager.Service</p>
-          </div>
+          <PolicyFormFields form={policyForm} onChange={(f) => { setPolicyForm(f); setPolicyConfigError(null); }} configError={policyConfigError} />
           <ModalFooter
             onCancel={() => { setShowCreatePolicy(false); setPolicyConfigError(null); }}
-            onConfirm={() => { setPolicyConfigError(null); createPolicyMutation.mutate(); }}
-            confirmLabel={createPolicyMutation.isPending ? "Creating..." : "Create"}
-            disabled={createPolicyMutation.isPending || !policyForm.name}
+            onConfirm={() => {
+              const parsed = parsePolicyConfig(policyForm.config);
+              if (typeof parsed === "string") { setPolicyConfigError(parsed); return; }
+              createPolicyMutation.mutate();
+            }}
+            confirmLabel={createPolicyMutation.isPending ? "Creating…" : "Create"}
+            disabled={createPolicyMutation.isPending || !policyForm.name.trim() || typeof parsePolicyConfig(policyForm.config) === "string"}
           />
         </Modal>
       )}
       {editingPolicy && (
         <Modal title="Edit Traffic Policy" onClose={() => { setEditingPolicy(null); setPolicyForm(defaultPolicyForm); setPolicyConfigError(null); }}>
-          <div className="space-y-4">
-            <p className="text-xs text-slate-400">PUT /admin/traffic/policies/:id — wired to backend UpdateTrafficPolicy</p>
-            <Input label="Name" value={policyForm.name} onChange={(v) => setPolicyForm({ ...policyForm, name: v })} placeholder="Rate limit API" />
-            <div>
-              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Type</label>
-              <select
-                className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
-                value={policyForm.type}
-                onChange={(e) => setPolicyForm({ ...policyForm, type: e.target.value as TrafficPolicy["type"] })}
-              >
-                <option value="rate_limit">Rate Limit</option>
-                <option value="ip_whitelist">IP Whitelist</option>
-                <option value="ip_blacklist">IP Blacklist</option>
-                <option value="circuit_breaker">Circuit Breaker</option>
-              </select>
-            </div>
-            <Input label="Config (JSON)" value={policyForm.config} onChange={(v) => setPolicyForm({ ...policyForm, config: v })} placeholder='{"requests_per_second": 100}' />
-            {policyConfigError ? <p className="text-sm text-red-300">{policyConfigError}</p> : null}
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <input type="checkbox" checked={policyForm.enabled} onChange={(e) => setPolicyForm({ ...policyForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
-              Enabled
-            </label>
-          </div>
+          <PolicyFormFields form={policyForm} onChange={(f) => { setPolicyForm(f); setPolicyConfigError(null); }} configError={policyConfigError} />
           <ModalFooter
             onCancel={() => { setEditingPolicy(null); setPolicyForm(defaultPolicyForm); setPolicyConfigError(null); }}
-            onConfirm={() => { setPolicyConfigError(null); updatePolicyMutation.mutate(); }}
-            confirmLabel={updatePolicyMutation.isPending ? "Saving..." : "Save"}
-            disabled={updatePolicyMutation.isPending || !policyForm.name}
+            onConfirm={() => {
+              const parsed = parsePolicyConfig(policyForm.config);
+              if (typeof parsed === "string") { setPolicyConfigError(parsed); return; }
+              updatePolicyMutation.mutate();
+            }}
+            confirmLabel={updatePolicyMutation.isPending ? "Saving…" : "Save"}
+            disabled={updatePolicyMutation.isPending || !policyForm.name.trim() || typeof parsePolicyConfig(policyForm.config) === "string"}
           />
         </Modal>
       )}
@@ -379,7 +434,7 @@ export default function AdminTrafficPage() {
 
 
 function RouteFormModal({
-  title, form, onChange, onSave, onClose, saving,
+  title, form, onChange, onSave, onClose, saving, groupNames, groupsNote, error,
 }: {
   title: string;
   form: typeof defaultRouteForm;
@@ -387,21 +442,85 @@ function RouteFormModal({
   onSave: () => void;
   onClose: () => void;
   saving: boolean;
+  groupNames: string[];
+  groupsNote: string;
+  error: string;
 }) {
+  const knownGroup = !form.targetGroup || groupNames.includes(form.targetGroup);
   return (
     <Modal title={title} onClose={onClose}>
       <div className="space-y-4">
-        <p className="text-xs text-slate-400">{title.includes("Edit") ? "PUT /admin/traffic/rules/:id" : "POST /admin/traffic/rules"} — backend now correctly uses PUT for updates</p>
         <Input label="Path" value={form.path} onChange={(v) => onChange({ ...form, path: v })} placeholder="/api/v1/servers" />
-        <Input label="Target Group" value={form.targetGroup} onChange={(v) => onChange({ ...form, targetGroup: v })} placeholder="prod-servers" />
-        <Input label="Priority" type="number" value={String(form.priority)} onChange={(v) => onChange({ ...form, priority: Number(v) })} />
-        <Input label="HTTP Methods (comma separated)" value={form.methods} onChange={(v) => onChange({ ...form, methods: v })} placeholder="GET,POST,PUT,DELETE" />
-        <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-          <input type="checkbox" checked={form.enabled} onChange={(e) => onChange({ ...form, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
-          Enabled
+        <div>
+          <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle" htmlFor="route-target-group">Target Group</label>
+          {/* A route naming a group that does not exist is accepted by the API and
+              forwards nowhere, so the Load Balancer's groups are offered as a list. */}
+          {groupNames.length > 0 ? (
+            <select aria-label="Target group this route forwards to" className="ui-input" id="route-target-group" value={form.targetGroup} onChange={(e) => onChange({ ...form, targetGroup: e.target.value })}>
+              <option value="">Select a target group</option>
+              {!knownGroup && form.targetGroup ? <option value={form.targetGroup}>{form.targetGroup} — not in the current list</option> : null}
+              {groupNames.map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          ) : (
+            <Input mono onChange={(v) => onChange({ ...form, targetGroup: v })} placeholder="prod-servers" value={form.targetGroup} />
+          )}
+          {groupsNote ? <p className="mt-1.5 text-xs text-text-subtle">{groupsNote}</p> : null}
+        </div>
+        <Input label="Priority" mono type="number" value={String(form.priority)} onChange={(v) => onChange({ ...form, priority: Number(v) })} />
+        <div>
+          <Input label="HTTP Methods (comma separated)" mono value={form.methods} onChange={(v) => onChange({ ...form, methods: v })} placeholder="GET,POST,PUT,DELETE" />
+          <p className="mt-1.5 text-xs text-text-subtle">Comma-separated HTTP methods, e.g. GET, POST. Matching is case-insensitive.</p>
+        </div>
+        <label className="flex items-center gap-2 text-sm font-medium text-text">
+          <input type="checkbox" checked={form.enabled} onChange={(e) => onChange({ ...form, enabled: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
+          {form.enabled ? "Enabled — this route forwards traffic" : "Disabled — this route is stored but does not forward traffic"}
         </label>
+        {error ? <p className="text-xs text-danger" role="alert">{error}</p> : null}
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Saving..." : "Save"} disabled={saving || !form.path} />
+      <ModalFooter onCancel={onClose} onConfirm={onSave} confirmLabel={saving ? "Saving…" : "Save"} disabled={saving || !!error} />
     </Modal>
+  );
+}
+
+function PolicyFormFields({ form, onChange, configError }: {
+  form: typeof defaultPolicyForm;
+  onChange: (f: typeof defaultPolicyForm) => void;
+  configError: string | null;
+}) {
+  const liveError = (() => { const r = parsePolicyConfig(form.config); return typeof r === "string" ? r : ""; })();
+  const selectClass = "h-9 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none focus:border-brand focus:ring-1 focus:ring-brand/30";
+  return (
+    <div className="space-y-4">
+      <Input label="Name" value={form.name} onChange={(v) => onChange({ ...form, name: v })} placeholder="Rate limit API" />
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle" htmlFor="policy-type">Type</label>
+        <select aria-label="Policy type" className={selectClass} id="policy-type" value={form.type} onChange={(e) => onChange({ ...form, type: e.target.value as TrafficPolicy["type"] })}>
+          <option value="rate_limit">Rate Limit</option>
+          <option value="ip_whitelist">IP Whitelist</option>
+          <option value="ip_blacklist">IP Blacklist</option>
+          <option value="circuit_breaker">Circuit Breaker</option>
+        </select>
+      </div>
+      <div>
+        <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle" htmlFor="policy-config">Config (JSON)</label>
+        {/* A multi-line field: the stored config is re-serialised with newlines,
+            and a one-line input showed a different value than the one submitted. */}
+        <textarea
+          aria-label="Policy configuration as JSON"
+          autoComplete="off"
+          className="ui-input h-28 w-full font-mono text-xs"
+          id="policy-config"
+          onChange={(e) => onChange({ ...form, config: e.target.value })}
+          spellCheck={false}
+          value={form.config}
+        />
+        <p className="mt-1.5 text-xs text-text-subtle">{CONFIG_HINT[form.type]}</p>
+        {(liveError || configError) ? <p className="mt-1 text-xs text-danger" role="alert">{liveError || configError}</p> : null}
+      </div>
+      <label className="flex items-center gap-2 text-sm font-medium text-text">
+        <input type="checkbox" checked={form.enabled} onChange={(e) => onChange({ ...form, enabled: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
+        {form.enabled ? "Enabled — this policy applies to matching traffic" : "Disabled — this policy is stored but does not apply"}
+      </label>
+    </div>
   );
 }

@@ -1,15 +1,26 @@
 "use client";
 
 import { useEffect } from "react";
-import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { AdminPageLayout, AdminPageHeader } from "@/components/admin/admin-ui";
+import { AdminLoadingState, AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
 
 /**
- * Legacy route — Database Services now live as a tab inside the unified
- * Databases page (`/admin/databases?tab=services` + Overview inventory).
- * This stub keeps old bookmarks/API docs working and forwards admins to
- * the single place where every created DB is shown.
+ * Legacy route — Database Services is a tab inside `/admin/databases`, not a nav
+ * row (`admin-registry.ts` deliberately omits it and lists the alias in
+ * `ADMIN_ALIAS_ROUTES`). The alias only resolves the *nav* position, so this
+ * filesystem route is what answers the old URL and has to do the navigating.
+ *
+ * It used to render full product chrome while it did so: its own `<h1>`
+ * "Database Services" plus a bespoke description contradicting the registry, a
+ * hand-styled brand button, and a `useEffect` redirect that fired after paint —
+ * so every visit flashed a second page title before jumping, and the target
+ * `?tab=services` was ignored by the destination, which silently landed the
+ * operator on Overview.
+ *
+ * Now: the header copy is the registry's (no hand-passed title, no invented
+ * description), the body is a loading state rather than a page, and
+ * `/admin/databases` reads `?tab=` so Services is actually reached. The redirect
+ * is still `router.replace`, so the stale URL never enters history.
  */
 export default function AdminDatabaseServicesRedirect() {
   const router = useRouter();
@@ -20,16 +31,8 @@ export default function AdminDatabaseServicesRedirect() {
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader
-        title="Database Services"
-        description="Moved — services now live inside Databases → Services, with every DB visible under Overview."
-      />
-      <div className="rounded-xl border border-white/[0.06] bg-white/[0.02] p-6 text-sm text-slate-300">
-        <p>This page moved to keep one inventory instead of two.</p>
-        <Link href="/admin/databases?tab=services" className="mt-3 inline-block rounded-lg bg-[var(--brand)] px-4 py-2 text-sm font-semibold text-white">
-          Open Databases → Services
-        </Link>
-      </div>
+      <SectionHeader />
+      <AdminLoadingState label="Opening Database Services inside Databases…" />
     </AdminPageLayout>
   );
 }

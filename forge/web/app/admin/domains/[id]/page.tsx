@@ -1,9 +1,10 @@
 "use client";
 
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Globe, Shield, Save, Trash2, ExternalLink, Plus, ArrowUpRight } from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Globe, Shield, Save, Trash2, ExternalLink, Plus, ArrowUpRight } from "lucide-react";
 import {
   fetchDomainSecurityHeaders,
   createDomainSecurityHeaders,
@@ -23,9 +24,14 @@ import {
   fetchAdminProxyDomain,
   type ProxyDomain as ApiProxyDomain,
 } from "@/lib/api/proxy-domains";
-import {
-  AdminPageLayout,
+import { fetchServer } from "@/lib/api/servers";
+import { ApiError } from "@/lib/api/http";
+import { sourceState } from "@/lib/admin/telemetry";
+import { FreshnessBadge } from "@/components/admin/telemetry-ui";
+import { AdminPageLayout,
   AdminPageHeader,
+  AdminLoadingState,
+  AdminErrorState,
   Card,
   CardHeader,
   Btn,
@@ -34,9 +40,16 @@ import {
   Modal,
   ModalFooter,
   EmptyState,
+  AdminTable,
+  AdminTHead,
+  AdminTh,
+  AdminTBody,
+  AdminTr,
+  AdminTd,
 } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { cn } from "@/lib/utils";
 import { OfflineBanner } from "@/components/shared/states-offline";
 
 type ProxyDomain = {
@@ -47,14 +60,35 @@ type ProxyDomain = {
   https: boolean;
   port: number;
   certType?: string;
+  autoRenew?: boolean;
   path?: string;
   createdAt?: string;
 };
+
+/** Referrer-Policy values a browser accepts. Free text here used to write an
+ *  ignored header into a live gateway route. */
+const REFERRER_POLICIES = [
+  "no-referrer",
+  "no-referrer-when-downgrade",
+  "origin",
+  "origin-when-cross-origin",
+  "same-origin",
+  "strict-origin",
+  "strict-origin-when-cross-origin",
+  "unsafe-url",
+];
+
+/** HSTS max-age is a duration in seconds. `0` alongside `hstsEnabled: true`
+ *  asks browsers to forget the policy, and values above one year are what the
+ *  preload list requires — so both ends are bounded. */
+const HSTS_MAX_AGE_MIN = 1;
+const HSTS_MAX_AGE_MAX = 63072000;
 
 export default function AdminDomainDetailPage() {
   const params = useParams();
   const router = useRouter();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const id = decodeURIComponent(params.id as string);
 
@@ -69,6 +103,18 @@ export default function AdminDomainDetailPage() {
   });
 
   const domain = domainQuery.data;
+
+  // Attribution. A proxy domain carries no serverId or organizationId of its
+  // own; the owning workload is `serviceId` when `serviceType` is `server`, so
+  // resolve that into a named server, its owner and its node rather than
+  // printing an unresolved UUID or claiming nothing.
+  const boundServerId = domain?.serviceType === "server" ? domain.serviceId ?? "" : "";
+  const serverQuery = useQuery({
+    queryKey: ["admin", "server", boundServerId],
+    queryFn: () => fetchServer(boundServerId),
+    enabled: !!boundServerId,
+  });
+
   const existing = headersQuery.data;
 
   const [form, setForm] = useState<UpdateSecurityHeadersInput>({
@@ -85,26 +131,42 @@ export default function AdminDomainDetailPage() {
     customHeaders: {},
   });
 
+  // Hydrate the form from the server copy once per override id. Re-running it
+  // on every `existing` change meant a save invalidating its own query
+  // overwrote anything typed while the response was in flight.
+  const hydratedFrom = useRef<string | null>(null);
   useEffect(() => {
-    if (existing) {
-      setForm({
-        hstsEnabled: existing.hstsEnabled,
-        hstsMaxAge: existing.hstsMaxAge,
-        hstsIncludeSubdomains: existing.hstsIncludeSubdomains,
-        hstsPreload: existing.hstsPreload,
-        xFrameOptions: existing.xFrameOptions ?? "DENY",
-        xContentTypeOptions: existing.xContentTypeOptions ?? "nosniff",
-        referrerPolicy: existing.referrerPolicy ?? "strict-origin-when-cross-origin",
-        cspEnabled: existing.cspEnabled,
-        cspPolicy: existing.cspPolicy ?? "",
-        permissionsPolicy: existing.permissionsPolicy ?? "",
-        customHeaders: existing.customHeaders ?? {},
-      });
-    }
+    if (!existing) return;
+    if (hydratedFrom.current === existing.id) return;
+    hydratedFrom.current = existing.id;
+    setForm({
+      hstsEnabled: existing.hstsEnabled,
+      hstsMaxAge: existing.hstsMaxAge,
+      hstsIncludeSubdomains: existing.hstsIncludeSubdomains,
+      hstsPreload: existing.hstsPreload,
+      xFrameOptions: existing.xFrameOptions ?? "DENY",
+      xContentTypeOptions: existing.xContentTypeOptions ?? "nosniff",
+      referrerPolicy: existing.referrerPolicy ?? "strict-origin-when-cross-origin",
+      cspEnabled: existing.cspEnabled,
+      cspPolicy: existing.cspPolicy ?? "",
+      permissionsPolicy: existing.permissionsPolicy ?? "",
+      customHeaders: existing.customHeaders ?? {},
+    });
   }, [existing]);
+
+  // These three controls write response headers into a live gateway route, so
+  // the mistakes are blocked before submit rather than surfaced as a 200.
+  const headerErrors: string[] = [];
+  if (form.hstsEnabled && (form.hstsMaxAge ?? 0) < HSTS_MAX_AGE_MIN) headerErrors.push("HSTS Max-Age must be at least 1 second while HSTS is enabled.");
+  if (form.hstsMaxAge != null && (form.hstsMaxAge > HSTS_MAX_AGE_MAX)) headerErrors.push(`HSTS Max-Age must be ${HSTS_MAX_AGE_MAX} seconds or less.`);
+  if (form.cspEnabled && !(form.cspPolicy ?? "").trim()) headerErrors.push("CSP is enabled but the policy is empty — saving would send an empty Content-Security-Policy header.");
+  if (form.referrerPolicy && !REFERRER_POLICIES.includes(form.referrerPolicy)) headerErrors.push("Referrer-Policy is not a value browsers recognise.");
+
+  const [notice, setNotice] = useState<{ tone: "ok" | "removed"; text: string } | null>(null);
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      setNotice(null);
       if (existing?.id) {
         return updateDomainSecurityHeaders(id, existing.id, form);
       }
@@ -113,44 +175,47 @@ export default function AdminDomainDetailPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["domain-security-headers-detail", id] });
       queryClient.invalidateQueries({ queryKey: ["domain-security-headers", id] });
+      setNotice({ tone: "ok", text: "Override saved. The gateway applies it on its next configuration reload — this page cannot confirm the reload has happened." });
     },
+    onError: (e: Error) => toast({ tone: "error", title: "Could not save headers", message: e.message }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: () => {
+      setNotice(null);
       if (!existing?.id) return Promise.resolve();
       return deleteDomainSecurityHeaders(id, existing.id);
     },
     onSuccess: () => {
+      hydratedFrom.current = null;
       queryClient.invalidateQueries({ queryKey: ["domain-security-headers-detail", id] });
       queryClient.invalidateQueries({ queryKey: ["domain-security-headers", id] });
+      setNotice({ tone: "removed", text: "Override removed. This domain now falls back to the global security-header defaults." });
     },
+    onError: (e: Error) => toast({ tone: "error", title: "Could not remove override", message: e.message }),
   });
 
-  const isLoading = domainQuery.isLoading || headersQuery.isLoading;
-
-  if (isLoading) {
-    return (
-      <AdminPageLayout>
-        <div className="p-8 text-center text-sm text-slate-300">Loading domain…</div>
-      </AdminPageLayout>
-    );
-  }
+  const isLoading = domainQuery.isPending || (headersQuery.isPending && !headersQuery.isError);
 
   if (domainQuery.isError) {
+    const err = domainQuery.error;
+    const notFound = err instanceof ApiError && err.status === 404;
     return (
       <AdminPageLayout>
         <AdminPageHeader
-          title="Domain not found"
-          description={domainQuery.error instanceof Error ? domainQuery.error.message : "Failed to load domain"}
+          title={notFound ? "Domain not found" : "Domain could not be loaded"}
+          description={notFound
+            ? `No proxy domain is recorded under ${id}.`
+            : `Loading ${id} failed. This is a request failure, not a missing domain.`}
           backAction={() => router.push("/admin/domains")}
           backLabel="Domains"
         />
-        <Card className="p-6 text-center text-sm text-amber-300">
-          Domain <code className="font-mono">{id}</code> could not be loaded. It may have been
-          deleted or the API at <code className="font-mono">GET /api/v1/domains/:id</code> is
-          unreachable.
-        </Card>
+        <div className="p-4">
+          <AdminErrorState
+            message={notFound ? "This domain is not in the gateway's proxy-domain list." : (err instanceof Error ? err.message : "Request failed")}
+            retry={() => void domainQuery.refetch()}
+          />
+        </div>
       </AdminPageLayout>
     );
   }
@@ -160,9 +225,10 @@ export default function AdminDomainDetailPage() {
       <OfflineBanner onRetry={() => window.location.reload()} />
       <AdminPageHeader
         title={domain?.hostname ?? id}
-        description={`Proxy domain ${id} — per-domain security headers, certificate, and gateway routing`}
+        description={`Gateway proxy domain · ${domain?.https ? "HTTPS" : "HTTP"} on port ${domain?.port ?? "unknown"}${domain?.path ? ` · path ${domain.path}` : ""}`}
         backAction={() => router.push("/admin/domains")}
         backLabel="Domains"
+        status={<FreshnessBadge state={sourceState(domainQuery)} />}
         action={
           <div className="flex gap-2">
             <Btn tone="ghost" onClick={() => router.push("/admin/security")}>
@@ -170,10 +236,10 @@ export default function AdminDomainDetailPage() {
             </Btn>
             {domain?.hostname && (
               <a
+                className="inline-flex items-center gap-1.5 rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-sm font-medium text-text hover:bg-overlay"
                 href={`https://${domain.hostname}`}
-                target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1.5 rounded-lg bg-white/[0.06] px-3 py-2 text-sm font-medium text-slate-200 hover:bg-white/[0.1]"
+                target="_blank"
               >
                 <ExternalLink size={14} /> Open
               </a>
@@ -182,26 +248,66 @@ export default function AdminDomainDetailPage() {
         }
       />
 
+      {isLoading && !domain ? <div className="p-4"><AdminLoadingState label="Loading proxy domain…" /></div> : null}
+
       <Card>
         <CardHeader title="Domain" icon={Globe} />
         <div className="grid gap-3 p-4 text-sm sm:grid-cols-2">
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">ID</p>
-            <p className="mt-1 font-mono text-xs text-slate-200">{domain?.id}</p>
+            <p className="t-eyebrow">Domain ID</p>
+            <p className="mt-1 font-mono text-xs text-text">{domain?.id ?? "—"}</p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Hostname</p>
-            <p className="mt-1 font-mono text-xs text-slate-200">{domain?.hostname}</p>
+            <p className="t-eyebrow">Hostname</p>
+            <p className="mt-1 font-mono text-xs text-text">{domain?.hostname ?? "—"}</p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Service</p>
-            <p className="mt-1 text-xs text-slate-300">
-              {domain?.serviceType ?? "—"} / {domain?.serviceId ?? "—"}
+            <p className="t-eyebrow">Bound service</p>
+            {serverQuery.data ? (
+              <p className="mt-1 text-xs text-text">
+                server /{" "}
+                <Link className="underline hover:text-text" href={`/admin/servers/${boundServerId}`}>
+                  {serverQuery.data.name}
+                </Link>
+              </p>
+            ) : boundServerId ? (
+              <p className="mt-1 text-xs text-text-subtle">
+                server / <span className="font-mono">{boundServerId}</span>
+                {serverQuery.isError ? " — name could not be resolved" : " — resolving…"}
+              </p>
+            ) : domain?.serviceId ? (
+              <p className="mt-1 text-xs text-text-subtle">{domain.serviceType ?? "unknown"} / <span className="font-mono">{domain.serviceId}</span> — not a server binding, so no owner attribution is available</p>
+            ) : (
+              <p className="mt-1 text-xs text-text-subtle">Not bound to a service — this domain routes nowhere.</p>
+            )}
+          </div>
+          <div>
+            <p className="t-eyebrow">Owner</p>
+            <p className="mt-1 text-xs text-text-subtle">
+              {serverQuery.data?.owner || serverQuery.data?.ownerEmail
+                ? serverQuery.data.owner ?? serverQuery.data.ownerEmail
+                : boundServerId && serverQuery.isPending
+                  ? "Resolving…"
+                  : "Not attributable from this record"}
             </p>
           </div>
           <div>
-            <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">HTTPS</p>
-            <Pill tone={domain?.https ? "green" : "neutral"}>{domain?.https ? "enabled" : "off"}</Pill>
+            <p className="t-eyebrow">Node</p>
+            <p className="mt-1 text-xs text-text-subtle">
+              {serverQuery.data?.node ?? (boundServerId && serverQuery.isPending ? "Resolving…" : "Not reported")}
+            </p>
+          </div>
+          <div>
+            <p className="t-eyebrow">HTTPS</p>
+            <Pill tone={domain?.https ? "green" : "neutral"}>{domain?.https ? "Enabled" : "Disabled"}</Pill>
+          </div>
+          <div>
+            <p className="t-eyebrow">Certificate</p>
+            <p className="mt-1 text-xs text-text-subtle">
+              {domain?.certType ? `${domain.certType}${domain.autoRenew ? " · auto-renew on" : " · auto-renew off"}` : "No certificate bound"}
+              {" · "}
+              <Link className="underline hover:text-text" href="/admin/certificates">Certificates</Link>
+            </p>
           </div>
         </div>
       </Card>
@@ -209,195 +315,168 @@ export default function AdminDomainDetailPage() {
       <Card>
         <CardHeader title="Security Headers" icon={Shield} />
         <div className="p-4">
-          <p className="mb-4 text-xs leading-5 text-slate-400">
-            Stored in <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">security_headers</code>{" "}
-            (see <code className="font-mono">store_security_headers.go:13</code>) and exposed via{" "}
-            <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
-              /api/v1/domains/:domainId/security-headers
-            </code>{" "}
-            and{" "}
-            <code className="rounded bg-white/[0.06] px-1 py-0.5 font-mono">
-              /api/v1/servers/:serverId/proxy-domains/:domainId/security-headers
-            </code>
-            . When set, the gateway (Caddy) injects them as response headers on the per-domain
-            route — see <code className="font-mono">caddy_proxy.go:777 buildDomainRoutes</code>.
-            Global defaults come from <code className="font-mono">middleware_security.go:31</code>.
+          <p className="mb-4 text-xs leading-5 text-text-subtle">
+            These headers are injected on this domain&apos;s gateway responses. Without an override
+            here, the global security-header defaults apply.
           </p>
 
-          {headersQuery.isError && (
-            <p className="mb-3 text-xs text-amber-300">
-              Failed to load headers: {(headersQuery.error as Error).message}
+          {headersQuery.isError ? (
+            <div className="mb-3">
+              <AdminErrorState
+                message={`Security headers could not be loaded: ${(headersQuery.error as Error).message}. Saving now may create a second override.`}
+                retry={() => void headersQuery.refetch()}
+              />
+            </div>
+          ) : headersQuery.isPending ? (
+            <div className="mb-3"><AdminLoadingState label="Loading the current override…" /></div>
+          ) : !existing ? (
+            <p className="mb-3 rounded-lg border border-line bg-overlay-subtle px-3 py-2 text-xs text-text-subtle">
+              No per-domain override is set — the global header defaults are in force. Saving creates one.
             </p>
-          )}
-
-          {!existing && (
-            <p className="mb-3 rounded-lg border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
-              No per-domain override yet — global middleware headers apply. Saving creates a row in{" "}
-              <code className="font-mono">security_headers</code>.
-            </p>
-          )}
+          ) : null}
 
           <div className="grid gap-4 sm:grid-cols-2">
-            <label className="flex items-center gap-2 text-sm text-slate-200">
+            <label className="flex items-center gap-2 text-sm text-text">
               <input
-                type="checkbox"
                 checked={!!form.hstsEnabled}
+                className="accent-[var(--brand)]"
                 onChange={(e) => setForm({ ...form, hstsEnabled: e.target.checked })}
-                className="rounded border-white/10 bg-white/5"
+                type="checkbox"
               />
               HSTS Enabled
             </label>
-            <div>
-              <label className="block text-xs font-medium text-slate-300">HSTS Max-Age</label>
+            <label className="block">
+              <span className="ui-label">HSTS Max-Age (seconds, {HSTS_MAX_AGE_MIN}–{HSTS_MAX_AGE_MAX})</span>
               <input
+                className="ui-input mt-1.5 w-full font-mono"
+                max={HSTS_MAX_AGE_MAX}
+                min={HSTS_MAX_AGE_MIN}
+                onChange={(e) => setForm({ ...form, hstsMaxAge: Number(e.target.value) })}
                 type="number"
                 value={form.hstsMaxAge ?? 63072000}
-                onChange={(e) => setForm({ ...form, hstsMaxAge: Number(e.target.value) })}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100 outline-none"
               />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text">
               <input
-                type="checkbox"
                 checked={!!form.hstsIncludeSubdomains}
+                className="accent-[var(--brand)]"
                 onChange={(e) => setForm({ ...form, hstsIncludeSubdomains: e.target.checked })}
-                className="rounded border-white/10 bg-white/5"
+                type="checkbox"
               />
               HSTS Include Subdomains
             </label>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
+            <label className="flex items-center gap-2 text-sm text-text">
               <input
-                type="checkbox"
                 checked={!!form.hstsPreload}
+                className="accent-[var(--brand)]"
                 onChange={(e) => setForm({ ...form, hstsPreload: e.target.checked })}
-                className="rounded border-white/10 bg-white/5"
+                type="checkbox"
               />
               HSTS Preload
             </label>
-            <div>
-              <label className="block text-xs font-medium text-slate-300">X-Frame-Options</label>
+            <label className="block">
+              <span className="ui-label">X-Frame-Options</span>
               <select
-                value={form.xFrameOptions ?? "DENY"}
+                className="ui-input mt-1.5 w-full"
                 onChange={(e) => setForm({ ...form, xFrameOptions: e.target.value })}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100"
+                value={form.xFrameOptions ?? "DENY"}
               >
                 <option value="DENY">DENY</option>
                 <option value="SAMEORIGIN">SAMEORIGIN</option>
                 <option value="">(none)</option>
               </select>
-            </div>
-            <div>
-              <label className="block text-xs font-medium text-slate-300">X-Content-Type-Options</label>
+            </label>
+            <label className="block">
+              <span className="ui-label">X-Content-Type-Options</span>
               <select
-                value={form.xContentTypeOptions ?? "nosniff"}
+                className="ui-input mt-1.5 w-full"
                 onChange={(e) => setForm({ ...form, xContentTypeOptions: e.target.value })}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 text-sm text-slate-100"
+                value={form.xContentTypeOptions ?? "nosniff"}
               >
                 <option value="nosniff">nosniff</option>
                 <option value="">(none)</option>
               </select>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-slate-300">Referrer-Policy</label>
-              <input
-                value={form.referrerPolicy ?? ""}
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="ui-label">Referrer-Policy</span>
+              <select
+                className="ui-input mt-1.5 w-full font-mono"
                 onChange={(e) => setForm({ ...form, referrerPolicy: e.target.value })}
-                placeholder="strict-origin-when-cross-origin"
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 font-mono text-sm text-slate-100"
-              />
-            </div>
-            <label className="flex items-center gap-2 text-sm text-slate-200">
+                value={form.referrerPolicy ?? ""}
+              >
+                <option value="">(none)</option>
+                {REFERRER_POLICIES.map((p) => <option key={p} value={p}>{p}</option>)}
+              </select>
+            </label>
+            <label className="flex items-center gap-2 text-sm text-text">
               <input
-                type="checkbox"
                 checked={!!form.cspEnabled}
+                className="accent-[var(--brand)]"
                 onChange={(e) => setForm({ ...form, cspEnabled: e.target.checked })}
-                className="rounded border-white/10 bg-white/5"
+                type="checkbox"
               />
               CSP Enabled
             </label>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-slate-300">CSP Policy</label>
+            <label className="block sm:col-span-2">
+              <span className="ui-label">CSP Policy{form.cspEnabled ? " (required while CSP is enabled)" : ""}</span>
               <textarea
-                value={form.cspPolicy ?? ""}
+                className="ui-input mt-1.5 w-full font-mono"
                 onChange={(e) => setForm({ ...form, cspPolicy: e.target.value })}
                 placeholder="default-src 'self'; ..."
                 rows={3}
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 font-mono text-xs text-slate-100"
+                value={form.cspPolicy ?? ""}
               />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block text-xs font-medium text-slate-300">Permissions-Policy</label>
+            </label>
+            <label className="block sm:col-span-2">
+              <span className="ui-label">Permissions-Policy</span>
               <input
-                value={form.permissionsPolicy ?? ""}
+                className="ui-input mt-1.5 w-full font-mono"
                 onChange={(e) => setForm({ ...form, permissionsPolicy: e.target.value })}
-                placeholder="geolocation=(), microphone=() …"
-                className="mt-1 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 py-2 font-mono text-xs text-slate-100"
+                placeholder="geolocation=(), microphone=()"
+                value={form.permissionsPolicy ?? ""}
               />
-            </div>
+            </label>
           </div>
 
+          {headerErrors.length > 0 && (
+            <ul aria-label="Fix before saving" className="ui-alert ui-alert-danger mt-4 list-disc space-y-1 pl-5 text-xs" role="alert">
+              {headerErrors.map((e) => <li key={e}>{e}</li>)}
+            </ul>
+          )}
+
           <div className="mt-6 flex gap-2">
-            <Btn tone="primary" onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending}>
+            <Btn
+              disabled={headerErrors.length > 0 || saveMutation.isPending || domainQuery.isPending || headersQuery.isPending}
+              onClick={() => saveMutation.mutate()}
+              tone="primary"
+            >
               <Save size={14} /> {saveMutation.isPending ? "Saving…" : existing ? "Update headers" : "Create headers"}
             </Btn>
             {existing && (
-              <Btn tone="danger" disabled={deleteMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: "Delete security-header override?", description: "This domain will fall back to the global security-header defaults. This cannot be undone.", danger: true, confirmLabel: "Delete override" })) deleteMutation.mutate(); })(); }}>
+              <Btn tone="danger" disabled={deleteMutation.isPending} onClick={() => { void (async () => { if (await confirm({ title: "Delete security-header override?", description: `${domain?.hostname ?? id} will fall back to the global security-header defaults. This cannot be undone.`, danger: true, confirmLabel: "Delete override" })) deleteMutation.mutate(); })(); }}>
                 <Trash2 size={14} /> Delete override
               </Btn>
             )}
-            <Btn tone="ghost" onClick={() => router.push("/admin/security")}>
-              <ArrowLeft size={14} /> Back
-            </Btn>
           </div>
           {(saveMutation.isError || deleteMutation.isError) && (
-            <p className="mt-3 text-xs text-red-300">
+            <p className="mt-3 text-xs text-danger">
               {(saveMutation.error as Error)?.message ?? (deleteMutation.error as Error)?.message}
             </p>
           )}
-          {(saveMutation.isSuccess || deleteMutation.isSuccess) && (
-            <p className="mt-3 text-xs text-emerald-300">Saved — gateway route will pick it up on next sync.</p>
+          {notice && (
+            <p className={cn("mt-3 text-xs", notice.tone === "ok" ? "text-ok" : "text-text-subtle")}>{notice.text}</p>
           )}
         </div>
       </Card>
 
-      <RedirectsSection domainId={id} />
+      <RedirectsSection domainId={id} hostname={domain?.hostname} />
 
       {renderConfirm()}
-
-      <Card className="p-4">
-        <h4 className="mb-2 text-xs font-semibold uppercase tracking-widest text-slate-400">Wiring notes</h4>
-        <ul className="list-disc space-y-1 pl-5 text-xs leading-5 text-slate-400">
-          <li>
-            API: <code className="font-mono">handlers_proxy_domains.go:312 registerSecurityHeadersRoutes</code> and{" "}
-            <code className="font-mono">handlers_user_web.go:30 registerUserWebRoutes</code>.
-          </li>
-          <li>
-            Store: <code className="font-mono">store_security_headers.go</code> + migration{" "}
-            <code className="font-mono">117_domains_certificates.sql:49</code>.
-          </li>
-          <li>
-            Client: <code className="font-mono">lib/api/security.ts:37</code> — canonical; server-scoped
-            mirror at <code className="font-mono">/servers/:id/proxy-domains/:domainId/security-headers</code>{" "}
-            (handlers_user_web.go:46).
-          </li>
-          <li>
-            Gateway: per-domain headers are rendered as a Caddy{" "}
-            <code className="font-mono">headers</code> handler in
-            <code className="font-mono">caddy_proxy.go:777</code> (response.set).
-          </li>
-          <li>
-            Redirects: <code className="font-mono">GET/POST /domains/:domainId/redirects</code>, <code className="font-mono">PUT/DELETE /domains/:domainId/redirects/:redirectId</code> via <code className="font-mono">lib/api/redirects.ts</code> (also re-exported from <code className="font-mono">lib/api/security.ts</code>) and proxy-domains mirror at <code className="font-mono">/servers/:serverId/proxy-domains/:domainId/redirects</code>.
-          </li>
-          <li>
-            Proxy domains: <code className="font-mono">lib/api/proxy-domains.ts</code> — <code className="font-mono">GET /domains</code>, <code className="font-mono">POST /domains</code>, <code className="font-mono">GET/PUT/DELETE /domains/:id</code>, server scoped <code className="font-mono">/servers/:id/proxy-domains</code>.
-          </li>
-        </ul>
-      </Card>
     </AdminPageLayout>
   );
 }
 
-function RedirectsSection({ domainId }: { domainId: string }) {
+function RedirectsSection({ domainId, hostname }: { domainId: string; hostname?: string }) {
   const qc = useQueryClient();
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
@@ -418,31 +497,30 @@ function RedirectsSection({ domainId }: { domainId: string }) {
 
   return (
     <Card>
-      <CardHeader title="Redirects — /domains/:domainId/redirects" icon={ArrowUpRight} action={<Btn size="sm" tone="primary" onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={12} /> Add Redirect</Btn>} />
-      <div className="p-3 text-xs text-slate-400">Wired via <code className="font-mono">lib/api/redirects.ts</code> (also <code className="font-mono">lib/api/security.ts</code> re-export) — CRUD maps to admin handlers at <code className="font-mono">handlers_proxy_domains.go</code>. Server mirror at <code className="font-mono">/servers/:id/proxy-domains/:domainId/redirects</code>.</div>
-      {redirectsQuery.isLoading ? <div className="p-6 text-center text-sm text-slate-400">Loading redirects via fetchRedirects…</div>
-        : redirectsQuery.isError ? <div className="p-4"><div className="rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">Could not load redirects: {(redirectsQuery.error as Error).message} <Btn size="sm" tone="ghost" onClick={() => void redirectsQuery.refetch()} className="ml-2">Retry</Btn></div></div>
-        : redirects.length === 0 ? <div className="p-6"><EmptyState icon={ArrowUpRight} message="No redirect rules. Use Add Redirect to POST /domains/:id/redirects with {sourcePath, targetUrl, statusCode}." /></div>
+      <CardHeader title="Redirects" icon={ArrowUpRight} action={<Btn size="sm" tone="primary" onClick={() => setShowCreate(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white"><Plus size={12} /> Add Redirect</Btn>} />
+      {redirectsQuery.isPending ? <div className="p-4"><AdminLoadingState label="Loading redirects…" /></div>
+        : redirectsQuery.isError ? <div className="p-4"><AdminErrorState message={`Redirects could not be loaded: ${(redirectsQuery.error as Error).message}`} retry={() => void redirectsQuery.refetch()} /></div>
+        : redirects.length === 0 ? <div className="p-4"><EmptyState icon={ArrowUpRight} title="No redirects" message={`No redirect rules are configured for ${hostname ?? "this domain"}.`} /></div>
         : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-sm">
-              <thead><tr className="border-b border-white/[0.06] bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-slate-500"><th className="px-4 py-3">Source</th><th className="px-4 py-3">Target</th><th className="px-4 py-3">Code</th><th className="px-4 py-3">Enabled</th><th className="px-4 py-3"></th></tr></thead>
-              <tbody className="divide-y divide-white/[0.04]">
-                {redirects.map((r) => (
-                  <tr key={r.id} className="hover:bg-white/[0.02]">
-                    <td className="px-4 py-3 font-mono text-xs text-slate-200">{r.sourcePath}</td>
-                    <td className="px-4 py-3 font-mono text-xs text-slate-400 truncate max-w-[260px]">{r.targetUrl}</td>
-                    <td className="px-4 py-3"><Pill tone={r.statusCode >= 300 && r.statusCode < 400 ? "green" : "neutral"}>{r.statusCode}</Pill></td>
-                    <td className="px-4 py-3"><Pill tone={r.enabled ? "green" : "yellow"}>{r.enabled ? "enabled" : "disabled"}</Pill></td>
-                    <td className="px-4 py-3 text-right space-x-1">
+          <AdminTable label={`Redirect rules for ${hostname ?? domainId}`}>
+            <AdminTHead><AdminTh>Source</AdminTh><AdminTh>Target</AdminTh><AdminTh>Status code</AdminTh><AdminTh>Enabled</AdminTh><AdminTh></AdminTh></AdminTHead>
+            <AdminTBody>
+              {redirects.map((r) => (
+                <AdminTr key={r.id}>
+                  <AdminTd className="font-mono text-xs text-text">{r.sourcePath}</AdminTd>
+                  <AdminTd className="max-w-xs truncate font-mono text-xs text-text-subtle" title={r.targetUrl}>{r.targetUrl}</AdminTd>
+                  <AdminTd><Pill tone={r.statusCode === 301 || r.statusCode === 308 ? "green" : "blue"}>{r.statusCode} {r.statusCode === 301 || r.statusCode === 308 ? "permanent" : "temporary"}</Pill></AdminTd>
+                  <AdminTd><Pill tone={r.enabled ? "green" : "neutral"}>{r.enabled ? "Enabled" : "Disabled"}</Pill></AdminTd>
+                  <AdminTd className="text-right">
+                    <div className="flex justify-end gap-1.5">
                       <Btn size="sm" tone="ghost" onClick={() => setEditing(r)}>Edit</Btn>
-                      <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: "Delete redirect?", description: `${r.sourcePath} → ${r.targetUrl}. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(r.id); })(); }}><Trash2 size={12} /></Btn>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                      <Btn ariaLabel={`Delete redirect ${r.sourcePath}`} size="sm" tone="danger" disabled={deleteMut.isPending && deleteMut.variables === r.id} loading={deleteMut.isPending && deleteMut.variables === r.id} onClick={() => { void (async () => { if (await confirm({ title: "Delete redirect?", description: `${hostname ?? domainId}: ${r.sourcePath} → ${r.targetUrl}. Visitors requesting the source path will get the domain's normal response. This cannot be undone.`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(r.id); })(); }}><Trash2 size={12} /></Btn>
+                    </div>
+                  </AdminTd>
+                </AdminTr>
+              ))}
+            </AdminTBody>
+          </AdminTable>
         )}
       {showCreate && <RedirectFormModal domainId={domainId} onClose={() => setShowCreate(false)} />}
       {editing && <RedirectFormModal domainId={domainId} existing={editing} onClose={() => setEditing(null)} />}
@@ -475,31 +553,44 @@ function RedirectFormModal({ domainId, existing, onClose }: { domainId: string; 
   const isPending = createMut.isPending || updateMut.isPending;
   const error = (createMut.error ?? updateMut.error) as Error | null;
 
+  // A redirect writes a gateway rule for a live hostname, so an unparseable
+  // target or a source that is not a path is blocked before submit.
+  const sourcePathError = !sourcePath.trim().startsWith("/") ? "Source path must start with /." : "";
+  const targetUrlError = /^https?:\/\/\S+\.\S+/.test(targetUrl.trim()) ? "" : "Target must be an absolute http(s) URL.";
+  const formError = sourcePathError || targetUrlError;
+
   return (
-    <Modal title={existing ? "Edit Redirect" : "Add Redirect"} description={existing ? `PUT /domains/${domainId}/redirects/${existing.id}` : `POST /domains/${domainId}/redirects`} onClose={onClose}>
+    <Modal description={existing ? "Change where visitors requesting this path are sent." : "Send visitors who request this path somewhere else."} onClose={onClose} title={existing ? "Edit Redirect" : "Add Redirect"}>
       <div className="space-y-4">
-        <Input label="Source Path" value={sourcePath} onChange={setSourcePath} placeholder="/old/*" mono />
-        <Input label="Target URL" value={targetUrl} onChange={setTargetUrl} placeholder="https://example.com/new" mono />
+        <Input label="Source Path" mono onChange={setSourcePath} placeholder="/old/*" value={sourcePath} />
+        {sourcePath && sourcePathError ? <p className="text-xs text-danger">{sourcePathError}</p> : null}
+        <Input label="Target URL" mono onChange={setTargetUrl} placeholder="https://example.com/new" value={targetUrl} />
+        {targetUrl && targetUrlError ? <p className="text-xs text-danger">{targetUrlError}</p> : null}
         <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Status Code</label>
-            <select value={statusCode} onChange={(e) => setStatusCode(e.target.value)} className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface)] px-3 text-sm text-slate-100">
+          <label className="block">
+            <span className="ui-label">Status Code</span>
+            <select className="ui-input mt-1.5 w-full" onChange={(e) => setStatusCode(e.target.value)} value={statusCode}>
               <option value="301">301 Permanent</option>
               <option value="302">302 Found</option>
               <option value="307">307 Temporary</option>
               <option value="308">308 Permanent</option>
             </select>
-          </div>
-          <label className="flex items-center gap-2 pt-6 text-sm text-slate-300"><input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} className="accent-[var(--brand)]" /> Enabled</label>
+          </label>
+          <label className="flex items-center gap-2 self-end text-sm text-text">
+            <input checked={enabled} className="accent-[var(--brand)]" onChange={(e) => setEnabled(e.target.checked)} type="checkbox" /> Enabled
+          </label>
         </div>
-        <div className="flex gap-4">
-          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={regex} onChange={(e) => setRegex(e.target.checked)} className="accent-[var(--brand)]" /> Regex</label>
-          <label className="flex items-center gap-2 text-sm text-slate-300"><input type="checkbox" checked={preservePath} onChange={(e) => setPreservePath(e.target.checked)} className="accent-[var(--brand)]" /> Preserve path</label>
+        <div className="flex flex-wrap gap-4">
+          <label className="flex items-center gap-2 text-sm text-text">
+            <input checked={regex} className="accent-[var(--brand)]" onChange={(e) => setRegex(e.target.checked)} type="checkbox" /> Treat source as a regular expression
+          </label>
+          <label className="flex items-center gap-2 text-sm text-text">
+            <input checked={preservePath} className="accent-[var(--brand)]" onChange={(e) => setPreservePath(e.target.checked)} type="checkbox" /> Append the matched path to the target
+          </label>
         </div>
-        <p className="text-xs text-slate-400">Wires <code className="font-mono">createRedirect / updateRedirect</code> → admin proxy-domain handlers; server mirror <code className="font-mono">/servers/:id/proxy-domains/:domainId/redirects</code>.</p>
-        {error && <p className="text-sm text-red-300">{error.message}</p>}
+        {error && <p className="text-sm text-danger">{error.message}</p>}
       </div>
-      <ModalFooter onCancel={onClose} onConfirm={() => existing ? updateMut.mutate() : createMut.mutate()} disabled={!sourcePath.trim() || !targetUrl.trim() || isPending} confirmLabel={isPending ? "Saving…" : existing ? "Update" : "Create"} />
+      <ModalFooter onCancel={onClose} onConfirm={() => existing ? updateMut.mutate() : createMut.mutate()} disabled={!!formError || !sourcePath.trim() || !targetUrl.trim() || isPending} confirmLabel={isPending ? "Saving…" : existing ? "Update" : "Create"} />
     </Modal>
   );
 }

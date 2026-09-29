@@ -22,12 +22,28 @@ export type DockerDiskUsage = {
   containersBytes: number;
   volumesBytes: number;
   buildCacheBytes: number;
+  /**
+   * Sum of the four categories above, recomputed by the panel
+   * (`dockerleanup/service.go`) — it is measured Docker usage, not the size of
+   * the node's filesystem, and carries no free-space or mount information.
+   * Beacon also reports `sizeIncompleteCount`, `unattributedImageBytes` and
+   * `accountingNotes` alongside these numbers; the control-plane type drops all
+   * three, so a partial total is indistinguishable from a complete one here.
+   */
   totalBytes: number;
   images: DockerImageInfo[];
 };
 
 export type DockerPruneResult = {
   nodeId: string;
+  /**
+   * Bytes the engine reported as freed. NOT a guarantee of measurement: Beacon
+   * answers `reclaimedBytesKnown: false` with `reclaimedBytes: 0` when it could
+   * not size the removals (`beacon/internal/server/docker_cleanup.go`), and the
+   * control-plane type (`dockerleanup.PruneResult`) has no field for that flag,
+   * so an unmeasured prune arrives here as 0. Callers must render 0-with-
+   * removals as "not measured", never as "0 B reclaimed".
+   */
   reclaimedBytes: number;
   removedCount: number;
 };

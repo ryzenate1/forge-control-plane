@@ -3,6 +3,7 @@ import { queryKeys } from "@/lib/api/query-keys";
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import Link from "next/link";
 import { HardDrive, Plus, Trash2 } from "lucide-react";
 import { fetchApps, type ApiApp } from "@/lib/api/apps";
 import {
@@ -19,6 +20,7 @@ import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import {
   AdminErrorState,
+  AdminLoadingRows,
   AdminSelect,
   AdminTable,
   AdminTBody,
@@ -26,7 +28,6 @@ import {
   AdminTh,
   AdminTHead,
   AdminTr,
-  Badge,
   Btn,
   Card,
   CardHeader,
@@ -34,9 +35,12 @@ import {
   Input,
   Modal,
   ModalFooter,
+  Pill,
   SectionHeader,
   Textarea,
+  type AdminTone,
 } from "./admin-ui";
+import { adminPageGuides } from "./admin-page-guides";
 
 /**
  * Admin view for *per-application* mounts (`/apps/:id/mounts`) — the declarative
@@ -105,11 +109,14 @@ const MOUNT_TYPES: MountTypeMeta[] = [
   MOUNT_TYPE_META["seed-file"],
 ];
 
-const typeTone: Record<AppMountType, string> = {
-  volume: "bg-sky-500/15 text-sky-300",
-  bind: "bg-violet-500/15 text-violet-300",
-  tmpfs: "bg-amber-500/15 text-amber-300",
-  "seed-file": "bg-emerald-500/15 text-emerald-300",
+// Colour comes from the shared `Pill` tone system rather than a class at the call
+// site, and the list prints `MOUNT_TYPE_META[...].label` so a mount kind has
+// exactly one spelling on the page and in the form.
+const typeTone: Record<AppMountType, AdminTone> = {
+  volume: "blue",
+  bind: "neutral",
+  tmpfs: "yellow",
+  "seed-file": "green",
 };
 
 const metaFor = (type: AppMountType): MountTypeMeta => MOUNT_TYPE_META[type];
@@ -200,7 +207,9 @@ export function AppMountsManager() {
   const openCreate = () => {
     setErrors({});
     setForm({
-      appId: apps[0]?.id ?? "",
+      // No silent default: prefilling `apps[0]` filed a mount against whichever
+      // application happened to sort first.
+      appId: "",
       name: "",
       type: "volume",
       source: "",
@@ -265,13 +274,19 @@ export function AppMountsManager() {
   // exists; the volume entry is a harmless default outside of it.
   const activeMeta: MountTypeMeta = form ? metaFor(form.type) : MOUNT_TYPE_META.volume;
 
+  const unreadApps = groups.length - failingGroups.length;
+
   return (
-    <div className="space-y-6">
+    <>
       <SectionHeader
-        title="App Mounts"
-        sub="Persistent storage declared on individual applications — named volumes, host bind mounts, tmpfs and seed files. The deploy pipeline injects each one into the app's compose document so data survives redeploys. For node-wide mount allowlists use Storage Mounts instead."
+        info={adminPageGuides.appMounts}
         action={
-          <Btn onClick={openCreate} disabled={apps.length === 0} tone="primary">
+          <Btn
+            onClick={openCreate}
+            disabled={apps.length === 0}
+            tone="primary"
+            title={apps.length === 0 ? "Mounts belong to an application; none are available to attach one to" : undefined}
+          >
             <Plus size={14} /> New Mount
           </Btn>
         }
@@ -282,17 +297,17 @@ export function AppMountsManager() {
           title="Declared Mounts"
           icon={HardDrive}
           action={
-            rows.length > 0 ? (
-              <span className="text-xs normal-case tracking-normal text-slate-400">
-                {rows.length} mount{rows.length === 1 ? "" : "s"} across {mountedAppCount} app
-                {mountedAppCount === 1 ? "" : "s"}
+            mountsQuery.data ? (
+              <span className="t-meta normal-case tracking-normal">
+                {rows.length} mount{rows.length === 1 ? "" : "s"} on {mountedAppCount} of {groups.length} application(s)
+                {failingGroups.length > 0 ? ` · ${failingGroups.length} could not be read, so this is a lower bound` : ""}
               </span>
             ) : null
           }
         />
 
         {appsQuery.isLoading ? (
-          <div className="py-10 text-center text-sm text-slate-500">Loading applications…</div>
+          <AdminLoadingRows rows={4} label="Loading applications…" />
         ) : appsQuery.isError ? (
           <div className="p-4">
             <AdminErrorState
@@ -307,9 +322,15 @@ export function AppMountsManager() {
             message="Mounts are declared per application. Create an application first, then attach its persistent storage here."
           />
         ) : mountsQuery.isLoading ? (
-          <div className="py-10 text-center text-sm text-slate-500">Loading mounts…</div>
+          <AdminLoadingRows rows={4} label="Loading mounts…" />
         ) : (
           <div className="space-y-4">
+            {failingGroups.length > 0 ? (
+              <p className="ui-hint px-4 pt-4">
+                {failingGroups.length} of {groups.length} applications could not be read
+                {unreadApps > 0 ? `; the ${unreadApps} that were are shown below.` : "."}
+              </p>
+            ) : null}
             {failingGroups.map((group) => (
               <div key={`error-${group.app.id}`} className="px-4 pt-4">
                 <AdminErrorState
@@ -334,41 +355,46 @@ export function AppMountsManager() {
                   <AdminTh>Target</AdminTh>
                   <AdminTh>Source</AdminTh>
                   <AdminTh>Mode</AdminTh>
-                  <AdminTh></AdminTh>
+                  <AdminTh className="text-right">Actions</AdminTh>
                 </AdminTHead>
                 <AdminTBody>
                   {rows.map(({ key, app, mount }) => (
                     <AdminTr key={key}>
                       <AdminTd>
                         <div className="min-w-0">
-                          <p className="truncate text-sm font-semibold text-white">{app.name}</p>
-                          <p className="truncate text-[10px] uppercase tracking-wider text-slate-500">{app.type}</p>
+                          <Link
+                            className="break-words text-sm font-semibold text-text underline-offset-2 hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                            href={`/admin/apps/${app.id}`}
+                          >
+                            {app.name}
+                          </Link>
+                          <p className="t-meta">{app.type || "type not reported"}</p>
                         </div>
                       </AdminTd>
                       <AdminTd>
-                        <span className="text-sm font-medium text-slate-100">{mount.name}</span>
+                        <span className="text-sm font-medium text-text">{mount.name}</span>
                       </AdminTd>
                       <AdminTd>
-                        <Badge className={typeTone[mount.type]}>{mount.type}</Badge>
+                        <Pill tone={typeTone[mount.type] ?? "neutral"}>
+                          {metaFor(mount.type)?.label ?? mount.type}
+                        </Pill>
                       </AdminTd>
                       <AdminTd>
-                        <code className="block max-w-[24ch] truncate font-mono text-xs text-slate-300" title={mount.target}>
+                        <code className="block break-all font-mono text-xs text-text">
                           {mount.target}
                         </code>
                       </AdminTd>
                       <AdminTd>
                         {mount.source ? (
-                          <code className="block max-w-[24ch] truncate font-mono text-xs text-slate-400" title={mount.source}>
+                          <code className="block break-all font-mono text-xs text-text-subtle">
                             {mount.source}
                           </code>
                         ) : (
-                          <span className="text-xs text-slate-600">—</span>
+                          <span className="text-xs text-text-muted">Not applicable</span>
                         )}
                       </AdminTd>
                       <AdminTd>
-                        <span className={`text-xs ${mount.readOnly ? "text-amber-300" : "text-slate-400"}`}>
-                          {mount.readOnly ? "Read-only" : "Read-write"}
-                        </span>
+                        <Pill tone={mount.readOnly ? "yellow" : "neutral"}>{mount.readOnly ? "Read-only" : "Read-write"}</Pill>
                       </AdminTd>
                       <AdminTd>
                         <div className="flex justify-end">
@@ -423,7 +449,7 @@ export function AppMountsManager() {
               options={apps.map((app) => ({ value: app.id, label: app.name }))}
               placeholder="Select an application"
             />
-            {errors.appId ? <p className="-mt-2 text-xs text-red-400">{errors.appId}</p> : null}
+            {errors.appId ? <p className="ui-field-error -mt-2 block">{errors.appId}</p> : null}
 
             <Input
               label="Name"
@@ -434,7 +460,7 @@ export function AppMountsManager() {
               }}
               placeholder="uploads"
             />
-            {errors.name ? <p className="-mt-2 text-xs text-red-400">{errors.name}</p> : null}
+            {errors.name ? <p className="ui-field-error -mt-2 block">{errors.name}</p> : null}
 
             <AdminSelect
               label="Type"
@@ -450,7 +476,7 @@ export function AppMountsManager() {
               }}
               options={MOUNT_TYPES.map(({ value, label }) => ({ value, label }))}
             />
-            <p className="-mt-2 text-xs leading-5 text-slate-400">{activeMeta.hint}</p>
+            <p className="ui-hint -mt-2">{activeMeta.hint}</p>
 
             {activeMeta.usesSource ? (
               <Input
@@ -464,7 +490,7 @@ export function AppMountsManager() {
                 mono
               />
             ) : null}
-            {errors.source ? <p className="-mt-2 text-xs text-red-400">{errors.source}</p> : null}
+            {errors.source ? <p className="ui-field-error -mt-2 block">{errors.source}</p> : null}
 
             <Input
               label="Target path in the container"
@@ -476,7 +502,7 @@ export function AppMountsManager() {
               placeholder="/data/uploads"
               mono
             />
-            {errors.target ? <p className="-mt-2 text-xs text-red-400">{errors.target}</p> : null}
+            {errors.target ? <p className="ui-field-error -mt-2 block">{errors.target}</p> : null}
 
             {activeMeta.usesContent ? (
               <Textarea
@@ -490,9 +516,9 @@ export function AppMountsManager() {
                 placeholder="The exact bytes written to the target path on deploy."
               />
             ) : null}
-            {errors.content ? <p className="-mt-2 text-xs text-red-400">{errors.content}</p> : null}
+            {errors.content ? <p className="ui-field-error -mt-2 block">{errors.content}</p> : null}
 
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-slate-300">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-text">
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-[var(--brand)]"
@@ -505,8 +531,16 @@ export function AppMountsManager() {
             </label>
 
             {createMut.isError ? (
-              <p className="ui-alert ui-alert-error" role="alert">
+              <p className="ui-alert ui-alert-danger" role="alert">
                 {errorMessage(createMut.error)}
+              </p>
+            ) : null}
+            {createMut.isError && createMut.variables ? (
+              // The two-step path (validate then create) used to look like the
+              // validation had failed; say which step actually stopped.
+              <p className="ui-alert ui-alert-warning" role="status">
+                The definition passed validation a moment earlier, so this is the create step failing — the
+                mount was not stored.
               </p>
             ) : null}
 
@@ -524,7 +558,7 @@ export function AppMountsManager() {
       ) : null}
 
       {renderConfirm()}
-    </div>
+    </>
   );
 }
 

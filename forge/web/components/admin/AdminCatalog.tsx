@@ -58,7 +58,9 @@ import {
   Modal,
   Card,
   CardHeader,
+  SectionHeader,
 } from "./admin-ui";
+import { adminPageGuides } from "./admin-page-guides";
 import { DashHeader } from "./dashboard-cards";
 import { cn } from "@/lib/utils";
 import { chart } from "@/lib/design-tokens";
@@ -307,38 +309,19 @@ export function AdminCatalog() {
     <AdminPageLayout>
       <OfflineBanner onRetry={() => { void catalogQ.refetch(); void retentionQ.refetch(); }} />
 
-      {/* Header — breadcrumb / title / actions */}
-      <div className="space-y-3">
-        <div className="flex items-center gap-2 text-xs">
-          <span className="text-slate-400">Workloads</span>
-          <span className="text-slate-600">/</span>
-          <span className="font-semibold text-slate-200">Catalog</span>
-        </div>
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
-          <div className="min-w-0">
-            <h1 className="flex items-center gap-2.5 text-[28px] font-bold tracking-tight text-slate-100">
-              Service Catalog
-              <span className="grid h-5 w-5 place-items-center rounded-full border border-white/15 text-slate-500">
-                <Info size={12} />
-              </span>
-            </h1>
-            <p className="mt-1.5 max-w-3xl text-xs leading-5 text-slate-400">
-              One-click service catalog and provisioning. GET /catalog, GET /catalog/:key, POST /admin/catalog/provision
-              (phase3_registrar.go:22).
-              <br />
-              Categories: database, cache, queue, storage.
-            </p>
-          </div>
-          <div className="flex shrink-0 items-center gap-2">
+      <SectionHeader
+        title="Service Catalog"
+        sub="Provision managed services (databases, caches, queues) from the catalog"
+        info={adminPageGuides.catalog}
+        action={<div className="flex flex-wrap items-center gap-2">
             <Btn size="sm" tone="ghost" onClick={() => { void catalogQ.refetch(); void retentionQ.refetch(); }}>
               <RefreshCw size={14} /> Refresh
             </Btn>
             <Btn size="sm" tone="ghost" onClick={() => runRetentionMut.mutate()} loading={runRetentionMut.isPending}>
               <Clock size={14} /> Run retention
             </Btn>
-          </div>
-        </div>
-      </div>
+          </div>}
+      />
 
       {/* Filter bar */}
       <div className="flex flex-col gap-2 rounded-xl border border-[var(--line)] bg-[var(--surface)] p-2 xl:flex-row xl:items-center">

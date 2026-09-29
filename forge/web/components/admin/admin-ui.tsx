@@ -12,7 +12,7 @@
 
 import { ArrowLeft, LockKeyhole, type LucideIcon } from "lucide-react";
 import { usePathname } from "next/navigation";
-import { useRef } from "react";
+import { useRef, useMemo } from "react";
 import {
   ForgeDrawer,
   ForgeGrid,
@@ -22,10 +22,11 @@ import {
   ForgeSpinner,
 } from "@/components/ui/forge";
 import { resolveTone, toneStyles, type ToneInput } from "@/components/ui/forge/status";
+import { PageInfoDisclosure, type PageInfoDisclosureProps } from "@/components/ui/page-info-disclosure";
 import { Button, Dialog, EmptyState as SharedEmptyState, Input as SharedInput, Select as SharedSelect, Textarea as SharedTextarea } from "@/components/ui/primitives";
 import { chart } from "@/lib/design-tokens";
 import { cn } from "@/lib/utils";
-import { findAdminPageGroup } from "./admin-registry";
+import { findAdminPage, findAdminPageGroup, type NavIcon } from "./admin-registry";
 
 export { cn };
 
@@ -138,8 +139,21 @@ export function SubsystemHealthMeter({
 }
 
 export interface SectionHeaderProps {
-  title: React.ReactNode;
+  /**
+   * Overrides the registry label. Legitimate only where the route cannot know
+   * its own name — a detail page titled by the resource, or a wizard step. A
+   * list page that restates its title is drift waiting to happen: the sidebar
+   * row, the breadcrumb tail and this `<h1>` all read `admin-registry.ts`, so
+   * leaving them to be typed twice means they can disagree.
+   */
+  title?: React.ReactNode;
+  /** Overrides the registry description. */
   sub?: string;
+  /**
+   * Header glyph, matching the sidebar row. Defaults to the registry `icon` for
+   * the current route; pass `null` to render none.
+   */
+  icon?: NavIcon | null;
   action?: React.ReactNode;
   breadcrumb?: React.ReactNode;
   hideBreadcrumb?: boolean;
@@ -155,6 +169,12 @@ export interface SectionHeaderProps {
    * to say here passes nothing and shows no badge.
    */
   status?: React.ReactNode;
+  /**
+   * The "what is this page" guide, rendered as a disclosure beside the title.
+   * Pages pass an entry from `admin-page-guides.ts`; the copy lives there, keyed
+   * by route, so a page cannot claim a guide it never wrote.
+   */
+  info?: PageInfoDisclosureProps;
   backAction?: () => void;
   backLabel?: string;
   className?: string;
@@ -163,16 +183,25 @@ export interface SectionHeaderProps {
 export function SectionHeader({
   title,
   sub,
+  icon,
   action,
   breadcrumb,
   hideBreadcrumb,
   status,
+  info,
   backAction,
   backLabel,
   className,
 }: SectionHeaderProps) {
   const pathname = usePathname() || "";
-  const groupMatch = findAdminPageGroup(pathname);
+  const entry = useMemo(() => findAdminPage(pathname), [pathname]);
+  const groupMatch = useMemo(() => findAdminPageGroup(pathname), [pathname]);
+
+  // Page language comes from the route, not the call site, so the sidebar row,
+  // the breadcrumb tail, the command palette and this heading cannot disagree.
+  const resolvedTitle = title ?? entry?.label ?? groupMatch?.pageLabel ?? "Admin";
+  const resolvedSub = sub ?? entry?.description;
+  const HeaderIcon = icon === undefined ? entry?.icon : icon;
 
   // Determine breadcrumb content
   let breadcrumbContent: React.ReactNode = null;
@@ -247,11 +276,17 @@ export function SectionHeader({
       <div className="flex flex-col gap-3 border-b border-line pb-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <h1 className="t-page flex min-w-0 items-center gap-2.5 break-words">
-            {title}
+            {HeaderIcon ? (
+              <span aria-hidden="true" className="grid h-9 w-9 shrink-0 place-items-center rounded-xl border border-line bg-overlay-subtle text-text-subtle">
+                <HeaderIcon size={19} />
+              </span>
+            ) : null}
+            <span className="min-w-0">{resolvedTitle}</span>
+            {info ? <PageInfoDisclosure {...info} /> : null}
           </h1>
-          {sub ? (
+          {resolvedSub ? (
             <p className="mt-1 max-w-prose text-xs leading-5 text-text-subtle">
-              {sub}
+              {resolvedSub}
             </p>
           ) : null}
         </div>
@@ -280,22 +315,26 @@ export function AdminBackButton({ onClick, label = "Back" }: { onClick: () => vo
 export function AdminPageHeader({
   title,
   description,
+  icon,
   action,
   backAction,
   backLabel,
   breadcrumb,
   hideBreadcrumb,
   status,
+  info,
   className,
 }: {
-  title: string;
+  title?: React.ReactNode;
   description?: string;
+  icon?: NavIcon | null;
   action?: React.ReactNode;
   backAction?: () => void;
   backLabel?: string;
   breadcrumb?: string;
   hideBreadcrumb?: boolean;
   status?: React.ReactNode;
+  info?: PageInfoDisclosureProps;
   className?: string;
 }) {
   return (
@@ -306,6 +345,8 @@ export function AdminPageHeader({
       breadcrumb={breadcrumb}
       className={className}
       hideBreadcrumb={hideBreadcrumb}
+      icon={icon}
+      info={info}
       status={status}
       sub={description}
       title={title}
@@ -629,7 +670,7 @@ export function PermissionDeniedState({ message }: { message?: string }) {
   );
 }
 
-export function StatsRow({ items }: { items: Array<{ label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone }> }) {
+export function StatsRow({ items }: { items: Array<{ label: string; value: React.ReactNode; icon?: LucideIcon; tone?: AdminTone }> }) {
   if (!items || items.length === 0) return null;
   return (
     <ForgeGrid className="mb-5" cols={4}>
@@ -645,7 +686,7 @@ export function StatsRow({ items }: { items: Array<{ label: string; value: strin
  * renders as `—` in the unknown tone rather than as `0`.
  */
 export function AdminStatCard({ label, value, icon: Icon, tone = "neutral", className }: {
-  label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone; className?: string;
+  label: string; value: React.ReactNode; icon?: LucideIcon; tone?: AdminTone; className?: string;
 }) {
   return (
     <ForgeMetric

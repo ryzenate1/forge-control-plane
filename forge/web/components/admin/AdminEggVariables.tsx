@@ -1,26 +1,71 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  ArrowUpDown, GripVertical, Plus, Settings, Trash2, Eye, EyeOff, Lock, Unlock,
+  ArrowUpDown, ChevronDown, ChevronUp, GripVertical, Plus, Settings, Trash2, Eye, EyeOff, Lock, Unlock,
   Variable,
 } from "lucide-react";
 import { type ApiEgg, type ApiEggVariable, fetchEggVariables, createEggVariable, updateEggVariable, deleteEggVariable, reorderEggVariables } from "@/lib/api";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { useToast } from "@/components/ui/toast";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, cn } from "./admin-ui";
+import {
+  AdminErrorState,
+  AdminIconButton,
+  AdminLoadingRows,
+  AdminSection,
+  AdminTable,
+  AdminTBody,
+  AdminTh,
+  AdminTHead,
+  Btn,
+  Card,
+  CardHeader,
+  EmptyState,
+  Input,
+  Modal,
+  ModalFooter,
+  Pill,
+} from "./admin-ui";
+
+function messageOf(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : "The request could not be completed.";
+}
+
+/** The user-facing consequence of each flag, spelled out: `userViewable` and
+ * `userEditable` gate what a server owner sees and changes, which the old
+ * "Viewable" / "Hidden" chips never said. */
+function AccessChips({ viewable, editable }: { viewable: boolean; editable: boolean }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      {viewable ? (
+        <Pill tone="green"><Eye size={10} /> Visible to users</Pill>
+      ) : (
+        <Pill tone="neutral"><EyeOff size={10} /> Hidden from users</Pill>
+      )}
+      {editable ? (
+        <Pill tone="blue"><Unlock size={10} /> Users can change it</Pill>
+      ) : (
+        <Pill tone="neutral"><Lock size={10} /> Users cannot change it</Pill>
+      )}
+    </div>
+  );
+}
 
 function VariableCard({
   v,
   onEdit,
   onDelete,
+  onMoveUp,
+  onMoveDown,
   dragHandlers,
   isDragging,
 }: {
   v: ApiEggVariable;
   onEdit: () => void;
   onDelete: () => void;
+  onMoveUp: () => void;
+  onMoveDown: () => void;
   dragHandlers: { onDragStart: () => void; onDragOver: (e: React.DragEvent) => void; onDragEnd: () => void };
   isDragging: boolean;
 }) {
@@ -30,73 +75,50 @@ function VariableCard({
       onDragStart={dragHandlers.onDragStart}
       onDragOver={dragHandlers.onDragOver}
       onDragEnd={dragHandlers.onDragEnd}
-      className={cn(
-        "flex items-start gap-3 rounded-lg border border-white/[0.06] bg-[var(--surface)] p-3 transition hover:border-white/[0.12] sm:p-4",
-        isDragging && "opacity-40 ring-2 ring-red-500/30",
-      )}
+      className={cnRow(isDragging)}
     >
-      <button
-        className="mt-0.5 cursor-grab touch-none text-slate-600 hover:text-slate-400 active:cursor-grabbing"
-        onMouseDown={(e) => e.currentTarget.parentElement?.draggable && void 0}
-        type="button"
-        aria-label="Drag to reorder"
-      >
-        <GripVertical size={16} />
-      </button>
+      <div className="flex shrink-0 flex-col gap-1">
+        {/* Keyboard/touch path for ordering; the pointer drag alone was the only
+            advertised way to reorder. */}
+        <AdminIconButton label={`Move ${v.envVariable} up`} onClick={onMoveUp}><ChevronUp size={12} /></AdminIconButton>
+        <AdminIconButton label={`Move ${v.envVariable} down`} onClick={onMoveDown}><ChevronDown size={12} /></AdminIconButton>
+      </div>
 
       <div className="min-w-0 flex-1 space-y-2">
         <div className="flex flex-wrap items-center gap-2">
-          <code className="rounded-md bg-amber-500/10 px-2 py-0.5 font-mono text-xs font-semibold text-amber-300">
-            {v.envVariable}
-          </code>
-          <span className="text-sm font-medium text-slate-200">{v.name}</span>
+          <code className="rounded-md bg-overlay-strong px-2 py-0.5 font-mono text-xs font-semibold text-text">{v.envVariable}</code>
+          <span className="text-sm font-medium text-text">{v.name}</span>
         </div>
 
         {v.description && (
-          <p className="text-xs leading-relaxed text-slate-500">{v.description}</p>
+          <p className="text-xs leading-relaxed text-text-subtle">{v.description}</p>
         )}
 
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px]">
-          <span className="font-mono text-slate-500">
-            Default: <span className="text-slate-300">{v.defaultValue || "\u2014"}</span>
+        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+          <span className="font-mono text-text-subtle">
+            Default: <span className="text-text">{v.defaultValue || "—"}</span>
           </span>
-          <code className="rounded bg-white/[0.04] px-1.5 py-0.5 text-slate-500">
-            {v.rules || "\u2014"}
+          <code className="rounded bg-overlay px-1.5 py-0.5 font-mono text-xs text-text-subtle">
+            {v.rules || "—"}
           </code>
         </div>
 
-        <div className="flex items-center gap-3">
-          {v.userViewable ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-400">
-              <Eye size={10} /> Viewable
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-              <EyeOff size={10} /> Hidden
-            </span>
-          )}
-          {v.userEditable ? (
-            <span className="inline-flex items-center gap-1 rounded-full bg-blue-500/10 px-2 py-0.5 text-[10px] font-medium text-blue-400">
-              <Unlock size={10} /> Editable
-            </span>
-          ) : (
-            <span className="inline-flex items-center gap-1 rounded-full bg-slate-500/10 px-2 py-0.5 text-[10px] font-medium text-slate-500">
-              <Lock size={10} /> Locked
-            </span>
-          )}
-        </div>
+        <AccessChips viewable={v.userViewable} editable={v.userEditable} />
       </div>
 
       <div className="flex shrink-0 flex-col gap-1">
-        <Btn size="sm" tone="ghost" onClick={onEdit}>
-          <Settings size={12} />
-        </Btn>
-        <Btn size="sm" tone="danger" onClick={onDelete}>
-          <Trash2 size={12} />
-        </Btn>
+        <AdminIconButton label={`Edit ${v.envVariable}`} onClick={onEdit}><Settings size={12} /></AdminIconButton>
+        <AdminIconButton label={`Delete ${v.envVariable}`} tone="danger" onClick={onDelete}><Trash2 size={12} /></AdminIconButton>
       </div>
     </div>
   );
+}
+
+function cnRow(isDragging: boolean) {
+  return [
+    "flex items-start gap-3 rounded-lg border border-line bg-overlay-subtle p-3 transition hover:border-line-strong sm:p-4",
+    isDragging ? "opacity-40 ring-2 ring-[var(--focus)]" : "",
+  ].join(" ");
 }
 
 export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
@@ -107,7 +129,7 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
     queryKey: ["egg-variables", egg.id],
     queryFn: () => fetchEggVariables(egg.id),
   });
-  const variables = varsQuery.data ?? [];
+  const variables = useMemo(() => varsQuery.data ?? [], [varsQuery.data]);
   const isLoading = varsQuery.isLoading;
   const isError = varsQuery.isError;
   const error = varsQuery.error;
@@ -145,6 +167,8 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
     setModal(v);
   };
 
+  const invalidateVars = () => qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] });
+
   const createMut = useMutation({
     mutationFn: () => createEggVariable(egg.id, {
       name: varName.trim(),
@@ -155,8 +179,8 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
       userEditable: varUserEditable,
       rules: varRules.trim(),
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }); setModal(null); },
-    onError: (err) => toast({ tone: "error", title: "Failed to create variable", message: err instanceof Error ? err.message : "An error occurred" }),
+    onSuccess: () => { invalidateVars(); setModal(null); toast({ tone: "success", title: "Variable created" }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to create variable", message: messageOf(err) }),
   });
 
   const updateMut = useMutation({
@@ -169,162 +193,206 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
       userEditable: varUserEditable,
       rules: varRules.trim(),
     }),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }); setModal(null); },
-    onError: (err) => toast({ tone: "error", title: "Failed to update variable", message: err instanceof Error ? err.message : "An error occurred" }),
+    onSuccess: () => { invalidateVars(); setModal(null); toast({ tone: "success", title: "Variable updated" }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to update variable", message: messageOf(err) }),
   });
 
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteEggVariable(egg.id, id),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }),
-    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: err instanceof Error ? err.message : "An error occurred" }),
+    onSuccess: () => { invalidateVars(); toast({ tone: "success", title: "Variable deleted" }); },
+    onError: (err) => toast({ tone: "error", title: "Failed to delete variable", message: messageOf(err) }),
   });
 
+  /**
+   * Reordering commits exactly once, on drop. The previous implementation called
+   * `reorderEggVariables` from every `dragover`, so dragging across N rows
+   * issued N POSTs and the last one to land silently won.
+   */
   const reorderMut = useMutation({
     mutationFn: (ids: string[]) => reorderEggVariables(egg.id, ids),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["egg-variables", egg.id] }),
-    onError: (err) => toast({ tone: "error", title: "Failed to reorder variables", message: err instanceof Error ? err.message : "An error occurred" }),
+    onSuccess: () => { invalidateVars(); setPendingOrder(null); },
+    onError: (err) => { setPendingOrder(null); toast({ tone: "error", title: "Order not saved", message: messageOf(err) }); },
   });
 
   const [dragIndex, setDragIndex] = useState<number | null>(null);
+  const [pendingOrder, setPendingOrder] = useState<string[] | null>(null);
+
+  const rows = useMemo(() => {
+    if (!pendingOrder) return variables;
+    const byId = new Map(variables.map((v) => [v.id, v]));
+    const ordered = pendingOrder
+      .map((id) => byId.get(id))
+      .filter((v): v is ApiEggVariable => Boolean(v));
+    const unknown = variables.filter((v) => !pendingOrder.includes(v.id));
+    return [...ordered, ...unknown];
+  }, [variables, pendingOrder]);
+
+  const commitOrder = (ids: string[]) => reorderMut.mutate(ids);
+
+  const move = (index: number, delta: -1 | 1) => {
+    const ids = rows.map((v) => v.id);
+    const target = index + delta;
+    if (target < 0 || target >= ids.length) return;
+    const next = [...ids];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved);
+    setPendingOrder(next);
+    commitOrder(next);
+  };
 
   const handleDragStart = (index: number) => setDragIndex(index);
   const handleDragOver = (e: React.DragEvent, index: number) => {
     e.preventDefault();
     if (dragIndex === null || dragIndex === index) return;
-    const items = [...variables];
-    const [moved] = items.splice(dragIndex, 1);
-    items.splice(index, 0, moved);
+    const ids = (pendingOrder ?? rows.map((v) => v.id));
+    const next = [...ids];
+    const [moved] = next.splice(dragIndex, 1);
+    next.splice(index, 0, moved);
     setDragIndex(index);
-    reorderMut.mutate(items.map((item) => item.id));
+    // Local preview only — no request until the row is dropped.
+    setPendingOrder(next);
   };
-  const handleDragEnd = () => setDragIndex(null);
+  const handleDragEnd = () => {
+    setDragIndex(null);
+    if (pendingOrder) commitOrder(pendingOrder);
+  };
+
+  const confirmDelete = (v: ApiEggVariable) => {
+    void (async () => {
+      if (await confirm({
+        title: `Delete variable ${v.envVariable}?`,
+        description: "Servers created from this definition keep their current value for it; new servers will not be given the variable. This cannot be undone.",
+        danger: true,
+        confirmLabel: "Delete",
+      })) deleteMut.mutate(v.id);
+    })();
+  };
 
   return (
     <div className="space-y-6">
-      <SectionHeader
-        hideBreadcrumb
-        title="Environment Variables"
-        sub="Environment variables for this egg. Presented to users when creating or managing servers."
-      />
+      <AdminSection
+        title="Environment variables"
+        description="Values presented to users when a server is created from this definition, and the rules the panel enforces on them."
+      >
+        <Card>
+          <CardHeader
+            title={varsQuery.data ? `${variables.length} variable${variables.length === 1 ? "" : "s"}` : "Variables"}
+            icon={Variable}
+            action={<Btn size="sm" onClick={openCreate}><Plus size={12} /> New Variable</Btn>}
+          />
 
-      <Card>
-        <CardHeader
-          title={`${variables.length} variable${variables.length === 1 ? "" : "s"}`}
-          icon={Variable}
-          action={<Btn size="sm" onClick={openCreate}><Plus size={12} /> New Variable</Btn>}
-        />
-
-        {isLoading ? (
-          <div className="p-8 text-center text-sm text-slate-500">Loading variables\u2026</div>
-        ) : isError ? (
-          <div className="p-4">
-            <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-              <span>Could not load variables: {error?.message ?? "Unknown error"}</span>
-              <Btn size="sm" tone="ghost" onClick={() => void refetch()}>Retry</Btn>
+          {isLoading ? (
+            <AdminLoadingRows rows={4} label="Loading variables…" />
+          ) : isError ? (
+            <div className="p-4">
+              <AdminErrorState
+                message={`Could not load variables: ${messageOf(error)}`}
+                retry={() => void refetch()}
+              />
             </div>
-          </div>
-        ) : variables.length === 0 ? (
-          <EmptyState icon={Variable} message="No variables defined for this egg." />
-        ) : (
-          <div>
-            {/* Desktop table — hidden on small screens */}
-            <div className="hidden sm:block overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
-                    <th className="w-8 px-3 py-3" />
-                    <th className="px-3 py-3">Env Variable</th>
-                    <th className="px-3 py-3">Name</th>
-                    <th className="px-3 py-3">Default</th>
-                    <th className="px-3 py-3">Rules</th>
-                    <th className="px-3 py-3">Access</th>
-                    <th className="px-3 py-3" />
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-white/[0.04]">
-                  {variables.map((v, index) => (
-                    <tr
-                      key={v.id}
-                      className={cn("hover:bg-white/[0.02]", dragIndex === index && "opacity-40")}
-                      draggable
-                      onDragEnd={handleDragEnd}
-                      onDragOver={(e) => handleDragOver(e, index)}
-                      onDragStart={() => handleDragStart(index)}
-                    >
-                      <td className="w-8 px-3 py-3">
-                        <span className="inline-flex cursor-grab text-slate-500 active:cursor-grabbing">
-                          <GripVertical size={14} />
-                        </span>
-                      </td>
-                      <td className="px-3 py-3">
-                        <code className="rounded-md bg-amber-500/10 px-2 py-0.5 font-mono text-xs font-semibold text-amber-300">
-                          {v.envVariable}
-                        </code>
-                      </td>
-                      <td className="px-3 py-3">
-                        <p className="font-medium text-slate-200">{v.name}</p>
-                        {v.description && (
-                          <p className="max-w-[220px] truncate text-xs text-slate-500">{v.description}</p>
-                        )}
-                      </td>
-                      <td className="max-w-[140px] truncate px-3 py-3 font-mono text-xs text-slate-400">
-                        {v.defaultValue || <span className="text-slate-600">\u2014</span>}
-                      </td>
-                      <td className="px-3 py-3">
-                        <code className="rounded bg-white/5 px-1.5 py-0.5 text-[10px] text-slate-400">
-                          {v.rules || "\u2014"}
-                        </code>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center gap-2">
-                          {v.userViewable ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-emerald-400"><Eye size={10} /> Viewable</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><EyeOff size={10} /> Hidden</span>
+          ) : variables.length === 0 ? (
+            <EmptyState icon={Variable} title="No variables defined" message="This egg exposes nothing at creation time. Add a variable to ask for a value." />
+          ) : (
+            <div>
+              {/* Desktop table — hidden on small screens */}
+              <div className="hidden sm:block">
+                <AdminTable label={`Variables for ${egg.name}`}>
+                  <AdminTHead>
+                    <AdminTh className="w-20">Order</AdminTh>
+                    <AdminTh>Env variable</AdminTh>
+                    <AdminTh>Name</AdminTh>
+                    <AdminTh>Default</AdminTh>
+                    <AdminTh>Rules</AdminTh>
+                    <AdminTh>Access</AdminTh>
+                    <AdminTh className="text-right">Actions</AdminTh>
+                  </AdminTHead>
+                  <AdminTBody>
+                    {rows.map((v, index) => (
+                      <tr
+                        key={v.id}
+                        className={dragIndex === index ? "opacity-40" : undefined}
+                        draggable
+                        onDragEnd={handleDragEnd}
+                        onDragOver={(e) => handleDragOver(e, index)}
+                        onDragStart={() => handleDragStart(index)}
+                      >
+                        <td className="ui-td">
+                          <div className="flex items-center gap-1">
+                            <span aria-hidden="true" className="inline-flex cursor-grab text-text-muted active:cursor-grabbing">
+                              <GripVertical size={14} />
+                            </span>
+                            <Btn size="sm" tone="ghost" ariaLabel={`Move ${v.envVariable} up`} disabled={index === 0 || reorderMut.isPending} onClick={() => move(index, -1)}>
+                              <ChevronUp size={12} />
+                            </Btn>
+                            <Btn size="sm" tone="ghost" ariaLabel={`Move ${v.envVariable} down`} disabled={index === rows.length - 1 || reorderMut.isPending} onClick={() => move(index, 1)}>
+                              <ChevronDown size={12} />
+                            </Btn>
+                          </div>
+                        </td>
+                        <td className="ui-td">
+                          <code className="rounded-md bg-overlay-strong px-2 py-0.5 font-mono text-xs font-semibold text-text">{v.envVariable}</code>
+                        </td>
+                        <td className="ui-td">
+                          <p className="font-medium text-text">{v.name}</p>
+                          {v.description && (
+                            <p className="max-w-[26ch] break-words text-xs text-text-subtle">{v.description}</p>
                           )}
-                          {v.userEditable ? (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-blue-400"><Unlock size={10} /> Editable</span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 text-[10px] text-slate-500"><Lock size={10} /> Locked</span>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-3 py-3">
-                        <div className="flex items-center justify-end gap-1">
-                          <Btn size="sm" tone="ghost" onClick={() => openEdit(v)}><Settings size={12} /></Btn>
-                          <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete variable ${v.envVariable}?`, description: "Servers using this variable will stop receiving its value. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(v.id); })(); }}><Trash2 size={12} /></Btn>
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
+                        </td>
+                        <td className="ui-td max-w-[20ch] break-all font-mono text-xs text-text-subtle">
+                          {v.defaultValue || <span className="text-text-muted">No default</span>}
+                        </td>
+                        <td className="ui-td">
+                          <code className="rounded bg-overlay px-1.5 py-0.5 font-mono text-xs text-text-subtle">
+                            {v.rules || "No rules"}
+                          </code>
+                        </td>
+                        <td className="ui-td"><AccessChips viewable={v.userViewable} editable={v.userEditable} /></td>
+                        <td className="ui-td">
+                          <div className="flex items-center justify-end gap-1">
+                            <AdminIconButton label={`Edit ${v.envVariable}`} onClick={() => openEdit(v)}><Settings size={12} /></AdminIconButton>
+                            <AdminIconButton label={`Delete ${v.envVariable}`} tone="danger" onClick={() => confirmDelete(v)}><Trash2 size={12} /></AdminIconButton>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                  </AdminTBody>
+                </AdminTable>
+              </div>
 
-            {/* Mobile cards — shown on small screens only */}
-            <div className="space-y-2 p-3 sm:hidden">
-              {variables.map((v, index) => (
-                <VariableCard
-                  key={v.id}
-                  v={v}
-                  isDragging={dragIndex === index}
-                  onEdit={() => openEdit(v)}
-                  onDelete={() => { void (async () => { if (await confirm({ title: `Delete variable ${v.envVariable}?`, description: "Servers using this variable will stop receiving its value. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(v.id); })(); }}
-                  dragHandlers={{
-                    onDragStart: () => handleDragStart(index),
-                    onDragOver: (e: React.DragEvent) => handleDragOver(e, index),
-                    onDragEnd: handleDragEnd,
-                  }}
-                />
-              ))}
-            </div>
+              {/* Mobile cards — shown on small screens only */}
+              <div className="space-y-2 p-3 sm:hidden">
+                {rows.map((v, index) => (
+                  <VariableCard
+                    key={v.id}
+                    v={v}
+                    isDragging={dragIndex === index}
+                    onEdit={() => openEdit(v)}
+                    onDelete={() => confirmDelete(v)}
+                    onMoveUp={() => move(index, -1)}
+                    onMoveDown={() => move(index, 1)}
+                    dragHandlers={{
+                      onDragStart: () => handleDragStart(index),
+                      onDragOver: (e: React.DragEvent) => handleDragOver(e, index),
+                      onDragEnd: handleDragEnd,
+                    }}
+                  />
+                ))}
+              </div>
 
-            <div className="flex items-center gap-2 border-t border-white/[0.06] px-4 py-2.5 text-[10px] text-slate-500">
-              <ArrowUpDown size={10} /> Drag rows to reorder
+              <div className="flex items-center gap-2 border-t border-line px-4 py-2.5 text-meta text-text-subtle">
+                <ArrowUpDown />
+                <span>
+                  {reorderMut.isPending
+                    ? "Saving the new order…"
+                    : pendingOrder
+                      ? "New order staged — it is saved when the row is dropped."
+                      : "Drag a row, or use the up and down buttons, to change the order variables are shown in."}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
-      </Card>
+          )}
+        </Card>
+      </AdminSection>
 
       {modal !== null && (
         <Modal
@@ -335,7 +403,7 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
           <div className="grid gap-4 md:grid-cols-2">
             <Input label="Name" value={varName} onChange={setVarName} placeholder="Server Port" />
             <Input
-              label="Environment Variable"
+              label="Environment variable"
               value={varEnvVariable}
               onChange={(v) => setVarEnvVariable(v.toUpperCase())}
               placeholder="SERVER_PORT"
@@ -344,32 +412,37 @@ export function AdminEggVariables({ egg }: { egg: ApiEgg }) {
             <div className="md:col-span-2">
               <Input label="Description" value={varDesc} onChange={setVarDesc} placeholder="The port the server will listen on" />
             </div>
-            <Input label="Default Value" value={varDefaultValue} onChange={setVarDefaultValue} placeholder="25565" />
-            <Input label="Validation Rules" value={varRules} onChange={setVarRules} placeholder="required|integer|min:1024|max:65535" mono />
-            <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface-input)] px-4 py-3 transition hover:border-white/20">
+            <Input label="Default value" value={varDefaultValue} onChange={setVarDefaultValue} placeholder="25565" />
+            <Input label="Validation rules" value={varRules} onChange={setVarRules} placeholder="required|integer|min:1024|max:65535" mono />
+            <label className="flex items-center gap-3 rounded-lg border border-line bg-overlay-subtle px-4 py-3 transition hover:border-line-strong">
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-[var(--brand)]"
                 checked={varUserViewable}
                 onChange={(e) => setVarUserViewable(e.target.checked)}
               />
-              <span className="text-sm text-slate-300">User viewable</span>
+              <span className="text-sm text-text">Visible to users</span>
             </label>
-            <label className="flex items-center gap-3 rounded-lg border border-white/10 bg-[var(--surface-input)] px-4 py-3 transition hover:border-white/20">
+            <label className="flex items-center gap-3 rounded-lg border border-line bg-overlay-subtle px-4 py-3 transition hover:border-line-strong">
               <input
                 type="checkbox"
                 className="h-4 w-4 accent-[var(--brand)]"
                 checked={varUserEditable}
                 onChange={(e) => setVarUserEditable(e.target.checked)}
               />
-              <span className="text-sm text-slate-300">User editable</span>
+              <span className="text-sm text-text">Changeable by users</span>
             </label>
+            {createMut.isError || updateMut.isError ? (
+              <div className="ui-alert ui-alert-danger md:col-span-2" role="alert">
+                <span>{messageOf(createMut.error ?? updateMut.error)}</span>
+              </div>
+            ) : null}
           </div>
           <ModalFooter
             onCancel={() => setModal(null)}
             onConfirm={() => modal === "create" ? createMut.mutate() : updateMut.mutate(modal)}
-            disabled={varName.trim() === "" || varEnvVariable.trim() === "" || createMut.isPending || updateMut.isPending}
-            confirmLabel={modal === "create" ? "Create" : "Save"}
+            disabled={!varName.trim() || !varEnvVariable.trim() || createMut.isPending || updateMut.isPending}
+            confirmLabel={modal === "create" ? (createMut.isPending ? "Creating…" : "Create") : (updateMut.isPending ? "Saving…" : "Save")}
           />
         </Modal>
       )}

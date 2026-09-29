@@ -2,34 +2,38 @@
 
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Archive, Box, Database, LayoutGrid, List, Plus, RotateCcw, Search, Server, Trash2 } from "lucide-react";
+import { Archive, Box, Database, LayoutGrid, LoaderCircle, List, Plus, RotateCcw, Search, Server, Trash2 } from "lucide-react";
 import { type DBContainer, listDBContainers, backupDBContainer, restartDBContainer, deprovisionDBContainer } from "@/lib/api/database-containers";
-import { Btn, EmptyState, SectionHeader, AdminConfirmDialog, cn } from "@/components/admin/admin-ui";
+import { Btn, EmptyState, AdminErrorState, AdminLoadingState, AdminConfirmDialog, cn } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { DBContainerCreateModal } from "./container-create-modal";
 import { DBContainerCredentialsModal } from "./container-credentials-modal";
 import { statusTone } from "@/lib/api/status";
-import { StatusDot } from "@/components/ui/primitives";
-import { DbStatCards, type DbStat } from "./databases-overview";
+import { StatusDot, Pagination } from "@/components/ui/primitives";
+import { DbStatCards, resourcesLabel, type DbStat } from "./databases-overview";
+import { isAvailable, isPartial, reportedTotal } from "@/lib/admin/telemetry";
+import { resolveTone } from "@/components/ui/forge/status";
+import { formatDate } from "@/lib/utils";
 
+/** Shared formatter — this file had its own `en-GB` date layout. */
 function fmtDate(iso?: string): string {
-  if (!iso) return "—";
-  const d = new Date(iso);
-  if (Number.isNaN(d.getTime())) return "—";
-  return d.toLocaleDateString("en-GB", { day: "2-digit", month: "2-digit", year: "numeric" });
+  return formatDate(iso, "—");
 }
 
 function ContainerStatusDot({ status }: { status: string }) {
   return <StatusDot status={status} tone={statusTone(status)} />;
 }
 
-function ContainerActions({ db, onRestart, onBackup, onDelete, onShowCreds, isPending }: {
+function ContainerActions({ db, onRestart, onBackup, onDelete, onShowCreds, isPending, pendingAction }: {
   db: DBContainer;
   onRestart: (id: string) => void;
   onBackup: (id: string) => void;
   onDelete: (id: string) => void;
   onShowCreds: (id: string) => void;
   isPending: boolean;
+  /** Which of this row's own operations is in flight, so the pressed button shows
+   *  it rather than every row on the page looking busy. */
+  pendingAction: "restart" | "backup" | "delete" | null;
 }) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
@@ -38,51 +42,55 @@ function ContainerActions({ db, onRestart, onBackup, onDelete, onShowCreds, isPe
       <div className="flex items-center justify-end gap-1">
         {db.connectionString ? (
           <button
-            type="button"
+            className="rounded-lg border border-line px-3 py-1.5 text-meta font-bold text-text transition hover:border-line-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             onClick={() => onShowCreds(db.id)}
-            className="rounded-lg border border-white/[0.08] px-3 py-1.5 text-[11px] font-bold text-slate-200 transition hover:border-white/20 hover:text-white"
+            type="button"
           >
             View
           </button>
         ) : (
-          <span className="px-2 text-xs text-slate-400">Pending</span>
+          <span className="px-2 text-xs text-text-subtle" title="The container has not reported a connection string yet">Credentials pending</span>
         )}
         <button
-          className="grid h-11 w-11 place-items-center rounded text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-slate-200 disabled:opacity-40"
+          aria-label={`Restart container ${db.id}`}
+          className="grid h-11 w-11 place-items-center rounded text-text-subtle transition-colors hover:bg-overlay-subtle hover:text-text disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
           disabled={isPending}
           onClick={() => onRestart(db.id)}
-          title="Restart"
+          title={pendingAction === "restart" ? "Restarting…" : "Restart"}
           type="button"
         >
-          <RotateCcw size={14} />
+          {pendingAction === "restart" ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} /> : <RotateCcw aria-hidden="true" size={14} />}
         </button>
         <button
-          className="grid h-11 w-11 place-items-center rounded text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-amber-200 disabled:opacity-40"
+          aria-label={`Back up container ${db.id}`}
+          className="grid h-11 w-11 place-items-center rounded text-text-subtle transition-colors hover:bg-overlay-subtle hover:text-text disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
           disabled={isPending}
           onClick={() => onBackup(db.id)}
-          title="Backup"
+          title={pendingAction === "backup" ? "Backing up…" : "Backup"}
           type="button"
         >
-          <Archive size={14} />
+          {pendingAction === "backup" ? <LoaderCircle aria-hidden="true" className="animate-spin" size={14} /> : <Archive aria-hidden="true" size={14} />}
         </button>
         <button
-          className="grid h-11 w-11 place-items-center rounded text-slate-400 transition-colors hover:bg-white/[0.06] hover:text-red-200 disabled:opacity-40"
+          aria-label={`Delete container ${db.id}`}
+          className="grid h-11 w-11 place-items-center rounded text-text-subtle transition-colors hover:bg-overlay-subtle hover:text-danger disabled:cursor-not-allowed disabled:opacity-40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
           disabled={isPending || db.status === "provisioning"}
           onClick={() => setConfirmDelete(true)}
-          title="Delete"
+          title={db.status === "provisioning" ? "Cannot delete while the container is still provisioning" : `Delete container ${db.id}`}
           type="button"
         >
-          <Trash2 size={14} />
+          <Trash2 aria-hidden="true" size={14} />
         </button>
       </div>
       <AdminConfirmDialog
+        confirmLabel="Delete container"
         destructive
-        loading={isPending}
+        description="The database container and its stored data are removed from the node. This cannot be undone."
+        loading={pendingAction === "delete"}
         onCancel={() => setConfirmDelete(false)}
         onConfirm={() => { onDelete(db.id); setConfirmDelete(false); }}
         open={confirmDelete}
         title={`Delete DB container ${db.id.slice(0, 8)}?`}
-        description="The database container and its data will be permanently removed. This cannot be undone."
       />
     </>
   );
@@ -140,19 +148,47 @@ export function DBContainerView() {
   });
 
   const isPending = restartMut.isPending || backupMut.isPending || deleteMut.isPending;
-  const loading = containersQuery.isLoading;
+  const containersReady = isAvailable(containersQuery);
+  /** Which operation this row itself has in flight — `isPending` alone is page-wide. */
+  const rowPendingAction = (id: string): "restart" | "backup" | "delete" | null => {
+    if (restartMut.isPending && restartMut.variables === id) return "restart";
+    if (backupMut.isPending && backupMut.variables === id) return "backup";
+    if (deleteMut.isPending && deleteMut.variables === id) return "delete";
+    return null;
+  };
 
+  /**
+   * Sub-heading, not a second page `<h1>`. The Databases route owns the one page
+   * title; this tab heads itself at `<h2>`.
+   */
   const stats: DbStat[] = useMemo(() => {
-    const running = containers.filter((c) => ["running", "ready"].includes(c.status.toLowerCase())).length;
-    const pending = containers.filter((c) => ["pending", "provisioning", "creating"].includes(c.status.toLowerCase())).length;
-    const memorySum = containers.reduce((sum, c) => sum + (c.memoryMb ?? 0), 0);
+    const running = containers.filter((c) => resolveTone(c.status) === "ok").length;
+    const pending = containers.filter((c) => resolveTone(c.status) === "pending").length;
+    // A container that reports no memory figure is not a 0MB container.
+    const memory = reportedTotal(containers, (c) => c.memoryMb);
+    const unknown = <span className="text-text-muted" title="The containers query has not reported">—</span>;
     return [
-      { key: "total", label: "Total", icon: Database, tile: "border-white/[0.08] bg-white/[0.03] text-slate-300", value: loading ? "…" : containers.length },
-      { key: "running", label: "Running", icon: Box, tile: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", value: loading ? "…" : running },
-      { key: "pending", label: "Pending", icon: Archive, tile: "border-amber-500/25 bg-amber-500/10 text-amber-300", value: loading ? "…" : pending },
-      { key: "memory", label: "Memory", icon: Server, tile: "border-sky-500/25 bg-sky-500/10 text-sky-300", value: loading ? "…" : containers.length === 0 ? "—" : `${memorySum}MB` },
+      { key: "total", label: "Total", icon: Database, hint: "Database containers on cluster nodes", value: containersReady ? containers.length : unknown },
+      { key: "running", label: "Running", icon: Box, hint: "Containers the node reported as running", value: containersReady ? running : unknown },
+      { key: "pending", label: "Pending", icon: Archive, hint: "Containers still being provisioned", value: containersReady ? pending : unknown },
+      {
+        key: "memory",
+        label: "Memory",
+        icon: Server,
+        hint: "Sum of what the containers reported",
+        value: containersReady
+          ? (memory.total === 0 || memory.value === undefined
+            ? <span className="text-text-muted" title="No container reported a memory figure">—</span>
+            : (
+              <span title={isPartial(memory) ? `Only ${memory.reported} of ${memory.total} containers reported memory` : undefined}>
+                {`${memory.value}MB`}
+                {isPartial(memory) ? <span className="ml-1 text-xs font-normal text-warn">partial</span> : null}
+              </span>
+            ))
+          : unknown,
+      },
     ];
-  }, [containers, loading]);
+  }, [containers, containersReady]);
 
   const engines = useMemo(() => [...new Set(containers.map((c) => c.engine).filter(Boolean))].sort(), [containers]);
   const statuses = useMemo(() => [...new Set(containers.map((c) => c.status).filter(Boolean))].sort(), [containers]);
@@ -186,70 +222,82 @@ export function DBContainerView() {
   const currentPage = Math.min(page, totalPages);
   const visible = sorted.slice((currentPage - 1) * pageSize, currentPage * pageSize);
   const hasActiveFilters = Boolean(search.trim() || engineFilter !== "all" || statusFilter !== "all");
+  /** Names the filtered denominator instead of presenting a subset as the total. */
+  const containersRangeLabel = sorted.length === 0
+    ? "Nothing to show"
+    : `Showing ${(currentPage - 1) * pageSize + 1}–${Math.min(currentPage * pageSize, sorted.length)} of ${hasActiveFilters ? `${sorted.length} matched of ${containers.length} containers (filtered)` : `${sorted.length} containers`}`;
 
-  const selectCls = "h-10 cursor-pointer appearance-none rounded-lg border border-white/[0.08] bg-black/20 pl-3 pr-8 text-xs text-slate-200 outline-none";
-  const selectWrap = "relative flex flex-col justify-center rounded-lg border border-white/[0.08] bg-black/20 px-3 py-1";
+  const selectCls = "ui-input w-full cursor-pointer sm:w-44";
 
   const showCreds = (db: DBContainer) => setCredsModal({ id: db.id, name: `${db.engine}-${db.version}` });
 
   return (
     <div className="space-y-4">
-      <SectionHeader
-        title="DB Containers"
-        sub="Managed database containers running on cluster nodes"
-        action={<Btn onClick={() => setShowCreate(true)}><Plus size={14} /> Create Container</Btn>}
-      />
+      {/* `<h2>` sub-heading: the Databases route owns the single `<h1>`, which it
+          derives from the registry. This tab used to render `SectionHeader`, adding a
+          second page title that changed whenever the tab changed. */}
+      <div className="flex flex-wrap items-start justify-between gap-3 border-b border-line pb-3">
+        <div className="min-w-0">
+          <h2 className="t-title">DB Containers</h2>
+          <p className="mt-0.5 max-w-prose text-meta text-text-subtle">
+            Database containers running on cluster nodes. These are low-level runtime objects; a
+            database created through another surface may appear here too.
+          </p>
+        </div>
+        <div className="flex shrink-0 items-center gap-2">
+          <Btn ariaLabel="Refresh containers" disabled={containersQuery.isFetching} onClick={() => void containersQuery.refetch()} tone="ghost">
+            <RotateCcw size={14} /> Refresh
+          </Btn>
+          <Btn onClick={() => setShowCreate(true)}><Plus size={14} /> Create Container</Btn>
+        </div>
+      </div>
 
       <DbStatCards stats={stats} />
 
       <div className="flex flex-col gap-2 xl:flex-row xl:items-center">
-        <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-2">
-          <Search size={13} className="shrink-0 text-slate-500" />
+        <label className="flex min-w-52 flex-1 items-center gap-2 rounded-lg border border-line bg-overlay-subtle px-2.5 py-2 focus-within:border-line-strong">
+          <Search aria-hidden="true" size={13} className="shrink-0 text-text-muted" />
           <input
-            type="text"
-            value={search}
+            aria-label="Search containers"
+            className="w-full bg-transparent text-xs text-text outline-none placeholder:text-text-muted"
             onChange={(e) => resetPage(() => setSearch(e.target.value))}
             placeholder="Search containers by id, engine, status…"
-            aria-label="Search containers"
-            className="w-full bg-transparent text-xs text-slate-200 outline-none placeholder:text-slate-600"
+            type="search"
+            value={search}
           />
         </label>
         <div className="flex flex-wrap items-center gap-2">
-          <label className={selectWrap}>
-            <span className="text-[10px] leading-3 text-slate-500">Engine</span>
-            <select aria-label="Filter by engine" value={engineFilter} onChange={(e) => resetPage(() => setEngineFilter(e.target.value))} className={selectCls + " h-6 border-0 bg-transparent pl-0 text-xs"}>
-              <option value="all">All</option>
-              {engines.map((e) => <option key={e} value={e}>{e}</option>)}
-            </select>
-          </label>
-          <label className={selectWrap}>
-            <span className="text-[10px] leading-3 text-slate-500">Status</span>
-            <select aria-label="Filter by status" value={statusFilter} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} className={selectCls + " h-6 border-0 bg-transparent pl-0 text-xs"}>
-              <option value="all">All</option>
-              {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </label>
-          <div className="flex gap-1 rounded-lg border border-white/[0.08] bg-black/20 p-1" role="group" aria-label="View mode">
-            <button type="button" aria-label="Table view" aria-pressed={view === "table"} onClick={() => setView("table")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "table" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
-              <List size={14} /> Table
+          <select aria-label="Filter containers by engine" className={selectCls} onChange={(e) => resetPage(() => setEngineFilter(e.target.value))} value={engineFilter}>
+            <option value="all">Engine: all</option>
+            {engines.map((e) => <option key={e} value={e}>{e}</option>)}
+          </select>
+          <select aria-label="Filter containers by status" className={selectCls} onChange={(e) => resetPage(() => setStatusFilter(e.target.value))} value={statusFilter}>
+            <option value="all">Status: all</option>
+            {statuses.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <div aria-label="View mode" className="flex gap-1 rounded-lg border border-line bg-overlay-subtle p-1" role="group">
+            <button aria-pressed={view === "table"} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "table" ? "border border-brand-line bg-brand-subtle text-text" : "border border-transparent text-text-muted hover:text-text")} onClick={() => setView("table")} type="button">
+              <List aria-hidden="true" size={14} /> Table
             </button>
-            <button type="button" aria-label="Cards view" aria-pressed={view === "cards"} onClick={() => setView("cards")} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "cards" ? "border border-red-500/50 bg-red-500/10 text-red-200" : "text-slate-500 hover:text-slate-300")}>
-              <LayoutGrid size={14} /> Cards
+            <button aria-pressed={view === "cards"} className={cn("flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition", view === "cards" ? "border border-brand-line bg-brand-subtle text-text" : "border border-transparent text-text-muted hover:text-text")} onClick={() => setView("cards")} type="button">
+              <LayoutGrid aria-hidden="true" size={14} /> Cards
             </button>
           </div>
           {hasActiveFilters && (
-            <button type="button" onClick={() => { setSearch(""); setEngineFilter("all"); setStatusFilter("all"); setPage(1); }} className="rounded-lg px-2.5 py-2 text-xs font-semibold text-slate-400 transition hover:text-white">
-              Clear
+            <button className="rounded-lg px-2.5 py-2 text-xs font-semibold text-text-subtle transition hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" onClick={() => { setSearch(""); setEngineFilter("all"); setStatusFilter("all"); setPage(1); }} type="button">
+              Clear filters
             </button>
           )}
         </div>
       </div>
 
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-sm font-bold text-slate-100">Containers ({sorted.length})</h2>
-        <label className="flex items-center gap-2 rounded-lg border border-white/[0.08] bg-black/20 px-2.5 py-1.5 text-xs text-slate-300">
-          <span className="text-[11px] text-slate-500">Sort by</span>
-          <select aria-label="Sort containers" value={sort} onChange={(e) => setSort(e.target.value)} className="cursor-pointer appearance-none bg-transparent pr-1 outline-none">
+        <h3 className="t-title">
+          Containers <span className="font-normal text-text-subtle">({hasActiveFilters ? `${sorted.length} of ${containers.length} (filtered)` : `${containers.length} container${containers.length === 1 ? "" : "s"}`})</span>
+        </h3>
+        <label className="flex items-center gap-2 rounded-lg border border-line bg-overlay-subtle px-2.5 py-1.5 text-xs text-text">
+          <span className="text-text-subtle">Sort by</span>
+          <select aria-label="Sort containers" className="cursor-pointer appearance-none bg-transparent pr-1 outline-none" onChange={(e) => setSort(e.target.value)} value={sort}>
             <option value="name-asc">Name (A → Z)</option>
             <option value="name-desc">Name (Z → A)</option>
             <option value="status">Status</option>
@@ -258,13 +306,13 @@ export function DBContainerView() {
         </label>
       </div>
 
-      {containersQuery.isLoading ? (
-        <div className="py-10 text-center text-sm text-slate-300">Loading</div>
+      {containersQuery.isPending ? (
+        <AdminLoadingState label="Loading database containers…" />
       ) : containersQuery.isError ? (
-        <div className="flex items-start justify-between gap-4 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-sm text-red-200">
-          <span>Could not load DB containers: {containersQuery.error.message}</span>
-          <Btn size="sm" tone="ghost" onClick={() => void containersQuery.refetch()}>Retry</Btn>
-        </div>
+        <AdminErrorState
+          message={`Could not load DB containers: ${containersQuery.error.message}`}
+          retry={() => void containersQuery.refetch()}
+        />
       ) : sorted.length === 0 ? (
         <EmptyState
           icon={Database}
@@ -275,22 +323,22 @@ export function DBContainerView() {
         <div>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visible.map((db) => (
-              <div key={db.id} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm transition hover:border-white/20">
+              <div key={db.id} className="rounded-xl border border-line bg-overlay-subtle p-4 shadow-sm transition hover:border-line-strong">
                 <div className="flex items-start gap-3">
-                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-white/[0.08] bg-white/[0.03] text-slate-300">
+                  <span className="grid h-10 w-10 shrink-0 place-items-center rounded-xl border border-line bg-overlay-subtle text-text-subtle">
                     <Box size={18} />
                   </span>
                   <div className="min-w-0 flex-1">
-                    <p className="truncate font-mono text-sm font-bold text-slate-100" title={db.id}>{db.id.slice(0, 8)}</p>
-                    <p className="font-mono text-[10px] text-slate-500">{fmtDate(db.createdAt)}</p>
+                    <p className="truncate font-mono text-sm font-bold text-text" title={db.id}>{db.id.slice(0, 8)}</p>
+                    <p className="font-mono text-meta text-text-muted">{fmtDate(db.createdAt)}</p>
                   </div>
                   <ContainerStatusDot status={db.status} />
                 </div>
-                <div className="mt-3 space-y-1 border-t border-white/[0.06] pt-3 font-mono text-[11px] text-slate-400">
+                <div className="mt-3 space-y-1 border-t border-line pt-3 font-mono text-meta text-text-subtle">
                   <p className="truncate">{db.engine}{db.version ? ` ${db.version}` : ""} · {db.containerId ? `${db.containerId.slice(0, 12)}:${db.port}` : "—"}</p>
-                  <p className="truncate">{db.memoryMb}MB / {db.cpuShares} CPU</p>
+                  <p className="truncate">{resourcesLabel(db.memoryMb, db.cpuShares)}</p>
                 </div>
-                <div className="mt-3 border-t border-white/[0.06] pt-3">
+                <div className="mt-3 border-t border-line pt-3">
                   <ContainerActions
                     db={db}
                     onRestart={(id) => restartMut.mutate(id)}
@@ -298,19 +346,18 @@ export function DBContainerView() {
                     onDelete={(id) => deleteMut.mutate(id)}
                     onShowCreds={() => showCreds(db)}
                     isPending={isPending}
+                    pendingAction={rowPendingAction(db.id)}
                   />
                 </div>
               </div>
             ))}
           </div>
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-white/[0.08] bg-[var(--surface)] px-4 py-3 text-xs text-slate-400">
-            <span>Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sorted.length)} of {sorted.length} containers</span>
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line bg-overlay-subtle px-4 py-3 text-xs text-text-subtle">
+            <span>{containersRangeLabel}</span>
             <div className="flex items-center gap-2">
-              <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">‹</button>
-              <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
-              <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">›</button>
-              <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
-                <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
+              <Pagination label="Container pagination" onPageChange={setPage} page={currentPage} pageCount={totalPages} />
+              <label className="flex items-center gap-1.5 rounded-lg border border-line px-2 py-1.5">
+                <select aria-label="Rows per page" className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none" onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} value={pageSize}>
                   <option value={10}>10 / page</option>
                   <option value={20}>20 / page</option>
                   <option value={50}>50 / page</option>
@@ -320,11 +367,11 @@ export function DBContainerView() {
           </div>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-white/[0.08] bg-[var(--surface)] shadow-sm">
+        <div className="overflow-hidden rounded-xl border border-line bg-overlay-subtle shadow-sm">
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
-                <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                <tr className="border-b border-line text-left text-meta uppercase tracking-wider text-text-muted">
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-2 py-3 font-medium">Engine / Version</th>
                   <th className="px-2 py-3 font-medium">Status</th>
@@ -333,29 +380,29 @@ export function DBContainerView() {
                   <th className="px-2 py-3 text-right font-medium">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/[0.04]">
+              <tbody className="divide-y divide-line">
                 {visible.map((db) => (
-                  <tr key={db.id} className="transition hover:bg-white/[0.02]">
+                  <tr key={db.id} className="transition hover:bg-overlay-subtle">
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-2.5">
-                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-400">
+                        <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle">
                           <Box size={14} />
                         </span>
                         <span className="min-w-0">
-                          <span className="block max-w-44 truncate font-mono text-xs font-bold text-slate-100" title={db.id}>{db.id.slice(0, 8)}</span>
-                          <span className="block font-mono text-[10px] text-slate-500">{fmtDate(db.createdAt)}</span>
+                          <span className="block max-w-44 truncate font-mono text-xs font-bold text-text" title={db.id}>{db.id.slice(0, 8)}</span>
+                          <span className="block font-mono text-meta text-text-muted">{fmtDate(db.createdAt)}</span>
                         </span>
                       </div>
                     </td>
                     <td className="px-2 py-3">
-                      <span className="block text-xs text-slate-200">{db.engine}</span>
-                      <span className="block font-mono text-[10px] text-slate-500">{db.version || "—"}</span>
+                      <span className="block text-xs text-text">{db.engine}</span>
+                      <span className="block font-mono text-meta text-text-muted">{db.version || "—"}</span>
                     </td>
                     <td className="px-2 py-3"><ContainerStatusDot status={db.status} /></td>
-                    <td className="px-2 py-3 font-mono text-[11px] text-slate-300">
+                    <td className="px-2 py-3 font-mono text-meta text-text-subtle">
                       {db.containerId ? `${db.containerId.slice(0, 12)}:${db.port}` : "-"}
                     </td>
-                    <td className="px-2 py-3 text-[11px] text-slate-400">
+                    <td className="px-2 py-3 text-meta text-text-subtle">
                       {db.memoryMb}MB / {db.cpuShares} CPU
                     </td>
                     <td className="px-2 py-3">
@@ -366,6 +413,7 @@ export function DBContainerView() {
                         onDelete={(id) => deleteMut.mutate(id)}
                         onShowCreds={() => showCreds(db)}
                         isPending={isPending}
+                    pendingAction={rowPendingAction(db.id)}
                       />
                     </td>
                   </tr>
@@ -373,14 +421,12 @@ export function DBContainerView() {
               </tbody>
             </table>
           </div>
-          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-white/[0.06] px-4 py-3 text-xs text-slate-400">
-            <span>Showing {(currentPage - 1) * pageSize + 1}–{Math.min(currentPage * pageSize, sorted.length)} of {sorted.length} containers</span>
+          <div className="flex flex-wrap items-center justify-between gap-3 border-t border-line px-4 py-3 text-xs text-text-subtle">
+            <span>{containersRangeLabel}</span>
             <div className="flex items-center gap-2">
-              <button type="button" aria-label="Previous page" disabled={currentPage === 1} onClick={() => setPage((p) => Math.max(1, p - 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">‹</button>
-              <span className="grid h-7 min-w-7 place-items-center rounded-lg border border-red-500/40 bg-red-500/10 px-2 font-mono font-bold text-red-200">{currentPage}</span>
-              <button type="button" aria-label="Next page" disabled={currentPage === totalPages} onClick={() => setPage((p) => Math.min(totalPages, p + 1))} className="grid h-7 w-7 place-items-center rounded-lg border border-white/[0.08] transition hover:border-white/20 disabled:opacity-40">›</button>
-              <label className="ml-1 flex items-center gap-1.5 rounded-lg border border-white/[0.08] px-2 py-1.5">
-                <select aria-label="Rows per page" value={pageSize} onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none">
+              <Pagination label="Container pagination" onPageChange={setPage} page={currentPage} pageCount={totalPages} />
+              <label className="flex items-center gap-1.5 rounded-lg border border-line px-2 py-1.5">
+                <select aria-label="Rows per page" className="cursor-pointer appearance-none bg-transparent pr-1 font-mono outline-none" onChange={(e) => { setPageSize(Number(e.target.value)); setPage(1); }} value={pageSize}>
                   <option value={10}>10 / page</option>
                   <option value={20}>20 / page</option>
                   <option value={50}>50 / page</option>

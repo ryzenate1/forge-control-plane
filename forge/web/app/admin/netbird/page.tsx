@@ -296,7 +296,46 @@ export default function AdminNetBirdPage() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader title="NetBird VPN" sub="WireGuard mesh VPN control plane: peers, networks, routes, ACLs, DNS and setup keys." />
+      <SectionHeader
+        title="NetBird VPN"
+        sub="WireGuard mesh VPN control plane: peers, networks, routes, ACLs, DNS and setup keys."
+        info={{
+          title: "Mesh VPN",
+          triggerLabel: "About NetBird VPN",
+          eyebrow: "Architecture & Semantics",
+          description: "Enroll mesh peers and control reachability with networks, routes, groups and access policies.",
+          sections: [
+            {
+              title: "Enrollment flow",
+              icon: KeyRound,
+              content:
+                "Setup keys enroll new clients onto the mesh — the secret shows once, so copy it immediately. Peers that require approval stay pending until an operator approves or denies them.",
+            },
+            {
+              title: "Reachability layers",
+              icon: Shield,
+              content:
+                "Networks group routing peers, routes publish subnets, groups scope identity, and ACLs decide which groups may reach each other. DNS settings control which groups skip managed resolution.",
+            },
+          ],
+        }}
+        action={
+          <Btn
+            size="sm"
+            tone="primary"
+            onClick={() => {
+              if (tab === "networks") setShowCreateNetwork(true);
+              else if (tab === "groups") setShowCreateGroup(true);
+              else if (tab === "routes") setShowCreateRoute(true);
+              else if (tab === "acls") setShowCreateACL(true);
+              else setTab("setup-keys");
+            }}
+          >
+            <Plus size={14} />
+            {tab === "networks" ? "Create network" : tab === "groups" ? "Create group" : tab === "routes" ? "Create route" : tab === "acls" ? "Create ACL" : "New setup key"}
+          </Btn>
+        }
+      />
 
       <AdminTabs tabs={tabs} active={tab} onChange={(id) => setTab(id as Tab)} />
 
