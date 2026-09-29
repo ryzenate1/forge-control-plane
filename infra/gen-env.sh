@@ -296,9 +296,14 @@ MAIL_FROM_NAME=GamePanel
 # =====================================================================
 # --- Database Connection Pool ---
 # =====================================================================
+# Applied to the pgxpool by store.applyPoolEnvOverrides. Anything set in
+# DATABASE_URL (pool_max_conns, pool_max_conn_lifetime,
+# pool_max_conn_idle_time) wins over these. Lifetime and idle time are in
+# seconds. DB_MAX_IDLE_CONNS is not emitted: pgxpool has no idle ceiling to
+# map it onto, so it was a knob wired to nothing.
 DB_MAX_OPEN_CONNS=25
-DB_MAX_IDLE_CONNS=5
 DB_CONN_MAX_LIFETIME=3600
+DB_CONN_MAX_IDLE_TIME=1800
 
 # =====================================================================
 # --- Logging ---

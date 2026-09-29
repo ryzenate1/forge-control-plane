@@ -8,6 +8,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 type DatabaseType string
@@ -78,12 +80,38 @@ func (c DBConfig) DSN() string {
 		}
 		return dsnURL.String()
 	case DatabaseMySQL, DatabaseMariaDB:
-		tls := "false"
-		if c.SSLMode == "require" || c.SSLMode == "enable" {
-			tls = "true"
+		// TLS mirrors the Postgres branch above: an unset SSLMode must not mean
+		// cleartext in production. "preferred" negotiates TLS when the server
+		// offers it — the closest MySQL analogue to libpq's "prefer" — so
+		// hardening the default does not break a server without TLS set up.
+		tlsParam := "false"
+		switch c.SSLMode {
+		case "require", "enable":
+			tlsParam = "true"
+		case "skip-verify":
+			tlsParam = "skip-verify"
+		case "disable":
+			tlsParam = "false"
+		case "":
+			if appEnv := os.Getenv("APP_ENV"); appEnv != "development" && appEnv != "" {
+				tlsParam = "preferred"
+			}
 		}
-		return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?tls=%s&parseTime=true",
-			c.User, c.Password, c.Host, c.Port, c.Database, tls)
+		// FormatDSN escapes the credentials and database name, which the
+		// hand-built format string it replaces could not: go-sql-driver's
+		// parser splits on the last '/' and the last '@', so a password
+		// containing '/' yielded a DSN that parsed into the wrong fields.
+		// NewConfig (not a bare &mysql.Config{}) is required for its defaults,
+		// notably AllowNativePasswords.
+		myCfg := mysql.NewConfig()
+		myCfg.User = c.User
+		myCfg.Passwd = c.Password
+		myCfg.Net = "tcp"
+		myCfg.Addr = fmt.Sprintf("%s:%d", c.Host, c.Port)
+		myCfg.DBName = c.Database
+		myCfg.ParseTime = true
+		myCfg.TLSConfig = tlsParam
+		return myCfg.FormatDSN()
 	case DatabaseSQLite:
 		if c.SQLitePath == "" {
 			c.SQLitePath = "file:gamepanel.db?cache=shared&_journal_mode=WAL"
@@ -102,14 +130,6 @@ func (c DBConfig) DSN() string {
 	default:
 		return ""
 	}
-}
-
-func (c DBConfig) RedactedDSN() string {
-	redacted := c
-	if redacted.Password != "" {
-		redacted.Password = "*****"
-	}
-	return redacted.DSN()
 }
 
 func NewDatabaseDriver(ctx context.Context, cfg DBConfig) (DatabaseDriver, error) {

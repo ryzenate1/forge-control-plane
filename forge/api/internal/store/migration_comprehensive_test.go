@@ -208,32 +208,27 @@ func createDisposableDatabase(t *testing.T, dbType DatabaseType) (DatabaseDriver
 		}
 
 	case DatabasePostgres:
-		// For PostgreSQL, we'll use a temporary database name
-		// In a real test environment, you'd need a running PostgreSQL instance
-		// For this test, we'll skip if PostgreSQL is not available
-		cfg := DBConfig{
-			Type:     DatabasePostgres,
-			Host:     "localhost",
-			Port:     5432,
-			User:     "postgres",
-			Password: "postgres",
-			Database: fmt.Sprintf("gamepanel_test_%d", time.Now().Unix()),
-			SSLMode:  "disable",
-		}
+		cfg := postgresTestConfig(fmt.Sprintf("gamepanel_test_%d", time.Now().UnixNano()))
 
 		// Try to create the database
-		connStr := fmt.Sprintf("postgres://%s:%s@%s:%d/postgres?sslmode=disable",
-			cfg.User, cfg.Password, cfg.Host, cfg.Port)
+		connStr := postgresAdminDSN(cfg)
 
 		createDB, err := sql.Open("postgres", connStr)
 		if err != nil {
-			t.Skipf("Skipping PostgreSQL test: %v", err)
+			skipOrFailWithoutPostgres(t, "open admin connection: %v", err)
+			return nil, func() {}
 		}
 		defer createDB.Close()
 
+		if err := createDB.PingContext(context.Background()); err != nil {
+			skipOrFailWithoutPostgres(t, "ping %s:%d: %v", cfg.Host, cfg.Port, err)
+			return nil, func() {}
+		}
+
 		_, err = createDB.Exec(fmt.Sprintf("CREATE DATABASE %s", cfg.Database))
 		if err != nil {
-			t.Skipf("Skipping PostgreSQL test: %v", err)
+			skipOrFailWithoutPostgres(t, "create database %s: %v", cfg.Database, err)
+			return nil, func() {}
 		}
 
 		db, err := NewDatabaseDriver(context.Background(), cfg)

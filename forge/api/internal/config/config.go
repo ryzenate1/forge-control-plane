@@ -46,12 +46,13 @@ type ServerConfig struct {
 	PanelURL    string        `mapstructure:"panel_url"`
 }
 
+// DBConfig carries only what something actually reads. The pool sizing knobs
+// (DB_MAX_OPEN_CONNS and friends) used to be parsed into fields here that no
+// caller ever consumed, which made the pool look configured when it was not.
+// They are read where the pool is built: store.applyPoolEnvOverrides.
 type DBConfig struct {
-	Driver          string `mapstructure:"driver"`
-	URL             string `mapstructure:"url"`
-	MaxOpenConns    int    `mapstructure:"max_open_conns"`
-	MaxIdleConns    int    `mapstructure:"max_idle_conns"`
-	ConnMaxLifetime int    `mapstructure:"conn_max_lifetime"`
+	Driver string `mapstructure:"driver"`
+	URL    string `mapstructure:"url"`
 }
 
 type RedisConfig struct {

@@ -135,6 +135,21 @@ func (c *Container) InitDB(ctx context.Context, production bool, appEnv string) 
 		connected.Close()
 		return err
 	}
+	// Migration filenames are immutable primary keys in schema_migrations, so
+	// an edit to an already-applied migration is never re-run. Drift is
+	// reported rather than fatal: the deployed schema is whatever it is, and
+	// refusing to boot would not repair it. It must not pass silently either.
+	if integrity := connected.MigrationIntegrity(); len(integrity.Drift) > 0 {
+		for _, d := range integrity.Drift {
+			c.Logger.Warn("migration file changed after it was applied; deployed schema may diverge from this build",
+				slog.String("migration", d.Version),
+				slog.String("applied_checksum", d.Applied),
+				slog.String("on_disk_checksum", d.OnDisk))
+		}
+		c.Logger.Warn("migration drift detected",
+			slog.Int("drifted", len(integrity.Drift)),
+			slog.Int("unverifiable", integrity.Unverified))
+	}
 	if err := eventstore.Migrate(connected.GetDB()); err != nil {
 		connected.Close()
 		return err

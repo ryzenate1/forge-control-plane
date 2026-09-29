@@ -1528,11 +1528,8 @@ func run() error {
 			PanelURL:    env("PANEL_URL", "http://localhost:3000"),
 		},
 		DB: config.DBConfig{
-			Driver:          env("DB_CONNECTION", "postgres"),
-			URL:             os.Getenv("DATABASE_URL"),
-			MaxOpenConns:    envInt("DB_MAX_OPEN_CONNS", 25),
-			MaxIdleConns:    envInt("DB_MAX_IDLE_CONNS", 5),
-			ConnMaxLifetime: envInt("DB_CONN_MAX_LIFETIME", 3600),
+			Driver: env("DB_CONNECTION", "postgres"),
+			URL:    os.Getenv("DATABASE_URL"),
 		},
 		Redis: config.RedisConfig{
 			Addr:     env("REDIS_ADDR", ""),

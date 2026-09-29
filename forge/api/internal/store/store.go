@@ -3,11 +3,13 @@ package store
 import (
 	"context"
 	crand "crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,6 +23,12 @@ import (
 type Store struct {
 	db      *pgxpool.Pool
 	secrets *secrets.Keyring
+
+	// migrationIntegrityMu guards the results of the last migration run's
+	// drift check (migrationDrift, migrationsUnverified).
+	migrationIntegrityMu sync.Mutex
+	migrationDrift       []MigrationDrift
+	migrationsUnverified int
 
 	// webhookHookMu guards webhookHook, the observer notified after each
 	// webhook event is persisted to the outbox.
@@ -1132,6 +1140,52 @@ func Connect(ctx context.Context, databaseURL string) (*Store, error) {
 	return ConnectWithKeyring(ctx, databaseURL, nil)
 }
 
+// applyPoolEnvOverrides lets operators size the connection pool using the
+// variables infra/gen-env.sh already writes into every generated production
+// .env. They used to be inert: the pool was fixed at MaxConns = 8, so raising
+// DB_MAX_OPEN_CONNS to relieve saturation changed nothing and warned about
+// nothing.
+//
+// Precedence is DSN > environment > the defaults in ConnectWithKeyring. A pool_*
+// parameter carried in DATABASE_URL is more specific than a process-wide
+// variable, so it wins. Unset, zero, negative and unparseable values keep the
+// default, so an existing deployment's pool behaviour does not change on
+// upgrade.
+//
+// DB_MAX_IDLE_CONNS is deliberately not mapped. pgxpool has no idle ceiling: it
+// keeps up to MaxConns idle and reaps them by age (MaxConnIdleTime). The closest
+// field, MinConns, is an idle *floor*, so honouring the variable there would
+// invert its meaning. It has been dropped from the generated env rather than
+// approximated here.
+func applyPoolEnvOverrides(cfg *pgxpool.Config, databaseURL string) {
+	if n, ok := envPositiveInt32("DB_MAX_OPEN_CONNS"); ok && !strings.Contains(databaseURL, "pool_max_conns") {
+		cfg.MaxConns = n
+	}
+	if n, ok := envPositiveInt32("DB_CONN_MAX_LIFETIME"); ok && !strings.Contains(databaseURL, "pool_max_conn_lifetime") {
+		cfg.MaxConnLifetime = time.Duration(n) * time.Second
+	}
+	if n, ok := envPositiveInt32("DB_CONN_MAX_IDLE_TIME"); ok && !strings.Contains(databaseURL, "pool_max_conn_idle_time") {
+		cfg.MaxConnIdleTime = time.Duration(n) * time.Second
+	}
+}
+
+// envPositiveInt32 reads a strictly positive environment variable that must fit
+// in an int32. Zero, negative and out-of-range values are rejected rather than
+// applied: pgxpool rejects MaxConns <= 0 outright, and a typo in an operator's
+// .env should fall back to the working default instead of taking the control
+// plane's pool below it.
+func envPositiveInt32(key string) (int32, bool) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || n <= 0 {
+		return 0, false
+	}
+	return int32(n), true
+}
+
 func ConnectWithKeyring(ctx context.Context, databaseURL string, keyring *secrets.Keyring) (*Store, error) {
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
@@ -1140,6 +1194,7 @@ func ConnectWithKeyring(ctx context.Context, databaseURL string, keyring *secret
 	cfg.MaxConns = 8
 	cfg.MinConns = 1
 	cfg.MaxConnLifetime = time.Hour
+	applyPoolEnvOverrides(cfg, databaseURL)
 
 	var lastErr error
 	for attempt := 0; attempt < 20; attempt++ {
@@ -1199,7 +1254,71 @@ func (s *Store) RunSelectedMigrations(ctx context.Context, dir string, names []s
 	return s.runMigrations(ctx, dir, names)
 }
 
+// MigrationDrift records an applied migration whose file content no longer
+// matches the content that was applied. Because the filename is the primary key
+// in schema_migrations, editing an already-applied migration is otherwise
+// invisible forever: the row exists, the file is skipped, and the deployed
+// schema diverges from the repository with nothing to show it.
+type MigrationDrift struct {
+	Version string `json:"version"`
+	Applied string `json:"applied"`
+	OnDisk  string `json:"onDisk"`
+}
+
+// MigrationIntegrity summarises what the most recent migration run could and
+// could not establish about already-applied migrations.
+type MigrationIntegrity struct {
+	// Drift lists applied migrations whose file changed after it ran.
+	Drift []MigrationDrift
+	// Unverified counts applied migrations carrying no checksum, about which
+	// nothing was proven in either direction: rows recorded before the
+	// checksum column existed, guard skips, alias backfills, and names passed
+	// to RunSelectedMigrations that do not live in the migrations directory.
+	// An empty Drift with a non-zero Unverified means "no drift found among
+	// the rows that could be checked" — not "no drift".
+	Unverified int
+}
+
+// MigrationIntegrity reports the drift check from the last migration run. The
+// store deliberately does no logging of its own; the caller that runs
+// migrations is responsible for surfacing this (see app.Container.InitDB).
+func (s *Store) MigrationIntegrity() MigrationIntegrity {
+	s.migrationIntegrityMu.Lock()
+	defer s.migrationIntegrityMu.Unlock()
+	out := MigrationIntegrity{Unverified: s.migrationsUnverified}
+	if len(s.migrationDrift) > 0 {
+		out.Drift = append([]MigrationDrift(nil), s.migrationDrift...)
+	}
+	return out
+}
+
+// migrationChecksum hashes the exact file bytes recorded in
+// schema_migrations.checksum, so any edit to an applied migration is reported,
+// whitespace included. The runner cannot know which edits are semantically
+// inert, so it does not guess.
+func migrationChecksum(body []byte) string {
+	sum := sha256.Sum256(body)
+	return hex.EncodeToString(sum[:])
+}
+
+func (s *Store) recordMigrationDrift(d MigrationDrift) {
+	s.migrationIntegrityMu.Lock()
+	s.migrationDrift = append(s.migrationDrift, d)
+	s.migrationIntegrityMu.Unlock()
+}
+
+func (s *Store) recordUnverifiedMigration() {
+	s.migrationIntegrityMu.Lock()
+	s.migrationsUnverified++
+	s.migrationIntegrityMu.Unlock()
+}
+
 func (s *Store) runMigrations(ctx context.Context, dir string, names []string) error {
+	s.migrationIntegrityMu.Lock()
+	s.migrationDrift = nil
+	s.migrationsUnverified = 0
+	s.migrationIntegrityMu.Unlock()
+
 	releaseLock, err := s.acquireMigrationLock(ctx)
 	if err != nil {
 		return err
@@ -1215,6 +1334,18 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
+	// checksum is added by ALTER, not included in the CREATE above, because
+	// schema_migrations already exists on every deployed host. It is nullable
+	// on purpose: rows recorded before this column existed, and rows recorded
+	// without executing a file (guard skips and alias backfills), have no
+	// content that was applied, so they stay NULL and are reported as
+	// unverifiable rather than as drift. schema_migrations is owned by this
+	// runner rather than by a migration file, so this bootstrap is where the
+	// column belongs.
+	if _, err := s.db.Exec(ctx, `ALTER TABLE schema_migrations ADD COLUMN IF NOT EXISTS checksum TEXT`); err != nil {
+		return fmt.Errorf("ensure schema_migrations.checksum: %w", err)
+	}
+
 	// Numeric-then-suffix order: bare "082" applies before "082_a", so the
 	// base table always exists before its suffixed companion alters it.
 	sortMigrationFiles(names)
@@ -1228,17 +1359,22 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 	// Canonicals themselves always execute when unrecorded: a guard row
 	// cannot prove the DDL ran, and every canonical is idempotent.
 	applied := make(map[string]struct{}, len(names))
-	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations`)
+	appliedChecksums := make(map[string]string, len(names))
+	rows, err := s.db.Query(ctx, `SELECT version, checksum FROM schema_migrations`)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
 	for rows.Next() {
 		var v string
-		if err := rows.Scan(&v); err != nil {
+		var sum *string
+		if err := rows.Scan(&v, &sum); err != nil {
 			rows.Close()
 			return fmt.Errorf("scan applied migration: %w", err)
 		}
 		applied[v] = struct{}{}
+		if sum != nil && *sum != "" {
+			appliedChecksums[v] = *sum
+		}
 	}
 	rows.Close()
 	if err := rows.Err(); err != nil {
@@ -1263,6 +1399,27 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 
 	for _, name := range names {
 		if _, ok := applied[name]; ok {
+			// Already applied: nothing to run, but this is the only moment the
+			// runner can compare what is deployed against what is in the
+			// repository.
+			recorded, verifiable := appliedChecksums[name]
+			if !verifiable {
+				s.recordUnverifiedMigration()
+				continue
+			}
+			body, err := os.ReadFile(filepath.Join(dir, name))
+			if err != nil {
+				if os.IsNotExist(err) {
+					// RunSelectedMigrations is called with names that may not
+					// live in this directory. Absent is unverifiable, not drift.
+					s.recordUnverifiedMigration()
+					continue
+				}
+				return fmt.Errorf("read applied migration %s for drift check: %w", name, err)
+			}
+			if onDisk := migrationChecksum(body); onDisk != recorded {
+				s.recordMigrationDrift(MigrationDrift{Version: name, Applied: recorded, OnDisk: onDisk})
+			}
 			continue
 		}
 		// Guard skip: this file is a no-op whose canonical already applied,
@@ -1292,7 +1449,9 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 				return fmt.Errorf("run migration %s: %w", name, err)
 			}
 		}
-		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version) VALUES ($1)`, name); err != nil {
+		// Recorded in the same transaction as the DDL, so a checksum can never
+		// describe content that did not commit.
+		if _, err := tx.Exec(ctx, `INSERT INTO schema_migrations (version, checksum) VALUES ($1, $2)`, name, migrationChecksum(body)); err != nil {
 			_ = tx.Rollback(ctx)
 			return fmt.Errorf("record migration %s: %w", name, err)
 		}

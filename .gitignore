@@ -71,6 +71,10 @@ _archive/
 *.exe
 *.exe~
 
+# Compiled Go test binaries, as left behind by `go test -c` / `-o`.
+# forge/api/internal/store/store.test was tracked for a while at 20 MB.
+*.test
+
 # =============================================================================
 # IDE
 # =============================================================================

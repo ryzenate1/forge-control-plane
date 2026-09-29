@@ -19,6 +19,27 @@ MIGRATION_DIR="$SCRIPT_DIR/../../forge/api/migrations"
 
 echo "Migration directory: $MIGRATION_DIR"
 
+# How many files each migration identifier is allowed to have.
+#
+# Ten bare prefixes shipped with duplicates before the rule existed and are
+# grandfathered at their shipped counts; everything else may appear once. This
+# mirrors allowedHistoricalDuplicates/knownMax in validateNoDuplicatePrefixes
+# (forge/api/internal/store/migration.go), which is the authority — change both
+# together. A NEW file may not reuse these numbers bare: it needs a letter
+# suffix (082_a_...) or a new number.
+#
+# A case statement rather than an associative array on purpose: macOS still
+# ships bash 3.2, where `declare -A` is not supported and degrades into an
+# indexed array whose "018" subscript is then parsed as an invalid octal
+# literal. That made this check pass while validating nothing.
+allowed_count_for() {
+    case "$1" in
+        015|018|020|044|054|080|083|087) echo 2 ;;
+        057|082) echo 3 ;;
+        *) echo 1 ;;
+    esac
+}
+
 # Function to check for duplicate migration identifiers
 check_duplicates() {
     echo -e "\n${BLUE}Checking for duplicate migration identifiers...${NC}"
@@ -41,34 +62,71 @@ check_duplicates() {
         done | sort | uniq -d
     )
     
-    if [ -n "$DUPLICATES" ]; then
-        echo -e "${RED}❌ Found duplicate migration identifiers:${NC}"
-        echo "$DUPLICATES"
+    local failed=0
+    while read -r count identifier; do
+        [ -z "$identifier" ] && continue
+        local allowed
+        allowed=$(allowed_count_for "$identifier")
+        if [ "$count" -gt "$allowed" ]; then
+            if [ "$allowed" -eq 1 ]; then
+                echo -e "${RED}❌ Duplicate migration identifier '$identifier' ($count files)${NC}"
+                echo "   Rename one with a letter suffix (${identifier}_a_*) or use a new number."
+            else
+                echo -e "${RED}❌ Grandfathered identifier '$identifier' grew to $count files (max $allowed)${NC}"
+                echo "   New files must not reuse this number bare; use ${identifier}_a_* or a new number."
+            fi
+            failed=1
+        fi
+    done < <(
+        for migration in *.sql; do
+            stem=${migration%.sql}
+            first=${stem%%_*}
+            remainder=${stem#*_}
+            letter=${remainder%%_*}
+            if [[ $letter =~ ^[a-z]$ ]] && [[ $remainder == *_* ]]; then
+                echo "${first}_${letter}"
+            else
+                echo "$first"
+            fi
+        done | sort | uniq -c
+    )
+
+    if [ "$failed" -ne 0 ]; then
         return 1
-    else
-        echo -e "${GREEN}✅ No duplicate migration identifiers found${NC}"
     fi
+    echo -e "${GREEN}✅ No unexpected duplicate migration identifiers${NC}"
+    echo "   (10 historical duplicates grandfathered at their shipped counts)"
 }
 
-# Function to check migration order
-check_order() {
-    echo -e "\n${BLUE}Checking migration order...${NC}"
-    
+# Function to check migration filenames are parseable by the runner
+#
+# This replaces an earlier "check migration order" that sorted the filenames and
+# then asserted the sorted list was sorted — it could never fail, and printing
+# "Migration order is correct" from it was a success claim for work not done.
+# Order is not a property of the directory anyway: sortMigrationFiles reorders
+# every run (numeric-then-suffix, so bare 082 precedes 082_a).
+#
+# The invariant that does matter, and that nothing else here checks, is that
+# every filename has the NNN[_x]_description.sql shape migrationPrefix expects.
+check_filename_shape() {
+    echo -e "\n${BLUE}Checking migration filename shape...${NC}"
+
     cd "$MIGRATION_DIR"
-    
-    # Get all migration names without .sql extension
-    MIGRATIONS=$(ls *.sql | sed 's/\.sql$//' | sort)
-    
-    PREV=""
-    for MIGRATION in $MIGRATIONS; do
-        if [ -n "$PREV" ] && [[ "$MIGRATION" < "$PREV" ]]; then
-            echo -e "${RED}❌ Migration order violation: $MIGRATION comes after $PREV${NC}"
-            return 1
+
+    local failed=0
+    for migration in *.sql; do
+        if [[ ! $migration =~ ^[0-9]{3}(_[a-z])?_[A-Za-z0-9_]+\.sql$ ]]; then
+            echo -e "${RED}❌ Unparseable migration filename: $migration${NC}"
+            failed=1
         fi
-        PREV="$MIGRATION"
     done
-    
-    echo -e "${GREEN}✅ Migration order is correct${NC}"
+
+    if [ "$failed" -ne 0 ]; then
+        echo "   Expected NNN_description.sql or NNN_x_description.sql."
+        return 1
+    fi
+
+    echo -e "${GREEN}✅ All migration filenames are parseable${NC}"
 }
 
 # Function to check for required Batch 2 migrations
@@ -322,23 +380,41 @@ generate_summary() {
     echo "Total migrations: $TOTAL_MIGRATIONS"
     echo "Batch 1 migrations (001-099): $BATCH1_MIGRATIONS"
     echo "Batch 2 migrations (100+): $BATCH2_MIGRATIONS"
-    
-    echo -e "\n${GREEN}✅ Validation completed!${NC}"
-    echo "All critical checks passed."
-    echo "Review warnings above for potential issues."
 }
 
-# Run all checks
-check_duplicates
-check_order
-check_batch2_migrations
-check_foreign_keys
-check_tenancy_columns
-check_batch2_entities
-check_cascading_behavior
-check_unique_constraints
-check_nullable_fields
-check_indexes
+# Run all checks.
+#
+# set -e is disabled around them deliberately: every check must run so the log
+# shows the full picture, rather than stopping at the first failure. Failures
+# are accumulated and reported in the exit status, because this script is a CI
+# gate — a guard that always exits 0 is not a guard. The summary reports what
+# failed instead of unconditionally claiming that "all critical checks passed",
+# which is what it used to print even on the run that produced this rewrite.
+set +e
+FAILED_CHECKS=()
+run_check() {
+    "$1" || FAILED_CHECKS+=("$1")
+}
+
+run_check check_duplicates
+run_check check_filename_shape
+run_check check_batch2_migrations
+run_check check_foreign_keys
+run_check check_tenancy_columns
+run_check check_batch2_entities
+run_check check_cascading_behavior
+run_check check_unique_constraints
+run_check check_nullable_fields
+run_check check_indexes
 generate_summary
 
-echo -e "\n🎉 Migration validation completed!"
+if [ ${#FAILED_CHECKS[@]} -ne 0 ]; then
+    echo -e "\n${RED}❌ Migration validation failed: ${#FAILED_CHECKS[@]} check(s)${NC}"
+    for check in "${FAILED_CHECKS[@]}"; do
+        echo "   - $check"
+    done
+    echo "Checks that emit ⚠️ warnings above do not fail the run; only ❌ does."
+    exit 1
+fi
+
+echo -e "\n🎉 Migration validation passed!"
