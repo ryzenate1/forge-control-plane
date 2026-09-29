@@ -2643,7 +2643,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerTrafficManagerRoutes(protected, cfg, cfg.TrafficManager, adminIPAccess, mutationLimiter)
 	registerDomainRoutes(protected, cfg, cfg.DomainService, mutationLimiter)
 	registerCertificateRoutes(protected, cfg, cfg.AcmeService, adminIPAccess, mutationLimiter)
-	registerCertificateRoutesExt(protected, cfg, adminIPAccess, mutationLimiter)
+	registerCertificateRoutesExt(protected, cfg, cfg.AcmeService, adminIPAccess, mutationLimiter)
 	registerAcmeAccountRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 	registerMTLSRoutes(protected, cfg, cfg.CertService, cfg.MTLSMigrator, adminIPAccess, mutationLimiter)
 	registerSchedulerRoutes(protected, cfg, cfg.PredictiveScorer, cfg.ConstraintScheduler, adminIPAccess, mutationLimiter)

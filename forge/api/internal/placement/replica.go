@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"gamepanel/forge/internal/runtime"
 )
 
 type ReplicaPlacementRequest struct {
@@ -151,21 +149,34 @@ func prepareReplicaPlacement(candidates []Candidate, req ReplicaPlacementRequest
 	return state, nil
 }
 
+// replicaReservation is the capacity one replica occupies. It is the single
+// source for both the amount apply deducts from a node and the amount reported
+// as ReplicaPlacement.Reserved, so the figure a caller is told to make durable
+// cannot drift from the figure the engine charged the node.
+func replicaReservation(replica ReplicaSpec) ResourceUsage {
+	return ResourceUsage{
+		CPU:      replica.CPU,
+		MemoryMB: replica.MemoryMB,
+		DiskMB:   replica.DiskMB,
+	}
+}
+
 // apply records that a replica landed on nodeID: the node's readable capacity
 // and the app's instance count both move, so the next replica sees the same
 // world the placement created.
 func (s *replicaPlacementState) apply(replica ReplicaSpec, nodeID string) {
+	reserved := replicaReservation(replica)
 	s.usedNodeCount[nodeID]++
 	for index := range s.candidates {
 		if s.candidates[index].NodeID != nodeID {
 			continue
 		}
-		s.candidates[index].AvailableCPU -= replica.CPU
-		s.candidates[index].AvailableMemory -= replica.MemoryMB
-		s.candidates[index].AvailableDisk -= replica.DiskMB
-		s.candidates[index].AllocatedCPU += replica.CPU
-		s.candidates[index].AllocatedMemory += replica.MemoryMB
-		s.candidates[index].AllocatedDisk += replica.DiskMB
+		s.candidates[index].AvailableCPU -= reserved.CPU
+		s.candidates[index].AvailableMemory -= reserved.MemoryMB
+		s.candidates[index].AvailableDisk -= reserved.DiskMB
+		s.candidates[index].AllocatedCPU += reserved.CPU
+		s.candidates[index].AllocatedMemory += reserved.MemoryMB
+		s.candidates[index].AllocatedDisk += reserved.DiskMB
 		s.candidates[index].ServerCount++
 	}
 }
@@ -206,8 +217,12 @@ func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req 
 	return result, nil
 }
 
-func (e *Engine) placeSingleReplica(ctx context.Context, candidates []Candidate, replica ReplicaSpec, req ReplicaPlacementRequest, usedNodeCount map[string]int) (*ReplicaPlacement, error) {
-	filtered := filterByRuntime(candidates, replica.RuntimeProvider)
+// placeSingleReplica scores one replica against the request-scoped state. It
+// takes the state rather than a loose (candidates, usedNodeCount) pair so the
+// two cannot drift apart: the counts must always describe the same working set
+// the scoring reads.
+func (e *Engine) placeSingleReplica(ctx context.Context, state *replicaPlacementState, replica ReplicaSpec, req ReplicaPlacementRequest) (*ReplicaPlacement, error) {
+	filtered := filterByRuntime(state.candidates, replica.RuntimeProvider)
 	if len(filtered) == 0 {
 		return nil, fmt.Errorf("no candidates support runtime %s", replica.RuntimeProvider)
 	}
@@ -222,7 +237,7 @@ func (e *Engine) placeSingleReplica(ctx context.Context, candidates []Candidate,
 				if err := e.checker.CheckHard(c, req.Constraints, req.ConstraintCtx); err != nil {
 					return nil, err
 				}
-				sp, err := e.scoreReplicaCandidate(ctx, c, replica, req, usedNodeCount)
+				sp, err := e.scoreReplicaCandidate(ctx, c, replica, req, state.usedNodeCount)
 				if err != nil {
 					return nil, err
 				}
@@ -232,6 +247,7 @@ func (e *Engine) placeSingleReplica(ctx context.Context, candidates []Candidate,
 					Score:           sp.Score,
 					Reasons:         sp.Reasons,
 					RuntimeProvider: replica.RuntimeProvider,
+					Reserved:        replicaReservation(replica),
 				}, nil
 			}
 		}
@@ -249,7 +265,7 @@ func (e *Engine) placeSingleReplica(ctx context.Context, candidates []Candidate,
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("replica placement cancelled: %w", err)
 		}
-		sp, err := e.scoreReplicaCandidate(ctx, c, replica, req, usedNodeCount)
+		sp, err := e.scoreReplicaCandidate(ctx, c, replica, req, state.usedNodeCount)
 		if err != nil {
 			continue
 		}
@@ -271,6 +287,7 @@ func (e *Engine) placeSingleReplica(ctx context.Context, candidates []Candidate,
 		Score:           selected.Score,
 		Reasons:         selected.Reasons,
 		RuntimeProvider: replica.RuntimeProvider,
+		Reserved:        replicaReservation(replica),
 	}, nil
 }
 

@@ -129,7 +129,7 @@ func wsSessionToken(client *fiberws.Conn) string {
 // the proxy fail-closed if the route config ever drifts. Empty origins belong
 // to non-browser clients and are accepted, matching the upgrader semantics.
 func validateWSOrigin(client *fiberws.Conn, cfg Config) error {
-	origin := strings.TrimSpace(client.Get("Origin"))
+	origin := strings.TrimSpace(client.Headers("Origin"))
 	if origin == "" {
 		return nil
 	}

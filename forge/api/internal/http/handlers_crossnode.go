@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -32,7 +33,16 @@ func registerCrossNodeRoutes(protected fiber.Router, cfg Config, resolver *cross
 				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "server_id or node_id parameter is required"})
 			}
 
-			host := resolver.ResolveTargetHost(ctx, serverID, nodeID)
+			// A failed resolution is reported as a failure, never as a fallback
+			// host: answering with a guess would point the caller at a node the
+			// resolver never confirmed.
+			host, err := resolver.ResolveTargetHost(ctx, serverID, nodeID)
+			if err != nil {
+				if errors.Is(err, crossnode.ErrNoTarget) {
+					return c.Status(http.StatusNotFound).JSON(fiber.Map{"error": "no reachable target for the requested server or node"})
+				}
+				return c.Status(http.StatusBadGateway).JSON(fiber.Map{"error": "target resolution failed"})
+			}
 			return c.JSON(fiber.Map{"data": fiber.Map{"host": host}})
 		})
 

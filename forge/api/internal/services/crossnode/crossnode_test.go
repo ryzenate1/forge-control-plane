@@ -2,6 +2,7 @@ package crossnode
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -581,15 +582,24 @@ func TestRouteGenerationRecords_PerService(t *testing.T) {
 func TestResolveTargetHost(t *testing.T) {
 	resolver := NewResolver(nil)
 
-	host := resolver.ResolveTargetHost(context.Background(), "", "")
-	if host != "localhost" {
-		t.Fatalf("expected localhost for empty inputs, got %s", host)
+	// ResolveTargetHost no longer falls back to localhost: an unresolvable
+	// target is an error with an empty host, so a caller cannot mistake a
+	// guess for a confirmed node.
+	host, err := resolver.ResolveTargetHost(context.Background(), "", "")
+	if !errors.Is(err, ErrNoTarget) {
+		t.Fatalf("expected ErrNoTarget for empty inputs, got host %q err %v", host, err)
+	}
+	if host != "" {
+		t.Fatalf("expected empty host alongside error, got %s", host)
 	}
 
 	resolver.ClearCache()
-	host = resolver.ResolveTargetHost(context.Background(), "", "node-1")
-	if host != "localhost" {
-		t.Fatalf("expected localhost when no store, got %s", host)
+	host, err = resolver.ResolveTargetHost(context.Background(), "", "node-1")
+	if !errors.Is(err, ErrNoTarget) {
+		t.Fatalf("expected ErrNoTarget when no store, got host %q err %v", host, err)
+	}
+	if host != "" {
+		t.Fatalf("expected empty host alongside error, got %s", host)
 	}
 }
 
