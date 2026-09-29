@@ -157,7 +157,7 @@ export function StatusPill({
 export function FreshnessBadge({ state, className }: { state: SourceState; className?: string }) {
   if (state.status === "loading") {
     return (
-      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-500", className)}>
+      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-text-muted", className)}>
         <LoaderCircle size={11} className="animate-spin" aria-hidden="true" />
         Loading
       </span>
@@ -165,7 +165,7 @@ export function FreshnessBadge({ state, className }: { state: SourceState; class
   }
   if (state.status === "restricted") {
     return (
-      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-amber-300", className)}>
+      <span className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-warn", className)}>
         <LockKeyhole size={11} aria-hidden="true" />
         Permission restricted
       </span>
@@ -174,7 +174,7 @@ export function FreshnessBadge({ state, className }: { state: SourceState; class
   if (state.status === "error") {
     return (
       <span
-        className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-red-300", className)}
+        className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-danger", className)}
         title={state.message}
       >
         <XCircle size={11} aria-hidden="true" />
@@ -188,7 +188,7 @@ export function FreshnessBadge({ state, className }: { state: SourceState; class
   if (state.stale) {
     return (
       <span
-        className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-amber-300", className)}
+        className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-warn", className)}
         title={absolute ? `Last successful read ${absolute}. Older than the refresh interval.` : undefined}
       >
         <AlertTriangle size={11} aria-hidden="true" />
@@ -198,13 +198,13 @@ export function FreshnessBadge({ state, className }: { state: SourceState; class
   }
   return (
     <span
-      className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-slate-500", className)}
+      className={cn("inline-flex items-center gap-1.5 font-mono text-[11px] text-text-muted", className)}
       title={absolute ? `Last read ${absolute}` : undefined}
     >
       {state.refreshing ? (
         <LoaderCircle size={11} className="animate-spin" aria-hidden="true" />
       ) : (
-        <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" aria-hidden="true" />
+        <span className="h-1.5 w-1.5 rounded-full bg-ok" aria-hidden="true" />
       )}
       {state.refreshing ? "Refreshing" : `Read ${age ?? "just now"}`}
     </span>
@@ -223,14 +223,14 @@ export function SourceRibbon({ sources, className }: { sources: NamedSource[]; c
   return (
     <div
       className={cn(
-        "flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-white/[0.06] bg-white/[0.012] px-3 py-2",
+        "flex flex-wrap items-center gap-x-4 gap-y-1.5 rounded-lg border border-line bg-overlay-subtle px-3 py-2",
         className,
       )}
     >
-      <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-500">Sources</span>
+      <span className="text-[11px] font-semibold uppercase tracking-wider text-text-muted">Sources</span>
       {sources.map((source) => (
         <span key={source.label} className="inline-flex items-center gap-1.5">
-          <span className="text-[11px] text-slate-400">{source.label}</span>
+          <span className="text-[11px] text-text-subtle">{source.label}</span>
           <FreshnessBadge state={source.state} />
         </span>
       ))}
@@ -268,11 +268,11 @@ export function DataState({
   if (state.status === "loading") {
     return (
       <div
-        className="grid min-h-28 place-items-center rounded-xl border border-dashed border-white/[0.1] bg-black/10 p-6 text-sm text-slate-400"
+        className="grid min-h-28 place-items-center rounded-xl border border-dashed border-line bg-well p-6 text-sm text-text-subtle"
         role="status"
       >
         <div className="flex flex-col items-center gap-2">
-          <LoaderCircle size={18} className="animate-spin text-slate-500" aria-hidden="true" />
+          <LoaderCircle size={18} className="animate-spin text-text-muted" aria-hidden="true" />
           <span>{loadingLabel}</span>
         </div>
       </div>
@@ -282,12 +282,12 @@ export function DataState({
   if (state.status === "restricted") {
     return (
       <div
-        className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border border-amber-500/20 bg-amber-500/[0.05] p-6 text-center"
+        className="flex min-h-28 flex-col items-center justify-center gap-2 rounded-xl border border-warn-line bg-warn-subtle p-6 text-center"
         role="status"
       >
-        <LockKeyhole size={20} className="text-amber-400" strokeWidth={1.5} aria-hidden="true" />
-        <p className="text-sm font-medium text-amber-200">Permission restricted</p>
-        <p className="max-w-md text-xs text-amber-400/80">
+        <LockKeyhole size={20} className="text-warn" strokeWidth={1.5} aria-hidden="true" />
+        <p className="text-sm font-medium text-warn">Permission restricted</p>
+        <p className="max-w-md text-xs text-warn/80">
           Your account cannot read this source. The data is not missing — it is not visible to you.
         </p>
       </div>
@@ -297,7 +297,7 @@ export function DataState({
   if (state.status === "error") {
     return (
       <div
-        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-950/20 p-4 text-sm text-red-100"
+        className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-danger-line bg-danger-subtle p-4 text-sm text-danger"
         role="alert"
       >
         <span className="flex items-center gap-2">
@@ -371,15 +371,15 @@ export function MetricTile({
   return (
     <div
       className={cn(
-        "rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4",
+        "rounded-xl ui-surface p-4",
         stale && "opacity-75",
         className,
       )}
     >
       <div className="flex items-start justify-between gap-2">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">{label}</span>
+        <span className="text-[11px] font-semibold uppercase tracking-wider text-text-subtle">{label}</span>
         <span
-          className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-slate-500"
+          className="shrink-0 text-[10px] font-medium uppercase tracking-wider text-text-muted"
           title={meta.hint}
         >
           {meta.label}
@@ -388,7 +388,7 @@ export function MetricTile({
 
       <div className="mt-2 flex items-baseline gap-1.5">
         {loading ? (
-          <span className="inline-block h-7 w-20 animate-pulse rounded bg-white/[0.06]" aria-label="Loading value" />
+          <span className="inline-block h-7 w-20 animate-pulse rounded bg-overlay-strong" aria-label="Loading value" />
         ) : missing ? (
           <span className="font-mono text-2xl font-bold tracking-tight text-text-subtle" title={missingReason}>
             —
@@ -403,17 +403,17 @@ export function MetricTile({
             >
               {value}
             </span>
-            {unit ? <span className="font-mono text-xs text-slate-500">{unit}</span> : null}
+            {unit ? <span className="font-mono text-xs text-text-muted">{unit}</span> : null}
           </>
         )}
       </div>
 
-      <p className="mt-1.5 text-xs leading-5 text-slate-500">
+      <p className="mt-1.5 text-xs leading-5 text-text-muted">
         {loading ? "Reading…" : missing ? missingReason : context}
       </p>
 
       {stale ? (
-        <p className="mt-1 text-[11px] text-amber-300/90">
+        <p className="mt-1 text-[11px] text-warn">
           Last read {relativeTime(state?.updatedAt) ?? "an unknown time"} ago — older than the refresh interval.
         </p>
       ) : null}
@@ -488,17 +488,17 @@ export function PanelCard({
 }) {
   return (
     <Card className={cn("flex flex-col", className)}>
-      <div className="flex min-h-12 items-center gap-2 border-b border-white/[0.07] bg-white/[0.018] -mx-4 sm:-mx-5 -mt-4 sm:-mt-5 mb-4 sm:mb-5 rounded-t-2xl px-4 sm:px-5">
-        {Icon ? <Icon size={14} className="text-slate-400" aria-hidden="true" /> : null}
+      <div className="flex min-h-12 items-center gap-2 border-b border-line bg-overlay-subtle -mx-4 sm:-mx-5 -mt-4 sm:-mt-5 mb-4 sm:mb-5 rounded-t-2xl px-4 sm:px-5">
+        {Icon ? <Icon size={14} className="text-text-subtle" aria-hidden="true" /> : null}
         <div className="min-w-0">
-          <h3 className="truncate text-xs font-semibold tracking-wide text-slate-200">{title}</h3>
-          {description ? <p className="truncate text-[11px] text-slate-500">{description}</p> : null}
+          <h3 className="truncate text-xs font-semibold tracking-wide text-text">{title}</h3>
+          {description ? <p className="truncate text-[11px] text-text-muted">{description}</p> : null}
         </div>
         {action ? <div className="ml-auto flex shrink-0 items-center gap-2">{action}</div> : null}
       </div>
       <div className="min-w-0 flex-1">{children}</div>
       {footer ? (
-        <div className="-mx-4 -mb-4 mt-4 border-t border-white/[0.06] px-4 py-2.5 text-[11px] leading-5 text-slate-500 sm:-mx-5 sm:-mb-5 sm:px-5">
+        <div className="-mx-4 -mb-4 mt-4 border-t border-line px-4 py-2.5 text-[11px] leading-5 text-text-muted sm:-mx-5 sm:-mb-5 sm:px-5">
           {footer}
         </div>
       ) : null}
@@ -552,16 +552,16 @@ export function NodeTelemetryTable({
           const selected = selectedNodeId === node.id;
           return (
             <AdminTr
-              className={cn(selected && "bg-white/[0.03]")}
+              className={cn(selected && "bg-overlay-subtle")}
               key={node.id}
               onClick={onSelect ? () => onSelect(node.id) : undefined}
             >
               <AdminTd>
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-slate-100">{node.name}</div>
+                  <div className="truncate font-medium text-text">{node.name}</div>
                   {/* No invented address: a node without an fqdn simply does not show one. */}
                   {node.fqdn ? (
-                    <div className="truncate font-mono text-[11px] text-slate-500">{node.fqdn}</div>
+                    <div className="truncate font-mono text-[11px] text-text-muted">{node.fqdn}</div>
                   ) : (
                     <div className="font-mono text-[11px] text-text-subtle" title="No FQDN configured">
                       no fqdn configured
@@ -708,9 +708,9 @@ export function MetricSeriesChart({
 
       {empty ? (
         <div className="pointer-events-none absolute inset-0 grid place-items-center">
-          <div className="pointer-events-auto max-w-sm rounded-lg border border-dashed border-white/[0.12] bg-[color-mix(in_srgb,var(--surface)_90%,transparent)] px-4 py-3 text-center">
-            <p className="text-sm font-medium text-slate-200">{emptyTitle}</p>
-            {emptyMessage ? <p className="mt-1 text-xs leading-5 text-slate-500">{emptyMessage}</p> : null}
+          <div className="pointer-events-auto max-w-sm rounded-lg border border-dashed border-line bg-surface px-4 py-3 text-center">
+            <p className="text-sm font-medium text-text">{emptyTitle}</p>
+            {emptyMessage ? <p className="mt-1 text-xs leading-5 text-text-muted">{emptyMessage}</p> : null}
           </div>
         </div>
       ) : null}
@@ -732,7 +732,7 @@ export function PartialFleetNotice({
   const name = (id: string) => nodeNames.get(id) ?? id;
   return (
     <div
-      className="flex flex-wrap items-start gap-2 rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2 text-xs leading-5 text-amber-200"
+      className="flex flex-wrap items-start gap-2 rounded-lg border border-warn-line bg-warn-subtle px-3 py-2 text-xs leading-5 text-warn"
       role="status"
     >
       <AlertTriangle size={14} className="mt-0.5 shrink-0" aria-hidden="true" />

@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"errors"
 	"strings"
 
@@ -28,10 +30,7 @@ func init() {
 
 func registerAppMountRoutesPhase(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(appMountsRegistrarName + ": store not configured, app mount routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: store not configured, app mount routes skipped", ErrPhaseSkipped)
 	}
 	// Injected via Config (handlers -> mounts.Service -> store); inline New is
 	// the dev/test fallback when main has not populated the field.

@@ -114,7 +114,6 @@ import (
 	"github.com/gofiber/fiber/v2"
 	"github.com/gofiber/fiber/v2/middleware/adaptor"
 	fiberrecover "github.com/gofiber/fiber/v2/middleware/recover"
-	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -2094,12 +2093,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		if !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		target, err := cfg.Store.ServerProvisionTarget(ctx, c.Params("id"))
 		if err != nil {
@@ -2118,12 +2113,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		if !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		target, err := cfg.Store.ServerProvisionTarget(ctx, c.Params("id"))
 		if err != nil {
@@ -2150,12 +2141,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
-		}
-		if !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		state := "installed"
 		if !body.Successful {
@@ -2196,10 +2183,10 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil || !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
+		var err error
 		if body.Status == "completed" && body.Checksum != "" {
 			completedAt := time.Now().UTC()
 			// Node-authenticated callers carry no user session:
@@ -2218,7 +2205,12 @@ func NewServer(cfg Config) *fiber.App {
 			err = cfg.Store.MarkBackupStatus(ctx, c.Params("id"), body.Name, body.Status, nil)
 		}
 		if err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			// Was a flat 400 with the raw error text. A backup report can fail
+			// because the caller named something that does not exist, but it
+			// can equally fail because the database is down, and blaming the
+			// node for that hides the outage. respondStoreError classifies the
+			// recognisable client-side conditions and redacts the rest.
+			return respondStoreError(c, err)
 		}
 		return c.SendStatus(fiber.StatusNoContent)
 	})
@@ -2238,9 +2230,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil || !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		if body.ActualState != "" {
 			if err := cfg.Store.SetServerActualState(ctx, c.Params("id"), store.ServerActualState(body.ActualState), body.Status); err != nil {
@@ -2272,9 +2263,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil || !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		serverID := c.Params("id")
 		if err := cfg.Store.AppendAudit(ctx, nil, body.Action, "server", &serverID, body.Metadata); err != nil {
@@ -2301,23 +2291,51 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, c.Params("id"), node.ID)
-		if err != nil || !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, c.Params("id"), node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
-		crashID := uuid.NewString()
 		crashCtx := cfg.BackgroundContext
 		if crashCtx == nil {
 			crashCtx = context.Background()
 		}
-		_, err = cfg.Store.Exec(crashCtx, `INSERT INTO server_crash_events
-			(id, server_id, node_id, exit_code, oom_killed, auto_restarted, created_at)
-			SELECT $1, s.id, s.node_id, $3, $4, $5, NOW() FROM servers s WHERE s.id = $2`,
-			crashID, c.Params("id"), req.ExitCode, req.OOMKilled, req.AutoRestart)
-		if err != nil {
+		// Detached from the request context on purpose: a node that drops the
+		// connection mid-report should not cost us the crash record.
+		//
+		// The write goes through the store rather than an inline INSERT. The
+		// previous inline form was an INSERT ... SELECT ... FROM servers WHERE
+		// s.id = $2, which recorded nothing when the server row was gone while
+		// Exec reported no error, so this endpoint answered ok:true for a crash
+		// it had not stored. node_id is passed explicitly — the ownership check
+		// above has just established that it is this server's node.
+		event, err := cfg.Store.CreateCrashEvent(crashCtx, store.CreateCrashEventRequest{
+			ServerID:      c.Params("id"),
+			NodeID:        node.ID,
+			ExitCode:      req.ExitCode,
+			OOMKilled:     req.OOMKilled,
+			AutoRestarted: req.AutoRestart,
+			// Beacon reports one crash per call and does not send a running
+			// count; 1 matches the column default the inline INSERT relied on
+			// by omitting the column. CleanExit stays false: this endpoint is
+			// only called for crashes.
+			CrashCount: 1,
+		})
+		switch {
+		case errors.Is(err, store.ErrCrashEventUnreadable):
+			// Durably recorded, only the read-back failed. Answering with an
+			// error here would make the node retry and log the crash twice.
+			// cfg.Logger is optional (see respondInternalError), and a partial
+			// write is exactly the case that must not go unrecorded, so fall
+			// back to the default logger rather than skipping the line.
+			crashLog := cfg.Logger
+			if crashLog == nil {
+				crashLog = slog.Default()
+			}
+			crashLog.Warn("crash event stored but not read back",
+				"server_id", c.Params("id"), "node_id", node.ID, "crash_id", event.ID, "error", err)
+		case err != nil:
 			return respondInternalError(c, err)
 		}
-		return c.JSON(fiber.Map{"ok": true, "id": crashID})
+		return c.JSON(fiber.Map{"ok": true, "id": event.ID})
 	})
 
 	// remote.Post("/servers/:id/health") is the control-plane ingest seam for
@@ -2362,9 +2380,8 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		belongs, err := cfg.Store.ServerBelongsToNode(ctx, serverID, node.ID)
-		if err != nil || !belongs {
-			return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+		if err := requireNodeOwnsServer(ctx, c, cfg.Store, serverID, node.ID, nodeCannotAccessServer); err != nil {
+			return err
 		}
 		svc := resourcelimits.NewFromPool(pool)
 		if err := svc.ReportHealth(ctx, serverID, processType, body.Healthy, body.Detail); err != nil {
@@ -2741,8 +2758,20 @@ func NewServer(cfg Config) *fiber.App {
 	registerCrossNodeRoutes(protected, cfg, cfg.CrossNodeResolver, cfg.IngressSynchronizer, adminIPAccess, mutationLimiter)
 	registerNetBirdRoutes(protected, cfg, adminIPAccess, mutationLimiter)
 
-	// Phase registrars (each of the 8 build phases registers here)
-	registerPhaseHooks(v1, protected, &cfg)
+	// Phase registrars (16 registered; see internal/http/phase_registry.go).
+	//
+	// A registrar failure is fatal. This is a startup panic for the same
+	// reason as the session-cookie check above: a panel that mounted only
+	// part of its API surface but reported a successful startup is
+	// indistinguishable from a healthy one until a user hits a route that has
+	// silently become a 404. Refusing to serve is the only outcome that does
+	// not report success for work that was not performed.
+	//
+	// Deliberate skips (ErrPhaseSkipped, for an optional dependency that is
+	// not configured) are logged and do not reach here.
+	if err := registerPhaseHooks(v1, protected, &cfg); err != nil {
+		panic("phase route registration failed: " + err.Error())
+	}
 
 	// Start schedule runner
 	if cfg.Store != nil {

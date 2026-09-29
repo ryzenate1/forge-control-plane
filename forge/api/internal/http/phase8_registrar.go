@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -32,7 +34,10 @@ func init() {
 // GET-form validate) now live on the routes that actually serve.
 func RegisterPhase8(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg == nil || cfg.Store == nil {
-		return nil
+		// Report the skip instead of returning nil: the branding surface has
+		// no other owner, so returning nil here claimed these routes were
+		// mounted when they were not.
+		return fmt.Errorf("%w: store not configured, branding routes not mounted", ErrPhaseSkipped)
 	}
 
 	admin := protected.Group("/admin", requireRole("admin"))

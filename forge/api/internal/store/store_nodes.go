@@ -1048,10 +1048,21 @@ func (s *Store) ResetNodeServerStates(ctx context.Context, nodeID string) error 
 	return err
 }
 
+// ServerBelongsToNode reports whether a server row exists with that node as its
+// owner. It is the authorization gate for every /api/remote endpoint, so the
+// (false, err) case must stay distinguishable from a plain (false, nil): the
+// first means "could not establish ownership", the second means "definitely not
+// this node's server". Callers should route them to 500 and 403 respectively —
+// see requireNodeOwnsServer in the http package.
 func (s *Store) ServerBelongsToNode(ctx context.Context, serverID, nodeID string) (bool, error) {
+	if s.db == nil {
+		return false, errors.New("no database connection")
+	}
 	var exists bool
-	err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id = $1 AND node_id = $2)`, serverID, nodeID).Scan(&exists)
-	return exists, err
+	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM servers WHERE id = $1 AND node_id = $2)`, serverID, nodeID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check server %s belongs to node %s: %w", serverID, nodeID, err)
+	}
+	return exists, nil
 }
 
 type NodeConfiguration struct {

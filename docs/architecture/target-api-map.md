@@ -42,7 +42,9 @@ No raw DB errors. Request/operation/job IDs traceable `operations` `092` + `time
 
 ## 4. API Refactor Sequence
 
-For each domain: inventory → document (purpose/resource/method/request/response/authorization/state/error/idempotency/async) → normalize only when causing product confusion/duplication/debt → compose debug/internal endpoints behind `Advanced` → extract service logic from `server.go:845` 1,432-line `NewServer` + `main.go:114` wiring into `internal/app/container.go` staged `InitDB/Stores/Services/HTTP`.
+For each domain: inventory → document (purpose/resource/method/request/response/authorization/state/error/idempotency/async) → normalize only when causing product confusion/duplication/debt → compose debug/internal endpoints behind `Advanced` → decompose `internal/http/server.go`'s `NewServer` and the `cmd/api/main.go` `run()` wiring into focused, named init steps.
+
+`run()` is the canonical composition root and there is no DI container. An earlier revision of this section named `internal/app/container.go` as the target for a staged `InitDB/Stores/Services/HTTP` refactor; that file was a never-imported no-op and has been deleted. Decompose the composition root in place rather than staging the graph in a parallel type — see the backend conventions in `AGENTS.md`.
 
 ## 5. Known Inconsistencies to Normalize
 

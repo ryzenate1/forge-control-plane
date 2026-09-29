@@ -1281,7 +1281,8 @@ type MigrationIntegrity struct {
 
 // MigrationIntegrity reports the drift check from the last migration run. The
 // store deliberately does no logging of its own; the caller that runs
-// migrations is responsible for surfacing this (see app.Container.InitDB).
+// migrations is responsible for surfacing this — see cmd/api/main.go run(),
+// immediately after RunMigrations.
 func (s *Store) MigrationIntegrity() MigrationIntegrity {
 	s.migrationIntegrityMu.Lock()
 	defer s.migrationIntegrityMu.Unlock()

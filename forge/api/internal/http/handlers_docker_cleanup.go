@@ -73,10 +73,7 @@ func (r nodeResolver) Resolve(ctx context.Context, nodeID string) (dockerleanups
 
 func registerDockerCleanupRoutes(_ fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil || cfg.Daemon == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(dockerCleanupRegistrarName + ": store or daemon not configured, docker cleanup routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: store or daemon not configured, docker cleanup routes skipped", ErrPhaseSkipped)
 	}
 
 	svc, err := dockerleanupsvc.New(cfg.Store, cfg.Daemon, nodeResolver{st: cfg.Store}, cfg.Logger, dockerCleanupInstanceID())

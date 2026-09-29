@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -44,14 +46,11 @@ func init() {
 func registerResourceLimitsRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	_ = v1
 	if cfg == nil || cfg.Store == nil || protected == nil {
-		return nil
+		return fmt.Errorf("%w: store or protected router not configured, resource limit routes not mounted", ErrPhaseSkipped)
 	}
 	pool := cfg.Store.GetDB()
 	if pool == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn("resource limits routes not registered: no postgres pool")
-		}
-		return nil
+		return fmt.Errorf("%w: resource limits routes not registered: no postgres pool", ErrPhaseSkipped)
 	}
 	// requireServerPermission and the handler factories take Config by value,
 	// which is how every route in this package receives it; the phase-hook

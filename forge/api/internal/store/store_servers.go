@@ -500,9 +500,78 @@ func (s *Store) UpdateServerGeneration(ctx context.Context, serverID string, gen
 		return err
 	}
 	if commandTag.RowsAffected() == 0 {
-		return errors.New("server not found")
+		return ErrServerNotFound
 	}
 	return nil
+}
+
+// GetServerGeneration returns servers.generation for a server.
+//
+// Generation is a fencing value: consumers compare it against an operation's
+// observed generation to decide whether that operation is stale. Zero is a
+// meaningful reading (never fenced), which is exactly why a failed lookup must
+// not produce it — a caller handed 0 on error concludes that nothing is
+// fenced. Callers that previously ran this query inline and discarded the
+// error did precisely that.
+//
+// A server with no row returns ErrServerNotFound, distinct from a query
+// failure.
+func (s *Store) GetServerGeneration(ctx context.Context, serverID string) (int64, error) {
+	if s.db == nil {
+		return 0, errors.New("no database connection")
+	}
+	var generation int64
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(generation, 0)
+		FROM servers
+		WHERE id = $1
+	`, serverID).Scan(&generation)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return 0, fmt.Errorf("%w: %s", ErrServerNotFound, serverID)
+	case err != nil:
+		return 0, fmt.Errorf("read generation for server %s: %w", serverID, err)
+	}
+	return generation, nil
+}
+
+// GetServerGenerations returns servers.generation for each of the given server
+// IDs, keyed by ID. IDs with no row are simply absent from the map, so a
+// caller can tell "this server is gone" from "generation 0"; any failure to
+// read is an error, never a short map.
+//
+// Callers use this to fence a batch of operations at once. A partial result
+// looks identical to a complete one, so a mid-stream failure (rows.Err) has to
+// be surfaced here rather than left to the caller to remember.
+func (s *Store) GetServerGenerations(ctx context.Context, serverIDs []string) (map[string]int64, error) {
+	generations := make(map[string]int64, len(serverIDs))
+	if len(serverIDs) == 0 {
+		return generations, nil
+	}
+	if s.db == nil {
+		return nil, errors.New("no database connection")
+	}
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, COALESCE(generation, 0)
+		FROM servers
+		WHERE id = ANY($1::uuid[])
+	`, serverIDs)
+	if err != nil {
+		return nil, fmt.Errorf("query server generations: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var generation int64
+		if err := rows.Scan(&id, &generation); err != nil {
+			return nil, fmt.Errorf("scan server generation: %w", err)
+		}
+		generations[id] = generation
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("read server generations: %w", err)
+	}
+	return generations, nil
 }
 
 func invalidOptionalInt(value *int, minimum int, strict bool) bool {

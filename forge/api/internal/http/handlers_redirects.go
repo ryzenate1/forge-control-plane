@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"errors"
 	"log/slog"
 	"strings"
@@ -55,14 +57,11 @@ func init() {
 func registerDomainRedirectsPhase(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	_ = v1
 	if cfg == nil || cfg.Store == nil || protected == nil {
-		return nil
+		return fmt.Errorf("%w: store or protected router not configured, domain redirect routes not mounted", ErrPhaseSkipped)
 	}
 	pool := cfg.Store.GetDB()
 	if pool == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(domainRedirectsRegistrarName + ": no postgres pool, domain redirect routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: no postgres pool, domain redirect routes skipped", ErrPhaseSkipped)
 	}
 	// Handler factories take Config by value, which is how every route in this
 	// package receives it; the registrar contract hands over a pointer, so it is

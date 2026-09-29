@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -38,13 +39,11 @@ func init() {
 // every /pipelines path then 404s intentionally.
 func registerPhase5PipelineRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil {
-		logPhase(cfg, phase5RegistrarName+": store not configured, pipeline routes skipped")
-		return nil
+		return fmt.Errorf("%w: store not configured, pipeline routes not mounted", ErrPhaseSkipped)
 	}
 	pool := cfg.Store.DB()
 	if pool == nil {
-		logPhase(cfg, phase5RegistrarName+": no postgres pool, pipeline routes skipped")
-		return nil
+		return fmt.Errorf("%w: no postgres pool, pipeline routes not mounted", ErrPhaseSkipped)
 	}
 
 	svc, err := pipeline.New(pipeline.Options{

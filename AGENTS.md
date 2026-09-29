@@ -76,14 +76,54 @@ Redis `6379`.
 
 - Layering is `handlers (internal/http/handlers_*.go) → services
   (internal/services/<pkg>) → store (internal/store)`. Handlers receive a
-  `Config` struct holding every service pointer. `internal/app/container.go` is
-  the DI container: `New → InitDB → InitStores → InitServices → BuildHTTP`.
+  `Config` struct holding every service pointer (`internal/http/server.go`,
+  123 exported fields).
+- **There is no DI container, by decision.** The canonical architecture is an
+  explicit composition root: `cmd/api/run()` (`cmd/api/main.go`) constructs the
+  entire dependency graph and injects it into the HTTP layer as a single
+  `http.Config` value. `internal/app/container.go` used to be described here as
+  "the DI container" — it never was. Nothing imported
+  `gamepanel/forge/internal/app`, and its `InitServices`/`BuildHTTP` were
+  `return nil` no-ops. It has been **deleted**, and its one genuinely useful
+  behaviour (the migration-drift check) was ported into `run()`. Do not
+  reintroduce a parallel container: add wiring to the composition root, or to a
+  focused constructor a service package owns.
+
+  It was also a stale, divergent fork of `run()` — its `InitDB` built a
+  **plaintext** Redis client *after* passing the production `REDIS_TLS` guard,
+  and its `demoSeedEnabled` blocked only the literal string `"production"`
+  where `run()` uses a development/local/test allowlist. Worth remembering as
+  the failure mode of speculative scaffolding kept "for later".
+
+  Known debt, not yet addressed: `run()` is ~1,600 lines and `http.Config` has
+  123 exported fields, so the composition root is honest but not yet readable.
+  The intended direction is to decompose `run()` into focused init functions
+  and to narrow `Config` toward per-domain dependency groups. Do this
+  incrementally, with a compiler and the test suite available.
 - Most routes are registered by ~100 `register*Routes(...)` calls inside
-  `NewServer` (`internal/http/server.go`). A smaller plugin-style hook exists:
-  `RegisterPhaseRegistrar(name, priority, fn)` in
+  `NewServer` (`internal/http/server.go`). A smaller plugin-style hook
+  exists: `RegisterPhaseRegistrar(name, priority, fn)` in
   `internal/http/phase_registry.go`, invoked from `registerPhaseHooks`.
   A registrar only runs if some file calls `RegisterPhaseRegistrar` in an
-  `init()` — defining the function is not enough.
+  `init()` — defining the function is not enough. There are **16** such
+  registrars (not the 8 some older comments claim).
+- **Phase registration fails closed.** A registrar has exactly three
+  outcomes, and "not mounted" can never look like "mounted":
+
+  | Return | Meaning | Effect |
+  | --- | --- | --- |
+  | `nil` | every route mounted | recorded `Mounted` |
+  | `fmt.Errorf("%w: reason", ErrPhaseSkipped)` | optional dependency absent, deliberately not mounted | logged `WARN`, recorded `Skipped`, startup continues |
+  | any other error | could not mount | logged `ERROR`, aggregated, **startup panics** |
+
+  Returning `nil` without mounting the routes is a bug — use `ErrPhaseSkipped`.
+  `RegisterPhaseRegistrar` panics on a nil registrar, a duplicate name, or a
+  duplicate priority (equal priorities would let mount order depend on the
+  order the compiler runs `init()` in). `registerPhaseHooks` runs every
+  registrar even after one fails, then returns the joined error; logging falls
+  back to `slog.Default()` so a nil `cfg.Logger` cannot hide a failure.
+  `PhaseRegistrationReport()` exposes the per-phase outcome for assertions.
+  Tests: `internal/http/phase_registry_test.go`.
 - Auth is `authMiddleware` in `internal/http/auth.go`; session cookie is
   `__Host-forge_session`. Authorization has three layers: admin scopes
   (`requireAdminScope`), per-server RBAC (`requireServerPermission`), and org

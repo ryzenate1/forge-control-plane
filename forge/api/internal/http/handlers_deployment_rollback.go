@@ -71,10 +71,7 @@ func init() {
 
 func registerDeploymentRollbackRoutes(_ fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil || cfg.Store.DB() == nil || cfg.DeploymentSvc == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(deploymentRollbackRegistrarName + ": store or deployment service not configured, rollback history routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: store or deployment service not configured, rollback history routes skipped", ErrPhaseSkipped)
 	}
 	limiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis,
 		cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")))

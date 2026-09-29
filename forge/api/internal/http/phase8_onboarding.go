@@ -1,6 +1,7 @@
 package http
 
 import (
+	"fmt"
 	"strings"
 
 	"gamepanel/forge/internal/services/onboarding"
@@ -144,9 +145,12 @@ func init() {
 }
 
 func registerPhase8OnboardingRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
+	if cfg == nil {
+		return fmt.Errorf("%w: nil config, onboarding routes not mounted", ErrPhaseSkipped)
+	}
 	svc := cfg.OnboardingService
 	if svc == nil {
-		return nil
+		return fmt.Errorf("%w: onboarding service not configured, wizard and /ide/files not mounted", ErrPhaseSkipped)
 	}
 	wizard := v1.Group("/onboarding", authMiddleware(cfg.AuthSecret, cfg.Store))
 	wizard.Get("/status", onboardingStatusHandler(svc))

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -159,8 +160,7 @@ func init() {
 // from a fake store.
 func registerPreviewEnvironmentRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil || cfg.Store.DB() == nil {
-		logPhase(cfg, previewEnvironmentRegistrarName+": no postgres pool, project preview routes skipped")
-		return nil
+		return fmt.Errorf("%w: no postgres pool, project preview routes not mounted", ErrPhaseSkipped)
 	}
 
 	svc := previewenv.New(cfg.Store, previewenv.Options{
@@ -177,8 +177,7 @@ func registerPreviewEnvironmentRoutes(v1 fiber.Router, protected fiber.Router, c
 		BackgroundContext:     cfg.BackgroundContext,
 	})
 	if svc == nil {
-		logPhase(cfg, previewEnvironmentRegistrarName+": preview service unavailable, routes skipped")
-		return nil
+		return fmt.Errorf("%w: preview service unavailable, routes not mounted", ErrPhaseSkipped)
 	}
 	if cfg.ComposeService == nil {
 		// Honest, not fatal: the routes still answer, and every create reports

@@ -40,10 +40,7 @@ func resourceTypeFromSegment(segment string) (string, bool) {
 
 func registerTagRoutesPhase(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(tagsRegistrarName + ": store not configured, tag routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: store not configured, tag routes skipped", ErrPhaseSkipped)
 	}
 	svc := tagssvc.New(cfg.Store)
 	limiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis, cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")))

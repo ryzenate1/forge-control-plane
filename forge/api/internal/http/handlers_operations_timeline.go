@@ -1,11 +1,15 @@
 package http
 
 import (
+	"context"
+	"errors"
+	"fmt"
 	"sort"
 	"time"
 
+	"gamepanel/forge/internal/store"
+
 	"github.com/gofiber/fiber/v2"
-	"github.com/jackc/pgx/v5"
 )
 
 // OperationsTimelineItem is the unified timeline row rendered by /admin/operations.
@@ -153,6 +157,401 @@ func generationFence(observed, desired, serverGen int64, extraFenced bool) (gen,
 	return gen, fenceGen, extraFenced
 }
 
+// timelineSource is one contributing read behind /admin/operations/timeline.
+//
+// Every section of this handler used to be written as `if err == nil { ... }`
+// around its read, `continue` on a row-scan failure and a discarded
+// rows.Err(), so a ledger this panel could not reach produced a short timeline
+// that was indistinguishable from a quiet one. Two sections went further and
+// carried "fallback" reads that derived different values from the primary path,
+// so the same drain could be reported with two different progress numbers
+// depending on which branch happened to run.
+//
+// Naming the sources lets the handler report the ones it could not read
+// instead of presenting a partial stream as complete, and leaves exactly one
+// implementation per source.
+type timelineSource struct {
+	// name identifies the source in meta.degraded when its read fails. It is
+	// the ledger being read, not a display label.
+	name string
+	// kind is the OperationsTimelineItem.Kind this source contributes, and is
+	// what the ?kind= filter selects on. Several sources may share a kind.
+	kind string
+	// read returns this source's items newest-first, capped at limit.
+	// collected carries the items gathered from earlier sources, which the
+	// legacy transfer read needs in order to deduplicate against migration
+	// rows; the other sources ignore it.
+	read func(ctx context.Context, cfg Config, limit int, collected []OperationsTimelineItem) ([]OperationsTimelineItem, error)
+}
+
+// operationsTimelineSources is evaluated in order. "migrations" must stay ahead
+// of "servers.transfer_state", which deduplicates against it.
+var operationsTimelineSources = []timelineSource{
+	{name: "job_queue", kind: "job", read: readTimelineJobs},
+	{name: "operations", kind: "operation", read: readTimelineOperations},
+	{name: "drain_states", kind: "drain", read: readTimelineDrains},
+	{name: "migrations", kind: "transfer", read: readTimelineMigrations},
+	{name: "servers.transfer_state", kind: "transfer", read: readTimelineLegacyTransfers},
+	{name: "server_orphan_remediations", kind: "orphan", read: readTimelineServerOrphans},
+	{name: "database_orphan_remediations", kind: "orphan", read: readTimelineDatabaseOrphans},
+}
+
+// timelineSQLReady reports whether the sources that still read SQL directly can
+// run. job_queue, operations and the legacy servers.transfer_state scan have no
+// store-layer equivalent yet, and calling Query on a nil pool panics inside
+// pgx, so a missing pool is turned into a degraded source here instead.
+func timelineSQLReady(cfg Config) error {
+	if cfg.Store == nil || cfg.Store.GetDB() == nil {
+		return errors.New("no database connection")
+	}
+	return nil
+}
+
+// capTimeline truncates a source's newest-first items to limit.
+//
+// The sources that read SQL apply LIMIT in the query; the ones that go through
+// the store return everything and are capped here. This replaces a set of
+// cumulative `if len(items) > limit*2 { break }` guards that counted items
+// already contributed by *earlier* sources: with any default limit those guards
+// were already satisfied by the time the drain section ran, so the timeline
+// emitted exactly one drain and silently dropped the rest. Capping per source
+// is safe because every source is ordered newest-first and the handler keeps
+// only the newest limit items overall.
+func capTimeline(items []OperationsTimelineItem, limit int) []OperationsTimelineItem {
+	if limit > 0 && len(items) > limit {
+		return items[:limit]
+	}
+	return items
+}
+
+// timelineResolvedAt mirrors the COALESCE(resolved_at, created_at) that the
+// orphan reads used to perform in SQL.
+func timelineResolvedAt(createdAt time.Time, resolvedAt *time.Time) time.Time {
+	if resolvedAt != nil {
+		return *resolvedAt
+	}
+	return createdAt
+}
+
+// transferAlreadyListed reports whether a transfer for that server and status is
+// already on the timeline. Status is compared before the empty-state
+// normalisation in readTimelineLegacyTransfers, matching the inline check this
+// replaces.
+func transferAlreadyListed(items []OperationsTimelineItem, serverID, status string) bool {
+	for _, it := range items {
+		if it.Kind == "transfer" && it.ServerID == serverID && it.Status == status {
+			return true
+		}
+	}
+	return false
+}
+
+// readTimelineJobs reads the queue ledger. Still raw SQL: job_queue has no
+// store-layer list method (see AGENTS.md, remaining handler SQL).
+func readTimelineJobs(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if err := timelineSQLReady(cfg); err != nil {
+		return nil, err
+	}
+	rows, err := cfg.Store.GetDB().Query(ctx, `
+		SELECT id::text, type::text, status::text,
+		       COALESCE(server_id::text,''), COALESCE(node_id::text,''),
+		       COALESCE(error,''), COALESCE(retry_count,0),
+		       COALESCE(priority,0),
+		       created_at, updated_at,
+		       started_at, completed_at
+		FROM job_queue
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []OperationsTimelineItem
+	for rows.Next() {
+		var id, typ, status, serverID, nodeID, errMsg string
+		var retryCount, priority int
+		var createdAt, updatedAt time.Time
+		var startedAt, completedAt *time.Time
+		// An undecodable row used to be skipped with continue, which shortened
+		// the timeline without saying so.
+		if err := rows.Scan(&id, &typ, &status, &serverID, &nodeID, &errMsg, &retryCount, &priority, &createdAt, &updatedAt, &startedAt, &completedAt); err != nil {
+			return nil, fmt.Errorf("scan job_queue row: %w", err)
+		}
+		prog := statusProgress(status)
+		// running pending gets 0 base, completed gets 100
+		if status == "pending" && prog != nil {
+			p := 5
+			prog = &p
+		}
+		items = append(items, OperationsTimelineItem{
+			ID:           id,
+			Kind:         "job",
+			Type:         typ,
+			Status:       status,
+			ServerID:     serverID,
+			NodeID:       nodeID,
+			Progress:     prog,
+			Error:        errMsg,
+			CreatedAt:    createdAt,
+			UpdatedAt:    updatedAt,
+			DesiredState: statusDesired(status),
+			ActualState:  statusActual(status),
+		})
+	}
+	return items, rows.Err()
+}
+
+// readTimelineOperations reads the operation projection, including the
+// desired/observed generation pair that the fence pass below resolves. Still
+// raw SQL: operations has no store-layer list method.
+func readTimelineOperations(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if err := timelineSQLReady(cfg); err != nil {
+		return nil, err
+	}
+	rows, err := cfg.Store.GetDB().Query(ctx, `
+		SELECT id::text, kind::text, resource_type::text, resource_id::text,
+		       status::text, COALESCE(error,''),
+		       COALESCE(desired_generation,1), COALESCE(observed_generation,0),
+		       created_at, updated_at, started_at, completed_at
+		FROM operations
+		ORDER BY created_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []OperationsTimelineItem
+	for rows.Next() {
+		var id, kind, rtype, rid, status, errMsg string
+		var desiredGen, observedGen int64
+		var createdAt, updatedAt time.Time
+		var startedAt, completedAt *time.Time
+		if err := rows.Scan(&id, &kind, &rtype, &rid, &status, &errMsg, &desiredGen, &observedGen, &createdAt, &updatedAt, &startedAt, &completedAt); err != nil {
+			return nil, fmt.Errorf("scan operations row: %w", err)
+		}
+		serverID := ""
+		if rtype == "server" {
+			serverID = rid
+		}
+		// The raw generation pair is stashed in Generation/FenceGeneration for
+		// the fence resolution pass in the handler.
+		items = append(items, OperationsTimelineItem{
+			ID:              id,
+			Kind:            "operation",
+			Type:            kind,
+			Status:          status,
+			ResourceType:    rtype,
+			ResourceID:      rid,
+			ServerID:        serverID,
+			Generation:      observedGen,
+			FenceGeneration: desiredGen,
+			Progress:        statusProgress(status),
+			Error:           errMsg,
+			CreatedAt:       createdAt,
+			UpdatedAt:       updatedAt,
+			DesiredState:    statusDesired(status),
+			ActualState:     statusActual(status),
+		})
+	}
+	return items, rows.Err()
+}
+
+// readTimelineDrains reads the drain ledger through the store.
+func readTimelineDrains(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if cfg.Store == nil {
+		return nil, errors.New("no store configured")
+	}
+	// The branch commented "fallback raw query if helper fails (e.g., no table
+	// yet)" that used to sit on the error path here is gone. It swallowed its
+	// own query error, skipped unscannable rows, and derived Progress from
+	// statusProgress while this path derives it from the drain ledger via
+	// drainProgressPercent — so the two disagreed about the same drain.
+	// ListDrainStates is the single implementation.
+	drains, err := cfg.Store.ListDrainStates(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]OperationsTimelineItem, 0, len(drains))
+	for _, d := range drains {
+		items = append(items, OperationsTimelineItem{
+			ID:        d.NodeID,
+			Kind:      "drain",
+			Type:      "node.drain",
+			Status:    d.Status,
+			NodeID:    d.NodeID,
+			Progress:  drainProgressPercent(d.Status, d.Progress.Remaining, d.Progress.Total),
+			CreatedAt: d.StartedAt,
+			UpdatedAt: d.UpdatedAt,
+		})
+	}
+	return capTimeline(items, limit), nil
+}
+
+// readTimelineMigrations reads server migrations through the store.
+func readTimelineMigrations(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if cfg.Store == nil {
+		return nil, errors.New("no store configured")
+	}
+	migs, err := cfg.Store.ListMigrations(ctx)
+	if err != nil {
+		return nil, err
+	}
+	items := make([]OperationsTimelineItem, 0, len(migs))
+	for _, m := range migs {
+		prog := migrationProgress(m.Status, m.TransferPhase)
+		if prog == nil {
+			p := 50
+			prog = &p
+		}
+		errStr := ""
+		if m.FailureReason != nil {
+			errStr = *m.FailureReason
+		}
+		items = append(items, OperationsTimelineItem{
+			ID:           m.ID,
+			Kind:         "transfer",
+			Type:         "server.migration",
+			Status:       m.Status,
+			ServerID:     m.ServerID,
+			NodeID:       m.TargetNodeID,
+			Progress:     prog,
+			Error:        errStr,
+			CreatedAt:    m.CreatedAt,
+			UpdatedAt:    m.UpdatedAt,
+			DesiredState: statusDesired(m.Status),
+			ActualState:  statusActual(m.Status),
+		})
+	}
+	return capTimeline(items, limit), nil
+}
+
+// readTimelineLegacyTransfers surfaces servers whose transfer_state is in
+// flight but which have no migration row. Still raw SQL: this is a projection
+// over servers columns with no store-layer equivalent.
+func readTimelineLegacyTransfers(ctx context.Context, cfg Config, limit int, collected []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if err := timelineSQLReady(cfg); err != nil {
+		return nil, err
+	}
+	rows, err := cfg.Store.GetDB().Query(ctx, `
+		SELECT id::text, COALESCE(transfer_state,''), COALESCE(transfer_target_node_id::text,''), COALESCE(transfer_error,''),
+		       COALESCE(generation,0), created_at, updated_at
+		FROM servers
+		WHERE transferring = true OR transfer_state IN ('queued','running','failed')
+		ORDER BY updated_at DESC
+		LIMIT $1
+	`, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var items []OperationsTimelineItem
+	for rows.Next() {
+		var sid, tstate, targetNode, terr string
+		var gen int64
+		var cat, uat time.Time
+		if err := rows.Scan(&sid, &tstate, &targetNode, &terr, &gen, &cat, &uat); err != nil {
+			return nil, fmt.Errorf("scan servers transfer_state row: %w", err)
+		}
+		// Skip a server that already reached the timeline through its
+		// migration row, and any duplicate within this read.
+		if transferAlreadyListed(collected, sid, tstate) || transferAlreadyListed(items, sid, tstate) {
+			continue
+		}
+		prog := statusProgress(tstate)
+		if tstate == "" {
+			tstate = "transferring"
+		}
+		items = append(items, OperationsTimelineItem{
+			ID:           "transfer:" + sid,
+			Kind:         "transfer",
+			Type:         "server.transfer",
+			Status:       tstate,
+			ServerID:     sid,
+			NodeID:       targetNode,
+			Generation:   gen,
+			Progress:     prog,
+			Error:        terr,
+			CreatedAt:    cat,
+			UpdatedAt:    uat,
+			DesiredState: statusDesired(tstate),
+			ActualState:  statusActual(tstate),
+		})
+	}
+	return items, rows.Err()
+}
+
+// readTimelineServerOrphans reads server orphan remediations through the store.
+//
+// This was a raw query with ListServerOrphanRemediations as a swallowed
+// fallback, and the two disagreed: the query reported
+// COALESCE(resolved_at, created_at) as UpdatedAt while the fallback reported
+// created_at, so the same resolved orphan carried different timestamps
+// depending on which branch ran. The store helper is now the single
+// implementation and resolved_at is applied here.
+func readTimelineServerOrphans(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if cfg.Store == nil {
+		return nil, errors.New("no store configured")
+	}
+	rems, err := cfg.Store.ListServerOrphanRemediations(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]OperationsTimelineItem, 0, len(rems))
+	for _, r := range rems {
+		status := string(r.Status)
+		prog := statusProgress(status)
+		if status == "pending" {
+			p := 0
+			prog = &p
+		}
+		items = append(items, OperationsTimelineItem{
+			ID:        r.ID,
+			Kind:      "orphan",
+			Type:      "server.orphan",
+			Status:    status,
+			ServerID:  r.ServerID,
+			Progress:  prog,
+			Error:     r.DaemonError,
+			CreatedAt: r.CreatedAt,
+			UpdatedAt: timelineResolvedAt(r.CreatedAt, r.ResolvedAt),
+		})
+	}
+	return capTimeline(items, limit), nil
+}
+
+// readTimelineDatabaseOrphans reads database orphan remediations through the
+// store, replacing a raw query whose error was discarded outright.
+func readTimelineDatabaseOrphans(ctx context.Context, cfg Config, limit int, _ []OperationsTimelineItem) ([]OperationsTimelineItem, error) {
+	if cfg.Store == nil {
+		return nil, errors.New("no store configured")
+	}
+	rems, err := cfg.Store.ListDatabaseOrphanRemediations(ctx, "")
+	if err != nil {
+		return nil, err
+	}
+	items := make([]OperationsTimelineItem, 0, len(rems))
+	for _, r := range rems {
+		status := string(r.Status)
+		items = append(items, OperationsTimelineItem{
+			ID:        r.ID,
+			Kind:      "orphan",
+			Type:      "database.orphan",
+			Status:    status,
+			ServerID:  r.ServerID,
+			Progress:  statusProgress(status),
+			Error:     r.Reason,
+			CreatedAt: r.CreatedAt,
+			UpdatedAt: timelineResolvedAt(r.CreatedAt, r.ResolvedAt),
+		})
+	}
+	return capTimeline(items, limit), nil
+}
+
 func registerOperationsTimelineRoutes(protected fiber.Router, cfg Config) {
 	protected.Get("/admin/operations/timeline", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -188,350 +587,45 @@ func registerOperationsTimelineRoutes(protected fiber.Router, cfg Config) {
 			return out
 		}
 
-		// ——— jobs (job_queue) ———
-		if kindFilter == "" || kindFilter == "job" {
-			rows, err := cfg.Store.GetDB().Query(ctx, `
-				SELECT id::text, type::text, status::text,
-				       COALESCE(server_id::text,''), COALESCE(node_id::text,''),
-				       COALESCE(error,''), COALESCE(retry_count,0),
-				       COALESCE(priority,0),
-				       created_at, updated_at,
-				       started_at, completed_at
-				FROM job_queue
-				ORDER BY created_at DESC
-				LIMIT $1
-			`, limit)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var id, typ, status, serverID, nodeID, errMsg string
-					var retryCount, priority int
-					var createdAt, updatedAt time.Time
-					var startedAt, completedAt *time.Time
-					if err := rows.Scan(&id, &typ, &status, &serverID, &nodeID, &errMsg, &retryCount, &priority, &createdAt, &updatedAt, &startedAt, &completedAt); err != nil {
-						continue
-					}
-					prog := statusProgress(status)
-					// running pending gets 0 base, completed gets 100
-					if status == "pending" && prog != nil {
-						p := 5
-						prog = &p
-					}
-					items = append(items, OperationsTimelineItem{
-						ID:           id,
-						Kind:         "job",
-						Type:         typ,
-						Status:       status,
-						ServerID:     serverID,
-						NodeID:       nodeID,
-						Progress:     prog,
-						Error:        errMsg,
-						CreatedAt:    createdAt,
-						UpdatedAt:    updatedAt,
-						DesiredState: statusDesired(status),
-						ActualState:  statusActual(status),
-					})
-				}
-				_ = rows.Err()
+		// degraded names the sources that could not be read. The timeline is an
+		// aggregate over independent ledgers, so one unreachable source does
+		// not invalidate the others and the request is still served — but the
+		// response has to say which ones are missing, otherwise a short list
+		// reads as a quiet panel. Each section used to swallow its own error,
+		// so that is exactly what this endpoint did.
+		//
+		// logInternalError is enough here (it no-ops when no logger is
+		// configured) because the omission is also reported in the response
+		// body rather than only in the log.
+		degraded := []string{}
+		for _, src := range operationsTimelineSources {
+			if kindFilter != "" && kindFilter != src.kind {
+				continue
 			}
-		}
-
-		// ——— operations (operations) ———
-		if kindFilter == "" || kindFilter == "operation" {
-			rows, err := cfg.Store.GetDB().Query(ctx, `
-				SELECT id::text, kind::text, resource_type::text, resource_id::text,
-				       status::text, COALESCE(error,''),
-				       COALESCE(desired_generation,1), COALESCE(observed_generation,0),
-				       created_at, updated_at, started_at, completed_at
-				FROM operations
-				ORDER BY created_at DESC
-				LIMIT $1
-			`, limit)
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var id, kind, rtype, rid, status, errMsg string
-					var desiredGen, observedGen int64
-					var createdAt, updatedAt time.Time
-					var startedAt, completedAt *time.Time
-					if err := rows.Scan(&id, &kind, &rtype, &rid, &status, &errMsg, &desiredGen, &observedGen, &createdAt, &updatedAt, &startedAt, &completedAt); err != nil {
-						continue
-					}
-					prog := statusProgress(status)
-					serverID := ""
-					if rtype == "server" {
-						serverID = rid
-					}
-					// stash gens in the item for later fence resolution; keep raw in Generation/FenceGeneration temporarily
-					items = append(items, OperationsTimelineItem{
-						ID:              id,
-						Kind:            "operation",
-						Type:            kind,
-						Status:          status,
-						ResourceType:    rtype,
-						ResourceID:      rid,
-						ServerID:        serverID,
-						Generation:      observedGen,
-						FenceGeneration: desiredGen,
-						Progress:        prog,
-						Error:           errMsg,
-						CreatedAt:       createdAt,
-						UpdatedAt:       updatedAt,
-						DesiredState:    statusDesired(status),
-						ActualState:     statusActual(status),
-					})
-				}
-				_ = rows.Err()
+			got, err := src.read(ctx, cfg, limit, items)
+			if err != nil {
+				degraded = append(degraded, src.name)
+				logInternalError(c, fmt.Errorf("operations timeline: read %s: %w", src.name, err))
+				continue
 			}
-		}
-
-		// ——— drains (drain_states:191) ———
-		if kindFilter == "" || kindFilter == "drain" {
-			drains, err := cfg.Store.ListDrainStates(ctx)
-			if err == nil {
-				for _, d := range drains {
-					prog := drainProgressPercent(d.Status, d.Progress.Remaining, d.Progress.Total)
-					// current step contributes to detail line in timeline
-					status := d.Status
-					// completed_at may be nil
-					createdAt := d.StartedAt
-					updatedAt := d.UpdatedAt
-					items = append(items, OperationsTimelineItem{
-						ID:        d.NodeID,
-						Kind:      "drain",
-						Type:      "node.drain",
-						Status:    status,
-						NodeID:    d.NodeID,
-						Progress:  prog,
-						CreatedAt: createdAt,
-						UpdatedAt: updatedAt,
-					})
-					if len(items) > limit*2 { // guard
-						break
-					}
-				}
-			} else if cfg.Store.GetDB() != nil {
-				// fallback raw query if helper fails (e.g., no table yet)
-				rows, qerr := cfg.Store.GetDB().Query(ctx, `SELECT node_id::text, status::text, started_at, updated_at, progress::text FROM drain_states ORDER BY started_at DESC LIMIT $1`, limit)
-				if qerr == nil {
-					defer rows.Close()
-					for rows.Next() {
-						var nid, status string
-						var started, updated time.Time
-						var raw string
-						if err := rows.Scan(&nid, &status, &started, &updated, &raw); err != nil {
-							continue
-						}
-						items = append(items, OperationsTimelineItem{
-							ID:        nid,
-							Kind:      "drain",
-							Type:      "node.drain",
-							Status:    status,
-							NodeID:    nid,
-							Progress:  statusProgress(status),
-							CreatedAt: started,
-							UpdatedAt: updated,
-						})
-					}
-				}
-			}
-		}
-
-		// ——— transfers / migrations ———
-		if kindFilter == "" || kindFilter == "transfer" {
-			migs, err := cfg.Store.ListMigrations(ctx)
-			if err == nil {
-				for _, m := range migs {
-					prog := migrationProgress(m.Status, m.TransferPhase)
-					if prog == nil {
-						p := 50
-						prog = &p
-					}
-					errStr := ""
-					if m.FailureReason != nil {
-						errStr = *m.FailureReason
-					}
-					items = append(items, OperationsTimelineItem{
-						ID:           m.ID,
-						Kind:         "transfer",
-						Type:         "server.migration",
-						Status:       m.Status,
-						ServerID:     m.ServerID,
-						NodeID:       m.TargetNodeID,
-						Progress:     prog,
-						Error:        errStr,
-						CreatedAt:    m.CreatedAt,
-						UpdatedAt:    m.UpdatedAt,
-						DesiredState: statusDesired(m.Status),
-						ActualState:  statusActual(m.Status),
-					})
-					if len(items) > limit*3 {
-						break
-					}
-				}
-			}
-			// Also surface legacy server-transfer states that have no migration row (orphan transfer_state)
-			rows, qerr := cfg.Store.GetDB().Query(ctx, `
-				SELECT id::text, COALESCE(transfer_state,''), COALESCE(transfer_target_node_id::text,''), COALESCE(transfer_error,''),
-				       COALESCE(generation,0), created_at, updated_at
-				FROM servers
-				WHERE transferring = true OR transfer_state IN ('queued','running','failed')
-				ORDER BY updated_at DESC
-				LIMIT $1
-			`, limit)
-			if qerr == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var sid, tstate, targetNode, terr string
-					var gen int64
-					var cat, uat time.Time
-					if err := rows.Scan(&sid, &tstate, &targetNode, &terr, &gen, &cat, &uat); err != nil {
-						continue
-					}
-					// avoid duplicating a server that already has a migration entry in items (check serverId+transfer kind)
-					dup := false
-					for _, it := range items {
-						if it.Kind == "transfer" && it.ServerID == sid && it.Status == tstate {
-							dup = true
-							break
-						}
-					}
-					if dup {
-						continue
-					}
-					prog := statusProgress(tstate)
-					if tstate == "" {
-						tstate = "transferring"
-					}
-					items = append(items, OperationsTimelineItem{
-						ID:           "transfer:" + sid,
-						Kind:         "transfer",
-						Type:         "server.transfer",
-						Status:       tstate,
-						ServerID:     sid,
-						NodeID:       targetNode,
-						Generation:   gen,
-						Progress:     prog,
-						Error:        terr,
-						CreatedAt:    cat,
-						UpdatedAt:    uat,
-						DesiredState: statusDesired(tstate),
-						ActualState:  statusActual(tstate),
-					})
-				}
-			}
-		}
-
-		// ——— orphans (server_orphan_remediations + database_orphan_remediations) ———
-		if kindFilter == "" || kindFilter == "orphan" {
-			// server orphans — pending + recent resolved
-			srvRows, err := cfg.Store.GetDB().Query(ctx, `
-				SELECT id::text, server_id::text, status::text, daemon_error, created_at, COALESCE(resolved_at, created_at)
-				FROM server_orphan_remediations
-				ORDER BY created_at DESC
-				LIMIT $1
-			`, limit)
-			if err == nil {
-				defer srvRows.Close()
-				for srvRows.Next() {
-					var id, serverID, status, daemonErr string
-					var cat, uat time.Time
-					if err := srvRows.Scan(&id, &serverID, &status, &daemonErr, &cat, &uat); err != nil {
-						continue
-					}
-					prog := statusProgress(status)
-					if status == "pending" {
-						p := 0
-						prog = &p
-					}
-					items = append(items, OperationsTimelineItem{
-						ID:        id,
-						Kind:      "orphan",
-						Type:      "server.orphan",
-						Status:    status,
-						ServerID:  serverID,
-						Progress:  prog,
-						Error:     daemonErr,
-						CreatedAt: cat,
-						UpdatedAt: uat,
-					})
-				}
-			} else {
-				// fallback via Store helper
-				if rems, err2 := cfg.Store.ListServerOrphanRemediations(ctx, ""); err2 == nil {
-					for _, r := range rems {
-						prog := statusProgress(string(r.Status))
-						items = append(items, OperationsTimelineItem{
-							ID:        r.ID,
-							Kind:      "orphan",
-							Type:      "server.orphan",
-							Status:    string(r.Status),
-							ServerID:  r.ServerID,
-							Progress:  prog,
-							Error:     r.DaemonError,
-							CreatedAt: r.CreatedAt,
-							UpdatedAt: r.CreatedAt,
-						})
-						if len(items) > limit*3 {
-							break
-						}
-					}
-				}
-			}
-			dbRows, err := cfg.Store.GetDB().Query(ctx, `
-				SELECT id::text, server_id::text, status::text, reason, created_at, COALESCE(resolved_at, created_at)
-				FROM database_orphan_remediations
-				ORDER BY created_at DESC
-				LIMIT $1
-			`, limit)
-			if err == nil {
-				defer dbRows.Close()
-				for dbRows.Next() {
-					var id, serverID, status, reason string
-					var cat, uat time.Time
-					if err := dbRows.Scan(&id, &serverID, &status, &reason, &cat, &uat); err != nil {
-						continue
-					}
-					prog := statusProgress(status)
-					items = append(items, OperationsTimelineItem{
-						ID:        id,
-						Kind:      "orphan",
-						Type:      "database.orphan",
-						Status:    status,
-						ServerID:  serverID,
-						Progress:  prog,
-						Error:     reason,
-						CreatedAt: cat,
-						UpdatedAt: uat,
-					})
-				}
-			}
+			items = append(items, got...)
 		}
 
 		// ——— generation fencing: batch fetch server generations ———
-		serverIDs := collectServerIDs()
-		genMap := map[string]int64{}
-		if len(serverIDs) > 0 {
-			// pgx doesn't support slice binding directly for ANY; use query with array
-			rows, err := cfg.Store.GetDB().Query(ctx, `SELECT id::text, COALESCE(generation,0) FROM servers WHERE id = ANY($1::uuid[])`, pgArray(serverIDs))
-			if err == nil {
-				defer rows.Close()
-				for rows.Next() {
-					var sid string
-					var g int64
-					if err := rows.Scan(&sid, &g); err == nil {
-						genMap[sid] = g
-					}
-				}
-			} else {
-				// fallback per-id
-				for _, sid := range serverIDs {
-					var g int64
-					if err := cfg.Store.GetDB().QueryRow(ctx, `SELECT COALESCE(generation,0) FROM servers WHERE id=$1`, sid).Scan(&g); err == nil {
-						genMap[sid] = g
-					}
-				}
-			}
+		//
+		// This lookup is not optional decoration: every item's fence state
+		// below is derived from it, and a server missing from genMap reads as
+		// generation 0, which generationFence interprets as "not fenced". A
+		// swallowed error here would make the UI assert that fenced
+		// operations are live. isFenced is a bool on the wire with no way to
+		// say "unknown", so failing the request is the only honest outcome.
+		//
+		// A server ID absent from a *successful* result is a different case —
+		// the row is genuinely gone (deleted server), and generationFence
+		// documents zero as "no server row, not fenced". That stays.
+		genMap, err := cfg.Store.GetServerGenerations(ctx, collectServerIDs())
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not load server generations; timeline fencing would be unreliable")
 		}
 
 		// Resolve fence for each item.
@@ -634,6 +728,12 @@ func registerOperationsTimelineRoutes(protected fiber.Router, cfg Config) {
 			"meta": fiber.Map{
 				"total": len(items),
 				"limit": limit,
+				// Additive: complete is false and degraded lists the ledgers
+				// that could not be read, so a consumer can tell a truncated
+				// timeline from an idle panel. Consumers that only read
+				// total/limit are unaffected.
+				"complete": len(degraded) == 0,
+				"degraded": degraded,
 			},
 		})
 	})
@@ -668,10 +768,25 @@ func registerOperationsTimelineRoutes(protected fiber.Router, cfg Config) {
 				"error":        mig.FailureReason,
 			})
 		}
-		state, _ := cfg.Store.GetServerTransferState(ctx, serverID)
+		// Both reads below were previously error-discarding, which made this
+		// endpoint answer "not transferring, generation 0" whenever it could
+		// not reach the database or the server did not exist — a 200 that is
+		// indistinguishable from a healthy idle server.
+		state, err := cfg.Store.GetServerTransferState(ctx, serverID)
+		switch {
+		case errors.Is(err, store.ErrServerNotFound):
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		case err != nil:
+			return fiber.NewError(fiber.StatusInternalServerError, "could not determine transfer state")
+		}
 		transferring := state == "queued" || state == "running" || state == "in_progress"
-		var gen int64
-		_ = cfg.Store.GetDB().QueryRow(ctx, `SELECT COALESCE(generation,0) FROM servers WHERE id=$1`, serverID).Scan(&gen)
+		gen, err := cfg.Store.GetServerGeneration(ctx, serverID)
+		switch {
+		case errors.Is(err, store.ErrServerNotFound):
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		case err != nil:
+			return fiber.NewError(fiber.StatusInternalServerError, "could not read server generation")
+		}
 		return c.JSON(fiber.Map{
 			"source":       "server",
 			"transferring": transferring,
@@ -772,14 +887,15 @@ func firstNonEmpty(a, b string) string {
 	return b
 }
 
-// pgArray builds a pg array literal for ANY($1::uuid[]) binding via text.
-// pgx can also bind []string directly, but this helper keeps driver portable
-// for the SQLite test double where ANY is not supported (fallback path covers it).
+// pgArray passes IDs through for ANY($1::uuid[]) binding.
+//
+// The name is historical: pgx v5 binds a []string natively (encoding it as
+// _text / _uuid), so nothing is built here. The original doc comment also
+// claimed it kept a SQLite test double working via a "fallback path" — that
+// path was a per-ID retry loop that silently swallowed every error, and it is
+// gone. The only remaining caller is handlers_deployment_rollback.go; the
+// identity function is kept rather than inlined so that call site keeps
+// reading as an explicit array bind.
 func pgArray(ids []string) interface{} {
-	// Let pgx handle []string natively — it encodes as _text / _uuid correctly
-	// for pgxpool; return the slice itself.
 	return ids
 }
-
-// Ensure pgx.ErrNoRows import is referenced.
-var _ = pgx.ErrNoRows

@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -11,6 +13,49 @@ import (
 
 	"github.com/gofiber/fiber/v2"
 )
+
+// tenancyAdminGate is the role test every tenancy write handler applies:
+// organization owners and admins, plus a platform admin regardless of their
+// organization role.
+func tenancyAdminGate(role string, claims tokenClaims) bool {
+	return role == "owner" || role == "admin" || claims.Role == "admin"
+}
+
+// requireProjectAdmin resolves a project's owning organization and reports
+// whether the caller may administer it. It returns a ready-to-return
+// *fiber.Error, or nil when the caller is permitted.
+//
+// This replaces the GetProject → ResolvePermissions → role-check preamble that
+// was repeated verbatim in each project and environment write handler.
+func requireProjectAdmin(ctx context.Context, tenancySvc *tenancy.Service, projectID string, claims tokenClaims) error {
+	project, err := tenancySvc.GetProject(ctx, projectID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "project not found")
+	}
+	if !tenancyAdminGate(tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role), claims) {
+		return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+	}
+	return nil
+}
+
+// requireEnvironmentAdmin is requireProjectAdmin for a handler addressed by
+// environment ID.
+//
+// The environment → project → organization walk goes through
+// Store.ResolveEnvContext, which already existed for exactly this purpose. The
+// handlers previously ran `SELECT project_id FROM environments` inline and
+// then made a second call to load the project, so this drops a raw query out
+// of the HTTP layer and a round trip with it.
+func requireEnvironmentAdmin(ctx context.Context, st *store.Store, tenancySvc *tenancy.Service, envID string, claims tokenClaims) error {
+	envCtx, err := st.ResolveEnvContext(ctx, envID)
+	if err != nil {
+		return fiber.NewError(fiber.StatusNotFound, "environment not found")
+	}
+	if !tenancyAdminGate(tenancySvc.ResolvePermissions(ctx, envCtx.Project.OrgID, claims.Sub, claims.Role), claims) {
+		return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+	}
+	return nil
+}
 
 func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenancy.Service, envvarSvc *envvars.Service) {
 	if cfg.Store == nil {
@@ -163,13 +208,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		project, err := tenancySvc.GetProject(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		role := tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role)
-		if role != "owner" && role != "admin" && claims.Role != "admin" {
-			return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+		if err := requireProjectAdmin(ctx, tenancySvc, c.Params("id"), claims); err != nil {
+			return err
 		}
 		updated, err := tenancySvc.UpdateProject(ctx, c.Params("id"), tenancy.CreateProjectInput{
 			Name:        strings.TrimSpace(req.Name),
@@ -192,13 +232,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		project, err := tenancySvc.GetProject(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		role := tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role)
-		if role != "owner" && role != "admin" && claims.Role != "admin" {
-			return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+		if err := requireProjectAdmin(ctx, tenancySvc, c.Params("id"), claims); err != nil {
+			return err
 		}
 		actorID := claims.Sub
 		if err := tenancySvc.DeleteProject(ctx, c.Params("id"), &actorID); err != nil {
@@ -220,7 +255,13 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "project not found")
 		}
-		isMember, _ := tenancySvc.UserIsOrgMember(ctx, project.OrgID, claims.Sub)
+		isMember, err := tenancySvc.UserIsOrgMember(ctx, project.OrgID, claims.Sub)
+		if err != nil && claims.Role != "admin" {
+			// Still denies, as before — but a failed membership lookup used to
+			// be indistinguishable from a definite "not a member", which sends
+			// the operator looking at permissions during a database outage.
+			return respondInternalError(c, err)
+		}
 		if !isMember && claims.Role != "admin" {
 			return fiber.NewError(fiber.StatusForbidden, "not a member of this organization")
 		}
@@ -241,13 +282,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		project, err := tenancySvc.GetProject(ctx, c.Params("id"))
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		role := tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role)
-		if role != "owner" && role != "admin" && claims.Role != "admin" {
-			return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+		if err := requireProjectAdmin(ctx, tenancySvc, c.Params("id"), claims); err != nil {
+			return err
 		}
 
 		var req struct {
@@ -289,18 +325,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		// Resolve project through environment
-		var projectID string
-		if err := cfg.Store.DB().QueryRow(ctx, `SELECT project_id::text FROM environments WHERE id = $1`, c.Params("id")).Scan(&projectID); err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "environment not found")
-		}
-		project, err := tenancySvc.GetProject(ctx, projectID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		role := tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role)
-		if role != "owner" && role != "admin" && claims.Role != "admin" {
-			return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+		if err := requireEnvironmentAdmin(ctx, cfg.Store, tenancySvc, c.Params("id"), claims); err != nil {
+			return err
 		}
 		env, err := tenancySvc.UpdateEnvironment(ctx, c.Params("id"), tenancy.CreateEnvironmentInput{
 			Name:      strings.TrimSpace(req.Name),
@@ -323,17 +349,8 @@ func registerTenancyRoutes(protected fiber.Router, cfg Config, tenancySvc *tenan
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		var projectID string
-		if err := cfg.Store.DB().QueryRow(ctx, `SELECT project_id::text FROM environments WHERE id = $1`, c.Params("id")).Scan(&projectID); err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "environment not found")
-		}
-		project, err := tenancySvc.GetProject(ctx, projectID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		role := tenancySvc.ResolvePermissions(ctx, project.OrgID, claims.Sub, claims.Role)
-		if role != "owner" && role != "admin" && claims.Role != "admin" {
-			return fiber.NewError(fiber.StatusForbidden, "insufficient permissions")
+		if err := requireEnvironmentAdmin(ctx, cfg.Store, tenancySvc, c.Params("id"), claims); err != nil {
+			return err
 		}
 		actorID := claims.Sub
 		if err := tenancySvc.DeleteEnvironment(ctx, c.Params("id"), &actorID); err != nil {
@@ -899,11 +916,13 @@ func projectEnvAccess(cfg Config) fiber.Handler {
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		var orgID string
-		if err := cfg.Store.DB().QueryRow(ctx, `SELECT org_id::text FROM projects WHERE id = $1`, c.Params("id")).Scan(&orgID); err != nil {
+		orgID, err := cfg.Store.GetProjectOrgID(ctx, c.Params("id"))
+		switch {
+		case errors.Is(err, store.ErrProjectNotFound):
 			return fiber.NewError(fiber.StatusNotFound, "project not found")
-		}
-		if orgID == "" {
+		case err != nil:
+			// Fails closed either way, but a database outage should not be
+			// reported to the caller as "this project does not exist".
 			return fiber.NewError(fiber.StatusForbidden, "cannot resolve organization for this project")
 		}
 		member, err := cfg.Store.UserIsOrgMember(ctx, orgID, claims.Sub)
@@ -955,9 +974,11 @@ func envVarAccess(cfg Config, envvarSvc *envvars.Service) fiber.Handler {
 			}
 			orgID = envCtx.Org.ID
 		case v.ProjectID != nil && *v.ProjectID != "":
-			if err := cfg.Store.DB().QueryRow(ctx, `SELECT org_id::text FROM projects WHERE id = $1`, *v.ProjectID).Scan(&orgID); err != nil {
+			resolved, err := cfg.Store.GetProjectOrgID(ctx, *v.ProjectID)
+			if err != nil {
 				return fiber.NewError(fiber.StatusNotFound, "project not found")
 			}
+			orgID = resolved
 		}
 		if orgID == "" {
 			return fiber.NewError(fiber.StatusForbidden, "cannot resolve organization for this env var")

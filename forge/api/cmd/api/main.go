@@ -200,6 +200,27 @@ func run() error {
 		if err := connected.RunMigrations(ctx, env("MIGRATIONS_DIR", "migrations")); err != nil {
 			return err
 		}
+		// Migration filenames are immutable primary keys in schema_migrations,
+		// so an edit to an already-applied migration is never re-run and the
+		// deployed schema can diverge from this build. Drift is reported
+		// rather than fatal: refusing to boot would not repair it. It must
+		// not pass silently either — rows applied before the checksum column
+		// existed are unverifiable, which is not the same as clean.
+		//
+		// This check previously existed only in internal/app/container.go,
+		// which nothing imported, so drift went unreported in production
+		// despite docs/migration-rollback-policy.md documenting it.
+		if integrity := connected.MigrationIntegrity(); len(integrity.Drift) > 0 || integrity.Unverified > 0 {
+			for _, d := range integrity.Drift {
+				slogLogger.Warn("migration file changed after it was applied; deployed schema may diverge from this build",
+					slog.String("migration", d.Version),
+					slog.String("applied_checksum", d.Applied),
+					slog.String("on_disk_checksum", d.OnDisk))
+			}
+			slogLogger.Warn("migration integrity check found unverified or drifted migrations",
+				slog.Int("drifted", len(integrity.Drift)),
+				slog.Int("unverifiable", integrity.Unverified))
+		}
 		if err := eventstore.Migrate(connected.GetDB()); err != nil {
 			return err
 		}

@@ -36,7 +36,12 @@ import (
 // node-facing endpoint; a hand-copied middleware list can only ever drift
 // weaker than the original.
 
-const dockerEventsPriority = 230
+// dockerEventsPriority was 230, colliding with deploymentRollbackRegistrarPrio.
+// Equal priorities left mount order decided by the order the compiler runs
+// init() in (filename order), which put deployment-rollback first by nothing
+// more than the alphabet. 231 preserves that same relative order explicitly.
+// RegisterPhaseRegistrar now rejects duplicate priorities outright.
+const dockerEventsPriority = 231
 
 const (
 	// dockerEventIngestLimit caps one batch. Beacon flushes at 50 events per
@@ -74,7 +79,7 @@ func init() {
 
 func registerDockerEventRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg == nil || cfg.Store == nil || protected == nil {
-		return nil
+		return fmt.Errorf("%w: store or protected router not configured, docker event routes not mounted", ErrPhaseSkipped)
 	}
 	// Handler factories in this package take Config by value, which is how every
 	// route receives it; the registrar contract hands over a pointer.

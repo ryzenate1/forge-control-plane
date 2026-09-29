@@ -76,9 +76,21 @@ export const queryKeys = {
     latest: () => [...queryKeys.monitoring.all, "latest"] as const,
     /** Observability summary — GET /monitoring/summary */
     summary: () => [...queryKeys.monitoring.all, "summary"] as const,
-    /** Per-node history — GET /monitoring/nodes/metrics?nodeId=… */
+    /**
+     * Metric history — GET /monitoring/nodes/metrics?nodeId=…
+     *
+     * The `"fleet"` segment is a *shape* discriminator, not decoration. This key
+     * caches a `PartialFleet<NodeMetrics>` (`{rows, failedNodeIds, skippedNodeIds}`)
+     * because fleet-wide history is a client fan-out that must report which
+     * nodes it could not read. A second reader once cached a bare
+     * `NodeMetrics[]` under the same `(scope, period)` pair; whichever query
+     * resolved first won the cache entry and the other consumer read the wrong
+     * shape — `.rows` of an array is `undefined`, `.map` of an object throws.
+     * Keeping the discriminator here means a differently-shaped reader cannot
+     * silently occupy this entry.
+     */
     history: (scope: string, period: string) =>
-      [...queryKeys.monitoring.all, "history", scope, period] as const,
+      [...queryKeys.monitoring.all, "history", "fleet", scope, period] as const,
   },
   activity: {
     all: ["activity"] as const,

@@ -1,6 +1,8 @@
 package http
 
 import (
+	"fmt"
+
 	"errors"
 	"strings"
 
@@ -35,10 +37,7 @@ func init() {
 
 func registerVaultProviderRoutes(_ fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.VaultService == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(vaultProviderRegistrarName + ": vault service not configured, vault provider routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: vault service not configured, vault provider routes skipped", ErrPhaseSkipped)
 	}
 	svc := cfg.VaultService
 	admin := protected.Group("/admin/vault", requireRole("admin"))

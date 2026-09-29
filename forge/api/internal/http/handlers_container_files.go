@@ -71,10 +71,7 @@ func registerContainerFilesRoutesPhase(v1 fiber.Router, protected fiber.Router, 
 		return fmt.Errorf("%s: nil config", containerFilesRegistrarName)
 	}
 	if cfg.Store == nil || cfg.Daemon == nil {
-		if cfg.Logger != nil {
-			cfg.Logger.Warn(containerFilesRegistrarName + ": postgres and daemon are required, container file routes skipped")
-		}
-		return nil
+		return fmt.Errorf("%w: postgres and daemon are required, container file routes skipped", ErrPhaseSkipped)
 	}
 	mutationLimiter := RateLimiter(GetRateLimitForEndpoint("mutation", cfg.Redis, cfg.RedisEnabled && strings.EqualFold(strings.TrimSpace(cfg.AppEnv), "production")))
 	registerContainerFileRoutes(protected, *cfg, mutationLimiter)

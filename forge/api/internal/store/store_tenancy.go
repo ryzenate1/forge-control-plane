@@ -246,6 +246,41 @@ func (s *Store) GetProject(ctx context.Context, projectID string) (Project, erro
 	return p, nil
 }
 
+// ErrProjectNotFound is returned when a project lookup names a row that does
+// not exist, so callers can tell that apart from a query failure.
+var ErrProjectNotFound = errors.New("project not found")
+
+// GetProjectOrgID returns the organization that owns a project.
+//
+// This is the narrow lookup the authorization middleware needs — it resolves a
+// :projectId route parameter to the org whose membership is then checked — and
+// exists so those guards do not reach for a raw query or load the whole
+// project row to read one column.
+//
+// An empty org_id is impossible in a well-formed row, so it is reported as an
+// error rather than returned: the guards treat an unresolvable organization as
+// a denial, and an empty string that reached a membership check would compare
+// against nothing and deny for the wrong reason.
+func (s *Store) GetProjectOrgID(ctx context.Context, projectID string) (string, error) {
+	if s.db == nil {
+		return "", errors.New("no database connection")
+	}
+	var orgID string
+	err := s.db.QueryRow(ctx, `
+		SELECT COALESCE(org_id::text, '')
+		FROM projects WHERE id = $1
+	`, projectID).Scan(&orgID)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", fmt.Errorf("%w: %s", ErrProjectNotFound, projectID)
+	case err != nil:
+		return "", fmt.Errorf("read org for project %s: %w", projectID, err)
+	case orgID == "":
+		return "", fmt.Errorf("project %s has no owning organization", projectID)
+	}
+	return orgID, nil
+}
+
 func (s *Store) CreateProject(ctx context.Context, orgID string, req CreateProjectRequest, actorID *string) (Project, error) {
 	name := strings.TrimSpace(req.Name)
 	if name == "" {

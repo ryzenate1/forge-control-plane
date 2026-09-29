@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"gamepanel/forge/internal/services/domainsenv"
@@ -28,7 +29,7 @@ func init() {
 
 func registerPhase2EnvironmentEngine(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg == nil || cfg.Store == nil {
-		return nil
+		return fmt.Errorf("%w: store not configured, environment engine routes not mounted", ErrPhaseSkipped)
 	}
 
 	// Injected via Config (handlers -> services -> store); inline construction
