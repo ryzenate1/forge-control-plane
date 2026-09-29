@@ -1536,7 +1536,7 @@ func (s *Server) power(w http.ResponseWriter, r *http.Request) {
 			}
 			switch status.Status {
 			case StatusCompleted:
-				writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": "docker", "operationId": op.ID})
+				writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": body.Signal, "accepted": true, "mode": s.runtimeProvider(), "operationId": op.ID})
 				return
 			case StatusFailed:
 				err := errors.New(status.Error)
@@ -1604,7 +1604,7 @@ func (s *Server) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.manager.Delete(serverID)
-	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": "delete", "accepted": true, "mode": "docker"})
+	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "signal": "delete", "accepted": true, "mode": s.runtimeProvider()})
 }
 
 // state reports the container's lifecycle truth: whether it exists, whether it
@@ -2333,6 +2333,14 @@ func (s *Server) consoleWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	// Spend the one-time ticket now that the upgrade succeeded. A replay of
+	// the same ticket must not open a second console, matching statsWS/logsWS.
+	ticketServerID := r.PathValue("id")
+	if _, redeemErr := s.redeemWebSocketTicket(r); redeemErr != nil {
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = conn.WriteJSON(map[string]any{"serverId": ticketServerID, "type": "error", "data": redeemErr.Error()})
+		return
+	}
 	defer s.trackWebSocket(r, conn)()
 	configureWebSocket(conn)
 	writer := &webSocketWriter{conn: conn}
@@ -4425,12 +4433,19 @@ type VersionInventory struct {
 }
 
 func (s *Server) handleVersionInventory(w http.ResponseWriter, r *http.Request) {
+	// Capabilities are derived from what this node actually wired up, never a
+	// literal. Advertising "docker" on a Podman/containerd/Kubernetes node is
+	// the phantom-provider bug the panel places with.
+	capabilities := s.systemCapabilities()
+	if len(capabilities) == 0 {
+		capabilities = []string{"files", "stats"}
+	}
 	inv := VersionInventory{
 		BeaconVersion: s.version,
 		GoVersion:     stdruntime.Version(),
 		OS:            stdruntime.GOOS,
 		Architecture:  stdruntime.GOARCH,
-		Capabilities:  []string{"docker", "sftp", "backups", "transfers", "stats", "console", "files", "compose", "build", "edge-agent", "upgrade"},
+		Capabilities:  capabilities,
 		UptimeSeconds: int64(time.Since(s.started).Seconds()),
 		EdgeState:     "unknown",
 	}

@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 )
@@ -25,6 +27,9 @@ const (
 	EnrollmentRevoked  EnrollmentState = "revoked"
 	EnrollmentExpired  EnrollmentState = "expired"
 )
+
+// maxEnrollRequestBytes bounds the JSON body an enrollment request may carry.
+const maxEnrollRequestBytes = 64 << 10
 
 // EnrollmentToken represents a single enrollment token's lifecycle state.
 //
@@ -81,6 +86,18 @@ func (m *EnrollmentManager) GenerateToken(nodeID string, ttl time.Duration) (*En
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	nodeID = strings.TrimSpace(nodeID)
+	// An empty node id would key every such token to "" and let any of them
+	// enroll; a non-positive ttl would create a token that is already expired
+	// yet still reported as issued. Reject both instead of issuing a credential
+	// that cannot be honoured.
+	if nodeID == "" {
+		return nil, errors.New("node id is required to issue an enrollment token")
+	}
+	if ttl <= 0 {
+		return nil, fmt.Errorf("enrollment token ttl must be positive, got %v", ttl)
+	}
+
 	if existing, ok := m.nodeIDs[nodeID]; ok {
 		if existing.State == EnrollmentApproved || existing.State == EnrollmentPending {
 			return nil, fmt.Errorf("node %s already has an active enrollment", nodeID)
@@ -105,8 +122,14 @@ func (m *EnrollmentManager) GenerateToken(nodeID string, ttl time.Duration) (*En
 	}
 	m.tokens[tokenHash] = et
 	m.nodeIDs[nodeID] = et
-	if err := m.save(); err != nil {
-		log.Printf("[enrollment] failed to persist: %v", err)
+	// A token that only lives in this process is lost on restart, so the node
+	// would present a credential the reloaded registry has never heard of.
+	// Persistence is part of issuing the token: on failure the in-memory record
+	// is withdrawn and the caller is told the token was not issued.
+	if err := m.saveLocked(); err != nil {
+		delete(m.tokens, tokenHash)
+		delete(m.nodeIDs, nodeID)
+		return nil, fmt.Errorf("persist enrollment token: %w", err)
 	}
 	return et, nil
 }
@@ -148,7 +171,7 @@ func (m *EnrollmentManager) Approve(token, approvedBy string) error {
 	}
 	et.State = EnrollmentApproved
 	et.ApprovedBy = approvedBy
-	return m.save()
+	return m.saveLocked()
 }
 
 func (m *EnrollmentManager) Reject(token, reason string) error {
@@ -164,7 +187,7 @@ func (m *EnrollmentManager) Reject(token, reason string) error {
 	}
 	et.State = EnrollmentRejected
 	et.Reason = reason
-	return m.save()
+	return m.saveLocked()
 }
 
 func (m *EnrollmentManager) Revoke(token, reason string) error {
@@ -177,7 +200,7 @@ func (m *EnrollmentManager) Revoke(token, reason string) error {
 	}
 	et.State = EnrollmentRevoked
 	et.Reason = reason
-	return m.save()
+	return m.saveLocked()
 }
 
 func (m *EnrollmentManager) RevokeByNodeID(nodeID, reason string) error {
@@ -190,7 +213,7 @@ func (m *EnrollmentManager) RevokeByNodeID(nodeID, reason string) error {
 	}
 	et.State = EnrollmentRevoked
 	et.Reason = reason
-	return m.save()
+	return m.saveLocked()
 }
 
 func (m *EnrollmentManager) GetByNodeID(nodeID string) *EnrollmentToken {
@@ -202,6 +225,11 @@ func (m *EnrollmentManager) GetByNodeID(nodeID string) *EnrollmentToken {
 func (m *EnrollmentManager) List() []*EnrollmentToken {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.listLocked()
+}
+
+// listLocked snapshots the registry. The caller must hold m.mu (read or write).
+func (m *EnrollmentManager) listLocked() []*EnrollmentToken {
 	result := make([]*EnrollmentToken, 0, len(m.tokens))
 	for _, et := range m.tokens {
 		result = append(result, et)
@@ -217,21 +245,32 @@ func (m *EnrollmentManager) PruneExpired() int {
 	pruned := 0
 	for token, et := range m.tokens {
 		if now.After(et.ExpiresAt) && et.State != EnrollmentApproved {
-			et.State = EnrollmentExpired
 			pruned++
 			delete(m.tokens, token)
-			delete(m.nodeIDs, et.NodeID)
+			// Only drop the node index when it still points at this very token:
+			// a node may hold a superseded record here while a newer token for
+			// the same node is live, and deleting that entry would silently
+			// un-enroll the node.
+			if m.nodeIDs[et.NodeID] == et {
+				delete(m.nodeIDs, et.NodeID)
+			}
 		}
 	}
 	if pruned > 0 {
-		_ = m.save()
+		if err := m.saveLocked(); err != nil {
+			log.Printf("[enrollment] pruned %d token(s) but could not persist the registry: %v", pruned, err)
+		}
 	}
 	return pruned
 }
 
-func (m *EnrollmentManager) save() error {
+// saveLocked writes the registry to disk. The caller must hold m.mu: sync.Mutex
+// and sync.RWMutex are not reentrant, so taking the lock here (directly or
+// through List) would deadlock the caller's goroutine and every later enrollment
+// request with it.
+func (m *EnrollmentManager) saveLocked() error {
 	if m.storageDir == "" {
-		return nil
+		return errors.New("enrollment storage directory is not configured")
 	}
 	if err := os.MkdirAll(m.storageDir, 0o750); err != nil {
 		return err
@@ -241,14 +280,46 @@ func (m *EnrollmentManager) save() error {
 		Tokens  []*EnrollmentToken `json:"tokens"`
 		Updated time.Time          `json:"updated"`
 	}{
-		Tokens:  m.List(),
+		Tokens:  m.listLocked(),
 		Updated: time.Now().UTC(),
 	}
 	body, err := json.MarshalIndent(data, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, body, 0o600)
+	// The registry is credential state: write it through a temporary file and
+	// rename, so an interrupted write cannot leave a half-written registry that
+	// load() then reads as "no tokens issued".
+	dir := filepath.Dir(path)
+	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	success := false
+	defer func() {
+		_ = temp.Close()
+		if !success {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if err := temp.Chmod(0o600); err != nil {
+		return err
+	}
+	if _, err := temp.Write(body); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, path); err != nil {
+		return err
+	}
+	success = true
+	return nil
 }
 
 func (m *EnrollmentManager) load() {
@@ -291,7 +362,9 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 		NodeID        string `json:"nodeId"`
 		BeaconVersion string `json:"beaconVersion"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+	// Bound the request body before decoding: this endpoint accepts a credential
+	// and an unbounded body would let a caller pin memory here.
+	if err := json.NewDecoder(io.LimitReader(r.Body, maxEnrollRequestBytes)).Decode(&body); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid enroll request")
 		return
 	}
@@ -334,7 +407,10 @@ func (s *Server) handleEnroll(w http.ResponseWriter, r *http.Request) {
 
 	compat := CheckVersionCompatibility(body.BeaconVersion, "")
 	if !compat.Compatible {
-		writeJSON(w, http.StatusOK, map[string]any{
+		// An enrollment that did not happen is a failure, not a 200: a caller
+		// that only reads the status code must not be able to mark this node
+		// enrolled. The reason stays in the body for the operator.
+		writeJSON(w, http.StatusUnprocessableEntity, map[string]any{
 			"enrolled":   false,
 			"compatible": false,
 			"reason":     compat.Message,

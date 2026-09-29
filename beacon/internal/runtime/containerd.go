@@ -22,6 +22,7 @@ import (
 	"github.com/containerd/containerd/v2/pkg/cio"
 	"github.com/containerd/containerd/v2/pkg/namespaces"
 	"github.com/containerd/containerd/v2/pkg/oci"
+	"github.com/containerd/errdefs"
 	"github.com/google/uuid"
 	specs "github.com/opencontainers/runtime-spec/specs-go"
 	"golang.org/x/sys/unix"
@@ -127,10 +128,10 @@ func (r *ContainerdRuntime) Create(ctx context.Context, req CreateRequest) error
 	// reconcile can detect it — but Create itself never disturbs a running
 	// container.
 	if existing, err := r.client.LoadContainer(ctx, name); err == nil {
-		if _, infoErr := existing.Info(ctx); infoErr == nil {
-			return nil
+		if _, infoErr := existing.Info(ctx); infoErr != nil {
+			return fmt.Errorf("read existing container metadata: %w", infoErr)
 		}
-		return fmt.Errorf("read existing container metadata: %w", infoErr)
+		return nil
 	}
 
 	hash, err := createRequestHash(req)
@@ -818,7 +819,7 @@ func (r *ContainerdRuntime) Delete(ctx context.Context, serverID string) error {
 		// Delete is idempotent only when the workload is actually gone.
 		// Any other load failure (auth, transport, corrupt metadata) must
 		// surface as an error, never as a false success.
-		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+		if errdefs.IsNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "not found") {
 			return nil
 		}
 		return fmt.Errorf("load container: %w", err)

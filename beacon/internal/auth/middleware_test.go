@@ -77,6 +77,7 @@ func TestNewAuthMiddleware_ValidToken(t *testing.T) {
 	claims := tokens.Claims{
 		Scope:     tokens.ScopeWebsocket,
 		ServerID:  "srv-1",
+		User:      "user-1",
 		IssuedAt:  time.Now(),
 		ExpiresAt: time.Now().Add(time.Hour),
 	}

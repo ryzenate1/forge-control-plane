@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS cron_jobs (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     name VARCHAR(255) NOT NULL,
+    org_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     description TEXT,
     schedule VARCHAR(100) NOT NULL,
     command TEXT NOT NULL,

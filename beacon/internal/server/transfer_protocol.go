@@ -176,6 +176,15 @@ func validateTransferDestination(raw string) error {
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
 		return errors.New("invalid transfer destination URL")
 	}
+	// The source daemon pushes the archive (carrying the destination credential)
+	// straight to this URL, so a literal link-local / multicast / unspecified
+	// address would let a caller pivot the daemon into cloud metadata endpoints
+	// or other same-host services. Routable and private node addresses remain
+	// allowed for legitimate migrations.
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil &&
+		(ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()) {
+		return errors.New("transfer destination must not point at a link-local, multicast, or unspecified address")
+	}
 	if parsed.Scheme == "https" {
 		return nil
 	}

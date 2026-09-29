@@ -620,8 +620,16 @@ func (s *Service) finalize(ctx context.Context, migrationID string, source, targ
 		return
 	}
 	// Rollback data is discarded and the source is destroyed only after the ownership/allocation commit.
-	if err := s.daemon.FinalizeTransferDestination(ctx, target.NodeURL, migrationID, destinationCredential); err == nil {
-		if err := s.daemon.CleanupTransferSource(ctx, source.NodeURL, migrationID, sourceCredential); err == nil {
+	// Both remote calls carry their own budget: the worker context has no
+	// deadline (it is bounded by the run lease), so without one a hung
+	// Beacon would pin a worker slot here the same way it would anywhere
+	// else in the run.
+	finalizeCtx, finalizeCancel := context.WithTimeout(ctx, migrationRPCTimeout)
+	defer finalizeCancel()
+	if err := s.daemon.FinalizeTransferDestination(finalizeCtx, target.NodeURL, migrationID, destinationCredential); err == nil {
+		cleanupCtx, cleanupCancel := context.WithTimeout(ctx, migrationRPCTimeout)
+		defer cleanupCancel()
+		if err := s.daemon.CleanupTransferSource(cleanupCtx, source.NodeURL, migrationID, sourceCredential); err == nil {
 			_ = s.store.MarkMigrationCleanupComplete(ctx, migrationID)
 		}
 	}

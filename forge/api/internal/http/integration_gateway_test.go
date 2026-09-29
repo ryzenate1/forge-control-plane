@@ -1268,5 +1268,4 @@ func containsSub(s, sub string) bool {
 		}
 	}
 	return false
-}et, so it errors instead of reporting an empty success.
-func TestIntegrationGateway_NoRuleSource_SyncRefuse
+}

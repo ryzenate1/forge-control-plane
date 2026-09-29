@@ -34,7 +34,7 @@ func (s *Service) ExecuteDeployment(ctx context.Context, deploymentID string) er
 		return fmt.Errorf("deployment %s is already being executed by another worker", deploymentID)
 	}
 	defer func() {
-		if err := s.store.ReleaseExecutionLease(ctx, deploymentID); err != nil {
+		if err := s.store.ReleaseExecutionLeaseIfOwner(ctx, deploymentID, executorID); err != nil {
 			slog.Error("release execution lease", "deploymentId", deploymentID, "error", err.Error())
 		}
 	}()
@@ -526,7 +526,7 @@ func (s *Service) resumeFromStep(ctx context.Context, deploymentID string) error
 	if !claimed {
 		return fmt.Errorf("deployment %s is already being executed by another worker", deploymentID)
 	}
-	defer s.store.ReleaseExecutionLease(ctx, deploymentID)
+	defer s.store.ReleaseExecutionLeaseIfOwner(ctx, deploymentID, executorID)
 
 	sd, err := s.store.GetDeployment(ctx, deploymentID)
 	if err != nil {

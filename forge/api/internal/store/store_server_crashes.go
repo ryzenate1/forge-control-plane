@@ -127,11 +127,14 @@ func (s *Store) CountRecentCrashes(ctx context.Context, serverID string, window 
 		return 0, errors.New("no database connection")
 	}
 	var count int
+	// make_interval(secs => $2) carries the window as seconds: Go's
+	// Duration.String ("1m0s") is not a Postgres interval literal and
+	// $2::interval would reject it.
 	err := s.db.QueryRow(ctx, `
 		SELECT COUNT(*)::int
 		FROM server_crash_events
-		WHERE server_id = $1 AND created_at >= NOW() - $2::interval
-	`, serverID, window.String()).Scan(&count)
+		WHERE server_id = $1 AND created_at >= NOW() - make_interval(secs => $2)
+	`, serverID, window.Seconds()).Scan(&count)
 	if err != nil {
 		return 0, err
 	}

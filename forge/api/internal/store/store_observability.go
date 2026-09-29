@@ -81,15 +81,31 @@ func (s *Store) getTimelineEvent(ctx context.Context, predicate string, value st
 
 func (s *Store) ListTimelineEvents(ctx context.Context, query TimelineQuery) ([]TimelineEvent, error) {
 	limit := normalizeTimelineLimit(query.Limit)
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, event_id::text, resource_type, resource_id, event_type, correlation_id, source, created_at, payload
-		FROM timeline_events
-		WHERE ($1 = '' OR resource_type = $1)
-		  AND ($2 = '' OR resource_id = $2)
-		  AND ($3 = '' OR correlation_id = $3)
-		ORDER BY created_at DESC, id DESC
-		LIMIT $4
-	`, strings.TrimSpace(query.ResourceType), strings.TrimSpace(query.ResourceID), strings.TrimSpace(query.CorrelationID), limit)
+	// Built dynamically (not WHERE ($1='' OR ...)): the OR form defeats the
+	// resource/correlation indexes. ORDER BY keeps the existing
+	// created_at DESC, id DESC tiebreak so pagination stays stable.
+	const timelineCols = `id::text, event_id::text, resource_type, resource_id, event_type, correlation_id, source, created_at, payload`
+	conds := []string{}
+	args := []any{}
+	if rt := strings.TrimSpace(query.ResourceType); rt != "" {
+		args = append(args, rt)
+		conds = append(conds, `resource_type = $`+itoa(len(args)))
+	}
+	if rid := strings.TrimSpace(query.ResourceID); rid != "" {
+		args = append(args, rid)
+		conds = append(conds, `resource_id = $`+itoa(len(args)))
+	}
+	if cid := strings.TrimSpace(query.CorrelationID); cid != "" {
+		args = append(args, cid)
+		conds = append(conds, `correlation_id = $`+itoa(len(args)))
+	}
+	args = append(args, limit)
+	q := `SELECT ` + timelineCols + ` FROM timeline_events`
+	if len(conds) > 0 {
+		q += ` WHERE ` + strings.Join(conds, ` AND `)
+	}
+	q += ` ORDER BY created_at DESC, id DESC LIMIT $` + itoa(len(args))
+	rows, err := s.db.Query(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}

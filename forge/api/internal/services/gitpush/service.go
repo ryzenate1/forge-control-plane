@@ -78,13 +78,14 @@ const repoPathTemplate = "/srv/git-push/%s.git"
 
 const zeroSHA = "0000000000000000000000000000000000000000"
 
-// maxNameLen, maxEnvValueLen and maxBodyBytes bound the caller-controlled
-// inputs: a display name, a config value and the post-receive body arriving on
-// the public receive endpoint.
+// maxNameLen, maxEnvValueLen and MaxReceiveBodyBytes bound the
+// caller-controlled inputs: a display name, a config value and the post-receive
+// body arriving on the public receive endpoint. MaxReceiveBodyBytes is exported
+// so the handler can reject an oversized push before Fiber has buffered it.
 const (
 	maxNameLen      = 64
 	maxEnvValueLen  = 8192
-	maxBodyBytes    = 1 << 20
+	MaxBodyBytes    = 1 << 20
 	maxSignatureLen = 256
 	// maxRefUpdates bounds one push's ref updates: a single push moves a handful
 	// of refs, and every line becomes a row.
@@ -100,6 +101,10 @@ var (
 	ErrInvalidEnvKey  = errors.New("environment variable name is invalid")
 	ErrSignature      = errors.New("invalid or missing git-push signature")
 	ErrNotProvisioned = errors.New("git-push repository is not provisioned on the node yet")
+	// ErrAppArchived is returned when a still-installed hook pushes to an
+	// archived app: archiving is a teardown that has not finished, and deploying
+	// onto it would report work nobody asked for.
+	ErrAppArchived = errors.New("git-push app is archived")
 
 	slugDisallowed = regexp.MustCompile(`[^a-z0-9]+`)
 	slugPattern    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
@@ -708,7 +713,7 @@ func (s *Service) HandleReceive(ctx context.Context, slug string, signature stri
 		return nil, ErrAppNotFound
 	}
 	// Bound the payload before it is copied into strings, maps and event rows.
-	if len(body) > maxBodyBytes || len(signature) > maxSignatureLen || signature == "" {
+	if len(body) > MaxBodyBytes || len(signature) > maxSignatureLen || signature == "" {
 		return nil, ErrSignature
 	}
 	row, err := s.db.GetGitPushAppBySlug(ctx, slug)
@@ -717,6 +722,11 @@ func (s *Service) HandleReceive(ctx context.Context, slug string, signature stri
 			return nil, ErrAppNotFound
 		}
 		return nil, err
+	}
+	// Archiving keeps the row (and therefore the hook's secret) alive, so a push
+	// that arrives afterwards has to be refused rather than deployed.
+	if row.Status == StatusArchived {
+		return nil, ErrAppArchived
 	}
 	// An unset secret would make verifySignature accept an all-zero key; the
 	// hook can never be signed with nothing, so refuse it outright.
@@ -948,6 +958,16 @@ func isHexSHA(s string) bool {
 		}
 	}
 	return true
+}
+
+// isZeroOID reports the "this ref was deleted" marker. Git writes one for every
+// object format, so a SHA-256 repository's 64-zero deletion must not be read as
+// a commit to deploy.
+func isZeroOID(s string) bool {
+	if len(s) != 40 && len(s) != 64 {
+		return false
+	}
+	return strings.Trim(s, "0") == ""
 }
 
 func normalizeBuilder(builder string) (string, error) {

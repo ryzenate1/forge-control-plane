@@ -3,6 +3,8 @@
 package server
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"strings"
 	"time"
@@ -31,6 +33,49 @@ func totalSystemMemoryMB() uint64 {
 		return 0
 	}
 	return value / (1024 * 1024)
+}
+
+// readMemorySample returns the host memory reading for one request. Total
+// comes from hw.memsize; available is the reclaimable-aware figure derived
+// from the free/inactive/speculative page queues. Any unreadable component is
+// an error, never a zero: a zero total would tell the scheduler this host has
+// no memory to place against.
+func readMemorySample() (memorySample, error) {
+	totalBytes, err := unix.SysctlUint64("hw.memsize")
+	if err != nil {
+		return memorySample{}, fmt.Errorf("read hw.memsize: %w", err)
+	}
+	totalMB := totalBytes / (1024 * 1024)
+	if totalMB == 0 {
+		return memorySample{}, fmt.Errorf("hw.memsize reported zero")
+	}
+	pageSize, err := unix.SysctlUint64("hw.pagesize")
+	if err != nil || pageSize == 0 {
+		return memorySample{}, fmt.Errorf("read hw.pagesize: %w", err)
+	}
+	// vm.page_free_count, vm.page_inactive_count and vm.page_speculative_count
+	// are the Darwin equivalents of Linux MemAvailable's reclaimable queues.
+	// A missing queue is not fatal on its own, but free pages are required:
+	// without them there is no honest available figure to report.
+	freePages, err := unix.SysctlUint64("vm.page_free_count")
+	if err != nil {
+		return memorySample{}, fmt.Errorf("read vm.page_free_count: %w", err)
+	}
+	availablePages := freePages
+	if inactive, err := unix.SysctlUint64("vm.page_inactive_count"); err == nil {
+		availablePages += inactive
+	}
+	if speculative, err := unix.SysctlUint64("vm.page_speculative_count"); err == nil {
+		availablePages += speculative
+	}
+	availableMB := availablePages * pageSize / (1024 * 1024)
+	if availableMB > totalMB {
+		availableMB = totalMB
+	}
+	return memorySample{
+		TotalMB:     totalMB,
+		AvailableMB: availableMB,
+	}, nil
 }
 
 func totalDiskMB(path string) uint64 {
@@ -114,7 +159,7 @@ func availableDiskBytesPlatform(path string) (int64, error) {
 	return int64(free), nil
 }
 
-func hostDiskPartitionsPlatform() []DiskPartition {
+func hostDiskPartitionsPlatform(paths []string) ([]DiskPartition, error) {
 	partitions := []DiskPartition{}
 	rootStat := unix.Statfs_t{}
 	if err := unix.Statfs("/", &rootStat); err == nil {
@@ -135,7 +180,46 @@ func hostDiskPartitionsPlatform() []DiskPartition {
 			UsedPct:    usedPct,
 		})
 	}
-	return partitions
+	// Probe the caller's data-root path as well so placement sees the disk a
+	// server really lands on when it is a separate mount. A path on the same
+	// filesystem as / adds no second row.
+	for _, path := range paths {
+		cleaned := strings.TrimSpace(path)
+		if cleaned == "" || cleaned == "/" {
+			continue
+		}
+		var stat unix.Statfs_t
+		if err := unix.Statfs(cleaned, &stat); err != nil {
+			continue
+		}
+		same := stat.Fsid == rootStat.Fsid
+		if same {
+			continue
+		}
+		total := uint64(stat.Blocks) * uint64(stat.Bsize) / (1024 * 1024)
+		free := uint64(stat.Bavail) * uint64(stat.Bsize) / (1024 * 1024)
+		var used uint64
+		if total > free {
+			used = total - free
+		}
+		var usedPct float64
+		if total > 0 {
+			usedPct = float64(used) / float64(total) * 100
+		}
+		partitions = append(partitions, DiskPartition{
+			MountPoint: cleaned,
+			Device:     cleaned,
+			FSType:     "apfs",
+			TotalMB:    total,
+			UsedMB:     used,
+			FreeMB:     free,
+			UsedPct:    usedPct,
+		})
+	}
+	if len(partitions) == 0 {
+		return nil, errors.New("no mounted filesystem could be read")
+	}
+	return partitions, nil
 }
 
 func kernelVersionPlatform() string {

@@ -423,12 +423,30 @@ func (s *Server) handleConn(raw net.Conn, config *ssh.ServerConfig) {
 
 	// Validate username format before making remote requests (security best practice)
 	username := conn.User()
-	if !validUsernameRegexp.MatchString(username) {
+	parts := validUsernameRegexp.FindStringSubmatch(username)
+	if parts == nil {
 		log.Printf("SFTP: rejected invalid username format: %s from %s", username, raw.RemoteAddr())
 		return
 	}
+	wantUser, wantServer := parts[1], parts[2]
 
 	userID, serverID := conn.Permissions.Extensions["user"], conn.Permissions.Extensions["server"]
+	// Bind the SSH principal to the panel auth result. The username is
+	// caller-controlled ("user.serverID") while the extensions are
+	// panel-asserted; accepting them uncompared would let a credential for
+	// server A open server B by renaming the login string.
+	if userID == "" || serverID == "" {
+		log.Printf("SFTP: rejected connection with empty auth principal from %s", raw.RemoteAddr())
+		return
+	}
+	if !strings.EqualFold(userID, wantUser) || !strings.EqualFold(serverID, wantServer) {
+		log.Printf("SFTP: rejected principal mismatch: login %q does not match auth %q.%q from %s", username, userID, serverID, raw.RemoteAddr())
+		return
+	}
+	if err := serverid.Validate(serverID); err != nil {
+		log.Printf("SFTP: rejected invalid server id %q from %s: %v", serverID, raw.RemoteAddr(), err)
+		return
+	}
 	if !s.acquireUser(userID) {
 		return
 	}
@@ -462,19 +480,23 @@ func (s *Server) handleChannel(conn *ssh.ServerConn, accepted ssh.Channel, reque
 		userID, serverID := conn.Permissions.Extensions["user"], conn.Permissions.Extensions["server"]
 		fresh, err := s.recheck(userID, serverID, remoteIP(conn.RemoteAddr()))
 		if err != nil {
+			log.Printf("SFTP: session recheck failed for %q/%q from %s: %v", userID, serverID, remoteIP(conn.RemoteAddr()), err)
 			return
 		}
 		base, err := rootfs.New(s.DataDir)
 		if err != nil {
+			log.Printf("SFTP: open data dir for %q from %s: %v", serverID, remoteIP(conn.RemoteAddr()), err)
 			return
 		}
 		if err := base.MkdirAll(serverID, 0o750); err != nil {
+			log.Printf("SFTP: create server dir %q from %s: %v", serverID, remoteIP(conn.RemoteAddr()), err)
 			base.Close()
 			return
 		}
 		_ = base.Close()
 		fsys, err := rootfs.New(filepath.Join(s.DataDir, serverID))
 		if err != nil {
+			log.Printf("SFTP: open server fs %q from %s: %v", serverID, remoteIP(conn.RemoteAddr()), err)
 			return
 		}
 		defer fsys.Close()
@@ -486,7 +508,11 @@ func (s *Server) handleChannel(conn *ssh.ServerConn, accepted ssh.Channel, reque
 		writeLock, _ := lockValue.(*sync.Mutex)
 		h := &handler{root: filepath.Join(s.DataDir, serverID), fsys: fsys, permissions: fresh.Permissions, readOnly: s.ReadOnly || fresh.ReadOnly, quotaBytes: server.MbToBytes(diskMB), writeLock: writeLock, activity: s.Activity, serverID: serverID, userID: userID, ip: remoteIP(conn.RemoteAddr()), client: sanitizeClient(conn.ClientVersion()), sessionID: sessionID(conn)}
 		requestServer := sftp.NewRequestServer(accepted, h.handlers())
-		_ = requestServer.Serve()
+		// A failed Serve is a real transfer failure, not a clean EOF: report
+		// it instead of closing silently as if the session ended well.
+		if err := requestServer.Serve(); err != nil && !errors.Is(err, io.EOF) {
+			log.Printf("SFTP: session for %q/%q from %s ended: %v", userID, serverID, remoteIP(conn.RemoteAddr()), err)
+		}
 		_ = requestServer.Close()
 		return
 	}
@@ -795,6 +821,14 @@ func (h *handler) Filecmd(request *sftp.Request) error {
 	case "Rename":
 		if !h.can("file.update") {
 			return sftp.ErrSSHFxPermissionDenied
+		}
+		// Renames mutate quota-relevant state (and create parent dirs), so
+		// they serialize on the same per-server write lock as Remove and
+		// Filewrite. Without this two concurrent renames/writes can
+		// interleave quota accounting against the same directory.
+		if h.writeLock != nil {
+			h.writeLock.Lock()
+			defer h.writeLock.Unlock()
 		}
 		to, cleanErr := rootfs.Clean(request.Target)
 		if cleanErr != nil || to == "" {

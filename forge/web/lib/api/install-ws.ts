@@ -7,21 +7,26 @@
 // When INSTALLER_WORKFLOW_ENABLED=0, Forge still surfaces workflow rows (DB→UI) but defers execution;
 // the WS manager below documents the flow and remains usable once the flag is enabled.
 
-import { connectServerWebSocket, serverWebSocketURL } from "@/lib/api";
+import { buildWebSocketUrl, postJSON } from "./http";
 import { WebSocketManager } from "@/lib/api/ws";
 
 export function installWebSocketURL(serverId: string): string {
   // Normalized panel route — Forge also aliases /servers/:id/install/ws for beacon compat
-  return serverWebSocketURL(serverId, "install" as never);
+  return buildWebSocketUrl(`/servers/${encodeURIComponent(serverId)}/ws/install`);
 }
 
 export async function connectInstallWebSocket(serverId: string): Promise<WebSocket> {
-  // Reuses the generic ticket flow: POST /servers/:id/ws/ticket?stream=install
+  // Same ticket flow as every other server stream: POST /servers/:id/ws/ticket?stream=install
   // Issues a short-lived (60s) single-use ticket bound to the requesting admin user.
   // The subsequent WS upgrade at GET /servers/:id/ws/install (or /install/ws) validates
   // the ticket against wsTicketStore (handlers_ws_ticket.go) and then mints an
   // admin-scoped beacon token via MintAdminToken before dialing Beacon's installWS.
-  return connectServerWebSocket(serverId, "install" as never);
+  // Built on the canonical primitive (./http) rather than the `@/lib/api` barrel
+  // so this domain module never cycles back through the barrel that aggregates it.
+  const ticket = await postJSON<{ token: string }>(
+    `/servers/${encodeURIComponent(serverId)}/ws/ticket?stream=install`,
+  );
+  return new WebSocket(`${installWebSocketURL(serverId)}?token=${encodeURIComponent(ticket.token)}`);
 }
 
 export function createInstallWSManager(serverId: string, handlers: { onLog?: (line: string) => void; onStatus?: (status: string) => void; onComplete?: (success: boolean, exitCode?: number) => void; onError?: (err: string) => void }) {
@@ -42,4 +47,10 @@ export function createInstallWSManager(serverId: string, handlers: { onLog?: (li
   });
 }
 
-export { fetchWSTicket as fetchInstallWSTicket } from "@/lib/api";
+export async function fetchInstallWSTicket(
+  serverId: string,
+): Promise<{ token: string }> {
+  return postJSON<{ token: string }>(
+    `/servers/${encodeURIComponent(serverId)}/ws/ticket?stream=install`,
+  );
+}

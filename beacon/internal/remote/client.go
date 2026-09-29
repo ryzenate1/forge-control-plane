@@ -21,6 +21,48 @@ import (
 
 const maxErrorBodyBytes = 16 * 1024
 
+// ResponseError is a non-2xx answer from the panel. The status is carried as
+// data, not only baked into the message, so a caller can tell "retry later"
+// (503, 429) from "this node credential is dead" (401/403/404) — and so the
+// panel's own words reach the operator instead of a bare "bad request".
+type ResponseError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Status     string
+	Detail     string
+}
+
+func (e *ResponseError) Error() string {
+	if e.Detail == "" {
+		return fmt.Sprintf("remote API %s %s returned %s", e.Method, e.Path, e.Status)
+	}
+	return fmt.Sprintf("remote API %s %s returned %s: %s", e.Method, e.Path, e.Status, e.Detail)
+}
+
+// Permanent reports whether repeating the request could ever succeed. A rejected
+// or unknown identity is not a transient fault: a deleted node, a rotated
+// credential or a removed endpoint stays rejected, so retrying it only hammers
+// the control plane and buries the actual reason in log noise.
+func (e *ResponseError) Permanent() bool {
+	switch e.StatusCode {
+	case http.StatusUnauthorized, http.StatusForbidden, http.StatusNotFound,
+		http.StatusMethodNotAllowed, http.StatusGone, http.StatusLengthRequired:
+		return true
+	default:
+		return false
+	}
+}
+
+// responseError extracts the panel response classification from an error.
+func responseError(err error) (*ResponseError, bool) {
+	var target *ResponseError
+	if errors.As(err, &target) {
+		return target, true
+	}
+	return nil, false
+}
+
 // Client interface for panel communication
 type Client interface {
 	GetServerConfiguration(ctx context.Context, uuid string) (ServerConfigurationResponse, error)
@@ -118,7 +160,7 @@ func (c *client) GetServerConfiguration(ctx context.Context, uuid string) (Serve
 	if err != nil {
 		return cfg, err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 	if err := json.NewDecoder(resp.Body).Decode(&cfg); err != nil {
 		return cfg, fmt.Errorf("decode server configuration: %w", err)
 	}
@@ -134,7 +176,7 @@ func (c *client) GetServers(ctx context.Context, perPage int) ([]RawServerData, 
 	if err != nil {
 		return nil, err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return nil, fmt.Errorf("decode servers response: %w", err)
 	}
@@ -148,7 +190,33 @@ func (c *client) ResetServersState(ctx context.Context) error {
 
 // SendActivityLogs sends activity to panel.
 func (c *client) SendActivityLogs(ctx context.Context, activity []Activity) error {
-	return c.postAndClose(ctx, c.remoteBaseURL, "/activity", map[string]interface{}{"data": activity})
+	// The panel decodes each entry's "metadata" as a JSON *string* and stores it
+	// verbatim as an audit payload (POST /api/remote/activity → AppendAudit).
+	// Beacon keeps a typed map so producers never hand-build JSON, but an object
+	// on the wire is a type error for the panel: it rejects the whole batch with
+	// 400 and every activity entry in it is lost. Serialise the map to the string
+	// the contract asks for.
+	entries := make([]map[string]any, 0, len(activity))
+	for _, entry := range activity {
+		metadata := ""
+		if entry.Metadata != nil {
+			raw, err := json.Marshal(entry.Metadata)
+			if err != nil {
+				return fmt.Errorf("encode activity metadata for %s: %w", entry.Event, err)
+			}
+			metadata = string(raw)
+		}
+		entries = append(entries, map[string]any{
+			"id":        entry.ID,
+			"action":    entry.Event,
+			"user":      entry.User,
+			"server":    entry.Server,
+			"ip":        entry.IP,
+			"timestamp": entry.Timestamp,
+			"metadata":  metadata,
+		})
+	}
+	return c.postAndClose(ctx, c.remoteBaseURL, "/activity", map[string]interface{}{"data": entries})
 }
 
 func (c *client) get(ctx context.Context, path string) (*http.Response, error) {
@@ -168,7 +236,10 @@ func (c *client) postAndClose(ctx context.Context, baseURL, path string, body in
 	if err != nil {
 		return err
 	}
-	return resp.Body.Close()
+	// Drain before closing so the connection returns to the pool; the panel's
+	// answer to a report is not used, but its body still has to be consumed.
+	drainAndClose(resp)
+	return nil
 }
 
 func (c *client) request(ctx context.Context, method, baseURL, path string, body interface{}) (*http.Response, error) {
@@ -184,8 +255,18 @@ func (c *client) request(ctx context.Context, method, baseURL, path string, body
 		payload = buf.Bytes()
 	}
 	endpoint := strings.TrimRight(baseURL, "/") + "/" + strings.TrimLeft(path, "/")
+	// Only repeat requests the panel can safely see twice. Everything Beacon
+	// sends here apart from reads is a POST that creates or mutates state
+	// (a reservation, a backup, an install-complete callback, a crash event),
+	// and a 5xx or a dropped connection says nothing about whether the panel
+	// already applied it. Retrying those duplicates reservations and backups and
+	// can report an outcome the node never produced, so a non-idempotent request
+	// is attempted exactly once and its error is surfaced to the caller, which
+	// re-drives it from its own state instead of from a blind loop.
+	retryable := isIdempotentMethod(method)
+	const lastAttempt = 2
 	var lastErr error
-	for attempt := 0; attempt < 3; attempt++ {
+	for attempt := 0; attempt <= lastAttempt; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(payload))
 		if err != nil {
 			return nil, fmt.Errorf("create remote API request: %w", err)
@@ -193,21 +274,25 @@ func (c *client) request(ctx context.Context, method, baseURL, path string, body
 		if err := c.setHeaders(req, payload); err != nil {
 			return nil, err
 		}
-		resp, err := c.httpClient.Do(req)
-		if err == nil && resp.StatusCode != http.StatusTooManyRequests && resp.StatusCode < 500 {
+		resp, doErr := c.httpClient.Do(req)
+		if doErr == nil && (resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500) {
+			// A retryable status on a request that must not be repeated is still
+			// a failure, reported with the panel's own explanation attached.
+			if !retryable || attempt == lastAttempt {
+				return c.handleResponse(req, resp)
+			}
+		} else if doErr == nil {
 			return c.handleResponse(req, resp)
-		}
-		if err == nil && attempt == 2 {
-			return c.handleResponse(req, resp)
+		} else if !retryable || attempt == lastAttempt {
+			return nil, fmt.Errorf("remote API %s %s: %w", method, req.URL.Path, doErr)
 		}
 		if resp != nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
-			_ = resp.Body.Close()
+			drainAndClose(resp)
 			lastErr = fmt.Errorf("remote API %s %s returned %s", method, req.URL.Path, resp.Status)
 		} else {
-			lastErr = err
+			lastErr = doErr
 		}
-		if attempt < 2 {
+		if attempt < lastAttempt {
 			timer := time.NewTimer(time.Duration(1<<attempt) * 250 * time.Millisecond)
 			select {
 			case <-timer.C:
@@ -218,6 +303,28 @@ func (c *client) request(ctx context.Context, method, baseURL, path string, body
 		}
 	}
 	return nil, fmt.Errorf("remote API request failed after retries: %w", lastErr)
+}
+
+// isIdempotentMethod reports whether repeating the request is safe. GET reads
+// state; every verb Beacon uses against the panel that changes state is a POST.
+func isIdempotentMethod(method string) bool {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodOptions:
+		return true
+	default:
+		return false
+	}
+}
+
+// drainAndClose releases the connection for reuse. Closing an unread body makes
+// net/http drop the connection instead of returning it to the pool, so every
+// retried 5xx would otherwise cost a fresh TCP+TLS handshake.
+func drainAndClose(resp *http.Response) {
+	if resp == nil || resp.Body == nil {
+		return
+	}
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
+	_ = resp.Body.Close()
 }
 
 func (c *client) do(req *http.Request) (*http.Response, error) {
@@ -234,14 +341,26 @@ func (c *client) handleResponse(req *http.Request, resp *http.Response) (*http.R
 	}
 	defer resp.Body.Close()
 	body, readErr := io.ReadAll(io.LimitReader(resp.Body, maxErrorBodyBytes))
-	if readErr != nil {
-		return nil, fmt.Errorf("remote API %s %s returned %s (read error body: %v)", req.Method, req.URL.Path, resp.Status, readErr)
-	}
 	detail := strings.TrimSpace(string(body))
-	if detail == "" {
-		return nil, fmt.Errorf("remote API %s %s returned %s", req.Method, req.URL.Path, resp.Status)
+	err := &ResponseError{Method: req.Method, Path: req.URL.Path, StatusCode: resp.StatusCode, Status: resp.Status}
+	if readErr != nil {
+		err.Detail = fmt.Sprintf("read error body: %v", readErr)
+		return nil, err
 	}
-	return nil, fmt.Errorf("remote API %s %s returned %s: %s", req.Method, req.URL.Path, resp.Status, detail)
+	if detail == "" {
+		return nil, err
+	}
+	err.Detail = detail
+	return nil, err
+}
+
+// CloseIdle releases pooled connections. The reconnect loop calls it when it
+// retires a client so a replaced connection pool does not linger with its
+// read-loop goroutines until the idle timeout happens to expire.
+func (c *client) CloseIdle() {
+	if transport, ok := c.httpClient.Transport.(*http.Transport); ok {
+		transport.CloseIdleConnections()
+	}
 }
 
 func (c *client) setHeaders(req *http.Request, body []byte) error {
@@ -274,7 +393,8 @@ func (c *client) SendNodeHeartbeat(ctx context.Context, nodeID string, heartbeat
 	if err != nil {
 		return err
 	}
-	return resp.Body.Close()
+	drainAndClose(resp)
+	return nil
 }
 
 // CreatePlacementReservation creates a resource reservation.
@@ -284,7 +404,7 @@ func (c *client) CreatePlacementReservation(ctx context.Context, req PlacementRe
 	if err != nil {
 		return reservation, err
 	}
-	defer resp.Body.Close()
+	defer drainAndClose(resp)
 	if err := json.NewDecoder(resp.Body).Decode(&reservation); err != nil {
 		return reservation, fmt.Errorf("decode placement reservation: %w", err)
 	}
@@ -331,8 +451,30 @@ func (c *client) SendCrashEvent(ctx context.Context, serverID string, exitCode i
 }
 
 // SendBackupStatus notifies the panel that a backup completed.
+//
+// The report is re-keyed onto the panel's contract ({name, uuid, status,
+// checksum, size}); marshalling BackupStatusRequest as-is would post fields the
+// handler does not read, leaving status empty so the finished backup is never
+// filed. See the type's doc comment in types.go.
 func (c *client) SendBackupStatus(ctx context.Context, serverID string, req BackupStatusRequest) error {
-	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/backups/status", req)
+	if strings.TrimSpace(req.BackupUUID) == "" && strings.TrimSpace(req.Name) == "" {
+		// Nothing identifies the backup to the panel: posting would be answered
+		// with a 2xx that filed nothing. Fail instead of reporting a status the
+		// control plane never received.
+		return fmt.Errorf("backup status report for server %s carries neither a backup uuid nor a name; the panel cannot file it", serverID)
+	}
+	status := "failed"
+	if req.Successful {
+		status = "completed"
+	}
+	payload := map[string]any{
+		"uuid":     req.BackupUUID,
+		"name":     req.Name,
+		"status":   status,
+		"checksum": req.Checksum,
+		"size":     req.Size,
+	}
+	return c.postAndClose(ctx, c.remoteBaseURL, "/servers/"+url.PathEscape(serverID)+"/backups/status", payload)
 }
 
 // SendRestoreStatus notifies the panel that a restore completed.

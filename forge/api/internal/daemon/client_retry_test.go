@@ -12,11 +12,13 @@ import (
 )
 
 // NOTE: The retry round tripper gates retries on request idempotency.
-// GET and HEAD are always safe to replay. A mutating request is replayed
-// only when it carries an idempotency key the daemon can dedupe on
-// (Idempotency-Key, X-Idempotency-Key, or X-Forge-Command-ID): replaying a
-// keyless POST/PUT/DELETE after a transport blip would execute the command
-// twice. The HMAC signature is re-generated per attempt via the resign
+// GET and HEAD are always safe to replay. A mutating request is replayed only
+// when it carries a command id on the single route Beacon dedupes on —
+// POST /servers/{id}/power, whose handler reads X-Forge-Command-ID (falling
+// back to Idempotency-Key) and enqueues by it. Every other mutating route
+// ignores those headers, so a replay there would execute the command twice:
+// create, transfer push and file writes are never replayed even when they
+// carry a key. The HMAC signature is re-generated per attempt via the resign
 // callback. Likewise, validateNodeURL keys plain-HTTP acceptance off the
 // client's loopback flag (set at construction) rather than inspecting each
 // request target, and command IDs ride on the context
@@ -92,7 +94,10 @@ func TestRetryRoundTripper_DoesNotRetryKeylessMutations(t *testing.T) {
 }
 
 func TestRetryRoundTripper_RetriesMutationsWithIdempotencyKey(t *testing.T) {
-	for _, header := range []string{"Idempotency-Key", "X-Idempotency-Key", "X-Forge-Command-ID"} {
+	// Only the two header names Beacon's power handler actually reads license a
+	// replay; X-Idempotency-Key is ignored by the daemon, so honouring it would
+	// replay a command nothing deduped.
+	for _, header := range []string{"Idempotency-Key", "X-Forge-Command-ID"} {
 		t.Run(header, func(t *testing.T) {
 			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
 			rt := newTestRetryClient(base)
@@ -105,6 +110,41 @@ func TestRetryRoundTripper_RetriesMutationsWithIdempotencyKey(t *testing.T) {
 			resp.Body.Close()
 			if base.requests != 2 {
 				t.Fatalf("requests = %d, want 2 (initial + 1 retry)", base.requests)
+			}
+		})
+	}
+	t.Run("X-Idempotency-Key is not a replay licence", func(t *testing.T) {
+		base := &countingTransport{failures: 1, statusCode: http.StatusOK}
+		rt := newTestRetryClient(base)
+		req := fastRequest(t, http.MethodPost, "/servers/srv-1/power")
+		req.Header.Set("X-Idempotency-Key", "test-key-1")
+		_, err := rt.RoundTrip(req)
+		if err == nil {
+			t.Fatal("expected the transport error to surface without replay")
+		}
+		if base.requests != 1 {
+			t.Fatalf("requests = %d, want 1 (header the daemon does not read)", base.requests)
+		}
+	})
+}
+
+func TestRetryRoundTripper_DoesNotReplayKeyedMutationsOnUndedupedRoutes(t *testing.T) {
+	// Beacon dedupes command ids only on POST /servers/{id}/power. A create, a
+	// compose deploy or a file write that carries a key is still not replayed:
+	// the key is bookkeeping, not a dedupe guarantee, and a lost response to
+	// these routes may mean the command already landed.
+	for _, target := range []string{"/servers", "/compose/stack-1/deploy", "/api/v1/transfers/m-1/source/push", "/v1/files/write"} {
+		t.Run(target, func(t *testing.T) {
+			base := &countingTransport{failures: 1, statusCode: http.StatusOK}
+			rt := newTestRetryClient(base)
+			req := fastRequest(t, http.MethodPost, target)
+			req.Header.Set("Idempotency-Key", "cmd-1")
+			req.Header.Set("X-Forge-Command-ID", "cmd-1")
+			if _, err := rt.RoundTrip(req); err == nil {
+				t.Fatal("expected the transport error to surface without replay")
+			}
+			if base.requests != 1 {
+				t.Fatalf("requests = %d, want 1 (route the daemon does not dedupe)", base.requests)
 			}
 		})
 	}
@@ -176,14 +216,13 @@ func TestRetryRoundTripper_RetriesRetryableStatus(t *testing.T) {
 			t.Fatalf("requests = %d, want %d", base.requests, maxRetries+1)
 		}
 	})
-	t.Run("POST also retried on 503 when it carries an idempotency key", func(t *testing.T) {
+	t.Run("power POST retried on 503 then gives up after budget", func(t *testing.T) {
 		base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
 		rt := newTestRetryClient(base)
-		req := fastRequest(t, http.MethodPost, "/command")
+		req := fastRequest(t, http.MethodPost, "/servers/srv-1/power")
 		req.Header.Set("X-Forge-Command-ID", "power:srv-1:stop")
-		resp, err := rt.RoundTrip(req)
+		_, err := rt.RoundTrip(req)
 		if err == nil {
-			resp.Body.Close()
 			t.Fatal("expected exhaustion error after retry budget")
 		}
 		if base.requests != maxRetries+1 {
@@ -202,6 +241,29 @@ func TestRetryRoundTripper_RetriesRetryableStatus(t *testing.T) {
 			t.Fatalf("requests = %d, want 1", base.requests)
 		}
 	})
+}
+
+func TestRetryRoundTripper_ExhaustionKeepsTypedDaemonError(t *testing.T) {
+	// The standing complaint about this client was that an operator sees only a
+	// generic failure when the node gave a real reason. Retry exhaustion must
+	// keep the status and the daemon's body, or callers that map
+	// *daemon.ResponseError to an HTTP code lose the verdict entirely.
+	base := &countingTransport{failures: 0, statusCode: http.StatusServiceUnavailable}
+	rt := newTestRetryClient(base)
+	_, err := rt.RoundTrip(fastRequest(t, http.MethodGet, "/stats"))
+	if err == nil {
+		t.Fatal("expected exhaustion error")
+	}
+	var re *ResponseError
+	if !errors.As(err, &re) {
+		t.Fatalf("exhaustion error = %T (%v), want *ResponseError", err, err)
+	}
+	if re.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want %d", re.StatusCode, http.StatusServiceUnavailable)
+	}
+	if !strings.Contains(re.Operation, "/stats") {
+		t.Fatalf("operation = %q, want the request it belongs to", re.Operation)
+	}
 }
 
 func TestValidateNodeURL_HTTPAllowedOnlyWhenClientIsLoopback(t *testing.T) {

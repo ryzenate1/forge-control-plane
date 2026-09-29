@@ -188,18 +188,24 @@ func (s *Store) DeleteNest(ctx context.Context, id string, actorID *string) erro
 // ---------- Egg CRUD ----------
 
 func (s *Store) ListEggs(ctx context.Context, nestID string) ([]Egg, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT e.id::text, e.nest_id::text, n.name, e.name, COALESCE(e.description, ''),
-		       e.docker_images, e.startup, e.config, e.default_memory_mb,
-		       e.install_script, e.install_container, e.install_entrypoint, e.file_denylist,
-		       e.config_from::text, e.copy_script_from::text,
-		       COALESCE(e.update_url, ''), COALESCE(e.author, ''),
-		       e.features, e.startup_commands, e.created_at
-		FROM eggs e
-		JOIN nests n ON n.id = e.nest_id
-		WHERE ($1 = '' OR e.nest_id = $1::uuid)
-		ORDER BY n.name, e.name
-	`, nestID)
+	// Branched queries (not WHERE ($1='' OR e.nest_id=$1::uuid)): the OR
+	// form defeats the nest_id index when listing all eggs, and worse,
+	// ''::uuid is a runtime cast error on PostgreSQL — the list-all path
+	// (store_templates.go calls ListEggs(ctx, "")) would fail outright.
+	const eggCols = `e.id::text, e.nest_id::text, n.name, e.name, COALESCE(e.description, ''),
+	       e.docker_images, e.startup, e.config, e.default_memory_mb,
+	       e.install_script, e.install_container, e.install_entrypoint, e.file_denylist,
+	       e.config_from::text, e.copy_script_from::text,
+	       COALESCE(e.update_url, ''), COALESCE(e.author, ''),
+	       e.features, e.startup_commands, e.created_at`
+	const eggFrom = `FROM eggs e JOIN nests n ON n.id = e.nest_id`
+	var rows pgxRows
+	var err error
+	if nestID != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+eggCols+` `+eggFrom+` WHERE e.nest_id = $1::uuid ORDER BY n.name, e.name`, nestID)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+eggCols+` `+eggFrom+` ORDER BY n.name, e.name`)
+	}
 	if err != nil {
 		return nil, err
 	}

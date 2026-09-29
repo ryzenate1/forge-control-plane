@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -18,12 +19,22 @@ const maxConfigFileSize = 64 * 1024 * 1024
 
 var placeholderRegex = regexp.MustCompile(`\{\{\s*([^}]+?)\s*\}\}`)
 
-// resolveValue replaces template placeholders like {{server.build.default.port}} and {{VAR}} using env map and allocation info.
-func resolveValue(input string, env map[string]string, port int, ip string) string {
+// resolveValue replaces template placeholders like {{server.build.default.port}}
+// and {{VAR}} using env map and allocation info.
+//
+// It returns the substituted string together with the placeholder keys that
+// could not be resolved. A placeholder that cannot be resolved is NOT silently
+// blanked by the caller: writing an empty port, IP or RCON password produces a
+// server that boots misconfigured or unreachable while the deploy reports
+// success, so the caller must surface the failure instead. A key that is
+// present in env with an empty value is a *resolved* empty value, which keeps
+// genuinely optional variables working.
+func resolveValue(input string, env map[string]string, port int, ip string) (string, []string) {
 	if input == "" {
-		return ""
+		return "", nil
 	}
-	return placeholderRegex.ReplaceAllStringFunc(input, func(m string) string {
+	var unresolved []string
+	out := placeholderRegex.ReplaceAllStringFunc(input, func(m string) string {
 		inner := placeholderRegex.FindStringSubmatch(m)
 		if len(inner) < 2 {
 			return m
@@ -33,9 +44,23 @@ func resolveValue(input string, env map[string]string, port int, ip string) stri
 		if strings.Contains(key, "|") {
 			parts := strings.SplitN(key, "|", 2)
 			k := strings.TrimSpace(parts[0])
+			defPart := strings.TrimSpace(parts[1])
+			defValue, hasDefault := "", false
+			if strings.HasPrefix(defPart, "default:") {
+				defValue = strings.Trim(strings.TrimSpace(strings.TrimPrefix(defPart, "default:")), "'\"")
+				hasDefault = true
+			}
 			// check env first
-			if v, ok := env[k]; ok && v != "" {
-				return v
+			if v, ok := env[k]; ok {
+				if v != "" {
+					return v
+				}
+				// Present but empty: the default filter applies, and with no
+				// filter the emptiness is a known value, not an unknown one.
+				if hasDefault {
+					return defValue
+				}
+				return ""
 			}
 			if k == "server.build.default.port" {
 				return strconv.Itoa(port)
@@ -46,12 +71,10 @@ func resolveValue(input string, env map[string]string, port int, ip string) stri
 				}
 				return "0.0.0.0"
 			}
-			defPart := strings.TrimSpace(parts[1])
-			if strings.HasPrefix(defPart, "default:") {
-				def := strings.TrimSpace(strings.TrimPrefix(defPart, "default:"))
-				def = strings.Trim(def, "'\"")
-				return def
+			if hasDefault {
+				return defValue
 			}
+			unresolved = append(unresolved, key)
 			return ""
 		}
 		switch key {
@@ -68,11 +91,15 @@ func resolveValue(input string, env map[string]string, port int, ip string) stri
 			if v, ok := env[k]; ok {
 				return v
 			}
+			if v, ok := env[strings.ToUpper(k)]; ok {
+				return v
+			}
+			unresolved = append(unresolved, key)
 			return ""
 		}
 		if strings.HasPrefix(key, "server.") {
 			// generic server.* not supported beyond port/ip
-			log.Printf("beacon: unresolved server placeholder %q, leaving empty", key)
+			unresolved = append(unresolved, key)
 			return ""
 		}
 		if v, ok := env[key]; ok {
@@ -82,10 +109,10 @@ func resolveValue(input string, env map[string]string, port int, ip string) stri
 		if v, ok := env[strings.ToUpper(key)]; ok {
 			return v
 		}
-		// Not found -> empty, log for visibility
-		log.Printf("beacon: unresolved template placeholder %q", key)
+		unresolved = append(unresolved, key)
 		return ""
 	})
+	return out, unresolved
 }
 
 // configurationFile holds a parsed egg config file entry.
@@ -227,8 +254,15 @@ func parseFilesMap(m map[string]any) ([]configurationFile, error) {
 	return out, nil
 }
 
-// patchConfigurationFiles applies config file patches inside rootDir using env and allocation info.
-// It handles both map and array shapes, supports properties/yaml/json and logs warn for others.
+// patchConfigurationFiles applies config file patches inside rootDir using env
+// and allocation info.
+//
+// It handles both map and array shapes and supports properties/yaml/json. Any
+// file it cannot patch correctly is reported through the returned error: the
+// caller's contract is that a nil error means every load-bearing value landed,
+// so a skipped file, an unresolved placeholder or a failed write must never
+// come back as success. Parsers beacon does not implement (file/ini/xml/toml)
+// are logged and skipped rather than failed - see the note in the switch below.
 func patchConfigurationFiles(rootDir string, payload map[string]any, env map[string]string, allocationPort int, allocationIP string) error {
 	if strings.TrimSpace(rootDir) == "" {
 		return nil
@@ -240,27 +274,43 @@ func patchConfigurationFiles(rootDir string, payload map[string]any, env map[str
 	if len(files) == 0 {
 		return nil
 	}
+	var problems []string
 	for _, cf := range files {
 		target := filepath.Join(rootDir, filepath.FromSlash(cf.FileName))
 		// Prevent escaping root
 		rel, err := filepath.Rel(rootDir, target)
 		if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 			log.Printf("beacon: config patch skip %q: escapes root", cf.FileName)
+			problems = append(problems, fmt.Sprintf("%s: configuration file path escapes the server root", cf.FileName))
 			continue
 		}
 		// Resolve replacements
+		var unresolved []string
 		resolvedFind := map[string]string{}
 		for k, raw := range cf.Find {
-			resolvedFind[k] = resolveValue(raw, env, allocationPort, allocationIP)
+			value, missing := resolveValue(raw, env, allocationPort, allocationIP)
+			resolvedFind[k] = value
+			unresolved = append(unresolved, missing...)
 		}
 		// Merge Replace list into map if no Find
 		resolvedReplaceMap := map[string]string{}
 		for _, r := range cf.Replace {
-			val := resolveValue(r.Value, env, allocationPort, allocationIP)
+			val, missing := resolveValue(r.Value, env, allocationPort, allocationIP)
 			// IfValue handling: only apply if file's current value matches IfValue (checked inside patchers where possible)
 			// For minimal, store IfValue separately and let patchers handle.
 			// For now, just use map; patchers that support IfValue will check.
 			resolvedReplaceMap[r.Match] = val
+			unresolved = append(unresolved, missing...)
+		}
+		if len(unresolved) > 0 {
+			// Writing the blanks this would otherwise produce is how a server
+			// ends up listening on port 0 with an empty RCON password while the
+			// panel shows a successful deploy. Leave the file exactly as it is
+			// and fail the operation with the names that could not be resolved.
+			keys := uniqueSortedStrings(unresolved)
+			log.Printf("beacon: config patch %q aborted, unresolved placeholders: %s", cf.FileName, strings.Join(keys, ", "))
+			problems = append(problems, fmt.Sprintf("%s: unresolved placeholder(s) %s", cf.FileName, strings.Join(keys, ", ")))
+			continue
 		}
 		// Prefer Replace map if Find empty but Replace exists
 		replacements := resolvedFind
@@ -279,34 +329,58 @@ func patchConfigurationFiles(rootDir string, payload map[string]any, env map[str
 		case "properties":
 			if err := applyPropertiesPatch(target, replacements); err != nil {
 				log.Printf("beacon: properties patch %q failed: %v", cf.FileName, err)
+				problems = append(problems, fmt.Sprintf("%s: properties patch failed: %v", cf.FileName, err))
 			} else {
 				log.Printf("beacon: patched properties %q (%d keys)", cf.FileName, len(replacements))
 			}
 		case "yaml", "yml":
 			if err := applyYamlPatch(target, replacements); err != nil {
 				log.Printf("beacon: yaml patch %q failed: %v", cf.FileName, err)
+				problems = append(problems, fmt.Sprintf("%s: yaml patch failed: %v", cf.FileName, err))
 			} else {
 				log.Printf("beacon: patched yaml %q", cf.FileName)
 			}
 		case "json":
 			if err := applyJsonPatch(target, replacements); err != nil {
 				log.Printf("beacon: json patch %q failed: %v", cf.FileName, err)
+				problems = append(problems, fmt.Sprintf("%s: json patch failed: %v", cf.FileName, err))
 			} else {
 				log.Printf("beacon: patched json %q", cf.FileName)
 			}
-		case "file":
-			log.Printf("beacon: parser %q for %q not yet implemented, skipping (supported: properties/yaml/json)", cf.Parser, cf.FileName)
-		case "ini":
-			log.Printf("beacon: parser %q for %q not yet implemented, skipping (supported: properties/yaml/json)", cf.Parser, cf.FileName)
-		case "xml":
-			log.Printf("beacon: parser %q for %q not yet implemented, skipping (supported: properties/yaml/json)", cf.Parser, cf.FileName)
-		case "toml":
-			log.Printf("beacon: parser %q for %q not yet implemented, skipping (supported: properties/yaml/json)", cf.Parser, cf.FileName)
+		// The parsers below are not implemented, and this is the one place where
+		// beacon deliberately does NOT fail: a patch failure blocks the start
+		// (ServerManager.applyPreStartConfigPatches), so turning every egg that
+		// declares an ini/xml/toml config into a refused start would take down
+		// working servers over a missing feature. Nothing incorrect is written -
+		// the file is left exactly as the installer put it - so it is logged
+		// loudly here and recorded as a limitation in the audit report instead.
+		// The panel has no warning channel to carry it to the operator yet.
+		case "file", "ini", "xml", "toml":
+			log.Printf("beacon: parser %q for %q is not implemented by beacon; the file keeps whatever the installer wrote", cf.Parser, cf.FileName)
 		default:
 			log.Printf("beacon: unsupported parser %q for %q, skipping", cf.Parser, cf.FileName)
 		}
 	}
+	if len(problems) > 0 {
+		return fmt.Errorf("configuration patch incomplete: %s", strings.Join(problems, "; "))
+	}
 	return nil
+}
+
+// uniqueSortedStrings dedupes and orders a list so a reported failure names
+// each missing placeholder exactly once.
+func uniqueSortedStrings(in []string) []string {
+	seen := make(map[string]struct{}, len(in))
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if _, ok := seen[s]; ok {
+			continue
+		}
+		seen[s] = struct{}{}
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func applyPropertiesPatch(targetPath string, replacements map[string]string) error {

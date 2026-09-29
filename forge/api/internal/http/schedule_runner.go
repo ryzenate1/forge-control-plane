@@ -3,6 +3,7 @@ package http
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"runtime"
 	"strings"
 	"sync"
@@ -40,6 +41,16 @@ func newScheduleRunner(cfg Config) *scheduleRunner {
 	}
 }
 
+func (r *scheduleRunner) log() *slog.Logger {
+	// The runner is built from Config in tests and minimal wirings where no
+	// logger is set. Fall back to slog.Default() so background sweeps never
+	// panic on a nil Logger — the phase registry uses the same fallback.
+	if r.cfg.Logger != nil {
+		return r.cfg.Logger
+	}
+	return slog.Default()
+}
+
 func (r *scheduleRunner) Start(ctx context.Context) {
 	runnerCtx, cancel := context.WithCancel(ctx)
 	r.cancel = cancel
@@ -50,7 +61,7 @@ func (r *scheduleRunner) Start(ctx context.Context) {
 			if recovered := recover(); recovered != nil {
 				buf := make([]byte, 4096)
 				n := runtime.Stack(buf, false)
-				r.cfg.Logger.Error("schedule runner panic recovered", "panic", recovered, "stack", string(buf[:n]))
+				r.log().Error("schedule runner panic recovered", "panic", recovered, "stack", string(buf[:n]))
 			}
 		}()
 		r.loop(runnerCtx)
@@ -236,7 +247,7 @@ func (r *scheduleRunner) runMetricsRetention(ctx context.Context, now time.Time)
 	retCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
 	defer cancel()
 	if _, err := r.cfg.Observability.EnforceRetention(retCtx); err != nil {
-		r.cfg.Logger.Error("metrics retention failed", "error", err.Error())
+		r.log().Error("metrics retention failed", "error", err.Error())
 		return
 	}
 	r.lastRetention = now
@@ -265,16 +276,16 @@ func (r *scheduleRunner) runBackupCleanup(ctx context.Context) {
 	if r.cfg.BackupSvc != nil {
 		deleted, err := r.cfg.BackupSvc.CleanupExpiredBackups(ctx)
 		if err != nil {
-			r.cfg.Logger.Error("backup retention sweep incomplete", "deleted", deleted, "error", err.Error())
+			r.log().Error("backup retention sweep incomplete", "deleted", deleted, "error", err.Error())
 		}
 	} else {
 		if _, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup); err != nil {
-			r.cfg.Logger.Error("backup retention sweep failed", "error", err.Error())
+			r.log().Error("backup retention sweep failed", "error", err.Error())
 		}
 	}
 
 	if _, err := r.cfg.Store.CleanupExpiredInvitations(ctx); err != nil {
-		r.cfg.Logger.Error("expired invitation cleanup failed", "error", err.Error())
+		r.log().Error("expired invitation cleanup failed", "error", err.Error())
 	}
 }
 

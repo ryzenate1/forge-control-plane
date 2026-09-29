@@ -238,12 +238,17 @@ func (s *Store) GetNotificationEventSubscription(ctx context.Context, channelID,
 }
 
 func (s *Store) ListNotificationEventSubscriptions(ctx context.Context, channelID string) ([]NotificationEventSubscription, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, channel_id::text, event_type, COALESCE(template,''), last_sent_at, delivery_status, created_at, updated_at
-		FROM notification_event_subscriptions
-		WHERE ($1 = '' OR channel_id = NULLIF($1, '')::uuid)
-		ORDER BY event_type ASC
-	`, channelID)
+	// Branched queries (not WHERE ($1='' OR channel_id=$1::uuid)): the OR
+	// form defeats the channel_id index when listing all subscriptions, and
+	// ''::uuid is a cast error — the list-all path must not pass '' at all.
+	const subCols = `id::text, channel_id::text, event_type, COALESCE(template,''), last_sent_at, delivery_status, created_at, updated_at`
+	var rows pgxRows
+	var err error
+	if channelID != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+subCols+` FROM notification_event_subscriptions WHERE channel_id = $1::uuid ORDER BY event_type ASC`, channelID)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+subCols+` FROM notification_event_subscriptions ORDER BY event_type ASC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -288,13 +293,15 @@ func (s *Store) ListNotificationLogs(ctx context.Context, channelID string, limi
 	if limit <= 0 || limit > 500 {
 		limit = 100
 	}
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, channel_id::text, event_type, status, COALESCE(error,''), sent_at
-		FROM notification_logs
-		WHERE ($1 = '' OR channel_id = NULLIF($1, '')::uuid)
-		ORDER BY sent_at DESC
-		LIMIT $2 OFFSET $3
-	`, channelID, limit, offset)
+	// id DESC tiebreak keeps OFFSET pagination stable on equal sent_at.
+	const logCols = `id::text, channel_id::text, event_type, status, COALESCE(error,''), sent_at`
+	var rows pgxRows
+	var err error
+	if channelID != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+logCols+` FROM notification_logs WHERE channel_id = $1::uuid ORDER BY sent_at DESC, id DESC LIMIT $2 OFFSET $3`, channelID, limit, offset)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+logCols+` FROM notification_logs ORDER BY sent_at DESC, id DESC LIMIT $1 OFFSET $2`, limit, offset)
+	}
 	if err != nil {
 		return nil, err
 	}

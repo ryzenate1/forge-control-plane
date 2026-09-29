@@ -91,7 +91,6 @@ function HealthPanel({ healthQ }: { healthQ: ReturnType<typeof useQuery> }) {
                   <span className={`h-2 w-2 rounded-full ${h?.resolver_available ? "bg-emerald-500" : "bg-red-500"}`} />
                   <span className="text-sm font-semibold text-[var(--text)]">{h?.resolver_available ? "Available" : "Unavailable"}</span>
                 </div>
-                <div className="mt-1 text-xs text-[var(--text-subtle)]">{h?.resolver_status ?? "—"}</div>
                 <Pill tone={h?.resolver_available ? "green" : "red"} className="mt-2">{h?.resolver_available ? "active" : "inactive"}</Pill>
               </div>
               <div className="rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-4">
@@ -100,7 +99,6 @@ function HealthPanel({ healthQ }: { healthQ: ReturnType<typeof useQuery> }) {
                   <span className={`h-2 w-2 rounded-full ${h?.ingress_sync_available ? "bg-emerald-500" : "bg-red-500"}`} />
                   <span className="text-sm font-semibold text-[var(--text)]">{h?.ingress_sync_available ? "Available" : "Unavailable"}</span>
                 </div>
-                <div className="mt-1 text-xs text-[var(--text-subtle)]">{h?.ingress_sync_status ?? "—"}</div>
                 <Pill tone={h?.ingress_sync_available ? "green" : "yellow"} className="mt-2">{h?.ingress_sync_available ? "active" : "inactive"}</Pill>
               </div>
               <div className="rounded-xl border border-[var(--line)] bg-[var(--canvas)] p-4 sm:col-span-2">
@@ -151,7 +149,10 @@ function ResolverPanel() {
 
   const resolveMut = useMutation({
     mutationFn: () => resolveCrossNodeTarget({ serverId: serverId.trim() || undefined, nodeId: nodeId.trim() || undefined }),
-    onSuccess: (data) => toast({ tone: "success", title: `Resolved → ${data.host}` }),
+    onSuccess: (data) =>
+      data.resolved
+        ? toast({ tone: "success", title: `Resolved → ${data.host}` })
+        : toast({ tone: "warning", title: "No reachable target", message: data.reason }),
     onError: (e: Error) => toast({ tone: "error", title: "Resolve failed", message: e.message }),
   });
 
@@ -260,7 +261,18 @@ function IngressPanel() {
   const syncMut = useMutation({
     mutationFn: triggerCrossNodeIngressSync,
     onSuccess: (data) => {
-      toast({ tone: "success", title: data.message ?? "Sync triggered" });
+      const r = data.result;
+      if (r?.skipped) {
+        toast({ tone: "warning", title: "Sync skipped", message: r.reason ?? "The synchronizer skipped this reconcile" });
+      } else if (r) {
+        toast({
+          tone: data.synced ? "success" : "warning",
+          title: data.synced ? "Sync triggered" : "Sync finished without reconciling",
+          message: `${r.observedRules} rules observed · ${r.groups} groups · ${r.healthyBackends} healthy backends`,
+        });
+      } else {
+        toast({ tone: data.synced ? "success" : "warning", title: data.synced ? "Sync triggered" : "Sync returned no result" });
+      }
       void qc.invalidateQueries({ queryKey: ["admin-crossnode-ingress"] });
     },
     onError: (e: Error) => toast({ tone: "error", title: "Sync failed", message: e.message }),

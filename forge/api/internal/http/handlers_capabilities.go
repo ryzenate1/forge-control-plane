@@ -1,9 +1,7 @@
 package http
 
 import (
-	"crypto/hmac"
-	"crypto/sha256"
-	"encoding/hex"
+	"context"
 	"encoding/json"
 	"strconv"
 	"strings"
@@ -16,12 +14,48 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// capabilityStore is the surface these handlers need from the layer beneath
+// them. Both registrations.Service (the intended handler -> service -> store
+// path, which counts the metrics Config already exposes a field for) and
+// *store.Store satisfy it, so the routes use the service as soon as the
+// container builds one and keep working against a bare store in dev trees.
+type capabilityStore interface {
+	CreateOnboardingToken(ctx context.Context, nodeID string, expiresAt time.Time) (*store.OnboardingToken, error)
+	GetOnboardingToken(ctx context.Context, tokenID string) (*store.OnboardingToken, error)
+	ApproveOnboardingToken(ctx context.Context, tokenID, approvedBy string) error
+	RejectOnboardingToken(ctx context.Context, tokenID, reason string) error
+	RevokeOnboardingToken(ctx context.Context, tokenID, reason string) error
+	ListOnboardingTokens(ctx context.Context, nodeID string) ([]store.OnboardingToken, error)
+	UpsertNodeCapability(ctx context.Context, nc *store.NodeCapability) error
+	GetNodeCapability(ctx context.Context, nodeID string) (*store.NodeCapability, error)
+	ListCapabilities(ctx context.Context, filter store.CapabilityInventoryFilter) ([]store.NodeCapability, error)
+	GetCapabilityHistory(ctx context.Context, nodeID string, limit int) ([]store.NodeCapabilityHistoryEntry, error)
+}
+
+// capabilityBackend resolves the backing layer for a capability or onboarding
+// route. ok is false only when neither the service nor a store exists, which
+// every caller turns into a 503 rather than an empty answer.
+func capabilityBackend(cfg Config) (capabilityStore, bool) {
+	if cfg.RegistrationService != nil {
+		return cfg.RegistrationService, true
+	}
+	if cfg.Store != nil {
+		return cfg.Store, true
+	}
+	return nil, false
+}
+
 func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nodeprobe.Service) {
 	// GET /workload-kinds — reports every runtime Forge models, derived from the
 	// live wiring rather than a fixed list, so the create-workload form can tell
 	// "not an engine we have" from "no adapter registered" from "registered but
 	// no node runs it". Every unavailable answer carries a reason.
-	protected.Get("/workload-kinds", func(c *fiber.Ctx) error {
+	//
+	// The response embeds the fleet inventory (node id, name, actual state per
+	// runtime), so it is a node read and gated as one: the only consumer is the
+	// admin servers page, and an unauthenticated-to-nodes caller must not be able
+	// to enumerate which machines exist and what state they are in.
+	protected.Get("/workload-kinds", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
 		// Which engines a node can actually serve. A Beacon runs exactly one
 		// runtime, so node reporting is the only honest placement signal.
 		type nodeRef struct {
@@ -133,8 +167,9 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /capabilities — list all node capabilities (inventory view)
 	protected.Get("/capabilities", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		offset := 0
 		if p := c.Query("offset"); p != "" {
@@ -150,7 +185,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		caps, err := cfg.Store.ListCapabilities(ctx, store.CapabilityInventoryFilter{Offset: offset, Limit: limit})
+		caps, err := backend.ListCapabilities(ctx, store.CapabilityInventoryFilter{Offset: offset, Limit: limit})
 		if err != nil {
 			return respondInternalError(c, err)
 		}
@@ -159,12 +194,13 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /capabilities/:nodeId — single node capability detail
 	protected.Get("/capabilities/:nodeId", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		nc, err := cfg.Store.GetNodeCapability(ctx, c.Params("nodeId"))
+		nc, err := backend.GetNodeCapability(ctx, c.Params("nodeId"))
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "capability not found")
 		}
@@ -173,8 +209,9 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /capabilities/:nodeId/history — capability change history
 	protected.Get("/capabilities/:nodeId/history", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		limit := 20
 		if l := c.Query("limit"); l != "" {
@@ -184,7 +221,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		entries, err := cfg.Store.GetCapabilityHistory(ctx, c.Params("nodeId"), limit)
+		entries, err := backend.GetCapabilityHistory(ctx, c.Params("nodeId"), limit)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
@@ -193,13 +230,14 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /capabilities/:nodeId/delta — drift between last two snapshots (amber-banner source)
 	protected.Get("/capabilities/:nodeId/delta", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		nodeID := c.Params("nodeId")
 		ctx, cancel := requestContext()
 		defer cancel()
-		entries, err := cfg.Store.GetCapabilityHistory(ctx, nodeID, 2)
+		entries, err := backend.GetCapabilityHistory(ctx, nodeID, 2)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
@@ -294,9 +332,10 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 	})
 
 	// POST /capabilities/:nodeId/probe — live-probe a node's beacon for capabilities
-	protected.Post("/capabilities/:nodeId/probe", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/capabilities/:nodeId/probe", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		if nodeProbe == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "node probe not available")
@@ -337,7 +376,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 			RawReport:        capabilitiesJSON,
 			FetchedAt:        time.Now().UTC(),
 		}
-		if err := cfg.Store.UpsertNodeCapability(ctx, nc); err != nil {
+		if err := backend.UpsertNodeCapability(ctx, nc); err != nil {
 			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{
@@ -346,78 +385,30 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		})
 	})
 
-	// POST /capabilities/ingest — Beacon capability report webhook (HMAC-authenticated)
-	protected.Post("/capabilities/ingest", func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
-		}
-
-		var report struct {
-			NodeID        string          `json:"nodeId"`
-			BeaconVersion string          `json:"beaconVersion"`
-			OS            string          `json:"os"`
-			Architecture  string          `json:"architecture"`
-			CPUThreads    int             `json:"cpuThreads"`
-			MemoryMB      int64           `json:"memoryMb"`
-			DiskMB        int64           `json:"diskMb"`
-			UptimeSeconds int64           `json:"uptimeSeconds"`
-			Capabilities  json.RawMessage `json:"capabilities"`
-			FetchedAt     string          `json:"fetchedAt"`
-			Signature     string          `json:"signature"`
-		}
-		if err := c.BodyParser(&report); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, "invalid report")
-		}
-		if report.NodeID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "nodeId is required")
-		}
-
-		ctx, cancel := requestContext()
-		defer cancel()
-
-		token, err := cfg.Store.GetNodeDaemonToken(ctx, report.NodeID)
-		if err != nil {
-			return fiber.NewError(fiber.StatusUnauthorized, "node authentication failed")
-		}
-
-		mac := hmac.New(sha256.New, []byte(token))
-		mac.Write([]byte(report.NodeID))
-		expectedSig := hex.EncodeToString(mac.Sum(nil))
-		if !hmac.Equal([]byte(report.Signature), []byte(expectedSig)) {
-			return fiber.NewError(fiber.StatusUnauthorized, "invalid node signature")
-		}
-
-		fetchedAt := time.Now().UTC()
-		if report.FetchedAt != "" {
-			if t, err := time.Parse(time.RFC3339, report.FetchedAt); err == nil {
-				fetchedAt = t
-			}
-		}
-
-		nc := &store.NodeCapability{
-			NodeID:        report.NodeID,
-			BeaconVersion: report.BeaconVersion,
-			OS:            report.OS,
-			Architecture:  report.Architecture,
-			CPUThreads:    report.CPUThreads,
-			MemoryMB:      report.MemoryMB,
-			DiskMB:        report.DiskMB,
-			UptimeSeconds: report.UptimeSeconds,
-			RawReport:     report.Capabilities,
-			FetchedAt:     fetchedAt,
-		}
-		if err := cfg.Store.UpsertNodeCapability(ctx, nc); err != nil {
-			return respondInternalError(c, err)
-		}
-		return c.JSON(fiber.Map{"accepted": true})
-	})
+	// POST /capabilities/ingest is NOT registered, deliberately.
+	//
+	// It was a Beacon-facing webhook that no Beacon sends: nothing in
+	// beacon/internal or internal/daemon posts to /capabilities/ingest, and it sat
+	// on the user-session `protected` group, which node credentials cannot
+	// authenticate against (nodes talk back over /api/remote). Its signature was
+	// also unsound in two ways: it keyed on report.NodeID alone, so the HMAC
+	// covered no byte of the CPU/memory/OS payload and one captured signature
+	// could be replayed with invented capacity to poison placement; and it derived
+	// that HMAC from GetNodeDaemonToken, while the platform's node credential is
+	// the composite tokenID.token from GetNodeDaemonCredential, so a correctly
+	// signed real report could never have verified either. The panel-initiated
+	// POST /capabilities/:nodeId/probe below is the live capability path and writes
+	// the same row. Re-adding ingest means: mount it on /api/remote behind the
+	// node guard, sign method+URI+timestamp+body with the composite credential,
+	// and reject a report whose body is not covered by the signature.
 
 	// ---- Onboarding Token Management ----
 
 	// POST /onboarding-tokens — generate an onboarding token for a node
-	protected.Post("/onboarding-tokens", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/onboarding-tokens", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		var req struct {
 			NodeID   string `json:"nodeId"`
@@ -440,7 +431,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		ctx, cancel := requestContext()
 		defer cancel()
 
-		token, err := cfg.Store.CreateOnboardingToken(ctx, req.NodeID, time.Now().UTC().Add(ttl))
+		token, err := backend.CreateOnboardingToken(ctx, req.NodeID, time.Now().UTC().Add(ttl))
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}
@@ -455,12 +446,13 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /onboarding-tokens/:tokenId — view token status
 	protected.Get("/onboarding-tokens/:tokenId", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		token, err := cfg.Store.GetOnboardingToken(ctx, c.Params("tokenId"))
+		token, err := backend.GetOnboardingToken(ctx, c.Params("tokenId"))
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "token not found")
 		}
@@ -468,24 +460,26 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 	})
 
 	// POST /onboarding-tokens/:tokenId/approve — approve a pending token
-	protected.Post("/onboarding-tokens/:tokenId/approve", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/onboarding-tokens/:tokenId/approve", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
 
 		actorID := actorIDFromCtx(c)
-		if err := cfg.Store.ApproveOnboardingToken(ctx, c.Params("tokenId"), actorID); err != nil {
+		if err := backend.ApproveOnboardingToken(ctx, c.Params("tokenId"), actorID); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
 		}
 		return c.JSON(fiber.Map{"approved": true})
 	})
 
 	// POST /onboarding-tokens/:tokenId/reject
-	protected.Post("/onboarding-tokens/:tokenId/reject", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/onboarding-tokens/:tokenId/reject", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		var req struct {
 			Reason string `json:"reason"`
@@ -495,16 +489,17 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.RejectOnboardingToken(ctx, c.Params("tokenId"), req.Reason); err != nil {
+		if err := backend.RejectOnboardingToken(ctx, c.Params("tokenId"), req.Reason); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
 		}
 		return c.JSON(fiber.Map{"rejected": true})
 	})
 
 	// POST /onboarding-tokens/:tokenId/revoke
-	protected.Post("/onboarding-tokens/:tokenId/revoke", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/onboarding-tokens/:tokenId/revoke", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		var req struct {
 			Reason string `json:"reason"`
@@ -514,7 +509,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.RevokeOnboardingToken(ctx, c.Params("tokenId"), req.Reason); err != nil {
+		if err := backend.RevokeOnboardingToken(ctx, c.Params("tokenId"), req.Reason); err != nil {
 			return fiber.NewError(fiber.StatusConflict, err.Error())
 		}
 		return c.JSON(fiber.Map{"revoked": true})
@@ -522,8 +517,9 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 
 	// GET /onboarding-tokens — list tokens for a node
 	protected.Get("/onboarding-tokens", requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		backend, ok := capabilityBackend(cfg)
+		if !ok {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "capability and onboarding backend is not wired")
 		}
 		nodeID := c.Query("nodeId")
 		if nodeID == "" {
@@ -531,7 +527,7 @@ func registerCapabilityRoutes(protected fiber.Router, cfg Config, nodeProbe *nod
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		tokens, err := cfg.Store.ListOnboardingTokens(ctx, nodeID)
+		tokens, err := backend.ListOnboardingTokens(ctx, nodeID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
 		}

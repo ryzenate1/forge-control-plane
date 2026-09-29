@@ -119,7 +119,46 @@ var (
 	ErrTicketUnknown      = errors.New("token is not a registered one-time ticket")
 	ErrTicketRedeemed     = errors.New("token has already been redeemed")
 	ErrMissingCredentials = errors.New("token is missing its signing secret")
+	ErrWeakSecret         = errors.New("token signing secret is empty or publicly known")
+	ErrTicketStateUnknown = errors.New("one-time ticket state cannot be determined")
 )
+
+// MinSecretBytes is the shortest signing secret a checked generator accepts.
+// An HMAC-SHA256 key below this size is brute-forceable offline once a single
+// ticket leaks, and a ticket carried in a query string is a ticket written into
+// every proxy and access log between the panel and this node.
+const MinSecretBytes = 32
+
+// publicSecrets are values that ship inside this repository's dev and example
+// configuration. They are refused unconditionally and independent of APP_ENV:
+// a secret that is committed is not a secret, and whoever holds it can mint a
+// ticket for any server on any tenant's node.
+var publicSecrets = []string{
+	"dev-node-token",
+	"devnodetoken0001.dev-node-token",
+	"change-me",
+	"changeme",
+}
+
+// WeakSecret reports whether a signing secret is unusable because it is empty,
+// is one of the values committed into this repository, or carries the
+// CHANGE_ME placeholder marker used by the shipped config templates.
+func WeakSecret(secret []byte) bool {
+	value := strings.TrimSpace(string(secret))
+	if value == "" {
+		return true
+	}
+	lowered := strings.ToLower(value)
+	if strings.Contains(lowered, "change_me") {
+		return true
+	}
+	for _, known := range publicSecrets {
+		if lowered == known {
+			return true
+		}
+	}
+	return false
+}
 
 // Generator signs and verifies scoped tokens using an HMAC-SHA256 secret.
 //
@@ -141,9 +180,30 @@ var (
 type Generator struct {
 	secret []byte
 
+	// weak marks a generator built with an empty or publicly known secret.
+	// It refuses to mint and refuses to accept, so a daemon that boots on a
+	// committed dev default cannot issue tenant credentials at all.
+	weak bool
+
 	// tickets, when wired, turns purpose-bound tokens into one-time
-	// credentials that Redeem consumes.
+	// credentials that Redeem consumes. NewGenerator always wires one: a
+	// generator without a ticket store cannot honour the single-use promise
+	// its tickets advertise.
 	tickets *TokenStore
+
+	// ticketsDisabled is set only by an explicit SetTicketStore(nil), which
+	// distinguishes a deliberate operator opt-out from an unwired store.
+	ticketsDisabled bool
+}
+
+// WeakSecret reports whether this generator was built with a secret that is
+// empty or publicly known; such a generator refuses to mint or accept.
+func (g *Generator) WeakSecret() bool { return g == nil || g.weak }
+
+// TicketSingleUseEnforced reports whether one-time tickets are actually
+// tracked by this generator.
+func (g *Generator) TicketSingleUseEnforced() bool {
+	return g != nil && g.tickets != nil
 }
 
 // Zero overwrites the in-memory secret bytes with zeros in place. Callers
@@ -157,20 +217,49 @@ func (g *Generator) Zero() {
 	}
 }
 
+// NewGenerator builds a generator that signs and verifies tickets, with a
+// one-time ticket store already wired. A secret that is empty or is one of the
+// values committed into this repository produces a generator that refuses every
+// mint and every verification: booting must not silently create forgeable
+// tenant credentials. Use NewGeneratorChecked to get that decision as an error
+// at boot time instead.
 func NewGenerator(secret []byte) *Generator {
 	owned := append([]byte(nil), secret...)
-	return &Generator{secret: owned}
+	g := &Generator{secret: owned, weak: WeakSecret(secret)}
+	if !g.weak {
+		g.tickets = NewTokenStore()
+	}
+	return g
+}
+
+// NewGeneratorChecked is the boot-time constructor: it refuses an empty or
+// publicly known secret, and refuses anything shorter than MinSecretBytes
+// unless the caller explicitly acknowledges the weak secret.
+func NewGeneratorChecked(secret []byte, allowWeak bool) (*Generator, error) {
+	if !WeakSecret(secret) && len(secret) < MinSecretBytes {
+		if !allowWeak {
+			return nil, fmt.Errorf("%w: %d bytes, minimum is %d", ErrWeakSecret, len(secret), MinSecretBytes)
+		}
+	}
+	g := NewGenerator(secret)
+	if g.weak && !allowWeak {
+		return nil, fmt.Errorf("%w: refusing to build a generator from an empty or committed secret", ErrWeakSecret)
+	}
+	return g, nil
 }
 
 // SetTicketStore wires a store that records minted one-time tickets. Once
 // wired, Generate registers the ticket and Redeem is the only way to spend
 // it; Validate keeps accepting the token so a handler can inspect claims
-// before the upgrade completes. A nil store disables the mechanism.
+// before the upgrade completes. Passing nil is a deliberate opt-out of
+// single-use enforcement and must never be done for a route that serves
+// tenant streams or files.
 func (g *Generator) SetTicketStore(store *TokenStore) {
 	if g == nil {
 		return
 	}
 	g.tickets = store
+	g.ticketsDisabled = store == nil
 }
 
 // TicketStore returns the wired one-time ticket store, if any.
@@ -184,6 +273,9 @@ func (g *Generator) TicketStore() *TokenStore {
 func (g *Generator) Generate(claims Claims) (string, error) {
 	if g == nil || len(g.secret) == 0 {
 		return "", ErrMissingCredentials
+	}
+	if g.weak {
+		return "", ErrWeakSecret
 	}
 	if !claims.Scope.Known() {
 		return "", fmt.Errorf("%w: %q", ErrInvalidScope, claims.Scope)
@@ -207,8 +299,13 @@ func (g *Generator) Generate(claims Claims) (string, error) {
 	if claims.UniqueID == "" {
 		claims.UniqueID = uuid.New().String()
 	}
-	if claims.Scope != ScopeAdmin && g.tickets != nil {
-		g.tickets.Add(claims.UniqueID, claims.ExpiresAt)
+	// A live one-time ticket must be registered before it is handed out,
+	// otherwise nothing can refuse its replay. Minting a token that is already
+	// born expired is harmless (Validate refuses it) and is not registered.
+	if claims.Scope != ScopeAdmin && g.tickets != nil && time.Now().Before(claims.ExpiresAt) {
+		if !g.tickets.Add(claims.UniqueID, claims.ExpiresAt) {
+			return "", fmt.Errorf("%w: could not register one-time ticket: %w", ErrTicketStateUnknown, ErrStoreFull)
+		}
 	}
 
 	header := jwtHeader{Alg: signingAlgorithm, Typ: "JWT"}
@@ -235,6 +332,9 @@ func (g *Generator) Generate(claims Claims) (string, error) {
 func (g *Generator) Validate(tokenString string) (*Claims, error) {
 	if g == nil || len(g.secret) == 0 {
 		return nil, ErrMissingCredentials
+	}
+	if g.weak {
+		return nil, ErrWeakSecret
 	}
 	parts := strings.Split(strings.TrimSpace(tokenString), ".")
 	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
@@ -290,8 +390,27 @@ func (g *Generator) Validate(tokenString string) (*Claims, error) {
 	if lifetime := claims.ExpiresAt.Sub(claims.IssuedAt); lifetime > absoluteMaxLifetime {
 		return nil, ErrLifetimeExceeded
 	}
-	if g.tickets != nil && claims.Scope.ResourceBound() && g.tickets.Redeemed(claims.UniqueID) {
-		return nil, ErrTicketRedeemed
+	// A tenant ticket that names no principal cannot be attributed, cannot be
+	// revoked when that principal is deauthorized, and leaves callers to fall
+	// back to a caller-controlled user header. It is refused here as well as
+	// in Redeem, so an inspect-only path cannot accept it either.
+	if claims.Scope.RequiresUser() && strings.TrimSpace(claims.User) == "" {
+		return nil, fmt.Errorf("%w: %s ticket names no principal", ErrUnboundToken, claims.Scope)
+	}
+	if claims.Scope.ResourceBound() {
+		if g.tickets == nil {
+			// Deliberate opt-out (SetTicketStore(nil)): single use is not
+			// enforced, so say nothing more. Anything else must be trackable.
+			if !g.ticketsDisabled {
+				return nil, ErrTicketStateUnknown
+			}
+		} else if g.tickets.LostEntries() {
+			// The store overflowed and can no longer answer "was this already
+			// spent" for tickets it has forgotten. Unknown is denial.
+			return nil, ErrTicketStateUnknown
+		} else if g.tickets.Redeemed(claims.UniqueID) {
+			return nil, ErrTicketRedeemed
+		}
 	}
 
 	return &claims, nil
@@ -345,9 +464,11 @@ func (g *Generator) Redeem(tokenString string) (*Claims, error) {
 		return nil, ErrTicketUnknown
 	}
 	if g.tickets == nil {
+		// Only a deliberate opt-out reaches here; Validate has already refused
+		// a generator that was simply never given a store.
 		return claims, nil
 	}
-	if !g.tickets.Consume(claims.UniqueID) {
+	if !g.tickets.ConsumeUntil(claims.UniqueID, claims.ExpiresAt) {
 		return nil, ErrTicketRedeemed
 	}
 	return claims, nil

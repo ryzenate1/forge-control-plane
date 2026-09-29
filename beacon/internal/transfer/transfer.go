@@ -504,6 +504,15 @@ func validateTargetURL(target *url.URL) error {
 	if target.User != nil {
 		return errors.New("target URL must not include credentials")
 	}
+	// Reject literal addresses that turn the daemon into an SSRF pivot or leak
+	// the node credential to a link-local metadata endpoint (169.254.169.254
+	// for AWS/GCP/Azure IMDS, fe80:: for IPv6 link-local, :: for unspecified).
+	// A trusted destination is always a routable host; private/VPC node
+	// addresses stay allowed so same-network migrations keep working.
+	if ip := net.ParseIP(target.Hostname()); ip != nil &&
+		(ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()) {
+		return errors.New("target URL must not point at a link-local, multicast, or unspecified address")
+	}
 	if target.Scheme == "https" {
 		return nil
 	}

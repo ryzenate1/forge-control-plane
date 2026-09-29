@@ -743,11 +743,14 @@ func (m *Manager) reconcile(ctx context.Context) {
 		return
 	}
 
+	anyFailed := false
 	for _, app := range apps {
 		instances, err := m.store.ListInstancesByApp(ctx, app.ID)
 		if err != nil {
 			continue
 		}
+		// RetryFailedPlacements fans out per app below; collecting the flag
+		// here keeps one paced pass per tick instead of one per failed app.
 
 		runningCount := 0
 		hasFailed := 0
@@ -784,7 +787,7 @@ func (m *Manager) reconcile(ctx context.Context) {
 		}
 
 		if hasFailed > 0 {
-			_, _ = m.RetryFailedPlacements(ctx)
+			anyFailed = true
 		}
 
 		if !hasProvisioning && runningCount == app.Replicas && app.Status != string(AppDeploymentStatusRunning) {
@@ -809,6 +812,12 @@ func (m *Manager) reconcile(ctx context.Context) {
 				"failed":   hasFailed,
 			})
 		}
+	}
+	// One paced pass per tick: RetryFailedPlacements already iterates every
+	// app, so calling it inside the loop above retried the same failed
+	// instances once per failed app and hammered the scheduler.
+	if anyFailed {
+		_, _ = m.RetryFailedPlacements(ctx)
 	}
 }
 

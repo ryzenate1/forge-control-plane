@@ -3,23 +3,28 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"time"
 )
 
 type EnhancedStats struct {
-	CPUPercent    float64   `json:"cpuPercent"`
-	CPUCount      int       `json:"cpuCount"`
-	MemoryUsage   uint64    `json:"memoryUsage"`
-	MemoryLimit   uint64    `json:"memoryLimit"`
-	MemoryPercent float64   `json:"memoryPercent"`
-	NetworkRx     uint64    `json:"networkRx"`
-	NetworkTx     uint64    `json:"networkTx"`
-	BlockRead     uint64    `json:"blockRead"`
-	BlockWrite    uint64    `json:"blockWrite"`
-	PIDs          int       `json:"pids"`
-	UptimeSeconds float64   `json:"uptimeSeconds"`
-	Timestamp     time.Time `json:"timestamp"`
+	CPUPercent    float64 `json:"cpuPercent"`
+	CPUCount      int     `json:"cpuCount"`
+	MemoryUsage   uint64  `json:"memoryUsage"`
+	MemoryLimit   uint64  `json:"memoryLimit"`
+	MemoryPercent float64 `json:"memoryPercent"`
+	NetworkRx     uint64  `json:"networkRx"`
+	NetworkTx     uint64  `json:"networkTx"`
+	BlockRead     uint64  `json:"blockRead"`
+	BlockWrite    uint64  `json:"blockWrite"`
+	PIDs          int     `json:"pids"`
+	UptimeSeconds float64 `json:"uptimeSeconds"`
+	// UptimeKnown is false when the engine never reported a start time. The
+	// seconds field is then meaningless and must not be read as "just started".
+	UptimeKnown bool      `json:"uptimeKnown"`
+	Timestamp   time.Time `json:"timestamp"`
 }
 
 type enhancedDockerStats struct {
@@ -88,11 +93,31 @@ func DecodeEnhancedStats(reader io.Reader) (*EnhancedStats, error) {
 		memPercent = float64(payload.MemoryStats.Usage) / float64(payload.MemoryStats.Limit) * 100
 	}
 
-	cpuDelta := float64(payload.CPUStats.CPUUsage.TotalUsage - payload.PreCPUStats.CPUUsage.TotalUsage)
-	systemDelta := float64(payload.CPUStats.SystemCPUUsage - payload.PreCPUStats.SystemCPUUsage)
+	// Same unsigned-counter regression guard as dockerCPUPercent: a restarted
+	// container can report a smaller cumulative value than the previous
+	// sample, and the subtraction would wrap to ~2^64 nanoseconds.
+	cpuKnown := payload.CPUStats.CPUUsage.TotalUsage >= payload.PreCPUStats.CPUUsage.TotalUsage &&
+		payload.CPUStats.SystemCPUUsage >= payload.PreCPUStats.SystemCPUUsage
+	cpuDelta := float64(0)
+	systemDelta := float64(0)
+	if cpuKnown {
+		cpuDelta = float64(payload.CPUStats.CPUUsage.TotalUsage - payload.PreCPUStats.CPUUsage.TotalUsage)
+		systemDelta = float64(payload.CPUStats.SystemCPUUsage - payload.PreCPUStats.SystemCPUUsage)
+	}
 	var cpuPercent float64
 	if systemDelta > 0 && cpuDelta > 0 && cpuCount > 0 {
 		cpuPercent = (cpuDelta / systemDelta) * float64(cpuCount) * 100
+	}
+
+	// Every section of the sample is optional in the daemon response. A payload
+	// that carries nothing (a `{}` written by an older or broken engine) would
+	// otherwise decode into an all-zero, nil-error "measurement" that reads as
+	// an idle container with no processes.
+	if payload.CPUStats.CPUUsage.TotalUsage == 0 && payload.PreCPUStats.CPUUsage.TotalUsage == 0 &&
+		payload.MemoryStats.Usage == 0 && payload.MemoryStats.Limit == 0 &&
+		len(payload.Networks) == 0 && len(payload.BlkioStats.IOServiceBytesRecursive) == 0 &&
+		payload.PIDsStats.Current == 0 {
+		return nil, errors.New("container stats sample carries no measurements")
 	}
 
 	return &EnhancedStats{
@@ -115,6 +140,15 @@ func CollectEnhancedStats(ctx context.Context, rt Runtime, serverID string) (*En
 	if err != nil {
 		return nil, err
 	}
+	if !state.Exists {
+		return nil, fmt.Errorf("workload %q does not exist", serverID)
+	}
+	// A workload that is not running has no live sample. Docker keeps serving
+	// the last cgroup snapshot for a stopped container, which is a stale
+	// reading, and a stale reading must not be returned as a measurement.
+	if !state.Running {
+		return nil, fmt.Errorf("workload %q is %q: no live metrics to report", serverID, state.Status)
+	}
 	rc, err := rt.StatsStream(ctx, serverID)
 	if err != nil {
 		return nil, err
@@ -124,9 +158,13 @@ func CollectEnhancedStats(ctx context.Context, rt Runtime, serverID string) (*En
 	if err != nil {
 		return nil, err
 	}
-	if !state.StartedAt.IsZero() {
+	stats.UptimeKnown = !state.StartedAt.IsZero()
+	if stats.UptimeKnown {
 		stats.UptimeSeconds = time.Since(state.StartedAt).Seconds()
 		if stats.UptimeSeconds < 0 {
+			// The engine reported a start time in the future: that is a bad
+			// clock or a bad reading, not a zero-uptime container.
+			stats.UptimeKnown = false
 			stats.UptimeSeconds = 0
 		}
 	}

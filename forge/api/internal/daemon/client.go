@@ -35,7 +35,6 @@ const (
 	// server-side and outlives an RPC budget. A caller context deadline
 	// still wins when it is earlier.
 	createServerTimeout = 5 * time.Minute
-	retryableStatuses   = "429,502,503,504"
 )
 
 var ErrMissingNodeToken = errors.New("daemon node token is required")
@@ -165,31 +164,56 @@ type retryRoundTripper struct {
 	resign func(*http.Request, []byte) error
 }
 
+// beaconDedupedCommandRoute reports whether the daemon records the command id
+// carried by this request, so that replaying it is deduped rather than
+// re-executed. Beacon dedupes exactly one route today: POST /servers/{id}/power
+// reads X-Forge-Command-ID (falling back to Idempotency-Key) and enqueues the
+// command by that id. Every other mutating route ignores the header, so a
+// replay there is a second execution of a create, a delete or a file write
+// whose first attempt may well have landed.
+func beaconDedupedCommandRoute(path string) bool {
+	return strings.HasPrefix(path, "/servers/") && strings.HasSuffix(path, "/power")
+}
+
 // idempotentRequest reports whether replaying the request is safe. Reads
-// always are; a mutating request is only replayed when it carries an
-// idempotency key the daemon can dedupe on (Idempotency-Key,
-// X-Idempotency-Key, or the command ID header SendPower sets). Replaying a
-// keyless POST/PUT/DELETE after a transport blip would execute the command
-// twice — power, restore and pull operations must never be retried blind.
+// always are; a mutating request is replayed only when it carries a command id
+// on the one route the daemon dedupes on. Replaying any other POST/PUT/DELETE
+// after a transport blip would execute the command twice — create, restore,
+// push and file-write operations must never be retried blind, with or without
+// an idempotency header, because the daemon does not consult one.
 func idempotentRequest(req *http.Request) bool {
 	switch req.Method {
 	case http.MethodGet, http.MethodHead:
 		return true
 	}
-	if req.Header.Get("Idempotency-Key") != "" {
-		return true
+	if !beaconDedupedCommandRoute(req.URL.Path) {
+		return false
 	}
-	if req.Header.Get("X-Idempotency-Key") != "" {
-		return true
+	return req.Header.Get("Idempotency-Key") != "" || req.Header.Get("X-Forge-Command-ID") != ""
+}
+
+// readErrorDetails consumes the bounded error body of a response that is about
+// to be discarded, so the daemon's own explanation survives in the retry
+// exhaustion error instead of being thrown away with the body.
+func readErrorDetails(body io.ReadCloser) string {
+	if body == nil {
+		return ""
 	}
-	return req.Header.Get("X-Forge-Command-ID") != ""
+	raw, err := io.ReadAll(io.LimitReader(body, 4*1024))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var (
-		resp      *http.Response
-		err       error
-		bodyBytes []byte
+		resp        *http.Response
+		err         error
+		bodyBytes   []byte
+		lastStatus  int
+		lastDetails string
+		sawStatus   bool
 	)
 	if req.Body != nil {
 		bodyBytes, err = io.ReadAll(req.Body)
@@ -243,14 +267,38 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 			// a retry-budget error that hides what the daemon said.
 			return resp, nil
 		}
+		// Keep what the daemon answered: the retry budget is about to run out
+		// and the last real response is the only evidence of why.
+		lastStatus = resp.StatusCode
+		lastDetails = readErrorDetails(resp.Body)
+		sawStatus = true
 		resp.Body.Close()
 	}
-	if err != nil {
+	if !sawStatus {
+		// Every attempt failed in transport: the transport error is the whole
+		// story, and callers classify on it.
+		if err == nil {
+			err = fmt.Errorf("request failed after %d attempt(s)", attempts)
+		}
 		return nil, err
 	}
-	lastStatus := resp.StatusCode
-	resp.Body.Close()
-	return nil, fmt.Errorf("request failed after %d attempt(s), last status: %d", attempts, lastStatus)
+	// Exhausted the budget on retryable statuses. Return the typed daemon error
+	// with the last status and the daemon's own body: a plain "failed after N
+	// attempts" string throws away both the status callers map to HTTP codes
+	// and the reason the node gave (docker compose output, quota text).
+	operation := strings.ToLower(req.Method) + " " + req.URL.RequestURI()
+	if err != nil {
+		if lastDetails == "" {
+			lastDetails = err.Error()
+		} else {
+			lastDetails += "; " + err.Error()
+		}
+	}
+	return nil, &ResponseError{
+		Operation:  operation,
+		StatusCode: lastStatus,
+		Details:    fmt.Sprintf("request failed after %d attempt(s): %s", attempts, lastDetails),
+	}
 }
 
 func NewClient(baseURL, nodeToken string) (*Client, error) {
@@ -560,10 +608,10 @@ func (c *Client) PushTransferSource(ctx context.Context, baseURL, migrationID, c
 	if err != nil {
 		return TransferMetadata{}, err
 	}
-	// The push copies the archive node-to-node server-side and outlives an
-	// RPC budget; it gets the streaming timeout, and its idempotency key is
-	// sent as a header so transport retries dedupe instead of duplicating
-	// the upload.
+	// The push copies the archive node-to-node server-side and outlives an RPC
+	// budget, so it gets the streaming timeout. Its idempotency key travels as
+	// a header for the daemon's own bookkeeping; the retry transport still never
+	// replays it, because only the power route dedupes command ids.
 	return c.transferJSONWithTimeout(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/transfers/"+migrationID+"/source/push", credential, body, longTransferTimeout, push.IdempotencyKey)
 }
 
@@ -592,11 +640,18 @@ func (c *Client) transferJSON(ctx context.Context, method, endpoint, credential 
 
 // transferJSONWithTimeout is transferJSON with an explicit HTTP budget and an
 // optional idempotency key. A zero timeout keeps the client's default RPC
-// budget; a non-empty key is sent as Idempotency-Key so the retry transport
-// may replay the request and the daemon may dedupe it.
+// budget; a non-empty key travels as Idempotency-Key for the daemon's
+// bookkeeping. It does not license a replay: the retry transport only replays
+// reads and the power route (see idempotentRequest).
 func (c *Client) transferJSONWithTimeout(ctx context.Context, method, endpoint, credential string, body []byte, timeout time.Duration, idempotencyKey string) (TransferMetadata, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
+		return TransferMetadata{}, err
+	}
+	// A transfer credential is a bearer secret: the same HTTPS-only rules that
+	// guard signed node requests apply here, or the scoped credential would go
+	// out in cleartext on a path newRequest never validates.
+	if err := c.validateNodeURL(request.URL); err != nil {
 		return TransferMetadata{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+credential)
@@ -712,10 +767,11 @@ func (c *Client) CreateServer(ctx context.Context, baseURL, nodeToken string, re
 	if err != nil {
 		return CreateResponse{}, err
 	}
-	// The caller's command ID is the idempotency key for this creation, the
-	// same way SendPower keys power commands. Replaying a keyless create
-	// after a transport blip would provision the container twice, so the key
-	// both enables transport retries and lets the daemon dedupe.
+	// The caller's command ID rides along for tracing and for the daemon's own
+	// operation bookkeeping, but it does NOT license a transport retry here:
+	// Beacon dedupes command ids only on the power route, so POST /servers is
+	// never replayed (see idempotentRequest). Replaying a create whose response
+	// was lost would provision the container a second time.
 	if commandID := commandIDFromContext(ctx); commandID != "" {
 		req.Header.Set("X-Forge-Command-ID", commandID)
 		req.Header.Set("Idempotency-Key", commandID)
@@ -1475,6 +1531,9 @@ func (c *Client) HostFilesUpload(ctx context.Context, baseURL, nodeToken, path s
 	if err != nil {
 		return err
 	}
+	if err := c.validateNodeURL(req.URL); err != nil {
+		return err
+	}
 	nodeToken, err = c.resolveNodeToken(nodeToken)
 	if err != nil {
 		return err
@@ -1951,6 +2010,9 @@ func (c *Client) AdminContainerFilesUpload(ctx context.Context, baseURL, nodeTok
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		strings.TrimRight(baseURL, "/")+"/api/admin/containers/"+containerID+"/files/upload?path="+url.QueryEscape(destPath), body)
 	if err != nil {
+		return err
+	}
+	if err := c.validateNodeURL(req.URL); err != nil {
 		return err
 	}
 	req.Header.Set("Content-Type", contentType)

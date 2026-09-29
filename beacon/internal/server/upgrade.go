@@ -94,6 +94,28 @@ type UpgradeManager struct {
 	err         string
 	progress    string
 	progressPct int
+	// stagedHash is the SHA-256 of the extracted binary that passed
+	// verification. Apply re-hashes the installed target against it, so the
+	// upgrade is only reported as applied once the bytes now standing in for
+	// this daemon's executable are known to be the ones that were checked.
+	stagedHash string
+	// backupHash is the SHA-256 of the recovery point written before the
+	// upgrade, so a rollback can prove it restored the right bytes.
+	backupHash string
+}
+
+// fileSHA256 returns the lowercase hex SHA-256 of a file's contents.
+func fileSHA256(path string) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	hasher := sha256.New()
+	if _, err := io.Copy(hasher, f); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(hasher.Sum(nil)), nil
 }
 
 func NewUpgradeManager(currentVersion, binPath, dataDir string) *UpgradeManager {
@@ -214,6 +236,13 @@ func (m *UpgradeManager) Apply(ctx context.Context) error {
 		m.mu.Unlock()
 		return errors.New("upgrade not ready to apply")
 	}
+	if m.stagedHash == "" {
+		state := m.state
+		m.mu.Unlock()
+		return fmt.Errorf("upgrade has no verified staged binary to apply (state %s)", state)
+	}
+	version := m.version
+	stagedHash := m.stagedHash
 	m.state = UpgradeStateApplying
 	m.progress = "applying upgrade"
 	m.progressPct = 50
@@ -225,21 +254,45 @@ func (m *UpgradeManager) Apply(ctx context.Context) error {
 		m.fail(err)
 		return err
 	}
+	if info, err := os.Stat(newBin); err != nil {
+		m.fail(fmt.Errorf("staged upgrade missing: %w", err))
+		return err
+	} else if info.Size() <= 0 {
+		err := errors.New("staged upgrade binary is empty")
+		m.fail(err)
+		return err
+	}
 	if err := atomicReplaceFromFile(newBin, target, 0o755); err != nil {
 		m.fail(fmt.Errorf("atomic apply failed: %w", err))
+		return err
+	}
+	// The replacement is hashed before the upgrade is called applied. The
+	// download was verified, but the file that now stands in for this daemon's
+	// executable is what every future start loads, and a copy that was never
+	// checked is a copy that was not proven to land. The previous binary is
+	// still in the backup directory, so a mismatch leaves a rollable node
+	// instead of a fleet that reboots into a short write.
+	installedHash, err := fileSHA256(target)
+	if err != nil {
+		m.fail(fmt.Errorf("verify installed binary: %w", err))
+		return err
+	}
+	if installedHash != stagedHash {
+		err := fmt.Errorf("installed binary does not match the verified download: expected %s, got %s", stagedHash, installedHash)
+		m.fail(err)
 		return err
 	}
 
 	m.mu.Lock()
 	m.state = UpgradeStateCompleted
 	m.currentVersion = m.version
-	m.currentHash = ""
-	m.progress = "upgrade applied successfully"
+	m.currentHash = installedHash
+	m.progress = "upgrade applied and verified"
 	m.progressPct = 100
 	m.completedAt = time.Now().UTC()
 	m.mu.Unlock()
 
-	log.Printf("[upgrade] beacon upgraded to version %s", m.version)
+	log.Printf("[upgrade] beacon upgraded to version %s", version)
 	return nil
 }
 
@@ -250,21 +303,32 @@ func (m *UpgradeManager) Rollback(ctx context.Context) error {
 		return errors.New("only failed or completed upgrades can be rolled back")
 	}
 	prevState := m.state
+	prevVersion := m.prevVersion
+	expectedHash := m.backupHash
 	m.state = UpgradeStateRollingBack
 	m.progress = "rolling back"
 	m.progressPct = 0
 	m.mu.Unlock()
 
-	backupPath := m.backupPath(m.prevVersion)
-	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
-		m.mu.Lock()
-		m.state = UpgradeStateRolledBack
-		m.err = fmt.Sprintf("backup binary not found at %s", backupPath)
-		m.completedAt = time.Now().UTC()
-		m.mu.Unlock()
+	backupPath := m.backupPath(prevVersion)
+	info, err := os.Stat(backupPath)
+	if errors.Is(err, os.ErrNotExist) {
+		// Nothing was restored. Recording the node as rolled back would tell
+		// the control plane this daemon runs the previous binary when it still
+		// runs the one being rolled away from, so the state stays failed and
+		// the operator is told the rollback did not happen.
+		m.fail(fmt.Errorf("rollback did not run, backup binary not found at %s", backupPath))
 		return fmt.Errorf("backup binary not found at %s", backupPath)
 	}
-
+	if err != nil {
+		m.fail(err)
+		return err
+	}
+	if info.Size() <= 0 {
+		err := fmt.Errorf("backup binary at %s is empty", backupPath)
+		m.fail(err)
+		return err
+	}
 	if err := ctx.Err(); err != nil {
 		m.fail(err)
 		return err
@@ -279,28 +343,69 @@ func (m *UpgradeManager) Rollback(ctx context.Context) error {
 		m.fail(fmt.Errorf("rollback copy failed: %w", err))
 		return err
 	}
+	if expectedHash != "" {
+		restored, err := fileSHA256(m.binPath)
+		if err != nil {
+			m.fail(fmt.Errorf("verify restored binary: %w", err))
+			return err
+		}
+		if restored != expectedHash {
+			err := fmt.Errorf("restored binary does not match the recorded backup: expected %s, got %s", expectedHash, restored)
+			m.fail(err)
+			return err
+		}
+	}
 
 	m.mu.Lock()
 	m.state = UpgradeStateRolledBack
 	m.currentVersion = m.prevVersion
+	m.currentHash = expectedHash
 	m.progress = fmt.Sprintf("rolled back to version %s", m.prevVersion)
 	m.progressPct = 100
 	m.completedAt = time.Now().UTC()
+	rolledBackTo := m.prevVersion
 	m.mu.Unlock()
 
-	log.Printf("[upgrade] beacon rolled back to version %s", m.prevVersion)
+	log.Printf("[upgrade] beacon rolled back to version %s", rolledBackTo)
 	return nil
 }
 
 func (m *UpgradeManager) backupCurrentBinary() error {
+	m.mu.Lock()
+	current := m.currentVersion
+	m.mu.Unlock()
 	if err := os.MkdirAll(m.backupDir, 0o700); err != nil {
 		return err
 	}
-	backupPath := m.backupPath(m.currentVersion)
-	if _, err := os.Stat(backupPath); err == nil {
-		return nil
+	backupPath := m.backupPath(current)
+	if info, err := os.Stat(backupPath); err == nil {
+		// A zero-length recovery point from an interrupted run is not a backup:
+		// restoring it would replace the running binary with an empty file.
+		if info.Size() <= 0 {
+			if err := os.Remove(backupPath); err != nil {
+				return fmt.Errorf("discard empty backup binary: %w", err)
+			}
+		} else {
+			return m.recordBackupHash(backupPath)
+		}
 	}
-	return atomicReplaceFromFile(m.binPath, backupPath, 0o700)
+	if err := atomicReplaceFromFile(m.binPath, backupPath, 0o700); err != nil {
+		return err
+	}
+	return m.recordBackupHash(backupPath)
+}
+
+// recordBackupHash stores the hash of the recovery point so Rollback can prove
+// afterwards that it put back the bytes that were taken out.
+func (m *UpgradeManager) recordBackupHash(backupPath string) error {
+	hash, err := fileSHA256(backupPath)
+	if err != nil {
+		return fmt.Errorf("hash backup binary: %w", err)
+	}
+	m.mu.Lock()
+	m.backupHash = hash
+	m.mu.Unlock()
+	return nil
 }
 
 func (m *UpgradeManager) backupPath(version string) string {

@@ -9,21 +9,29 @@ import (
 	incus "gamepanel/forge/internal/services/incus"
 )
 
+// registerIncusRoutes wires the Forge Virtualization (Incus) admin surface.
+//
+// Gated by nodes.* rather than an incus.* family: no incus.read/incus.write
+// exists in store.AdminScopes, so requireAdminScope("incus.read") could never be
+// satisfied by an API key (ValidateApiKeyScopes rejects unregistered names and
+// the published catalogue is store.AdminScopes). An Incus host is a node, and
+// these routes inspect and drive those hosts, so nodes.read/nodes.write is the
+// scope that both exists and describes the access.
 func registerIncusRoutes(protected fiber.Router, cfg Config, adminIPAccess fiber.Handler) {
 	ic := protected.Group("/admin/incus", adminIPAccess)
-	ic.Get("/nodes", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListNodes(c, cfg) })
-	ic.Get("/instances", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListInstances(c, cfg) })
-	ic.Get("/instances/:name", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusGetInstance(c, cfg) })
-	ic.Post("/instances", requireRole("admin"), requireAdminScope("incus.write"), func(c *fiber.Ctx) error { return incusCreateInstance(c, cfg) })
-	ic.Post("/instances/:name/start", requireRole("admin"), requireAdminScope("incus.write"), func(c *fiber.Ctx) error { return incusStartInstance(c, cfg) })
-	ic.Post("/instances/:name/stop", requireRole("admin"), requireAdminScope("incus.write"), func(c *fiber.Ctx) error { return incusStopInstance(c, cfg) })
-	ic.Post("/instances/:name/restart", requireRole("admin"), requireAdminScope("incus.write"), func(c *fiber.Ctx) error { return incusRestartInstance(c, cfg) })
-	ic.Delete("/instances/:name", requireRole("admin"), requireAdminScope("incus.write"), func(c *fiber.Ctx) error { return incusDeleteInstance(c, cfg) })
-	ic.Get("/images", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListImages(c, cfg) })
-	ic.Get("/profiles", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListProfiles(c, cfg) })
-	ic.Get("/storage-pools", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListStoragePools(c, cfg) })
-	ic.Get("/cluster", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusListClusterMembers(c, cfg) })
-	ic.Get("/metrics", requireRole("admin"), requireAdminScope("incus.read"), func(c *fiber.Ctx) error { return incusServerMetrics(c, cfg) })
+	ic.Get("/nodes", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListNodes(c, cfg) })
+	ic.Get("/instances", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListInstances(c, cfg) })
+	ic.Get("/instances/:name", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusGetInstance(c, cfg) })
+	ic.Post("/instances", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error { return incusCreateInstance(c, cfg) })
+	ic.Post("/instances/:name/start", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error { return incusStartInstance(c, cfg) })
+	ic.Post("/instances/:name/stop", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error { return incusStopInstance(c, cfg) })
+	ic.Post("/instances/:name/restart", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error { return incusRestartInstance(c, cfg) })
+	ic.Delete("/instances/:name", requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error { return incusDeleteInstance(c, cfg) })
+	ic.Get("/images", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListImages(c, cfg) })
+	ic.Get("/profiles", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListProfiles(c, cfg) })
+	ic.Get("/storage-pools", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListStoragePools(c, cfg) })
+	ic.Get("/cluster", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusListClusterMembers(c, cfg) })
+	ic.Get("/metrics", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error { return incusServerMetrics(c, cfg) })
 }
 
 // incusError maps a service failure onto HTTP: an unconfigured backend is 503
@@ -43,7 +51,7 @@ func incusListNodes(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	nodes, err := cfg.Store.ListNodes(ctx)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return respondInternalError(c, err)
 	}
 	var out []fiber.Map
 	for _, n := range nodes {
@@ -77,7 +85,7 @@ func resolveIncusNode(c *fiber.Ctx, cfg Config) (string, error) {
 	defer cancel()
 	nodes, err := cfg.Store.ListNodes(ctx)
 	if err != nil {
-		return "", fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return "", respondInternalError(c, err)
 	}
 	selected := ""
 	count := 0

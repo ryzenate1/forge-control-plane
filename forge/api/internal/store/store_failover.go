@@ -137,14 +137,17 @@ func (s *Store) CreateFailoverIncident(ctx context.Context, e *FailoverEvent, wi
 		return false, err
 	}
 	var active bool
+	// make_interval(secs => $2) carries the window as seconds: Go's
+	// Duration.String ("1m0s") is not a Postgres interval literal and
+	// $2::interval would reject it.
 	if err := tx.QueryRow(ctx, `
 		SELECT EXISTS (
 			SELECT 1 FROM failover_events
 			WHERE node_id=$1
 			  AND status IN ('detected','evacuating','restarting')
-			  AND created_at > NOW()-$2::interval
+			  AND created_at > NOW()-make_interval(secs => $2)
 		)
-	`, e.NodeID, window.String()).Scan(&active); err != nil {
+	`, e.NodeID, window.Seconds()).Scan(&active); err != nil {
 		return false, err
 	}
 	if active {

@@ -213,7 +213,7 @@ func validateEnvLogWSUpgrade(conn *fiberws.Conn, cfg *Config, st *envLogTicketSt
 	// Re-check 2FA posture: the session's 2FA state can change within the
 	// ticket's window, so enforce the panel policy on upgrade as well.
 	twoFactorCtx, twoFactorCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	twoFactorErr := checkRealtimeTwoFactor(twoFactorCtx, cfg, validated)
+	twoFactorErr := checkRealtimeTwoFactor(twoFactorCtx, *cfg, validated)
 	twoFactorCancel()
 	if twoFactorErr != nil {
 		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required")

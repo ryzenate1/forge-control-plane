@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON } from "@/lib/api";
+import { fetchJSON, postJSON, putJSON, deleteJSON } from "./http";
 
 export type PredictiveScore = {
   nodeId: string;

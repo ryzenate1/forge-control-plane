@@ -2,7 +2,6 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -13,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"gamepanel/beacon/internal/runtime"
+	"gamepanel/beacon/internal/backup"
 )
 
 type CapabilityType string
@@ -89,7 +88,6 @@ type DatabaseCapability struct {
 }
 
 func (s *Server) collectCapabilities() CapabilityReport {
-	runtimeStatus := "unknown"
 	runtimeProvider := s.runtimeProvider()
 	if runtimeProvider == "unknown" {
 		runtimeProvider = ""
@@ -99,35 +97,38 @@ func (s *Server) collectCapabilities() CapabilityReport {
 	// capability report has to say "not available" rather than advertise a
 	// runtime that can build nothing.
 	rtAvailable := runtimeAvailable(s.runtime)
-	if s.runtime != nil {
-		runtimeStatus = s.dockerStatus()
-		if pinger, ok := s.runtime.(runtime.Pinger); ok {
-			if err := pinger.Ping(context.Background()); err == nil {
-				runtimeStatus = "ok"
-			} else {
-				runtimeStatus = "error"
-			}
-		}
-	}
+	// dockerStatus pings the engine and reports "unknown" when the wired runtime
+	// cannot be pinged at all. It used to fall back to a snapshot taken once at
+	// construction, which kept reading "ok" for the lifetime of the process after
+	// the engine behind it died; the panel placed workloads on that reading.
+	runtimeStatus := s.dockerStatus()
+	// runtimeUsable is the only claim of usability this report makes: a runtime
+	// that is wired up but does not answer is not usable, and a runtime that
+	// cannot be asked at all is unknown rather than working.
+	runtimeUsable := rtAvailable && runtimeStatus == "ok"
 
 	_, dockerBuildErr := exec.LookPath("docker")
 	_, nixpacksErr := exec.LookPath("nixpacks")
-	dockerBuildEnabled := rtAvailable && dockerBuildErr == nil
-	nixpacksEnabled := rtAvailable && nixpacksErr == nil
+	dockerBuildEnabled := runtimeUsable && dockerBuildErr == nil
+	nixpacksEnabled := runtimeUsable && nixpacksErr == nil
 	buildStatus := "error"
 	if dockerBuildEnabled || nixpacksEnabled {
 		buildStatus = "ok"
 	}
 
-	composeEnabled := s.composeStacks != nil
+	// "compose" is not the stack bookkeeping this process keeps in memory - any
+	// node has that. It is the ability to run `docker compose`, which needs both
+	// a usable engine and the docker CLI the compose subcommand rides on.
+	composeEnabled := s.composeStacks != nil && dockerBuildEnabled
 	var stackCount int
-	if composeEnabled {
+	if s.composeStacks != nil {
 		stackCount = s.composeStacks.count()
 	}
 	transferEnabled := s.transferProtocol != nil
 	backupsEnabled := s.backups != nil
-	gatewayEnabled := s.consoles != nil
-	databaseEnabled := rtAvailable
+	consoleEnabled := s.consoles != nil && runtimeUsable
+	gatewayEnabled := s.consoles != nil || s.SFTPEnabled()
+	databaseEnabled := runtimeUsable
 
 	// Every status below is derived from something this process actually wired
 	// up. They used to be a row of literal "ok" values, which told the panel the
@@ -138,7 +139,7 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		{Type: CapabilityBuild, Status: buildStatus},
 		{Type: CapabilityCompose, Status: capabilityStatus(composeEnabled)},
 		{Type: CapabilityStorage, Status: capabilityStatus(backupsEnabled || transferEnabled)},
-		{Type: CapabilityGateway, Status: capabilityStatus(gatewayEnabled || s.SFTPEnabled())},
+		{Type: CapabilityGateway, Status: capabilityStatus(gatewayEnabled)},
 		{Type: CapabilityDatabase, Status: capabilityStatus(databaseEnabled)},
 	}
 
@@ -156,21 +157,36 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		TransferEnabled: transferEnabled,
 	}
 	if backupsEnabled {
-		storageInfo.LocalBackups = true
-		storageInfo.BackupAdapters = append(storageInfo.BackupAdapters, "local")
+		// The adapter names itself. Reporting "local" unconditionally told the
+		// panel that backups landed on this node's disk when the operator
+		// configured the S3 adapter, and S3Backups never turned true.
+		switch adapter := s.backups.Type(); adapter {
+		case backup.LocalAdapter:
+			storageInfo.LocalBackups = true
+			storageInfo.BackupAdapters = append(storageInfo.BackupAdapters, string(adapter))
+		case backup.S3Adapter:
+			storageInfo.S3Backups = true
+			storageInfo.BackupAdapters = append(storageInfo.BackupAdapters, string(adapter))
+		default:
+			// An adapter this build does not recognise is reported as itself
+			// rather than as one of the two known kinds.
+			if name := strings.TrimSpace(string(adapter)); name != "" {
+				storageInfo.BackupAdapters = append(storageInfo.BackupAdapters, name)
+			}
+		}
 	}
 
 	gatewayInfo := &GatewayCapability{
 		SFTPEnabled:      s.SFTPEnabled(),
 		WebSocketEnabled: gatewayEnabled,
-		ConsoleEnabled:   gatewayEnabled,
+		ConsoleEnabled:   consoleEnabled,
 	}
 
 	databaseInfo := &DatabaseCapability{
 		ProvisioningEnabled: databaseEnabled,
 	}
 	if databaseEnabled {
-		databaseInfo.SupportedEngines = []string{"mysql", "postgresql"}
+		databaseInfo.SupportedEngines = provisionableDatabaseEngines()
 	}
 
 	return CapabilityReport{
@@ -179,16 +195,40 @@ func (s *Server) collectCapabilities() CapabilityReport {
 		Architecture:  stdruntime.GOARCH,
 		CPUThreads:    stdruntime.NumCPU(),
 		MemoryMB:      totalSystemMemoryMB(),
+		// Disk is probed from the data directory's filesystem. A report that
+		// omitted it left the panel reading a node with zero disk capacity.
+		DiskMB:        totalDiskMB(s.dataDir),
 		UptimeSeconds: int64(time.Since(s.started).Seconds()),
 		Capabilities:  capabilities,
-		RuntimeInfo:   &RuntimeCapability{DockerAvailable: rtAvailable, DockerStatus: runtimeStatus, RuntimeProvider: runtimeProvider},
-		BuildInfo:     buildInfo,
-		ComposeInfo:   composeInfo,
-		StorageInfo:   storageInfo,
-		GatewayInfo:   gatewayInfo,
-		DatabaseInfo:  databaseInfo,
-		FetchedAt:     time.Now().UTC().Format(time.RFC3339),
+		// Only an engine that answers a live ping is advertised as available.
+		// Reporting "wired, therefore available" told the control plane a node
+		// could run workloads after its socket went away, and it kept placing
+		// servers on a daemon that refuses every create. The capability-gated
+		// placeholder runtimes report nothing but "unknown" for the same reason.
+		RuntimeInfo:  &RuntimeCapability{DockerAvailable: runtimeUsable, DockerStatus: runtimeStatus, RuntimeProvider: runtimeProvider},
+		BuildInfo:    buildInfo,
+		ComposeInfo:  composeInfo,
+		StorageInfo:  storageInfo,
+		GatewayInfo:  gatewayInfo,
+		DatabaseInfo: databaseInfo,
+		FetchedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
+}
+
+// provisionableDatabaseEngines reports exactly the engines this daemon's
+// provisioning path accepts, filtered through the same guard the provision
+// handler uses. It used to be a hardcoded pair, which both omitted the engines
+// the node really can serve and would have kept advertising them if support
+// were dropped.
+func provisionableDatabaseEngines() []string {
+	candidates := []string{"postgresql", "mysql", "mariadb", "mongodb", "redis"}
+	engines := make([]string, 0, len(candidates))
+	for _, engine := range candidates {
+		if validDatabaseEngine(engine) {
+			engines = append(engines, engine)
+		}
+	}
+	return engines
 }
 
 // capabilityStatus names a subsystem's real wiring instead of a hardcoded "ok".
@@ -207,11 +247,13 @@ func capabilityStatus(enabled bool) string {
 func (s *Server) systemCapabilities() []string {
 	report := s.collectCapabilities()
 	capabilities := []string{"files", "stats"}
+	// The provider this process actually resolved, or nothing. Falling back to a
+	// literal "docker" here advertised a Docker node behind a Podman, containerd
+	// or Kubernetes engine, which is the phantom-provider bug in the report the
+	// panel places with.
 	if report.RuntimeInfo != nil && report.RuntimeInfo.DockerAvailable {
 		if provider := report.RuntimeInfo.RuntimeProvider; provider != "" {
 			capabilities = append(capabilities, provider)
-		} else {
-			capabilities = append(capabilities, "docker")
 		}
 	}
 	if report.BuildInfo != nil && (report.BuildInfo.DockerBuildEnabled || report.BuildInfo.NixpacksEnabled) {
@@ -266,28 +308,48 @@ func (s *Server) handlePostCapabilitiesHeartbeat(w http.ResponseWriter, r *http.
 		return
 	}
 	var externalReport CapabilityReport
-	if err := json.NewDecoder(r.Body).Decode(&externalReport); err != nil {
-		writeError(w, http.StatusBadRequest, "invalid capabilities payload")
+	if err := decodeJSONBody(w, r, capabilityReportLimit, &externalReport); err != nil {
+		// decodeJSONBody has already written the response, and it distinguishes
+		// an oversized payload (413) from a malformed one (400) instead of
+		// reporting both as bad JSON.
 		return
 	}
 	externalReport.FetchedAt = time.Now().UTC().Format(time.RFC3339)
+	forwarded := false
 	if s.panelClient != nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 		defer cancel()
 		if err := s.panelClient.SendCapabilityReport(ctx, externalReport); err != nil {
+			// The whole point of this endpoint is to get the report onto the
+			// panel. Acknowledging it locally while the forward failed told the
+			// caller a capability update landed when it did not, so the failure
+			// is returned as a bad gateway instead of being logged and dropped.
 			log.Printf("[beacon] failed to send capability report: %v", err)
+			writeError(w, http.StatusBadGateway, "capability report not delivered to panel: "+err.Error())
+			return
 		}
+		forwarded = true
 	}
 	delta := s.computeCapabilityDeltaFromExternal(externalReport)
-	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "delta": delta})
+	writeJSON(w, http.StatusOK, map[string]any{"accepted": true, "forwarded": forwarded, "delta": delta})
 }
 
+// capabilityReportLimit bounds an inbound capability report. The report is a
+// fixed-shape summary, so anything past this is either abusive or corrupt.
+const capabilityReportLimit = int64(1 << 20)
+
+// handleGetCapabilitiesDelta reports how this node's capabilities moved since
+// the last capability observation, which is what the route's name promises.
+// It used to answer with the full report, so a caller comparing two polls
+// received an object with no added/removed/changed keys at all and had to
+// assume nothing had changed. Both capability routes share one baseline: they
+// describe the same node, and the delta is always "since anyone last looked".
 func (s *Server) handleGetCapabilitiesDelta(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 		return
 	}
-	writeJSON(w, http.StatusOK, s.collectCapabilities())
+	writeJSON(w, http.StatusOK, s.computeCapabilityDeltaFromExternal(s.collectCapabilities()))
 }
 
 func (s *Server) computeCapabilityDeltaFromExternal(current CapabilityReport) CapabilityDelta {

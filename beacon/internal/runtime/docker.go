@@ -38,6 +38,27 @@ import (
 func ptrInt64(v int64) *int64 { return &v }
 func ptrBool(v bool) *bool    { return &v }
 
+// Per-call bounds for daemon round-trips. The Docker SDK client carries no
+// default timeout, so a wedged or unreachable daemon blocks the caller
+// indefinitely: a lifecycle request would never return, and the workload would
+// keep running while the panel waited. Streams (logs, stats, console) are
+// deliberately not bounded this way — they are long-lived by design and rely on
+// the caller's context instead.
+const (
+	engineInspectTimeout = 15 * time.Second
+	engineCallTimeout    = 60 * time.Second
+	engineStopTimeout    = 2 * time.Minute
+)
+
+// withEngineDeadline bounds an engine call without shortening a deadline the
+// caller already set. The returned cancel is always safe to defer.
+func withEngineDeadline(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
+	if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) <= timeout {
+		return ctx, func() {}
+	}
+	return context.WithTimeout(ctx, timeout)
+}
+
 var pinnedImagePattern = regexp.MustCompile(`@sha256:[a-fA-F0-9]{64}$`)
 
 type DockerRuntime struct {
@@ -385,15 +406,57 @@ func (r *DockerRuntime) Install(ctx context.Context, req InstallRequest) (Instal
 		return InstallResult{}, err
 	}
 	defer logsReader.Close()
-	var raw bytes.Buffer
-	_, _ = io.Copy(&raw, io.LimitReader(logsReader, 1024*1024))
+	// The installer is not a TTY container, so the daemon returns stdout and
+	// stderr as framed records. Copying that stream verbatim handed the panel
+	// eight-byte binary headers interleaved with the script output, and the
+	// install transcript published to the user was unparseable. Demux it, and
+	// only cap the retained size: a transcript that stops mid-way must say so
+	// rather than look complete.
+	capped := &cappedBuffer{limit: installLogLimit}
+	if _, copyErr := stdcopy.StdCopy(capped, capped, logsReader); copyErr != nil {
+		return InstallResult{ExitCode: int(statusCode)}, fmt.Errorf("read installer logs: %w", copyErr)
+	}
+	logs := capped.String()
+	if capped.dropped > 0 {
+		logs += fmt.Sprintf("\n[install log truncated: %d bytes omitted]", capped.dropped)
+	}
 	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
 	_ = r.client.ContainerRemove(cleanupCtx, resp.ID, container.RemoveOptions{Force: true, RemoveVolumes: true})
-	return InstallResult{ExitCode: int(statusCode), Logs: raw.String()}, nil
+	return InstallResult{ExitCode: int(statusCode), Logs: logs}, nil
 }
 
+// installLogLimit bounds how much of an installer's transcript Beacon retains.
+// The reader keeps draining past the limit so the engine sees a complete
+// stream; only the retained copy stops growing, and the shortfall is reported
+// in the transcript itself.
+const installLogLimit = 1 << 20
+
+type cappedBuffer struct {
+	buf    bytes.Buffer
+	limit  int64
+	dropped int64
+}
+
+func (c *cappedBuffer) Write(p []byte) (int, error) {
+	room := c.limit - int64(c.buf.Len())
+	switch {
+	case room <= 0:
+		c.dropped += int64(len(p))
+	case int64(len(p)) <= room:
+		c.buf.Write(p)
+	default:
+		c.buf.Write(p[:room])
+		c.dropped += int64(len(p)) - room
+	}
+	return len(p), nil
+}
+
+func (c *cappedBuffer) String() string { return c.buf.String() }
+
 func (r *DockerRuntime) Inspect(ctx context.Context, serverID string) (ContainerState, error) {
+	ctx, cancel := withEngineDeadline(ctx, engineInspectTimeout)
+	defer cancel()
 	inspection, err := r.client.ContainerInspect(ctx, containerName(serverID))
 	if err != nil {
 		if errdefs.IsNotFound(err) {
@@ -457,7 +520,9 @@ func (r *DockerRuntime) Start(ctx context.Context, serverID string) error {
 	if state.Running {
 		return nil
 	}
-	return r.client.ContainerStart(ctx, containerName(serverID), container.StartOptions{})
+	callCtx, cancel := withEngineDeadline(ctx, engineCallTimeout)
+	defer cancel()
+	return r.client.ContainerStart(callCtx, containerName(serverID), container.StartOptions{})
 }
 
 func (r *DockerRuntime) SendCommand(ctx context.Context, serverID, command string) error {
@@ -504,7 +569,9 @@ func (r *DockerRuntime) Stop(ctx context.Context, serverID string) error {
 		return nil
 	}
 	timeout := 30
-	return r.client.ContainerStop(ctx, containerName(serverID), container.StopOptions{Timeout: &timeout})
+	callCtx, cancel := withEngineDeadline(ctx, engineStopTimeout)
+	defer cancel()
+	return r.client.ContainerStop(callCtx, containerName(serverID), container.StopOptions{Timeout: &timeout})
 }
 
 func (r *DockerRuntime) WaitForStop(ctx context.Context, serverID string, duration time.Duration, terminate bool) error {
@@ -618,12 +685,17 @@ func (r *DockerRuntime) Logs(ctx context.Context, serverID string) (io.ReadClose
 			return nil, fmt.Errorf("container %q has never started: no logs to report", containerName(serverID))
 		}
 	}
+	// The bound is an explicit line tail, the same one LogsStream applies, and
+	// it is visible to the caller as "the last N lines". It used to be a five
+	// minute window, which silently dropped everything older and still returned
+	// HTTP 200 with a short body: an absent reading presented as a quiet
+	// container.
 	return r.client.ContainerLogs(ctx, containerName(serverID), container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,
 		Follow:     false,
 		Timestamps: true,
-		Since:      time.Now().Add(-5 * time.Minute).Format(time.RFC3339),
+		Tail:       "10000",
 	})
 }
 

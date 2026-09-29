@@ -1106,10 +1106,13 @@ func (s *Store) CreatePasswordResetToken(ctx context.Context, userID, tokenHash 
 		return "", nil
 	}
 	id := uuid.NewString()
+	// make_interval(secs => $4) carries the TTL as seconds: Go's
+	// Duration.String ("30m0s") is not a Postgres interval literal and
+	// $4::interval would reject it.
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, requested_ip)
-		VALUES ($1, $2, $3, now() + $4::interval, $5)
-	`, id, userID, tokenHash, ttl.String(), ip)
+		VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5)
+	`, id, userID, tokenHash, ttl.Seconds(), ip)
 	if err != nil {
 		return "", err
 	}

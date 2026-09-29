@@ -1,6 +1,7 @@
 package http
 
 import (
+	"bytes"
 	"errors"
 
 	"github.com/gofiber/fiber/v2"
@@ -8,19 +9,30 @@ import (
 	nomadsvc "gamepanel/forge/internal/services/nomad"
 )
 
+// registerNomadRoutes wires the Forge Orchestration (Nomad) admin surface.
+//
+// It is gated by the scheduler.* scope family rather than a nomad.* family:
+// there is no nomad.read/nomad.write in store.AdminScopes, and requireAdminScope
+// only accepts a scope that an API key can actually be issued. ValidateApiKeyScopes
+// rejects unregistered names and the scope catalogue served at
+// GET /api-keys is store.AdminScopes itself, so gating on nomad.* made every
+// route here permanently 403 for every API key — reachable only by
+// session-cookie admins, who bypass scopes entirely via "*". scheduler.* means
+// "view and manage workload placement/scheduling", which is exactly what these
+// routes do, so reusing it keeps the gate real instead of minting a dead scope.
 func registerNomadRoutes(protected fiber.Router, cfg Config, adminIPAccess fiber.Handler) {
 	nm := protected.Group("/admin/nomad", adminIPAccess)
-	nm.Get("/jobs", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListJobs(c, cfg) })
-	nm.Post("/jobs", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadSubmitJob(c, cfg) })
-	nm.Get("/jobs/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetJob(c, cfg) })
-	nm.Post("/jobs/:id/stop", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadStopJob(c, cfg) })
-	nm.Get("/allocations", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListAllocations(c, cfg) })
-	nm.Post("/allocations/:id/promote", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadPromoteAllocation(c, cfg) })
-	nm.Get("/nodes", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListNodes(c, cfg) })
-	nm.Get("/nodes/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetNode(c, cfg) })
-	nm.Post("/nodes/:id/drain", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadDrainNode(c, cfg) })
-	nm.Get("/deployments", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListDeployments(c, cfg) })
-	nm.Get("/deployments/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetDeployment(c, cfg) })
+	nm.Get("/jobs", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadListJobs(c, cfg) })
+	nm.Post("/jobs", requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error { return nomadSubmitJob(c, cfg) })
+	nm.Get("/jobs/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadGetJob(c, cfg) })
+	nm.Post("/jobs/:id/stop", requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error { return nomadStopJob(c, cfg) })
+	nm.Get("/allocations", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadListAllocations(c, cfg) })
+	nm.Post("/allocations/:id/promote", requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error { return nomadPromoteAllocation(c, cfg) })
+	nm.Get("/nodes", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadListNodes(c, cfg) })
+	nm.Get("/nodes/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadGetNode(c, cfg) })
+	nm.Post("/nodes/:id/drain", requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error { return nomadDrainNode(c, cfg) })
+	nm.Get("/deployments", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadListDeployments(c, cfg) })
+	nm.Get("/deployments/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error { return nomadGetDeployment(c, cfg) })
 }
 
 // nomadError answers 503 when Forge Orchestration is not configured and 502 for
@@ -184,9 +196,18 @@ func nomadDrainNode(c *fiber.Ctx, cfg Config) error {
 	var body struct {
 		Drain *bool `json:"drain"`
 	}
-	// Absent body defaults to starting a drain; pass {"drain": false} to reverse.
+	// A truly absent body defaults to starting a drain. A body that is present
+	// but unparseable must not: silently treating corrupt JSON as "drain the
+	// node" turns a typo into a fleet evacuation, so it is rejected instead of
+	// resolved to the destructive default.
 	drain := true
-	if err := c.BodyParser(&body); err == nil && body.Drain != nil {
+	if raw := bytes.TrimSpace(c.Body()); len(raw) > 0 && string(raw) != "null" {
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if body.Drain == nil {
+			return fiber.NewError(fiber.StatusBadRequest, "drain must be a boolean")
+		}
 		drain = *body.Drain
 	}
 	ctx, cancel := longRequestContext()

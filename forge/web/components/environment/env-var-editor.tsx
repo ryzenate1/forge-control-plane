@@ -43,7 +43,7 @@ export function EnvVarEditor({
   const vars = varsQuery.data ?? [];
 
   const revisionsQuery = useQuery({
-    queryKey: [...REVISIONS_KEY, historyVar?.id ?? ""],
+    queryKey: [...REVISIONS_KEY, historyVar?.id ?? "none"],
     queryFn: () => fetchEnvVarRevisions(historyVar!.id),
     enabled: Boolean(historyVar),
   });

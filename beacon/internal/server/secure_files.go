@@ -297,7 +297,22 @@ func extractZipStaged(fsys *rootfs.FS, reader *zip.Reader, stage string, limits 
 			return err
 		}
 		remaining := limits.bytes - written
-		count, copyErr := io.Copy(destination, io.LimitReader(source, remaining+1))
+		// Bound each entry read to its *declared* uncompressed size (validateZip
+		// already guaranteed that size fits the global limit) rather than to the
+		// whole remaining budget. A malicious zip can advertise a tiny
+		// UncompressedSize64 while its deflate stream expands to gigabytes;
+		// without this cap we would write up to the full limit into staging before
+		// the size mismatch is detected — a decompression-bomb write amplification
+		// and quota bypass.
+		declared := int64(entry.UncompressedSize64)
+		if declared < 0 {
+			declared = 0
+		}
+		entryCap := declared
+		if entryCap > remaining {
+			entryCap = remaining
+		}
+		count, copyErr := io.Copy(destination, io.LimitReader(source, entryCap+1))
 		closeErr := destination.Close()
 		_ = source.Close()
 		written += count
@@ -307,7 +322,7 @@ func extractZipStaged(fsys *rootfs.FS, reader *zip.Reader, stage string, limits 
 		if count > remaining {
 			return errors.New("archive expanded size exceeds limit")
 		}
-		if count != int64(entry.UncompressedSize64) {
+		if count != declared {
 			return errors.New("archive entry size is incomplete")
 		}
 		if closeErr != nil {

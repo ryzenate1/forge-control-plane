@@ -48,12 +48,25 @@ func decodeJSONBody(w http.ResponseWriter, r *http.Request, maxBytes int64, dst 
 	return nil
 }
 
-// readAllBounded reads up to max bytes from r and returns the body. Used by
-// Wings-style update/deauthorize-user endpoints that may carry modest JSON
-// payloads.
+// errBodyTooLarge reports that a request body carried more bytes than the
+// caller was prepared to accept. Silently handing back the first max bytes
+// would let a truncated document be parsed, persisted or acted on as if it
+// were the whole thing, so the overflow is an error and never a short read.
+var errBodyTooLarge = errors.New("request body exceeds the accepted size limit")
+
+// readAllBounded reads the body and returns it, refusing a payload larger
+// than max bytes. Used by Wings-style update/deauthorize-user endpoints that
+// may carry modest JSON payloads.
 func readAllBounded(r io.ReadCloser, max int64) ([]byte, error) {
 	defer r.Close()
-	return io.ReadAll(io.LimitReader(r, max))
+	body, err := io.ReadAll(io.LimitReader(r, max+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(body)) > max {
+		return nil, errBodyTooLarge
+	}
+	return body, nil
 }
 
 // slogUpdateAccepted logs that the panel pushed an update payload to this

@@ -13,7 +13,10 @@ package server
 // Transport uses the Docker archive API (CopyFromContainer/CopyToContainer)
 // for reads/writes so no in-container shell is required, and narrowly scoped
 // exec (rm -rf / mkdir -p) for the two mutations the archive API cannot
-// express. All paths are validated server-side: absolute, canonical, no NUL
+// express. This surface is Docker-family only (docker, podman): the archive
+// IDs, exec protocol and tar framing do not exist on containerd/firecracker/
+// kubernetes, so those providers are refused with 501 rather than having a
+// Docker client pointed at a pod UID or microVM ID it cannot resolve. All paths are validated server-side: absolute, canonical, no NUL
 // bytes, and recursive deletes refuse system roots and the workload's own
 // data root. Authentication is the panel HMAC enforced by the shared
 // middleware — exactly like the host file routes in server.go: per-user
@@ -32,6 +35,8 @@ import (
 	"path"
 	"strings"
 	"time"
+
+	"gamepanel/beacon/internal/runtime"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
@@ -52,6 +57,13 @@ const (
 	// containerFileListingLimit caps how many immediate children a single
 	// ls response returns so huge directories do not balloon the payload.
 	containerFileListingLimit = 5000
+	// containerFileListingMaxBytes caps how much of the recursive Docker tar
+	// stream we consume for one listing. CopyFromContainer archives the whole
+	// subtree, so reading it to find immediate children is otherwise unbounded
+	// in time and memory — a workload directory with a deep/huge subtree would
+	// make the daemon stream the entire tree into Beacon on every ls. Beyond
+	// this budget the listing is returned truncated.
+	containerFileListingMaxBytes = 256 << 20
 	// containerFilePathLimit caps pathological path lengths.
 	containerFilePathLimit = 4096
 )
@@ -84,6 +96,18 @@ func (s *Server) resolveServerContainer(r *http.Request) (*client.Client, string
 	}
 	if s.runtime == nil {
 		return nil, "", &containerFilesHTTPError{status: http.StatusServiceUnavailable, message: errRuntimeUnavailable.Error()}
+	}
+	// The archive API is Docker-family only. Pointing a Docker client at a
+	// Kubernetes pod UID, a containerd snapshot name or a microVM ID would
+	// either fail opaquely or, worse, resolve to an unrelated container.
+	// Refuse honestly so callers fall back to SFTP/host files instead.
+	switch provider := s.runtimeProvider(); strings.ToLower(strings.TrimSpace(provider)) {
+	case runtime.ProviderDocker, runtime.ProviderPodman:
+	default:
+		if provider == "" || provider == "unknown" {
+			return nil, "", &containerFilesHTTPError{status: http.StatusServiceUnavailable, message: "container file manager requires a docker-compatible runtime: current provider is unknown"}
+		}
+		return nil, "", &containerFilesHTTPError{status: http.StatusNotImplemented, message: "container file manager is not supported by the " + provider + " runtime; use SFTP or host files instead"}
 	}
 	state, err := s.runtime.Inspect(r.Context(), serverID)
 	if err != nil {
@@ -245,7 +269,7 @@ func (s *Server) handleServerContainerFilesLs(w http.ResponseWriter, r *http.Req
 	}
 	defer stream.Close()
 
-	tr := tar.NewReader(stream)
+	tr := tar.NewReader(io.LimitReader(stream, containerFileListingMaxBytes))
 	rootHdr, err := tr.Next()
 	if err != nil {
 		if errors.Is(err, io.EOF) {
@@ -274,8 +298,11 @@ func (s *Server) handleServerContainerFilesLs(w http.ResponseWriter, r *http.Req
 			break
 		}
 		if err != nil {
-			writeError(w, http.StatusBadGateway, "read archive: "+err.Error())
-			return
+			// The recursive archive exceeded the listing byte budget (or is
+			// malformed). Return the partial listing as truncated rather than
+			// streaming an unbounded number of bytes from the daemon.
+			listing.Truncated = true
+			break
 		}
 		name := strings.TrimSuffix(strings.TrimPrefix(hdr.Name, prefix), "/")
 		if name == "" || strings.Contains(name, "/") {

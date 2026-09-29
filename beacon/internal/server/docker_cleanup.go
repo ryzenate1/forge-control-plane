@@ -19,6 +19,7 @@ package server
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -37,6 +38,12 @@ type dockerCleanupImageInfo struct {
 	Size      int64    `json:"size"`
 	CreatedAt string   `json:"createdAt"`
 	InUse     bool     `json:"inUse"`
+
+	// ContainerCountKnown is false when the engine answered "-1" for how many
+	// containers reference this image: it did not count. InUse then reports the
+	// safe assumption (in use) rather than a measurement, so an uncounted image
+	// is never treated as a deletable one.
+	ContainerCountKnown bool `json:"containerCountKnown,omitempty"`
 }
 
 // dockerCleanupDiskUsage mirrors dockerleanup.DiskUsage. The panel fills in
@@ -48,6 +55,22 @@ type dockerCleanupDiskUsage struct {
 	VolumesBytes    int64                    `json:"volumesBytes"`
 	BuildCacheBytes int64                    `json:"buildCacheBytes"`
 	Images          []dockerCleanupImageInfo `json:"images"`
+
+	// SizeIncompleteCount records how many objects the engine returned without
+	// ever calculating a size for them. Their bytes are missing from the totals
+	// above rather than measured as zero, so a small total can be told apart from
+	// a node that genuinely holds little data.
+	SizeIncompleteCount int `json:"sizeIncompleteCount,omitempty"`
+
+	// UnattributedImageBytes is the part of the engine's own LayersSize total that
+	// no per-image entry accounts for. The panel prunes by image, so bytes sitting
+	// outside the reported breakdown are not reclaimable by any listed candidate.
+	UnattributedImageBytes int64 `json:"unattributedImageBytes,omitempty"`
+
+	// AccountingNotes are gaps found while assembling this report ("volume size
+	// not calculated", ...). They ride along so a partial report is never read as
+	// a complete one.
+	AccountingNotes []string `json:"accountingNotes,omitempty"`
 }
 
 // dockerCleanupPruneResult mirrors dockerleanup.PruneResult (nodeId is stamped
@@ -56,6 +79,46 @@ type dockerCleanupDiskUsage struct {
 type dockerCleanupPruneResult struct {
 	ReclaimedBytes int64 `json:"reclaimedBytes"`
 	RemovedCount   int   `json:"removedCount"`
+
+	// FailedCount / SkippedCount / Errors describe the objects that were NOT
+	// deleted. A prune that removed 2 of 10 images is not the same result as one
+	// that removed 10, so failures are reported instead of dropped; Errors carries
+	// at most the first few reasons while FailedCount stays exact.
+	FailedCount  int      `json:"failedCount,omitempty"`
+	SkippedCount int      `json:"skippedCount,omitempty"`
+	Errors       []string `json:"errors,omitempty"`
+
+	// ReclaimedBytesKnown is false when the engine could not be asked for image
+	// sizes, or an image disappeared before it could be measured. ReclaimedBytes
+	// is then 0 meaning "not measured", not "nothing was freed".
+	ReclaimedBytesKnown bool `json:"reclaimedBytesKnown"`
+}
+
+// dockerCleanupErrorDetailLimit caps how many per-object failure strings a prune
+// response carries; FailedCount is the complete count regardless.
+const dockerCleanupErrorDetailLimit = 12
+
+func (r *dockerCleanupPruneResult) recordFailure(reason string, skipped bool) {
+	r.FailedCount++
+	if skipped {
+		r.SkippedCount++
+	}
+	if len(r.Errors) < dockerCleanupErrorDetailLimit {
+		r.Errors = append(r.Errors, reason)
+	}
+}
+
+// isImageInUseError recognises the engine's "this image is being used by a
+// container" refusal, which is a skip (the image is legitimately still wanted)
+// rather than an unexpected failure.
+func isImageInUseError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "image is being used") ||
+		strings.Contains(msg, "is using referenced image") ||
+		strings.Contains(msg, "conflict")
 }
 
 // handleDockerDiskUsage returns the node's aggregate Docker disk accounting plus
@@ -80,30 +143,64 @@ func (s *Server) handleDockerDiskUsage(w http.ResponseWriter, r *http.Request) {
 	out := dockerCleanupDiskUsage{Images: []dockerCleanupImageInfo{}}
 	out.ImagesBytes = du.LayersSize
 
+	var imageBytesSum int64
 	for _, img := range du.Images {
 		if img == nil {
 			continue
 		}
-		// Containers is populated by the disk-usage endpoint; -1 means the engine
-		// did not calculate it, which we treat as "not known to be in use" so a
-		// shared/base image is not pruned merely because the count is unavailable.
-		inUse := img.Containers > 0
+		// image.Summary.Containers is documented as "-1 = not set / calculated".
+		// The panel prunes everything it is told is not in use, so an unknown
+		// count must fail closed and be reported as in use: "the engine did not
+		// tell us" cannot become "safe to delete".
+		containerCountKnown := img.Containers >= 0
+		inUse := img.Containers != 0
+		if !containerCountKnown {
+			out.SizeIncompleteCount++
+		}
+		if img.Size < 0 {
+			out.SizeIncompleteCount++
+		} else {
+			imageBytesSum += img.Size
+		}
 		out.Images = append(out.Images, dockerCleanupImageInfo{
-			ID:        img.ID,
-			RepoTags:  img.RepoTags,
-			Size:      img.Size,
-			CreatedAt: time.Unix(img.Created, 0).UTC().Format(time.RFC3339),
-			InUse:     inUse,
+			ID:                  img.ID,
+			RepoTags:            img.RepoTags,
+			Size:                img.Size,
+			CreatedAt:           time.Unix(img.Created, 0).UTC().Format(time.RFC3339),
+			InUse:               inUse,
+			ContainerCountKnown: containerCountKnown,
 		})
 	}
+	// LayersSize is the engine's own total. Anything it counts that no per-image
+	// entry accounts for is reported separately instead of vanishing from the
+	// report — otherwise a node can look smaller than it is.
+	if du.LayersSize > imageBytesSum {
+		out.UnattributedImageBytes = du.LayersSize - imageBytesSum
+		out.AccountingNotes = append(out.AccountingNotes,
+			"engine reports more image layers than the per-image breakdown accounts for")
+	}
+
 	for _, c := range du.Containers {
 		if c == nil {
+			continue
+		}
+		if c.SizeRootFs < 0 {
+			out.SizeIncompleteCount++
+			out.AccountingNotes = append(out.AccountingNotes,
+				"container root filesystem size was not calculated; containersBytes is a partial total")
 			continue
 		}
 		out.ContainersBytes += c.SizeRootFs
 	}
 	for _, v := range du.Volumes {
-		if v == nil || v.UsageData == nil {
+		if v == nil {
+			continue
+		}
+		if v.UsageData == nil {
+			// No usage data at all is "size unknown", not "volume is empty".
+			out.SizeIncompleteCount++
+			out.AccountingNotes = append(out.AccountingNotes,
+				"volume usage data was not reported; volumesBytes is a partial total")
 			continue
 		}
 		if v.UsageData.Size > 0 {
@@ -156,25 +253,42 @@ func (s *Server) handleDockerPruneImages(w http.ResponseWriter, r *http.Request)
 	}
 
 	// Pre-fetch sizes so reclaimed space can be reported even though ImageRemove
-	// does not return per-image byte counts. Images that vanish between the list
-	// and the remove simply contribute nothing to the total.
+	// does not return per-image byte counts. If the list fails the removals still
+	// proceed, but the reclaimed total is reported as not measured rather than as
+	// zero, because "0 bytes freed" and "we could not tell" are different answers.
 	sizeByID := map[string]int64{}
-	if images, err := docker.ImageList(r.Context(), image.ListOptions{All: true}); err == nil {
+	res := dockerCleanupPruneResult{ReclaimedBytesKnown: true}
+	images, err := docker.ImageList(r.Context(), image.ListOptions{All: true})
+	if err != nil {
+		res.ReclaimedBytesKnown = false
+		res.recordFailure("image size listing failed, reclaimed bytes not measured: "+err.Error(), false)
+	} else {
 		for _, img := range images {
 			sizeByID[img.ID] = img.Size
 		}
 	}
 
-	res := dockerCleanupPruneResult{}
 	for _, id := range ids {
 		if _, err := docker.ImageRemove(r.Context(), id, image.RemoveOptions{Force: false, PruneChildren: true}); err != nil {
 			// A still-in-use image is not a hard failure of the whole batch: skip it
-			// so the panel can prune the rest. Anything else is logged via response
-			// detail only when nothing at all could be removed.
+			// so the panel can prune the rest. Both the skip and any other error are
+			// counted and carried in the response, so a batch that deleted nothing
+			// cannot read back as a successful prune.
+			res.recordFailure(id+": "+err.Error(), isImageInUseError(err))
 			continue
 		}
 		res.RemovedCount++
-		res.ReclaimedBytes += sizeByID[id]
+		size, known := sizeByID[id]
+		if !known {
+			// The image was not in the size listing (or vanished from it): its bytes
+			// are unknown, not zero.
+			res.ReclaimedBytesKnown = false
+			continue
+		}
+		res.ReclaimedBytes += size
+	}
+	if res.RemovedCount == 0 && res.FailedCount > 0 {
+		log.Printf("docker prune-images removed nothing: %d of %d images failed or were skipped", res.FailedCount, len(ids))
 	}
 	writeJSON(w, http.StatusOK, res)
 }
@@ -197,8 +311,9 @@ func (s *Server) handleDockerPruneBuildCache(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	writeJSON(w, http.StatusOK, dockerCleanupPruneResult{
-		ReclaimedBytes: int64(report.SpaceReclaimed),
-		RemovedCount:   len(report.CachesDeleted),
+		ReclaimedBytes:      int64(report.SpaceReclaimed),
+		RemovedCount:        len(report.CachesDeleted),
+		ReclaimedBytesKnown: true,
 	})
 }
 
@@ -220,8 +335,9 @@ func (s *Server) handleDockerPruneVolumes(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, dockerCleanupPruneResult{
-		ReclaimedBytes: int64(report.SpaceReclaimed),
-		RemovedCount:   len(report.VolumesDeleted),
+		ReclaimedBytes:      int64(report.SpaceReclaimed),
+		RemovedCount:        len(report.VolumesDeleted),
+		ReclaimedBytesKnown: true,
 	})
 }
 

@@ -56,6 +56,9 @@ export async function fetchWithRetry<T>(
   config: RetryConfig = {},
 ): Promise<T> {
   const retry = toRetryPolicy(config);
+  // Fail fast on an already-aborted (stale) signal instead of issuing a request
+  // that is guaranteed to abort mid-flight.
+  options.signal?.throwIfAborted?.();
   return requestJSON<T>(url, options, retry === undefined ? {} : { retry });
 }
 

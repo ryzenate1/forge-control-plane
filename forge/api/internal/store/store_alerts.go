@@ -401,12 +401,16 @@ func (s *Store) GetNotificationRoute(ctx context.Context, id string) (Notificati
 }
 
 func (s *Store) ListNotificationRoutes(ctx context.Context, tenantID string) ([]NotificationRoute, error) {
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, name, channel_type, enabled, config, min_severity, event_types, COALESCE(tenant_id,''), created_at, updated_at
-		FROM notification_routes
-		WHERE ($1 = '' OR tenant_id = $1)
-		ORDER BY name ASC
-	`, tenantID)
+	// Branched queries (not WHERE ($1='' OR tenant_id=$1)): the OR form
+	// defeats the tenant_id index when listing all routes.
+	const routeCols = `id::text, name, channel_type, enabled, config, min_severity, event_types, COALESCE(tenant_id,''), created_at, updated_at`
+	var rows pgxRows
+	var err error
+	if tenantID != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+routeCols+` FROM notification_routes WHERE tenant_id = $1 ORDER BY name ASC`, tenantID)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+routeCols+` FROM notification_routes ORDER BY name ASC`)
+	}
 	if err != nil {
 		return nil, err
 	}

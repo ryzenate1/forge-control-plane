@@ -141,6 +141,7 @@ import type {
 import { getApiBaseUrl, buildWebSocketUrl, requestJSON, requestBlob, requestText, ApiError, postJSON } from './api/http';
 export { API_BASE_URL, getApiBaseUrl, requestJSON, requestBlob, requestText, fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, postMultipartJSON, requestVoid, unwrapList, unwrapData, unwrapNullableData } from './api/http';
 import type { PaginationMeta as PaginationMetadata, PaginatedResponse } from '@forge/shared-types';
+import { getTotalPages } from './api/servers';
 
 export type { PaginationMeta as PaginationMetadata, PaginatedEnvelope, PaginatedResponse } from '@forge/shared-types';
 

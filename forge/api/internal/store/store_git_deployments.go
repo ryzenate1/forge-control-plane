@@ -183,7 +183,7 @@ func (s *Store) GetActiveGitDeployment(ctx context.Context, gitSourceID string) 
 		&deployment.BuildLog, &deployment.DeployLog, &deployment.Error,
 		&deployment.StartedAt, &completedAt, &deployment.CreatedAt, &deployment.UpdatedAt)
 	if err != nil {
-		if errors.Is(err, ErrNoRows) {
+		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, nil
 		}
 		return nil, err

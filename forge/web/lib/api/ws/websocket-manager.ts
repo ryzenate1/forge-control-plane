@@ -112,16 +112,63 @@ export class WebSocketManager {
 
     this.ws.onmessage = (event) => {
       if (this.aborted) return;
-      try {
-        const data = JSON.parse(event.data);
-        this.config.onMessage?.(data);
-      } catch {
-        if (typeof event.data !== 'string') return;
-        if (this.config.deliverRawText) {
-          this.config.onMessage?.(event.data);
-          return;
+      // Console-style streams may deliver Blob/ArrayBuffer frames (e.g. xterm
+      // attachments) alongside JSON control frames. Decode binary to text
+      // first so real output is never silently dropped; only truly
+      // undecodable payloads are ignored (with a guarded preview — `slice`
+      // does not exist on Blob).
+      const handleText = (text: string) => {
+        if (this.aborted) return;
+        try {
+          const data = JSON.parse(text);
+          this.config.onMessage?.(data);
+        } catch {
+          if (this.config.deliverRawText) {
+            this.config.onMessage?.(text);
+            return;
+          }
+          console.warn('[WebSocketManager] received non-JSON message', text.slice(0, 200));
         }
-        console.warn('[WebSocketManager] received non-JSON message', event.data.slice(0, 200));
+      };
+      const data = event.data as unknown;
+      if (typeof data === 'string') {
+        handleText(data);
+        return;
+      }
+      if (data instanceof Blob) {
+        void data
+          .text()
+          .then(handleText)
+          .catch(() => {
+            console.warn('[WebSocketManager] received unreadable Blob message');
+          });
+        return;
+      }
+      if (data instanceof ArrayBuffer) {
+        try {
+          handleText(new TextDecoder().decode(data));
+        } catch {
+          console.warn('[WebSocketManager] received undecodable ArrayBuffer message');
+        }
+        return;
+      }
+      if (ArrayBuffer.isView(data)) {
+        try {
+          handleText(
+            new TextDecoder().decode(data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength) as ArrayBuffer),
+          );
+        } catch {
+          console.warn('[WebSocketManager] received undecodable binary message');
+        }
+        return;
+      }
+      try {
+        console.warn(
+          '[WebSocketManager] received non-JSON message',
+          String(data).slice(0, 200),
+        );
+      } catch {
+        console.warn('[WebSocketManager] received non-JSON message');
       }
     };
 

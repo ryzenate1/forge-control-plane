@@ -17,6 +17,7 @@ CREATE TABLE IF NOT EXISTS service_templates (
 CREATE TABLE IF NOT EXISTS database_services (
     id UUID PRIMARY KEY,
     name TEXT NOT NULL DEFAULT '',
+    org_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     type TEXT NOT NULL CHECK (type IN ('postgresql','mysql','redis','mongodb','mariadb')),
     version TEXT NOT NULL,
     status TEXT NOT NULL DEFAULT 'provisioning' CHECK (status IN ('provisioning','running','stopped','failed','deleting')),

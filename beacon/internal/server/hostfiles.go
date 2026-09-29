@@ -251,8 +251,20 @@ func (s *Server) handleHostFilesList(w http.ResponseWriter, r *http.Request) {
 		}
 		// Skip symlinked entries for safety, but allow listing
 		if info.Mode()&os.ModeSymlink != 0 {
-			// Resolve symlink target type if possible; skip if dangling
-			targetInfo, err := os.Stat(filepath.Join(cleaned, entry.Name()))
+			// Resolve the symlink target and re-check it against the host-file
+			// policy before disclosing anything about it. A symlink inside an
+			// allowed root must not leak the size/mtime/mode of (or otherwise
+			// stand in for) a file the policy would deny, e.g. link ->
+			// /etc/shadow. Fail closed: unresolvable or policy-denied targets are
+			// skipped entirely.
+			target, err := filepath.EvalSymlinks(filepath.Join(cleaned, entry.Name()))
+			if err != nil {
+				continue
+			}
+			if err := s.verifyHostPolicy(target); err != nil {
+				continue
+			}
+			targetInfo, err := os.Stat(target)
 			if err != nil || targetInfo.Mode()&os.ModeSymlink != 0 {
 				continue
 			}

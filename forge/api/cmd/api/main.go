@@ -244,6 +244,8 @@ func run() error {
 			}
 		}
 		db = connected
+	} else if production {
+		return errors.New("DATABASE_URL is required in production")
 	}
 
 	var redisClient *redis.Client

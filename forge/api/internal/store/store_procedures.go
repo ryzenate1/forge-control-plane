@@ -277,7 +277,12 @@ func (s *Store) ListProcedureSteps(ctx context.Context, procedureID string) ([]P
 		}
 		step.Config = map[string]any{}
 		if len(configRaw) > 0 {
-			_ = json.Unmarshal(configRaw, &step.Config)
+			// Fail loudly on corrupt config: swallowing this error would
+			// return a step with empty Config and nil error, which
+			// callers cannot distinguish from "no config".
+			if err := json.Unmarshal(configRaw, &step.Config); err != nil {
+				return nil, err
+			}
 		}
 		steps = append(steps, step)
 	}

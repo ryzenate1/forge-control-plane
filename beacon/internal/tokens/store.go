@@ -36,7 +36,11 @@ func NewTokenStore() *TokenStore {
 // IsValid reports whether uniqueID was issued here and has not expired. An
 // empty or unknown id is invalid; an unreachable state is never "valid".
 func (ts *TokenStore) IsValid(uniqueID string) bool {
-	if ts == nil || uniqueID == "" {
+	if ts == nil {
+		return false
+	}
+	uniqueID = NormalizeID(uniqueID)
+	if uniqueID == "" {
 		return false
 	}
 	ts.mu.Lock()
@@ -58,9 +62,22 @@ func (ts *TokenStore) IsValid(uniqueID string) bool {
 }
 
 // Consume validates and atomically removes a one-time token, marking it spent
-// so later reads of the same id refuse it.
+// so later reads of the same id refuse it. The spend is remembered for as long
+// as the token itself could have been presented.
 func (ts *TokenStore) Consume(uniqueID string) bool {
-	if ts == nil || uniqueID == "" {
+	return ts.ConsumeUntil(uniqueID, time.Now().Add(absoluteMaxLifetime))
+}
+
+// ConsumeUntil spends a ticket and records the spend only until the moment the
+// credential itself stops being usable. Holding spent entries longer than the
+// token's lifetime fills the store with entries that can never be replayed,
+// which eventually trips the overflow breaker and denies every ticket.
+func (ts *TokenStore) ConsumeUntil(uniqueID string, until time.Time) bool {
+	if ts == nil {
+		return false
+	}
+	uniqueID = NormalizeID(uniqueID)
+	if uniqueID == "" {
 		return false
 	}
 	ts.mu.Lock()
@@ -75,11 +92,16 @@ func (ts *TokenStore) Consume(uniqueID string) bool {
 		// A token minted elsewhere (the panel) is legitimately unknown here.
 		// The signature already authenticated it; record the spend so the
 		// replay is refused regardless of where it came from.
-		expiry = now.Add(absoluteMaxLifetime)
+		expiry = until
 	}
-	if !now.Before(expiry) {
-		delete(ts.tokens, uniqueID)
+	if !expiry.After(now) {
+		if exists {
+			delete(ts.tokens, uniqueID)
+		}
 		return false
+	}
+	if ts.spent == nil {
+		ts.spent = make(map[string]time.Time)
 	}
 	if len(ts.spent) >= maxTracked {
 		ts.sweepSpentLocked(now)
@@ -101,6 +123,7 @@ func (ts *TokenStore) Redeemed(uniqueID string) bool {
 	if ts == nil {
 		return true
 	}
+	uniqueID = NormalizeID(uniqueID)
 	if uniqueID == "" {
 		return true
 	}
@@ -124,7 +147,11 @@ func (ts *TokenStore) Redeemed(uniqueID string) bool {
 // stored, so a caller never reports success for a ticket that is not
 // actually tracked.
 func (ts *TokenStore) Add(uniqueID string, expiry time.Time) bool {
-	if ts == nil || uniqueID == "" || !time.Now().Before(expiry) {
+	if ts == nil {
+		return false
+	}
+	uniqueID = NormalizeID(uniqueID)
+	if uniqueID == "" || !time.Now().Before(expiry) {
 		return false
 	}
 	ts.mu.Lock()

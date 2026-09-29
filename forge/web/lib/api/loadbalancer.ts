@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON, patchJSON } from "@/lib/api";
+import { fetchJSON, postJSON, putJSON, deleteJSON, patchJSON } from "./http";
 
 export type TargetStatus = "healthy" | "unhealthy" | "draining";
 export type Algorithm = "round_robin" | "least_connections" | "ip_hash" | "weighted_round_robin";

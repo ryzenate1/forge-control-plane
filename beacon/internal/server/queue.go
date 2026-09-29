@@ -265,13 +265,13 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 		op.Status = StatusFailed
 		op.Error = "command expired"
 		op.CompletedAt = time.Now().UTC()
-		_ = q.persist(op)
+		journalWarning("expiry", op.ID, q.persist(op))
 		q.mu.Unlock()
 		return
 	}
 	op.Status = StatusRunning
 	op.StartedAt = time.Now().UTC()
-	_ = q.persist(op)
+	journalWarning("running status", op.ID, q.persist(op))
 	handlerOp := *op
 	q.mu.Unlock()
 	var opErr string
@@ -282,22 +282,54 @@ func (q *OperationQueue) processOp(ctx context.Context, op *Operation) {
 	}
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	if q.db != nil && ctx.Err() != nil {
-		op.Status = StatusPending
-		op.Error = ""
-		op.StartedAt = time.Time{}
-		op.CompletedAt = time.Time{}
-		_ = q.persist(op)
+	if ctx.Err() != nil {
+		// Cancellation cut this operation short, so it has no verdict. It must
+		// never be recorded as completed: a journaled queue resets it to pending
+		// so it replays after restart, and a memory-only queue - where nothing
+		// can replay it - records it as cancelled, the same way Shutdown reports
+		// work that was queued but never ran.
+		if q.db != nil {
+			op.Status = StatusPending
+			op.Error = ""
+			op.StartedAt = time.Time{}
+			op.CompletedAt = time.Time{}
+			journalWarning("reset status", op.ID, q.persist(op))
+			return
+		}
+		op.Status = StatusCancelled
+		if opErr == "" {
+			opErr = ctx.Err().Error()
+		}
+		op.Error = opErr
+		op.CompletedAt = time.Now().UTC()
+		journalWarning("cancelled status", op.ID, q.persist(op))
 		return
 	}
 	op.CompletedAt = time.Now().UTC()
-	op.Error = opErr
-	if opErr != "" {
+	switch {
+	case opErr != "":
 		op.Status = StatusFailed
-	} else {
+		op.Error = opErr
+	case op.Status == StatusFailed:
+		// The panel recorded a failure through POST /api/commands/{id}/result
+		// while the handler was still running. The handler returning cleanly
+		// afterwards is not evidence that the reported failure did not happen,
+		// so the recorded failure stands instead of being retired to completed.
+	default:
 		op.Status = StatusCompleted
+		op.Error = ""
 	}
-	_ = q.persist(op)
+	journalWarning("final status", op.ID, q.persist(op))
+}
+
+// journalWarning reports a command-journal write that failed. The in-memory
+// status has already moved by then, so the row a restart replays can disagree
+// with what this process actually did; that gap is surfaced rather than
+// discarded, because the queue cannot answer the client any more at this point.
+func journalWarning(what, id string, err error) {
+	if err != nil {
+		log.Printf("beacon: could not journal %s for operation %s: %v", what, id, err)
+	}
 }
 
 func (q *OperationQueue) SetProgress(id string, progress string, pct int) error {
@@ -376,7 +408,7 @@ func (q *OperationQueue) ExpireExpired() int {
 			op.Status = StatusFailed
 			op.Error = "command expired"
 			op.CompletedAt = now
-			_ = q.persist(op)
+			journalWarning("expiry", op.ID, q.persist(op))
 			expired++
 		}
 	}
@@ -399,11 +431,20 @@ func (q *OperationQueue) EnqueueCommandWithTTL(ctx context.Context, commandID, s
 	}
 	if commandID != "" {
 		for _, existing := range q.operations {
-			if existing.CommandID == commandID {
-				cp := *existing
-				q.mu.Unlock()
-				return &cp, nil
+			if existing.CommandID != commandID {
+				continue
 			}
+			if existing.ServerID != serverID {
+				// One command id naming two different servers is an ambiguous
+				// target, not a duplicate. Returning the other server's
+				// operation (or running this one) would silently pick a
+				// workload the caller did not name, so it is refused.
+				q.mu.Unlock()
+				return nil, fmt.Errorf("command %s already refers to server %s, not %s", commandID, existing.ServerID, serverID)
+			}
+			cp := *existing
+			q.mu.Unlock()
+			return &cp, nil
 		}
 	}
 	q.nextID++
@@ -576,11 +617,16 @@ func (q *OperationQueue) Shutdown() {
 				op.Status = StatusCancelled
 				op.CompletedAt = time.Now().UTC()
 			}
-			_ = q.persist(op)
+			journalWarning("shutdown status", op.ID, q.persist(op))
 		}
 	}
 	q.mu.Unlock()
 	if q.db != nil {
-		_ = q.db.Close()
+		// A journal that will not close cleanly can lose the statuses written
+		// above, which is the difference between a command replaying after the
+		// restart and vanishing from the node.
+		if err := q.db.Close(); err != nil {
+			log.Printf("beacon: command journal did not close cleanly: %v", err)
+		}
 	}
 }

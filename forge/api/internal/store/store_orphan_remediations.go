@@ -57,12 +57,17 @@ func (s *Store) ListServerOrphanRemediations(ctx context.Context, status OrphanR
 	if !validOrphanRemediationStatus(status) {
 		return nil, errors.New("invalid orphan remediation status")
 	}
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, server_id::text, node_url, daemon_error, status, created_at, resolved_at
-		FROM server_orphan_remediations
-		WHERE ($1 = '' OR status = $1)
-		ORDER BY created_at DESC
-	`, status)
+	// Branched queries (not WHERE ($1='' OR status=$1)): the OR form
+	// defeats the status index when listing all remediations. id DESC
+	// tiebreak keeps the order stable on equal created_at.
+	const serverOrphanCols = `id::text, server_id::text, node_url, daemon_error, status, created_at, resolved_at`
+	var rows pgxRows
+	var err error
+	if status != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+serverOrphanCols+` FROM server_orphan_remediations WHERE status = $1 ORDER BY created_at DESC, id DESC`, status)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+serverOrphanCols+` FROM server_orphan_remediations ORDER BY created_at DESC, id DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -83,13 +88,15 @@ func (s *Store) ListDatabaseOrphanRemediations(ctx context.Context, status Orpha
 	if !validOrphanRemediationStatus(status) {
 		return nil, errors.New("invalid orphan remediation status")
 	}
-	rows, err := s.db.Query(ctx, `
-		SELECT id::text, server_database_id::text, server_id::text, database_host_id::text,
-		       engine, host, port, database_name, username, remote, reason, status, created_at, resolved_at
-		FROM database_orphan_remediations
-		WHERE ($1 = '' OR status = $1)
-		ORDER BY created_at DESC
-	`, status)
+	const dbOrphanCols = `id::text, server_database_id::text, server_id::text, database_host_id::text,
+	       engine, host, port, database_name, username, remote, reason, status, created_at, resolved_at`
+	var rows pgxRows
+	var err error
+	if status != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+dbOrphanCols+` FROM database_orphan_remediations WHERE status = $1 ORDER BY created_at DESC, id DESC`, status)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+dbOrphanCols+` FROM database_orphan_remediations ORDER BY created_at DESC, id DESC`)
+	}
 	if err != nil {
 		return nil, err
 	}

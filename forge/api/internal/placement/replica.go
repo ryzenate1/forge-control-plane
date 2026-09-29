@@ -412,12 +412,6 @@ func candidateStorageLocality(c Candidate) string {
 	return "local"
 }
 
-// normalizeLocality collapses the spellings used for the same storage
-// behaviour so "local_only", "local-only" and "local" compare equal.
-func normalizeLocality(value string) string {
-	return CanonicalStorageLocality(value)
-}
-
 func filterByRuntime(candidates []Candidate, runtimeProvider string) []Candidate {
 	if runtimeProvider == "" {
 		return candidates

@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -20,18 +19,115 @@ import (
 )
 
 type buildJob struct {
-	id          string
-	workspaceID string
-	cmd         *exec.Cmd
-	logBuf      bytes.Buffer
-	logCh       chan string
-	cancel      context.CancelFunc
-	status      string
-	exitCode    int
-	imageRef    string
-	startedAt   time.Time
-	truncated   bool
-	mu          sync.RWMutex
+	id             string
+	workspaceID    string
+	cmd            *exec.Cmd
+	logBuf         bytes.Buffer
+	logCh          chan string
+	cancel         context.CancelFunc
+	status         string
+	exitCode       int
+	imageRef       string
+	startedAt      time.Time
+	truncated      bool
+	log            *buildLogWriter
+	credentialText []string
+	mu             sync.RWMutex
+}
+
+// maxBuildJobDuration bounds a single build. Without it a `docker buildx` that
+// stalls pins a job, its log buffer and its child process until the 12h reaper
+// happens to run.
+const maxBuildJobDuration = 2 * time.Hour
+
+// buildLogWriter turns the child's combined output into complete, redacted
+// lines in the job buffer. It exists so a build never uses cmd.StdoutPipe: a
+// pipe must be drained before Wait returns or the tail of the log is lost, and
+// draining it in a detached goroutine races with the status write.
+type buildLogWriter struct {
+	job     *buildJob
+	mu      sync.Mutex
+	partial string
+}
+
+func (w *buildLogWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	w.partial += string(p)
+	var complete string
+	if idx := strings.LastIndex(w.partial, "\n"); idx >= 0 {
+		complete = w.partial[:idx]
+		w.partial = w.partial[idx+1:]
+	}
+	w.mu.Unlock()
+	if complete != "" {
+		for _, line := range strings.Split(complete, "\n") {
+			w.job.appendBuildLine(line)
+		}
+	}
+	return len(p), nil
+}
+
+// flush writes a trailing line that arrived without a newline; a child can exit
+// with a partially written final line.
+func (w *buildLogWriter) flush() {
+	w.mu.Lock()
+	rest := w.partial
+	w.partial = ""
+	w.mu.Unlock()
+	if rest != "" {
+		w.job.appendBuildLine(rest)
+	}
+}
+
+func (j *buildJob) appendBuildLine(line string) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	for _, pattern := range j.credentialText {
+		if pattern != "" {
+			line = strings.ReplaceAll(line, pattern, "****")
+		}
+	}
+	if j.logBuf.Len()+len(line)+1 < maxLogBufferSize {
+		_, _ = fmt.Fprintln(&j.logBuf, line)
+		return
+	}
+	if !j.truncated {
+		_, _ = fmt.Fprintln(&j.logBuf, "[LOG TRUNCATED: exceeded 100MB limit]")
+		j.truncated = true
+	}
+}
+
+// currentStatus returns the job status under the job lock. Reading job.status
+// directly from a handler races with the goroutine that records the exit.
+func (j *buildJob) currentStatus() string {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.status
+}
+
+// snapshotLog copies the buffered log. The buffer is only ever touched under
+// the job lock, so callers must never keep a view of it past the lock.
+func (j *buildJob) snapshotLog() []byte {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return append([]byte(nil), j.logBuf.Bytes()...)
+}
+
+func (j *buildJob) logLength() int {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	return j.logBuf.Len()
+}
+
+// readLogFrom returns a copy of everything appended after offset.
+func (j *buildJob) readLogFrom(offset int) []byte {
+	j.mu.RLock()
+	defer j.mu.RUnlock()
+	buf := j.logBuf.Bytes()
+	if offset >= len(buf) {
+		return nil
+	}
+	return append([]byte(nil), buf[offset:]...)
 }
 
 type buildManager struct {
@@ -173,7 +269,7 @@ func (s *Server) handleDockerfileBuild(w http.ResponseWriter, r *http.Request) {
 		"id":          job.id,
 		"imageName":   imageName,
 		"workspaceId": req.WorkspaceID,
-		"status":      job.status,
+		"status":      job.currentStatus(),
 	})
 }
 
@@ -247,7 +343,7 @@ func (s *Server) handleNixpacksBuild(w http.ResponseWriter, r *http.Request) {
 		"id":          job.id,
 		"imageName":   imageName,
 		"workspaceId": req.WorkspaceID,
-		"status":      job.status,
+		"status":      job.currentStatus(),
 	})
 }
 
@@ -271,7 +367,7 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 
 	if job.isTerminal() || !follow {
 		w.Header().Set("Content-Type", "text/plain")
-		_, _ = w.Write(job.logBuf.Bytes())
+		_, _ = w.Write(job.snapshotLog())
 		return
 	}
 
@@ -285,32 +381,39 @@ func (s *Server) handleBuildLogs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	offset := job.logBuf.Len()
+	offset := job.logLength()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
+	// A build that produces no output for minutes is indistinguishable from a
+	// dead stream to every proxy in between, so say something periodically
+	// instead of letting the connection be silently reaped.
+	keepalive := time.NewTicker(30 * time.Second)
+	defer keepalive.Stop()
 
 	ctx := r.Context()
 	for {
 		select {
+		case <-keepalive.C:
+			_, _ = fmt.Fprint(w, ": keepalive\n\n")
+			flusher.Flush()
+			if job.isTerminal() {
+				_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", job.currentStatus())
+				flusher.Flush()
+				return
+			}
 		case <-ticker.C:
-			job.mu.RLock()
-			currentLen := job.logBuf.Len()
-			if currentLen > offset {
-				chunk := job.logBuf.Bytes()[offset:currentLen]
-				offset = currentLen
-				job.mu.RUnlock()
+			if chunk := job.readLogFrom(offset); len(chunk) > 0 {
+				offset += len(chunk)
 				for _, line := range strings.Split(string(chunk), "\n") {
 					if line != "" {
 						_, _ = fmt.Fprintf(w, "data: %s\n\n", line)
 						flusher.Flush()
 					}
 				}
-			} else {
-				job.mu.RUnlock()
 			}
 
 			if job.isTerminal() {
-				_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", job.status)
+				_, _ = fmt.Fprintf(w, "event: done\ndata: %s\n\n", job.currentStatus())
 				flusher.Flush()
 				return
 			}
@@ -347,7 +450,12 @@ func (s *Server) handleBuildCancel(w http.ResponseWriter, r *http.Request) {
 }
 
 func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID string, command string, credPatterns []string, args ...string) *buildJob {
-	buildCtx, cancel := context.WithCancel(ctx)
+	// A build must not be tied to the request that started it: r.Context() is
+	// cancelled the instant this handler writes its 202 response, which killed
+	// every accepted build while the panel still believed it was running. The
+	// job is bounded by maxBuildJobDuration instead, cancelled explicitly
+	// through POST /build/cancel, and reaped if it outlives both.
+	buildCtx, cancel := context.WithTimeout(context.Background(), maxBuildJobDuration)
 	cmd := exec.CommandContext(buildCtx, command, args...)
 	cmd.SysProcAttr = getSysProcAttr()
 	buildHome, homeErr := os.MkdirTemp("", "beacon-build-home-*")
@@ -357,18 +465,19 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID str
 	cmd.Env = buildEnvironment(buildHome)
 
 	job := &buildJob{
-		id:          "build-" + uuid.NewString(),
-		workspaceID: workspaceID,
-		cmd:         cmd,
-		cancel:      cancel,
-		status:      "running",
-		imageRef:    imageRef,
-		startedAt:   time.Now(),
-		logCh:       make(chan string, 256),
+		id:             "build-" + uuid.NewString(),
+		workspaceID:    workspaceID,
+		cmd:            cmd,
+		cancel:         cancel,
+		status:         "running",
+		imageRef:       imageRef,
+		startedAt:      time.Now(),
+		logCh:          make(chan string, 256),
+		credentialText: append([]string(nil), credPatterns...),
 	}
-
-	stdout, _ := cmd.StdoutPipe()
-	cmd.Stderr = cmd.Stdout
+	job.log = &buildLogWriter{job: job}
+	cmd.Stdout = job.log
+	cmd.Stderr = job.log
 
 	m.mu.Lock()
 	m.active[job.id] = job
@@ -378,9 +487,12 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID str
 		if buildHome != "" {
 			_ = os.RemoveAll(buildHome)
 		}
+		job.mu.Lock()
 		job.status = "failed"
 		job.exitCode = -1
 		_, _ = fmt.Fprintf(&job.logBuf, "ERROR: %v\n", err)
+		job.mu.Unlock()
+		cancel()
 		return job
 	}
 
@@ -404,28 +516,11 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID str
 	}()
 
 	go func() {
-		scanner := bufio.NewScanner(stdout)
-		scanner.Buffer(make([]byte, 64*1024), 1024*1024)
-		for scanner.Scan() {
-			line := scanner.Text()
-			for _, pattern := range credPatterns {
-				if pattern != "" {
-					line = strings.ReplaceAll(line, pattern, "****")
-				}
-			}
-			job.mu.Lock()
-			if job.logBuf.Len()+len(line) < maxLogBufferSize {
-				_, _ = fmt.Fprintln(&job.logBuf, line)
-			} else if !job.truncated {
-				_, _ = fmt.Fprintln(&job.logBuf, "[LOG TRUNCATED: exceeded 100MB limit]")
-				job.truncated = true
-			}
-			job.mu.Unlock()
-		}
-	}()
-
-	go func() {
+		// cmd.Stdout is a plain io.Writer, so exec.Cmd copies the child output in
+		// its own goroutines and Wait drains them before returning: no log line is
+		// lost and no reader races the status write.
 		err := cmd.Wait()
+		job.log.flush()
 		close(processDone)
 		if buildHome != "" {
 			_ = os.RemoveAll(buildHome)
@@ -435,9 +530,15 @@ func (m *buildManager) startBuild(ctx context.Context, imageRef, workspaceID str
 
 		if err != nil {
 			if buildCtx.Err() != nil {
-				job.status = "canceled"
-				job.exitCode = -1
-				_, _ = fmt.Fprintln(&job.logBuf, "Build canceled")
+				if buildCtx.Err() == context.DeadlineExceeded {
+					job.status = "failed"
+					job.exitCode = -1
+					_, _ = fmt.Fprintf(&job.logBuf, "Build timed out after %s\n", maxBuildJobDuration)
+				} else {
+					job.status = "canceled"
+					job.exitCode = -1
+					_, _ = fmt.Fprintln(&job.logBuf, "Build canceled")
+				}
 			} else if exitErr, ok := err.(*exec.ExitError); ok {
 				job.status = "failed"
 				job.exitCode = exitErr.ExitCode()

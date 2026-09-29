@@ -187,8 +187,8 @@ func (s *Store) ExpireStaleReconcilePlans(ctx context.Context, olderThan time.Du
 		UPDATE reconcile_plans
 		SET state = 'expired', error = 'plan expired after TTL', executed_at = now()
 		WHERE state IN ('pending', 'confirmed', 'queued')
-		  AND created_at < now() - $1::interval
-	`, olderThan.String())
+		  AND created_at < now() - make_interval(secs => $1)
+	`, olderThan.Seconds())
 	if err != nil {
 		return 0, err
 	}
@@ -211,12 +211,18 @@ func (s *Store) ListReconcileEvents(ctx context.Context, resourceID string, limi
 	if limit <= 0 {
 		limit = 50
 	}
-	rows, err := s.db.Query(ctx, `
-		SELECT id, plan_id, resource_id, resource_kind, event_type, summary, created_at
-		FROM reconcile_events
-		WHERE ($1 = '' OR resource_id = $1)
-		ORDER BY created_at DESC LIMIT $2
-	`, resourceID, limit)
+	// Branched queries (not WHERE ($1='' OR resource_id=$1)): the OR form
+	// defeats the resource_id index and forces a seq scan when listing all
+	// events. ORDER BY created_at DESC, id DESC keeps pagination stable
+	// when rows share a timestamp.
+	const eventCols = `id, plan_id, resource_id, resource_kind, event_type, summary, created_at`
+	var rows pgxRows
+	var err error
+	if resourceID != "" {
+		rows, err = s.db.Query(ctx, `SELECT `+eventCols+` FROM reconcile_events WHERE resource_id=$1 ORDER BY created_at DESC, id DESC LIMIT $2`, resourceID, limit)
+	} else {
+		rows, err = s.db.Query(ctx, `SELECT `+eventCols+` FROM reconcile_events ORDER BY created_at DESC, id DESC LIMIT $1`, limit)
+	}
 	if err != nil {
 		return nil, err
 	}

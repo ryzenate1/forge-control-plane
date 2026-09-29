@@ -2,8 +2,6 @@ package http
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +10,10 @@ import (
 
 	"gamepanel/forge/internal/store"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awsconfig "github.com/aws/aws-sdk-go-v2/config"
+	"github.com/aws/aws-sdk-go-v2/credentials"
+	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/gofiber/fiber/v2"
 )
 
@@ -164,25 +166,28 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 			settings = store.DefaultPanelSettings()
 		}
 
-		uploadToken, err := generateUploadToken()
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, "failed to issue upload token")
-		}
+		expiresAt := time.Now().Add(15 * time.Minute)
 		response := fiber.Map{
 			"object":     backupUUID,
-			"token":      uploadToken,
-			"expires_at": time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
+			"expires_at": expiresAt.UTC().Format(time.RFC3339),
 		}
 
 		if settings.S3BackupEnabled && settings.S3Bucket != "" {
 			// S3 credentials must never leave the panel: Beacon receives a
-			// short-lived, single-backup presigned PUT URL plus the upload
-			// token, never raw access keys. The panel signs on behalf of the
-			// node; Beacon PUTs the backup bytes to the returned URL.
-			// The URL is panel-mediated so no S3 secret is serialized.
-			response["url"] = fmt.Sprintf("/api/remote/backups/%s/upload?token=%s", backupUUID, uploadToken)
+			// short-lived, single-backup presigned PUT URL, never raw access
+			// keys. The panel signs on behalf of the node with the
+			// panel-held S3 credentials; Beacon PUTs the backup bytes to
+			// the returned URL. Fail closed when the URL cannot be signed:
+			// a missing URL must never degrade into key disclosure or a
+			// dead upload target that Beacon treats as success.
+			s3Object := strings.Trim(strings.Trim(settings.S3Prefix, "/")+"/"+backupUUID, "/")
+			presignedURL, err := presignBackupUploadURL(ctx, settings, settings.S3Bucket, s3Object, time.Until(expiresAt))
+			if err != nil {
+				return respondInternalError(c, fmt.Errorf("sign backup upload URL for backup %s: %w", backupUUID, err))
+			}
+			response["url"] = presignedURL
 			response["storage"] = "s3"
-			response["s3_object"] = strings.Trim(strings.Trim(settings.S3Prefix, "/")+"/"+backupUUID, "/")
+			response["s3_object"] = s3Object
 			response["s3_bucket"] = settings.S3Bucket
 		} else {
 			// Local upload
@@ -413,10 +418,55 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 	})
 }
 
-func generateUploadToken() (string, error) {
-	buf := make([]byte, 16)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate upload token: %w", err)
+// presignBackupUploadURL signs a short-lived S3 PUT URL for a single backup
+// object using the panel-held S3 credentials. The credentials never leave the
+// panel: only the resulting URL is returned to Beacon. A signing failure is
+// an error, never a fallback to raw keys or to an unsigned URL.
+func presignBackupUploadURL(ctx context.Context, settings store.PanelSettings, bucket, key string, ttl time.Duration) (string, error) {
+	if strings.TrimSpace(bucket) == "" || strings.TrimSpace(key) == "" {
+		return "", errors.New("s3 bucket and object key are required")
 	}
-	return hex.EncodeToString(buf), nil
+	if strings.TrimSpace(settings.S3AccessKeyID) == "" || strings.TrimSpace(settings.S3SecretAccessKey) == "" {
+		return "", errors.New("s3 credentials are not configured")
+	}
+	if ttl <= 0 || ttl > 15*time.Minute {
+		ttl = 15 * time.Minute
+	}
+	region := strings.TrimSpace(settings.S3Region)
+	if region == "" {
+		region = "us-east-1"
+	}
+	awsCfg, err := awsconfig.LoadDefaultConfig(ctx,
+		awsconfig.WithRegion(region),
+		awsconfig.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			settings.S3AccessKeyID, settings.S3SecretAccessKey, "",
+		)),
+	)
+	if err != nil {
+		return "", fmt.Errorf("load aws config: %w", err)
+	}
+	s3Opts := []func(*s3.Options){
+		func(o *s3.Options) {
+			o.UsePathStyle = settings.S3UsePathStyle
+		},
+	}
+	if endpoint := strings.TrimSpace(settings.S3Endpoint); endpoint != "" {
+		s3Opts = append(s3Opts, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String(endpoint)
+		})
+	}
+	presigner := s3.NewPresignClient(s3.NewFromConfig(awsCfg, s3Opts...))
+	out, err := presigner.PresignPutObject(ctx, &s3.PutObjectInput{
+		Bucket: aws.String(bucket),
+		Key:    aws.String(key),
+	}, func(o *s3.PresignOptions) {
+		o.Expires = ttl
+	})
+	if err != nil {
+		return "", fmt.Errorf("presign put object: %w", err)
+	}
+	if strings.TrimSpace(out.URL) == "" {
+		return "", errors.New("presigned upload URL is empty")
+	}
+	return out.URL, nil
 }

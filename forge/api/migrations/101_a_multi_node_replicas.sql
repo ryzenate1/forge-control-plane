@@ -1,6 +1,7 @@
 CREATE TABLE IF NOT EXISTS replica_applications (
     id UUID PRIMARY KEY,
     name TEXT NOT NULL,
+    org_id UUID REFERENCES organizations(id) ON DELETE SET NULL,
     replicas INTEGER NOT NULL DEFAULT 1,
     cpu INTEGER NOT NULL DEFAULT 1024,
     memory_mb INTEGER NOT NULL DEFAULT 2048,

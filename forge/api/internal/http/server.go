@@ -2688,7 +2688,7 @@ func NewServer(cfg Config) *fiber.App {
 	registerActivityRoutes(protected, cfg)
 	registerAuditLogRoutes(protected, cfg)
 	registerOrphanRemediationRoutes(protected, cfg, mutationLimiter, adminIPAccess)
-	registerAdminExtras(protected, cfg, nodeProbe)
+	registerAdminExtras(protected, cfg, nodeProbe, adminIPAccess, mutationLimiter)
 	// The following three registrars were defined but never invoked, so the
 	// admin Operations-timeline, Kubernetes and Installer pages (advertised as
 	// "available" in the admin registry and backed by lib/api modules) 404'd.

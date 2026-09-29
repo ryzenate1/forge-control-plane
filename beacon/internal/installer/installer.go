@@ -96,6 +96,9 @@ func (i *Installer) runSteps(ctx context.Context, dataDir string, s Script) ([]b
 }
 
 func (i *Installer) runScript(ctx context.Context, dataDir string, s Script) ([]byte, error) {
+	if i.client == nil {
+		return nil, errors.New("installer: docker client is not initialized")
+	}
 	scriptPath := filepath.Join(dataDir, "install.sh")
 	logFile := filepath.Join(dataDir, "install.log")
 
@@ -146,60 +149,95 @@ func (i *Installer) runScript(ctx context.Context, dataDir string, s Script) ([]
 		return nil, err
 	}
 	containerID := createResp.ID
+	// Whatever happens below, the install container must not outlive this call:
+	// a stopped leftover keeps the name, the bind mount over the server root and
+	// the read-only rootfs, so the next install fails with a conflict nobody can
+	// explain from the panel. Removal uses a context detached from ctx so a
+	// cancelled install can still clean up after itself.
+	defer func() {
+		rmCtx, rmCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+		defer rmCancel()
+		_ = i.client.ContainerRemove(rmCtx, containerID, container.RemoveOptions{Force: true})
+	}()
 
-	logger := newInstallerLogWriter()
-	if _, err := i.runtime.AttachConsole(ctx, containerID); err != nil {
+	session, err := i.runtime.AttachConsole(ctx, containerID)
+	if err != nil {
 		_ = i.runtime.Kill(ctx, containerID)
-		return nil, err
+		return nil, fmt.Errorf("installer: attach install console: %w", err)
 	}
-	_ = i.runtime.Start(ctx, containerID)
+	// The console session is the only copy of the installer output the runtime
+	// keeps open; leaving it attached pins a stream for the life of the daemon.
+	defer func() { _ = session.Close() }()
 
-	_ = logger
+	// A failed start has to fail the install. Swallowing it here meant the poll
+	// loop below saw a container that was never running, read an exit code of 0
+	// for it, and reported an installation that never executed as successful.
+	if err := i.runtime.Start(ctx, containerID); err != nil {
+		_ = i.runtime.Kill(ctx, containerID)
+		return nil, fmt.Errorf("installer: start install container: %w", err)
+	}
 
 	waitCtx, cancel := context.WithTimeout(ctx, 30*time.Minute)
 	defer cancel()
 
 	var exitCode int
+	var containerErr string
 	for {
 		inspected, inspectErr := i.client.ContainerInspect(waitCtx, containerID)
 		if inspectErr != nil {
-			return nil, inspectErr
+			return nil, fmt.Errorf("installer: inspect install container: %w", inspectErr)
 		}
 		if !inspected.State.Running {
 			exitCode = inspected.State.ExitCode
+			// OOM-killed and never-started containers report a reason instead of
+			// an exit code that would only be a number.
+			if inspected.State.OOMKilled {
+				containerErr = "installation container was killed for exceeding its memory limit"
+			} else if inspected.State.Error != "" {
+				containerErr = inspected.State.Error
+			}
 			break
 		}
 		select {
 		case <-waitCtx.Done():
 			_ = i.runtime.Kill(ctx, containerID)
-			_ = i.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-			return nil, waitCtx.Err()
+			return nil, fmt.Errorf("installer: installation timed out after 30m: %w", waitCtx.Err())
 		case <-time.After(250 * time.Millisecond):
 		}
 	}
 
-	_ = exitCode
-
 	readCloser, err := i.client.ContainerLogs(ctx, containerID, container.LogsOptions{ShowStdout: true, ShowStderr: true})
 	if err != nil {
-		_ = i.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-		return nil, err
+		return nil, fmt.Errorf("installer: read install logs: %w", err)
 	}
 	defer readCloser.Close()
 	logs, _ := io.ReadAll(readCloser)
 
-	if strings.Contains(string(logs), "ERROR:") || strings.Contains(string(logs), "FATAL:") {
-		_ = i.runtime.Stop(ctx, containerID)
-		_ = i.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-		return logs, errors.New("installer: installation script returned errors")
-	}
-
-	_ = i.runtime.Stop(ctx, containerID)
-	_ = i.client.ContainerRemove(ctx, containerID, container.RemoveOptions{Force: true})
-
+	// Persist the log before deciding the outcome, so a failed install still has
+	// its output on disk for the operator to read.
 	if err := os.WriteFile(logFile, logs, 0o600); err != nil {
-		return nil, err
+		return logs, err
 	}
+
+	// The exit code is the authority on whether the script ran to completion.
+	// It used to be read, logged and discarded, which let a `set -e` script that
+	// died half way through be reported as an installed server.
+	if exitCode != 0 {
+		if containerErr != "" {
+			return logs, fmt.Errorf("installer: installation failed (%s): exit code %d", containerErr, exitCode)
+		}
+		return logs, fmt.Errorf("installer: installation script failed with exit code %d", exitCode)
+	}
+	if containerErr != "" {
+		return logs, fmt.Errorf("installer: installation did not complete: %s", containerErr)
+	}
+	// A script that prints its own ERROR/FATAL lines but still exits 0 is the
+	// egg's own reporting convention; honour it rather than calling the install
+	// clean.
+	if strings.Contains(string(logs), "ERROR:") || strings.Contains(string(logs), "FATAL:") {
+		return logs, errors.New("installer: installation script reported errors")
+	}
+
 	return logs, nil
 }
 

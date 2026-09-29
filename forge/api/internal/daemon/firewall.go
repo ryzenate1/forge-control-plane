@@ -3,7 +3,6 @@ package daemon
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -24,7 +23,7 @@ func (c *Client) EnableFirewall(ctx context.Context, baseURL, nodeToken string) 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("enable firewall failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("enable firewall", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -45,7 +44,7 @@ func (c *Client) DisableFirewall(ctx context.Context, baseURL, nodeToken string)
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("disable firewall failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("disable firewall", res)
 	}
 	var payload json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -77,7 +76,7 @@ func (c *Client) DeleteFirewallRule(ctx context.Context, baseURL, nodeToken, rul
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("delete firewall rule failed with status %d", res.StatusCode)
+		return daemonResponseError("delete firewall rule", res)
 	}
 	return nil
 }
@@ -99,7 +98,7 @@ func (c *Client) UpdateFirewallRule(ctx context.Context, baseURL, nodeToken, rul
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("update firewall rule failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("update firewall rule", res)
 	}
 	var result json.RawMessage
 	if err := json.NewDecoder(res.Body).Decode(&result); err != nil {

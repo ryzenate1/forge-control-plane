@@ -3,6 +3,7 @@ package server
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -23,6 +24,7 @@ import (
 	"github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/mount"
 	"github.com/docker/docker/api/types/network"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/go-connections/nat"
 )
@@ -53,6 +55,30 @@ type databaseDeProvisionRequest struct {
 }
 
 const databaseLabel = "modern-game-panel.database"
+
+// databaseContainerBackupPath is the fixed in-container path where a database
+// dump is staged (gzipped) before CopyFromContainer extracts it. It is a
+// constant, never derived from request input, so engine/timestamp/fileName
+// values cannot inject shell or path content into the backup flow.
+const databaseContainerBackupPath = "/tmp/mgp-backup.backup.gz"
+
+// databaseContainerDumpPath is the fixed in-container path where redis-cli
+// --rdb writes its dump before gzip stages it at databaseContainerBackupPath.
+const databaseContainerDumpPath = "/tmp/backup.rdb"
+
+// databaseVolumeLabel marks a volume this package created, so de-provision can
+// tell a managed data volume from one it happens to have been handed the name of.
+const databaseVolumeLabel = "modern-game-panel.database-volume"
+
+// databaseEngines are the engines this package can provision, health-check, back
+// up and restore. Anything else is refused rather than run with a guessed image.
+var databaseEngines = map[string]bool{
+	"postgresql": true,
+	"mysql":      true,
+	"mariadb":    true,
+	"mongodb":    true,
+	"redis":      true,
+}
 
 func databaseImageName(engine, version string) string {
 	images := map[string]string{
@@ -171,6 +197,10 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 	ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
 	defer cancel()
 	engine := strings.ToLower(strings.TrimSpace(req.Engine))
+	if !databaseEngines[engine] {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unsupported database engine: " + engine})
+		return
+	}
 	imageName := databaseImageName(engine, req.Version)
 	containerName := databaseContainerName(req.ServerID + "-" + engine)
 	volumeName := req.VolumeName
@@ -184,31 +214,55 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 	}
 
 	if existing, err := cli.ContainerInspect(ctx, containerName); err == nil {
-		_ = existing
+		if !databaseOwnedContainer(existing) {
+			// The name is deterministic, but a container under it that does not carry
+			// the managed marker is not ours to stop, reuse or delete.
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":       "container name is taken by an unmanaged container",
+				"containerId": existing.ID,
+			})
+			return
+		}
 		if existing.State != nil && existing.State.Running {
 			resp := databaseProvisionResponse{
 				ContainerID: existing.ID,
 				VolumeID:    volumeName,
 			}
-			if existing.NetworkSettings != nil && len(existing.NetworkSettings.Ports) > 0 {
-				for _, bindings := range existing.NetworkSettings.Ports {
-					if len(bindings) > 0 {
-						if p, err := strconv.Atoi(bindings[0].HostPort); err == nil {
-							resp.Port = p
-							break
-						}
+			// Ask for the binding of the port we actually exposed. Scanning the
+			// whole map would return whichever binding Go happened to iterate
+			// first, i.e. a port number with no claim on being the database's.
+			if existing.NetworkSettings != nil {
+				if bindings := existing.NetworkSettings.Ports[nat.Port(fmt.Sprintf("%d/tcp", containerPort))]; len(bindings) == 1 {
+					if p, perr := strconv.Atoi(bindings[0].HostPort); perr == nil && p >= 1 && p <= 65535 {
+						resp.Port = p
 					}
+				} else if len(bindings) > 1 {
+					writeJSON(w, http.StatusConflict, map[string]any{
+						"error":       "database port mapping is ambiguous",
+						"containerId": existing.ID,
+					})
+					return
 				}
 			}
 			if resp.Port == 0 {
-				resp.Port = containerPort
+				writeJSON(w, http.StatusConflict, map[string]any{
+					"error":       "database port mapping is unavailable",
+					"containerId": existing.ID,
+				})
+				return
 			}
 			writeJSON(w, http.StatusOK, resp)
 			return
 		}
 		timeout := 10
-		_ = cli.ContainerStop(ctx, existing.ID, container.StopOptions{Timeout: &timeout})
-		_ = cli.ContainerRemove(ctx, existing.ID, container.RemoveOptions{RemoveVolumes: false})
+		if err := cli.ContainerStop(ctx, existing.ID, container.StopOptions{Timeout: &timeout}); err != nil && !client.IsErrNotFound(err) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "stop existing database container: " + err.Error()})
+			return
+		}
+		if err := cli.ContainerRemove(ctx, existing.ID, container.RemoveOptions{RemoveVolumes: false}); err != nil && !client.IsErrNotFound(err) {
+			writeJSON(w, http.StatusBadGateway, map[string]any{"error": "remove existing database container: " + err.Error()})
+			return
+		}
 	}
 
 	if _, _, err := cli.ImageInspectWithRaw(ctx, imageName); err != nil {
@@ -248,6 +302,23 @@ func (s *Server) handleDatabaseProvision(w http.ResponseWriter, r *http.Request)
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "generate root credentials: " + err.Error()})
 		return
 	}
+
+	// Create the data volume explicitly so it carries the managed marker. A volume
+	// Docker created implicitly on mount has no labels, and de-provision would then
+	// have nothing to check the name against before deleting it.
+	if _, err := cli.VolumeCreate(ctx, volume.CreateOptions{
+		Name:   volumeName,
+		Driver: "local",
+		Labels: map[string]string{
+			databaseVolumeLabel:         "true",
+			"modern-game-panel.server_id": req.ServerID,
+			"modern-game-panel.db_engine": engine,
+		},
+	}); err != nil && !strings.Contains(strings.ToLower(err.Error()), "already exists") {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "create data volume " + volumeName + ": " + err.Error()})
+		return
+	}
+
 	envVars := databaseEnvVars(engine, req.DBName, req.Username, req.Password, rootPassword)
 	memoryMB := req.MemoryMB
 	if memoryMB == 0 {
@@ -352,6 +423,10 @@ func (s *Server) handleDatabaseDeProvision(w http.ResponseWriter, r *http.Reques
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid request body"})
 		return
 	}
+	if strings.TrimSpace(req.ContainerID) == "" && strings.TrimSpace(req.VolumeID) == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "containerId or volumeId is required"})
+		return
+	}
 
 	cli, err := getDockerClient()
 	if err != nil {
@@ -363,15 +438,107 @@ func (s *Server) handleDatabaseDeProvision(w http.ResponseWriter, r *http.Reques
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 
+	resp := map[string]any{
+		"containerRemoved": false,
+		"volumeRemoved":    false,
+	}
+	var failures []string
+
 	if req.ContainerID != "" {
-		timeout := 10
-		_ = cli.ContainerStop(ctx, req.ContainerID, container.StopOptions{Timeout: &timeout})
-		_ = cli.ContainerRemove(ctx, req.ContainerID, container.RemoveOptions{RemoveVolumes: false})
+		// Ownership first. This endpoint takes an id, so without the label check it
+		// would stop and delete whatever container the caller named — including one
+		// belonging to a game workload. Unknown or uninspectable is not "ours".
+		inspect, err := cli.ContainerInspect(ctx, req.ContainerID)
+		switch {
+		case err != nil && client.IsErrNotFound(err):
+			resp["containerRemoved"] = true
+		case err != nil:
+			writeJSON(w, http.StatusBadGateway, map[string]any{
+				"error": "cannot verify ownership of container " + req.ContainerID + ": " + err.Error(),
+			})
+			return
+		case !databaseOwnedContainer(inspect):
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":        "container is not a managed database container",
+				"containerId":  req.ContainerID,
+				"refused":      true,
+			})
+			return
+		default:
+			timeout := 10
+			if err := cli.ContainerStop(ctx, req.ContainerID, container.StopOptions{Timeout: &timeout}); err != nil && !client.IsErrNotFound(err) {
+				failures = append(failures, "stop: "+err.Error())
+			}
+			if err := cli.ContainerRemove(ctx, req.ContainerID, container.RemoveOptions{RemoveVolumes: false}); err != nil {
+				if client.IsErrNotFound(err) {
+					resp["containerRemoved"] = true
+				} else {
+					failures = append(failures, "remove: "+err.Error())
+				}
+			} else {
+				resp["containerRemoved"] = true
+			}
+		}
 	}
+
 	if req.VolumeID != "" {
-		_ = cli.VolumeRemove(ctx, req.VolumeID, true)
+		if owned, err := databaseVolumeIsOurs(ctx, cli, req.VolumeID); err != nil {
+			failures = append(failures, "volume ownership check: "+err.Error())
+		} else if !owned {
+			writeJSON(w, http.StatusForbidden, map[string]any{
+				"error":     "volume is not a managed database volume",
+				"volumeId":  req.VolumeID,
+				"refused":   true,
+				"failures":  failures,
+			})
+			return
+		} else if err := cli.VolumeRemove(ctx, req.VolumeID, true); err != nil {
+			if client.IsErrNotFound(err) {
+				resp["volumeRemoved"] = true
+			} else {
+				failures = append(failures, "volume remove: "+err.Error())
+			}
+		} else {
+			resp["volumeRemoved"] = true
+		}
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+
+	// Nothing that failed is reported as done: ok is only true when every requested
+	// deletion actually happened.
+	resp["ok"] = len(failures) == 0
+	if len(failures) > 0 {
+		resp["error"] = strings.Join(failures, "; ")
+		resp["partial"] = true
+		writeJSON(w, http.StatusBadGateway, resp)
+		return
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+// databaseOwnedContainer reports whether a container carries the marker this
+// package sets when it provisions database containers.
+func databaseOwnedContainer(inspect container.InspectResponse) bool {
+	if inspect.Config == nil || inspect.Config.Labels == nil {
+		return false
+	}
+	return inspect.Config.Labels[databaseLabel] == "true"
+}
+
+// databaseVolumeIsOurs reports whether a volume is one this package manages. A
+// volume that carries neither the managed label nor the managed name prefix is
+// refused: "the caller named it" is not evidence that deleting it is in scope.
+func databaseVolumeIsOurs(ctx context.Context, cli *client.Client, volumeID string) (bool, error) {
+	vol, err := cli.VolumeInspect(ctx, volumeID)
+	if err != nil {
+		if client.IsErrNotFound(err) {
+			return false, nil
+		}
+		return false, err
+	}
+	if vol.Labels[databaseVolumeLabel] == "true" || strings.HasPrefix(volumeID, "mgp-db-data-") {
+		return true, nil
+	}
+	return false, fmt.Errorf("volume %s carries no managed database label", volumeID)
 }
 
 func (s *Server) handleDatabaseStatus(w http.ResponseWriter, r *http.Request) {
@@ -393,18 +560,33 @@ func (s *Server) handleDatabaseStatus(w http.ResponseWriter, r *http.Request) {
 
 	inspect, err := cli.ContainerInspect(ctx, containerID)
 	if err != nil {
-		writeJSON(w, http.StatusNotFound, map[string]any{"status": "not_found", "running": false})
+		if client.IsErrNotFound(err) {
+			writeJSON(w, http.StatusNotFound, map[string]any{"status": "not_found", "running": false, "known": true})
+			return
+		}
+		// A daemon that would not answer is not a container that is gone: reporting
+		// not_found here tells the panel the database does not exist.
+		writeJSON(w, http.StatusBadGateway, map[string]any{
+			"error":    "database status unavailable: " + err.Error(),
+			"status":   "unknown",
+			"running":  false,
+			"known":    false,
+			"measured": false,
+		})
 		return
 	}
 
 	running := inspect.State != nil && inspect.State.Running
 	status := "stopped"
 	if running {
-		if inspect.State.Health != nil {
+		if inspect.State.Health != nil && inspect.State.Health.Status != "" {
 			status = inspect.State.Health.Status
 		} else {
 			status = "running"
 		}
+	} else if inspect.State == nil {
+		// No state at all is not "stopped"; it is a reading the engine did not give.
+		status = "unknown"
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -457,9 +639,17 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 	// fileName) is ever concatenated into the shell command string, which
 	// eliminates any shell-injection risk regardless of how those values
 	// are computed.
-	const containerBackupPath = "/tmp/mgp-backup.sql.gz"
+	const containerBackupPath = databaseContainerBackupPath
+	const containerDumpPath = databaseContainerDumpPath
+	backupScript := strings.Join(cmd, " ") + " | gzip > " + containerBackupPath
+	if engine == "redis" {
+		// redis-cli --rdb writes the dump file itself and prints nothing to
+		// stdout, so piping it into gzip produced a valid archive of an empty
+		// stream: the handler reported a successful backup that held no data.
+		backupScript = strings.Join(cmd, " ") + " && gzip -c " + containerDumpPath + " > " + containerBackupPath
+	}
 	execResp, err := cli.ContainerExecCreate(ctx, req.ContainerID, container.ExecOptions{
-		Cmd:          []string{"sh", "-c", strings.Join(cmd, " ") + " | gzip > " + containerBackupPath},
+		Cmd:          []string{"sh", "-c", backupScript},
 		AttachStdout: true,
 		AttachStderr: true,
 	})
@@ -473,6 +663,8 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	poll := time.NewTicker(1 * time.Second)
+	defer poll.Stop()
 	for {
 		inspect, err := cli.ContainerExecInspect(ctx, execResp.ID)
 		if err != nil {
@@ -490,7 +682,7 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		case <-ctx.Done():
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "backup timed out"})
 			return
-		case <-time.After(1 * time.Second):
+		case <-poll.C:
 		}
 	}
 
@@ -529,14 +721,69 @@ func (s *Server) handleDatabaseBackup(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A backup is only a backup if the archive holds something and the gzip stream
+	// is intact end to end. An empty or truncated file used to be reported as
+	// `ok` with a size and checksum computed over nothing.
+	if verifyErr := verifyGzipArchive(backupPath, size); verifyErr != nil {
+		_ = os.Remove(backupPath)
+		writeJSON(w, http.StatusInternalServerError, map[string]any{
+			"error":       "backup is not restorable: " + verifyErr.Error(),
+			"backupId":    req.BackupID,
+			"size":        size,
+			"verified":    false,
+			"checksummed": false,
+		})
+		return
+	}
+
 	writeJSON(w, http.StatusOK, map[string]any{
-		"ok":       true,
-		"backupId": req.BackupID,
-		"name":     fileName,
-		"engine":   engine,
-		"size":     size,
-		"checksum": hex.EncodeToString(hasher.Sum(nil)),
+		"ok":         true,
+		"backupId":   req.BackupID,
+		"name":       fileName,
+		"engine":     engine,
+		"size":       size,
+		"checksum":   hex.EncodeToString(hasher.Sum(nil)),
+		"verified":   true,
+		"checksummed": true,
 	})
+}
+
+// verifyGzipArchive reads the whole archive back through a gzip reader. It
+// rejects an empty result and a stream that stops short of its own end, which is
+// what a dump command killed by ENOSPC, a timeout or a dying container leaves
+// behind.
+func verifyGzipArchive(path string, declaredSize int64) error {
+	if declaredSize <= 0 {
+		return fmt.Errorf("archive holds no data (%d bytes)", declaredSize)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if info.Size() != declaredSize {
+		return fmt.Errorf("archive is %d bytes but the dump reported %d", info.Size(), declaredSize)
+	}
+	gz, err := gzip.NewReader(f)
+	if err != nil {
+		return fmt.Errorf("not a readable gzip stream: %w", err)
+	}
+	defer gz.Close()
+	// Read to EOF: gzip's reader reports a truncated or corrupt stream here,
+	// which is the only thing that distinguishes a restorable archive from a
+	// file that merely exists and is non-empty.
+	written, err := io.Copy(io.Discard, gz)
+	if err != nil {
+		return fmt.Errorf("gzip stream is damaged: %w", err)
+	}
+	if written == 0 {
+		return fmt.Errorf("gzip stream decompresses to nothing")
+	}
+	return nil
 }
 
 func (s *Server) handleDatabaseRestore(w http.ResponseWriter, r *http.Request) {

@@ -3,6 +3,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"os"
@@ -65,6 +66,28 @@ func totalSystemMemoryMB() uint64 {
 	return ms.ullTotalPhys / (1024 * 1024)
 }
 
+// readMemorySample returns the host memory reading for one request. A nil
+// GlobalMemoryStatusEx result is an error, never a zero sample: a zero total
+// would tell the scheduler this host has no memory to place against.
+func readMemorySample() (memorySample, error) {
+	ms := getMemoryStatus()
+	if ms == nil {
+		return memorySample{}, errors.New("GlobalMemoryStatusEx failed")
+	}
+	totalMB := ms.ullTotalPhys / (1024 * 1024)
+	if totalMB == 0 {
+		return memorySample{}, errors.New("reported memory total is zero")
+	}
+	availableMB := ms.ullAvailPhys / (1024 * 1024)
+	if availableMB > totalMB {
+		availableMB = totalMB
+	}
+	return memorySample{
+		TotalMB:     totalMB,
+		AvailableMB: availableMB,
+	}, nil
+}
+
 func freeMemoryMB() uint64 {
 	ms := getMemoryStatus()
 	if ms == nil {
@@ -111,7 +134,7 @@ func availableDiskBytesPlatform(path string) (int64, error) {
 	return int64(avail), nil
 }
 
-func hostDiskPartitionsPlatform() []DiskPartition {
+func hostDiskPartitionsPlatform(paths []string) ([]DiskPartition, error) {
 	total, free, _ := getDiskSpaceBytes("C:\\")
 	used := uint64(0)
 	if total > free {
@@ -121,7 +144,7 @@ func hostDiskPartitionsPlatform() []DiskPartition {
 	if total > 0 {
 		usedPct = float64(used) / float64(total) * 100
 	}
-	return []DiskPartition{
+	partitions := []DiskPartition{
 		{
 			MountPoint: "C:\\",
 			Device:     "C:",
@@ -132,6 +155,43 @@ func hostDiskPartitionsPlatform() []DiskPartition {
 			UsedPct:    usedPct,
 		},
 	}
+	// Probe the caller's data-root volume as well so placement sees the disk a
+	// server really lands on when it is not C:. A path on C: adds no row.
+	for _, path := range paths {
+		cleaned := strings.TrimSpace(path)
+		if cleaned == "" {
+			continue
+		}
+		vol := filepath.VolumeName(cleaned)
+		if vol == "" || strings.EqualFold(vol, "C:") {
+			continue
+		}
+		volTotal, volFree, _ := getDiskSpaceBytes(cleaned)
+		if volTotal == 0 {
+			continue
+		}
+		var volUsed uint64
+		if volTotal > volFree {
+			volUsed = volTotal - volFree
+		}
+		var volPct float64
+		if volTotal > 0 {
+			volPct = float64(volUsed) / float64(volTotal) * 100
+		}
+		partitions = append(partitions, DiskPartition{
+			MountPoint: cleaned,
+			Device:     vol,
+			FSType:     "NTFS",
+			TotalMB:    volTotal / (1024 * 1024),
+			UsedMB:     volUsed / (1024 * 1024),
+			FreeMB:     volFree / (1024 * 1024),
+			UsedPct:    volPct,
+		})
+	}
+	if len(partitions) == 0 {
+		return nil, errors.New("no mounted filesystem could be read")
+	}
+	return partitions, nil
 }
 
 func kernelVersionPlatform() string {
