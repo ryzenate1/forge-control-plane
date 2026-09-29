@@ -292,6 +292,11 @@ those three values), so populating it during D3's rewrite is a small change.
 column-aligned with its neighbours in the struct. `make format` will fix it;
 flagged only so it is not mistaken for a manual edit later.
 
+Wider than first recorded: `internal/http/realtime.go` and
+`internal/http/server.go` carry the same drift, outside the lines the fixes
+touched. Deliberately left out of the build-fix commits — reformatting
+untouched lines would have buried the actual repairs in noise.
+
 ---
 
 ## 5. Root cause
@@ -440,39 +445,57 @@ must be propagated.
 | D1 | `strconv.Itoa` + import in `ingress_sync.go` | committed `29d1600` |
 | D2 + L1 | `&totalMem` **and** `&totalCPU` in nomad `GetResources` | committed `29d1600` |
 | D5 | explicit stop-watch goroutine in `probeContext` | committed `29d1600` |
-| D3 + L2 | `placeSingleReplica` on `*replicaPlacementState`; `Reserved` populated | done, uncommitted |
-| D4 | unused `internal/runtime` import dropped | done, uncommitted |
-| D6 | `client.Headers("Origin")` | done, uncommitted |
-| D7 | `cfg.AcmeService` threaded to the registrar | done, uncommitted |
-| D8 | `ResolveTargetHost` error propagated | done, uncommitted |
-| L3 | `gofmt` drift at `replica.go` | outstanding — needs `make format` |
+| D3 + L2 | `placeSingleReplica` on `*replicaPlacementState`; `Reserved` populated | committed `b7df85e` |
+| D4 | unused `internal/runtime` import dropped | committed `b7df85e` |
+| D6 | `client.Headers("Origin")` | committed `b7df85e` |
+| D7 | `cfg.AcmeService` threaded to the registrar | committed `b7df85e` |
+| D8 | `ResolveTargetHost` returns 404 `ErrNoTarget` / 502, never a guessed host | committed `b7df85e` |
+| L3 | `gofmt` drift in `replica.go`, `realtime.go`, `server.go` | outstanding — needs `make format` |
 
-`29d1600` carries D1, D2+L1 and D5 only. It makes **`beacon` build clean on its
-own**; it does not make `forge/api` build, because the remaining five fixes were
-authored concurrently in the same checkout by other sessions and were
-deliberately excluded rather than swept into a commit whose contents had not
-been verified line by line.
+The work was split across two commits because it was authored concurrently by
+two sessions sharing this checkout. Both used path-scoped commits, so neither
+captured the other's in-progress index:
 
-**Current state, with those uncommitted changes in the tree:**
+- `29d1600` — D1, D2+L1, D5. Makes **`beacon` build clean on its own**; does not
+  make `forge/api` build.
+- `b7df85e` — D3+L2, D4, D6, D7, D8. Completes `forge/api`.
+
+Worth recording about D8, because it is the substantive design decision in the
+set: the pre-`7389900` call site would have wanted a fallback host. The fix
+returns 404 (`ErrNoTarget`) or 502 instead, and never guesses — the same
+reasoning as D2's `CPUMHz`, and what `AGENTS.md` means by "never resolve an
+ambiguous target silently."
+
+**Current state, both commits in:**
 
 ```
 cd forge/api && go build ./...   → exit 0
 cd beacon    && go build ./...   → exit 0
 ```
 
-`make test` still has no clean signal on this branch. Two sandbox limits block
-it here and neither is a code defect:
+`forge/web` is also clean: `tsc --noEmit` and `eslint` pass, 572 vitest tests
+passing.
+
+`make test` still has no clean signal for the Go side on this branch. Two
+sandbox limits block it here, and **neither is a code defect** — do not file
+either as one:
 
 - `httptest` cannot bind a listener (`listen tcp6 [::1]:0: bind: operation not
   permitted`), which fails `crossnode/TestGatewayReloadFailure` and
   `beacon/internal/remote/TestClientRejectsNon2xxResponses`.
-- `internal/placement` cannot build its test binary: `stretchr/testify` has
-  only `.mod` metadata in the local module cache, and both remedies are denied
-  (module-cache writes, and `proxy.golang.org`).
+- Any suite needing `stretchr/testify` or `lib/pq` cannot build its test
+  binary: both have only `.mod` metadata in the local module cache, and both
+  remedies are denied (module-cache writes, and `proxy.golang.org`). This takes
+  out `internal/placement`, `internal/http`, `internal/eventstore` and
+  `internal/store`.
 
 Of what could run, `crossnode` passed 14 of 15. A full `make test` outside the
 sandbox is still the first real post-`7389900` signal, and §6's warning stands:
 expect further drift.
+
+Two pre-existing web test failures are also open, unrelated to this breakage and
+outside its scope: a relative WebSocket URL in `api.contract.test.ts`, and the
+`GenerationFencedDots` ring in `design-system.test.tsx`.
 
 ---
 
