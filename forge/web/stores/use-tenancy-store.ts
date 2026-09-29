@@ -9,7 +9,8 @@ import {
   fetchTeamMembers,
 } from '@/lib/api/tenancy';
 
-let orgsGeneration = 0;
+let fetchOrgsGeneration = 0;
+let selectOrgGeneration = 0;
 let projectGeneration = 0;
 
 interface TenancyState {
@@ -63,20 +64,20 @@ export const useTenancyStore = create<TenancyState>((set) => ({
   reset: () => set({ organizations: [], activeOrg: null, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [], loading: false, error: null }),
 
   fetchOrgs: async () => {
-    const generation = ++orgsGeneration;
+    const generation = ++fetchOrgsGeneration;
     set({ loading: true, error: null });
     try {
       const orgs = await fetchOrganizations();
-      if (generation !== orgsGeneration) return;
+      if (generation !== fetchOrgsGeneration) return;
       set({ organizations: orgs, loading: false });
     } catch (err) {
-      if (generation !== orgsGeneration) return;
+      if (generation !== fetchOrgsGeneration) return;
       set({ error: err instanceof Error ? err.message : 'Failed to load organizations', loading: false });
     }
   },
 
   selectOrg: async (org) => {
-    const generation = ++orgsGeneration;
+    const generation = ++selectOrgGeneration;
     set({ activeOrg: org, projects: [], activeProject: null, environments: [], activeEnvironment: null, members: [] });
     if (!org) return;
     set({ loading: true, error: null });
@@ -85,13 +86,22 @@ export const useTenancyStore = create<TenancyState>((set) => ({
         apiFetchProjects(org.id),
         fetchTeamMembers(org.id),
       ]);
-      if (generation !== orgsGeneration) return;
+      if (generation !== selectOrgGeneration) return;
+      // A rejected branch is reported, not mistaken for "this org has none":
+      // the failed slice keeps its previous (here: reset) value and the error
+      // names which source failed so the UI can offer a retry.
+      const sources = ['projects', 'members'] as const;
+      const failures = results
+        .map((r, i) => ({ r, source: sources[i] }))
+        .filter((x): x is { r: PromiseRejectedResult; source: (typeof sources)[number] } => x.r.status === 'rejected');
       const projects = results[0].status === 'fulfilled' ? results[0].value : [];
       const members = results[1].status === 'fulfilled' ? results[1].value : [];
-      const errors = results.filter((r) => r.status === 'rejected').map((r) => (r as PromiseRejectedResult).reason);
-      set({ projects, members, loading: false, error: errors.length > 0 ? (errors[0] instanceof Error ? errors[0].message : 'Failed to load org details') : null });
+      const error = failures.length > 0
+        ? `Failed to load org details (${failures.map((f) => `${f.source}: ${f.r.reason instanceof Error ? f.r.reason.message : 'unknown error'}`).join('; ')})`
+        : null;
+      set({ projects, members, loading: false, error });
     } catch (err) {
-      if (generation !== orgsGeneration) return;
+      if (generation !== selectOrgGeneration) return;
       set({ error: err instanceof Error ? err.message : 'Failed to load org details', loading: false });
     }
   },

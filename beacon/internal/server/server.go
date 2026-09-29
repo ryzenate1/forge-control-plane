@@ -681,15 +681,42 @@ func (s *Server) health(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "service": "daemon", "runtime": false, "reason": "container runtime unavailable"})
 		return
 	}
+	// A wired runtime is not a working engine: when the socket is gone
+	// (Colima stopped, dockerd down) the daemon must say so. Ping the
+	// engine like the capability report does; unknown is not healthy.
+	if err := s.pingRuntime(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ok": false, "service": "daemon", "runtime": false, "reason": "container runtime ping failed: " + err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "service": "daemon", "runtime": true})
 }
 
-func (s *Server) ready(w http.ResponseWriter, _ *http.Request) {
+func (s *Server) ready(w http.ResponseWriter, r *http.Request) {
 	if !runtimeAvailable(s.runtime) {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "reason": "runtime unavailable"})
 		return
 	}
+	if err := s.pingRuntime(r.Context()); err != nil {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"ready": false, "reason": "container runtime ping failed: " + err.Error()})
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]any{"ready": true})
+}
+
+// pingRuntime verifies the engine behind the wired runtime actually answers.
+// Runtimes without a Ping method report nothing, so only a failed ping fails;
+// a missing engine is already handled by runtimeAvailable above.
+func (s *Server) pingRuntime(ctx context.Context) error {
+	if s.runtime == nil {
+		return errRuntimeUnavailable
+	}
+	pinger, ok := s.runtime.(runtime.Pinger)
+	if !ok {
+		return nil
+	}
+	pingCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	return pinger.Ping(pingCtx)
 }
 
 // runtimeAvailable reports whether the wired runtime can actually serve
@@ -1340,7 +1367,7 @@ func (s *Server) install(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "install script failed with exit code "+strconv.Itoa(result.ExitCode), http.StatusConflict)
 		return
 	}
-	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "accepted": true, "mode": "docker", "exitCode": result.ExitCode, "logs": result.Logs})
+	writeJSON(w, http.StatusAccepted, map[string]any{"serverId": serverID, "accepted": true, "mode": s.runtimeProvider(), "exitCode": result.ExitCode, "logs": result.Logs})
 }
 
 // The install websocket lives in install_stream.go: it attaches to an install
@@ -1670,7 +1697,28 @@ func (s *Server) logs(w http.ResponseWriter, r *http.Request) {
 	defer reader.Close()
 
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	_, _ = stdcopy.StdCopy(w, w, io.LimitReader(reader, 256*1024))
+	// Only the Docker-family engines multiplex stdout/stderr with the
+	// StdCopy frame header. Every other runtime hands back a plain byte
+	// stream; running it through StdCopy would discard the payload and
+	// answer 200 with an empty body.
+	if dockerFramedLogs(s.runtimeProvider()) {
+		_, _ = stdcopy.StdCopy(w, w, io.LimitReader(reader, 256*1024))
+		return
+	}
+	_, _ = io.Copy(w, io.LimitReader(reader, 256*1024))
+}
+
+// dockerFramedLogs reports whether the named provider multiplexes log
+// streams with the Docker StdCopy framing. Unknown providers are treated
+// as plain streams: demultiplexing plain bytes drops them silently, while
+// copying framed bytes through only loses the stream separation.
+func dockerFramedLogs(provider string) bool {
+	switch strings.ToLower(strings.TrimSpace(provider)) {
+	case runtime.ProviderDocker, runtime.ProviderPodman:
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *Server) createBackup(w http.ResponseWriter, r *http.Request) {
@@ -2001,6 +2049,16 @@ func (s *Server) statsWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	// Spend the one-time ticket now that the upgrade succeeded. A replay of
+	// the same ticket must not open a second stream, and the connection is
+	// registered in the session registry below so deauthorize-user can
+	// still close it afterwards.
+	ticketServerID := r.PathValue("id")
+	if _, redeemErr := s.redeemWebSocketTicket(r); redeemErr != nil {
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = conn.WriteJSON(map[string]any{"serverId": ticketServerID, "error": redeemErr.Error()})
+		return
+	}
 	defer s.trackWebSocket(r, conn)()
 	configureWebSocket(conn)
 	writer := &webSocketWriter{conn: conn}
@@ -2128,12 +2186,14 @@ func (s *Server) streamStats(ctx context.Context, writer *webSocketWriter, serve
 }
 
 // decodeProviderStats decodes one frame from a StatsStream using the framing
-// of the provider that produced it. Docker streams raw engine samples that
-// need DecodeDockerStats; every other runtime streams runtime.Stats JSON.
+// of the provider that produced it. Docker and Podman both stream raw engine
+// samples that need DecodeDockerStats (Podman speaks the Docker API);
+// every other runtime streams runtime.Stats JSON.
 // Decoding Docker frames as Stats (or vice versa) yields zero telemetry that
 // looks healthy, so the provider selects the decoder explicitly.
 func decodeProviderStats(stream io.Reader, provider string) (runtime.Stats, error) {
-	if strings.EqualFold(strings.TrimSpace(provider), runtime.ProviderDocker) || strings.TrimSpace(provider) == "" {
+	name := strings.ToLower(strings.TrimSpace(provider))
+	if name == runtime.ProviderDocker || name == runtime.ProviderPodman || name == "" {
 		return runtime.DecodeDockerStats(stream)
 	}
 	var stats runtime.Stats
@@ -2167,6 +2227,16 @@ func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.Close()
+	// Spend the one-time ticket now that the upgrade succeeded. A replay of
+	// the same ticket must not open a second stream, and the connection is
+	// registered in the session registry below so deauthorize-user can
+	// still close it afterwards.
+	ticketServerID := r.PathValue("id")
+	if _, redeemErr := s.redeemWebSocketTicket(r); redeemErr != nil {
+		_ = conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
+		_ = conn.WriteJSON(map[string]any{"serverId": ticketServerID, "error": redeemErr.Error()})
+		return
+	}
 	defer s.trackWebSocket(r, conn)()
 	configureWebSocket(conn)
 	writer := &webSocketWriter{conn: conn}
@@ -2209,7 +2279,11 @@ func (s *Server) logsWS(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	logWriter := &wsLogWriter{writer: writer, serverID: serverID}
-	_, _ = stdcopy.StdCopy(logWriter, logWriter, stream)
+	if dockerFramedLogs(s.runtimeProvider()) {
+		_, _ = stdcopy.StdCopy(logWriter, logWriter, stream)
+		return
+	}
+	_, _ = io.Copy(logWriter, stream)
 }
 
 type wsLogWriter struct {
@@ -3828,7 +3902,7 @@ func (s *Server) applyPower(r *http.Request, serverID, signal string) (string, e
 	}
 	err := s.manager.HandlePower(r.Context(), serverID, signal)
 	if err == nil {
-		return "docker", nil
+		return s.runtimeProvider(), nil
 	}
 	return "", err
 }
@@ -4063,21 +4137,16 @@ func isStreamingUpload(r *http.Request) bool {
 
 // authenticateWebSocket validates JWT token for WebSocket connections.
 // Token can be provided via query parameter "token" or Authorization header.
+//
+// This is the pre-upgrade probe only: it never spends the ticket. The
+// one-time ticket is spent by redeemWebSocketTicket after the upgrade
+// succeeds, so a replayed ticket is refused even within its expiry window.
 func (s *Server) authenticateWebSocket(w http.ResponseWriter, r *http.Request) (*tokens.Claims, error) {
 	if s.tokenGenerator == nil {
 		return nil, errors.New("token generator not configured")
 	}
 
-	// Try to get token from query parameter first (common for WebSocket connections)
-	tokenStr := r.URL.Query().Get("token")
-	if tokenStr == "" {
-		// Fall back to Authorization header
-		auth := r.Header.Get("Authorization")
-		if strings.HasPrefix(auth, "Bearer ") {
-			tokenStr = strings.TrimPrefix(auth, "Bearer ")
-		}
-	}
-
+	tokenStr := websocketToken(r)
 	if tokenStr == "" {
 		return nil, errors.New("missing token")
 	}
@@ -4087,6 +4156,43 @@ func (s *Server) authenticateWebSocket(w http.ResponseWriter, r *http.Request) (
 		return nil, fmt.Errorf("invalid token: %w", err)
 	}
 
+	return claims, nil
+}
+
+// websocketToken extracts the raw bearer token from a WebSocket request,
+// shared by the pre-upgrade probe (Validate) and the post-upgrade spend
+// (Redeem) so both observe the same credential.
+func websocketToken(r *http.Request) string {
+	// Try to get token from query parameter first (common for WebSocket connections)
+	tokenStr := r.URL.Query().Get("token")
+	if tokenStr == "" {
+		// Fall back to Authorization header
+		auth := r.Header.Get("Authorization")
+		if strings.HasPrefix(auth, "Bearer ") {
+			tokenStr = strings.TrimPrefix(auth, "Bearer ")
+		}
+	}
+	return tokenStr
+}
+
+// redeemWebSocketTicket spends the request's one-time stream ticket. It must
+// run exactly once per connection, after the upgrade succeeds: spending
+// before the upgrade would burn the ticket when the upgrade fails, and never
+// spending leaves the ticket replayable until it expires (the spent-ticket
+// denylist stays empty and dead). A nil store still validates principal and
+// binding without recording the spend.
+func (s *Server) redeemWebSocketTicket(r *http.Request) (*tokens.Claims, error) {
+	if s.tokenGenerator == nil {
+		return nil, errors.New("token generator not configured")
+	}
+	tokenStr := websocketToken(r)
+	if tokenStr == "" {
+		return nil, errors.New("missing token")
+	}
+	claims, err := s.tokenGenerator.Redeem(tokenStr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid token: %w", err)
+	}
 	return claims, nil
 }
 

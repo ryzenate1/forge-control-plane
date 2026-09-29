@@ -15,8 +15,8 @@ test: ## Run all tests
 	@set -e; cd forge/web && npm test
 
 build: ## Build all components
-	cd forge/api && go build ./cmd/api && cd ../..
-	cd beacon && go build ./cmd/daemon && cd ../..
+	cd forge/api && go build ./... && cd ../..
+	cd beacon && go build ./... && cd ../..
 	npm run build:packages
 	cd forge/web && npm run build && cd ../..
 

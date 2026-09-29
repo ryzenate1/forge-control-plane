@@ -688,9 +688,6 @@ func userHasConfiguredTwoFactor(ctx context.Context, cfg Config, user store.User
 // Policy levels: "none" (no requirement), "admin" (require for admin users only), "all" (require for all users)
 func requireTwoFactorAuthentication(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
-		if source, _ := c.Locals("authSource").(string); source != authSourceCookieSession {
-			return c.Next()
-		}
 		st := cfg.Store
 		if st == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -728,7 +725,14 @@ func requireTwoFactorAuthentication(cfg Config) fiber.Handler {
 			return fiber.NewError(fiber.StatusUnauthorized, "user not found")
 		}
 
-		// Check if 2FA is enabled for the user
+		// Check if 2FA is enabled for the user. Scoped credentials
+		// (API keys, OAuth tokens) cannot complete a 2FA step-up, so they
+		// are guarded by the same enrollment requirement: when the panel
+		// policy mandates 2FA, a scoped credential whose owner has not
+		// enrolled is denied rather than bypassing the policy. An enrolled
+		// owner may still use scoped credentials (the key issuance itself
+		// was gated by a 2FA'd session); unenrolled owners must enroll
+		// first. Fail closed.
 		has2FA := userHasConfiguredTwoFactor(ctx, cfg, user)
 
 		// Apply policy logic

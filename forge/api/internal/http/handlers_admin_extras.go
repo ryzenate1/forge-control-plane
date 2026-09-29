@@ -3,6 +3,7 @@ package http
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -221,10 +222,18 @@ func md5OfEmail(email string) string {
 	return md5Hex(e)
 }
 
-func generateRandomTokenHex(n int) string {
+// generateRandomTokenHex returns n random bytes as hex. Entropy failure is
+// returned, never masked with a deterministic fallback: callers must fail the
+// request rather than mint a guessable token.
+func generateRandomTokenHex(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("token length must be positive")
+	}
 	buf := make([]byte, n)
-	_, _ = rand.Read(buf)
-	return hex.EncodeToString(buf)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // silenceUnusedGenerate keeps the random helper available for future use

@@ -47,7 +47,8 @@ export interface GameTemplateConfig {
     done?: string;
   };
   stop: string;
-  logs?: Record<string, unknown>;
+  /** Required by `template-schema.json` (`config.required` includes `logs`). Every shipped template defines it (empty `{}` when the game has no log rules). */
+  logs: Record<string, unknown>;
 }
 
 export interface GameTemplate {

@@ -267,21 +267,34 @@ export async function fetchNodesPage(
   return Array.isArray(response) ? { data: response } : response;
 }
 
-export async function fetchAllNodes(): Promise<ApiNode[]> {
+export async function fetchAllNodes(opts?: { signal?: AbortSignal; concurrency?: number }): Promise<ApiNode[]> {
+  opts?.signal?.throwIfAborted?.();
   const firstPage = await fetchNodesPage();
   const pagination = firstPage.meta?.pagination;
-  const totalPages = getTotalPages(
-    pagination as { per_page?: number; total_records?: number; total_pages?: number; total?: number } | undefined,
-  );
+  const totalPages = getTotalPages(pagination);
   if (totalPages <= 1) {
     return firstPage.data ?? [];
   }
-  const remainingPages = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, index) => fetchNodesPage(index + 2)),
+  // Bounded fan-out (default 5): a 50-page fleet must not open 49 sockets at
+  // once. A failed page fails loudly — never a silent partial list.
+  const concurrency = opts?.concurrency ?? 5;
+  const pages = Array.from({ length: totalPages - 1 }, (_, index) => index + 2);
+  const results: PaginatedResponse<ApiNode>[] = new Array(pages.length);
+  let next = 0;
+  const workers = Array.from(
+    { length: Math.max(1, Math.min(concurrency, pages.length)) },
+    async () => {
+      while (next < pages.length) {
+        opts?.signal?.throwIfAborted?.();
+        const slot = next++;
+        results[slot] = await fetchNodesPage(pages[slot]);
+      }
+    },
   );
+  await Promise.all(workers);
   return [
     ...firstPage.data,
-    ...remainingPages.flatMap((response) => response.data ?? []),
+    ...results.flatMap((response) => response.data ?? []),
   ];
 }
 
@@ -402,27 +415,10 @@ export async function fetchDatabaseHost(id: string): Promise<ApiDatabaseHost> {
 // PaginatedResponse/PaginatedEnvelope are canonical in @forge/shared-types
 // (re-exported from the barrel above). Do not redefine them here.
 
-export function getTotalPages(meta?: { per_page?: number; total_records?: number; total_pages?: number; total?: number; current?: number; count?: number } | PaginationMetadata): number {
-  if (!meta) return 1;
-  const perPage = (meta as { per_page?: number }).per_page;
-  const totalRecords = (meta as { total_records?: number }).total_records;
-  // The record count is authoritative: the backend emits both `total` (page
-  // count) and `total_records`, and the two can disagree when one is cached.
-  if (
-    typeof perPage === "number" &&
-    perPage > 0 &&
-    typeof totalRecords === "number" &&
-    totalRecords >= 0
-  ) {
-    return Math.max(1, Math.ceil(totalRecords / perPage));
-  }
-  const totalPages = (meta as { total_pages?: number }).total_pages;
-  if (typeof totalPages === "number" && totalPages > 0) return Math.floor(totalPages);
-  // `total` is already a page count — never divide it by per_page again.
-  const total = (meta as { total?: number }).total;
-  if (typeof total === "number" && total > 0) return Math.floor(total);
-  return 1;
-}
+// `getTotalPages` is canonical in `./api/servers` (single implementation —
+// a previous revision kept this copy and `pageCountOf` side by side and they
+// diverged). Re-exported here so `@/lib/api` callers keep working.
+export { getTotalPages } from './api/servers';
 
 // Server listing is canonical in `./api/servers` (re-exported from the barrel
 // above). Do not re-implement pagination here — `fetchServers` already walks

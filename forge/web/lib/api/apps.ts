@@ -9,7 +9,9 @@ export type AppStatus =
   | "pending"
   | "restarting"
   | "starting"
-  | "stopping";
+  | "stopping"
+  | "idle"
+  | "unknown";
 
 export type DeploymentStatus =
   | "pending"
@@ -370,11 +372,14 @@ export function mapApplication(raw: BackendApplication): ApiApp {
     SOURCE_TYPE_TO_APP[upperType] ??
     (raw.type === "image" || raw.type === "git" || raw.type === "compose" || raw.type === "game_server" ? raw.type : "image");
   const split = splitImageTag(cfg.image ?? raw.image);
+  // Absent means unknown — never default to a healthy-looking state. "unknown"
+  // is now a first-class AppStatus so the UI renders it as not-reported.
+  const reportedStatus = raw.observedStatus || raw.status || "unknown";
   return {
     id: raw.id,
     name: raw.name,
     type,
-    status: (raw.observedStatus || raw.status || "idle") as ApiApp["status"],
+    status: reportedStatus as ApiApp["status"],
     desiredState: raw.desiredState,
     observedStatus: raw.observedStatus,
     domain: (raw.domains ?? [])[0]?.domain,

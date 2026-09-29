@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
 import { Terminal as TerminalIcon, RefreshCw, Wifi, WifiOff } from "lucide-react";
-import { API_BASE_URL, checkApiReachable } from "@/lib/api/http";
+import { getApiBaseUrl, buildWebSocketUrl, checkApiReachable } from "@/lib/api/http";
 import { Card, CardHeader, Btn, AdminToolbar, AdminLoadingState, AdminPageLayout, AdminPageHeader } from "@/components/admin/admin-ui";
 import { NodeSelect } from "@/components/admin/node-select";
 import { cn } from "@/lib/utils";
@@ -78,7 +78,7 @@ export default function AdminTerminalPage() {
 
       const terminal = new xtermModule.Terminal({
         theme: TERMINAL_THEME,
-        fontFamily: '"JetBrains Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
+        fontFamily: "var(--font-mono), ui-monospace, SFMono-Regular, Menlo, Consolas, monospace",
         fontSize: 13,
         cursorBlink: true,
         cursorStyle: "block",
@@ -144,14 +144,14 @@ export default function AdminTerminalPage() {
 
     // /host/terminal/ws is a session-cookie-protected route with no ticket
     // flow, so it only works same-origin (cookies are not sent cross-origin).
-    const wsUrl = API_BASE_URL.replace(/^http/, "ws") + "/host/terminal/ws"
+    const wsUrl = buildWebSocketUrl("/host/terminal/ws")
       + (nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "");
 
     void (async () => {
       if (aborted) return;
       const reachable = await checkApiReachable();
       if (!reachable && !aborted) {
-        setError("API unreachable — make sure the Go backend is running");
+        setError("API unreachable or session expired — make sure the Go backend is running and you are signed in");
         terminal.writeln("\x1b[1;31mAPI unreachable\x1b[0m");
         return;
       }
@@ -209,7 +209,7 @@ export default function AdminTerminalPage() {
 
     ws.onerror = () => {
       if (aborted) return;
-      setError(`WebSocket connection failed — ${API_BASE_URL}/host/terminal/ws not reachable`);
+      setError(`WebSocket connection failed — ${getApiBaseUrl()}/host/terminal/ws not reachable. If the API is up, your session may have expired — sign in again.`);
       terminal.writeln("\x1b[1;31mConnection failed\x1b[0m");
     };
 
@@ -254,7 +254,7 @@ export default function AdminTerminalPage() {
       {
         connected,
         nodeId: nodeId || null,
-        apiBase: API_BASE_URL,
+        apiBase: getApiBaseUrl(),
         retries: reconnectAttempt.current,
         maxRetries: TERMINAL_MAX_RETRIES,
         ready: terminalReady,

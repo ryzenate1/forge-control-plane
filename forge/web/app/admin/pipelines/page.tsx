@@ -44,7 +44,7 @@ import { ProgressBar } from "@/components/ui/primitives";
 import { DashHeader } from "@/components/admin/dashboard-cards";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import { formatDate, cn } from "@/lib/utils";
-import { API_BASE_URL } from "@/lib/api/http";
+import { getApiBaseUrl } from "@/lib/api/http";
 import { statusTone, type StatusTone } from "@/lib/api/status";
 
 const ACTIVE = new Set(["queued", "running", "await_approval", "in_progress"]);
@@ -299,7 +299,7 @@ export default function AdminPipelinesPage() {
                   {artifacts.map((a) => (
                     <a
                       key={a.id}
-                      href={`${API_BASE_URL}${pipelineArtifactDownloadUrl(a.id)}`}
+                      href={`${getApiBaseUrl()}${pipelineArtifactDownloadUrl(a.id)}`}
                       className="inline-flex items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.03] px-2.5 py-1.5 text-xs text-slate-300 transition hover:border-white/20 hover:bg-white/[0.06]"
                     >
                       <Download size={12} /> {a.name}

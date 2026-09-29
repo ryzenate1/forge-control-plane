@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit",
     "prebuild": "node scripts/validate-templates.mjs",
     "test": "vitest run"
   },
@@ -31,6 +32,9 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./templates/*": "./templates/*",
+    "./index.json": "./index.json",
+    "./template-schema.json": "./template-schema.json",
     "./package.json": "./package.json"
   }
 }

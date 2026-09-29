@@ -1,4 +1,4 @@
-import { postJSON } from "./http";
+import { requestJSON } from "./http";
 
 export type OAuth2TokenRequest =
   | {
@@ -34,14 +34,33 @@ export type OAuth2TokenResponse = {
 /**
  * POST /oauth2/token — RFC 6749 compliant token endpoint (canonical).
  * Backend: server.go v1.Post("/oauth2/token", IssueOAuth2Token) and alias /oauth/token.
- * Accepts application/x-www-form-urlencoded OR JSON. This helper uses JSON for
- * simplicity; backend handles both via c.BodyParser.
+ * RFC 6749 §4 requires `application/x-www-form-urlencoded`; the backend also
+ * accepts JSON via `c.BodyParser`, but form-encoding is the interoperable
+ * contract (and the only shape a generic OAuth client will send), so this
+ * helper encodes as form data through the canonical primitive (same CSRF,
+ * credentials, timeout and error shaping as every other call).
  */
 export async function issueOAuth2Token(req: OAuth2TokenRequest): Promise<OAuth2TokenResponse> {
-  return postJSON<OAuth2TokenResponse>("/oauth2/token", req);
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(req)) {
+    if (value !== undefined && value !== null) form.set(key, String(value));
+  }
+  return requestJSON<OAuth2TokenResponse>("/oauth2/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
 }
 
 /** @deprecated use issueOAuth2Token (POST /oauth2/token). Alias kept for backend compat. */
 export async function issueOAuthTokenLegacy(req: OAuth2TokenRequest): Promise<OAuth2TokenResponse> {
-  return postJSON<OAuth2TokenResponse>("/oauth/token", req);
+  const form = new URLSearchParams();
+  for (const [key, value] of Object.entries(req)) {
+    if (value !== undefined && value !== null) form.set(key, String(value));
+  }
+  return requestJSON<OAuth2TokenResponse>("/oauth/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: form.toString(),
+  });
 }

@@ -1,7 +1,15 @@
--- 138_consolidate_legacy_batch2.sql deliberately has no destructive down step.
+-- non-reversible: 138_consolidate_legacy_batch2.sql deliberately has no
+-- destructive down step.
+--
 -- It records legacy Batch 2 schema that may already be shared with older
 -- deployments and later canonical migrations. Dropping those objects would
 -- corrupt data or undo schema owned by another migration. Rollback therefore
--- removes only its ledger entry; restore schema changes from a database backup
--- when a full reversal is required.
+-- removes only its ledger entry, which is exactly why the marker above is
+-- required: isNonReversibleRollback (internal/store/store.go) only recognises
+-- the literal token "non-reversible" in the leading comment block, and this
+-- file used to carry the explanation without the token, so Rollback executed
+-- the no-op below and then DELETEd the schema_migrations row -- history
+-- deleted for work that was not undone.
+--
+-- Restore schema changes from a database backup when a full reversal is needed.
 SELECT 1;

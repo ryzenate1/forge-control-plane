@@ -32,15 +32,24 @@ func onboardingStatusHandler(svc *onboarding.Service) fiber.Handler {
 }
 
 // GET /api/v1/onboarding/repos — repository autocomplete listing.
+// Requires ?providerTokenId= (legacy ?providerId= accepted as an alias).
+// No default token is ever picked: an ambiguous target is rejected with 400.
 func onboardingReposHandler(svc *onboarding.Service) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		claims, err := currentClaims(c)
 		if err != nil {
 			return err
 		}
+		tokenID := c.Query("providerTokenId")
+		if tokenID == "" {
+			tokenID = c.Query("providerId")
+		}
+		if tokenID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "providerTokenId is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		repos, err := svc.ListRepos(ctx, claims.Sub, c.Query("providerId"))
+		repos, err := svc.ListRepos(ctx, claims.Sub, tokenID)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
@@ -62,9 +71,16 @@ func onboardingBranchesHandler(svc *onboarding.Service) fiber.Handler {
 		if repo == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "repo is required")
 		}
+		tokenID := c.Query("providerTokenId")
+		if tokenID == "" {
+			tokenID = c.Query("providerId")
+		}
+		if tokenID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "providerTokenId is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		branches, err := svc.ListBranches(ctx, claims.Sub, c.Query("providerId"), repo)
+		branches, err := svc.ListBranches(ctx, claims.Sub, tokenID, repo)
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}

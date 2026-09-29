@@ -22,7 +22,7 @@ const Alert = React.forwardRef<HTMLDivElement, AlertProps>(
         className
       )}
       ref={ref}
-      role="alert"
+      role={variant === "destructive" ? "alert" : "status"}
       {...props}
     />
   )

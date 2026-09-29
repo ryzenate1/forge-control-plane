@@ -4,11 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// ErrGitSourceNotFound distinguishes a missing row from a store failure so
+// handlers stop answering 404 for outages and driver text stops reaching the
+// client.
+var ErrGitSourceNotFound = errors.New("git source not found")
 
 type GitSource struct {
 	ID               string     `json:"id"`
@@ -102,12 +108,15 @@ func (s *Store) getGitSourceInternal(ctx context.Context, id string) (GitSource,
 		&gs.WebhookID, &gs.WebhookURL,
 		&gs.LastCommitSHA, &gs.LastCommitMsg, &gs.LastCommitAuthor,
 		&gs.LastDeployedAt, &gs.CreatedAt, &gs.UpdatedAt)
+	if isGitNoRows(err) {
+		return GitSource{}, ErrGitSourceNotFound
+	}
 	if err != nil {
-		return GitSource{}, errors.New("git source not found")
+		return GitSource{}, fmt.Errorf("git source lookup: %w", err)
 	}
 	gs.WebhookSecret, err = s.decryptSecret(webhookEncrypted, webhookPlain, secretAAD("git_sources", gs.ID, "webhook_secret"))
 	if err != nil {
-		return GitSource{}, err
+		return GitSource{}, fmt.Errorf("git source %s: %w", gs.ID, err)
 	}
 	return gs, nil
 }
@@ -124,11 +133,39 @@ func (s *Store) GetGitSource(ctx context.Context, id string) (GitSource, error) 
 }
 
 func (s *Store) CreateGitSource(ctx context.Context, req CreateGitSourceRequest) (GitSource, error) {
+	if strings.TrimSpace(req.UserID) == "" {
+		return GitSource{}, errors.New("userId is required")
+	}
 	if strings.TrimSpace(req.RepositoryURL) == "" {
 		return GitSource{}, errors.New("repositoryUrl is required")
 	}
+	provider := strings.ToLower(strings.TrimSpace(req.Provider))
+	switch provider {
+	case "", "github", "gitlab", "bitbucket", "gitea", "custom":
+	default:
+		// git_sources.provider carries a CHECK of exactly these values; an
+		// unknown provider used to reach the client as driver text.
+		return GitSource{}, fmt.Errorf("unsupported provider %q: expected github, gitlab, bitbucket, gitea or custom", req.Provider)
+	}
 	if req.Branch == "" {
 		req.Branch = "main"
+	}
+	if req.WebhookSecret == maskedStoreSecret {
+		return GitSource{}, errors.New("webhookSecret is masked; supply the real secret")
+	}
+
+	// One source per (owner, repository, branch): duplicates make webhook
+	// delivery ambiguous, and the second row's signing secret is never used.
+	var existing string
+	err := s.db.QueryRow(ctx, `
+		SELECT id FROM git_sources
+		WHERE user_id = $1 AND lower(repository_url) = lower($2) AND lower(branch) = lower($3)
+		LIMIT 1
+	`, req.UserID, strings.TrimSpace(req.RepositoryURL), req.Branch).Scan(&existing)
+	if err == nil {
+		return GitSource{}, fmt.Errorf("a git source already exists for %s@%s", req.RepositoryURL, req.Branch)
+	} else if !isGitNoRows(err) {
+		return GitSource{}, fmt.Errorf("check existing git source: %w", err)
 	}
 
 	id := uuid.NewString()
@@ -144,8 +181,8 @@ func (s *Store) CreateGitSource(ctx context.Context, req CreateGitSourceRequest)
 			webhook_secret_encrypted, webhook_secret_plaintext,
 			webhook_id, webhook_url, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, '', $12, $13, $14, $15)
-	`, id, req.UserID, req.CredentialID, req.ProviderTokenID, req.Provider,
-		req.RepositoryURL, req.RepositoryName, req.RepositoryOwner, req.Branch, req.AutoDeploy,
+	`, id, req.UserID, req.CredentialID, req.ProviderTokenID, provider,
+		strings.TrimSpace(req.RepositoryURL), req.RepositoryName, req.RepositoryOwner, req.Branch, req.AutoDeploy,
 		webhookEncrypted, req.WebhookID, req.WebhookURL, now, now); err != nil {
 		return GitSource{}, err
 	}
@@ -154,10 +191,16 @@ func (s *Store) CreateGitSource(ctx context.Context, req CreateGitSourceRequest)
 
 func (s *Store) UpdateGitSourceDeploy(ctx context.Context, id, sha, message, author string) error {
 	now := time.Now().UTC()
-	_, err := s.db.Exec(ctx, `
+	cmd, err := s.db.Exec(ctx, `
 		UPDATE git_sources SET last_commit_sha = $1, last_commit_message = $2, last_commit_author = $3, last_deployed_at = $4, updated_at = $5 WHERE id = $6
 	`, sha, message, author, now, now, id)
-	return err
+	if err != nil {
+		return err
+	}
+	if cmd.RowsAffected() == 0 {
+		return ErrGitSourceNotFound
+	}
+	return nil
 }
 
 func (s *Store) FindGitSourceByRepoAndBranch(ctx context.Context, repoURL, branch string) (*GitSource, error) {

@@ -253,8 +253,14 @@ func TestWebhookHandlerJSONPayloads(t *testing.T) {
 }
 
 func TestGenerateWebhookSecret(t *testing.T) {
-	s1 := generateWebhookSecret()
-	s2 := generateWebhookSecret()
+	s1, err := generateWebhookSecret()
+	if err != nil {
+		t.Fatalf("generateWebhookSecret: %v", err)
+	}
+	s2, err := generateWebhookSecret()
+	if err != nil {
+		t.Fatalf("generateWebhookSecret: %v", err)
+	}
 	if s1 == s2 {
 		t.Error("expected unique secrets")
 	}

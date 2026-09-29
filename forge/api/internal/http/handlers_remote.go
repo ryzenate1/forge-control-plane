@@ -17,6 +17,7 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/redis/go-redis/v9"
 )
 
 var (
@@ -40,16 +41,67 @@ func longRequestContext() (context.Context, context.CancelFunc) {
 // request volume; when full, the oldest entry is evicted.
 const maxRemoteNonces = 4096
 
+// remoteNonceStore is a replay cache for HMAC nonces.
+//
+// When Redis is available the store is shared across API instances via
+// SETNX + expiry: the first instance to see a nonce wins, every other
+// instance rejects the replay. Without Redis the in-memory fallback keeps
+// single-instance deployments working; multi-instance deployments without
+// Redis fall back to per-process detection bounded by the 5-minute timestamp
+// skew window (fail closed on signature, availability-limited on cross-
+// instance replay — never an authentication bypass, since the HMAC itself is
+// still verified on every instance).
 type remoteNonceStore struct {
-	mu   sync.Mutex
-	seen map[string]time.Time
+	mu           sync.Mutex
+	seen         map[string]time.Time
+	redis        *redis.Client
+	redisEnabled bool
 }
 
 func newRemoteNonceStore() *remoteNonceStore {
 	return &remoteNonceStore{seen: make(map[string]time.Time)}
 }
 
+// setRedis attaches the shared Redis backend. Nil-safe: a nil client or a
+// disabled flag keeps the in-memory fallback.
+func (s *remoteNonceStore) setRedis(client *redis.Client, enabled bool) {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.redis = client
+	s.redisEnabled = enabled && client != nil
+}
+
 func (s *remoteNonceStore) accept(nonce string, expires time.Time) bool {
+	if s == nil {
+		return false
+	}
+	// Shared path first: atomic claim across instances.
+	s.mu.Lock()
+	shared := s.redis
+	sharedEnabled := s.redisEnabled
+	s.mu.Unlock()
+	if sharedEnabled && shared != nil {
+		ttl := time.Until(expires)
+		if ttl <= 0 {
+			return false
+		}
+		if ttl > 10*time.Minute {
+			ttl = 10 * time.Minute
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		claimed, err := shared.SetNX(ctx, "forge:remote-nonce:"+nonce, "1", ttl).Result()
+		if err != nil {
+			// Redis unavailable: fall through to the in-memory cache so a
+			// transient outage degrades to single-instance detection
+			// rather than denying all node traffic.
+		} else {
+			return claimed
+		}
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	now := time.Now()
@@ -77,6 +129,10 @@ func (s *remoteNonceStore) accept(nonce string, expires time.Time) bool {
 // verifyRemoteHMAC requires a fresh, one-time signed request. Bearer auth in
 // remoteNodeMiddleware establishes the node identity; HMAC binds the method,
 // URI, body, timestamp, and nonce to prevent tampering and replay.
+//
+// Replay detection is shared via Redis SETNX when configured (see
+// remoteNonceStore); the signature check itself is stateless and holds on
+// every instance.
 func verifyRemoteHMAC(c *fiber.Ctx, nodeToken string, nonces *remoteNonceStore) error {
 	signature := c.Get("X-Panel-Signature")
 	timestamp := c.Get("X-Panel-Timestamp")
@@ -125,7 +181,13 @@ func signHMAC(token, method, requestURI, timestamp, nonce string, body []byte) s
 }
 
 func remoteNodeMiddleware(cfg Config, nodeRegistry *noderegistry.Service) fiber.Handler {
+	// Shared replay cache (Redis SETNX when configured, in-memory fallback).
+	// Node credentials are never ambiguous here: the bearer token both selects
+	// the node (via AuthenticateRemoteNode) and keys the HMAC, and user JWTs
+	// are never accepted on this chain — a user session cannot impersonate a
+	// node and a node token cannot access user routes. Both failures deny.
 	nonces := newRemoteNonceStore()
+	nonces.setRedis(cfg.Redis, cfg.RedisEnabled)
 	return func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")

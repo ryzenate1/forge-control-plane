@@ -66,6 +66,20 @@ export COMPOSE_FILE=""
 export ENV_FILE="$INFRA_DIR/.env"
 export TAG="$VERSION"
 
+# Snapshot current state so rollback_on_failure has something to restore.
+# (Previously the guard file was never created, so rollback was a no-op.)
+snapshot_pre_deploy_state() {
+  if [ "$DRY_RUN" = true ]; then
+    return 0
+  fi
+  {
+    echo "# deploy snapshot $(date -u +%Y-%m-%dT%H:%M:%SZ) tag=$VERSION"
+    docker compose -f "$INFRA_DIR/compose.yml" -f "$INFRA_DIR/compose.production.yml" --env-file "$INFRA_DIR/.env" images 2>/dev/null || true
+  } > "$INFRA_DIR/.deploy.backup"
+  chmod 600 "$INFRA_DIR/.deploy.backup" 2>/dev/null || true
+  info "Pre-deploy snapshot written to $INFRA_DIR/.deploy.backup"
+}
+
 compose_up() {
   local service=$1
   local label=$2
@@ -135,6 +149,7 @@ rollback_on_failure() {
 
 # --- Phase 1: Postgres ---
 header "Phase 1/6: PostgreSQL"
+snapshot_pre_deploy_state
 if [ "$DRY_RUN" = false ]; then
   docker compose -f "$INFRA_DIR/compose.yml" -f "$INFRA_DIR/compose.production.yml" --env-file "$INFRA_DIR/.env" pull postgres 2>&1 | sed 's/^/  /' || warn "Could not pull postgres image, using cached"
 fi

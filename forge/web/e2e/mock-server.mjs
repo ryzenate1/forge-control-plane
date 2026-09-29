@@ -57,7 +57,7 @@ function handle(req, res) {
     ];
     // Support ?mockEmpty=1 to test empty state
     if (url.searchParams.get('mockEmpty') === '1') {
-      json(res, 200, { data: [] });
+      json(res, 200, { data: [], meta: { pagination: { current: 1, total: 1, count: 0, per_page: 100, total_records: 0 } } });
       return;
     }
     if (path.match(/\/nodes\/[^/]+\/configuration/)) {
@@ -72,7 +72,7 @@ function handle(req, res) {
       json(res, 200, nodes[0]);
       return;
     }
-    json(res, 200, { data: nodes });
+    json(res, 200, { data: nodes, meta: { pagination: { current: 1, total: 1, count: nodes.length, per_page: 100, total_records: nodes.length } } });
     return;
   }
 

@@ -11,8 +11,10 @@ export type ApiTemplateTimestamps = {
 };
 
 export type TemplateToApiOptions = ApiTemplateTimestamps & {
-  nestId?: string;
-  eggId?: string;
+  /** Real nest id the template belongs to. No default: a fabricated id would attribute the template to a nest it never came from. */
+  nestId: string;
+  /** Real egg id backing this template. No default: same reason as `nestId`. */
+  eggId: string;
 };
 
 /**
@@ -34,8 +36,8 @@ export function templateToApiTemplate(
   const out: ApiTemplate = {
     id: template.id,
     name: template.name,
-    eggId: opts.eggId ?? 'default',
-    nestId: opts.nestId ?? 'default',
+    eggId: opts.eggId,
+    nestId: opts.nestId,
     createdAt: opts.createdAt,
     updatedAt: opts.updatedAt,
   };
@@ -51,18 +53,22 @@ export function templateToApiTemplate(
 /**
  * Convert a registry index entry to the API shape. Registry entries carry no
  * image information, so `dockerImage` is only present when the caller supplies
- * a real image — never an explicit `undefined`.
+ * a real image — never an explicit `undefined`. Registry entries also carry
+ * no creation time of their own, so the caller must supply the real
+ * `createdAt` (e.g. the template file's mtime or first-seen record):
+ * reusing `updatedAt` for both fields would misreport a freshly edited
+ * template as freshly created.
  */
 export function registryItemToApiTemplate(
   item: GameTemplateRegistryItem,
-  opts: { nestId?: string; eggId?: string; dockerImage?: string } = {},
+  opts: { nestId: string; eggId: string; createdAt: string; dockerImage?: string },
 ): ApiTemplate {
   const out: ApiTemplate = {
     id: item.id,
     name: item.name,
-    eggId: opts.eggId ?? 'default',
-    nestId: opts.nestId ?? 'default',
-    createdAt: item.updatedAt,
+    eggId: opts.eggId,
+    nestId: opts.nestId,
+    createdAt: opts.createdAt,
     updatedAt: item.updatedAt,
   };
   if (item.description !== undefined) out.description = item.description;

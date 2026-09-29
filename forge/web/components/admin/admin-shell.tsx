@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils";
 import { logout, fetchNotificationLogs, EVENT_LABELS } from "@/lib/api";
 import { useCurrentUser } from "@/lib/api/use-current-user";
 import { useHealthQuery } from "@/lib/admin/telemetry";
-import { API_BASE_URL } from "@/lib/api/http";
+import { getApiBaseUrl } from "@/lib/api/http";
 import { useBranding } from "@/components/branding";
 import { useServerStore } from "@/stores/use-server-store";
 import { useTenancyStore } from "@/stores/use-tenancy-store";
@@ -49,8 +49,8 @@ function NavStateLaneBadge({ hasPending }: { hasPending?: boolean }) {
   if (!hasPending) return null;
   return (
     <span className="ml-auto flex items-center gap-1" aria-label="Pending generation">
-      <span className="h-1.5 w-1.5 rounded-full bg-emerald-400" />
-      <span className="h-1.5 w-1.5 rounded-full bg-amber-400 motion-safe:animate-pulse" />
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--success)]" />
+      <span className="h-1.5 w-1.5 rounded-full bg-[var(--warning)] motion-safe:animate-pulse" />
     </span>
   );
 }
@@ -92,7 +92,7 @@ function SidebarNav({
       "flex w-full items-center gap-2.5 rounded-md border-l-2 px-2.5 py-1.5 text-left text-xs font-medium transition-colors motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
       active
         ? "border-[var(--brand)] bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] font-semibold text-[var(--brand)]"
-        : "border-transparent text-[var(--text-subtle)] hover:bg-white/[0.04] hover:text-[var(--text)]",
+        : "border-transparent text-[var(--text-subtle)] hover:bg-[var(--overlay-subtle)] hover:text-[var(--text)]",
     );
 
   const renderItem = (item: AdminNavEntry) => {
@@ -135,7 +135,7 @@ function SidebarNav({
               type="button"
               onClick={() => onToggleGroup(group.title)}
               aria-expanded={!collapsed}
-              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)] transition-colors hover:bg-white/[0.04] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="flex w-full items-center justify-between rounded px-2 py-1 text-left text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-muted)] transition-colors hover:bg-[var(--overlay-subtle)] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             >
               <span className="flex items-center gap-1.5">
                 {label(group.title, group.titleKey)}
@@ -160,7 +160,7 @@ function SidebarNav({
                         type="button"
                         onClick={() => onToggleMore(group.title)}
                         aria-expanded={showSecondary}
-                        className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:bg-white/[0.04] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                        className="flex w-full items-center gap-1.5 rounded-md px-2.5 py-1.5 text-[11px] font-medium text-[var(--text-muted)] transition-colors hover:bg-[var(--overlay-subtle)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
                       >
                         {showSecondary ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
                         {showSecondary ? "Show less" : `${group.secondaryItems.length} more`}
@@ -199,7 +199,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { companyName } = useBranding();
-  const { currentUser } = useServerStore();
+  const currentUser = useServerStore((s) => s.currentUser);
   const resetServer = useServerStore((s) => s.reset);
   const resetTenancy = useTenancyStore((s) => s.reset);
   const userQuery = useCurrentUser();
@@ -317,11 +317,11 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
     return (
       <div className="grid min-h-screen place-items-center bg-[var(--canvas)] p-4">
         <div className="w-full max-w-md space-y-4 rounded-xl border border-[color-mix(in_srgb,var(--danger)_30%,transparent)] bg-[var(--surface-raised)] p-6 text-center" role="alert">
-          <AlertTriangle size={28} className="mx-auto text-amber-400" strokeWidth={1.5} />
+          <AlertTriangle size={28} className="mx-auto text-[var(--warn)]" strokeWidth={1.5} />
           <h1 className="text-xl font-bold text-[var(--text)]">{tOr("admin.shell.verifyFailedTitle", "Unable to verify admin access")}</h1>
-          <p className="text-sm text-red-300">
+          <p className="text-sm text-[var(--text-subtle)]">
             {userQuery.isError
-              ? `${tOr("admin.shell.apiUnreachable", "API not reachable at")} ${API_BASE_URL}. ${tOr("admin.shell.apiUnreachableHint", "Make sure the Go backend is running.")}`
+              ? `${tOr("admin.shell.apiUnreachable", "API not reachable at")} ${getApiBaseUrl()}. ${tOr("admin.shell.apiUnreachableHint", "Make sure the Go backend is running.")}`
               : tOr("admin.shell.userLoadFailed", "The current user could not be loaded. Admin content remains hidden until the API responds.")
             }
           </p>
@@ -379,7 +379,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
           <button
             aria-label={tOr("admin.shell.openNav", "Open admin navigation")}
             aria-expanded={mobileOpen}
-            className="hidden rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] max-[899px]:inline-flex"
+            className="hidden rounded-lg p-2 text-[var(--text-subtle)] hover:bg-[var(--overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface)] max-[899px]:inline-flex"
             onClick={() => setMobileOpen(true)}
             type="button"
           >
@@ -464,7 +464,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
               aria-label={tOr("admin.shell.notifications", "Notifications")}
               aria-expanded={notificationsOpen}
               onClick={() => setNotificationsOpen(!notificationsOpen)}
-              className="relative cursor-pointer rounded-lg p-2 text-[var(--text-subtle)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="relative cursor-pointer rounded-lg p-2 text-[var(--text-subtle)] transition-colors hover:bg-[var(--overlay)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             >
               <NotificationBellIcon size={15} />
               {recentNotifications.length > 0 && (
@@ -477,7 +477,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
                 <div className="flex items-center justify-between border-b border-[var(--line)] pb-2">
                   <span className="text-xs font-bold text-[var(--text)]">Notifications</span>
                   {recentNotifications.length > 0 && (
-                    <span className="rounded-full bg-rose-500/20 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-rose-300">{recentNotifications.length} recent</span>
+                    <span className="rounded-full bg-danger-subtle px-1.5 py-0.5 font-mono text-[10px] font-semibold text-danger">{recentNotifications.length} recent</span>
                   )}
                 </div>
                 {notificationsQuery.isPending ? (
@@ -493,7 +493,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
                         <span
                           className={cn(
                             "mt-1 h-1.5 w-1.5 shrink-0 rounded-full",
-                            log.status === "failed" ? "bg-rose-400" : log.status === "pending" ? "bg-amber-400" : "bg-sky-400"
+                            log.status === "failed" ? "bg-[var(--danger)]" : log.status === "pending" ? "bg-[var(--warn)]" : "bg-[var(--info)]"
                           )}
                         />
                         <div className="min-w-0">
@@ -520,7 +520,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
             type="button"
             aria-label={tOr("admin.nav.settings", "Platform Settings")}
             onClick={() => router.push("/admin/settings")}
-            className="cursor-pointer rounded-lg p-2 text-[var(--text-subtle)] transition-colors hover:bg-white/[0.06] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+            className="cursor-pointer rounded-lg p-2 text-[var(--text-subtle)] transition-colors hover:bg-[var(--overlay)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
           >
             <SettingsCogIcon size={15} />
           </button>
@@ -533,9 +533,9 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
               aria-haspopup="menu"
               aria-label={tOr("admin.shell.accountMenu", "Account menu")}
               onClick={() => setUserMenuOpen(!userMenuOpen)}
-              className="flex cursor-pointer items-center gap-2 rounded-lg p-1 transition hover:bg-white/[0.04] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="flex cursor-pointer items-center gap-2 rounded-lg p-1 transition hover:bg-[var(--overlay-subtle)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
             >
-              <span className="grid h-7 w-7 place-items-center rounded-full bg-gradient-to-tr from-slate-700 to-slate-600 text-xs font-bold uppercase text-white ring-1 ring-white/10">
+              <span className="grid h-7 w-7 place-items-center rounded-full bg-overlay-strong text-xs font-bold uppercase text-text ring-1 ring-line">
                 {user?.email ? user.email.charAt(0) : "A"}
               </span>
               <span className="hidden flex-col text-left 2xl:flex">
@@ -565,7 +565,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
                       type="button"
                       role="menuitem"
                       onClick={() => { setUserMenuOpen(false); router.push(href); }}
-                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-subtle)] hover:bg-white/[0.06] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                      className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-[var(--text-subtle)] hover:bg-[var(--overlay)] hover:text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
                     >
                       <Icon size={13} />
                       <span>{label}</span>
@@ -577,7 +577,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
                     type="button"
                     role="menuitem"
                     onClick={handleLogout}
-                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-rose-300 hover:bg-rose-500/10 hover:text-rose-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                    className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-xs text-danger hover:bg-danger-subtle focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
                   >
                     <LogOut size={13} />
                     <span>{tOr("auth.logout", "Sign Out")}</span>
@@ -590,7 +590,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
           <button
             onClick={() => setCommandPaletteOpen(true)}
             aria-label={tOr("admin.shell.openPalette", "Open command palette")}
-            className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] hover:text-[var(--text)] md:hidden"
+            className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-[var(--overlay)] hover:text-[var(--text)] md:hidden"
             type="button"
           >
             <Search size={16} />
@@ -623,7 +623,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
             <ScopeSwitcher />
             <button
               onClick={handleLogout}
-              className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs text-[var(--text-subtle)] transition-colors hover:bg-white/[0.04] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+              className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-1.5 text-xs text-[var(--text-subtle)] transition-colors hover:bg-[var(--overlay-subtle)] hover:text-[var(--text)] motion-safe:transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
               type="button"
             >
               <LogOut size={14} />
@@ -660,7 +660,7 @@ function AdminShellFrame({ children }: { children: React.ReactNode }) {
               <button
                 ref={closeButtonRef}
                 aria-label={tOr("common.close", "Close")}
-                className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
+                className="rounded-lg p-2 text-[var(--text-subtle)] hover:bg-[var(--overlay)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
                 onClick={closeDrawer}
                 type="button"
               >
@@ -704,9 +704,9 @@ function PlatformStatusPill({
   onClick: () => void;
 }) {
   const config = {
-    pending: { text: "Checking status…", dot: "bg-slate-400", chip: "border-[var(--line)] bg-white/[0.03] text-[var(--text-subtle)]", pulse: false },
-    healthy: { text: "All Systems Operational", dot: "bg-emerald-500", chip: "border-emerald-500/25 bg-emerald-500/10 text-emerald-300", pulse: true },
-    degraded: { text: "Platform Degraded", dot: "bg-amber-500", chip: "border-amber-500/30 bg-amber-500/15 text-amber-300", pulse: true },
+    pending: { text: "Checking status…", dot: "bg-[var(--text-subtle)]", chip: "border-[var(--line)] bg-[var(--overlay-subtle)] text-[var(--text-subtle)]", pulse: false },
+    healthy: { text: "All Systems Operational", dot: "bg-[var(--ok)]", chip: "border-ok-line bg-ok-subtle text-ok", pulse: true },
+    degraded: { text: "Platform Degraded", dot: "bg-[var(--warn)]", chip: "border-warn-line bg-warn-subtle text-warn", pulse: true },
     unknown: { text: "Status Unknown", dot: "bg-unknown", chip: "border-unknown-line bg-unknown-subtle text-text-subtle", pulse: false },
   }[status];
 

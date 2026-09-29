@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON } from './http';
+import { fetchJSON, postJSON, unwrapData, unwrapList } from './http';
 import type { ApiEndpointHealthRecord } from './types';
 
 export interface NodeMetrics {
@@ -56,12 +56,19 @@ export async function getNodeMetrics(params?: { nodeId?: string; period?: string
   if (params?.limit != null) query.set('limit', String(params.limit));
   if (params?.since) query.set('since', params.since);
   const qs = query.toString();
-  const res = await fetchJSON<{ data: NodeMetrics[] }>(`/monitoring/nodes/metrics${qs ? `?${qs}` : ''}`);
-  return res.data ?? [];
+  // Backend returns `{ data: [...] }` (or a bare array on older routes) —
+  // unwrap via the shared helper so contract drift throws instead of
+  // rendering as an empty chart.
+  return unwrapList(
+    await fetchJSON<{ data: NodeMetrics[] } | NodeMetrics[]>(`/monitoring/nodes/metrics${qs ? `?${qs}` : ''}`),
+  );
 }
 
 export async function getSystemInfo(): Promise<SystemInfo> {
-  const data = await fetchJSON<SystemInfo>('/monitoring/summary');
+  // Summary is a single object (bare or `{ data }`); unwrap without inventing
+  // missing sections — absent stays `undefined` so the UI renders "unknown",
+  // never a confident zero.
+  const data = unwrapData(await fetchJSON<SystemInfo | { data: SystemInfo }>('/monitoring/summary'));
   return {
     ...data,
     recentHealthChecks: data.recentHealthChecks?.map((row) => ({
@@ -76,7 +83,8 @@ export async function getAlertHistory(params?: { page?: number; limit?: number }
   if (params?.page) query.set('page', String(params.page));
   if (params?.limit) query.set('limit', String(params.limit));
   const qs = query.toString();
-  const res = await fetchJSON<{ alerts: AlertEvent[] }>(`/alerts${qs ? `?${qs}` : ''}`);
+  const res = await fetchJSON<{ alerts: AlertEvent[] } | AlertEvent[]>(`/alerts${qs ? `?${qs}` : ''}`);
+  if (Array.isArray(res)) return res;
   return res.alerts ?? [];
 }
 
@@ -92,9 +100,14 @@ export function resolveAlert(id: string): Promise<void> {
   return postJSON<void>(`/alerts/${encodeURIComponent(id)}/resolve`);
 }
 
-/** @deprecated Use resolveAlert (POST) — kept for backward compat with task spec mentioning GET */
+/**
+ * @deprecated Use {@link resolveAlert} (POST). A state-changing GET is
+ * uncacheable-unfriendly and can fire from prefetching; kept as a same-shape
+ * alias that issues the canonical POST so legacy callers keep compiling
+ * without issuing a GET mutation.
+ */
 export function resolveAlertGET(id: string): Promise<void> {
-  return fetchJSON<void>(`/alerts/${encodeURIComponent(id)}/resolve`);
+  return resolveAlert(id);
 }
 
 export type MetricPeriod = "1h" | "6h" | "24h" | "7d" | "30d";

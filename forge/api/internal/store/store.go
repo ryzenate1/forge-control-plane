@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,10 +26,11 @@ type Store struct {
 	secrets *secrets.Keyring
 
 	// migrationIntegrityMu guards the results of the last migration run's
-	// drift check (migrationDrift, migrationsUnverified).
+	// drift check (migrationDrift, migrationsUnverified, migrationsSkippedDDL).
 	migrationIntegrityMu sync.Mutex
 	migrationDrift       []MigrationDrift
 	migrationsUnverified int
+	migrationsSkippedDDL []string
 
 	// webhookHookMu guards webhookHook, the observer notified after each
 	// webhook event is persisted to the outbox.
@@ -82,6 +84,14 @@ const migrationAdvisoryLockID int64 = 0x466F7267656D6967 // "ForgeMig"
 // pool connection. The returned release func releases the lock and returns the
 // connection to the pool. The lock is automatically dropped if the session
 // dies, so a crashed process cannot permanently wedge migrations.
+//
+// PostgreSQL-only by design: Store is PostgreSQL-only (see ConnectWithKeyring
+// fail-fast). Queries throughout the store use PostgreSQL syntax — DISTINCT
+// ON, FOR UPDATE / FOR SHARE / SKIP LOCKED, ::casts, pg_advisory_lock,
+// ON CONFLICT, RETURNING — and have no MySQL/SQLite spelling. The
+// DatabaseDriver MySQL/SQLite implementations exist only for MigrationRunner
+// use in tests and local dev (migration translation + dialect overrides),
+// never for Store queries.
 func (s *Store) acquireMigrationLock(ctx context.Context) (func(), error) {
 	conn, err := s.db.Acquire(ctx)
 	if err != nil {
@@ -1187,9 +1197,29 @@ func envPositiveInt32(key string) (int32, bool) {
 }
 
 func ConnectWithKeyring(ctx context.Context, databaseURL string, keyring *secrets.Keyring) (*Store, error) {
+	// Fail fast on non-Postgres DSNs: Store queries are PostgreSQL-only
+	// (DISTINCT ON, FOR UPDATE/SHARE + SKIP LOCKED, ::casts, ON CONFLICT,
+	// RETURNING, pg_advisory_lock) with no MySQL/SQLite spelling. The
+	// MySQL/SQLite DatabaseDriver implementations are scoped to
+	// MigrationRunner use in tests and local dev (migration translation +
+	// dialect overrides), never for Store queries. A MySQL DSN
+	// (user:pass@tcp(...)/db, mysql://...) or SQLite path (file:...,
+	// :memory:, *.db) here is a configuration error, not a dialect to
+	// negotiate — reject it loudly instead of failing obscurely on the
+	// first Postgres-only query.
+	trimmed := strings.TrimSpace(databaseURL)
+	lower := strings.ToLower(trimmed)
+	if strings.Contains(lower, "@tcp(") || strings.Contains(lower, "@unix(") ||
+		strings.HasPrefix(lower, "mysql://") || strings.HasPrefix(lower, "mariadb://") ||
+		strings.HasPrefix(lower, "mysql:") || strings.HasPrefix(lower, "sqlite:") ||
+		strings.HasPrefix(lower, "sqlite3:") || strings.HasPrefix(lower, "file:") ||
+		strings.HasPrefix(lower, ":memory:") || strings.HasSuffix(lower, ".db") ||
+		strings.HasSuffix(lower, ".sqlite") || strings.HasSuffix(lower, ".sqlite3") {
+		return nil, fmt.Errorf("store requires PostgreSQL: got a MySQL/SQLite DSN %q; MySQL/SQLite drivers are test/migration-only (MigrationRunner), Store queries are PostgreSQL-only", databaseURL)
+	}
 	cfg, err := pgxpool.ParseConfig(databaseURL)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("store requires PostgreSQL (pgxpool parse): %w", err)
 	}
 	cfg.MaxConns = 8
 	cfg.MinConns = 1
@@ -1277,6 +1307,12 @@ type MigrationIntegrity struct {
 	// An empty Drift with a non-zero Unverified means "no drift found among
 	// the rows that could be checked" — not "no drift".
 	Unverified int
+	// SkippedDDL lists PostgreSQL-only statements skipped on non-Postgres
+	// dialects (SQLite via MigrationRunner, see sqliteSkippedDDL). Each entry
+	// is "file: one-line statement". The Postgres runner never populates it;
+	// the MigrationRunner populates it alongside its stderr warning so the
+	// accepted drift is queryable instead of stderr-only.
+	SkippedDDL []string
 }
 
 // MigrationIntegrity reports the drift check from the last migration run. The
@@ -1290,14 +1326,26 @@ func (s *Store) MigrationIntegrity() MigrationIntegrity {
 	if len(s.migrationDrift) > 0 {
 		out.Drift = append([]MigrationDrift(nil), s.migrationDrift...)
 	}
+	if len(s.migrationsSkippedDDL) > 0 {
+		out.SkippedDDL = append([]string(nil), s.migrationsSkippedDDL...)
+	}
 	return out
 }
 
-// migrationChecksum hashes the exact file bytes recorded in
-// schema_migrations.checksum, so any edit to an applied migration is reported,
-// whitespace included. The runner cannot know which edits are semantically
-// inert, so it does not guess.
+// migrationChecksum is the one content hash for migration files, shared with
+// validateMigrationHashes via migrationContentHash (normalize + sha256 in
+// migration.go). A trailing-whitespace-only edit is not drift in either
+// check. Legacy rows recorded with the pre-normalization exact-bytes hash
+// are still accepted by the drift comparison (see runMigrations), so
+// upgrading does not manufacture drift.
 func migrationChecksum(body []byte) string {
+	return migrationContentHash(body)
+}
+
+// migrationChecksumExact hashes the exact file bytes (pre-normalization
+// legacy). Only used as a backwards-compat fallback when comparing a
+// recorded checksum that may predate normalization.
+func migrationChecksumExact(body []byte) string {
 	sum := sha256.Sum256(body)
 	return hex.EncodeToString(sum[:])
 }
@@ -1318,6 +1366,7 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 	s.migrationIntegrityMu.Lock()
 	s.migrationDrift = nil
 	s.migrationsUnverified = 0
+	s.migrationsSkippedDDL = nil
 	s.migrationIntegrityMu.Unlock()
 
 	releaseLock, err := s.acquireMigrationLock(ctx)
@@ -1352,6 +1401,17 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 	sortMigrationFiles(names)
 
 	if err := validateNoDuplicatePrefixes(names); err != nil {
+		return err
+	}
+
+	// Same byte-identical-copy guard the MigrationRunner enforces: two
+	// different filenames with identical content (outside a registered rename
+	// alias) mean someone duplicated a migration instead of referencing it.
+	paths := make(map[string]string, len(names))
+	for _, name := range names {
+		paths[name] = filepath.Join(dir, name)
+	}
+	if err := validateMigrationHashes(paths); err != nil {
 		return err
 	}
 
@@ -1418,7 +1478,8 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 				}
 				return fmt.Errorf("read applied migration %s for drift check: %w", name, err)
 			}
-			if onDisk := migrationChecksum(body); onDisk != recorded {
+			onDisk := migrationChecksum(body)
+			if onDisk != recorded && migrationChecksumExact(body) != recorded {
 				s.recordMigrationDrift(MigrationDrift{Version: name, Applied: recorded, OnDisk: onDisk})
 			}
 			continue
@@ -1444,6 +1505,10 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 		if err != nil {
 			return fmt.Errorf("begin migration %s: %w", name, err)
 		}
+		// Deferred Rollback is the safety net for early returns and panics;
+		// every error path below also rolls back explicitly. Rollback after
+		// a successful Commit returns an error that is ignored here.
+		defer func() { _ = tx.Rollback(ctx) }()
 		for _, statement := range splitSQLStatements(string(body)) {
 			if _, err := tx.Exec(ctx, statement); err != nil {
 				_ = tx.Rollback(ctx)
@@ -1466,9 +1531,13 @@ func (s *Store) runMigrations(ctx context.Context, dir string, names []string) e
 
 // Rollback reverts applied migrations to a target version by applying
 // .down.sql files from the rollbacks directory in reverse order of
-// application (applied_at DESC, version DESC as a tiebreak), not filename
-// order: filename order is not application order once renames, letter
-// suffixes, and backfills exist. A migration with no .down.sql file — or one
+// application (applied_at DESC, migration sort-key DESC as a tiebreak), not
+// filename order: filename order is not application order once renames, letter
+// suffixes, and backfills exist. The target boundary and the tiebreak both use
+// migrationSortKey (numeric-then-suffix): a lexicographic SQL comparison would
+// misorder suffixed files (e.g. "082_deployments.sql" sorts AFTER "082" but
+// BEFORE "082_a_failover.sql" in apply order, while plain string ">=" cannot
+// express that). A migration with no .down.sql file — or one
 // whose .down.sql carries the "-- non-reversible" marker — is refused loudly;
 // history is never deleted for something that was not actually undone.
 func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion string) error {
@@ -1487,25 +1556,50 @@ func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion
 		return fmt.Errorf("ensure schema_migrations: %w", err)
 	}
 
-	rows, err := s.db.Query(ctx, `SELECT version FROM schema_migrations WHERE version >= $1 ORDER BY applied_at DESC, version DESC`, targetVersion)
+	targetNum, targetSuffix := migrationSortKey(targetVersion)
+	type appliedMigration struct {
+		version   string
+		appliedAt time.Time
+	}
+	rows, err := s.db.Query(ctx, `SELECT version, applied_at FROM schema_migrations`)
 	if err != nil {
 		return fmt.Errorf("list applied migrations: %w", err)
 	}
 	defer rows.Close()
 
-	var versions []string
+	var versions []appliedMigration
 	for rows.Next() {
 		var v string
-		if err := rows.Scan(&v); err != nil {
+		var ts time.Time
+		if err := rows.Scan(&v, &ts); err != nil {
 			return err
 		}
-		versions = append(versions, v)
+		// Boundary in sort-key space, not lexicographic string space (see
+		// doc comment): only versions applied at-or-after the target roll back.
+		if n, sfx := migrationSortKey(v); n < targetNum || (n == targetNum && sfx < targetSuffix) {
+			continue
+		}
+		versions = append(versions, appliedMigration{version: v, appliedAt: ts})
 	}
 	if err := rows.Err(); err != nil {
 		return err
 	}
+	// Reverse application order: newest applied_at first, migration sort-key
+	// DESC breaking timestamp ties.
+	sort.Slice(versions, func(i, j int) bool {
+		if !versions[i].appliedAt.Equal(versions[j].appliedAt) {
+			return versions[i].appliedAt.After(versions[j].appliedAt)
+		}
+		ni, si := migrationSortKey(versions[i].version)
+		nj, sj := migrationSortKey(versions[j].version)
+		if ni != nj {
+			return ni > nj
+		}
+		return si > sj
+	})
 
-	for _, v := range versions {
+	for _, m := range versions {
+		v := m.version
 		downFile := filepath.Join(rollbacksDir, strings.TrimSuffix(v, ".sql")+".down.sql")
 		body, err := os.ReadFile(downFile)
 		if err != nil {
@@ -1522,6 +1616,9 @@ func (s *Store) Rollback(ctx context.Context, rollbacksDir string, targetVersion
 		if err != nil {
 			return fmt.Errorf("begin rollback %s: %w", v, err)
 		}
+		// Deferred Rollback covers early returns and panics; explicit
+		// rollbacks below remain for clarity. Ignored after Commit.
+		defer func() { _ = tx.Rollback(ctx) }()
 		for _, statement := range splitSQLStatements(string(body)) {
 			if _, err := tx.Exec(ctx, statement); err != nil {
 				_ = tx.Rollback(ctx)

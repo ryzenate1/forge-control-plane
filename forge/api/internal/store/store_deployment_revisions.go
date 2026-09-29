@@ -3,8 +3,13 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+// ErrDeploymentRevisionNotFound is returned when a revision write matches no
+// row: a status change that updated nothing was not recorded.
+var ErrDeploymentRevisionNotFound = errors.New("deployment revision not found")
 
 type RevisionStatus string
 
@@ -132,12 +137,18 @@ func (s *Store) GetLatestDeploymentRevision(ctx context.Context, deploymentID st
 }
 
 func (s *Store) UpdateDeploymentRevisionStatus(ctx context.Context, id string, status string, deployedAt *time.Time) error {
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployment_revisions
 		SET status = $2, deployed_at = $3, updated_at = now()
 		WHERE id = $1
 	`, id, status, deployedAt)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeploymentRevisionNotFound
+	}
+	return nil
 }
 
 func (s *Store) SupersedeDeploymentRevisions(ctx context.Context, deploymentID string, exceptID string) error {

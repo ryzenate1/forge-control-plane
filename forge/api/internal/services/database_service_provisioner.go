@@ -70,22 +70,31 @@ func NewDatabaseServiceProvisioner(s *store.Store, dc *daemon.Client, beaconBase
 	}
 }
 
-func generatePassword(length int) string {
+func generatePassword(length int) (string, error) {
+	if length <= 0 {
+		return "", fmt.Errorf("password length must be positive")
+	}
 	b := make([]byte, length)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)[:length]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate password: %w", err)
+	}
+	return hex.EncodeToString(b)[:length], nil
 }
 
-func generateDBName() string {
+func generateDBName() (string, error) {
 	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	return "db_" + hex.EncodeToString(b)[:8]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate db name: %w", err)
+	}
+	return "db_" + hex.EncodeToString(b)[:8], nil
 }
 
-func generateUsername() string {
+func generateUsername() (string, error) {
 	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return "u_" + hex.EncodeToString(b)[:8]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate username: %w", err)
+	}
+	return "u_" + hex.EncodeToString(b)[:8], nil
 }
 
 func defaultPortForEngine(engine string) int {
@@ -164,7 +173,7 @@ func connectionString(engine, dbName, username, password, host string, port int)
 	}
 }
 
-func credsJSON(engine, dbName, username, password string) json.RawMessage {
+func credsJSON(engine, dbName, username, password string) (json.RawMessage, error) {
 	creds := map[string]string{
 		"username": username,
 		"password": password,
@@ -173,8 +182,11 @@ func credsJSON(engine, dbName, username, password string) json.RawMessage {
 	case "postgresql", "mysql", "mariadb", "mongodb":
 		creds["database"] = dbName
 	}
-	raw, _ := json.Marshal(creds)
-	return raw
+	raw, err := json.Marshal(creds)
+	if err != nil {
+		return nil, fmt.Errorf("encode database credentials: %w", err)
+	}
+	return raw, nil
 }
 
 func (p *DatabaseServiceProvisioner) ProvisionService(ctx context.Context, name, engine, version string, memoryMB, cpuShares int) (store.DatabaseService, error) {
@@ -201,9 +213,21 @@ func (p *DatabaseServiceProvisioner) ProvisionService(ctx context.Context, name,
 		return store.DatabaseService{}, fmt.Errorf("create service record: %w", err)
 	}
 
-	dbName := generateDBName()
-	username := generateUsername()
-	password := generatePassword(32)
+	dbName, err := generateDBName()
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", "", "", "", nil)
+		return store.DatabaseService{}, fmt.Errorf("generate database name: %w", err)
+	}
+	username, err := generateUsername()
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", "", "", "", nil)
+		return store.DatabaseService{}, fmt.Errorf("generate database username: %w", err)
+	}
+	password, err := generatePassword(32)
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", "", "", "", nil)
+		return store.DatabaseService{}, fmt.Errorf("generate database password: %w", err)
+	}
 	volumeName := "mgp-dbsvc-" + svc.ID[:12]
 	port := defaultPortForEngine(engine)
 
@@ -230,7 +254,11 @@ func (p *DatabaseServiceProvisioner) ProvisionService(ctx context.Context, name,
 		return store.DatabaseService{}, fmt.Errorf("encrypt database credential: %w", err)
 	}
 	connStr := connectionString(engine, dbName, username, password, p.dockerHost, resp.Port)
-	creds := credsJSON(engine, dbName, username, password)
+	creds, err := credsJSON(engine, dbName, username, password)
+	if err != nil {
+		_ = p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "failed", "", 0, "", "", "", resp.ContainerID, resp.VolumeID, "", nil)
+		return store.DatabaseService{}, err
+	}
 	if err := p.store.UpdateDatabaseServiceStatus(ctx, svc.ID, "running", p.dockerHost, resp.Port, username, encPass, dbName, resp.ContainerID, resp.VolumeID, connStr, creds); err != nil {
 		return store.DatabaseService{}, fmt.Errorf("persist provisioned service: %w", err)
 	}

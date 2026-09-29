@@ -28,6 +28,37 @@ import (
 type MigrationRunner struct {
 	driver DatabaseDriver
 	dir    string
+
+	// skippedMu guards skippedDDL, the SQLite-only statements skipped via
+	// sqliteSkippedDDL during the last Run. They are PostgreSQL-only
+	// maintenance forms with no SQLite equivalent (see sqliteSkippedDDL);
+	// the runner still emits the stderr warning, but the list is also
+	// surfaced via MigrationIntegrity so the drift is queryable instead
+	// of stderr-only.
+	skippedMu  sync.Mutex
+	skippedDDL []string
+}
+
+// recordSkippedDDL appends a file-qualified one-line excerpt of a skipped
+// PostgreSQL-only statement. Callers already emit the stderr warning;
+// this makes the same fact available via MigrationIntegrity.
+func (mr *MigrationRunner) recordSkippedDDL(file, stmt string) {
+	mr.skippedMu.Lock()
+	mr.skippedDDL = append(mr.skippedDDL, file+": "+singleLine(stmt))
+	mr.skippedMu.Unlock()
+}
+
+// SkippedDDL returns the one-line excerpts skipped by the last Run.
+func (mr *MigrationRunner) SkippedDDL() []string {
+	mr.skippedMu.Lock()
+	defer mr.skippedMu.Unlock()
+	return append([]string(nil), mr.skippedDDL...)
+}
+
+// MigrationIntegrity surfaces the last Run's SQLite skip list through the
+// shared MigrationIntegrity contract (SkippedDDL), alongside zero drift.
+func (mr *MigrationRunner) MigrationIntegrity() MigrationIntegrity {
+	return MigrationIntegrity{SkippedDDL: mr.SkippedDDL()}
 }
 
 func NewMigrationRunner(driver DatabaseDriver, dir string) *MigrationRunner {
@@ -223,6 +254,11 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("begin transaction for %s: %w", file, err)
 		}
+		// Best-effort safety net: every explicit error path below already
+		// calls tx.Rollback before returning, but a deferred Rollback covers
+		// early returns and panics. Rollback after a successful Commit
+		// returns sql.ErrTxDone and is ignored.
+		defer func() { _ = tx.Rollback() }()
 
 		// A migration that declares itself non-reversible applies normally;
 		// the marker only affects Rollback, which must refuse loudly instead
@@ -241,6 +277,7 @@ func (mr *MigrationRunner) Run(ctx context.Context) error {
 				}
 				if sqliteSkippedDDL(stmt) {
 					fmt.Fprintf(os.Stderr, "migration %s: skipping PostgreSQL-only statement on sqlite: %.120s\n", file, singleLine(stmt))
+					mr.recordSkippedDDL(file, stmt)
 					continue
 				}
 				for _, expanded := range splitSQLiteAlterAdd(stmt) {
@@ -679,6 +716,7 @@ func isDollarChar(c byte) bool {
 //     production moves on (the followup that changes a type is a no-op here).
 //   - DROP COLUMN skips mean SQLite retains columns production dropped; code
 //     that still reads them looks healthy on SQLite and breaks on PostgreSQL.
+//
 // PostgreSQL is authoritative. Anything that must hold on SQLite needs a
 // sqlite/ dialect override; anything skipped here is accepted drift, not
 // parity.
@@ -940,6 +978,63 @@ func mysqlRewriteOnConflict(sql string) string {
 	return strings.Join(lines, "\n")
 }
 
+// sqliteWordReplacements are whole-word, case-insensitive rewrites for the
+// small PostgreSQL-specific subset used by the canonical migrations. They
+// apply ONLY to code segments — never inside string literals, quoted
+// identifiers, dollar-quoted blocks, or comments (see
+// sqliteCompatibleMigration). A naive substring replacer corrupts identifiers
+// that merely CONTAIN a type name: uuid_short became "text_short" (live case:
+// 088_server_parity_fields.sql), exactly as serial_number became
+// "int auto_increment_number" on the MySQL path before word boundaries.
+// \b is safe here because _ counts as a word character, so uuid_short /
+// serial_number / cabinet never match UUID / SERIAL / INET.
+//
+// Order matters: plain type words are rewritten BEFORE the function defaults
+// that introduce new SQLite text, so generated text is never re-processed.
+// \b also protects gen_random_uuid (which contains "uuid" flanked by _)
+// from the UUID -> TEXT pass.
+//
+// Patterns containing single-quoted literals (split_part's '@', the CHECK
+// regexes) are NOT in this table: the literal-aware splitter would separate
+// the quoted part from its code. They are handled as distinctive global
+// phrase replacements in sqliteCompatibleMigration, where the full phrase
+// (code + literal) is unambiguous in migration files.
+var sqliteWordReplacements = []struct {
+	pattern *regexp.Regexp
+	repl    string
+}{
+	{regexp.MustCompile(`(?i)\bTIMESTAMPTZ\b`), "TIMESTAMP"},
+	{regexp.MustCompile(`(?i)\bjsonb_build_object\s*\(\s*t\.image\s*,\s*t\.image\s*\)`), "('{\"' || t.image || '\":\"' || t.image || '\"}')"},
+	{regexp.MustCompile(`(?i)\bjsonb_build_object\b`), ""},
+	{regexp.MustCompile(`(?i)\bjsonb_object_agg\b`), ""},
+	{regexp.MustCompile(`(?i)\bjsonb_array_elements_text\b`), ""},
+	{regexp.MustCompile(`(?i)\bJSONB\b`), "TEXT"},
+	{regexp.MustCompile(`(?i)\bTEXT\s*\[\]`), "TEXT"},
+	{regexp.MustCompile(`(?i)\bUUID\b`), "TEXT"},
+	{regexp.MustCompile(`(?i)\bINET\b`), "TEXT"},
+	{regexp.MustCompile(`(?i)\bgen_random_uuid\s*\(\s*\)`), "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))"},
+	{regexp.MustCompile(`(?i)\bnow\s*\(\s*\)`), "CURRENT_TIMESTAMP"},
+}
+
+// sqliteLiteralPhrases are distinctive code+literal phrases replaced globally
+// (not per code segment) because they embed single-quoted literals. Each is
+// long and migration-specific; none appears as data inside a larger literal
+// in the shipped stream.
+var sqliteLiteralPhrases = []struct{ old, new string }{
+	{"split_part(email, '@', 1)", "substr(email, 1, instr(email, '@') - 1)"},
+	{"CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')", "CHECK (length(slug) > 0)"},
+	{"CHECK (color ~ '^#[0-9a-fA-F]{6}$')", "CHECK (length(color) = 7)"},
+}
+
+// sqliteTranslateCodeSegment applies sqliteWordReplacements to one
+// literal-free code segment.
+func sqliteTranslateCodeSegment(seg string) string {
+	for _, r := range sqliteWordReplacements {
+		seg = r.pattern.ReplaceAllString(seg, r.repl)
+	}
+	return seg
+}
+
 // sqliteCompatibleMigration adapts the small PostgreSQL-specific subset used by
 // the canonical migrations. SQLite is supported for local development and tests;
 // production PostgreSQL migrations are deliberately left byte-for-byte intact.
@@ -948,26 +1043,81 @@ func mysqlRewriteOnConflict(sql string) string {
 // sqliteUntranslatableDDL); the caller decides per statement. Cast stripping
 // is literal-aware: a "::" inside a single-quoted literal or dollar-quoted
 // block (e.g. a JSON default or a regex) is data, not a cast.
+//
+// The type/function rewrite is literal-aware like the MySQL path: code
+// segments are translated with word-boundary regexes while single-quoted
+// literals, double-quoted identifiers, dollar-quoted blocks, and both comment
+// styles are copied verbatim, so data (a 'uuid' default, a "uuid_short"
+// identifier, a regex containing "now()") is never rewritten — only code is.
 func sqliteCompatibleMigration(sql string) (string, error) {
-	replacer := strings.NewReplacer(
-		"TIMESTAMPTZ", "TIMESTAMP", "timestamptz", "timestamp",
-		"jsonb_build_object(t.image, t.image)", "('{\"' || t.image || '\":\"' || t.image || '\"}')",
-		"jsonb_build_object", "",
-		"jsonb_object_agg", "",
-		"jsonb_array_elements_text", "",
-		"JSONB", "TEXT", "jsonb", "text",
-		"TEXT[]", "TEXT", "text[]", "text",
-		"UUID", "TEXT", "uuid", "text",
-		"INET", "TEXT", "inet", "text",
-		"now()", "CURRENT_TIMESTAMP", "NOW()", "CURRENT_TIMESTAMP",
-		"DEFAULT gen_random_uuid()", "DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
-		"DEFAULT gen_random_uuid ()", "DEFAULT (lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
-		"gen_random_uuid()", "(lower(hex(randomblob(4))) || '-' || lower(hex(randomblob(2))) || '-4' || substr(lower(hex(randomblob(2))),2) || '-' || substr('89ab', 1 + (abs(random()) % 4), 1) || substr(lower(hex(randomblob(2))),2) || '-' || lower(hex(randomblob(6))))",
-		"split_part(email, '@', 1)", "substr(email, 1, instr(email, '@') - 1)",
-		"CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$')", "CHECK (length(slug) > 0)",
-		"CHECK (color ~ '^#[0-9a-fA-F]{6}$')", "CHECK (length(color) = 7)",
-	)
-	sql = replacer.Replace(sql)
+	for _, p := range sqliteLiteralPhrases {
+		sql = strings.ReplaceAll(sql, p.old, p.new)
+	}
+	var out strings.Builder
+	out.Grow(len(sql))
+	start := 0 // start of the current code segment
+	flush := func(end int) {
+		if end > start {
+			out.WriteString(sqliteTranslateCodeSegment(sql[start:end]))
+		}
+		start = end
+	}
+	i := 0
+	for i < len(sql) {
+		c := sql[i]
+		switch {
+		case c == '\'' || c == '"':
+			// Literal or quoted identifier: copy verbatim, honouring the
+			// doubled-quote escape.
+			flush(i)
+			j := i + 1
+			for j < len(sql) {
+				if sql[j] == c {
+					if j+1 < len(sql) && sql[j+1] == c {
+						j += 2
+						continue
+					}
+					j++
+					break
+				}
+				j++
+			}
+			out.WriteString(sql[i:j])
+			i, start = j, j
+		case c == '-' && i+1 < len(sql) && sql[i+1] == '-':
+			flush(i)
+			j := i
+			for j < len(sql) && sql[j] != '\n' {
+				j++
+			}
+			out.WriteString(sql[i:j])
+			i, start = j, j
+		case c == '/' && i+1 < len(sql) && sql[i+1] == '*':
+			flush(i)
+			j := len(sql)
+			if end := strings.Index(sql[i+2:], "*/"); end >= 0 {
+				j = i + 2 + end + 2
+			}
+			out.WriteString(sql[i:j])
+			i, start = j, j
+		case c == '$':
+			if tag := scanDollarTagStr(sql, i); tag != "" {
+				flush(i)
+				j := len(sql)
+				if end := strings.Index(sql[i+len(tag):], tag); end >= 0 {
+					j = i + len(tag) + end + len(tag)
+				}
+				out.WriteString(sql[i:j])
+				i, start = j, j
+			} else {
+				i++
+			}
+		default:
+			i++
+		}
+	}
+	flush(len(sql))
+	sql = out.String()
 	sql = strings.ReplaceAll(sql, "ALTER TABLE allocations\n    ALTER COLUMN ip TYPE text USING ip;", "")
 	sql = strings.ReplaceAll(sql, "ALTER TABLE allocations\n    ALTER COLUMN ip TYPE text USING ip", "")
 	sql = strings.ReplaceAll(sql, "ALTER TABLE allocations\n    DROP CONSTRAINT IF EXISTS allocations_port_range_check;", "")
@@ -1162,10 +1312,9 @@ var fkFollowupMigrations = map[string]string{
 	"backup_policies":    "125_backup_policies.sql",
 	"recovery_items":     "126_recovery_backup_execution.sql",
 	"webhook_deliveries": "123_async_delivery_foundation.sql",
-	// Tracked gap: target_group_targets.server_id / node_id were created
-	// without FKs in 082_target_groups.sql and no later migration adds them
-	// yet. Recorded here so the gap stays visible until a followup ships.
-	"target_group_targets": "",
+	// Followup shipped: 234_target_group_targets_fks.sql converts server_id /
+	// node_id to UUID and adds both FKs (plus backing indexes).
+	"target_group_targets": "234_target_group_targets_fks.sql",
 }
 
 // grandfatheredRetiredFiles are the exact legacy fragments retained as
@@ -1346,8 +1495,7 @@ func validateMigrationHashes(paths map[string]string) error {
 		if err != nil {
 			return fmt.Errorf("hash migration %s: %w", name, err)
 		}
-		sum := sha256.Sum256(normalizeMigrationBytes(data))
-		digest := hex.EncodeToString(sum[:])
+		digest := migrationContentHash(data)
 		if first, ok := byHash[digest]; ok {
 			if !isRegisteredAlias(first, name) {
 				return fmt.Errorf("migrations %q and %q are byte-identical but not a registered rename; register the pair in migrationAliases or remove the copy (never rename an applied file)",
@@ -1361,13 +1509,25 @@ func validateMigrationHashes(paths map[string]string) error {
 }
 
 // normalizeMigrationBytes strips trailing whitespace per line so a copy that
-// differs only in a trailing newline still counts as identical.
+// differs only in a trailing newline still counts as identical. It is the
+// single normalizer shared by duplicate detection (validateMigrationHashes)
+// and drift detection (migrationChecksum in store.go): both hash the
+// normalized form so a trailing-whitespace-only edit is not silent
+// divergence in one check and drift in the other.
 func normalizeMigrationBytes(data []byte) []byte {
 	lines := strings.Split(string(data), "\n")
 	for i, line := range lines {
 		lines[i] = strings.TrimRight(line, " \t\r")
 	}
 	return []byte(strings.Join(lines, "\n"))
+}
+
+// migrationContentHash is the one content hash for migration files: sha256
+// over normalizeMigrationBytes. Both runners share it so their notions of
+// "identical" and "drifted" agree.
+func migrationContentHash(data []byte) string {
+	sum := sha256.Sum256(normalizeMigrationBytes(data))
+	return hex.EncodeToString(sum[:])
 }
 
 func isRegisteredAlias(a, b string) bool {

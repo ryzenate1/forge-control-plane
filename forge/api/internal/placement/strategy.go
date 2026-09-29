@@ -128,11 +128,12 @@ func (s *BinPackScorer) Score(_ context.Context, candidate Candidate, request Wo
 	if candidate.TotalDisk > 0 {
 		diskUtil = float64(candidate.AllocatedDisk) / float64(candidate.TotalDisk)
 	}
-	score := (memUtil + cpuUtil + diskUtil) / 3.0
+	score := math.Max(memUtil, math.Max(cpuUtil, diskUtil))
 	reasons := []string{
 		fmt.Sprintf("memory utilization: %.0f%%", math.Round(memUtil*100)),
 		fmt.Sprintf("CPU utilization: %.0f%%", math.Round(cpuUtil*100)),
 		fmt.Sprintf("disk utilization: %.0f%%", math.Round(diskUtil*100)),
+		fmt.Sprintf("bin-pack score takes the max: %.3f", score),
 	}
 	return score, reasons, nil
 }
@@ -182,6 +183,19 @@ func (s *RandomScorer) Score(_ context.Context, candidate Candidate, request Wor
 func ensureCapacity(candidate Candidate, request WorkloadRequest) error {
 	if request.CPU < 0 || request.MemoryMB < 0 || request.DiskMB < 0 {
 		return fmt.Errorf("workload resources must not be negative")
+	}
+	// Unknown capacity is not empty capacity and not infinite capacity: a
+	// node that reports no total for a requested resource cannot be shown to
+	// fit, so it is excluded. This matches the scheduler's HasCapacity, which
+	// rejects unknown totals the same way — one rule in both layers.
+	if request.CPU > 0 && candidate.TotalCPU <= 0 {
+		return fmt.Errorf("candidate %s has unknown CPU capacity", candidate.NodeID)
+	}
+	if request.MemoryMB > 0 && candidate.TotalMemory <= 0 {
+		return fmt.Errorf("candidate %s has unknown memory capacity", candidate.NodeID)
+	}
+	if request.DiskMB > 0 && candidate.TotalDisk <= 0 {
+		return fmt.Errorf("candidate %s has unknown disk capacity", candidate.NodeID)
 	}
 	if request.CPU > candidate.AvailableCPU || request.MemoryMB > candidate.AvailableMemory || request.DiskMB > candidate.AvailableDisk {
 		return fmt.Errorf("candidate %s does not have enough capacity", candidate.NodeID)

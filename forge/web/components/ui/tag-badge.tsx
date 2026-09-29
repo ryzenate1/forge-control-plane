@@ -97,7 +97,7 @@ export function TagBadge({
           }}
           className={cn(
             "-mr-1 inline-flex shrink-0 items-center justify-center rounded-full p-0.5 transition",
-            subtle || !safe ? "hover:bg-overlay-strong" : "hover:bg-black/20",
+            subtle || !safe ? "hover:bg-overlay-strong" : "hover:bg-[color-mix(in_srgb,#000_20%,transparent)]",
           )}
         >
           <X size={small ? 10 : 12} />

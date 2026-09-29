@@ -27,7 +27,7 @@ export function MountsView({ server }: { server: ApiServer }) {
       <div className="ui-card">
         <div className="ui-alert ui-alert-error" role="alert">
           <p className="text-sm">{message(error, "Mounts could not be loaded.")}</p>
-          <p className="mt-1 text-xs text-red-300/80">This usually means the daemon is unreachable or the server lacks the mount.read permission. Verify the daemon is online, then retry.</p>
+          <p className="mt-1 text-xs text-[var(--text-subtle)]">This usually means the daemon is unreachable or the server lacks the mount.read permission. Verify the daemon is online, then retry.</p>
           <button className="ui-button ui-button-secondary mt-3" onClick={() => void refetch()} type="button">Retry</button>
         </div>
       </div>
@@ -46,20 +46,20 @@ export function MountsView({ server }: { server: ApiServer }) {
 
   return (
     <div className="space-y-3">
-      <h2 className="text-lg font-bold text-white">Server Mounts</h2>
+      <h2 className="text-lg font-bold text-[var(--text)]">Server Mounts</h2>
       <div className="grid gap-3 sm:grid-cols-2">
         {mounts.map((mount: ApiMount) => (
           <div key={mount.id} className="ui-card">
             <div className="flex items-center justify-between gap-3">
-              <h3 className="truncate font-medium text-white">{mount.name}</h3>
+              <h3 className="truncate font-medium text-[var(--text)]">{mount.name}</h3>
               {mount.readOnly !== false && (
                 <span className="ui-status-pill ui-status-pill-warning">Read-only</span>
               )}
             </div>
-            {mount.description && <p className="mt-1 text-xs text-slate-400">{mount.description}</p>}
-            <div className="mt-3 space-y-1 text-xs text-slate-400">
-              <p><span className="text-slate-500">Source:</span> <code className="font-mono text-slate-300">{mount.source}</code></p>
-              <p><span className="text-slate-500">Target:</span> <code className="font-mono text-slate-300">{mount.target}</code></p>
+            {mount.description && <p className="mt-1 text-xs text-[var(--text-subtle)]">{mount.description}</p>}
+            <div className="mt-3 space-y-1 text-xs text-[var(--text-subtle)]">
+              <p><span className="text-[var(--text-muted)]">Source:</span> <code className="font-mono text-[var(--text)]">{mount.source}</code></p>
+              <p><span className="text-[var(--text-muted)]">Target:</span> <code className="font-mono text-[var(--text)]">{mount.target}</code></p>
             </div>
           </div>
         ))}

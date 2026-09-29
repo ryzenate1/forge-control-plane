@@ -116,7 +116,7 @@ export function ScopePicker({ scopes, selected, onChange, disabled, label }: {
               aria-expanded
               aria-controls={listboxId}
               aria-activedescendant={filtered[activeIndex] ? `${listboxId}-${filtered[activeIndex][0]}` : undefined}
-              className="min-w-0 flex-1 rounded bg-transparent text-sm text-text outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-brand/50"
+              className="min-w-0 flex-1 rounded bg-transparent text-sm text-text outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--brand)_50%,transparent)]"
               placeholder={`Search ${label.toLowerCase()}...`}
               value={query}
               onChange={(e) => setQuery(e.target.value)}
@@ -139,14 +139,11 @@ export function ScopePicker({ scopes, selected, onChange, disabled, label }: {
                     tabIndex={-1}
                     onClick={() => toggle(scope)}
                     onMouseEnter={() => setActiveIndex(index)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter" || e.key === " ") {
-                        e.preventDefault();
-                        toggle(scope);
-                      }
-                    }}
+                    // No key handler here: Enter/Space are handled once by the
+                    // listbox container above. A row-level handler would bubble
+                    // to it and toggle twice.
                     className={cn(
-                      "flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand/50",
+                      "flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 hover:bg-overlay focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[color-mix(in_srgb,var(--brand)_50%,transparent)]",
                       isActive && "bg-overlay",
                       isSelected && "bg-overlay-subtle",
                     )}

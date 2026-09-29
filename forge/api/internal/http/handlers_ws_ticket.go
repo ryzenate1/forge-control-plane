@@ -120,6 +120,21 @@ func (s *wsTicketStore) peek(subject string) (wsTicket, bool) {
 	return t, true
 }
 
+// allowedWSStreams is the closed set of Beacon streams a ticket may open.
+// An unvalidated stream would mint a signed token for a stream no proxy
+// serves, or worse, for a future privileged stream.
+var allowedWSStreams = map[string]bool{
+	"console": true,
+	"stats":   true,
+	"logs":    true,
+	"backup":  true,
+	"install": true,
+}
+
+func validWSStream(s string) bool {
+	return allowedWSStreams[s]
+}
+
 // IssueWSTicket issues a short-lived (60s) single-use ticket for a server WS
 // connection. The ticket is signed with the API auth secret. The frontend
 // should pass it in `?token=<ticket>` (replacing the JWT in the query string).
@@ -132,6 +147,9 @@ func IssueWSTicket(cfg Config, store *wsTicketStore) fiber.Handler {
 			return fiber.NewError(fiber.StatusBadRequest, "server id required")
 		}
 		stream := c.Query("stream", "console")
+		if !validWSStream(stream) {
+			return fiber.NewError(fiber.StatusBadRequest, "unsupported stream: must be one of console, stats, logs, backup, install")
+		}
 		claims, ok := c.Locals("user").(tokenClaims)
 		if !ok || claims.Sub == "" {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing user")
@@ -189,7 +207,14 @@ func inspectWSTicket(cfg Config, store *wsTicketStore, token string) (wsTicket, 
 	if !ok {
 		return wsTicket{}, false
 	}
-	return store.peek(subject)
+	t, ok := store.peek(subject)
+	if !ok {
+		return wsTicket{}, false
+	}
+	if !validWSStream(t.Stream) {
+		return wsTicket{}, false
+	}
+	return t, true
 }
 
 func consumeWSTicket(cfg Config, store *wsTicketStore, token string) bool {

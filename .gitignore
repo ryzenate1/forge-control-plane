@@ -133,3 +133,6 @@ gamepanel-source.zip
 .venv*/
 graphify-out/
 .dev-tools/
+
+# Captured vitest output logs in forge/web (large, not sources).
+forge/web/vitest-*.txt

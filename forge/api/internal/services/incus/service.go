@@ -30,6 +30,11 @@ import (
 // Incus host. Handlers resolve nodes by this marker.
 const RuntimeProvider = "incus"
 
+// ErrNotConfigured reports that no Forge Virtualization endpoint exists yet:
+// no node registered with runtime=incus and no environment credentials. Callers
+// answer 503 so an unconfigured backend never renders as an empty fleet.
+var ErrNotConfigured = errors.New("Forge Virtualization (driver: incus) is not configured: register a node with runtime=incus or set INCUS_TLS_CERT / INCUS_TLS_KEY / INCUS_TRUST_TOKEN")
+
 // defaultPort is Incus's REST API port (incus.localhost / remote daemon).
 const defaultPort = 8443
 
@@ -198,7 +203,7 @@ func (s *Service) Available() bool {
 // host). It errors when the node is unknown or has no host to dial.
 func (s *Service) resolveConnection(ctx context.Context, nodeID string) (Connection, error) {
 	if s == nil {
-		return Connection{}, errors.New("incus service unavailable")
+		return Connection{}, errors.New("Forge Virtualization service unavailable")
 	}
 	c := s.defaults
 	if nodeID != "" {
@@ -246,7 +251,7 @@ func (s *Service) resolveConnection(ctx context.Context, nodeID string) (Connect
 		c.Port = defaultPort
 	}
 	if c.Host == "" {
-		return Connection{}, errors.New("no incus host configured (set a node with runtime=incus or INCUS_HOST / SetConnection)")
+		return Connection{}, ErrNotConfigured
 	}
 	return c, nil
 }
@@ -324,7 +329,7 @@ func (s *Service) httpClient(nodeID string, c Connection) (*http.Client, error) 
 // (async) responses are treated as success when the HTTP status is 2xx.
 func (s *Service) do(ctx context.Context, nodeID, method, path string, query url.Values, body any, out any) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	conn, err := s.resolveConnection(ctx, nodeID)
 	if err != nil {
@@ -377,6 +382,17 @@ func (s *Service) do(ctx context.Context, nodeID, method, path string, query url
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("incus %s %s: status %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(payload)))
 	}
+	// A server-side default limit must not let a truncated first page read as a
+	// complete listing.
+	if total := res.Header.Get("X-Incus-Result-Total"); total != "" {
+		count := res.Header.Get("X-Incus-Result-Count")
+		if count == "" {
+			count = res.Header.Get("X-Incus-Result-Filtered")
+		}
+		if count != "" && count != total {
+			return fmt.Errorf("incus %s %s: result truncated (%s of %s entries returned); retry with explicit limit/offset", method, path, count, total)
+		}
+	}
 	if out == nil {
 		return nil
 	}
@@ -392,6 +408,9 @@ func (s *Service) do(ctx context.Context, nodeID, method, path string, query url
 		if envelope.Err != "" {
 			return errors.New(envelope.Err)
 		}
+		if envelope.Metadata == nil {
+			return fmt.Errorf("incus %s %s: %q response carries no metadata to decode", method, path, envelope.Type)
+		}
 		return json.Unmarshal(envelope.Metadata, out)
 	}
 	return json.Unmarshal(payload, out)
@@ -400,7 +419,7 @@ func (s *Service) do(ctx context.Context, nodeID, method, path string, query url
 // ListInstances returns every instance on a node.
 func (s *Service) ListInstances(ctx context.Context, nodeID string) ([]Instance, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []Instance
 	q := url.Values{"recursion": {"1"}, "recycle": {"1"}, "all-projects": {"true"}}
@@ -413,7 +432,7 @@ func (s *Service) ListInstances(ctx context.Context, nodeID string) ([]Instance,
 // GetInstance returns a single instance.
 func (s *Service) GetInstance(ctx context.Context, nodeID, name string) (*Instance, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out Instance
 	if err := s.do(ctx, nodeID, http.MethodGet, "/1.0/instances/"+url.PathEscape(name), url.Values{"recursion": {"1"}}, nil, &out); err != nil {
@@ -425,7 +444,7 @@ func (s *Service) GetInstance(ctx context.Context, nodeID, name string) (*Instan
 // CreateInstance creates an instance from an Incus InstancesPost document.
 func (s *Service) CreateInstance(ctx context.Context, nodeID string, spec map[string]any) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	return s.do(ctx, nodeID, http.MethodPost, "/1.0/instances", nil, spec, nil)
 }
@@ -442,7 +461,7 @@ func (s *Service) powerState(ctx context.Context, nodeID, name, action string, f
 // StartInstance boots a stopped instance.
 func (s *Service) StartInstance(ctx context.Context, nodeID, name string) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	return s.powerState(ctx, nodeID, name, "start", false)
 }
@@ -450,7 +469,7 @@ func (s *Service) StartInstance(ctx context.Context, nodeID, name string) error 
 // StopInstance stops a running instance (force triggers an immediate shutdown).
 func (s *Service) StopInstance(ctx context.Context, nodeID, name string, force bool) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	return s.powerState(ctx, nodeID, name, "stop", force)
 }
@@ -458,7 +477,7 @@ func (s *Service) StopInstance(ctx context.Context, nodeID, name string, force b
 // RestartInstance reboots a running instance.
 func (s *Service) RestartInstance(ctx context.Context, nodeID, name string) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	return s.powerState(ctx, nodeID, name, "restart", false)
 }
@@ -466,7 +485,7 @@ func (s *Service) RestartInstance(ctx context.Context, nodeID, name string) erro
 // DeleteInstance removes an instance.
 func (s *Service) DeleteInstance(ctx context.Context, nodeID, name string, force bool) error {
 	if s == nil {
-		return errors.New("incus service unavailable")
+		return errors.New("Forge Virtualization service unavailable")
 	}
 	q := url.Values{}
 	if force {
@@ -478,7 +497,7 @@ func (s *Service) DeleteInstance(ctx context.Context, nodeID, name string, force
 // ListImages returns every image on a node.
 func (s *Service) ListImages(ctx context.Context, nodeID string) ([]Image, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []Image
 	q := url.Values{"recursion": {"1"}}
@@ -491,7 +510,7 @@ func (s *Service) ListImages(ctx context.Context, nodeID string) ([]Image, error
 // ListProfiles returns every profile on a node.
 func (s *Service) ListProfiles(ctx context.Context, nodeID string) ([]Profile, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []Profile
 	q := url.Values{"recursion": {"1"}}
@@ -504,7 +523,7 @@ func (s *Service) ListProfiles(ctx context.Context, nodeID string) ([]Profile, e
 // ListStoragePools returns every storage pool on a node.
 func (s *Service) ListStoragePools(ctx context.Context, nodeID string) ([]StoragePool, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []StoragePool
 	q := url.Values{"recursion": {"1"}}
@@ -517,7 +536,7 @@ func (s *Service) ListStoragePools(ctx context.Context, nodeID string) ([]Storag
 // ListNetworks returns every managed network on a node.
 func (s *Service) ListNetworks(ctx context.Context, nodeID string) ([]Network, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []Network
 	q := url.Values{"recursion": {"1"}}
@@ -530,7 +549,7 @@ func (s *Service) ListNetworks(ctx context.Context, nodeID string) ([]Network, e
 // ListClusterMembers returns every cluster member (empty for standalone hosts).
 func (s *Service) ListClusterMembers(ctx context.Context, nodeID string) ([]ClusterMember, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out []ClusterMember
 	if err := s.do(ctx, nodeID, http.MethodGet, "/1.0/cluster/members", url.Values{"recursion": {"1"}}, nil, &out); err != nil {
@@ -543,7 +562,7 @@ func (s *Service) ListClusterMembers(ctx context.Context, nodeID string) ([]Clus
 // configuration and API extensions) as a generic map.
 func (s *Service) GetServerMetrics(ctx context.Context, nodeID string) (map[string]any, error) {
 	if s == nil {
-		return nil, errors.New("incus service unavailable")
+		return nil, errors.New("Forge Virtualization service unavailable")
 	}
 	var out map[string]any
 	if err := s.do(ctx, nodeID, http.MethodGet, "/1.0", nil, nil, &out); err != nil {

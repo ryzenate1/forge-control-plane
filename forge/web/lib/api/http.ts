@@ -24,17 +24,22 @@ function resolveApiBaseUrl(): string {
 }
 
 export function getApiBaseUrl(): string {
-  return resolveApiBaseUrl();
+  const next = resolveApiBaseUrl();
+  // Keep the legacy named export live (ESM live bindings): anyone holding
+  // `API_BASE_URL` sees the refreshed value after any request-time lookup.
+  API_BASE_URL = next;
+  return next;
 }
 
 /**
- * Build-time snapshot of {@link getApiBaseUrl}. Prefer calling
- * `getApiBaseUrl()` at request time: this const is frozen at module load, so a
- * runtime override injected after the bundle loads
- * (`window.__FORGE_CONFIG__.apiBaseUrl`) is invisible to anyone holding this
- * value. Kept for backward-compatible imports only.
+ * Legacy snapshot export. Historically frozen at module load, which made a
+ * runtime `window.__FORGE_CONFIG__.apiBaseUrl` override invisible to holders
+ * of this value. It is now a live `let` refreshed on every `getApiBaseUrl()`
+ * call (and on every request, which resolves via `getApiBaseUrl`). Prefer
+ * calling `getApiBaseUrl()` at request time; this remains for
+ * backward-compatible imports only.
  */
-export const API_BASE_URL = resolveApiBaseUrl();
+export let API_BASE_URL = resolveApiBaseUrl();
 
 export class ApiError extends Error {
   /**
@@ -92,8 +97,8 @@ export function unwrapList<T>(body: ListEnvelope<T> | null | undefined): T[] {
   }
   // Never silently present "no data" for a shape the backend never emits: a
   // non-empty unexpected body means the contract drifted and must surface,
-  // not render as an empty list.
-  if (isRecord(body) && Object.keys(body).length === 0) return [];
+  // not render as an empty list. An empty object is not an empty list
+  // either — returning [] for `{}` would hide the drift the same way.
   throw new Error('Unexpected response: expected an array or { data: [...] }');
 }
 
@@ -123,7 +128,15 @@ export function getCSRFToken(): string | null {
   const match =
     document.cookie.match(/(?:^|;\s*)__Host-forge_csrf=([^;]+)/) ??
     document.cookie.match(/(?:^|;\s*)forge_csrf=([^;]+)/);
-  return match ? decodeURIComponent(match[1]) : null;
+  if (!match) return null;
+  // A malformed cookie value (stray `%`) must never throw out of a request
+  // path — fall back to the raw value so callers still attempt the request
+  // and the backend remains the authority on rejection.
+  try {
+    return decodeURIComponent(match[1]);
+  } catch {
+    return match[1] ?? null;
+  }
 }
 
 function addCSRFToHeaders(headers: Record<string, string>, method: string): void {
@@ -160,6 +173,15 @@ export function notifySessionExpired(): void {
       detail: { next: window.location.pathname + window.location.search },
     }),
   );
+}
+
+/**
+ * Re-arm the 401 → session-expired signal after a successful (re-)login.
+ * `notifySessionExpired` fires at most once per expiry; without a reset a
+ * re-login in the same page lifetime would never surface a second expiry.
+ */
+export function resetSessionExpiredNotification(): void {
+  sessionExpiredNotified = false;
 }
 
 /**
@@ -259,7 +281,11 @@ function ensureIdempotencyKey(
 
 function resolveRequestUrl(path: string, options: ForgeRequestOptions): string {
   if (options.sameOrigin || /^https?:\/\//i.test(path) || path.startsWith('//')) return path;
-  return `${getApiBaseUrl()}${path}`;
+  // Callers occasionally pass `servers/123` without a leading slash — without
+  // the join below that becomes `/api/v1servers/123`. Normalize so every
+  // API-relative path resolves under the base.
+  const normalizedPath = path.startsWith('/') ? path : `/${path}`;
+  return `${getApiBaseUrl()}${normalizedPath}`;
 }
 
 /**
@@ -391,6 +417,29 @@ async function sendRequest(
     : new ApiError(lastError instanceof Error ? lastError.message : 'Unknown error', 0);
 }
 
+/**
+ * Normalize any `HeadersInit` (plain object, `Headers` instance or entries)
+ * to a plain record. Spreading `init.headers` directly drops `Headers`
+ * instances (their entries are not own enumerable props), silently losing
+ * caller-supplied headers such as `Idempotency-Key` or test fixtures.
+ */
+function normalizeHeadersToRecord(input: HeadersInit | undefined): Record<string, string> {
+  if (!input) return {};
+  if (input instanceof Headers) {
+    const out: Record<string, string> = {};
+    input.forEach((value, key) => {
+      out[key] = value;
+    });
+    return out;
+  }
+  if (Array.isArray(input)) {
+    const out: Record<string, string> = {};
+    for (const [key, value] of input) out[key] = value;
+    return out;
+  }
+  return { ...(input as Record<string, string>) };
+}
+
 async function executeRequest(
   method: string,
   url: string,
@@ -401,7 +450,7 @@ async function executeRequest(
   const sameOrigin = isSameOriginRequest(url, options);
   const headers: Record<string, string> = {
     Accept: 'application/json',
-    ...(init.headers as Record<string, string> | undefined),
+    ...normalizeHeadersToRecord(init.headers as HeadersInit | undefined),
   };
   if (sameOrigin) {
     addCSRFToHeaders(headers, method);
@@ -438,9 +487,12 @@ async function executeRequest(
 }
 
 async function parseJSONBody<T>(response: Response, method: string, path: string): Promise<T> {
-  if (response.status === 204) return undefined as T;
+  // A 204 or empty body carries no payload. `requestJSON<void>` is the honest
+  // contract for those routes; the double cast keeps the generic honest — a
+  // bare `undefined as T` would claim `undefined` is every `T`.
+  if (response.status === 204) return undefined as unknown as T;
   const text = await response.text();
-  if (!text) return undefined as T;
+  if (!text) return undefined as unknown as T;
   try {
     return JSON.parse(text) as T;
   } catch {
@@ -534,7 +586,7 @@ export async function requestVoid(
 function mergeJsonInit(method: string, body: unknown, init?: RequestInit): RequestInit {
   const contentHeaders: Record<string, string> =
     body !== undefined ? { 'Content-Type': 'application/json' } : {};
-  const extraHeaders = (init?.headers as Record<string, string> | undefined) ?? {};
+  const extraHeaders = normalizeHeadersToRecord(init?.headers as HeadersInit | undefined);
   const { headers: _omit, method: _m, body: _b, ...rest } = init ?? {};
   void _omit;
   void _m;
@@ -586,7 +638,7 @@ export async function deleteJSON<T = void>(
 function statusHint(status: number): string {
   if (status === 0 || status >= 600) return 'API server unreachable — is the Go backend running?';
   if (status === 401) return 'Not authenticated — try logging out and back in';
-  if (status === 403) return 'Access denied — admin role required';
+  if (status === 403) return 'Access denied — you may lack permission for this resource';
   if (status === 404) return 'Endpoint not found — check API server is running and up to date';
   if (status === 503)
     return 'Service unavailable — a required dependency (database/daemon) is not ready';
@@ -691,4 +743,41 @@ export async function checkApiReachable(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+export type FetchExternalOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number | false;
+};
+
+/**
+ * Fetch an arbitrary third-party URL (not the Forge API) with the same error
+ * shaping as the canonical primitive: transport failures surface as
+ * {@link ApiError} with status 0, non-2xx as {@link ApiError} with the real
+ * status, and AbortError/TimeoutError propagate untouched. Routes through
+ * {@link sendRequest} so there is still exactly one HTTP execution path —
+ * absolute URLs bypass the API base prefix, cross-origin calls default to
+ * `same-origin` credentials (never `include`), and CSRF is only signed for
+ * same-origin targets (see `isSameOriginRequest`).
+ */
+export async function fetchExternalBlob(url: string, options?: FetchExternalOptions): Promise<Blob> {
+  const response = await sendRequest(
+    'GET',
+    url,
+    options?.signal ? { signal: options.signal } : {},
+    options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {},
+  );
+  if (response.status === 204) return new Blob();
+  return response.blob();
+}
+
+/** Text variant of {@link fetchExternalBlob} with identical error shaping. */
+export async function fetchExternalText(url: string, options?: FetchExternalOptions): Promise<string> {
+  const response = await sendRequest(
+    'GET',
+    url,
+    options?.signal ? { signal: options.signal } : {},
+    options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {},
+  );
+  return response.text();
 }

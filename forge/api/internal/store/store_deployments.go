@@ -11,6 +11,11 @@ import (
 
 var ErrDeploymentInProgress = errors.New("deployment already in progress for this server")
 
+// ErrDeploymentNotFound is returned by writes whose target row is gone. An
+// UPDATE that matched nothing must not be reported as a successful state
+// transition.
+var ErrDeploymentNotFound = errors.New("deployment not found")
+
 type Deployment struct {
 	ID                      string     `json:"id"`
 	ServerID                string     `json:"serverId"`
@@ -125,8 +130,12 @@ func (s *Store) ListDeployments(ctx context.Context, serverID string) ([]Deploym
 	return result, rows.Err()
 }
 
+// UpdateDeployment writes every caller-owned column. It deliberately does not
+// touch executor_id or execution_lease_until: lease ownership belongs to the
+// executor that claimed it, and a bookkeeping write from another request must
+// never steal or clear it.
 func (s *Store) UpdateDeployment(ctx context.Context, d *Deployment) error {
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployments
 		SET server_id = $2, strategy = $3, status = $4, image = $5, blue_target_id = $6, green_target_id = $7,
 						active_target = $8, health_check_path = $9, health_check_port = $10, health_check_host = $11, error = $12,
@@ -134,7 +143,7 @@ func (s *Store) UpdateDeployment(ctx context.Context, d *Deployment) error {
 						timeout_seconds = $15, health_gate_enabled = $16, health_gate_threshold = $17,
 						health_gate_interval_ms = $18, auto_rollback_enabled = $19, rollback_on_health_failure = $20,
 						cleanup_on_failure = $21, target_replicas = $22, progress_pct = $23, next_step = $24,
-						timeout_at = $25, executor_id = $26, execution_lease_until = $27, version = version + 1, updated_at = now(), completed_at = $28
+						timeout_at = $25, version = version + 1, updated_at = now(), completed_at = $26
 					WHERE id = $1
 				`, d.ID, d.ServerID, d.Strategy, d.Status, d.Image, d.BlueTargetID, d.GreenTargetID,
 		d.ActiveTarget, d.HealthCheckPath, d.HealthCheckPort, d.HealthCheckHost, d.Error,
@@ -142,18 +151,30 @@ func (s *Store) UpdateDeployment(ctx context.Context, d *Deployment) error {
 		d.TimeoutSeconds, d.HealthGateEnabled, d.HealthGateThreshold,
 		d.HealthGateIntervalMs, d.AutoRollbackEnabled, d.RollbackOnHealthFailure,
 		d.CleanupOnFailure, d.TargetReplicas, d.ProgressPct, d.NextStep,
-		d.TimeoutAt, d.ExecutorID, d.ExecutionLeaseUntil, d.CompletedAt)
-	return err
+		d.TimeoutAt, d.CompletedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeploymentNotFound
+	}
+	return nil
 }
 
 func (s *Store) UpdateDeploymentStatus(ctx context.Context, id string, status string, errMsg string) error {
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployments
 		SET status = $2, error = CASE WHEN $3 = '' THEN error ELSE $3 END, updated_at = now(),
 		    completed_at = CASE WHEN $2 IN ('completed', 'failed', 'rolled_back', 'cancelled') THEN now() ELSE completed_at END
 		WHERE id = $1
 	`, id, status, errMsg)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeploymentNotFound
+	}
+	return nil
 }
 
 func (s *Store) ListAllDeployments(ctx context.Context) ([]Deployment, error) {
@@ -297,6 +318,9 @@ func (s *Store) DeleteDeployment(ctx context.Context, id string) error {
 	return err
 }
 
+// ClaimExecutionLease takes the lease for deploymentID. A false return always
+// means "someone else holds it"; a missing row is an error, because "no such
+// deployment" and "already running elsewhere" must not be conflated.
 func (s *Store) ClaimExecutionLease(ctx context.Context, deploymentID string, executorID string, leaseDuration time.Duration) (bool, error) {
 	var claimed bool
 	err := s.db.QueryRow(ctx, `
@@ -310,16 +334,24 @@ func (s *Store) ClaimExecutionLease(ctx context.Context, deploymentID string, ex
 		RETURNING true
 	`, deploymentID, executorID, leaseDuration.Seconds()).Scan(&claimed)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return false, err
 		}
-		return false, err
+		var exists bool
+		if err := s.db.QueryRow(ctx, `SELECT true FROM deployments WHERE id = $1`, deploymentID).Scan(&exists); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return false, ErrDeploymentNotFound
+			}
+			return false, err
+		}
+		return false, nil
 	}
 	return claimed, nil
 }
 
 // RenewExecutionLease extends the lease for the owning executor so long
-// executions never have their lease lapse mid-run.
+// executions never have their lease lapse mid-run. A false return means this
+// executor no longer holds the lease.
 func (s *Store) RenewExecutionLease(ctx context.Context, deploymentID, executorID string, leaseDuration time.Duration) (bool, error) {
 	var renewed bool
 	err := s.db.QueryRow(ctx, `
@@ -341,20 +373,13 @@ func (s *Store) RenewExecutionLease(ctx context.Context, deploymentID, executorI
 
 // ReleaseExecutionLeaseIfOwner clears the lease only when it belongs to the
 // given executor, so a stale executor cannot release another worker's lease.
+// The `$2 = ''` escape is what makes it safe for a caller that never recorded
+// an owner; a real executor always passes its own identity.
 func (s *Store) ReleaseExecutionLeaseIfOwner(ctx context.Context, deploymentID, executorID string) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE deployments
 		SET executor_id = NULL, execution_lease_until = NULL, updated_at = now()
 		WHERE id = $1 AND (executor_id = $2 OR $2 = '')
 	`, deploymentID, executorID)
-	return err
-}
-
-func (s *Store) ReleaseExecutionLease(ctx context.Context, deploymentID string) error {
-	_, err := s.db.Exec(ctx, `
-		UPDATE deployments
-		SET executor_id = NULL, execution_lease_until = NULL, updated_at = now()
-		WHERE id = $1
-	`, deploymentID)
 	return err
 }

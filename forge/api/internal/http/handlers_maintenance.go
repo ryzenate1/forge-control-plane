@@ -7,7 +7,7 @@ import (
 )
 
 func registerMaintenanceRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
-	protected.Post("/admin/settings/maintenance", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/settings/maintenance", mutationLimiter, requireRole("admin"), requireAdminScope("maintenance.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -47,7 +47,7 @@ func registerMaintenanceRoutes(protected fiber.Router, cfg Config, mutationLimit
 		})
 	})
 
-	protected.Get("/admin/settings/maintenance", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/admin/settings/maintenance", requireRole("admin"), requireAdminScope("maintenance.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return c.JSON(store.DefaultMaintenanceSettings())
 		}

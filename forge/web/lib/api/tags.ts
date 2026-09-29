@@ -7,7 +7,7 @@
 // primitives in ./http so CSRF signing, cookie credentials and the 401
 // session-expiry signal are handled in exactly one place.
 
-import { deleteJSON, fetchJSON, patchJSON, postJSON } from './http';
+import { deleteJSON, fetchJSON, patchJSON, postJSON, unwrapList } from './http';
 
 /** Kinds of objects a tag can be attached to. Mirrors the backend enum. */
 export type TagResourceType = 'application' | 'server' | 'environment';
@@ -56,13 +56,10 @@ export interface TagBulkResponse {
   total: number;
 }
 
-/** The backend wraps list payloads in `{ data: [...] }`; unwrap defensively so
- * callers always receive an array even if a future route returns a bare array. */
+/** The backend wraps list payloads in `{ data: [...] }`; the canonical
+ * {@link unwrapList} also throws on an unexpected shape instead of rendering
+ * it as an empty list. */
 type ListEnvelope<T> = { data?: T[] } | T[];
-
-function unwrapList<T>(body: ListEnvelope<T>): T[] {
-  return Array.isArray(body) ? body : body?.data ?? [];
-}
 
 /** URL segment per resource type (the assignment routes are registered per
  * concrete kind: /applications/:id/tags, /servers/:id/tags, ...). */

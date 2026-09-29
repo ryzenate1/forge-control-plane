@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, deleteJSON } from "./http";
+import { fetchJSON, postJSON, deleteJSON, unwrapData } from "./http";
 
 export type DNSProvider = {
   id: string;
@@ -30,13 +30,6 @@ export type CreateDNSProviderInput = {
   providerType: string;
   credentials: Record<string, string>;
 };
-
-function unwrapData<T>(value: T | { data: T }): T {
-  if (value && typeof value === "object" && "data" in (value as Record<string, unknown>)) {
-    return (value as { data: T }).data;
-  }
-  return value as T;
-}
 
 export function fetchDnsProviders(): Promise<DNSProvider[]> {
   return fetchJSON<DNSProvider[] | { data: DNSProvider[] }>("/dns/providers/configured").then((res) => {

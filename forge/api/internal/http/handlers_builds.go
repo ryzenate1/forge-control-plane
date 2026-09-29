@@ -22,12 +22,12 @@ type startBuildRequest struct {
 	NoCache     bool              `json:"noCache"`
 }
 
-func registerBuildRoutes(v1 fiber.Router, cfg Config, buildSvc *build.Service, mutationLimiter fiber.Handler) {
+func registerBuildRoutes(protected fiber.Router, cfg Config, buildSvc *build.Service, mutationLimiter fiber.Handler) {
 	if buildSvc == nil {
 		return
 	}
 
-	builds := v1.Group("/builds", requireRole("admin"))
+	builds := protected.Group("/builds", requireRole("admin"))
 
 	builds.Post("/", mutationLimiter, func(c *fiber.Ctx) error {
 		var req startBuildRequest

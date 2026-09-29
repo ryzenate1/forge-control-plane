@@ -21,6 +21,8 @@ echo "=== Running TypeScript checks ==="
 (cd "$ROOT/forge/web" && npm run typecheck)
 if [ -d "$ROOT/packages/sdk" ] && grep -q '"lint"' "$ROOT/packages/sdk/package.json" 2>/dev/null; then (cd "$ROOT/packages/sdk" && npm run lint); fi
 if [ -d "$ROOT/packages/shared-types" ] && grep -q '"lint"' "$ROOT/packages/shared-types/package.json" 2>/dev/null; then (cd "$ROOT/packages/shared-types" && npm run lint); fi
+if [ -d "$ROOT/packages/ui" ] && grep -q '"lint"' "$ROOT/packages/ui/package.json" 2>/dev/null; then (cd "$ROOT/packages/ui" && npm run lint); fi
+if [ -d "$ROOT/packages/game-templates" ] && grep -q '"lint"' "$ROOT/packages/game-templates/package.json" 2>/dev/null; then (cd "$ROOT/packages/game-templates" && npm run lint); fi
 
 echo "=== Running Prettier check ==="
 (cd "$ROOT" && npx prettier --check "forge/web/**/*.{ts,tsx,js,jsx,json,css}")

@@ -3,7 +3,6 @@ package placement
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 )
 
@@ -72,6 +71,15 @@ type ReplicaFailure struct {
 	Index  int    `json:"index"`
 	Reason string `json:"reason"`
 }
+
+// Spread terms for replica anti-affinity. The penalty grows per existing
+// instance of the same app on the node, but it is capped: spreading is a
+// preference, and an unbounded term would let a crowded node never win even
+// when it is the only node with free capacity.
+const (
+	spreadPenaltyPerInstance = 0.1
+	maxSpreadPenalty         = 0.5
+)
 
 // replicaPlacementState is the request-scoped working set both the decision and
 // the explanation run against, so an explanation cannot describe a winner the
@@ -182,6 +190,14 @@ func (s *replicaPlacementState) apply(replica ReplicaSpec, nodeID string) {
 }
 
 func (e *Engine) PlaceReplicas(ctx context.Context, candidates []Candidate, req ReplicaPlacementRequest) (*ReplicaPlacementResult, error) {
+	// The Engine holds no placement state (scorer, checker, logger only), so
+	// the working set is request-local and needs no engine lock; Place and
+	// PlaceAll lock nothing for the same reason. Concurrency across requests
+	// is not closed here at all — the durable guard is the placement
+	// reservation the caller makes per placed replica (see
+	// replicamanager.deployReplicas: reserve, write the instance row, confirm;
+	// cancel on any failure). Reserved on each placement tells the caller how
+	// much capacity to make durable before the next placement reads it.
 	state, err := prepareReplicaPlacement(candidates, req)
 	if err != nil {
 		return nil, err
@@ -276,11 +292,8 @@ func (e *Engine) placeSingleReplica(ctx context.Context, state *replicaPlacement
 		return nil, fmt.Errorf("no viable node for replica %d", replica.Index)
 	}
 
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Score > results[j].Score
-	})
+	selected := bestScoredPlacement(results)
 
-	selected := results[0]
 	return &ReplicaPlacement{
 		Index:           replica.Index,
 		NodeID:          selected.NodeID,
@@ -289,6 +302,20 @@ func (e *Engine) placeSingleReplica(ctx context.Context, state *replicaPlacement
 		RuntimeProvider: replica.RuntimeProvider,
 		Reserved:        replicaReservation(replica),
 	}, nil
+}
+
+// bestScoredPlacement picks the highest score with a deterministic
+// tie-breaker: equal scores resolve to the lexicographically smallest node,
+// so identical inputs always place identically instead of depending on input
+// order.
+func bestScoredPlacement(results []scoredPlacement) scoredPlacement {
+	best := results[0]
+	for _, r := range results[1:] {
+		if r.Score > best.Score || (r.Score == best.Score && r.NodeID < best.NodeID) {
+			best = r
+		}
+	}
+	return best
 }
 
 type scoredPlacement struct {
@@ -311,6 +338,21 @@ func (e *Engine) scoreReplicaCandidate(ctx context.Context, c Candidate, replica
 	score += bonus
 	reasons = append(reasons, bonusReasons...)
 
+	// Storage locality is scored the same way on both placement paths: the
+	// hard filter in prepareReplicaPlacement already removed mismatches, so
+	// this term documents the preference for callers that score candidates
+	// the filter never saw. It mirrors the scheduler's ScoreNodes term, using
+	// the same canonical vocabulary and the same bounded bonus/penalty.
+	if req.StorageLocality != "" {
+		if candidateStorageLocality(c) == CanonicalStorageLocality(req.StorageLocality) {
+			score += StorageMatchBonusValue()
+			reasons = append(reasons, "storage locality match bonus")
+		} else {
+			score -= StorageMismatchPenaltyValue()
+			reasons = append(reasons, "storage locality mismatch penalty")
+		}
+	}
+
 	count := c.ServerCount + usedNodeCount[c.NodeID]
 	if count > 0 {
 		spreadPenalty := float64(count) * 0.1
@@ -330,33 +372,50 @@ func filterByStorageLocality(candidates []Candidate, requested string) []Candida
 	if strings.TrimSpace(requested) == "" {
 		return candidates
 	}
-	want := normalizeLocality(requested)
+	want := CanonicalStorageLocality(requested)
 	var filtered []Candidate
 	for _, c := range candidates {
-		got := normalizeLocality(c.StorageLocality)
-		if got == "" {
-			// A candidate that reports no locality is a docker-class node,
-			// which the scheduler treats as local storage.
-			got = "local"
-		}
-		if got == want {
+		if candidateStorageLocality(c) == want {
 			filtered = append(filtered, c)
 		}
 	}
 	return filtered
 }
 
+// CanonicalStorageLocality collapses the spellings used for the same storage
+// behaviour so "local_only", "local-only" and "local" compare equal. It is the
+// single vocabulary for storage locality on the placement path: the scheduler
+// layer delegates to it, so a filter decision and a scoring decision can never
+// disagree about what matches.
+func CanonicalStorageLocality(value string) string {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "":
+		return ""
+	case "local", "local_only", "local-only", "localonly":
+		return "local"
+	case "shared", "shared_storage", "shared-storage", "sharedstorage":
+		return "shared"
+	case "replicated":
+		return "replicated"
+	default:
+		return strings.ToLower(strings.TrimSpace(value))
+	}
+}
+
+// candidateStorageLocality names the storage a candidate offers in the same
+// vocabulary requests use. A candidate that reports no locality is a
+// docker-class node, which the scheduler treats as local storage.
+func candidateStorageLocality(c Candidate) string {
+	if got := CanonicalStorageLocality(c.StorageLocality); got != "" {
+		return got
+	}
+	return "local"
+}
+
 // normalizeLocality collapses the spellings used for the same storage
 // behaviour so "local_only", "local-only" and "local" compare equal.
 func normalizeLocality(value string) string {
-	s := strings.ToLower(strings.TrimSpace(value))
-	s = strings.ReplaceAll(s, "_", "")
-	s = strings.ReplaceAll(s, "-", "")
-	s = strings.ReplaceAll(s, " ", "")
-	if s == "localonly" {
-		return "local"
-	}
-	return s
+	return CanonicalStorageLocality(value)
 }
 
 func filterByRuntime(candidates []Candidate, runtimeProvider string) []Candidate {
@@ -399,6 +458,13 @@ func ExplainReplicaPlacement(ctx context.Context, engine *Engine, candidates []C
 			if err != nil {
 				ce.Rejected = true
 				ce.Reasons = append(ce.Reasons, fmt.Sprintf("hard constraint: %s", err.Error()))
+			} else if req.StorageLocality != "" && candidateStorageLocality(c) != CanonicalStorageLocality(req.StorageLocality) {
+				// The engine's prepareReplicaPlacement drops locality
+				// mismatches before scoring; the explanation marks them
+				// rejected instead so the reason stays visible while the
+				// outcome still agrees with what the engine would pick.
+				ce.Rejected = true
+				ce.Reasons = append(ce.Reasons, fmt.Sprintf("storage locality %q does not satisfy %q", c.StorageLocality, req.StorageLocality))
 			} else {
 				score, reasons, _ := engine.scorer.Score(ctx, c, WorkloadRequest{
 					CPU:      replica.CPU,
@@ -408,6 +474,10 @@ func ExplainReplicaPlacement(ctx context.Context, engine *Engine, candidates []C
 				bonus, bonusReasons := engine.checker.CheckSoft(c, req.Constraints, req.ConstraintCtx)
 				ce.Score = score + bonus
 				ce.Reasons = append(reasons, bonusReasons...)
+				if req.StorageLocality != "" {
+					ce.Score += StorageMatchBonusValue()
+					ce.Reasons = append(ce.Reasons, "storage locality match bonus")
+				}
 				count := c.ServerCount + usedNodeCount[c.NodeID]
 				if count > 0 {
 					ce.Reasons = append(ce.Reasons, fmt.Sprintf("spread penalty: %d existing instances", count))

@@ -3,6 +3,8 @@ package scheduler
 import (
 	"os"
 	"strings"
+
+	"gamepanel/forge/internal/placement"
 )
 
 // Normalized scoring terms for the scheduler layer. The engine already returns a
@@ -66,19 +68,12 @@ func storageLocalityPenalty() float64 {
 // requirement; comparing them as strings made every local-only workload look
 // incompatible with every local node, and the mismatch carried the largest
 // penalty in the score.
+//
+// It delegates to placement.CanonicalStorageLocality: one vocabulary shared
+// by the filter and both scoring paths, so a match decision cannot differ
+// between them.
 func canonicalStorageLocality(value string) string {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "":
-		return ""
-	case "local", "local_only", "local-only", "localonly":
-		return "local"
-	case "shared", "shared_storage", "shared-storage":
-		return "shared"
-	case "replicated":
-		return "replicated"
-	default:
-		return strings.ToLower(strings.TrimSpace(value))
-	}
+	return placement.CanonicalStorageLocality(value)
 }
 
 // storageLocalityEqual compares two locality expressions by what they mean.

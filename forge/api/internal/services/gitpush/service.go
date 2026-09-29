@@ -60,6 +60,12 @@ const (
 
 	EventReceived = "received"
 	EventQueued   = "queued"
+	// EventDeploying is the state after the ref update has been handed to the
+	// deployer: the deploy is in flight, not finished. Nothing in this package
+	// observes a completion, so it never claims "deployed".
+	EventDeploying = "deploying"
+	// EventDeployed is reserved for the deploy-completion callback, which does
+	// not exist yet; nothing here advances an event past EventDeploying.
 	EventDeployed = "deployed"
 	EventFailed   = "failed"
 	EventSkipped  = "skipped"
@@ -72,29 +78,54 @@ const repoPathTemplate = "/srv/git-push/%s.git"
 
 const zeroSHA = "0000000000000000000000000000000000000000"
 
+// maxNameLen, maxEnvValueLen and maxBodyBytes bound the caller-controlled
+// inputs: a display name, a config value and the post-receive body arriving on
+// the public receive endpoint.
+const (
+	maxNameLen      = 64
+	maxEnvValueLen  = 8192
+	maxBodyBytes    = 1 << 20
+	maxSignatureLen = 256
+	// maxRefUpdates bounds one push's ref updates: a single push moves a handful
+	// of refs, and every line becomes a row.
+	maxRefUpdates = 128
+)
+
 var (
 	ErrAppNotFound    = errors.New("git-push app not found")
 	ErrInvalidName    = errors.New("app name must contain at least one alphanumeric character")
 	ErrInvalidBuilder = errors.New("builder must be one of herokuish, dockerfile, nixpacks, null")
 	ErrInvalidBranch  = errors.New("invalid deploy branch")
+	ErrInvalidRef     = errors.New("invalid git ref in push body")
 	ErrInvalidEnvKey  = errors.New("environment variable name is invalid")
 	ErrSignature      = errors.New("invalid or missing git-push signature")
 	ErrNotProvisioned = errors.New("git-push repository is not provisioned on the node yet")
 
 	slugDisallowed = regexp.MustCompile(`[^a-z0-9]+`)
+	slugPattern    = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$`)
+
+	// refPattern accepts a namespaced git ref whose every segment starts with an
+	// alphanumeric character. That single rule rejects a leading '-' (which a
+	// git argv would read as an option), a ".." segment (path traversal once the
+	// ref is used in a filesystem path), and every control character.
+	refPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*(?:/[A-Za-z0-9][A-Za-z0-9._-]*)*$`)
 )
 
 // GitPushDeployer is the seam into the build/deploy pipeline. The existing
 // gitsvc.DeployService takes a GitSourceID rather than a (node, repo, sha)
 // triple, so it does not satisfy this interface as-is; wiring the two together
-// is an adapter's job (see the note in main.go). A nil deployer is legal: the
-// push is still recorded, it just is not acted on.
+// is an adapter's job. A nil deployer is legal: the push is still recorded, it
+// just is not acted on, and every such event is stored as skipped with the
+// reason rather than reported as deployed.
 type GitPushDeployer interface {
 	DeployFromGit(ctx context.Context, nodeID, repoURL, branch, sha string) (operationID string, err error)
 }
 
 // App is the service-level view of a git-push application. EnvVars is the
 // decoded form of the JSONB column; the wire shape keeps it camelCased.
+// SharedSecret is the HMAC key the node's post-receive hook signs with, so it
+// is populated only by the calls that hand an operator something to install:
+// CreateApp and RotateSecret. Everything else returns a redacted copy.
 type App struct {
 	ID           string            `json:"id"`
 	Name         string            `json:"name"`
@@ -104,7 +135,7 @@ type App struct {
 	Builder      string            `json:"builder"`
 	Branch       string            `json:"branch"`
 	RepoPath     string            `json:"repoPath"`
-	SharedSecret string            `json:"sharedSecret"`
+	SharedSecret string            `json:"sharedSecret,omitempty"`
 	DeployedSHA  *string           `json:"deployedSha,omitempty"`
 	LastDeployAt *string           `json:"lastDeployAt,omitempty"`
 	Status       string            `json:"status"`
@@ -112,6 +143,17 @@ type App struct {
 	EnvVars      map[string]string `json:"envVars"`
 	CreatedAt    string            `json:"createdAt"`
 	UpdatedAt    string            `json:"updatedAt"`
+}
+
+// withoutSecret returns a copy safe to serve from a read endpoint: the hook
+// secret cannot be re-issued from a read, so it is not sent.
+func (a *App) withoutSecret() *App {
+	if a == nil {
+		return nil
+	}
+	copied := *a
+	copied.SharedSecret = ""
+	return &copied
 }
 
 // PushEvent is one ref update reported by a repository's post-receive hook.
@@ -131,6 +173,7 @@ type PushEvent struct {
 type ReceiveResult struct {
 	Events []PushEvent `json:"events"`
 	// Deployed is true when at least one ref update was handed to the deployer.
+	// It means accepted, not finished: the events carry the real state.
 	Deployed bool `json:"deployed"`
 }
 
@@ -176,6 +219,15 @@ func (s *Service) CreateApp(ctx context.Context, name, nodeID, builder, branch s
 	if s.db == nil {
 		return nil, errors.New("store not configured")
 	}
+	name = strings.TrimSpace(name)
+	if name == "" || len(name) > maxNameLen {
+		return nil, fmt.Errorf("app name must be between 1 and %d characters", maxNameLen)
+	}
+	// A missing node is not defaulted to any node: guessing one would reserve a
+	// repository path on a machine nobody asked for.
+	if strings.TrimSpace(nodeID) == "" {
+		return nil, errors.New("node id is required")
+	}
 	slug, err := s.uniqueSlug(ctx, name)
 	if err != nil {
 		return nil, err
@@ -184,7 +236,10 @@ func (s *Service) CreateApp(ctx context.Context, name, nodeID, builder, branch s
 	if err != nil {
 		return nil, err
 	}
-	branch = normalizeBranch(branch)
+	branch, err = sanitizeBranch(branch)
+	if err != nil {
+		return nil, err
+	}
 
 	node, err := s.db.GetNode(ctx, nodeID)
 	if err != nil {
@@ -198,7 +253,7 @@ func (s *Service) CreateApp(ctx context.Context, name, nodeID, builder, branch s
 
 	app := &store.GitPushApp{
 		ID:           uuid.NewString(),
-		Name:         strings.TrimSpace(name),
+		Name:         name,
 		Slug:         slug,
 		NodeID:       node.ID,
 		Builder:      builder,
@@ -242,7 +297,7 @@ func (s *Service) ensureRepoParent(ctx context.Context, node store.Node, repoPat
 
 func (s *Service) ListApps(ctx context.Context) ([]App, error) {
 	if s.db == nil {
-		return []App{}, nil
+		return nil, errors.New("store not configured")
 	}
 	rows, err := s.db.ListGitPushApps(ctx)
 	if err != nil {
@@ -250,14 +305,30 @@ func (s *Service) ListApps(ctx context.Context) ([]App, error) {
 	}
 	apps := make([]App, 0, len(rows))
 	for i := range rows {
-		apps = append(apps, *appToService(&rows[i]))
+		apps = append(apps, *appToService(&rows[i]).withoutSecret())
 	}
 	return apps, nil
 }
 
 func (s *Service) GetApp(ctx context.Context, id string) (*App, error) {
 	if s.db == nil {
-		return nil, ErrAppNotFound
+		return nil, errors.New("store not configured")
+	}
+	row, err := s.db.GetGitPushApp(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrGitPushAppNotFound) {
+			return nil, ErrAppNotFound
+		}
+		return nil, err
+	}
+	return appToService(row).withoutSecret(), nil
+}
+
+// GetAppWithSecret resolves an app including the hook secret. Only the create
+// and rotate responses use it; every other read goes through GetApp.
+func (s *Service) GetAppWithSecret(ctx context.Context, id string) (*App, error) {
+	if s.db == nil {
+		return nil, errors.New("store not configured")
 	}
 	row, err := s.db.GetGitPushApp(ctx, id)
 	if err != nil {
@@ -271,7 +342,7 @@ func (s *Service) GetApp(ctx context.Context, id string) (*App, error) {
 
 func (s *Service) ListEvents(ctx context.Context, appID string, limit int) ([]PushEvent, error) {
 	if s.db == nil {
-		return []PushEvent{}, nil
+		return nil, errors.New("store not configured")
 	}
 	rows, err := s.db.ListGitPushEvents(ctx, appID, limit)
 	if err != nil {
@@ -295,11 +366,16 @@ func (s *Service) RemoteURL(ctx context.Context, app *App) (string, error) {
 	host := ""
 	port := s.sshPort
 	if s.db != nil {
-		if node, err := s.db.GetNode(ctx, app.NodeID); err == nil {
-			host = firstNonEmpty(node.FQDN, hostFromURL(node.BaseURL), node.PublicHostname)
-			if node.DaemonSFTP > 0 {
-				port = node.DaemonSFTP
-			}
+		// A node that cannot be read is not a node that has no address: falling
+		// back to the panel host here would hand out a remote for the wrong
+		// machine, which is exactly the ambiguous target this repo forbids.
+		node, err := s.db.GetNode(ctx, app.NodeID)
+		if err != nil {
+			return "", fmt.Errorf("resolve node %q: %w", app.NodeID, err)
+		}
+		host = firstNonEmpty(node.FQDN, hostFromURL(node.BaseURL), node.PublicHostname)
+		if node.DaemonSFTP > 0 {
+			port = node.DaemonSFTP
 		}
 	}
 	if host == "" {
@@ -308,7 +384,23 @@ func (s *Service) RemoteURL(ctx context.Context, app *App) (string, error) {
 	if host == "" {
 		return "", ErrNotProvisioned
 	}
+	if !validRemoteHost(host) {
+		return "", fmt.Errorf("node host %q is not a usable remote address", host)
+	}
 	return fmt.Sprintf("ssh://git@%s:%d/%s.git", host, port, app.Slug), nil
+}
+
+// validRemoteHost guards the string interpolation that builds the remote: the
+// host is stored on a node row, and a value containing a space, a scheme or a
+// path separator would produce a remote that is not the one it looks like.
+func validRemoteHost(host string) bool {
+	if host == "" || len(host) > 253 {
+		return false
+	}
+	if strings.ContainsAny(host, "@/:\\ \t\r\n") {
+		return false
+	}
+	return true
 }
 
 // --------------------------------------------------------------- mutations ---
@@ -317,7 +409,7 @@ func (s *Service) RemoteURL(ctx context.Context, app *App) (string, error) {
 // argument means "leave as stored".
 func (s *Service) UpdateApp(ctx context.Context, id string, builder *string, branch *string, autoDeploy *bool) (*App, error) {
 	if s.db == nil {
-		return nil, ErrAppNotFound
+		return nil, errors.New("store not configured")
 	}
 	row, err := s.db.GetGitPushApp(ctx, id)
 	if err != nil {
@@ -334,9 +426,9 @@ func (s *Service) UpdateApp(ctx context.Context, id string, builder *string, bra
 		row.Builder = b
 	}
 	if branch != nil {
-		b := normalizeBranch(*branch)
-		if b == "" {
-			return nil, ErrInvalidBranch
+		b, err := sanitizeBranch(*branch)
+		if err != nil {
+			return nil, err
 		}
 		row.Branch = b
 	}
@@ -346,12 +438,16 @@ func (s *Service) UpdateApp(ctx context.Context, id string, builder *string, bra
 	if err := s.db.UpdateGitPushApp(ctx, row); err != nil {
 		return nil, err
 	}
-	return appToService(row), nil
+	return appToService(row).withoutSecret(), nil
 }
 
+// DeleteApp removes the app and the bare repository it owns on the node. The
+// repository is removed first and a failed removal aborts the delete: an app
+// row that is gone but a live repository that is not leaves a push target
+// whose hook secret nobody remembers.
 func (s *Service) DeleteApp(ctx context.Context, id string) error {
 	if s.db == nil {
-		return ErrAppNotFound
+		return errors.New("store not configured")
 	}
 	row, err := s.db.GetGitPushApp(ctx, id)
 	if err != nil {
@@ -360,18 +456,8 @@ func (s *Service) DeleteApp(ctx context.Context, id string) error {
 		}
 		return err
 	}
-	// Best-effort teardown of the repository. A node that never finished
-	// provisioning has nothing to remove, and a failure here must not strand
-	// the database row, so it is logged rather than returned.
-	if s.daemon != nil && row.RepoPath != "" {
-		if node, nodeErr := s.db.GetNode(ctx, row.NodeID); nodeErr == nil && node.BaseURL != "" {
-			if token, tokenErr := s.db.GetNodeDaemonCredential(ctx, node.ID); tokenErr == nil {
-				if rmErr := s.daemon.HostFilesRemove(ctx, node.BaseURL, token, row.RepoPath); rmErr != nil {
-					s.logger.Warn("git-push repository removal failed",
-						"app", row.Slug, "path", row.RepoPath, "error", rmErr)
-				}
-			}
-		}
+	if err := s.removeRepoFromNode(ctx, row); err != nil {
+		return err
 	}
 	if err := s.db.DeleteGitPushApp(ctx, id); err != nil {
 		if errors.Is(err, store.ErrGitPushAppNotFound) {
@@ -382,9 +468,123 @@ func (s *Service) DeleteApp(ctx context.Context, id string) error {
 	return nil
 }
 
+// removeRepoFromNode deletes the repository directory when the node reports it
+// present. A node that cannot be reached, or whose credential is missing, is
+// an error: the caller has to know the teardown did not happen rather than
+// receive a successful delete of an app whose repo is still accepting pushes.
+func (s *Service) removeRepoFromNode(ctx context.Context, row *store.GitPushApp) error {
+	if row.RepoPath == "" {
+		return nil
+	}
+	if s.daemon == nil {
+		return fmt.Errorf("git-push repository %s was not removed: no node client is configured", row.RepoPath)
+	}
+	node, err := s.db.GetNode(ctx, row.NodeID)
+	if err != nil {
+		return fmt.Errorf("git-push repository %s was not removed: resolve node: %w", row.RepoPath, err)
+	}
+	token, err := s.db.GetNodeDaemonCredential(ctx, node.ID)
+	if err != nil {
+		return fmt.Errorf("git-push repository %s was not removed: node credential: %w", row.RepoPath, err)
+	}
+	present, err := s.repoPresent(ctx, node.BaseURL, token, row.RepoPath)
+	if err != nil {
+		return fmt.Errorf("git-push repository %s removal unverified: %w", row.RepoPath, err)
+	}
+	if !present {
+		return nil
+	}
+	if err := s.daemon.HostFilesRemove(ctx, node.BaseURL, token, row.RepoPath); err != nil {
+		return fmt.Errorf("git-push repository %s could not be removed: %w", row.RepoPath, err)
+	}
+	return nil
+}
+
+// repoPresent asks the node whether path exists as a directory, by listing its
+// parent. Listing the parent rather than the path itself keeps "absent" and
+// "unreadable" distinguishable: only a failed parent read is an error.
+func (s *Service) repoPresent(ctx context.Context, baseURL, token, path string) (bool, error) {
+	if s.daemon == nil {
+		return false, errors.New("daemon client not configured")
+	}
+	if baseURL == "" {
+		return false, errors.New("node has no base url")
+	}
+	parent := strings.TrimSuffix(path, "/"+slugFromPath(path))
+	if parent == path {
+		return false, fmt.Errorf("repository path %q has no parent directory", path)
+	}
+	raw, err := s.daemon.HostFilesList(ctx, baseURL, token, parent)
+	if err != nil {
+		return false, err
+	}
+	var entries []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(raw, &entries); err != nil {
+		return false, fmt.Errorf("decode node listing of %q: %w", parent, err)
+	}
+	want := slugFromPath(path)
+	for _, e := range entries {
+		if e.Name == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// VerifyProvisioned is the operator's answer to "is the repository actually
+// there yet?". CreateApp can only reserve the path, so an app stays in
+// "provisioning" until this check, which asks the node, moves it to "ready" or
+// leaves it where it is. It never reports ready without the live check.
+func (s *Service) VerifyProvisioned(ctx context.Context, id string) (*App, bool, error) {
+	if s.db == nil {
+		return nil, false, errors.New("store not configured")
+	}
+	row, err := s.db.GetGitPushApp(ctx, id)
+	if err != nil {
+		if errors.Is(err, store.ErrGitPushAppNotFound) {
+			return nil, false, ErrAppNotFound
+		}
+		return nil, false, err
+	}
+	if s.daemon == nil {
+		return nil, false, errors.New("no node client is configured, cannot verify the repository")
+	}
+	node, err := s.db.GetNode(ctx, row.NodeID)
+	if err != nil {
+		return nil, false, fmt.Errorf("resolve node %q: %w", row.NodeID, err)
+	}
+	token, err := s.db.GetNodeDaemonCredential(ctx, node.ID)
+	if err != nil {
+		return nil, false, fmt.Errorf("node credential: %w", err)
+	}
+	present, err := s.repoPresent(ctx, node.BaseURL, token, row.RepoPath)
+	if err != nil {
+		return nil, false, err
+	}
+	if present && row.Status != StatusReady {
+		if err := s.db.SetGitPushAppStatus(ctx, row.ID, StatusReady); err != nil && !errors.Is(err, store.ErrGitPushAppNotFound) {
+			return nil, false, err
+		}
+		row.Status = StatusReady
+	}
+	if !present && row.Status == StatusReady {
+		// The repository went away under a row that still claims it exists.
+		if err := s.db.SetGitPushAppStatus(ctx, row.ID, StatusProvisioning); err != nil && !errors.Is(err, store.ErrGitPushAppNotFound) {
+			return nil, false, err
+		}
+		row.Status = StatusProvisioning
+	}
+	return appToService(row).withoutSecret(), present, nil
+}
+
 func (s *Service) SetGitPushAppStatus(ctx context.Context, id string, status string) error {
 	if s.db == nil {
-		return ErrAppNotFound
+		return errors.New("store not configured")
+	}
+	if !validAppStatus(status) {
+		return fmt.Errorf("unknown git-push app status %q", status)
 	}
 	if err := s.db.SetGitPushAppStatus(ctx, id, status); err != nil {
 		if errors.Is(err, store.ErrGitPushAppNotFound) {
@@ -395,11 +595,20 @@ func (s *Service) SetGitPushAppStatus(ctx context.Context, id string, status str
 	return nil
 }
 
+func validAppStatus(status string) bool {
+	switch status {
+	case StatusProvisioning, StatusReady, StatusFailed, StatusArchived:
+		return true
+	default:
+		return false
+	}
+}
+
 // SetEnv writes one environment variable that the build/deploy handoff passes
 // through to the app (Dokku's `config:set` equivalent).
 func (s *Service) SetEnv(ctx context.Context, id string, vars map[string]string) (*App, error) {
 	if s.db == nil {
-		return nil, ErrAppNotFound
+		return nil, errors.New("store not configured")
 	}
 	row, err := s.db.GetGitPushApp(ctx, id)
 	if err != nil {
@@ -414,6 +623,9 @@ func (s *Service) SetEnv(ctx context.Context, id string, vars map[string]string)
 		if !validEnvKey(k) {
 			return nil, fmt.Errorf("%w: %q", ErrInvalidEnvKey, k)
 		}
+		if len(v) > maxEnvValueLen {
+			return nil, fmt.Errorf("environment value for %q exceeds %d characters", k, maxEnvValueLen)
+		}
 		current[k] = v
 	}
 	encoded, err := json.Marshal(current)
@@ -427,12 +639,12 @@ func (s *Service) SetEnv(ctx context.Context, id string, vars map[string]string)
 		return nil, err
 	}
 	row.EnvVars = encoded
-	return appToService(row), nil
+	return appToService(row).withoutSecret(), nil
 }
 
 func (s *Service) DeleteEnv(ctx context.Context, id string, keys []string) (*App, error) {
 	if s.db == nil {
-		return nil, ErrAppNotFound
+		return nil, errors.New("store not configured")
 	}
 	row, err := s.db.GetGitPushApp(ctx, id)
 	if err != nil {
@@ -456,15 +668,16 @@ func (s *Service) DeleteEnv(ctx context.Context, id string, keys []string) (*App
 		return nil, err
 	}
 	row.EnvVars = encoded
-	return appToService(row), nil
+	return appToService(row).withoutSecret(), nil
 }
 
 // RotateSecret replaces the HMAC key the post-receive hook signs with. Callers
 // must re-issue the hook on the node; until they do, callbacks fail signature
-// verification, which is the safe direction for a mistake.
+// verification, which is the safe direction for a mistake. This is one of the
+// two calls that return the secret, because the operator has to install it.
 func (s *Service) RotateSecret(ctx context.Context, id string) (*App, error) {
 	if s.db == nil {
-		return nil, ErrAppNotFound
+		return nil, errors.New("store not configured")
 	}
 	secret, err := randomHex(32)
 	if err != nil {
@@ -476,7 +689,7 @@ func (s *Service) RotateSecret(ctx context.Context, id string) (*App, error) {
 		}
 		return nil, err
 	}
-	return s.GetApp(ctx, id)
+	return s.GetAppWithSecret(ctx, id)
 }
 
 // ------------------------------------------------------------ receive path ---
@@ -485,34 +698,43 @@ func (s *Service) RotateSecret(ctx context.Context, id string) (*App, error) {
 // exactly what git wrote to the hook's stdin: one "<old> <new> <ref>" line per
 // updated ref. The raw bytes are HMAC-SHA256'd with the app's shared secret;
 // nothing else authenticates this endpoint, so the comparison is constant-time
-// and the parse happens only after it succeeds.
+// and the body is only parsed, and only refs accepted, once it succeeds.
 func (s *Service) HandleReceive(ctx context.Context, slug string, signature string, body []byte) (*ReceiveResult, error) {
 	if s.db == nil {
+		return nil, errors.New("store not configured")
+	}
+	slug = strings.TrimSpace(slug)
+	if !slugPattern.MatchString(slug) {
 		return nil, ErrAppNotFound
 	}
-	row, err := s.db.GetGitPushAppBySlug(ctx, strings.TrimSpace(slug))
+	// Bound the payload before it is copied into strings, maps and event rows.
+	if len(body) > maxBodyBytes || len(signature) > maxSignatureLen || signature == "" {
+		return nil, ErrSignature
+	}
+	row, err := s.db.GetGitPushAppBySlug(ctx, slug)
 	if err != nil {
 		if errors.Is(err, store.ErrGitPushAppNotFound) {
 			return nil, ErrAppNotFound
 		}
 		return nil, err
 	}
+	// An unset secret would make verifySignature accept an all-zero key; the
+	// hook can never be signed with nothing, so refuse it outright.
 	if row.SharedSecret == "" || !verifySignature(row.SharedSecret, signature, body) {
 		return nil, ErrSignature
 	}
 
-	result := &ReceiveResult{Events: []PushEvent{}}
-	actor := "git-hook"
-	for _, line := range strings.Split(string(body), "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
-		before, after, ref, ok := parseRefUpdate(line)
-		if !ok {
-			s.logger.Warn("git-push hook sent an unparsable ref line", "app", row.Slug, "line", line)
-			continue
-		}
+	// Parse the whole body before writing anything, so a malformed or hostile
+	// line cannot leave a half-applied push behind it.
+	updates, err := parseReceiveBody(string(body))
+	if err != nil {
+		return nil, err
+	}
+
+	result := &ReceiveResult{Events: make([]PushEvent, 0, len(updates))}
+	const actor = "git-hook"
+	for _, u := range updates {
+		before, after, ref := u.before, u.after, u.ref
 
 		status := EventReceived
 		var failure string
@@ -571,19 +793,63 @@ func (s *Service) HandleReceive(ctx context.Context, slug string, signature stri
 			s.failEvent(ctx, event.ID, fmt.Sprintf("deploy: %v", deployErr))
 			continue
 		}
+		// The deployer accepted the handoff; nothing here observes it finish, so
+		// the event stops at "deploying". Marking it deployed - or the app as
+		// running this SHA - would be reporting success for work that may still
+		// fail on the node.
 		result.Deployed = true
-		if err := s.db.UpdatePushEventStatus(ctx, event.ID, EventDeployed, ""); err != nil {
+		if err := s.db.UpdatePushEventStatus(ctx, event.ID, EventDeploying, ""); err != nil {
 			s.logger.Error("git-push event update failed", "event", event.ID, "error", err)
-		}
-		if err := s.db.MarkGitPushAppDeployed(ctx, row.ID, after); err != nil {
-			s.logger.Error("git-push app deploy marker failed", "app", row.ID, "error", err)
 		}
 	}
 
-	if len(result.Events) == 0 {
-		return nil, fmt.Errorf("git-push hook body contained no ref updates")
-	}
 	return result, nil
+}
+
+// refUpdate is one parsed line of a post-receive body.
+type refUpdate struct {
+	before string
+	after  string
+	ref    string
+}
+
+// parseReceiveBody turns the hook's stdin into ref updates, refusing the whole
+// body on the first line that is not a well-formed update. The ref is the only
+// caller-controlled string that leaves this package as a name rather than data,
+// so it is validated here: a leading '-' would read as an option in any git
+// command built from it, and a '..' segment would escape a filesystem path.
+func parseReceiveBody(body string) ([]refUpdate, error) {
+	var updates []refUpdate
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		before, after, ref, ok := parseRefUpdate(line)
+		if !ok {
+			return nil, fmt.Errorf("git-push hook sent an unparsable ref line: %q", truncateLine(line))
+		}
+		if !validGitRef(ref) {
+			return nil, fmt.Errorf("%w: %q", ErrInvalidRef, truncateLine(ref))
+		}
+		updates = append(updates, refUpdate{before: before, after: after, ref: ref})
+	}
+	if len(updates) == 0 {
+		return nil, errors.New("git-push hook body contained no ref updates")
+	}
+	if len(updates) > maxRefUpdates {
+		return nil, fmt.Errorf("git-push hook body contained more than %d ref updates", maxRefUpdates)
+	}
+	return updates, nil
+}
+
+// truncateLine keeps caller-controlled text out of error strings at unbounded
+// length; the body is already size-capped but an error is echoed to the client.
+func truncateLine(s string) string {
+	if len(s) > 120 {
+		return s[:120] + "..."
+	}
+	return s
 }
 
 func (s *Service) failEvent(ctx context.Context, eventID string, msg string) {
@@ -595,28 +861,42 @@ func (s *Service) failEvent(ctx context.Context, eventID string, msg string) {
 
 // ------------------------------------------------------------------- helpers ---
 
-// verifySignature accepts either "sha256=<hex>" (the header shape Dokku's own
-// plugins and GitHub both use) or a bare hex digest, and compares in constant
-// time so a wrong signature cannot be found one byte at a time.
+// verifySignature accepts either "sha256=<hex>" (GitHub's X-Hub-Signature-256
+// and Dokku's own plugins) or "sha256:<hex>", and compares in constant time so
+// a wrong signature cannot be found one byte at a time. An empty secret or an
+// empty signature never verifies.
 func verifySignature(secret, signature string, body []byte) bool {
 	signature = strings.TrimSpace(signature)
-	if signature == "" {
+	if signature == "" || secret == "" {
 		return false
 	}
-	if idx := strings.IndexByte(signature, '='); strings.HasPrefix(signature, "sha256:") && idx > 0 {
-		signature = signature[idx+1:]
+	if hexPart, ok := stripSignaturePrefix(signature); ok {
+		signature = hexPart
 	}
-	provided, err := hex.DecodeString(strings.TrimSpace(signature))
+	provided, err := hex.DecodeString(signature)
 	if err != nil || len(provided) == 0 {
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(secret))
 	mac.Write(body)
 	expected := mac.Sum(nil)
+	// Equal lengths first: ConstantTimeCompare returns 0 for differing lengths
+	// anyway, but the explicit check keeps the intent readable.
 	if len(provided) != len(expected) {
 		return false
 	}
 	return subtle.ConstantTimeCompare(expected, provided) == 1
+}
+
+// stripSignaturePrefix removes the algorithm label from a keyed-digest header.
+// Both '=' and ':' separators are in the wild; the hex payload is what hashes.
+func stripSignaturePrefix(signature string) (string, bool) {
+	for _, label := range []string{"sha256=", "sha256:"} {
+		if len(signature) > len(label) && strings.EqualFold(signature[:len(label)], label) {
+			return strings.TrimSpace(signature[len(label):]), true
+		}
+	}
+	return "", false
 }
 
 // parseRefUpdate splits one line of a post-receive stdin: "<old> <new> <ref>".
@@ -631,6 +911,28 @@ func parseRefUpdate(line string) (before, after, ref string, ok bool) {
 		return "", "", "", false
 	}
 	return before, after, ref, true
+}
+
+// validGitRef accepts a namespaced ref ("refs/heads/main", "refs/tags/v1") and
+// nothing that could be mistaken for an option or a path escape. Every segment
+// must start alphanumeric, which rules out a leading '-' on the ref, a leading
+// '-' on any segment, and a ".." or "." segment.
+func validGitRef(ref string) bool {
+	if len(ref) == 0 || len(ref) > 255 {
+		return false
+	}
+	if strings.HasSuffix(ref, ".lock") || strings.Contains(ref, "//") || strings.HasSuffix(ref, "/") {
+		return false
+	}
+	if !refPattern.MatchString(ref) {
+		return false
+	}
+	for _, segment := range strings.Split(ref, "/") {
+		if segment == ".." || segment == "." {
+			return false
+		}
+	}
+	return true
 }
 
 func isHexSHA(s string) bool {
@@ -659,12 +961,19 @@ func normalizeBuilder(builder string) (string, error) {
 	}
 }
 
-func normalizeBranch(branch string) string {
+// sanitizeBranch normalises the deploy branch and validates it as a ref name.
+// The branch is compared against hook refs and handed to the deployer as a
+// git argument, so a value like "-D" or "../../etc" must never be stored.
+func sanitizeBranch(branch string) (string, error) {
 	branch = strings.TrimSpace(branch)
 	if branch == "" {
-		return "main"
+		return "main", nil
 	}
-	return strings.TrimPrefix(branch, "refs/heads/")
+	branch = strings.TrimPrefix(branch, "refs/heads/")
+	if branch == "" || !validGitRef("refs/heads/" + branch) {
+		return "", fmt.Errorf("%w: %q", ErrInvalidBranch, truncateLine(branch))
+	}
+	return branch, nil
 }
 
 // slugify turns a display name into the path segment that becomes both the
@@ -676,11 +985,15 @@ func slugify(name string) string {
 	if slug == "" {
 		return ""
 	}
-	if len(slug) > 48 {
-		slug = strings.Trim(slug[:48], "-")
+	if len(slug) > maxSlugBaseLen {
+		slug = strings.Trim(slug[:maxSlugBaseLen], "-")
 	}
 	return slug
 }
+
+// maxSlugBaseLen leaves room for the collision suffix inside slugPattern's
+// 48-character limit.
+const maxSlugBaseLen = 40
 
 // uniqueSlug keeps a generated suffix on collisions: two admins naming an app
 // "web" must not end up fighting over /srv/git-push/web.git.
@@ -690,19 +1003,19 @@ func (s *Service) uniqueSlug(ctx context.Context, name string) (string, error) {
 		return "", ErrInvalidName
 	}
 	taken := map[string]bool{}
-	if apps, err := s.db.ListGitPushApps(ctx); err == nil {
-		for _, a := range apps {
-			taken[a.Slug] = true
-		}
-	} else {
+	apps, err := s.db.ListGitPushApps(ctx)
+	if err != nil {
 		return "", err
+	}
+	for _, a := range apps {
+		taken[a.Slug] = true
 	}
 	if !taken[base] {
 		return base, nil
 	}
 	for i := 2; i < 1000; i++ {
 		candidate := base + "-" + strconv.Itoa(i)
-		if !taken[candidate] {
+		if !taken[candidate] && slugPattern.MatchString(candidate) {
 			return candidate, nil
 		}
 	}
@@ -710,7 +1023,11 @@ func (s *Service) uniqueSlug(ctx context.Context, name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return base + "-" + suffix, nil
+	candidate := base + "-" + suffix
+	if !slugPattern.MatchString(candidate) {
+		return "", ErrInvalidName
+	}
+	return candidate, nil
 }
 
 func slugFromPath(path string) string {

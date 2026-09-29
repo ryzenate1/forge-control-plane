@@ -53,14 +53,19 @@ docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" 2>/dev/null | tee
 # === PostgreSQL check ===
 echo "" | tee -a "$REPORT"
 echo "--- PostgreSQL ---" | tee -a "$REPORT"
+# Defaults mirror compose (.env overrides when present); never rely on
+# POSTGRES_* being exported in this shell — pass explicitly via docker -e.
+_DIAG_PGUSER="${POSTGRES_USER:-${DB_USER:-gamepanel}}"
+_DIAG_PGDB="${POSTGRES_DB:-${DB_NAME:-gamepanel}}"
+_DIAG_PGPASS="${POSTGRES_PASSWORD:-${DB_PASS:-}}"
 if (docker ps --format '{{.Names}}' 2>/dev/null || true) | grep -q postgres; then
   PG_CONTAINER=$( (docker ps --format '{{.Names}}' 2>/dev/null || true) | grep postgres | head -1 || echo "")
-  if [ -n "$PG_CONTAINER" ] && docker exec "$PG_CONTAINER" pg_isready -U gamepanel > /dev/null 2>&1; then
+  if [ -n "$PG_CONTAINER" ] && docker exec "$PG_CONTAINER" pg_isready -U "$_DIAG_PGUSER" > /dev/null 2>&1; then
     ok "PostgreSQL is ready"
     # Query database stats
-    migrations_cnt=$(docker exec "$PG_CONTAINER" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM schema_migrations"' 2>/dev/null | tr -d ' ' || echo 'N/A')
-    servers_cnt=$(docker exec "$PG_CONTAINER" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM servers"' 2>/dev/null | tr -d ' ' || echo 'N/A')
-    nodes_cnt=$(docker exec "$PG_CONTAINER" sh -c 'PGPASSWORD="$POSTGRES_PASSWORD" psql -U "$POSTGRES_USER" -d "$POSTGRES_DB" -t -c "SELECT COUNT(*) FROM nodes"' 2>/dev/null | tr -d ' ' || echo 'N/A')
+    migrations_cnt=$(docker exec -e PGPASSWORD="$_DIAG_PGPASS" "$PG_CONTAINER" psql -U "$_DIAG_PGUSER" -d "$_DIAG_PGDB" -t -c "SELECT COUNT(*) FROM schema_migrations" 2>/dev/null | tr -d ' ' || echo 'N/A')
+    servers_cnt=$(docker exec -e PGPASSWORD="$_DIAG_PGPASS" "$PG_CONTAINER" psql -U "$_DIAG_PGUSER" -d "$_DIAG_PGDB" -t -c "SELECT COUNT(*) FROM servers" 2>/dev/null | tr -d ' ' || echo 'N/A')
+    nodes_cnt=$(docker exec -e PGPASSWORD="$_DIAG_PGPASS" "$PG_CONTAINER" psql -U "$_DIAG_PGUSER" -d "$_DIAG_PGDB" -t -c "SELECT COUNT(*) FROM nodes" 2>/dev/null | tr -d ' ' || echo 'N/A')
     info "Migrations applied: $migrations_cnt"
     info "Servers: $servers_cnt"
     info "Nodes: $nodes_cnt"

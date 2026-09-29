@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -18,6 +19,45 @@ import (
 
 	"gopkg.in/yaml.v3"
 )
+
+type stubRuleSource struct {
+	rules    []*trafficmanager.RoutingRule
+	policies []*trafficmanager.TrafficPolicy
+	err      error
+}
+
+func (s *stubRuleSource) ListRoutingRules(context.Context) ([]*trafficmanager.RoutingRule, error) {
+	return s.rules, s.err
+}
+
+func (s *stubRuleSource) ListTrafficPolicies(context.Context) ([]*trafficmanager.TrafficPolicy, error) {
+	return s.policies, s.err
+}
+
+type stubReconciler struct {
+	syncRoutes   atomic.Int64
+	cleanupCalls atomic.Int64
+	syncErr      error
+	cleanupErr   error
+}
+
+func (r *stubReconciler) SyncRoutes(context.Context) error {
+	r.syncRoutes.Add(1)
+	return r.syncErr
+}
+
+func (r *stubReconciler) CleanupStaleRoutes(context.Context) error {
+	r.cleanupCalls.Add(1)
+	return r.cleanupErr
+}
+
+func newTestSyncer(health *HealthFilter, src RuleSource, rec GatewayReconciler) *IngressSynchronizer {
+	is := NewIngressSynchronizer(nil, health)
+	if src != nil || rec != nil {
+		is.SetReconciler(src, rec)
+	}
+	return is
+}
 
 func TestRouteGrouping_SingleRule(t *testing.T) {
 	rules := []*trafficmanager.RoutingRule{
@@ -524,19 +564,23 @@ func TestIngressSyncStats(t *testing.T) {
 	defer admin.Close()
 
 	proxy := trafficmanager.NewTraefikReverseProxy(dir, strings.TrimPrefix(admin.URL, "http://"))
-	resolver := NewResolver(nil)
 	health := NewHealthFilter(2, 30*time.Second)
-	// The synchronizer only routes to recorded-healthy backends.
+	// The synchronizer only reports backends with a recorded healthy verdict.
 	health.RecordSuccess("localhost", 8080)
-	syncer := NewIngressSynchronizer(proxy, resolver, health)
-
-	syncer.SetRules([]*trafficmanager.RoutingRule{
+	syncer := NewIngressSynchronizer(proxy, health)
+	syncer.SetReconciler(&stubRuleSource{rules: []*trafficmanager.RoutingRule{
 		{ID: "test", Domain: "test.com", Path: "/", TargetPort: 8080, TargetHost: "localhost", Enabled: true},
-	})
+	}}, &stubReconciler{})
 
-	err := syncer.Sync(context.Background())
+	result, err := syncer.Sync(context.Background())
 	if err != nil {
 		t.Fatalf("Sync failed: %v", err)
+	}
+	if result.Observed != 1 {
+		t.Fatalf("expected 1 observed rule, got %d", result.Observed)
+	}
+	if result.Healthy != 1 {
+		t.Fatalf("expected 1 healthy backend, got %d", result.Healthy)
 	}
 
 	stats := syncer.Stats()
@@ -605,21 +649,32 @@ func TestResolveTargetHost(t *testing.T) {
 
 func TestDescribeBackend(t *testing.T) {
 	proxy := trafficmanager.NewTraefikReverseProxy(t.TempDir(), "localhost:8080")
-	resolver := NewResolver(nil)
 	health := NewHealthFilter(2, 30*time.Second)
-	syncer := NewIngressSynchronizer(proxy, resolver, health)
+	syncer := NewIngressSynchronizer(proxy, health)
 
+	// A backend that was never probed must not read as healthy; asserting the
+	// opposite is what let an unchecked node look routable.
 	desc := syncer.DescribeBackend("10.0.0.1", 8080)
-	if !strings.Contains(desc, "HEALTHY") {
-		t.Fatalf("expected HEALTHY description, got: %s", desc)
+	if !strings.Contains(desc, "UNKNOWN") {
+		t.Fatalf("expected UNKNOWN description for an unprobed backend, got: %s", desc)
 	}
 
 	health.RecordFailure("10.0.0.1", 8080, "connection refused")
-	health.RecordFailure("10.0.0.1", 8080, "connection refused")
+	desc = syncer.DescribeBackend("10.0.0.1", 8080)
+	if !strings.Contains(desc, "DEGRADED") {
+		t.Fatalf("expected DEGRADED description below threshold, got: %s", desc)
+	}
 
+	health.RecordFailure("10.0.0.1", 8080, "connection refused")
 	desc = syncer.DescribeBackend("10.0.0.1", 8080)
 	if !strings.Contains(desc, "DOWN") {
-		t.Fatalf("expected DOWN description, got: %s", desc)
+		t.Fatalf("expected DOWN description at threshold, got: %s", desc)
+	}
+
+	health.RecordSuccess("10.0.0.1", 8080)
+	desc = syncer.DescribeBackend("10.0.0.1", 8080)
+	if !strings.Contains(desc, "HEALTHY") {
+		t.Fatalf("expected HEALTHY description after recovery, got: %s", desc)
 	}
 }
 
@@ -738,29 +793,35 @@ func TestConcurrentIngressSync(t *testing.T) {
 	defer admin.Close()
 
 	proxy := trafficmanager.NewTraefikReverseProxy(t.TempDir(), strings.TrimPrefix(admin.URL, "http://"))
-	resolver := NewResolver(nil)
 	health := NewHealthFilter(2, 30*time.Second)
-	syncer := NewIngressSynchronizer(proxy, resolver, health)
+
+	rules := make([]*trafficmanager.RoutingRule, 0, 5)
+	for i := 0; i < 5; i++ {
+		rules = append(rules, &trafficmanager.RoutingRule{
+			ID:         fmt.Sprintf("svc-%d", i),
+			Domain:     fmt.Sprintf("svc%d.example.com", i),
+			Path:       "/",
+			TargetPort: 8080 + i,
+			TargetHost: "localhost",
+			Enabled:    true,
+		})
+		health.RecordSuccess("localhost", 8080+i)
+	}
+
+	rec := &stubReconciler{}
+	syncer := NewIngressSynchronizer(proxy, health)
+	syncer.SetReconciler(&stubRuleSource{rules: rules}, rec)
 
 	var wg sync.WaitGroup
 	errs := make(chan error, 5)
 
 	for i := 0; i < 5; i++ {
 		wg.Add(1)
-		go func(idx int) {
+		go func() {
 			defer wg.Done()
-			syncer.SetRules([]*trafficmanager.RoutingRule{
-				{
-					ID:         fmt.Sprintf("svc-%d", idx),
-					Domain:     fmt.Sprintf("svc%d.example.com", idx),
-					Path:       "/",
-					TargetPort: 8080 + idx,
-					TargetHost: "localhost",
-					Enabled:    true,
-				},
-			})
-			errs <- syncer.Sync(context.Background())
-		}(i)
+			_, err := syncer.Sync(context.Background())
+			errs <- err
+		}()
 	}
 	wg.Wait()
 	close(errs)
@@ -770,6 +831,202 @@ func TestConcurrentIngressSync(t *testing.T) {
 			t.Fatalf("concurrent sync failed: %v", err)
 		}
 	}
+
+	stats := syncer.Stats()
+	if stats.SyncCount != 5 {
+		t.Fatalf("expected 5 syncs, got %d", stats.SyncCount)
+	}
+	if stats.RuleCount != 5 {
+		t.Fatalf("expected 5 observed rules, got %d", stats.RuleCount)
+	}
+	// Sync only observes. Converging the gateway belongs to the reconciler.
+	if got := rec.syncRoutes.Load(); got != 0 {
+		t.Fatalf("Sync must not reconcile the gateway, got %d SyncRoutes calls", got)
+	}
+}
+
+// TestSyncFailsClosedWithoutRuleSource replaces the old behaviour where an
+// unwired synchronizer returned nil and the operator saw "sync successful".
+func TestSyncFailsClosedWithoutRuleSource(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	syncer := NewIngressSynchronizer(nil, health)
+
+	result, err := syncer.Sync(context.Background())
+	if !errors.Is(err, ErrNoRuleSource) {
+		t.Fatalf("expected ErrNoRuleSource, got %v", err)
+	}
+	if !result.Skipped || result.Reason == "" {
+		t.Fatalf("expected a skipped result carrying a reason, got %+v", result)
+	}
+	if syncer.Stats().ErrCount == 0 {
+		t.Fatal("an unwired sync must be counted as an error")
+	}
+}
+
+// TestGatewayWritesRefusedWithoutReconciler is the regression test for the P0:
+// crossnode shared one Caddy admin API with trafficmanager, and its cleanup path
+// passed its own (always empty) rule set to a gateway call that withdraws every
+// route absent from it. Refusing outright is the only safe behaviour.
+func TestGatewayWritesRefusedWithoutReconciler(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	syncer := NewIngressSynchronizer(nil, health)
+
+	if syncer.ReconcilerConfigured() {
+		t.Fatal("expected no reconciler configured")
+	}
+
+	if _, err := syncer.Reconcile(context.Background()); !errors.Is(err, ErrNoReconciler) {
+		t.Fatalf("Reconcile without a reconciler must fail, got %v", err)
+	}
+	if err := syncer.CleanupStale(context.Background()); !errors.Is(err, ErrNoReconciler) {
+		t.Fatalf("CleanupStale without a reconciler must fail, got %v", err)
+	}
+}
+
+func TestReconcileDelegatesGatewayConvergence(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	health.RecordSuccess("10.0.0.1", 8080)
+
+	src := &stubRuleSource{rules: []*trafficmanager.RoutingRule{
+		{ID: "svc-a", Domain: "a.example.com", Path: "/", TargetHost: "10.0.0.1", TargetPort: 8080, Enabled: true},
+	}}
+	rec := &stubReconciler{}
+	syncer := NewIngressSynchronizer(nil, health)
+	syncer.SetReconciler(src, rec)
+
+	result, err := syncer.Reconcile(context.Background())
+	if err != nil {
+		t.Fatalf("Reconcile failed: %v", err)
+	}
+	if result.Observed != 1 || result.Groups != 1 || result.Healthy != 1 {
+		t.Fatalf("unexpected observation result: %+v", result)
+	}
+	if got := rec.syncRoutes.Load(); got != 1 {
+		t.Fatalf("expected exactly 1 SyncRoutes call, got %d", got)
+	}
+
+	if err := syncer.CleanupStale(context.Background()); err != nil {
+		t.Fatalf("CleanupStale failed: %v", err)
+	}
+	if got := rec.cleanupCalls.Load(); got != 1 {
+		t.Fatalf("expected cleanup delegated to the reconciler, got %d calls", got)
+	}
+}
+
+// TestUniqueBackendsSkipsEmptyTarget guards the localhost substitution: an
+// unresolved target used to appear as a routable backend on the control plane.
+func TestUniqueBackendsSkipsEmptyTarget(t *testing.T) {
+	groups := GroupRulesByRoute([]*trafficmanager.RoutingRule{
+		{ID: "known", Domain: "a.example.com", Path: "/", TargetHost: "10.0.0.1", TargetPort: 8080, Enabled: true},
+		{ID: "unknown-target", Domain: "a.example.com", Path: "/", TargetPort: 9090, Enabled: true},
+	})
+
+	grp := groups[RouteKey{Domain: "a.example.com", Path: "/", Protocol: "http"}]
+	if grp == nil {
+		t.Fatal("expected the route group to exist")
+	}
+	backends := grp.UniqueBackends()
+	if len(backends) != 1 {
+		t.Fatalf("expected only the resolved backend, got %+v", backends)
+	}
+	if backends[0].Host == "localhost" || backends[0].Host == "" {
+		t.Fatalf("an empty target must not become a backend, got %q", backends[0].Host)
+	}
+}
+
+// TestBackendKeyDistinguishesNegativePorts replaces the hand-rolled itoa, whose
+// non-positive branch returned "" so two different backends shared one record.
+func TestBackendKeyDistinguishesNegativePorts(t *testing.T) {
+	if backendKey("10.0.0.1", -1) == backendKey("10.0.0.1", -2) {
+		t.Fatalf("negative ports collided on key %q", backendKey("10.0.0.1", -1))
+	}
+
+	health := NewHealthFilter(2, 30*time.Second)
+	health.RecordFailure("10.0.0.1", -1, "one")
+	health.RecordFailure("10.0.0.1", -2, "two")
+
+	if health.GetHealth("10.0.0.1", -1).FailCount != 1 {
+		t.Fatal("first backend's failure count was corrupted by the second")
+	}
+	if health.GetHealth("10.0.0.1", -2).FailCount != 1 {
+		t.Fatal("second backend's failure count was corrupted by the first")
+	}
+}
+
+func TestFilterHealthyExcludesUnprobedBackends(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	health.RecordSuccess("10.0.0.1", 8080)
+
+	backends := []BackendAddr{
+		{Host: "10.0.0.1", Port: 8080},
+		{Host: "10.0.0.2", Port: 8080},
+	}
+	healthy := health.FilterHealthy(backends)
+	if len(healthy) != 1 || healthy[0].Host != "10.0.0.1" {
+		t.Fatalf("expected only the probed-healthy backend, got %+v", healthy)
+	}
+	if health.IsHealthy("10.0.0.2", 8080) {
+		t.Fatal("an unprobed backend must not report healthy")
+	}
+}
+
+func TestGetAllHealthIsDeterministic(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	for _, b := range []struct {
+		host string
+		port int
+	}{{"10.0.0.3", 8080}, {"10.0.0.1", 9090}, {"10.0.0.1", 8080}, {"10.0.0.2", 8080}} {
+		health.RecordSuccess(b.host, b.port)
+	}
+
+	first := health.GetAllHealth()
+	second := health.GetAllHealth()
+	if len(first) != 4 {
+		t.Fatalf("expected 4 tracked backends, got %d", len(first))
+	}
+	for i := range first {
+		if first[i].Host != second[i].Host || first[i].Port != second[i].Port {
+			t.Fatalf("ordering differs at %d: %+v vs %+v", i, first, second)
+		}
+	}
+	if first[0].Host != "10.0.0.1" || first[1].Port != 8080 {
+		t.Fatalf("expected host-then-port ordering, got %+v", first)
+	}
+	if health.Count() != 4 {
+		t.Fatalf("expected Count of 4, got %d", health.Count())
+	}
+
+	health.MarkUnknown("10.0.0.1", 8080)
+	if health.Count() != 3 {
+		t.Fatalf("MarkUnknown must drop the record, count is %d", health.Count())
+	}
+	if got := health.GetHealth("10.0.0.1", 8080).Status; got != HealthUnknown {
+		t.Fatalf("expected HealthUnknown after MarkUnknown, got %d", got)
+	}
+}
+
+func TestReaperRestartsAfterStop(t *testing.T) {
+	health := NewHealthFilter(2, 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	health.StartReaper(ctx, 10*time.Millisecond)
+	health.RecordSuccess("10.0.0.1", 8080)
+	health.StopReaper()
+	// A second Start must actually produce a working reaper, not see a stale flag
+	// and return while nothing runs.
+	health.StartReaper(ctx, 10*time.Millisecond)
+	defer health.StopReaper()
+
+	health.RecordFailure("10.9.9.9", 1234, "stale")
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if health.Count() <= 1 {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("reaper did not run after restart, tracked backends: %d", health.Count())
 }
 
 func TestRouteGroupStrategyDetection(t *testing.T) {

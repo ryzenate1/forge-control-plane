@@ -64,6 +64,15 @@ func registerAuthRoutes(protected fiber.Router, cfg Config, mutationLimiter fibe
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
 		}
+		// Revoke the presented (legacy localStorage) JTI so the migration is
+		// a rotation, not a duplication: after this call only the new
+		// HttpOnly-cookie session remains usable. Fail closed if the revoke
+		// cannot be persisted.
+		if claims.JTI != "" {
+			if err := cfg.Store.RevokeJWT(ctx, claims.JTI, time.Unix(claims.Exp, 0)); err != nil {
+				return fiber.NewError(fiber.StatusServiceUnavailable, "could not revoke legacy session")
+			}
+		}
 		// Issue new token with same JTI/Exp for continuity
 		newToken, err := issueConfiguredToken(cfg, store.User{ID: current.Sub, Email: current.Email, Role: current.Role, SessionVersion: current.SessionVersion})
 		if err != nil {

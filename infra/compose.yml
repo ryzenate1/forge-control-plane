@@ -150,6 +150,7 @@ services:
       PGPASSWORD: "${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in infra/.env}"
       POSTGRES_BACKUP_INTERVAL_SECONDS: ${POSTGRES_BACKUP_INTERVAL_SECONDS:-86400}
       POSTGRES_BACKUP_RETENTION_DAYS: ${POSTGRES_BACKUP_RETENTION_DAYS:-14}
+      PUSHGATEWAY_URL: ${PUSHGATEWAY_URL:-http://pushgateway:9091}
       S3_BACKUP_BUCKET: ${S3_BACKUP_BUCKET:-}
       S3_BACKUP_REGION: ${S3_BACKUP_REGION:-}
       S3_BACKUP_ACCESS_KEY_ID: ${S3_BACKUP_ACCESS_KEY_ID:-}
@@ -402,10 +403,12 @@ services:
     restart: unless-stopped
     stop_grace_period: 30s
     image: prom/alertmanager:v0.27.0
+    # NOTE: prom/alertmanager has no --config.expand-env flag (v0.27.0).
+    # Receiver endpoints are baked in by scripts/gen-alertmanager.sh from
+    # ALERTMANAGER_* vars before startup; do not re-add the flag.
     command:
       - "--config.file=/etc/alertmanager/alertmanager.yml"
       - "--storage.path=/alertmanager"
-      - "--config.expand-env=true"
     ports:
       - "127.0.0.1:9093:9093"
     healthcheck:
@@ -509,6 +512,9 @@ services:
     expose:
       - "9121"
     environment:
+      # redis_exporter defaults to redis://localhost:6379; point it at the
+      # compose `redis` service explicitly (auth via REDIS_PASSWORD).
+      REDIS_ADDR: "redis://redis:6379"
       REDIS_PASSWORD: "${REDIS_PASSWORD}"
     depends_on:
       redis:
@@ -539,6 +545,79 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
+
+  # Backs the PostgresBackupStale alert: postgres-backup pushes
+  # backup_last_success_seconds here when PUSHGATEWAY_URL is set.
+  pushgateway:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prom/pushgateway:v1.9.0
+    expose:
+      - "9091"
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "pushgateway"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9091/-/healthy"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  # Backs the DiskSpaceLow alert (node_filesystem_* metrics).
+  node-exporter:
+    restart: unless-stopped
+    stop_grace_period: 15s
+    image: prom/node-exporter:v1.8.2
+    expose:
+      - "9100"
+    command:
+      - "--path.rootfs=/host"
+    volumes:
+      - /:/host:ro,rslave
+    networks:
+      - backend
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 64M
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    labels:
+      app.organization: "gamepanel"
+      app.component: "node-exporter"
+      app.environment: "${APP_ENV:-development}"
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:9100/metrics"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   grafana:
     restart: unless-stopped

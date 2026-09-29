@@ -145,6 +145,24 @@ if [ -f "$OUTPUT" ]; then
     cp -p "$OUTPUT" "${OUTPUT}.bak"
     echo "Backed up existing $OUTPUT to ${OUTPUT}.bak"
 fi
+# Quote secrets for the .env file: bare KEY=VALUE lines break when a value
+# contains spaces, '#', '$' or quotes (user-supplied passwords can). Double
+# quotes are stripped by compose dotenv parsing and by the bootstrap
+# restricted parser, so quoting is round-trip safe. Escape \ and " first.
+env_quote() { local v="$1"; v="${v//\\/\\\\}"; v="${v//\"/\\\"}"; printf '"%s"' "$v"; }
+q_POSTGRES_PASSWORD="$(env_quote "$POSTGRES_PASSWORD")"
+q_DATABASE_URL="$(env_quote "$DATABASE_URL")"
+q_REDIS_PASSWORD="$(env_quote "$REDIS_PASSWORD")"
+q_API_AUTH_SECRET="$(env_quote "$API_AUTH_SECRET")"
+q_APP_KEY="$(env_quote "$APP_KEY")"
+q_FORGE_MASTER_KEY="$(env_quote "$FORGE_MASTER_KEY")"
+q_NODE_TOKEN="$(env_quote "$NODE_TOKEN")"
+q_SFTP_PASSPHRASE="$(env_quote "$DAEMON_SFTP_HOST_KEY_PASSPHRASE")"
+q_GRAFANA_PASSWORD="$(env_quote "$GRAFANA_ADMIN_PASSWORD")"
+q_METRICS_TOKEN="$(env_quote "$METRICS_TOKEN")"
+q_SOKETI_KEY="$(env_quote "$SOKETI_APP_KEY")"
+q_SOKETI_SECRET="$(env_quote "$SOKETI_APP_SECRET")"
+q_CRYPTO_KEY="$(env_quote "$CRYPTO_KEY")"
 cat > "$OUTPUT" <<ENV
 # =====================================================================
 # GamePanel Production Environment
@@ -173,8 +191,8 @@ TAG=${TAG}
 # =====================================================================
 POSTGRES_DB=${POSTGRES_DB}
 POSTGRES_USER=${POSTGRES_USER}
-POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-DATABASE_URL=${DATABASE_URL}
+POSTGRES_PASSWORD=${q_POSTGRES_PASSWORD}
+DATABASE_URL=${q_DATABASE_URL}
 POSTGRES_BACKUP_HOST_DIR=/var/backups/gamepanel/postgres
 POSTGRES_BACKUP_INTERVAL_SECONDS=86400
 POSTGRES_BACKUP_RETENTION_DAYS=14
@@ -183,14 +201,14 @@ POSTGRES_BACKUP_RETENTION_DAYS=14
 # --- Redis ---
 # =====================================================================
 REDIS_ADDR=redis:6379
-REDIS_PASSWORD=${REDIS_PASSWORD}
+REDIS_PASSWORD=${q_REDIS_PASSWORD}
 
 # =====================================================================
 # --- Soketi / WebSocket (optional — requires compose.realtime.yml) ---
 # =====================================================================
 SOKETI_APP_ID=gamepanel
-SOKETI_APP_KEY=${SOKETI_APP_KEY}
-SOKETI_APP_SECRET=${SOKETI_APP_SECRET}
+SOKETI_APP_KEY=${q_SOKETI_KEY}
+SOKETI_APP_SECRET=${q_SOKETI_SECRET}
 SOKETI_METRICS_PORT=9601
 
 # =====================================================================
@@ -202,8 +220,8 @@ PANEL_URL=https://${PANEL_DOMAIN}
 # --- API Configuration ---
 # =====================================================================
 API_ADDR=:8080
-API_AUTH_SECRET=${API_AUTH_SECRET}
-APP_KEY=${APP_KEY}
+API_AUTH_SECRET=${q_API_AUTH_SECRET}
+APP_KEY=${q_APP_KEY}
 APP_ENV=production
 LOAD_BALANCER_ENABLED=true
 LOAD_BALANCER_BIND_HOST=
@@ -216,7 +234,7 @@ LOAD_BALANCER_PORT_MAX=30100
 # encoded.  If lost, ALL encrypted data becomes permanently
 # unrecoverable.
 # =====================================================================
-FORGE_MASTER_KEY=${FORGE_MASTER_KEY}
+FORGE_MASTER_KEY=${q_FORGE_MASTER_KEY}
 FORGE_MASTER_KEY_ID=primary
 FORGE_PREVIOUS_MASTER_KEYS=
 FORGE_ALLOW_EPHEMERAL_MASTER_KEY=false
@@ -226,8 +244,8 @@ FORGE_ALLOW_EPHEMERAL_MASTER_KEY=false
 # Format: <token_id>.<secret>
 # Generate a new token from the panel web UI after deployment.
 # =====================================================================
-DAEMON_NODE_TOKEN=${NODE_TOKEN}
-DAEMON_SFTP_HOST_KEY_PASSPHRASE=${DAEMON_SFTP_HOST_KEY_PASSPHRASE}
+DAEMON_NODE_TOKEN=${q_NODE_TOKEN}
+DAEMON_SFTP_HOST_KEY_PASSPHRASE=${q_SFTP_PASSPHRASE}
 DAEMON_UPGRADE_PUBLIC_KEY=${DAEMON_UPGRADE_PUBLIC_KEY:-}
 
 # =====================================================================
@@ -255,14 +273,14 @@ PANEL_API_URL=https://${PANEL_DOMAIN}/api/v1
 DAEMON_IMAGE=ghcr.io/gamepanel/beacon:${TAG}
 API_IMAGE=ghcr.io/gamepanel/forge-api:${TAG}
 WEB_IMAGE=ghcr.io/gamepanel/forge-web:${TAG}
-METRICS_TOKEN=${METRICS_TOKEN}
+METRICS_TOKEN=${q_METRICS_TOKEN}
 METRICS_TOKEN_FILE=./.metrics-token
 
 # =====================================================================
 # --- Grafana ---
 # =====================================================================
 GRAFANA_ADMIN_USER=${GRAFANA_ADMIN_USER}
-GRAFANA_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+GRAFANA_ADMIN_PASSWORD=${q_GRAFANA_PASSWORD}
 
 # =====================================================================
 # --- Backup Adapter ---
@@ -350,11 +368,13 @@ BATCH2_MIGRATIONS_DIR=/batch2-migrations
 # CRYPTO_KEY is a general-purpose encryption key.  Uncomment below if
 # your deployment requires it (not used by the default compose stack).
 # =====================================================================
-#CRYPTO_KEY=${CRYPTO_KEY}
+#CRYPTO_KEY=${q_CRYPTO_KEY}
 ENV
 
 chmod 600 "$OUTPUT"
-printf '%s\n' "$METRICS_TOKEN" > "$(dirname "$OUTPUT")/.metrics-token"
+# No trailing newline: Prometheus credentials_file sends the file verbatim,
+# so a newline becomes part of the bearer token and auth fails.
+printf '%s' "$METRICS_TOKEN" > "$(dirname "$OUTPUT")/.metrics-token"
 chmod 600 "$(dirname "$OUTPUT")/.metrics-token"
 
 # ---- Docker Secrets Files ---------------------------------------------------

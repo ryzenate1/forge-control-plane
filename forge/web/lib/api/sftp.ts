@@ -1,4 +1,4 @@
-import { fetchJSON, putJSON } from "./http";
+import { fetchJSON, putJSON, unwrapData, unwrapList } from "./http";
 
 export type SFTPGlobalConfig = {
   enabled: boolean;
@@ -30,9 +30,9 @@ export type SFTPNodeConfig = {
 };
 
 export async function fetchSFTPGlobalConfig(): Promise<SFTPGlobalConfig> {
-  const raw = await fetchJSON<SFTPGlobalConfig | { data: SFTPGlobalConfig }>("/admin/sftp/settings");
-  const maybeData = (raw as { data: SFTPGlobalConfig }).data;
-  return maybeData ?? (raw as SFTPGlobalConfig);
+  return unwrapData(
+    await fetchJSON<SFTPGlobalConfig | { data: SFTPGlobalConfig }>("/admin/sftp/settings"),
+  );
 }
 
 export async function updateSFTPGlobalConfig(cfg: SFTPGlobalConfig): Promise<{ ok: boolean }> {
@@ -40,15 +40,15 @@ export async function updateSFTPGlobalConfig(cfg: SFTPGlobalConfig): Promise<{ o
 }
 
 export async function fetchSFTPNodeConfigs(): Promise<SFTPNodeConfig[]> {
-  const raw = await fetchJSON<SFTPNodeConfig[] | { data: SFTPNodeConfig[] }>("/admin/sftp/nodes");
-  if (Array.isArray(raw)) return raw;
-  return (raw as { data: SFTPNodeConfig[] }).data ?? [];
+  return unwrapList(
+    await fetchJSON<SFTPNodeConfig[] | { data: SFTPNodeConfig[] }>("/admin/sftp/nodes"),
+  );
 }
 
 export async function fetchSFTPNodeConfig(nodeId: string): Promise<SFTPNodeConfig> {
-  const raw = await fetchJSON<SFTPNodeConfig | { data: SFTPNodeConfig }>(`/admin/nodes/${encodeURIComponent(nodeId)}/sftp`);
-  const maybeData = (raw as { data: SFTPNodeConfig }).data;
-  return maybeData ?? (raw as SFTPNodeConfig);
+  return unwrapData(
+    await fetchJSON<SFTPNodeConfig | { data: SFTPNodeConfig }>(`/admin/nodes/${encodeURIComponent(nodeId)}/sftp`),
+  );
 }
 
 export async function updateSFTPNodeConfig(nodeId: string, cfg: SFTPNodeConfig): Promise<{ ok: boolean }> {

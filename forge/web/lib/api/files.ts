@@ -166,13 +166,21 @@ export async function uploadFileChunked(
   path: string,
   file: File | Blob,
   onProgress?: (loaded: number, total: number) => void,
+  options?: { signal?: AbortSignal; chunkSize?: number; retry?: boolean },
 ): Promise<void> {
-  const chunkSize = 8 * 1024 * 1024;
+  const chunkSize = options?.chunkSize ?? 8 * 1024 * 1024;
   const totalSize = file.size;
   let offset = 0;
-  const uploadId = crypto.randomUUID();
+  // `crypto.randomUUID` is unavailable on non-secure contexts (plain http on
+  // LAN IPs) — fall back to a unique-enough id so chunked uploads still work
+  // there instead of throwing before the first byte.
+  const uploadId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 
   while (offset < totalSize) {
+    options?.signal?.throwIfAborted?.();
     const end = Math.min(offset + chunkSize, totalSize);
     const chunk = file.slice(offset, end);
     const isLast = end >= totalSize;
@@ -189,9 +197,12 @@ export async function uploadFileChunked(
       {
         method: 'PUT',
         headers: { 'Content-Type': 'application/octet-stream' },
-        credentials: 'include',
+        ...(options?.signal ? { signal: options.signal } : {}),
         body: chunk,
       },
+      // Chunk PUTs are offset-addressed, so a retried chunk overwrites the
+      // same range rather than duplicating data. Opt-in via options.
+      options?.retry ? { retry: { retries: 2, idempotent: true } } : {},
     );
 
     offset = end;

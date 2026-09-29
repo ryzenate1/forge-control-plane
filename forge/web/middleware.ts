@@ -3,7 +3,9 @@ import { isProtectedPath } from "@/lib/auth/protected-paths";
 
 const PUBLIC_PATHS = new Set(["/", "/setup", "/forgot-password", "/reset-password", "/favicon.ico"]);
 const IS_DEV = process.env.NODE_ENV === "development";
-const CSP_HEADER = (nonce: string) => `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${IS_DEV ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' https://fonts.gstatic.com data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`;
+// next/font self-hosts every family at build time, so there is no runtime
+// fetch to fonts.gstatic.com — font-src stays 'self' + data: only.
+const CSP_HEADER = (nonce: string) => `default-src 'self'; script-src 'self' 'nonce-${nonce}' 'strict-dynamic'${IS_DEV ? " 'unsafe-eval'" : ""}; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; font-src 'self' data:; connect-src 'self' ws: wss:; object-src 'none'; base-uri 'self'; frame-ancestors 'none'`;
 const API_INTERNAL_URL = (process.env.API_INTERNAL_URL ?? "http://127.0.0.1:8080").replace(/\/$/, "");
 
 function isProtected(pathname: string) {
@@ -38,7 +40,7 @@ async function isSetupRequired(): Promise<boolean | null> {
   }
 }
 
-async function hasValidSession(request: NextRequest): Promise<boolean> {
+async function hasValidSession(request: NextRequest): Promise<boolean | null> {
   try {
     const authPath = API_INTERNAL_URL.endsWith("/api/v1") ? "/auth/me" : "/api/v1/auth/me";
     const response = await fetch(new URL(authPath, `${API_INTERNAL_URL}/`), {
@@ -46,9 +48,16 @@ async function hasValidSession(request: NextRequest): Promise<boolean> {
       cache: "no-store",
       signal: AbortSignal.timeout(3000),
     });
-    return response.ok;
+    // 401/403 is a definite "no session". A 5xx or any other unexpected
+    // status means the API could not answer authoritatively — report unknown
+    // (null) rather than false so the caller does not bounce a valid session
+    // to login just because the backend is down.
+    if (response.status === 401 || response.status === 403) return false;
+    if (response.ok) return true;
+    return null;
   } catch {
-    return false;
+    // Network error / timeout / API down: unknown, not invalid.
+    return null;
   }
 }
 
@@ -77,19 +86,31 @@ export async function middleware(request: NextRequest) {
   }
 
   const session = getSessionCookie(request);
-  if (session && await hasValidSession(request)) {
+  if (!session) {
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/";
+    const nextPath = search ? `${pathname}${search}` : pathname;
+    loginUrl.search = `?reason=session-expired&next=${encodeURIComponent(nextPath)}`;
     const nonce = crypto.randomUUID().replace(/-/g, "");
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set("x-csp-nonce", nonce);
-    return withCsp(NextResponse.next({ request: { headers: requestHeaders } }), nonce);
+    return withCsp(NextResponse.redirect(loginUrl), nonce);
   }
-
-  const loginUrl = request.nextUrl.clone();
-  loginUrl.pathname = "/";
-  const nextPath = search ? `${pathname}${search}` : pathname;
-  loginUrl.search = `?reason=session-expired&next=${encodeURIComponent(nextPath)}`;
+  const validity = await hasValidSession(request);
+  if (validity === false) {
+    const loginUrl = request.nextUrl.clone();
+    loginUrl.pathname = "/";
+    const nextPath = search ? `${pathname}${search}` : pathname;
+    loginUrl.search = `?reason=session-expired&next=${encodeURIComponent(nextPath)}`;
+    const nonce = crypto.randomUUID().replace(/-/g, "");
+    return withCsp(NextResponse.redirect(loginUrl), nonce);
+  }
+  // validity === null means the API could not be reached authoritatively
+  // (down, 5xx, timeout). Fail open: let the request through and let the
+  // client-side SessionLoader verify once the API answers, instead of
+  // bouncing a potentially-valid session to login on every API blip.
   const nonce = crypto.randomUUID().replace(/-/g, "");
-  return withCsp(NextResponse.redirect(loginUrl), nonce);
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-csp-nonce", nonce);
+  return withCsp(NextResponse.next({ request: { headers: requestHeaders } }), nonce);
 }
 
 export const config = {

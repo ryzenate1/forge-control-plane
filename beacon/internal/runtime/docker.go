@@ -190,9 +190,12 @@ func (r *DockerRuntime) Create(ctx context.Context, req CreateRequest) error {
 		return err
 	}
 	if existing.Exists {
-		// Idempotent: creating a workload that already exists is a no-op.
-		// The panel re-provisions on boot to repair missing workloads without
-		// disturbing running containers.
+		// Idempotent by existence: creating a workload that already exists
+		// is a no-op. The panel re-provisions on boot to repair missing
+		// workloads without disturbing running containers. Configuration
+		// drift is deliberately not compared here — Reconcile compares the
+		// configHashLabel and recreates on mismatch, while Create never
+		// disturbs a live container.
 		return nil
 	}
 	return r.reconcile(ctx, req)
@@ -295,7 +298,7 @@ func (r *DockerRuntime) Install(ctx context.Context, req InstallRequest) (Instal
 		return InstallResult{}, err
 	}
 	if req.Image == "" {
-		req.Image = "alpine:3.21"
+		req.Image = "docker.io/library/alpine:3.21@sha256:21a3deaa0d32a8057914f36584b5288d2e5da9845c690f493846b7b90a70dbcd"
 	}
 	if req.Entrypoint == "" {
 		req.Entrypoint = "sh"
@@ -419,13 +422,22 @@ func (r *DockerRuntime) List(ctx context.Context) ([]ContainerState, error) {
 		if serverID == "" {
 			continue
 		}
+		// ContainerList only carries creation time. The real start time
+		// comes from an inspect; fall back to Created when the inspect
+		// fails so a list failure never hides the whole fleet.
+		startedAt := time.Unix(item.Created, 0)
+		if inspection, inspectErr := r.client.ContainerInspect(ctx, item.ID); inspectErr == nil && inspection.State != nil {
+			if parsed, parseErr := time.Parse(time.RFC3339Nano, inspection.State.StartedAt); parseErr == nil && !parsed.IsZero() {
+				startedAt = parsed
+			}
+		}
 		states = append(states, ContainerState{
 			ServerID:  serverID,
 			ID:        item.ID,
 			Exists:    true,
 			Running:   strings.EqualFold(item.State, "running"),
 			Status:    item.Status,
-			StartedAt: time.Unix(item.Created, 0),
+			StartedAt: startedAt,
 		})
 	}
 	return states, nil
@@ -597,6 +609,15 @@ func (r *DockerRuntime) Stats(ctx context.Context, serverID string) (Stats, erro
 }
 
 func (r *DockerRuntime) Logs(ctx context.Context, serverID string) (io.ReadCloser, error) {
+	// A container that was created but never started has no output. Docker
+	// would return an empty stream with nil error, which reads as
+	// "healthy but quiet"; refuse it instead so callers cannot mistake
+	// never-ran for quiet.
+	if inspection, err := r.client.ContainerInspect(ctx, containerName(serverID)); err == nil && inspection.State != nil {
+		if started, parseErr := time.Parse(time.RFC3339Nano, inspection.State.StartedAt); (parseErr != nil || started.IsZero()) && !inspection.State.Running {
+			return nil, fmt.Errorf("container %q has never started: no logs to report", containerName(serverID))
+		}
+	}
 	return r.client.ContainerLogs(ctx, containerName(serverID), container.LogsOptions{
 		ShowStdout: true,
 		ShowStderr: true,

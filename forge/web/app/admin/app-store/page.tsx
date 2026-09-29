@@ -338,7 +338,7 @@ export default function AppStorePage() {
                   )}
                   <div className="mb-3 flex h-12 w-12 items-center justify-center rounded-lg bg-white/5">
                     {app.icon ? (
-                      <Image src={app.icon} alt="" width={32} height={32} className="h-11 w-11" unoptimized />
+                      <Image src={app.icon} alt={`${app.name} icon`} width={32} height={32} className="h-11 w-11" unoptimized />
                     ) : (
                       <Package className="h-6 w-6 text-slate-400" />
                     )}
@@ -464,7 +464,7 @@ function AppDetailView({
 
       <div className="flex items-start gap-5">
         <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-xl bg-white/5">
-          {app.icon ? <Image src={app.icon} alt="" width={40} height={40} className="h-10 w-10" unoptimized /> : <Package className="h-11 w-11 text-slate-400" />}
+          {app.icon ? <Image src={app.icon} alt={`${app.name} icon`} width={40} height={40} className="h-10 w-10" unoptimized /> : <Package className="h-11 w-11 text-slate-400" />}
         </div>
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-3">
@@ -573,7 +573,10 @@ function InstallFormModal({
       }
       setParams(defaults);
     }
-  }, [app]);
+  // Depend on the stable app key: `app` is a fresh object each render, so
+  // [app] would reset user-edited params in a loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [app.key]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();

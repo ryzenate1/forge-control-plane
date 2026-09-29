@@ -317,3 +317,126 @@ func TestIsNonReversibleRollback(t *testing.T) {
 		t.Error("marker inside a statement must not count; only leading comment lines")
 	}
 }
+
+func TestMySQLCompatibleMigration_WordBoundaries(t *testing.T) {
+	// Live corruption case: 114_a_mtls_certificates.serial_number became
+	// "int auto_increment_number" under the old substring replacer.
+	out := mysqlCompatibleMigration("CREATE TABLE certs (\n    serial_number VARCHAR(64) NOT NULL DEFAULT '',\n    cabinet TEXT NOT NULL DEFAULT 'serial',\n    id UUID PRIMARY KEY DEFAULT gen_random_uuid()\n);")
+	if strings.Contains(out, "auto_increment_number") {
+		t.Errorf("identifier serial_number was corrupted, got: %s", out)
+	}
+	if !strings.Contains(out, "serial_number VARCHAR(64)") {
+		t.Errorf("serial_number column must survive verbatim, got: %s", out)
+	}
+	if strings.Contains(out, "cabvarchar") || !strings.Contains(out, "cabinet TEXT") {
+		t.Errorf("identifier cabinet must survive verbatim, got: %s", out)
+	}
+	// Data inside literals is never rewritten.
+	if !strings.Contains(out, "DEFAULT 'serial'") {
+		t.Errorf("literal 'serial' must survive verbatim, got: %s", out)
+	}
+	// Real PG-isms in code position still translate.
+	if !strings.Contains(out, "CHAR(36) PRIMARY KEY DEFAULT UUID()") {
+		t.Errorf("UUID/gen_random_uuid() must translate in code, got: %s", out)
+	}
+	// Quoted identifiers are data too.
+	out2 := mysqlCompatibleMigration(`SELECT "uuid", "serial" FROM t WHERE note = 'now()';`)
+	if strings.Contains(out2, "CHAR(36)") || strings.Contains(out2, "CURRENT_TIMESTAMP") {
+		t.Errorf("quoted identifiers/literals must not be rewritten, got: %s", out2)
+	}
+}
+
+func TestMySQLRewriteOnConflict_BareCompositePK(t *testing.T) {
+	// 043's mount_server backfill: bare ON CONFLICT DO NOTHING on a
+	// composite-PK table with no id column. The old
+	// "ON DUPLICATE KEY UPDATE id=id" rewrite is invalid MySQL there.
+	sql := "INSERT INTO mount_server (mount_id, server_id)\nSELECT mount_id, server_id FROM server_mounts\nON CONFLICT DO NOTHING;"
+	out := mysqlCompatibleMigration(sql)
+	if strings.Contains(out, "ON DUPLICATE KEY UPDATE id=id") {
+		t.Errorf("id-assuming rewrite must be gone, got: %s", out)
+	}
+	if strings.Contains(out, "ON CONFLICT") {
+		t.Errorf("bare ON CONFLICT must be stripped, got: %s", out)
+	}
+	if !strings.Contains(out, "INSERT IGNORE INTO mount_server") {
+		t.Errorf("expected INSERT IGNORE conversion, got: %s", out)
+	}
+}
+
+func TestMySQLRewriteOnConflict_ExtendedLookback(t *testing.T) {
+	// INSERT..SELECT bodies span dozens of lines; the old 6-line window
+	// silently missed the INSERT and left a bare "ON CONFLICT" behind.
+	var sb strings.Builder
+	sb.WriteString("INSERT INTO eggs (\n    id,\n    nest_id,\n    name,\n    description,\n    docker_images,\n    startup,\n    config,\n    default_memory_mb,\n    install_script,\n    install_container,\n    install_entrypoint,\n    file_denylist,\n    created_at\n)\nSELECT\n    t.id,\n    (SELECT id FROM nests WHERE name = 'Legacy Templates' LIMIT 1),\n    t.name,\n    '',\n    t.image,\n    t.startup_command\nFROM server_templates t\nON CONFLICT (nest_id, name) DO NOTHING;")
+	out := mysqlCompatibleMigration(sb.String())
+	if strings.Contains(out, "ON CONFLICT") {
+		t.Errorf("distant ON CONFLICT must be handled, got: %s", out)
+	}
+	if !strings.Contains(out, "INSERT IGNORE INTO eggs") {
+		t.Errorf("expected INSERT IGNORE conversion across 20+ lines, got: %s", out)
+	}
+}
+
+func TestGetRecordMigrationSQL_Idempotent(t *testing.T) {
+	pg := getRecordMigrationSQL(DatabasePostgres)
+	if !strings.Contains(pg, "ON CONFLICT") || !strings.Contains(pg, "($1)") {
+		t.Errorf("postgres record must carry ON CONFLICT DO NOTHING with $1, got: %q", pg)
+	}
+	my := getRecordMigrationSQL(DatabaseMySQL)
+	if !strings.Contains(my, "INSERT IGNORE") || !strings.Contains(my, "(?)") {
+		t.Errorf("mysql record must be INSERT IGNORE with ?, got: %q", my)
+	}
+}
+
+func TestAssertSQLiteColumnCompatible(t *testing.T) {
+	db, cleanup := createDisposableDatabase(t, DatabaseSQLite)
+	defer cleanup()
+	ctx := context.Background()
+	tx, err := db.BeginTx(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback()
+	if _, err := tx.ExecContext(ctx, `CREATE TABLE t_compat (name TEXT NOT NULL, n INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	// Same type re-applied: harmless, no error.
+	if err := assertSQLiteColumnCompatible(ctx, tx, `ALTER TABLE t_compat ADD COLUMN name TEXT`); err != nil {
+		t.Errorf("matching type must pass, got: %v", err)
+	}
+	// Different type: loud divergence error, never a silent swallow.
+	if err := assertSQLiteColumnCompatible(ctx, tx, `ALTER TABLE t_compat ADD COLUMN name INTEGER NOT NULL`); err == nil {
+		t.Error("mismatched type must fail loudly, got nil")
+	}
+	if err := assertSQLiteColumnCompatible(ctx, tx, `ALTER TABLE t_compat ADD COLUMN n TEXT`); err == nil {
+		t.Error("mismatched type must fail loudly, got nil")
+	}
+}
+
+func TestMigrationSortKey_SuffixedBoundary(t *testing.T) {
+	// Pins the rollback boundary semantics: bare 082 files sort BEFORE 082_a,
+	// so rolling back to 082_a must not include them.
+	nBare, sBare := migrationSortKey("082_deployments.sql")
+	nSfx, sSfx := migrationSortKey("082_a_failover.sql")
+	if nBare != nSfx || !(sBare < sSfx) {
+		t.Errorf("expected bare 082 < 082_a, got (%d,%q) vs (%d,%q)", nBare, sBare, nSfx, sSfx)
+	}
+}
+
+func TestMySQLDSN_EncodesSpecialChars(t *testing.T) {
+	cfg := DBConfig{
+		Type: DatabaseMySQL, Host: "db", Port: 3306,
+		User: "forge", Password: "p@ss:w?rd/with#special%chars",
+		Database: "forge",
+	}
+	dsn := cfg.DSN()
+	if strings.Contains(dsn, "p@ss:w?rd/with#special%chars") {
+		t.Errorf("raw password must not appear in DSN, got: %s", dsn)
+	}
+	if !strings.Contains(dsn, "/forge?") {
+		t.Errorf("dbname and params must survive encoding, got: %s", dsn)
+	}
+	if red := cfg.RedactedDSN(); strings.Contains(red, "p@ss") || strings.Contains(red, "%40") {
+		t.Errorf("redacted DSN must not leak password material, got: %s", red)
+	}
+}

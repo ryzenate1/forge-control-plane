@@ -18,7 +18,12 @@ func init() {
 			return fmt.Errorf("phase1-git: nil config")
 		}
 		registerPhase1OAuthConfigs(cfg)
-		bridge := phase1git.New(cfg.GitProviderService, cfg.Store, cfg.Logger)
+		// Injected via Config when main wires it; inline New is the dev/test
+		// fallback. Layering: handler -> phase1git.Bridge -> gitprovider/store.
+		bridge := cfg.Phase1GitBridge
+		if bridge == nil {
+			bridge = phase1git.New(cfg.GitProviderService, cfg.Store, cfg.Logger)
+		}
 
 		git := protected.Group("/git")
 

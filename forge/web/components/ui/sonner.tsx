@@ -12,10 +12,12 @@ function toInput(input: ToastInput): { title: string; message?: string } {
  * Module-level toast API — same store as `useToast().toast`, safe to call
  * outside React (loaders, query callbacks). `pushToast` queues until the
  * provider mounts, so early calls are flushed, not dropped.
+ *
+ * NOTE: there is intentionally no `<Toaster/>` component here. The toast
+ * region is rendered once by `ToastProvider` (`components/ui/toast.tsx`),
+ * which owns the toast state — a second region component would render empty.
+ * Mount `<ToastProvider>` (see `components/providers.tsx`) and call `toast.*`.
  */
-export function Toaster() {
-  return null;
-}
 
 export const toast = {
   success: (message: ToastInput) => pushToast({ ...toInput(message), tone: "success" }),

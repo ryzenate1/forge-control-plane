@@ -3,16 +3,16 @@
 // by the Next.js runtime (no external Google Fonts requests at page runtime).
 //
 // Self-hosting via `next/font/local` requires the Manrope / JetBrains Mono
-// woff2 files to be vendored into the repo; they are not present under
-// `public/` or anywhere in the tree, so we use `next/font/google` here to avoid
+// woff2 files to be vendored into the repo under `public/fonts/`; they are not
+// present in this checkout, so we use `next/font/google` here to avoid
 // fabricating import paths that would break the build. TODO: vendor the woff2
 // files and migrate these to `next/font/local` for full self-hosting.
 //
-// Space_Grotesk is a deliberate, documented exception to the two-font rule: it
-// is used only for display headings (`--font-display`) where Manrope's
-// workhorse grotesque lacks the character the product headers need. Body,
-// UI chrome and code remain Manrope / JetBrains Mono exclusively.
-import { Manrope, JetBrains_Mono, Space_Grotesk } from "next/font/google";
+// There is no third display face: headings, numbers and code all use the two
+// tokens above (`--font-sans` / `--font-mono`). `display` below is kept as an
+// alias of `sans` so existing `display.variable` class hooks keep working
+// without pulling a Space_Grotesk payload.
+import { Manrope, JetBrains_Mono } from "next/font/google";
 
 export const sans = Manrope({
   subsets: ["latin"],
@@ -21,7 +21,7 @@ export const sans = Manrope({
   variable: "--font-sans",
 });
 
-export const display = Space_Grotesk({
+export const display = Manrope({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   display: "swap",

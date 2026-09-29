@@ -134,12 +134,12 @@ export function ZerodowntimeManager() {
     >
       <OfflineBanner onRetry={() => { if (serverId.trim()) void loadReleases(); }} />
       {error && (
-        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-500/[0.09] p-4 text-sm text-red-200">
+        <div role="alert" className="flex items-center justify-between gap-3 rounded-xl border border-[var(--danger-line)] bg-[var(--danger-subtle)] p-4 text-sm text-[var(--text)]">
           <span>{error}</span> <button onClick={() => setError(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
         </div>
       )}
       {success && (
-        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.09] p-4 text-sm text-emerald-200">
+        <div role="status" className="flex items-center justify-between gap-3 rounded-xl border border-[var(--ok-line)] bg-[var(--ok-subtle)] p-4 text-sm text-[var(--text)]">
           <span>{success}</span> <button onClick={() => setSuccess(null)} className="rounded px-2 py-1 text-xs underline hover:bg-white/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Dismiss</button>
         </div>
       )}
@@ -161,9 +161,9 @@ export function ZerodowntimeManager() {
           ) : (
             <div className="space-y-2 max-h-[520px] overflow-auto">
               {releases.map((r) => (
-                <div key={r.id} className={`rounded-lg border p-3 ${selected?.id === r.id ? "border-red-400 bg-[var(--brand)]-wash" : "border-[var(--line)] bg-surface"}`}>
+                <div key={r.id} className={`rounded-lg border p-3 ${selected?.id === r.id ? "border-[var(--brand)] bg-[var(--brand-subtle)]" : "border-[var(--line)] bg-[var(--surface)]"}`}>
                   <div className="flex items-center justify-between">
-                    <p className="text-sm font-bold text-[var(--text)]">v{r.version} · {r.imageTag} <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${r.status === "live" ? "bg-green-100 text-emerald-200" : r.status === "failed" ? "bg-[var(--brand)]-100 text-red-700" : "bg-amber-100 text-amber-700"}`}>{r.status}</span></p>
+                    <p className="text-sm font-bold text-[var(--text)]">v{r.version} · {r.imageTag} <span className={`ml-2 rounded-full px-2 py-0.5 text-xs ${r.status === "live" ? "bg-[var(--ok-subtle)] text-[var(--ok)]" : r.status === "failed" ? "bg-[var(--danger-subtle)] text-[var(--danger)]" : "bg-[var(--warn-subtle)] text-[var(--warn)]"}`}>{r.status}</span></p>
                     <span className="text-xs text-[var(--text-subtle)]">{new Date(r.createdAt).toLocaleString()}</span>
                   </div>
                   <div className="mt-2 flex gap-1">
@@ -238,7 +238,7 @@ export function ZerodowntimeManager() {
                   {events.length === 0 ? <p className="text-xs text-[var(--text-subtle)]">No events.</p> : (
                     <div className="mt-2 space-y-1 max-h-40 overflow-auto">
                       {events.map((ev) => (
-                        <div key={ev.id} className="flex justify-between rounded border border-[var(--line)] bg-surface px-3 py-1.5 text-xs">
+                        <div key={ev.id} className="flex justify-between rounded border border-[var(--line)] bg-[var(--surface)] px-3 py-1.5 text-xs">
                           <span><b>{ev.eventType}</b> — {ev.message}</span>
                           <span className="text-[var(--text-subtle)]">{new Date(ev.createdAt).toLocaleTimeString()}</span>
                         </div>

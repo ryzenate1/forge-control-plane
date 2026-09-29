@@ -61,6 +61,7 @@ import {
 } from "./admin-ui";
 import { DashHeader } from "./dashboard-cards";
 import { cn } from "@/lib/utils";
+import { chart } from "@/lib/design-tokens";
 
 type ViewMode = "cards" | "list";
 type SortKey = "name-asc" | "name-desc" | "category" | "recent";
@@ -111,21 +112,21 @@ function groupIdFor(entry: CatalogEntry): string {
 }
 
 const LOGO_STYLE: Record<string, { color: string; bg: string; icon: LucideIcon }> = {
-  postgres: { color: "#60a5fa", bg: "rgba(96,165,250,0.12)", icon: Database },
-  mysql: { color: "#38bdf8", bg: "rgba(56,189,248,0.12)", icon: Database },
-  mariadb: { color: "#d2a679", bg: "rgba(210,166,121,0.12)", icon: Database },
-  redis: { color: "#f87171", bg: "rgba(248,113,113,0.12)", icon: Layers },
-  valkey: { color: "#a78bfa", bg: "rgba(167,139,250,0.14)", icon: Layers },
-  mongodb: { color: "#4ade80", bg: "rgba(74,222,128,0.12)", icon: Leaf },
-  "redis-queue": { color: "#f87171", bg: "rgba(248,113,113,0.12)", icon: ListOrdered },
-  rabbitmq: { color: "#fb923c", bg: "rgba(251,146,60,0.12)", icon: Rabbit },
-  clickhouse: { color: "#facc15", bg: "rgba(250,204,21,0.12)", icon: BarChart3 },
-  nats: { color: "#34d399", bg: "rgba(52,211,153,0.12)", icon: Zap },
-  memcached: { color: "#94a3b8", bg: "rgba(148,163,184,0.14)", icon: HardDrive },
+  postgres: { color: chart.catalogPostgres, bg: chart.catalogPostgresBg, icon: Database },
+  mysql: { color: chart.sky, bg: chart.catalogMysqlBg, icon: Database },
+  mariadb: { color: chart.catalogMariadb, bg: chart.catalogMariadbBg, icon: Database },
+  redis: { color: chart.dangerSoft, bg: chart.catalogRedisBg, icon: Layers },
+  valkey: { color: chart.violet, bg: chart.catalogValkeyBg, icon: Layers },
+  mongodb: { color: chart.brightEmerald, bg: chart.catalogMongoBg, icon: Leaf },
+  "redis-queue": { color: chart.dangerSoft, bg: chart.catalogRedisBg, icon: ListOrdered },
+  rabbitmq: { color: chart.lightOrange, bg: chart.catalogRabbitBg, icon: Rabbit },
+  clickhouse: { color: chart.brightYellow, bg: chart.catalogClickhouseBg, icon: BarChart3 },
+  nats: { color: chart.lightEmerald, bg: chart.catalogNatsBg, icon: Zap },
+  memcached: { color: chart.unknown, bg: chart.gridSlate, icon: HardDrive },
 };
 
 function logoFor(key: string): { color: string; bg: string; icon: LucideIcon } {
-  return LOGO_STYLE[key.toLowerCase()] ?? { color: "#94a3b8", bg: "rgba(148,163,184,0.12)", icon: Package };
+  return LOGO_STYLE[key.toLowerCase()] ?? { color: chart.unknown, bg: chart.gridSlate, icon: Package };
 }
 
 function CatalogLogo({ entryKey, size = "md" }: { entryKey: string; size?: "md" | "sm" }) {
@@ -146,21 +147,21 @@ function VersionPills({ entry }: { entry: CatalogEntry }) {
   const versions = entry.versions ?? [];
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      <span className="inline-flex items-center rounded-md border border-blue-500/30 bg-blue-500/10 px-2 py-0.5 text-[11px] font-medium capitalize text-blue-300">
+      <span className="inline-flex items-center rounded-md border border-[var(--info-line)] bg-[var(--info-subtle)] px-2 py-0.5 text-[11px] font-medium capitalize text-[var(--info)]">
         {entry.category}
       </span>
       {versions.slice(0, 3).map((v) =>
         v === entry.defaultVersion ? (
           <span
             key={v}
-            className="inline-flex items-center rounded-md border border-red-500/40 bg-red-500/10 px-2 py-0.5 font-mono text-[11px] font-medium text-red-300"
+            className="inline-flex items-center rounded-md border border-[var(--danger-line)] bg-[var(--danger-subtle)] px-2 py-0.5 font-mono text-[11px] font-medium text-[var(--danger)]"
           >
             {v}&nbsp;&nbsp;·&nbsp;&nbsp;default
           </span>
         ) : (
           <span
             key={v}
-            className="inline-flex items-center rounded-md border border-white/10 bg-white/[0.04] px-2 py-0.5 font-mono text-[11px] text-slate-400"
+            className="inline-flex items-center rounded-md border border-[var(--line)] bg-[var(--surface-input)] px-2 py-0.5 font-mono text-[11px] text-[var(--text-subtle)]"
           >
             {v}
           </span>
@@ -453,11 +454,13 @@ export function AdminCatalog() {
       ) : filtered.length === 0 ? (
         <EmptyState
           icon={Package}
-          title={search || category !== "all" || runtime !== "all" ? "No matches" : "Catalog empty"}
+          title={runtime === "kubernetes" ? "Kubernetes not yet supported" : search || category !== "all" || runtime !== "all" ? "No matches" : "Catalog empty"}
           message={
-            search || category !== "all" || runtime !== "all"
-              ? "No services match the current filters."
-              : "No catalog entries — seed the catalog via migrations or the admin seeder."
+            runtime === "kubernetes"
+              ? "The catalog provisions Docker workloads only. Kubernetes scheduling is on the roadmap — switch the runtime filter back to Docker."
+              : search || category !== "all" || runtime !== "all"
+                ? "No services match the current filters."
+                : "No catalog entries — seed the catalog via migrations or the admin seeder."
           }
         />
       ) : (

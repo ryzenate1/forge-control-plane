@@ -117,6 +117,21 @@ describe("auth API client", () => {
       const { logout } = await import("./auth");
       await expect(logout()).rejects.toThrow("Logout failed");
     });
+
+    it("does not fire the session-expired event on 401 (explicit logout is not an expiry)", async () => {
+      mockFetchByUrl({
+        "/auth/logout": jsonResponse({ error: "unauthorized" }, 401),
+      });
+      const onExpired = vi.fn();
+      window.addEventListener("forge:session-expired", onExpired);
+      try {
+        const { logout } = await import("./auth");
+        await expect(logout()).rejects.toThrow();
+        expect(onExpired).not.toHaveBeenCalled();
+      } finally {
+        window.removeEventListener("forge:session-expired", onExpired);
+      }
+    });
   });
 
   describe("fetchCurrentUser", () => {

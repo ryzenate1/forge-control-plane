@@ -78,8 +78,11 @@ services:
       - no-new-privileges:true
     cap_drop:
       - ALL
-    cap_add:
-      - NET_ADMIN
+    # NOTE: no cap_add here. An earlier revision granted NET_ADMIN, but the
+    # beacon drives game containers through the docker-proxy socket and never
+    # manages host interfaces itself — the capability only widened a
+    # container breakout. If packet-level features ever need it, scope the
+    # grant with a comment linking the feature, and prefer NET_RAW alone.
     networks:
       # docker-api reaches docker-proxy; docker-egress is the only path to
       # PANEL_API_URL (and image registries). `internal: true` on docker-api

@@ -26,6 +26,18 @@ compress="${POSTGRES_BACKUP_COMPRESS:-true}"
 case "$interval" in *[!0-9]*|'') echo "invalid backup interval" >&2; exit 1;; esac
 case "$retention" in *[!0-9]*|'') echo "invalid backup retention" >&2; exit 1;; esac
 
+# Fail closed when S3 offload is configured but the uploader is missing.
+# postgres:16-alpine ships no `aws` CLI; run an amazon/aws-cli sidecar or
+# install it into a custom backup image instead of silently keeping local-only
+# dumps while the operator believes S3 offload is active.
+if [ -n "$s3_bucket" ] && [ -n "$s3_access_key" ] && [ -n "$s3_secret_key" ]; then
+  if ! command -v aws >/dev/null 2>&1; then
+    echo "S3 offload configured (S3_BACKUP_BUCKET=$s3_bucket) but 'aws' CLI is not installed in this image (postgres:16-alpine)" >&2
+    echo "Refusing to start: fix by running an amazon/aws-cli sidecar sharing /backups, or build a backup image with aws-cli installed." >&2
+    exit 1
+  fi
+fi
+
 mkdir -p /backups
 chmod 700 /backups 2>/dev/null || true
 
@@ -89,29 +101,40 @@ while true; do
       mv "$partial" "$final"
     fi
     chmod 600 "$final" 2>/dev/null || true
-    push_backup_metric
+    # The success metric must reflect end-to-end durability. When S3 offload
+    # is configured, a local dump whose upload fails is NOT a success: the
+    # stale-backup alert must keep firing.
+    s3_required=false
+    s3_ok=true
+    if [ -n "$s3_bucket" ] && [ -n "$s3_access_key" ] && [ -n "$s3_secret_key" ]; then
+      s3_required=true
+      s3_ok=false
+      if command -v aws >/dev/null 2>&1; then
+        s3_path="${s3_prefix}/gamepanel-${timestamp}.dump"
+        if [ "$compress" = "true" ]; then s3_path="${s3_path}.gz"; fi
+        export AWS_ACCESS_KEY_ID="$s3_access_key"
+        export AWS_SECRET_ACCESS_KEY="$s3_secret_key"
+        export AWS_DEFAULT_REGION="${s3_region:-us-east-1}"
+        if aws s3 cp "$final" "s3://${s3_bucket}/${s3_path}" --no-progress; then
+          echo "S3 upload succeeded: s3://${s3_bucket}/${s3_path}"
+          s3_ok=true
+        else
+          echo "S3 upload failed at $timestamp" >&2
+        fi
+      else
+        echo "S3 credentials supplied but aws CLI is not installed" >&2
+      fi
+    fi
+    if [ "$s3_required" = false ] || [ "$s3_ok" = true ]; then
+      push_backup_metric
+    else
+      echo "Skipping success metric: S3 offload failed for $timestamp" >&2
+    fi
   else
     echo "PostgreSQL backup failed at $timestamp" >&2
     rm -f "$partial"
     sleep "$interval"
     continue
-  fi
-
-  if [ -n "$s3_bucket" ] && [ -n "$s3_access_key" ] && [ -n "$s3_secret_key" ]; then
-    if command -v aws >/dev/null 2>&1; then
-      s3_path="${s3_prefix}/gamepanel-${timestamp}.dump"
-      if [ "$compress" = "true" ]; then s3_path="${s3_path}.gz"; fi
-      export AWS_ACCESS_KEY_ID="$s3_access_key"
-      export AWS_SECRET_ACCESS_KEY="$s3_secret_key"
-      export AWS_DEFAULT_REGION="${s3_region:-us-east-1}"
-      if aws s3 cp "$final" "s3://${s3_bucket}/${s3_path}" --no-progress; then
-        echo "S3 upload succeeded: s3://${s3_bucket}/${s3_path}"
-      else
-        echo "S3 upload failed at $timestamp" >&2
-      fi
-    else
-      echo "S3 credentials supplied but aws CLI is not installed" >&2
-    fi
   fi
 
   find /backups -maxdepth 1 -type f \( -name 'gamepanel-*.dump' -o -name 'gamepanel-*.dump.gz' \) -mtime "+$retention" -delete

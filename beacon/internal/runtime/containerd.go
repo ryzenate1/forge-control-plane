@@ -130,7 +130,7 @@ func (r *ContainerdRuntime) Create(ctx context.Context, req CreateRequest) error
 		if _, infoErr := existing.Info(ctx); infoErr == nil {
 			return nil
 		}
-		return nil
+		return fmt.Errorf("read existing container metadata: %w", infoErr)
 	}
 
 	hash, err := createRequestHash(req)
@@ -720,8 +720,10 @@ func (r *ContainerdRuntime) LogsStream(ctx context.Context, serverID string, tai
 	if err != nil {
 		return nil, err
 	}
-	if tail == "" || tail == "all" {
-		return io.NopCloser(bytes.NewReader(payload)), nil
+	// Align with Docker LogsStream: an empty tail or "all" means the last
+	// 10000 lines, not the entire buffer.
+	if strings.TrimSpace(tail) == "" || tail == "all" {
+		tail = "10000"
 	}
 	count, err := strconv.Atoi(tail)
 	if err != nil || count < 0 {
@@ -762,31 +764,38 @@ func (r *ContainerdRuntime) StatsStream(ctx context.Context, serverID string) (i
 			case <-ticker.C:
 				metric, err := task.Metrics(ctx)
 				if err != nil {
+					// Propagate instead of a silent EOF: the reader must see
+					// the failure, not an idle stream that looks healthy.
+					_ = writer.CloseWithError(fmt.Errorf("containerd metrics: %w", err))
 					return
 				}
 				data := metric.Data
-				if data != nil && len(data.Value) > 0 {
-					var metricsData struct {
-						CPUUsage    uint64 `json:"cpu_usage"`
-						SystemUsage uint64 `json:"system_cpu"`
-						MemoryUsage uint64 `json:"memory_usage"`
-						MemoryLimit uint64 `json:"memory_limit"`
-					}
-					if err := json.Unmarshal(data.Value, &metricsData); err == nil {
-						cpuPercent := float64(0)
-						if metricsData.SystemUsage > 0 {
-							cpuPercent = float64(metricsData.CPUUsage) / float64(metricsData.SystemUsage) * 100
-						}
-						payload := Stats{
-							CPUPercent:  cpuPercent,
-							MemoryBytes: metricsData.MemoryUsage,
-							MemoryLimit: metricsData.MemoryLimit,
-						}
-						body, _ := json.Marshal(payload)
-						_, _ = writer.Write(body)
-						_, _ = writer.Write([]byte("\n"))
-					}
+				if data == nil || len(data.Value) == 0 {
+					_ = writer.CloseWithError(errors.New("containerd metrics are unavailable"))
+					return
 				}
+				var metricsData struct {
+					CPUUsage    uint64 `json:"cpu_usage"`
+					SystemUsage uint64 `json:"system_cpu"`
+					MemoryUsage uint64 `json:"memory_usage"`
+					MemoryLimit uint64 `json:"memory_limit"`
+				}
+				if err := json.Unmarshal(data.Value, &metricsData); err != nil {
+					_ = writer.CloseWithError(fmt.Errorf("decode containerd metrics: %w", err))
+					return
+				}
+				cpuPercent := float64(0)
+				if metricsData.SystemUsage > 0 {
+					cpuPercent = float64(metricsData.CPUUsage) / float64(metricsData.SystemUsage) * 100
+				}
+				payload := Stats{
+					CPUPercent:  cpuPercent,
+					MemoryBytes: metricsData.MemoryUsage,
+					MemoryLimit: metricsData.MemoryLimit,
+				}
+				body, _ := json.Marshal(payload)
+				_, _ = writer.Write(body)
+				_, _ = writer.Write([]byte("\n"))
 			case <-ctx.Done():
 				return
 			}
@@ -806,9 +815,13 @@ func (r *ContainerdRuntime) Delete(ctx context.Context, serverID string) error {
 
 	container, err := r.client.LoadContainer(ctx, name)
 	if err != nil {
-		// Delete is idempotent: removing a workload that does not exist is
-		// a no-op (matching Docker Delete on NotFound).
-		return nil
+		// Delete is idempotent only when the workload is actually gone.
+		// Any other load failure (auth, transport, corrupt metadata) must
+		// surface as an error, never as a false success.
+		if strings.Contains(strings.ToLower(err.Error()), "not found") {
+			return nil
+		}
+		return fmt.Errorf("load container: %w", err)
 	}
 
 	task, err := container.Task(ctx, nil)

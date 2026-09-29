@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"time"
 )
 
@@ -10,14 +12,33 @@ import (
 // preview_deployments table with TTL support added in migration
 // 180_preview_ttl.sql (expires_at).
 
-const previewActiveStatuses = "('deploying', 'running', 'stopped', 'failed')"
+// previewLiveStatuses are exactly the statuses that hold a branch/PR slot and
+// consume an organisation permit — so they are also exactly the statuses the
+// reaper has to be able to expire. 'cleaned_up' and 'failed' release the slot.
+const previewLiveStatuses = "('deploying', 'running', 'stopped')"
+
+// defaultReapBatch bounds one reaper pass so a backlog cannot pin a goroutine
+// (or a connection) for minutes at a time.
+const defaultReapBatch = 200
 
 // SetPreviewDeploymentExpiresAt sets the TTL deadline for a preview row. A nil
-// deadline clears the deadline (no auto-destroy).
+// deadline clears the deadline (no auto-destroy). A row that is not there is an
+// error, not a success: the caller has to know whether the preview it just
+// created is reapable.
 func (s *Store) SetPreviewDeploymentExpiresAt(ctx context.Context, id string, expiresAt *time.Time) error {
-	_, err := s.db.Exec(ctx, `UPDATE preview_deployments SET expires_at = $2, updated_at = now() WHERE id = $1`, id, expiresAt)
-	return err
+	tag, err := s.db.Exec(ctx, `UPDATE preview_deployments SET expires_at = $2, updated_at = now() WHERE id = $1`, id, expiresAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrPreviewDeploymentNotFound
+	}
+	return nil
 }
+
+// ErrPreviewDeploymentNotFound is returned when a preview row the caller named
+// does not exist (anymore).
+var ErrPreviewDeploymentNotFound = errors.New("preview deployment not found")
 
 // ListPreviewDeploymentsWithExpiry returns every preview row including its
 // scheduled expiry timestamp, newest first.
@@ -48,22 +69,29 @@ func (s *Store) ListPreviewDeploymentsWithExpiry(ctx context.Context) ([]Preview
 	return result, rows.Err()
 }
 
-// CountActivePreviewDeploymentsForOrg counts live previews ("deploying",
-// "running", "stopped") that belong to repo_owner — the per-org lifecycle
-// limit guard (PREVIEW_MAX_PER_ORG).
+// CountActivePreviewDeploymentsForOrg counts live previews that belong to
+// repo_owner — the per-org lifecycle limit guard (PREVIEW_MAX_PER_ORG). The
+// owner is matched case-insensitively because service.Create deduplicates PRs
+// with EqualFold: a case-sensitive count would let "Acme" and "acme" each
+// accumulate a full quota.
 func (s *Store) CountActivePreviewDeploymentsForOrg(ctx context.Context, repoOwner string) (int, error) {
 	var count int
 	err := s.db.QueryRow(ctx, `
 		SELECT COUNT(*)
 		FROM preview_deployments
-		WHERE repo_owner = $1 AND status IN ('deploying', 'running', 'stopped')
+		WHERE lower(repo_owner) = lower($1) AND status IN `+previewLiveStatuses+`
 	`, repoOwner).Scan(&count)
 	return count, err
 }
 
-// ListExpiredPreviewDeployments returns live preview rows whose TTL has
-// elapsed. The reaper turns these into cleaned_up.
-func (s *Store) ListExpiredPreviewDeployments(ctx context.Context, before time.Time) ([]PreviewDeployment, error) {
+// ListExpiredPreviewDeployments returns up to limit live preview rows whose TTL
+// has elapsed, oldest deadline first. The reaper turns these into cleaned_up.
+// Every status that consumes a quota slot is reapable, otherwise a 'stopped'
+// preview would hold its org permit forever.
+func (s *Store) ListExpiredPreviewDeployments(ctx context.Context, before time.Time, limit int) ([]PreviewDeployment, error) {
+	if limit <= 0 {
+		limit = defaultReapBatch
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, server_id::text, service_id::text, pr_number,
 		       COALESCE(pr_title, ''), COALESCE(pr_url, ''), COALESCE(branch, ''),
@@ -72,9 +100,10 @@ func (s *Store) ListExpiredPreviewDeployments(ctx context.Context, before time.T
 		       source, COALESCE(unique_suffix, ''), COALESCE(is_isolated, true),
 		       created_by::text, created_at, updated_at, cleaned_at, expires_at
 		FROM preview_deployments
-		WHERE status IN ('deploying', 'running') AND expires_at IS NOT NULL AND expires_at < $1
+		WHERE status IN `+previewLiveStatuses+` AND expires_at IS NOT NULL AND expires_at < $1
 		ORDER BY expires_at ASC
-	`, before)
+		LIMIT $2
+	`, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -91,9 +120,12 @@ func (s *Store) ListExpiredPreviewDeployments(ctx context.Context, before time.T
 	return result, rows.Err()
 }
 
-// ListReapablePreviewDeployments returns cleaned_up rows whose cleanup is
-// older than before — the retention half of the reaper (row expiry).
-func (s *Store) ListReapablePreviewDeployments(ctx context.Context, before time.Time) ([]PreviewDeployment, error) {
+// ListReapablePreviewDeployments returns up to limit cleaned_up rows whose
+// cleanup is older than before — the retention half of the reaper (row expiry).
+func (s *Store) ListReapablePreviewDeployments(ctx context.Context, before time.Time, limit int) ([]PreviewDeployment, error) {
+	if limit <= 0 {
+		limit = defaultReapBatch
+	}
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, server_id::text, service_id::text, pr_number,
 		       COALESCE(pr_title, ''), COALESCE(pr_url, ''), COALESCE(branch, ''),
@@ -104,7 +136,8 @@ func (s *Store) ListReapablePreviewDeployments(ctx context.Context, before time.
 		FROM preview_deployments
 		WHERE status = 'cleaned_up' AND COALESCE(cleaned_at, updated_at) < $1
 		ORDER BY COALESCE(cleaned_at, updated_at) ASC
-	`, before)
+		LIMIT $2
+	`, before, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -125,6 +158,10 @@ func (s *Store) ListReapablePreviewDeployments(ctx context.Context, before time.
 // scanning the reverse label map (servers.docker_labels["git_source_id"]).
 // The reverse query is intentionally SQL-portable: labels are parsed in Go
 // instead of using JSONB operators, so postgres and sqlite behave alike.
+//
+// More than one server carrying the same git_source_id is an error, not a
+// coin flip: deploying a preview onto an arbitrary one of two hosts is exactly
+// the ambiguous targeting this codebase refuses to resolve implicitly.
 func (s *Store) FindServerIDByGitSource(ctx context.Context, gitSourceID string) (string, error) {
 	if s.db == nil || gitSourceID == "" {
 		return "", nil
@@ -135,6 +172,7 @@ func (s *Store) FindServerIDByGitSource(ctx context.Context, gitSourceID string)
 	}
 	defer rows.Close()
 
+	var matches []string
 	for rows.Next() {
 		var id, raw string
 		if err := rows.Scan(&id, &raw); err != nil {
@@ -145,10 +183,20 @@ func (s *Store) FindServerIDByGitSource(ctx context.Context, gitSourceID string)
 			continue
 		}
 		if labels["git_source_id"] == gitSourceID {
-			return id, nil
+			matches = append(matches, id)
 		}
 	}
-	return "", rows.Err()
+	if err := rows.Err(); err != nil {
+		return "", err
+	}
+	switch len(matches) {
+	case 0:
+		return "", nil
+	case 1:
+		return matches[0], nil
+	default:
+		return "", fmt.Errorf("%d servers declare git source %s; label the server that owns it before previewing", len(matches), gitSourceID)
+	}
 }
 
 func scanPreviewWithExpiry(rows interface{ Scan(dest ...any) error }) (PreviewDeployment, error) {

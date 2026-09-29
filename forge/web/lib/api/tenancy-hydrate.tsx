@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { ApiError } from "./http";
+import { queryKeys } from "./query-keys";
 import { fetchOrganizations, fetchProjects, fetchEnvironments } from "./tenancy";
 
 const TENANCY_STALE_TIME = 30_000;
@@ -24,11 +25,10 @@ export function TenancyHydrator() {
   const setError = useTenancyStore((s) => s.setError);
 
   const orgsQuery = useQuery({
-    queryKey: ["organizations"],
+    queryKey: queryKeys.tenancy.organizations(),
     queryFn: fetchOrganizations,
     staleTime: TENANCY_STALE_TIME,
     retry: false,
-    placeholderData: (prev) => prev,
   });
 
   useEffect(() => {
@@ -42,10 +42,10 @@ export function TenancyHydrator() {
       // Membership revoked (or never granted): drop every cached tenancy
       // subtree for the stale scope and clear the selection explicitly so
       // the UI cannot keep acting on an org the user can no longer access.
+      // removeQueries (not invalidateQueries): invalidation would refetch,
+      // hit 403 again and loop through this effect.
       if (isForbidden(orgsQuery.error)) {
-        void queryClient.invalidateQueries({ queryKey: ["organizations"] });
-        void queryClient.invalidateQueries({ queryKey: ["projects"] });
-        void queryClient.invalidateQueries({ queryKey: ["environments"] });
+        void queryClient.removeQueries({ queryKey: queryKeys.tenancy.all });
         setActiveOrg(null);
       }
       setError(orgsQuery.error instanceof Error ? orgsQuery.error.message : String(orgsQuery.error));
@@ -77,20 +77,18 @@ export function TenancyHydrator() {
   const activeOrg = useTenancyStore((s) => s.activeOrg);
 
   const projectsQuery = useQuery({
-    queryKey: ["projects", activeOrg?.id],
+    queryKey: queryKeys.tenancy.projects(activeOrg?.id ?? "none"),
     queryFn: () => fetchProjects(activeOrg!.id),
-    enabled: Boolean(activeOrg),
+    enabled: Boolean(activeOrg?.id),
     staleTime: TENANCY_STALE_TIME,
     retry: false,
-    placeholderData: (prev) => prev,
   });
 
   useEffect(() => {
     if (!activeOrg) return;
     if (projectsQuery.error) {
       if (isForbidden(projectsQuery.error)) {
-        void queryClient.invalidateQueries({ queryKey: ["projects", activeOrg.id] });
-        void queryClient.invalidateQueries({ queryKey: ["environments"] });
+        void queryClient.removeQueries({ queryKey: queryKeys.tenancy.all });
         setActiveOrg(null);
       }
       setError(projectsQuery.error instanceof Error ? projectsQuery.error.message : String(projectsQuery.error));
@@ -116,19 +114,18 @@ export function TenancyHydrator() {
   const activeProject = useTenancyStore((s) => s.activeProject);
 
   const envsQuery = useQuery({
-    queryKey: ["environments", activeProject?.id],
+    queryKey: queryKeys.tenancy.environments(activeProject?.id ?? "none"),
     queryFn: () => fetchEnvironments(activeProject!.id),
-    enabled: Boolean(activeProject),
+    enabled: Boolean(activeProject?.id),
     staleTime: TENANCY_STALE_TIME,
     retry: false,
-    placeholderData: (prev) => prev,
   });
 
   useEffect(() => {
     if (!activeProject) return;
     if (envsQuery.error) {
       if (isForbidden(envsQuery.error)) {
-        void queryClient.invalidateQueries({ queryKey: ["environments", activeProject.id] });
+        void queryClient.removeQueries({ queryKey: queryKeys.tenancy.all });
         setActiveProject(null);
       }
       setError(envsQuery.error instanceof Error ? envsQuery.error.message : String(envsQuery.error));

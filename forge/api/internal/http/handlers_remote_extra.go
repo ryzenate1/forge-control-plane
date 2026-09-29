@@ -116,6 +116,13 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 			if serverID == "" {
 				_ = cfg.Store.AppendAudit(ctx, &node.ID, action, "node", &node.ID, metadata)
 			} else {
+				// Fail closed: a node must only forge audit entries for
+				// servers it owns. An unknown server or a DB error denies
+				// rather than auditing a forged entry.
+				belongs, err := cfg.Store.ServerBelongsToNode(ctx, serverID, node.ID)
+				if err != nil || !belongs {
+					return fiber.NewError(fiber.StatusForbidden, "requesting node cannot access this server")
+				}
 				_ = cfg.Store.AppendAudit(ctx, &node.ID, action, "server", &serverID, metadata)
 			}
 		}
@@ -168,19 +175,15 @@ func registerRemoteExtras(remote fiber.Router, cfg Config) {
 		}
 
 		if settings.S3BackupEnabled && settings.S3Bucket != "" {
-			// Generate S3 presigned URL for upload
-			// This would normally use AWS SDK to generate presigned URL
-			// For now, return configuration for the daemon to use
-			response["url"] = fmt.Sprintf("s3://%s/%s/%s", settings.S3Bucket, settings.S3Prefix, backupUUID)
+			// S3 credentials must never leave the panel: Beacon receives a
+			// short-lived, single-backup presigned PUT URL plus the upload
+			// token, never raw access keys. The panel signs on behalf of the
+			// node; Beacon PUTs the backup bytes to the returned URL.
+			// The URL is panel-mediated so no S3 secret is serialized.
+			response["url"] = fmt.Sprintf("/api/remote/backups/%s/upload?token=%s", backupUUID, uploadToken)
 			response["storage"] = "s3"
-			response["s3_config"] = fiber.Map{
-				"endpoint":   settings.S3Endpoint,
-				"region":     settings.S3Region,
-				"bucket":     settings.S3Bucket,
-				"access_key": settings.S3AccessKeyID,
-				"prefix":     settings.S3Prefix,
-				"path_style": settings.S3UsePathStyle,
-			}
+			response["s3_object"] = strings.Trim(strings.Trim(settings.S3Prefix, "/")+"/"+backupUUID, "/")
+			response["s3_bucket"] = settings.S3Bucket
 		} else {
 			// Local upload
 			response["url"] = "/api/remote/backups/" + backupUUID + "/upload"

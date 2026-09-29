@@ -186,7 +186,7 @@ type Config struct {
 	NodeAutoscaler             *nodeautoscale.Service
 	CrashDetector              *crashdetector.Detector
 	DeploymentSvc              *deployment.Service
-	PreviewDeploymentSvc       previewDeploymentService
+	PreviewDeploymentSvc       *previewDeploymentService
 	CloudManager               *cloud.Manager
 	AcmeService                *acmesvc.Service
 	LoadBalancer               *loadbalancer.Service
@@ -339,8 +339,10 @@ var (
 	inMemLoginCount = map[string]int{}
 )
 
-// nodeHeartbeatNonces is a shared replay-protection cache for node heartbeat
-// requests. It mirrors the /api/remote HMAC nonce store.
+// nodeHeartbeatNonces is the replay-protection cache for node heartbeat
+// requests. It shares state across instances via Redis SETNX when NewServer
+// wires cfg.Redis (see remoteNonceStore); without Redis it degrades to a
+// per-process cache bounded by the timestamp skew window.
 var nodeHeartbeatNonces = newRemoteNonceStore()
 
 // verifyNodeTokenWithHMAC authenticates a v1 node-scoped request the way
@@ -984,7 +986,13 @@ func NewServer(cfg Config) *fiber.App {
 
 	// WebSocket ticket store (in-memory; tickets are short-lived and single-use).
 	wsTickets := newWSTicketStore(cfg)
-	fileDownloadTickets := newFileDownloadTicketStore()
+	fileDownloadTickets := newFileDownloadTicketStore(cfg)
+
+	// Share the HMAC nonce replay cache across instances when Redis is
+	// configured so a nonce consumed on one instance is rejected on every
+	// other (SETNX + expiry). Without Redis each instance keeps its own
+	// cache bounded by the timestamp skew window.
+	nodeHeartbeatNonces.setRedis(cfg.Redis, cfg.RedisEnabled)
 
 	// Services are fully constructed in main.go and injected via Config.
 	nodeRegistry := cfg.NodeRegistry
@@ -1145,15 +1153,39 @@ func NewServer(cfg Config) *fiber.App {
 		if err := c.BodyParser(&req); err != nil || strings.TrimSpace(req.Token) == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		// Redacted identifier for audit/logs: the token ID prefix only.
+		// The full token and the resulting node credential must never be
+		// logged, echoed, or stored in audit metadata.
+		redactedID := "unknown"
+		if id, _, ok := strings.Cut(strings.TrimSpace(req.Token), "."); ok && id != "" {
+			if len(id) > 8 {
+				redactedID = id[:8] + "..."
+			} else {
+				redactedID = id
+			}
+		}
+		clientIP := ExtractClientIP(c)
 		ctx, cancel := requestContext()
 		defer cancel()
 		nodeID, err := cfg.Store.ConsumeOnboardingToken(ctx, req.Token)
 		if err != nil {
+			_ = cfg.Store.AppendAudit(ctx, nil, "node.onboarding.exchange.failed", "node", nil, safeAuditMeta(map[string]string{"tokenId": redactedID, "ip": clientIP}))
+			if cfg.Logger != nil {
+				cfg.Logger.Warn("onboarding exchange failed", "tokenId", redactedID, "ip", clientIP)
+			}
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid or expired onboarding token")
 		}
 		credential, err := cfg.Store.GetNodeDaemonCredential(ctx, nodeID)
 		if err != nil {
+			_ = cfg.Store.AppendAudit(ctx, nil, "node.onboarding.exchange.failed", "node", &nodeID, safeAuditMeta(map[string]string{"tokenId": redactedID, "ip": clientIP}))
+			if cfg.Logger != nil {
+				cfg.Logger.Error("onboarding exchange credential unavailable", "nodeId", nodeID, "ip", clientIP)
+			}
 			return fiber.NewError(fiber.StatusInternalServerError, "node credential is unavailable")
+		}
+		_ = cfg.Store.AppendAudit(ctx, nil, "node.onboarding.exchange", "node", &nodeID, safeAuditMeta(map[string]string{"tokenId": redactedID, "ip": clientIP}))
+		if cfg.Logger != nil {
+			cfg.Logger.Info("onboarding exchange succeeded", "nodeId", nodeID, "ip", clientIP)
 		}
 		return c.JSON(fiber.Map{"nodeId": nodeID, "nodeToken": credential})
 	})
@@ -1207,13 +1239,16 @@ func NewServer(cfg Config) *fiber.App {
 		return c.JSON(cfg.Translator.AvailableLocales())
 	})
 
-	// Translation file endpoint — serves locale JSON for the frontend
+	// Translation file endpoint — serves locale JSON for the frontend.
+	// Single source of truth for the supported set is the `lang/*.json`
+	// catalog together with `supportedLocales` in
+	// `packages/shared-types/src/i18n.ts` (drift between the two fails
+	// `sync:locales:check`). This allowlist must match that set exactly:
+	// listing a locale here that has no catalog would serve the English
+	// fallback while reporting success for a translation that does not exist.
 	allowedLocales := map[string]bool{
 		"en": true, "de": true, "fr": true, "es": true, "pt": true,
-		"ru": true, "zh": true, "ja": true, "ko": true, "it": true,
-		"nl": true, "pl": true, "sv": true, "nb": true, "da": true,
-		"fi": true, "cs": true, "hu": true, "ro": true, "uk": true,
-		"tr": true, "ar": true, "th": true, "vi": true, "ms": true,
+		"ru": true, "zh": true, "ja": true,
 	}
 	v1.Get("/i18n/:locale", func(c *fiber.Ctx) error {
 		locale := c.Params("locale")
@@ -1276,12 +1311,13 @@ func NewServer(cfg Config) *fiber.App {
 			report := cfg.HealthService.RunAll(c.Context())
 			return c.JSON(report)
 		}
-		// Keep the diagnostics response shape stable even when monitoring has not
-		// been configured yet. The Monitoring Center can then distinguish an empty
-		// report from an unavailable endpoint without relying on mock data.
-		return c.JSON(health.HealthReport{
-			Status:    health.StatusOK,
-			OK:        true,
+		// Monitoring has not been configured: the endpoint is unavailable, not
+		// healthy. An empty OK report would claim health that was never
+		// measured; unknown is not zero, so answer 503 with an explicit
+		// unknown status.
+		return c.Status(fiber.StatusServiceUnavailable).JSON(health.HealthReport{
+			Status:    health.StatusUnknown,
+			OK:        false,
 			Service:   "api",
 			Checks:    []health.CheckResult{},
 			CheckedAt: time.Now(),
@@ -1730,13 +1766,17 @@ func NewServer(cfg Config) *fiber.App {
 		if err != nil {
 			recordLoginFailure(ctx, cfg, c, req.Email)
 			if err := cfg.Store.AppendAudit(ctx, nil, "login.failed", "user", nil, safeAuditMeta(map[string]string{"email": req.Email})); err != nil {
-				cfg.Logger.Error("audit append failed", "action", "login.failed", "error", err)
+				if cfg.Logger != nil {
+					cfg.Logger.Error("audit append failed", "action", "login.failed", "error", err)
+				}
 			}
 			return fiber.NewError(fiber.StatusUnauthorized, "invalid credentials")
 		}
 		clearLoginFailures(ctx, cfg, c, req.Email)
 		if err := cfg.Store.AppendAudit(ctx, &user.ID, "login.success", "user", &user.ID, "{}"); err != nil {
-			cfg.Logger.Error("audit append failed", "action", "login.success", "error", err)
+			if cfg.Logger != nil {
+				cfg.Logger.Error("audit append failed", "action", "login.success", "error", err)
+			}
 		}
 
 		if user.UseTOTP {
@@ -2071,13 +2111,15 @@ func NewServer(cfg Config) *fiber.App {
 		defer cancel()
 		var result store.SFTPAuthResult
 		var err error
-		switch body.Type {
-		case "", "password":
+		switch strings.TrimSpace(body.Type) {
+		case "password":
 			result, err = cfg.Store.AuthenticateSFTP(ctx, node.ID, body.Username, body.Password)
 		case "public_key":
 			result, err = cfg.Store.AuthenticateSFTPPublicKey(ctx, node.ID, body.Username, body.PublicKey)
 		case "check":
 			result, err = cfg.Store.AuthorizeSFTPSession(ctx, node.ID, body.User, body.Server)
+		case "":
+			return fiber.NewError(fiber.StatusBadRequest, "sftp authentication type is required")
 		default:
 			return fiber.NewError(fiber.StatusForbidden, "unsupported sftp authentication type")
 		}
@@ -2235,12 +2277,18 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		if body.ActualState != "" {
 			if err := cfg.Store.SetServerActualState(ctx, c.Params("id"), store.ServerActualState(body.ActualState), body.Status); err != nil {
-				cfg.Logger.Error("failed to set server actual state", "serverId", c.Params("id"), "error", err)
+				if cfg.Logger != nil {
+					cfg.Logger.Error("failed to set server actual state", "serverId", c.Params("id"), "error", err)
+				}
+				return respondInternalError(c, err)
 			}
 		}
 		if body.Status != "" {
 			if err := cfg.Store.SetServerStatus(ctx, c.Params("id"), body.Status, body.Error); err != nil {
-				cfg.Logger.Error("failed to set server status", "serverId", c.Params("id"), "error", err)
+				if cfg.Logger != nil {
+					cfg.Logger.Error("failed to set server status", "serverId", c.Params("id"), "error", err)
+				}
+				return respondInternalError(c, err)
 			}
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -2268,7 +2316,9 @@ func NewServer(cfg Config) *fiber.App {
 		}
 		serverID := c.Params("id")
 		if err := cfg.Store.AppendAudit(ctx, nil, body.Action, "server", &serverID, body.Metadata); err != nil {
-			cfg.Logger.Error("audit append failed", "action", body.Action, "error", err)
+			if cfg.Logger != nil {
+				cfg.Logger.Error("audit append failed", "action", body.Action, "error", err)
+			}
 		}
 		return c.SendStatus(fiber.StatusNoContent)
 	})
@@ -2367,9 +2417,16 @@ func NewServer(cfg Config) *fiber.App {
 		// Accept both camelCase (the panel-facing twin) and snake_case (the
 		// daemon's convention) for the process type; it is required because a
 		// probe that names no process type cannot be attributed to a release.
-		processType := strings.TrimSpace(body.ProcessType)
+		// When both spellings are present they must agree — silently picking
+		// one would attribute the probe to a process the sender did not name.
+		camel := strings.TrimSpace(body.ProcessType)
+		snake := strings.TrimSpace(body.ProcessType2)
+		if camel != "" && snake != "" && camel != snake {
+			return fiber.NewError(fiber.StatusBadRequest, "conflicting processType and process_type values")
+		}
+		processType := camel
 		if processType == "" {
-			processType = strings.TrimSpace(body.ProcessType2)
+			processType = snake
 		}
 		if processType == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "processType is required")
@@ -2473,11 +2530,13 @@ func NewServer(cfg Config) *fiber.App {
 		if r := c.Route(); r != nil {
 			routePath = r.Path
 		}
+		actCtx, actCancel := requestContext()
+		defer actCancel()
 		_ = cfg.ActivityService.NewEvent("http:"+c.Method()+" "+routePath).
 			Actor(actorID, actorEmail, "user").
 			IP(ExtractClientIP(c)).
 			Description(c.Method()+" "+c.OriginalURL()).
-			Save(c.Context(), cfg.ActivityService)
+			Save(actCtx, cfg.ActivityService)
 		return herr
 	})
 
@@ -2563,7 +2622,9 @@ func NewServer(cfg Config) *fiber.App {
 			actorID = &claims.Sub
 		}
 		if err := cfg.Store.AppendAudit(ctx, actorID, "server:console.command", "server", &target.ServerID, safeAuditMeta(map[string]string{"command": body.Command})); err != nil {
-			cfg.Logger.Error("audit append failed", "action", "server:console.command", "error", err)
+			if cfg.Logger != nil {
+				cfg.Logger.Error("audit append failed", "action", "server:console.command", "error", err)
+			}
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -2643,7 +2704,7 @@ func NewServer(cfg Config) *fiber.App {
 	// admin-only registrar so /notifications/channels is the user-scoped list.
 	registerNotificationCrudRoutes(protected, cfg.NotificationRouter, mutationLimiter)
 	if cfg.EnhancedNotificationService != nil {
-		registerEnhancedNotificationRoutes(protected, cfg.EnhancedNotificationService, mutationLimiter)
+		registerEnhancedNotificationRoutes(protected, cfg, cfg.EnhancedNotificationService, mutationLimiter)
 	}
 	registerMailSettingsRoutes(protected, cfg, mutationLimiter, adminIPAccess)
 	registerSFTPRoutes(protected, cfg, mutationLimiter)
@@ -2699,7 +2760,11 @@ func NewServer(cfg Config) *fiber.App {
 	// App hosting routes (Application → Service model)
 	registerAppHostingRoutes(protected, cfg, cfg.AppHostingService, mutationLimiter)
 	registerProcedureRoutes(protected, cfg, cfg.ProcedureService, mutationLimiter)
-	registerPipelineRoutes(protected, cfg.PipelineService, mutationLimiter)
+	// Pipelines are served by the single validated phase5 surface
+	// (registerPhase5PipelineRoutes): it prefers cfg.PipelineService when
+	// main injects it and otherwise builds from the Postgres pool. The legacy
+	// registerPipelineRoutes duplicate is retired so /pipelines and
+	// /pipeline-runs have exactly one owner.
 
 	// Portainer-inspired container/image/network/volume administration
 	registerPortainerRoutes(protected, cfg, mutationLimiter, adminIPAccess)

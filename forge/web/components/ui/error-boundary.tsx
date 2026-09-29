@@ -32,10 +32,11 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     if (prevProps.resetKey !== this.props.resetKey && this.state.hasError) {
       this.setState({ hasError: false, error: null });
     }
-    if (prevProps.children !== this.props.children && this.state.hasError) {
-      // A new subtree is not the same failure — allow a retry via remount.
-      this.setState({ hasError: false, error: null });
-    }
+    // NOTE: a changed `children` identity alone must NOT clear the error. Every
+    // parent re-render produces new element identities, so resetting on that
+    // would dismiss a real failure on the next render after it was caught —
+    // masking the crash and inviting an error loop. Recovery is explicit:
+    // `resetKey` or the retry button below.
   }
 
   private retry = () => this.setState({ hasError: false, error: null });

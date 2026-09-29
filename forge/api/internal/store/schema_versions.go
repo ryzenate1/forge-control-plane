@@ -2,11 +2,12 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"sort"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -118,6 +119,9 @@ func (m *SchemaMigrator) Run(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("begin migration v%d: %w", mig.version, err)
 		}
+		// Deferred Rollback covers early returns and panics; explicit
+		// rollbacks below remain. Ignored after Commit.
+		defer func() { _ = tx.Rollback(ctx) }()
 
 		execWrapper := &pgxTxAdapter{tx: tx}
 		if err := mig.up(ctx, execWrapper); err != nil {
@@ -125,7 +129,17 @@ func (m *SchemaMigrator) Run(ctx context.Context) error {
 			return fmt.Errorf("run migration v%d (%s): %w", mig.version, mig.name, err)
 		}
 
-		checksum := fmt.Sprintf("v%d-%s-%s", mig.version, mig.name, uuid.NewString()[:8])
+		// Deterministic content hash, reconciled with the file-based
+		// schema_migrations runner (migrationContentHash in migration.go):
+		// sha256 over "v<version>:<name>". The previous random
+		// "v%d-%s-<uuid>" checksum made every checksum unique per host,
+		// so two hosts running the same migration recorded different
+		// checksums and no drift comparison could ever agree. This second
+		// system (schema_versions) is legacy — new migrations belong in
+		// forge/api/migrations with schema_migrations bookkeeping — but
+		// while it exists its checksums must be deterministic.
+		sum := sha256.Sum256([]byte(fmt.Sprintf("v%d:%s", mig.version, mig.name)))
+		checksum := hex.EncodeToString(sum[:])
 		if _, err := tx.Exec(ctx, `INSERT INTO schema_versions (version, name, checksum) VALUES ($1, $2, $3)`,
 			mig.version, mig.name, checksum); err != nil {
 			_ = tx.Rollback(ctx)
@@ -177,6 +191,8 @@ func (m *SchemaMigrator) Rollback(ctx context.Context, targetVersion int) error 
 		if err != nil {
 			return fmt.Errorf("begin rollback v%d: %w", v, err)
 		}
+		// Deferred Rollback covers early returns and panics. Ignored after Commit.
+		defer func() { _ = tx.Rollback(ctx) }()
 
 		execWrapper := &pgxTxAdapter{tx: tx}
 		if err := mig.down(ctx, execWrapper); err != nil {

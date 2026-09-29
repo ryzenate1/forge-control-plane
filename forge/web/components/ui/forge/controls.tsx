@@ -296,6 +296,7 @@ export function ForgeSwitch({
 }) {
   const switchId = React.useId();
   const labelId = `${switchId}-label`;
+  const inputId = id ?? switchId;
   const toggle = (
     <button
       aria-checked={checked}
@@ -306,14 +307,8 @@ export function ForgeSwitch({
         checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong"
       )}
       disabled={disabled}
-      id={id ?? switchId}
-      onClick={(event) => {
-        // The labelled wrapper below also toggles on click, so a click on the
-        // switch itself must not bubble — otherwise onChange fires twice and
-        // the switch appears stuck.
-        event.stopPropagation();
-        onChange(!checked);
-      }}
+      id={inputId}
+      onClick={() => onChange(!checked)}
       role="switch"
       type="button"
     >
@@ -330,13 +325,21 @@ export function ForgeSwitch({
     return <span className={className}>{toggle}</span>;
   }
 
+  // The label is associated via htmlFor so clicking the text forwards a single
+  // click to the button. There is deliberately no wrapper onClick: a wrapper
+  // handler plus the button handler fired onChange twice per click and the
+  // switch appeared stuck.
   return (
-    <div className={cn("flex cursor-pointer items-start gap-2.5", className)} onClick={disabled ? undefined : () => onChange(!checked)} role="presentation">
+    <div className={cn("flex items-start gap-2.5", className)}>
       {toggle}
-      <span className="min-w-0 space-y-0.5" id={label ? labelId : undefined}>
+      <label
+        className={cn("min-w-0 space-y-0.5", disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer")}
+        htmlFor={inputId}
+        id={labelId}
+      >
         {label ? <span className="block text-xs font-semibold text-text">{label}</span> : null}
         {description ? <span className="ui-hint block">{description}</span> : null}
-      </span>
+      </label>
     </div>
   );
 }

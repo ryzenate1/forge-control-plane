@@ -31,6 +31,10 @@ const (
 	// bodies legitimately take longer than an RPC. Callers opt in per
 	// operation via WithTimeout; everything else gets defaultTimeout.
 	longTransferTimeout = 15 * time.Minute
+	// createServerTimeout bounds container creation, which pulls images
+	// server-side and outlives an RPC budget. A caller context deadline
+	// still wins when it is earlier.
+	createServerTimeout = 5 * time.Minute
 	retryableStatuses   = "429,502,503,504"
 )
 
@@ -70,6 +74,10 @@ func jitter(d time.Duration) time.Duration {
 }
 
 type Client struct {
+	// Panel-to-Beacon commands are HTTP only: every method on this client
+	// issues a signed HTTP request to the node. WebSockets carry streams
+	// alone (console/stats/logs/install output, see WebSocketURL and the
+	// realtime proxy) and never commands.
 	httpClient       *http.Client
 	defaultBaseURL   string
 	defaultNodeToken string
@@ -552,7 +560,11 @@ func (c *Client) PushTransferSource(ctx context.Context, baseURL, migrationID, c
 	if err != nil {
 		return TransferMetadata{}, err
 	}
-	return c.transferJSON(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/transfers/"+migrationID+"/source/push", credential, body)
+	// The push copies the archive node-to-node server-side and outlives an
+	// RPC budget; it gets the streaming timeout, and its idempotency key is
+	// sent as a header so transport retries dedupe instead of duplicating
+	// the upload.
+	return c.transferJSONWithTimeout(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/transfers/"+migrationID+"/source/push", credential, body, longTransferTimeout, push.IdempotencyKey)
 }
 
 func (c *Client) RestoreTransferDestination(ctx context.Context, baseURL, migrationID, credential string) (TransferMetadata, error) {
@@ -575,6 +587,14 @@ func (c *Client) CancelTransfer(ctx context.Context, baseURL, migrationID, crede
 }
 
 func (c *Client) transferJSON(ctx context.Context, method, endpoint, credential string, body []byte) (TransferMetadata, error) {
+	return c.transferJSONWithTimeout(ctx, method, endpoint, credential, body, 0, "")
+}
+
+// transferJSONWithTimeout is transferJSON with an explicit HTTP budget and an
+// optional idempotency key. A zero timeout keeps the client's default RPC
+// budget; a non-empty key is sent as Idempotency-Key so the retry transport
+// may replay the request and the daemon may dedupe it.
+func (c *Client) transferJSONWithTimeout(ctx context.Context, method, endpoint, credential string, body []byte, timeout time.Duration, idempotencyKey string) (TransferMetadata, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
 		return TransferMetadata{}, err
@@ -584,7 +604,14 @@ func (c *Client) transferJSON(ctx context.Context, method, endpoint, credential 
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := c.httpClient.Do(request)
+	if strings.TrimSpace(idempotencyKey) != "" {
+		request.Header.Set("Idempotency-Key", strings.TrimSpace(idempotencyKey))
+	}
+	client := c.httpClient
+	if timeout > 0 {
+		client = c.WithTimeout(timeout).httpClient
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return TransferMetadata{}, err
 	}
@@ -685,8 +712,18 @@ func (c *Client) CreateServer(ctx context.Context, baseURL, nodeToken string, re
 	if err != nil {
 		return CreateResponse{}, err
 	}
+	// The caller's command ID is the idempotency key for this creation, the
+	// same way SendPower keys power commands. Replaying a keyless create
+	// after a transport blip would provision the container twice, so the key
+	// both enables transport retries and lets the daemon dedupe.
+	if commandID := commandIDFromContext(ctx); commandID != "" {
+		req.Header.Set("X-Forge-Command-ID", commandID)
+		req.Header.Set("Idempotency-Key", commandID)
+	}
 
-	res, err := c.httpClient.Do(req)
+	// Creation includes image pull server-side and outlives an RPC budget.
+	// A caller context deadline still wins when it is earlier.
+	res, err := c.WithTimeout(createServerTimeout).httpClient.Do(req)
 	if err != nil {
 		return CreateResponse{}, err
 	}
@@ -1269,6 +1306,10 @@ func (c *Client) RenameFile(ctx context.Context, baseURL, nodeToken, serverID, f
 }
 
 func (c *Client) WebSocketURL(baseURL, serverID, stream string) (string, string) {
+	// Stream URLs only. Commands are never sent over these sockets: the panel
+	// issues every Beacon command over HTTP (see the methods above), and the
+	// realtime proxy discards client frames on output-only streams rather
+	// than forwarding them upstream as commands.
 	// Beacon canonical for install is /servers/{id}/install/ws; panel normalizes
 	// to /ws/install but both are proxied via realtimeProxy(stream=install).
 	path := "/servers/" + serverID + "/ws/" + stream

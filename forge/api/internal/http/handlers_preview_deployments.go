@@ -17,22 +17,15 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// previewDeploymentService is the contract the preview-deployment admin API
-// needs. It is satisfied by the real services/previewenv implementation (which
-// derives per-PR URLs, provisions TLS/routing and reports commit status) so the
-// endpoint is backed by a genuine lifecycle rather than a stub that only flips
-// status and fabricates URLs.
-type previewDeploymentService interface {
-	ListAll(ctx context.Context) ([]store.PreviewDeployment, error)
-	Get(ctx context.Context, id string) (*store.PreviewDeployment, error)
-	Create(ctx context.Context, serverID string, req *store.PreviewDeployment) (*store.PreviewDeployment, error)
-	Deploy(ctx context.Context, id string) error
-	Cleanup(ctx context.Context, id string) error
-	UpdateStatus(ctx context.Context, id string, status string) error
-	List(ctx context.Context, serverID string) ([]store.PreviewDeployment, error)
-}
+// previewDeploymentService is the concrete preview lifecycle backing the
+// admin preview-deployment API (services/previewenv, which derives per-PR
+// URLs, provisions TLS/routing and reports commit status). The handler takes
+// the concrete type — not a local interface — so Config holds the single
+// *previewenv.Service pointer main wires (see PreviewEnvService /
+// PreviewDeploymentSvc) and layering stays handler -> service -> store.
+type previewDeploymentService = previewenv.Service
 
-func registerPreviewDeploymentRoutes(protected fiber.Router, cfg Config, svc previewDeploymentService, adminIPAccess, mutationLimiter fiber.Handler) {
+func registerPreviewDeploymentRoutes(protected fiber.Router, cfg Config, svc *previewDeploymentService, adminIPAccess, mutationLimiter fiber.Handler) {
 	if svc == nil {
 		return
 	}
@@ -157,25 +150,30 @@ func init() {
 // registerPreviewEnvironmentRoutes wires /api/v1/projects/:id/previews and the
 // public /api/v1/webhooks/preview endpoint. It is fully additive: without a
 // Postgres pool the routes are skipped (and therefore 404) rather than served
-// from a fake store.
+// from a fake store. Layering: handler -> previewenv.Service -> store; the
+// service is injected via Config.PreviewEnvService when main wires it, and
+// only built inline here as a dev/test fallback.
 func registerPreviewEnvironmentRoutes(v1 fiber.Router, protected fiber.Router, cfg *Config) error {
 	if cfg.Store == nil || cfg.Store.DB() == nil {
 		return fmt.Errorf("%w: no postgres pool, project preview routes not mounted", ErrPhaseSkipped)
 	}
 
-	svc := previewenv.New(cfg.Store, previewenv.Options{
-		PreviewDomain:         previewEnvironmentDomain(),
-		PreviewTTL:            previewEnvironmentTTL(),
-		MaxPreviewsPerProject: previewEnvironmentMaxPerProject(),
-		Compose:               cfg.ComposeService,
-		Logger:                cfg.Logger,
-		GitService:            cfg.GitService,
-		AcmeService:           cfg.AcmeService,
-		TrafficMgr:            cfg.TrafficManager,
-		DomainSvc:             cfg.DomainService,
-		PanelURL:              cfg.PanelURL,
-		BackgroundContext:     cfg.BackgroundContext,
-	})
+	svc := cfg.PreviewEnvService
+	if svc == nil {
+		svc = previewenv.New(cfg.Store, previewenv.Options{
+			PreviewDomain:         previewEnvironmentDomain(),
+			PreviewTTL:            previewEnvironmentTTL(),
+			MaxPreviewsPerProject: previewEnvironmentMaxPerProject(),
+			Compose:               cfg.ComposeService,
+			Logger:                cfg.Logger,
+			GitService:            cfg.GitService,
+			AcmeService:           cfg.AcmeService,
+			TrafficMgr:            cfg.TrafficManager,
+			DomainSvc:             cfg.DomainService,
+			PanelURL:              cfg.PanelURL,
+			BackgroundContext:     cfg.BackgroundContext,
+		})
+	}
 	if svc == nil {
 		return fmt.Errorf("%w: preview service unavailable, routes not mounted", ErrPhaseSkipped)
 	}
@@ -361,11 +359,31 @@ func previewEnvironmentWebhookHandler(svc *previewenv.Service) fiber.Handler {
 				"cannot identify the provider from the request headers; send X-GitHub-Event/X-Hub-Signature-256 or X-Gitlab-Token")
 		}
 		projectID := strings.TrimSpace(c.Params("projectId", c.Query("projectId")))
-		if projectID == "" {
-			projectID = strings.TrimSpace(c.Get("X-Forge-Project"))
+		headerProject := strings.TrimSpace(c.Get("X-Forge-Project"))
+		bodyProject := strings.TrimSpace(previewWebhookBodyProject(body))
+		// The project may arrive via path, query, header, or body, but when
+		// more than one source names a project they must agree. Silently
+		// preferring one would verify the signature against the wrong
+		// project's secret and attribute the preview to the wrong project.
+		candidates := map[string]bool{}
+		for _, cand := range []string{projectID, headerProject, bodyProject} {
+			if cand != "" {
+				candidates[cand] = true
+			}
+		}
+		// c.Params with a fallback already merges path+query; check the raw
+		// query value separately so a path/query mismatch is also caught.
+		if rawQuery := strings.TrimSpace(c.Query("projectId")); rawQuery != "" {
+			candidates[rawQuery] = true
+		}
+		if len(candidates) > 1 {
+			return fiber.NewError(fiber.StatusBadRequest, "conflicting project identifiers in preview webhook request")
 		}
 		if projectID == "" {
-			projectID = previewWebhookBodyProject(body)
+			projectID = headerProject
+		}
+		if projectID == "" {
+			projectID = bodyProject
 		}
 		if projectID == "" {
 			return fiber.NewError(fiber.StatusBadRequest,

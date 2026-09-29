@@ -57,8 +57,11 @@ groups:
 
       - alert: PostgresBackupStale
         # postgres-backup pushes backup_last_success_seconds to the
-        # pushgateway after each successful dump (see postgres-backup.sh).
+        # pushgateway sidecar (PUSHGATEWAY_URL=http://pushgateway:9091, see
+        # compose.yml + prometheus.yml `pushgateway` job) after each
+        # successful dump (see postgres-backup.sh).
         # Fires when no successful backup has been recorded for 36h.
+        # absent() guards the first-boot window before the initial push.
         expr: (time() - backup_last_success_seconds) > 129600
         for: 30m
         labels:
@@ -67,15 +70,22 @@ groups:
           summary: "PostgreSQL backups are stale"
           description: "No successful backup in 36h. See docs/restore-runbook.md."
 
-      - alert: TlsCertExpiringSoon
-        # Fires when any Caddy-managed certificate expires within 7 days.
-        expr: (caddy_tls_certificate_expiration_seconds - time()) < 604800
-        for: 1h
+      - alert: PostgresBackupNeverReported
+        # Covers the never-backed-up case: the Stale rule above is empty
+        # (never fires) until the first successful push creates the series.
+        expr: absent(backup_last_success_seconds) == 1
+        for: 36h
         labels:
           severity: warning
         annotations:
-          summary: "TLS certificate expiring soon"
-          description: "A TLS certificate expires in <7d. Check Caddy/ACME renewal."
+          summary: "No PostgreSQL backup has ever succeeded"
+          description: "backup_last_success_seconds absent for 36h. Check postgres-backup logs and S3 offload."
+
+      # NOTE: no TlsCertExpiringSoon alert: the Caddy admin API is
+      # loopback-only by design (unauthenticated config API) and is not
+      # scrapable from Prometheus, so caddy_tls_certificate_expiration_seconds
+      # is never present. Monitor certificate expiry at the edge (ACME mail /
+      # external blackbox) instead of adding a rule that can never fire.
 
       - alert: ApiHigh5xxRate
         expr: sum(rate(http_requests_total{job="api", status=~"5.."}[5m])) / sum(rate(http_requests_total{job="api"}[5m])) > 0.05
@@ -87,8 +97,8 @@ groups:
           description: "More than 5% of API responses are 5xx over the last 5m."
 
       - alert: DiskSpaceLow
-        # Requires node-exporter (add the job to prometheus.yml when the
-        # exporter is deployed). Kept here so the rule exists before it fires.
+        # Served by the node-exporter sidecar (prometheus.yml `node-exporter`
+        # job, compose.yml `node-exporter` service).
         expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
         for: 10m
         labels:

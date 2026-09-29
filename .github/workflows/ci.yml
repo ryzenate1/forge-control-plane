@@ -29,6 +29,13 @@ jobs:
           go-version-file: forge/api/go.mod
           cache-dependency-path: forge/api/go.sum
 
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.1.6
+          working-directory: forge/api
+          args: --timeout=5m
+
       - name: Build
         run: go build ./...
 
@@ -49,6 +56,18 @@ jobs:
       # docs/migration-rollback-policy.md documented it as a wired guard.
       - name: Validate migrations
         run: bash scripts/test/validate_migrations.sh
+
+      - name: Verify migration count docs
+        run: |
+          count=$(ls forge/api/migrations/*.sql | wc -l | tr -d ' ')
+          echo "migration files: $count"
+          echo "migration_count=$count" >> "$GITHUB_OUTPUT"
+          # Fail closed if the documented count drifted; update
+          # docs/migration-rollback-policy.md and AGENTS.md to match.
+          if ! grep -q "$count migrations" docs/migration-rollback-policy.md; then
+            echo "::error::docs/migration-rollback-policy.md count does not mention $count migrations"
+            exit 1
+          fi
 
   forge-api-integration:
     name: forge/api (Go, PostgreSQL)
@@ -107,6 +126,13 @@ jobs:
         with:
           go-version-file: beacon/go.mod
           cache-dependency-path: beacon/go.sum
+
+      - name: Lint (golangci-lint)
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: v2.1.6
+          working-directory: beacon
+          args: --timeout=5m
 
       - name: Build
         run: go build ./...

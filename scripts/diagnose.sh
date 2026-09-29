@@ -21,6 +21,8 @@ REDIS_PORT="${REDIS_PORT:-6379}"
 DB_USER="${DB_USER:-gamepanel}"
 DB_NAME="${DB_NAME:-gamepanel}"
 DB_PASS="${DB_PASS:-${POSTGRES_PASSWORD:-gamepanel}}"
+# Diagnostic login account: override via environment in CI/prod. Defaults are
+# dev-only placeholders and must never be real credentials.
 DIAG_EMAIL="${DIAG_EMAIL:-admin@example.com}"
 DIAG_PASSWORD="${DIAG_PASSWORD:-admin123}"
 export PGPASSWORD="$DB_PASS"
@@ -117,8 +119,9 @@ LOGIN_RESPONSE=$(curl -s -X POST "http://localhost:${API_PORT}/api/v1/auth/login
 
 if echo "$LOGIN_RESPONSE" | grep -q "token"; then
     printf "${GREEN}✓ Working${NC}\n"
+    # Token withheld: never print session credentials to the console or logs.
+    echo "   Login succeeded (token withheld from output)"
     TOKEN=$(echo "$LOGIN_RESPONSE" | grep -o '"token":"[^"]*' | cut -d'"' -f4)
-    echo "   Token: ${TOKEN:0:50}..."
 
     # Test authenticated endpoint
     echo -n "Authenticated request: "

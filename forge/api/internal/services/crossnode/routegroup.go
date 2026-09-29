@@ -71,13 +71,11 @@ func GroupRulesByRoute(rules []*trafficmanager.RoutingRule) map[RouteKey]*RouteG
 	return groups
 }
 
-// UniqueBackends collapses the group's rules into one backend per host:port.
-//
-// Several rules may name the same backend with different weights; the weights
-// are summed instead of resolved by "whichever rule came first", because rules
-// reach this package through a Go map and the first one visited is not stable
-// across syncs. A non-positive weight counts as 1 so an unconfigured rule keeps
-// the smallest schedulable share instead of a zero that would make it dead.
+// UniqueBackends collapses the group's rules into one backend per host:port and
+// sums weights, so the (host, port) sorted result is identical for the same rule
+// set in any order. A non-positive weight counts as 1. A rule with no TargetHost
+// contributes no backend: an unknown address must surface as a missing backend,
+// never as a routable-looking one.
 func (g *RouteGroup) UniqueBackends() []BackendAddr {
 	index := make(map[string]int, len(g.Rules))
 	var backends []BackendAddr
@@ -85,7 +83,7 @@ func (g *RouteGroup) UniqueBackends() []BackendAddr {
 	for _, rule := range g.Rules {
 		host := rule.TargetHost
 		if host == "" {
-			host = "localhost"
+			continue
 		}
 		weight := rule.Weight
 		if weight <= 0 {
@@ -124,46 +122,26 @@ func (g *RouteGroup) HasWebSocket() bool {
 	return false
 }
 
-// Strategy returns the group's effective strategy: the first non-default
-// strategy in rule-ID order, or round_robin when no rule asks for one. If the
-// group mixes more than one non-default strategy the earliest rule wins here
-// and StrategyConflict reports the losers, so callers never see a silent
-// precedence.
+// Strategy returns the group's effective strategy: the lexicographically
+// smallest non-default strategy any rule asks for, or round_robin when none
+// does. Sorting the candidates, rather than taking the first rule's, is what
+// keeps the answer stable when a group's rules disagree.
 func (g *RouteGroup) Strategy() string {
+	var candidates []string
 	for _, rule := range g.Rules {
 		if rule.Strategy != "" && rule.Strategy != defaultStrategy {
-			return rule.Strategy
+			candidates = append(candidates, rule.Strategy)
 		}
 	}
-	return defaultStrategy
-}
-
-// StrategyConflict reports whether the group's rules disagree on strategy.
-// The string is the strategies that lost to Strategy()'s choice, joined for
-// display; the bool is true only when such a conflict exists.
-func (g *RouteGroup) StrategyConflict() (string, bool) {
-	seen := make(map[string]bool, len(g.Rules))
-	for _, rule := range g.Rules {
-		if rule.Strategy != "" && rule.Strategy != defaultStrategy {
-			seen[rule.Strategy] = true
-		}
+	if len(candidates) == 0 {
+		return defaultStrategy
 	}
-	winner := g.Strategy()
-	var losers []string
-	for strategy := range seen {
-		if strategy != winner {
-			losers = append(losers, strategy)
-		}
-	}
-	if len(losers) == 0 {
-		return "", false
-	}
-	sort.Strings(losers)
-	return strings.Join(losers, ", "), true
+	sort.Strings(candidates)
+	return candidates[0]
 }
 
 // ServiceIDs returns the distinct server IDs referenced by the group's rules,
-// in first-by-rule-ID order.
+// sorted so the displayed list does not shuffle between syncs.
 func (g *RouteGroup) ServiceIDs() []string {
 	seen := make(map[string]bool)
 	var ids []string
@@ -173,6 +151,7 @@ func (g *RouteGroup) ServiceIDs() []string {
 			ids = append(ids, rule.ServerID)
 		}
 	}
+	sort.Strings(ids)
 	return ids
 }
 
@@ -199,10 +178,27 @@ func BuildRouteGenerationRecords(groups map[RouteKey]*RouteGroup) []RouteGenerat
 	for key, grp := range groups {
 		backends := grp.UniqueBackends()
 		ruleIDs := make([]string, len(grp.Rules))
+		alternatives := make(map[string]bool)
 		for i, r := range grp.Rules {
 			ruleIDs[i] = r.ID
+			if r.Strategy != "" && r.Strategy != defaultStrategy {
+				alternatives[r.Strategy] = true
+			}
 		}
-		conflict, _ := grp.StrategyConflict()
+		sort.Strings(ruleIDs)
+
+		strategy := grp.Strategy()
+		delete(alternatives, strategy)
+		var conflict string
+		if len(alternatives) > 0 {
+			losers := make([]string, 0, len(alternatives))
+			for s := range alternatives {
+				losers = append(losers, s)
+			}
+			sort.Strings(losers)
+			conflict = strings.Join(losers, ", ")
+		}
+
 		records = append(records, RouteGenerationRecord{
 			RouteKey:         key,
 			GroupID:          groupID(key),
@@ -210,7 +206,7 @@ func BuildRouteGenerationRecords(groups map[RouteKey]*RouteGroup) []RouteGenerat
 			ServerIDs:        grp.ServiceIDs(),
 			BackendCount:     len(backends),
 			HasWebSocket:     grp.HasWebSocket(),
-			Strategy:         grp.Strategy(),
+			Strategy:         strategy,
 			StrategyConflict: conflict,
 		})
 	}

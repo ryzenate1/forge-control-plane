@@ -10,7 +10,7 @@ import (
 
 func TestNotificationWebSocketRequiresUpgrade(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Get("/notifications/ws", handleNotificationWebSocket(nil))
+	app.Get("/notifications/ws", handleNotificationWebSocket(Config{}, nil))
 	req := httptest.NewRequest(http.MethodGet, "/notifications/ws", nil)
 	res, err := app.Test(req)
 	if err != nil {

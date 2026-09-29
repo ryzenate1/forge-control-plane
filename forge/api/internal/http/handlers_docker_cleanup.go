@@ -133,6 +133,12 @@ func registerDockerCleanupRoutesOn(admin fiber.Router, cfg Config, svc *dockerle
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		if strings.TrimSpace(req.NodeID) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "nodeId is required")
+		}
+		if len(req.ImageIDs) == 0 {
+			return fiber.NewError(fiber.StatusBadRequest, "at least one image id is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		res, err := svc.PruneImages(ctx, req.NodeID, req.ImageIDs)
@@ -250,17 +256,20 @@ func registerDockerCleanupRoutesOn(admin fiber.Router, cfg Config, svc *dockerle
 
 	admin.Post("/policies/:id/run-now", mutationLimiter, requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
 		id := c.Params("id")
+		if strings.TrimSpace(id) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "policy id is required")
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		policy, err := svc.RunPolicyNow(ctx, id)
-		if policy != nil {
-			recordAudit(cfg, c, "docker:cleanup-policy-run", "policy", &id, nil)
-			return c.JSON(policy)
-		}
 		if err != nil {
 			return dockerCleanupError(c, err)
 		}
-		return respondInternalError(c, errors.New("docker cleanup: policy run produced no result"))
+		if policy == nil {
+			return respondInternalError(c, errors.New("docker cleanup: policy run produced no result"))
+		}
+		recordAudit(cfg, c, "docker:cleanup-policy-run", "policy", &id, nil)
+		return c.JSON(policy)
 	})
 }
 

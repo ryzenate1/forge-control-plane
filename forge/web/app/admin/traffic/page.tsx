@@ -68,7 +68,7 @@ export default function AdminTrafficPage() {
 
   const policiesQuery = useQuery({
     queryKey: ["admin", "traffic", "policies"],
-    queryFn: () => fetchJSON<TrafficPolicy[]>("/admin/traffic/policies"),
+    queryFn: async () => unwrapList(await fetchJSON<TrafficPolicy[]>("/admin/traffic/policies")),
   });
 
   const routes = useMemo(() => routesQuery.data ?? [], [routesQuery.data]);

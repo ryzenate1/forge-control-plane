@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import {
-  cloneElement, forwardRef, isValidElement, useId, useState,
+  cloneElement, forwardRef, Fragment, isValidElement, useId, useState,
   type ButtonHTMLAttributes, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes, type TextareaHTMLAttributes,
 } from "react";
 import { cn } from "@/lib/utils";
@@ -96,8 +96,11 @@ export function Alert({ tone = "info", title, children, actions, className }: { 
 }
 
 export function Card({ title, description, icon, badge, children, className, contentClassName }: { title?: string; description?: string; icon?: ReactNode; badge?: ReactNode; children: ReactNode; className?: string; contentClassName?: string }) {
+  // NOTE: the section is `ui-surface`, not `ui-card` — `ui-card` already
+  // carries p-4/sm:p-5, and the content slot below adds its own padding, so
+  // combining them doubled every inset. Header/content own their padding here.
   return (
-    <section className={cn("ui-card", className)}>
+    <section className={cn("ui-surface shadow-card", className)}>
       {title ? (
         <div className="ui-card-header">
           <div className="flex min-w-0 items-start gap-3">
@@ -177,13 +180,25 @@ export function SearchInput({ label = "Search", className, ...props }: InputHTML
   );
 }
 
-export function Switch({ checked, onCheckedChange, label, disabled = false }: { checked: boolean; onCheckedChange: (checked: boolean) => void; label: ReactNode; disabled?: boolean }) {
+/**
+ * Legacy switch. Kept for the two admin call sites that pass
+ * `onCheckedChange`; new code must use `ForgeSwitch` from
+ * `@/components/ui/forge`, which is the single switch implementation.
+ *
+ * Both `onChange` and the legacy `onCheckedChange` are accepted so call sites
+ * can migrate to the `ForgeSwitch` prop naming (`onChange`) without a flag
+ * day; when both are given `onChange` wins.
+ *
+ * @deprecated Use `ForgeSwitch` (`@/components/ui/forge`) for new code.
+ */
+export function Switch({ checked, onCheckedChange, onChange, label, disabled = false }: { checked: boolean; onCheckedChange?: (checked: boolean) => void; onChange?: (checked: boolean) => void; label: ReactNode; disabled?: boolean }) {
   const id = useId();
   const labelId = `${id}-label`;
+  const handleChange = onChange ?? onCheckedChange ?? (() => undefined);
   return (
     <div className={cn("inline-flex items-center gap-2.5 text-xs", disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer")}>
       <span className="t-eyebrow text-text-subtle" id={labelId}>{label}</span>
-      <button aria-checked={checked} aria-labelledby={labelId} className={cn("relative h-5 w-9 rounded-full border transition-colors", checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong")} disabled={disabled} id={id} onClick={() => onCheckedChange(!checked)} role="switch" type="button">
+      <button aria-checked={checked} aria-labelledby={labelId} className={cn("relative h-5 w-9 rounded-full border transition-colors", checked ? "border-transparent bg-brand" : "border-line bg-overlay-strong")} disabled={disabled} id={id} onClick={() => handleChange(!checked)} role="switch" type="button">
         <span className={cn("absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow transition-transform", checked && "translate-x-4")} />
       </button>
     </div>
@@ -331,6 +346,10 @@ export function Dialog({ open, title, description, children, closeAction, classN
 export function ConfirmDialog({ open, title, description, confirmLabel = "Confirm", destructive = false, loading = false, closeAction, confirmAction }: {
   open: boolean; title: string; description: string; confirmLabel?: string; destructive?: boolean; loading?: boolean; closeAction: () => void; confirmAction: () => void;
 }) {
+  // While the mutation is in flight the dialog must stay put: Escape and
+  // backdrop clicks are disabled so the operator cannot orphan a pending
+  // mutation and double-submit on retry (mirrors ForgeConfirmDialog).
+  const dismiss = loading ? () => undefined : closeAction;
   return (
     <ForgeDialog
       description={description}
@@ -340,9 +359,11 @@ export function ConfirmDialog({ open, title, description, confirmLabel = "Confir
           <Button loading={loading} onClick={confirmAction} variant={destructive ? "danger" : "primary"}>{confirmLabel}</Button>
         </>
       }
-      onClose={closeAction}
+      hideClose={loading}
+      onClose={dismiss}
       open={open}
       size="sm"
+      static={loading}
       title={title}
     />
   );

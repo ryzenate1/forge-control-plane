@@ -1,34 +1,47 @@
 package http
 
 import (
+	"errors"
+
 	"github.com/gofiber/fiber/v2"
+
+	nomadsvc "gamepanel/forge/internal/services/nomad"
 )
 
 func registerNomadRoutes(protected fiber.Router, cfg Config, adminIPAccess fiber.Handler) {
 	nm := protected.Group("/admin/nomad", adminIPAccess)
-	nm.Get("/jobs", requireRole("admin"), func(c *fiber.Ctx) error { return nomadListJobs(c, cfg) })
-	nm.Post("/jobs", requireRole("admin"), func(c *fiber.Ctx) error { return nomadSubmitJob(c, cfg) })
-	nm.Get("/jobs/:id", requireRole("admin"), func(c *fiber.Ctx) error { return nomadGetJob(c, cfg) })
-	nm.Post("/jobs/:id/stop", requireRole("admin"), func(c *fiber.Ctx) error { return nomadStopJob(c, cfg) })
-	nm.Get("/allocations", requireRole("admin"), func(c *fiber.Ctx) error { return nomadListAllocations(c, cfg) })
-	nm.Post("/allocations/:id/promote", requireRole("admin"), func(c *fiber.Ctx) error { return nomadPromoteAllocation(c, cfg) })
-	nm.Get("/nodes", requireRole("admin"), func(c *fiber.Ctx) error { return nomadListNodes(c, cfg) })
-	nm.Get("/nodes/:id", requireRole("admin"), func(c *fiber.Ctx) error { return nomadGetNode(c, cfg) })
-	nm.Post("/nodes/:id/drain", requireRole("admin"), func(c *fiber.Ctx) error { return nomadDrainNode(c, cfg) })
-	nm.Get("/deployments", requireRole("admin"), func(c *fiber.Ctx) error { return nomadListDeployments(c, cfg) })
-	nm.Get("/deployments/:id", requireRole("admin"), func(c *fiber.Ctx) error { return nomadGetDeployment(c, cfg) })
+	nm.Get("/jobs", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListJobs(c, cfg) })
+	nm.Post("/jobs", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadSubmitJob(c, cfg) })
+	nm.Get("/jobs/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetJob(c, cfg) })
+	nm.Post("/jobs/:id/stop", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadStopJob(c, cfg) })
+	nm.Get("/allocations", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListAllocations(c, cfg) })
+	nm.Post("/allocations/:id/promote", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadPromoteAllocation(c, cfg) })
+	nm.Get("/nodes", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListNodes(c, cfg) })
+	nm.Get("/nodes/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetNode(c, cfg) })
+	nm.Post("/nodes/:id/drain", requireRole("admin"), requireAdminScope("nomad.write"), func(c *fiber.Ctx) error { return nomadDrainNode(c, cfg) })
+	nm.Get("/deployments", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadListDeployments(c, cfg) })
+	nm.Get("/deployments/:id", requireRole("admin"), requireAdminScope("nomad.read"), func(c *fiber.Ctx) error { return nomadGetDeployment(c, cfg) })
+}
+
+// nomadError answers 503 when Forge Orchestration is not configured and 502 for
+// upstream Nomad control-plane faults.
+func nomadError(err error) error {
+	if errors.Is(err, nomadsvc.ErrNotConfigured) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+	}
+	return fiber.NewError(fiber.StatusBadGateway, err.Error())
 }
 
 func nomadListJobs(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	ctx, cancel := longRequestContext()
 	defer cancel()
 	jobs, err := svc.ListJobs(ctx, c.Query("namespace"))
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"jobs": jobs})
 }
@@ -36,7 +49,7 @@ func nomadListJobs(c *fiber.Ctx, cfg Config) error {
 func nomadSubmitJob(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	var spec map[string]any
 	if err := c.BodyParser(&spec); err != nil {
@@ -49,7 +62,7 @@ func nomadSubmitJob(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	job, err := svc.SubmitJob(ctx, spec)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"ok": true, "job": job})
 }
@@ -57,7 +70,7 @@ func nomadSubmitJob(c *fiber.Ctx, cfg Config) error {
 func nomadGetJob(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -67,7 +80,7 @@ func nomadGetJob(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	job, err := svc.GetJobStatus(ctx, id)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(job)
 }
@@ -75,7 +88,7 @@ func nomadGetJob(c *fiber.Ctx, cfg Config) error {
 func nomadStopJob(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -86,7 +99,7 @@ func nomadStopJob(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	evalID, err := svc.StopJob(ctx, id, purge)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"ok": true, "job": id, "evalId": evalID})
 }
@@ -94,7 +107,7 @@ func nomadStopJob(c *fiber.Ctx, cfg Config) error {
 func nomadListAllocations(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	jobID := c.Query("jobId")
 	if jobID == "" {
@@ -104,7 +117,7 @@ func nomadListAllocations(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	allocs, err := svc.ListAllocations(ctx, jobID)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"allocations": allocs})
 }
@@ -112,7 +125,7 @@ func nomadListAllocations(c *fiber.Ctx, cfg Config) error {
 func nomadPromoteAllocation(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -122,7 +135,7 @@ func nomadPromoteAllocation(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	deployID, err := svc.PromoteAllocation(ctx, id)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"ok": true, "allocation": id, "deployment": deployID})
 }
@@ -130,13 +143,13 @@ func nomadPromoteAllocation(c *fiber.Ctx, cfg Config) error {
 func nomadListNodes(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	ctx, cancel := longRequestContext()
 	defer cancel()
 	nodes, err := svc.ListNodes(ctx)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"nodes": nodes})
 }
@@ -144,7 +157,7 @@ func nomadListNodes(c *fiber.Ctx, cfg Config) error {
 func nomadGetNode(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -154,7 +167,7 @@ func nomadGetNode(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	node, err := svc.GetNode(ctx, id)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(node)
 }
@@ -162,7 +175,7 @@ func nomadGetNode(c *fiber.Ctx, cfg Config) error {
 func nomadDrainNode(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -179,7 +192,7 @@ func nomadDrainNode(c *fiber.Ctx, cfg Config) error {
 	ctx, cancel := longRequestContext()
 	defer cancel()
 	if err := svc.DrainNode(ctx, id, drain); err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"ok": true, "node": id, "drain": drain})
 }
@@ -187,13 +200,13 @@ func nomadDrainNode(c *fiber.Ctx, cfg Config) error {
 func nomadListDeployments(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	ctx, cancel := longRequestContext()
 	defer cancel()
 	deployments, err := svc.ListDeployments(ctx)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(fiber.Map{"deployments": deployments})
 }
@@ -201,7 +214,7 @@ func nomadListDeployments(c *fiber.Ctx, cfg Config) error {
 func nomadGetDeployment(c *fiber.Ctx, cfg Config) error {
 	svc := cfg.NomadService
 	if svc == nil {
-		return fiber.NewError(fiber.StatusServiceUnavailable, "nomad service unavailable")
+		return fiber.NewError(fiber.StatusServiceUnavailable, "Forge Orchestration service unavailable")
 	}
 	id := c.Params("id")
 	if id == "" {
@@ -211,7 +224,7 @@ func nomadGetDeployment(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 	deployment, err := svc.GetDeployment(ctx, id)
 	if err != nil {
-		return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		return nomadError(err)
 	}
 	return c.JSON(deployment)
 }

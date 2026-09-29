@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 // GitDeployment represents a Git-based deployment in the database
@@ -40,10 +42,31 @@ type CreateGitDeploymentRequest struct {
 	CompletedAt    *time.Time
 }
 
+var (
+	// ErrGitDeploymentStoreUnavailable is returned when a git deployment row
+	// cannot be read or written at all. Callers must never treat a swallowed
+	// no-op as success: an unrecorded deployment is not a deployed one.
+	ErrGitDeploymentStoreUnavailable = errors.New("git deployment store is unavailable")
+
+	// ErrGitDeploymentNotTransitioned is returned when a guarded transition
+	// matched no row, which means the deployment is already terminal
+	// (completed/failed/cancelled), was never persisted, or lost a race with a
+	// fresher writer. The caller must not report the state it intended.
+	ErrGitDeploymentNotTransitioned = errors.New("git deployment state transition did not apply")
+)
+
+// gitDeploymentActiveStatuses are the states a deployment can still move out
+// of. Anything else is terminal and must not be overwritten by a job that
+// finishes last.
+var gitDeploymentActiveStatuses = []string{"pending", "queued", "building", "deploying"}
+
+// gitDeploymentTerminalStatuses are the states no later writer may leave.
+var gitDeploymentTerminalStatuses = []string{"completed", "failed", "cancelled"}
+
 // CreateGitDeployment creates a new Git deployment record
 func (s *Store) CreateGitDeployment(ctx context.Context, req CreateGitDeploymentRequest) (*GitDeployment, error) {
 	if s.db == nil {
-		return nil, nil
+		return nil, ErrGitDeploymentStoreUnavailable
 	}
 
 	id := uuid.NewString()
@@ -73,20 +96,106 @@ func (s *Store) CreateGitDeployment(ctx context.Context, req CreateGitDeployment
 		) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
 	`
 
-	_, err := s.db.Exec(ctx, query,
+	tag, err := s.db.Exec(ctx, query,
 		id, req.GitSourceID, req.CommitSHA, req.Branch, req.Status, req.StatusMessage,
 		req.ImageTag, req.BuildLog, req.DeployLog, req.Error, req.StartedAt, req.CompletedAt, now, now)
 	if err != nil {
 		return nil, err
 	}
+	if tag.RowsAffected() != 1 {
+		return nil, ErrGitDeploymentNotTransitioned
+	}
 
 	return deployment, nil
+}
+
+// CreateGitDeploymentIfIdle inserts a deployment record only while no other
+// deployment for the same git source is still in flight. The guard is a single
+// statement so two concurrent webhook deliveries of one commit cannot both
+// insert: exactly one caller gets created=true, and the loser receives the
+// active row instead of starting a second build of the same target.
+func (s *Store) CreateGitDeploymentIfIdle(ctx context.Context, req CreateGitDeploymentRequest) (*GitDeployment, bool, error) {
+	if s.db == nil {
+		return nil, false, ErrGitDeploymentStoreUnavailable
+	}
+	if req.GitSourceID == "" {
+		return nil, false, errors.New("git source id is required")
+	}
+
+	id := uuid.NewString()
+	now := time.Now().UTC()
+	startedAt := req.StartedAt
+	if startedAt.IsZero() {
+		startedAt = now
+	}
+
+	tag, err := s.db.Exec(ctx, `
+		INSERT INTO git_deployments (
+			id, git_source_id, commit_sha, branch, status, status_message,
+			image_tag, build_log, deploy_log, error, started_at, completed_at, created_at, updated_at
+		)
+		SELECT $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+		WHERE NOT EXISTS (
+			SELECT 1 FROM git_deployments
+			WHERE git_source_id = $2 AND status = ANY($15::text[])
+		)
+	`, id, req.GitSourceID, req.CommitSHA, req.Branch, req.Status, req.StatusMessage,
+		req.ImageTag, req.BuildLog, req.DeployLog, req.Error, startedAt, req.CompletedAt, now, now,
+		gitDeploymentActiveStatuses)
+	if err != nil {
+		return nil, false, err
+	}
+	if tag.RowsAffected() == 1 {
+		return &GitDeployment{
+			ID: id, GitSourceID: req.GitSourceID, CommitSHA: req.CommitSHA, Branch: req.Branch,
+			Status: req.Status, StatusMessage: req.StatusMessage, ImageTag: req.ImageTag,
+			BuildLog: req.BuildLog, DeployLog: req.DeployLog, Error: req.Error,
+			StartedAt: startedAt, CompletedAt: req.CompletedAt, CreatedAt: now, UpdatedAt: now,
+		}, true, nil
+	}
+
+	active, err := s.GetActiveGitDeployment(ctx, req.GitSourceID)
+	if err != nil {
+		return nil, false, err
+	}
+	return active, false, nil
+}
+
+// GetActiveGitDeployment returns the newest deployment for a git source that
+// has not reached a terminal state, or nil when the source is idle.
+func (s *Store) GetActiveGitDeployment(ctx context.Context, gitSourceID string) (*GitDeployment, error) {
+	if s.db == nil {
+		return nil, ErrGitDeploymentStoreUnavailable
+	}
+
+	var deployment GitDeployment
+	var completedAt *time.Time
+	err := s.db.QueryRow(ctx, `
+		SELECT id, git_source_id, commit_sha, branch, status, status_message,
+			image_tag, build_log, deploy_log, error, started_at, completed_at, created_at, updated_at
+		FROM git_deployments
+		WHERE git_source_id = $1 AND status = ANY($2::text[])
+		ORDER BY created_at DESC
+		LIMIT 1
+	`, gitSourceID, gitDeploymentActiveStatuses).Scan(
+		&deployment.ID, &deployment.GitSourceID, &deployment.CommitSHA, &deployment.Branch,
+		&deployment.Status, &deployment.StatusMessage, &deployment.ImageTag,
+		&deployment.BuildLog, &deployment.DeployLog, &deployment.Error,
+		&deployment.StartedAt, &completedAt, &deployment.CreatedAt, &deployment.UpdatedAt)
+	if err != nil {
+		if errors.Is(err, ErrNoRows) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	deployment.CompletedAt = completedAt
+	return &deployment, nil
 }
 
 // GetGitDeployment retrieves a Git deployment by ID
 func (s *Store) GetGitDeployment(ctx context.Context, id string) (*GitDeployment, error) {
 	if s.db == nil {
-		return nil, nil
+		return nil, ErrGitDeploymentStoreUnavailable
 	}
 
 	query := `
@@ -96,7 +205,7 @@ func (s *Store) GetGitDeployment(ctx context.Context, id string) (*GitDeployment
 	`
 
 	var deployment GitDeployment
-	var completedAt time.Time
+	var completedAt *time.Time
 
 	err := s.db.QueryRow(ctx, query, id).Scan(
 		&deployment.ID, &deployment.GitSourceID, &deployment.CommitSHA, &deployment.Branch,
@@ -107,17 +216,20 @@ func (s *Store) GetGitDeployment(ctx context.Context, id string) (*GitDeployment
 		return nil, err
 	}
 
-	if completedAt != (time.Time{}) {
-		deployment.CompletedAt = &completedAt
-	}
-
+	deployment.CompletedAt = completedAt
 	return &deployment, nil
 }
 
 // ListGitDeployments retrieves deployment history for a Git source
 func (s *Store) ListGitDeployments(ctx context.Context, gitSourceID string, limit int) ([]GitDeployment, error) {
 	if s.db == nil {
-		return []GitDeployment{}, nil
+		return nil, ErrGitDeploymentStoreUnavailable
+	}
+	if limit <= 0 {
+		limit = 10
+	}
+	if limit > 200 {
+		limit = 200
 	}
 
 	query := `

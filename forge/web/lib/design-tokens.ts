@@ -144,12 +144,28 @@ export const chart = {
   lightEmerald: "#34d399",
   lightViolet: "#c084fc",
   indigo: "#6366f1",
+  /** Discord blurple — webhook preview chrome only (CSS cannot use var() in Tailwind arbitrary values). */
+  discord: "#5865f2",
   /** Status hex mirrors for SVG attributes — track `--ok`/`--warn`/`--danger`. */
   success: "#10b981",
   warning: "#f59e0b",
   dangerBright: "#ef4444",
   dangerSoft: "#f87171",
   critical: "#f43f5e",
+  brightEmerald: "#4ade80",
+  brightYellow: "#facc15",
+  /** Catalog logo swatches — icon fg + translucent tile bg per engine. */
+  catalogPostgres: "#60a5fa",
+  catalogPostgresBg: "rgba(96,165,250,0.12)",
+  catalogMysqlBg: "rgba(56,189,248,0.12)",
+  catalogMariadb: "#d2a679",
+  catalogMariadbBg: "rgba(210,166,121,0.12)",
+  catalogRedisBg: "rgba(248,113,113,0.12)",
+  catalogValkeyBg: "rgba(167,139,250,0.14)",
+  catalogMongoBg: "rgba(74,222,128,0.12)",
+  catalogRabbitBg: "rgba(251,146,60,0.12)",
+  catalogClickhouseBg: "rgba(250,204,21,0.12)",
+  catalogNatsBg: "rgba(52,211,153,0.12)",
   /** Mirrors `--unknown`. Use for gaps in a series — never render those as 0. */
   unknown: "#64748b",
   onColor: "#ffffff",

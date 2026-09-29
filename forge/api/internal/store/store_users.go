@@ -259,29 +259,63 @@ func (s *Store) UserCanAccessServer(ctx context.Context, serverID, userID, role,
 		return true, nil
 	}
 	var ownerID string
-	if err := s.db.QueryRow(ctx, `SELECT owner_id::text FROM servers WHERE id = $1`, serverID).Scan(&ownerID); err != nil {
+	var orgID *string
+	if err := s.db.QueryRow(ctx, `SELECT owner_id::text, org_id::text FROM servers WHERE id = $1`, serverID).Scan(&ownerID, &orgID); err != nil {
 		return false, err
+	}
+	hasServerGrant := false
+	if ownerID == userID {
+		hasServerGrant = true
+	} else {
+		var raw []byte
+		if err := s.db.QueryRow(ctx, `
+			SELECT permissions
+			FROM subusers
+			WHERE server_id = $1 AND user_id = $2
+		`, serverID, userID).Scan(&raw); err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				return false, nil
+			}
+			return false, err
+		}
+		var permissions []string
+		_ = json.Unmarshal(raw, &permissions)
+		if permission == "" {
+			hasServerGrant = true
+		} else {
+			hasServerGrant = HasPermission(permissions, permission)
+		}
+		if !hasServerGrant {
+			return false, nil
+		}
+	}
+	if permission != "" && ownerID == userID {
+		// Owners hold every permission on their own servers; no subuser-row
+		// check is needed. Fall through to the org check below.
+	}
+	// Tenancy: when the server is scoped to an org, the caller must also be
+	// a member of that org (owner, subuser, or otherwise). Both the server
+	// grant above AND org membership are required. Legacy servers with NULL
+	// org_id skip the org check. Admins bypass via the early return. Fail
+	// closed on membership lookup errors.
+	if orgID != nil && strings.TrimSpace(*orgID) != "" {
+		member, err := s.UserIsOrgMember(ctx, *orgID, userID)
+		if err != nil {
+			return false, err
+		}
+		if !member {
+			return false, nil
+		}
 	}
 	if ownerID == userID {
 		return true, nil
 	}
-	var raw []byte
-	if err := s.db.QueryRow(ctx, `
-		SELECT permissions
-		FROM subusers
-		WHERE server_id = $1 AND user_id = $2
-	`, serverID, userID).Scan(&raw); err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return false, nil
-		}
-		return false, err
-	}
-	var permissions []string
-	_ = json.Unmarshal(raw, &permissions)
 	if permission == "" {
-		return true, nil
+		return hasServerGrant, nil
 	}
-	return HasPermission(permissions, permission), nil
+	// Re-check the subuser permission for the non-owner path (already
+	// verified above); reaching here means the grant held.
+	return hasServerGrant, nil
 }
 
 func (s *Store) DeleteServerSubuser(ctx context.Context, serverID, userID string, actorID *string) error {

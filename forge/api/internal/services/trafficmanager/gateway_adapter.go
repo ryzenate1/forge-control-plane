@@ -7,8 +7,11 @@ import (
 	"gamepanel/forge/internal/services/domains"
 )
 
+// NodeResolver resolves the reachable host for a server/node pair. It mirrors
+// crossnode.Resolver.ResolveTargetHost: an unresolved target is an error, never
+// an empty string or a guessed host.
 type NodeResolver interface {
-	ResolveTargetHost(ctx context.Context, serverID string, nodeID string) string
+	ResolveTargetHost(ctx context.Context, serverID string, nodeID string) (string, error)
 }
 
 type AdapterKind string

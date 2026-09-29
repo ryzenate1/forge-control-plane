@@ -33,7 +33,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return
 	}
 	_ = cfg
-	protected.Get("/cron-jobs", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/cron-jobs", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		jobs, err := cronJobService.ListJobs(ctx)
@@ -52,7 +52,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.JSON(result)
 	})
 
-	protected.Post("/cron-jobs", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/cron-jobs", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
 		var req struct {
 			Name            string `json:"name" validate:"required"`
 			Description     string `json:"description"`
@@ -105,7 +105,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.Status(fiber.StatusCreated).JSON(job)
 	})
 
-	protected.Get("/cron-jobs/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/cron-jobs/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		job, err := cronJobService.GetJob(ctx, c.Params("id"))
@@ -115,7 +115,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.JSON(job)
 	})
 
-	protected.Put("/cron-jobs/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Put("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
 		var req struct {
 			Name            *string `json:"name"`
 			Description     *string `json:"description"`
@@ -161,7 +161,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.JSON(job)
 	})
 
-	protected.Delete("/cron-jobs/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := cronJobService.DeleteJob(ctx, c.Params("id")); err != nil {
@@ -170,7 +170,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	protected.Post("/cron-jobs/:id/execute", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/cron-jobs/:id/execute", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		execution, err := cronJobService.TriggerNow(ctx, c.Params("id"))
@@ -180,7 +180,7 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.JSON(execution)
 	})
 
-	protected.Post("/cron-jobs/:id/toggle", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/cron-jobs/:id/toggle", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		job, err := cronJobService.ToggleJob(ctx, c.Params("id"))
@@ -190,10 +190,20 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 		return c.JSON(job)
 	})
 
-	protected.Get("/cron-jobs/:id/executions", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/cron-jobs/:id/executions", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
-		limit, _ := strconv.Atoi(c.Query("limit", "50"))
+		limit := 50
+		if raw := strings.TrimSpace(c.Query("limit", "")); raw != "" {
+			n, err := strconv.Atoi(raw)
+			if err != nil || n < 1 {
+				return fiber.NewError(fiber.StatusBadRequest, "limit must be a positive integer")
+			}
+			if n > 500 {
+				n = 500
+			}
+			limit = n
+		}
 		executions, err := cronJobService.ListExecutions(ctx, c.Params("id"), limit)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, err.Error())

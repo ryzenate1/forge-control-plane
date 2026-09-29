@@ -20,11 +20,16 @@ export PATH="$BREW_PREFIX/bin:$BREW_PREFIX/opt/postgresql@16/bin:$PATH"
 DB_USER=gamepanel
 DB_PASS=gamepanel
 DB_NAME=gamepanel
-DB_PORT=5432
-REDIS_PORT=6379
-API_PORT=8080
-WEB_PORT=3000
-BEACON_PORT=9090
+# Canonical ports live in scripts/dev/ports.env; source it when present so the
+# two launchers cannot drift. WEB_PORT/BEACON_PORT are this script's legacy
+# names for FRONTEND_PORT/DAEMON_PORT.
+# shellcheck disable=SC1091
+[ -f "$ROOT/scripts/dev/ports.env" ] && . "$ROOT/scripts/dev/ports.env"
+DB_PORT="${DB_PORT:-5432}"
+REDIS_PORT="${REDIS_PORT:-6379}"
+API_PORT="${API_PORT:-8080}"
+WEB_PORT="${FRONTEND_PORT:-${WEB_PORT:-3000}}"
+BEACON_PORT="${DAEMON_PORT:-${BEACON_PORT:-9090}}"
 
 # Set by any tier that did not come up. The start continues — one dead tier is
 # not a reason to withhold the others — but the banner and the exit code must
@@ -40,7 +45,19 @@ PID_DIR="$ROOT/.dev-pids"
 DATA_DIR="$ROOT/.dev-data"
 SECRETS="$ROOT/.dev-secrets.env"
 
-if [ -S "$HOME/.docker/run/docker.sock" ]; then
+if [ -n "${DOCKER_HOST:-}" ]; then
+    # Respect an explicit DOCKER_HOST (e.g. Colima, remote daemon). Only
+    # unix:// sockets map to a filesystem path we can test with -S.
+    case "$DOCKER_HOST" in
+        unix://*)
+            DOCKER_SOCK="${DOCKER_HOST#unix://}"
+            ;;
+        *)
+            # TCP/named-pipe endpoints have no socket file; pass through.
+            DOCKER_SOCK="$DOCKER_HOST"
+            ;;
+    esac
+elif [ -S "$HOME/.docker/run/docker.sock" ]; then
     DOCKER_SOCK="$HOME/.docker/run/docker.sock"
 elif [ -S "$HOME/.colima/default/docker.sock" ]; then
     DOCKER_SOCK="$HOME/.colima/default/docker.sock"
@@ -53,7 +70,12 @@ else
     DOCKER_SOCK=""
 fi
 HAVE_DOCKER_SOCK=0
-[ -n "${DOCKER_SOCK:-}" ] && [ -S "$DOCKER_SOCK" ] && HAVE_DOCKER_SOCK=1
+if [ -n "${DOCKER_SOCK:-}" ]; then
+    case "$DOCKER_SOCK" in
+        tcp://*|ssh://*|npipe://*) HAVE_DOCKER_SOCK=1 ;;
+        *) [ -S "$DOCKER_SOCK" ] && HAVE_DOCKER_SOCK=1 ;;
+    esac
+fi
 
 RED=$'\033[0;31m'; GREEN=$'\033[0;32m'; YELLOW=$'\033[1;33m'; CYAN=$'\033[0;36m'; NC=$'\033[0m'
 
@@ -360,13 +382,29 @@ start_api() {
 start_beacon() {
     head_ "Beacon daemon (launchd)"
     info "Building..."
-    (cd "$ROOT/beacon" && go build -o daemon ./cmd/daemon)
+    if ! (cd "$ROOT/beacon" && go build -o daemon ./cmd/daemon); then
+        fail "Beacon build failed; refusing to start the previously built binary."
+        STACK_DEGRADED=1
+        return 0
+    fi
+    # launchd kills a bare `go build` binary with OS_REASON_CODESIGNING (it is
+    # linker-signed as Identifier=a.out), so ad-hoc re-sign it with a stable
+    # identifier before the agent tries to spawn it.
+    if [ "$(uname -s)" = "Darwin" ]; then
+        codesign --force --sign - --identifier com.gamepanel.beacon "$ROOT/beacon/daemon" >/dev/null 2>&1 \
+            || warn "codesign of beacon/daemon failed - launchd may refuse to start Beacon"
+    fi
 
     mkdir -p "$HOME/Library/LaunchAgents" "$DATA_DIR/beacon" "$DATA_DIR/beacon-tmp"
 
     local runtime_env=""
     if [ "${HAVE_DOCKER_SOCK:-0}" -eq 1 ]; then
-        runtime_env="<key>DOCKER_HOST</key><string>unix://$DOCKER_SOCK</string>"
+        case "$DOCKER_SOCK" in
+            unix://*|tcp://*|ssh://*|npipe://*)
+                runtime_env="<key>DOCKER_HOST</key><string>$DOCKER_SOCK</string>" ;;
+            *)
+                runtime_env="<key>DOCKER_HOST</key><string>unix://$DOCKER_SOCK</string>" ;;
+        esac
         info "Docker runtime via $DOCKER_SOCK"
     elif [ "${DAEMON_ALLOW_MOCK_RUNTIME:-false}" = "true" ]; then
         runtime_env="<key>DAEMON_ALLOW_MOCK_RUNTIME</key><string>true</string>"
@@ -530,6 +568,9 @@ stop_tier() {
 }
 
 cmd_start() {
+    # Reset per-run: `restart` runs cmd_stop then cmd_start in one process, so
+    # a degraded flag from an earlier start must not leak into this one.
+    STACK_DEGRADED=0
     mkdir -p "$LOG_DIR" "$PID_DIR" "$DATA_DIR"
     export_env
     ensure_databases
@@ -561,7 +602,7 @@ cmd_start() {
             printf '  %-16s %s (not listening)\n' "$label" "$value"
         fi
     done
-    printf '\n  Demo login: admin@example.com / admin123\n'
+    printf '\n  Demo login: admin@example.com (dev seed only — use /setup credentials in production)\n'
     printf '  Logs: %s\n\n' "$LOG_DIR"
     [ "$STACK_DEGRADED" -eq 0 ]
 }

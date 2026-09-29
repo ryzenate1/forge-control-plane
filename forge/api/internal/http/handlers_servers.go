@@ -100,7 +100,7 @@ func createResourceValue(value *int, fallback int) int {
 
 func ensureTransferIdle(c *fiber.Ctx, cfg Config, serverID string) error {
 	if cfg.Store == nil {
-		return nil
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 	}
 	ctx, cancel := requestContext()
 	defer cancel()

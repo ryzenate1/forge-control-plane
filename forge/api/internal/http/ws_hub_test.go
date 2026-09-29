@@ -235,12 +235,12 @@ func TestWSHub_PublishUserNotificationExplicitRecipientOnly(t *testing.T) {
 // getWebSocketAllowedOrigins (pinned in ws_origin_test.go).
 
 func TestNotificationWebSocket_NonUpgradeRejected(t *testing.T) {
-	// handleNotificationWebSocket now takes only the notification service; the
-	// old (hub-less) Config + handler-level origin rejection was removed along
-	// with the bespoke middleware. The surviving contract: requests that are
+	// handleNotificationWebSocket takes (Config, service); origin enforcement
+	// flows through websocket.Config.Origins built by
+	// getWebSocketAllowedOrigins. The surviving contract: requests that are
 	// not a websocket upgrade must be refused with 426.
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	app.Get("/notifications/ws", handleNotificationWebSocket(nil))
+	app.Get("/notifications/ws", handleNotificationWebSocket(Config{}, nil))
 
 	req := httptestNewGetRequest("/notifications/ws")
 	res, err := app.Test(req)
@@ -254,13 +254,13 @@ func TestNotificationWebSocket_NonUpgradeRejected(t *testing.T) {
 }
 
 func TestNotificationWSRoute_NonUpgradeRejectedAtRegisteredRoute(t *testing.T) {
-	// Signature is now (protected, notificationService, mutationLimiter).
+	// Signature is now (protected, cfg, notificationService, mutationLimiter).
 	// A nil service is acceptable at registration time; the upgraded conn would
 	// then close with "authentication required", but a plain GET must still be
 	// refused with 426 by the route handler.
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	protected := app.Group("/", func(c *fiber.Ctx) error { return c.Next() })
-	registerEnhancedNotificationRoutes(protected, nil, func(c *fiber.Ctx) error { return c.Next() })
+	registerEnhancedNotificationRoutes(protected, Config{}, nil, func(c *fiber.Ctx) error { return c.Next() })
 
 	req := httptestNewGetRequest("/notifications/ws")
 	res, err := app.Test(req)

@@ -51,10 +51,12 @@ type WebhookPayload struct {
 	} `json:"commits"`
 }
 
-func (s *DeploymentManagementService) GenerateSecret() string {
+func (s *DeploymentManagementService) GenerateSecret() (string, error) {
 	b := make([]byte, 32)
-	_, _ = rand.Read(b)
-	return hex.EncodeToString(b)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate webhook secret: %w", err)
+	}
+	return hex.EncodeToString(b), nil
 }
 
 func (s *DeploymentManagementService) InitiateDeployment(ctx context.Context, repoURL, branch, commitHash string) (*store.GitDeployment, error) {

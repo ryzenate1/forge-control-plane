@@ -41,27 +41,31 @@ func NewDBContainerService(s *store.Store, dc *daemon.Client, beaconBaseURL, nod
 	}
 }
 
-func generatePassword(length int) string {
+func generatePassword(length int) (string, error) {
 	if length <= 0 {
-		return ""
+		return "", errors.New("password length must be positive")
 	}
 	b := make([]byte, (length+1)/2)
 	if _, err := rand.Read(b); err != nil {
-		return ""
+		return "", fmt.Errorf("generate password: %w", err)
 	}
-	return hex.EncodeToString(b)[:length]
+	return hex.EncodeToString(b)[:length], nil
 }
 
-func generateDBName() string {
+func generateDBName() (string, error) {
 	b := make([]byte, 6)
-	_, _ = rand.Read(b)
-	return "db_" + hex.EncodeToString(b)[:8]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate db name: %w", err)
+	}
+	return "db_" + hex.EncodeToString(b)[:8], nil
 }
 
-func generateUsername() string {
+func generateUsername() (string, error) {
 	b := make([]byte, 4)
-	_, _ = rand.Read(b)
-	return "u_" + hex.EncodeToString(b)[:8]
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("generate username: %w", err)
+	}
+	return "u_" + hex.EncodeToString(b)[:8], nil
 }
 
 func imageForDB(engine, version string) string {
@@ -72,34 +76,37 @@ func imageForDB(engine, version string) string {
 	return fmt.Sprintf("%s:%s", image, version)
 }
 
-func envVarsForDB(engine, dbName, username, password string) []string {
+func envVarsForDB(engine, dbName, username, password string) ([]string, error) {
 	switch strings.ToLower(engine) {
 	case "postgresql":
 		return []string{
 			"POSTGRES_DB=" + dbName,
 			"POSTGRES_USER=" + username,
 			"POSTGRES_PASSWORD=" + password,
-		}
+		}, nil
 	case "mysql", "mariadb":
-		rootPassword := generatePassword(64)
+		rootPassword, err := generatePassword(64)
+		if err != nil {
+			return nil, err
+		}
 		return []string{
 			"MYSQL_DATABASE=" + dbName,
 			"MYSQL_USER=" + username,
 			"MYSQL_PASSWORD=" + password,
 			"MYSQL_ROOT_PASSWORD=" + rootPassword,
-		}
+		}, nil
 	case "mongodb":
 		return []string{
 			"MONGO_INITDB_DATABASE=" + dbName,
 			"MONGO_INITDB_ROOT_USERNAME=" + username,
 			"MONGO_INITDB_ROOT_PASSWORD=" + password,
-		}
+		}, nil
 	case "redis":
 		return []string{
 			"REDIS_PASSWORD=" + password,
-		}
+		}, nil
 	default:
-		return nil
+		return nil, nil
 	}
 }
 
@@ -167,11 +174,20 @@ func (s *DBContainerService) Provision(ctx context.Context, serverID, engine, ve
 	if err != nil {
 		return store.DBContainer{}, fmt.Errorf("create db container record: %w", err)
 	}
-	dbName := generateDBName()
-	username := generateUsername()
-	password := generatePassword(32)
-	if password == "" {
-		return store.DBContainer{}, errors.New("generate database password")
+	dbName, err := generateDBName()
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
+	username, err := generateUsername()
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
+	password, err := generatePassword(32)
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
 	}
 	volumeName := "mgp-db-" + db.ID[:12]
 	port := defaultPortForEngine(engine)
@@ -194,7 +210,11 @@ func (s *DBContainerService) Provision(ctx context.Context, serverID, engine, ve
 		return store.DBContainer{}, fmt.Errorf("provision container via beacon: %w", err)
 	}
 	connStr := connectionStringForDB(engine, dbName, username, password, s.dockerHost, resp.Port, version)
-	creds, _ := credentialsJSON(engine, dbName, username, password)
+	creds, err := credentialsJSON(engine, dbName, username, password)
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
 	if err := s.store.SetDBContainerStatus(ctx, db.ID, resp.ContainerID, "running", resp.Port, resp.VolumeID, connStr, creds); err != nil {
 		return store.DBContainer{}, fmt.Errorf("update container status: %w", err)
 	}
@@ -218,11 +238,20 @@ func (s *DBContainerService) ProvisionDevFallback(ctx context.Context, serverID,
 	if err != nil {
 		return store.DBContainer{}, fmt.Errorf("create db container record: %w", err)
 	}
-	dbName := generateDBName()
-	username := generateUsername()
-	password := generatePassword(32)
-	if password == "" {
-		return store.DBContainer{}, errors.New("generate database password")
+	dbName, err := generateDBName()
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
+	username, err := generateUsername()
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
+	password, err := generatePassword(32)
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
 	}
 	volumeName := "mgp-db-" + db.ID[:12]
 	port := defaultPortForEngine(engine)
@@ -231,7 +260,11 @@ func (s *DBContainerService) ProvisionDevFallback(ctx context.Context, serverID,
 		host = "127.0.0.1"
 	}
 	connStr := connectionStringForDB(engine, dbName, username, password, host, port, version)
-	creds, _ := credentialsJSON(engine, dbName, username, password)
+	creds, err := credentialsJSON(engine, dbName, username, password)
+	if err != nil {
+		_ = s.store.SetDBContainerStatus(ctx, db.ID, "", "failed", 0, "", "", nil)
+		return store.DBContainer{}, err
+	}
 	if err := s.store.SetDBContainerStatus(ctx, db.ID, "", "running", port, volumeName, connStr, creds); err != nil {
 		return store.DBContainer{}, fmt.Errorf("update container status: %w", err)
 	}

@@ -57,7 +57,7 @@ function ServerStatus({ server }: { server: ApiServer }) {
 export default function ServersPage() {
   const t = useT();
   const router = useRouter();
-  const { currentUser } = useServerStore();
+  const currentUser = useServerStore((s) => s.currentUser);
   const { companyName } = useBranding();
 
   const userQuery = useCurrentUser();

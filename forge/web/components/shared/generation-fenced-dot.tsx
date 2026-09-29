@@ -139,7 +139,6 @@ export function ServerStateLaneBadge(props: {
   generation?: number | null;
   fenceGeneration?: number | null;
   isFenced?: boolean;
-  name?: string;
 }) {
   return <StateLanesBadge {...props} />;
 }

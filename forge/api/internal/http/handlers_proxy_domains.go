@@ -273,6 +273,13 @@ func registerProxyDomainRoutes(protected fiber.Router, cfg Config, adminIPAccess
 // registerProxyCertificateRoutes owns one route: importing an operator-supplied
 // certificate and binding it to a proxy domain.
 //
+// Guard note (unified with handlers_certificates.go / _ext.go): the ACME
+// certificate routes guard on AcmeService == nil because they delegate to
+// acme.Service. This import guards on Store == nil instead because it is
+// store-backed by design — it binds PEM material to a proxy-domain row, not
+// to the ACME lifecycle — and documents that boundary rather than taking a
+// service it does not use.
+//
 // It used to also register GET /certificates, GET /certificates/:id,
 // DELETE /certificates/:id and POST /certificates/:id/renew. All four were
 // dead: registerCertificateRoutes (handlers_certificates.go, server.go:2562)

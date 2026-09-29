@@ -54,10 +54,8 @@ export type ApiUser = {
   serverLimit?: number;
   createdAt: string;
   updatedAt: string;
-  sessionVersion?: number;
   disabled?: boolean;
   useTotp?: boolean;
-  totpSecret?: string;
 };
 
 export type ApiServerDesiredState = 'running' | 'stopped' | 'terminated';
@@ -399,9 +397,33 @@ export type ApiBackup = {
 };
 
 export type BackupCreateInput = {
-  name?: string;
+  /**
+   * File patterns to exclude from the backup. This is the only field the
+   * server honors: `POST /servers/:id/backups` binds `{ ignored }`
+   * (`forge/api/internal/http/handlers_servers.go`) and generates the backup
+   * name server-side. Lock state is managed via the lock/unlock endpoints,
+   * never at create time — so there are no `name`/`is_locked` fields here by
+   * design, and callers must not collect them from users.
+   */
   ignored?: string[];
-  is_locked?: boolean;
+};
+
+/**
+ * Response of `GET /servers/:id/backups`. Unlike the canonical
+ * `PaginatedResponse` (`{ data, meta.pagination }`), this route returns a
+ * flat `{ data, pagination: { page, per_page, total, total_pages } }` shape
+ * (`forge/api/internal/http/handlers_servers.go`). Typed separately so a
+ * drift in either shape surfaces at compile time instead of rendering as an
+ * empty list.
+ */
+export type BackupListResponse = {
+  data: ApiBackup[];
+  pagination: {
+    page: number;
+    per_page: number;
+    total: number;
+    total_pages: number;
+  };
 };
 
 export type ServerCreateInput = {
@@ -1072,7 +1094,13 @@ export type CreateNodeInput = {
   name: string;
   region: string;
   regionId?: string;
-  locationId?: string;
+  /**
+   * Required: `CreateNodeRequest.LocationID` carries `validate:"required"`
+   * (`forge/api/internal/http/server.go`), and `regionId` is an independent
+   * optional field — not an alternative — so omitting `locationId` is always
+   * a 422.
+   */
+  locationId: string;
   description?: string;
   baseUrl?: string;
   fqdn: string;
@@ -1152,7 +1180,14 @@ export type UpdateNodeInput = {
 export type CreateAllocationInput = {
   nodeId: string;
   ip: string;
-  ports: string;
+  /**
+   * Single port. The server accepts `port` or `ports` (at least one is
+   * required — `handlers_admin.go` 400s on "port or ports is required"), so
+   * both are optional here and callers must supply one. The SDK enforces this
+   * client-side; the web caller passes `ports`.
+   */
+  port?: number;
+  ports?: string;
   containerPort?: number;
   protocol?: 'tcp' | 'udp';
   alias?: string;

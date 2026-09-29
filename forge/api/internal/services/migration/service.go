@@ -27,6 +27,15 @@ const (
 	DefaultReconcileInterval = 30 * time.Second
 	maxConcurrentWorkers     = 4
 	migrationTaskTimeout     = 30 * time.Second
+	// Operation budgets for the destination half of a migration run. The
+	// worker context itself carries no deadline (it is bounded by the run
+	// lease), so every remote call gets its own: without one a hung Beacon
+	// would pin a worker slot until the process exits.
+	migrationRPCTimeout     = 30 * time.Second
+	migrationCreateTimeout  = 5 * time.Minute
+	migrationPrepareTimeout = 5 * time.Minute
+	migrationPushTimeout    = 15 * time.Minute
+	migrationRestoreTimeout = 5 * time.Minute
 )
 
 type Metrics struct {
@@ -468,13 +477,15 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 	if !phaseAtLeast(run.Phase, "source_archived") {
 		_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "credentials_registered", "", 0, "")
 	}
-	if run.Phase == "destination_created" {
+	if phaseAtLeast(run.Phase, "destination_created") {
 		s.finalize(ctx, migrationID, source, target, sourceCredential, destinationCredential)
 		return
 	}
 	archive := daemon.TransferMetadata{ArchiveSize: run.ArchiveSize, Checksum: run.ArchiveChecksum, Phase: "archived"}
 	if !phaseAtLeast(run.Phase, "source_archived") {
-		archive, err = s.daemon.PrepareTransferSource(ctx, source.NodeURL, migrationID, sourceCredential)
+		prepareCtx, prepareCancel := context.WithTimeout(ctx, migrationPrepareTimeout)
+		archive, err = s.daemon.PrepareTransferSource(prepareCtx, source.NodeURL, migrationID, sourceCredential)
+		prepareCancel()
 		if err != nil {
 			s.fail(ctx, migrationID, fmt.Errorf("prepare source: %w", err), source, target, false, sourceCredential, destinationCredential)
 			return
@@ -487,10 +498,12 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 		_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "source_archived", "", archive.ArchiveSize, archive.Checksum)
 	}
 	if !phaseAtLeast(run.Phase, "destination_verified") {
-		verified, pushErr := s.daemon.PushTransferSource(ctx, source.NodeURL, migrationID, sourceCredential, daemon.TransferPushRequest{
+		pushCtx, pushCancel := context.WithTimeout(ctx, migrationPushTimeout)
+		verified, pushErr := s.daemon.PushTransferSource(pushCtx, source.NodeURL, migrationID, sourceCredential, daemon.TransferPushRequest{
 			DestinationURL: target.NodeURL, DestinationCredential: destinationCredential,
 			IdempotencyKey: migration.IdempotencyKey + ":upload",
 		})
+		pushCancel()
 		if pushErr != nil {
 			s.fail(ctx, migrationID, fmt.Errorf("transfer archive: %w", pushErr), source, target, false, sourceCredential, destinationCredential)
 			return
@@ -503,7 +516,9 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 		_, _ = s.store.UpdateMigrationStatus(ctx, migrationID, store.MigrationStatusRestoring, "destination checksum verified")
 	}
 	if !phaseAtLeast(run.Phase, "destination_restored") {
-		restored, restoreErr := s.daemon.RestoreTransferDestination(ctx, target.NodeURL, migrationID, destinationCredential)
+		restoreCtx, restoreCancel := context.WithTimeout(ctx, migrationRestoreTimeout)
+		restored, restoreErr := s.daemon.RestoreTransferDestination(restoreCtx, target.NodeURL, migrationID, destinationCredential)
+		restoreCancel()
 		if restoreErr != nil || restored.Phase != "restored" {
 			if restoreErr == nil {
 				restoreErr = errors.New("destination did not report restored")
@@ -513,23 +528,42 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 		}
 		_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "destination_restored", "", 0, "")
 	}
-	runtimeTarget := runtimeTarget(target)
+	destTarget := runtimeTarget(target)
 	if !phaseAtLeast(run.Phase, "destination_configured") {
-		if err := s.runtime.SyncServerConfiguration(ctx, runtimeTarget, runtimeConfiguration(target)); err != nil {
-			s.fail(ctx, migrationID, fmt.Errorf("sync destination configuration: %w", err), source, target, false, sourceCredential, destinationCredential)
+		syncCtx, syncCancel := context.WithTimeout(ctx, migrationRPCTimeout)
+		syncErr := s.runtime.SyncServerConfiguration(syncCtx, destTarget, runtimeConfiguration(target))
+		syncCancel()
+		if syncErr != nil {
+			s.fail(ctx, migrationID, fmt.Errorf("sync destination configuration: %w", syncErr), source, target, false, sourceCredential, destinationCredential)
 			return
 		}
 		_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "destination_configured", "", 0, "")
 	}
-	created, err := s.runtime.CreateServer(ctx, runtimeTarget, runtimeCreateRequest(target))
+	// Idempotent create: a previous attempt may have created the destination
+	// container and then crashed before recording destination_created. The
+	// observed state decides — a retry must never assume it starts empty.
+	if s.destinationExists(ctx, destTarget) {
+		_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "destination_created", "", 0, "")
+		s.finalize(ctx, migrationID, source, target, sourceCredential, destinationCredential)
+		return
+	}
+	createCtx := daemon.ContextWithCommandID(ctx, migrationCreateCommandID(migration))
+	createTimeoutCtx, createCancel := context.WithTimeout(createCtx, migrationCreateTimeout)
+	created, err := s.runtime.CreateServer(createTimeoutCtx, destTarget, runtimeCreateRequest(target))
+	createCancel()
 	if err != nil || !created.Accepted {
 		if err == nil {
 			err = errors.New("destination rejected container creation")
 		}
-		s.fail(ctx, migrationID, fmt.Errorf("create destination container: %w", err), source, target, false, sourceCredential, destinationCredential)
+		// The create call may have succeeded remotely while its response was
+		// lost. Derive cleanup from what the destination actually holds,
+		// never from the assumption that a failed call created nothing.
+		s.fail(ctx, migrationID, fmt.Errorf("create destination container: %w", err), source, target, s.destinationCreatedObserved(ctx, destTarget), sourceCredential, destinationCredential)
 		return
 	}
-	exists, err := s.runtime.Exists(ctx, runtimeTarget)
+	existsCtx, existsCancel := context.WithTimeout(ctx, migrationRPCTimeout)
+	exists, err := s.runtime.Exists(existsCtx, destTarget)
+	existsCancel()
 	if err != nil || !exists {
 		if err == nil {
 			err = errors.New("post-creation health check failed: server does not exist on destination")
@@ -539,6 +573,45 @@ func (s *Service) run(ctx context.Context, migrationID string) {
 	}
 	_, _ = s.store.UpdateMigrationRun(ctx, migrationID, "destination_created", "", 0, "")
 	s.finalize(ctx, migrationID, source, target, sourceCredential, destinationCredential)
+}
+
+// destinationExists reports whether the destination already holds the
+// migrated container. An unreadable destination reads as absent here: the
+// create call carries the run's idempotency key, so proceeding still cannot
+// duplicate the container, while skipping on unknown state could abandon a
+// migration whose container was never made.
+func (s *Service) destinationExists(ctx context.Context, target gpruntime.Target) bool {
+	opCtx, cancel := context.WithTimeout(ctx, migrationRPCTimeout)
+	defer cancel()
+	exists, err := s.runtime.Exists(opCtx, target)
+	if err != nil {
+		return false
+	}
+	return exists
+}
+
+// destinationCreatedObserved decides cleanup after a create call whose
+// outcome is uncertain. Unknown reads as created: deleting a container that
+// turns out to be absent is a harmless no-op, while leaking one the failed
+// call actually made leaves a duplicate behind for the next retry.
+func (s *Service) destinationCreatedObserved(ctx context.Context, target gpruntime.Target) bool {
+	opCtx, cancel := context.WithTimeout(ctx, migrationRPCTimeout)
+	defer cancel()
+	exists, err := s.runtime.Exists(opCtx, target)
+	if err != nil {
+		return true
+	}
+	return exists
+}
+
+// migrationCreateCommandID is the idempotency key for the destination
+// container creation. It is stable across retries of the same migration run,
+// so a replayed create dedupes instead of duplicating the container.
+func migrationCreateCommandID(migration store.Migration) string {
+	if migration.IdempotencyKey != "" {
+		return migration.IdempotencyKey + ":create"
+	}
+	return "migration-" + migration.ID + ":create"
 }
 
 func (s *Service) finalize(ctx context.Context, migrationID string, source, target store.ServerProvisionTarget, sourceCredential, destinationCredential string) {

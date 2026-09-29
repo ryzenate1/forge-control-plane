@@ -10,11 +10,17 @@ import (
 	"time"
 
 	"gamepanel/forge/internal/services/servicediscovery"
+	"gamepanel/forge/internal/services/trafficmanager"
 )
+
+// compile assert: Resolver must satisfy the gateway NodeResolver contract
+// (string,error). A string-only resolver would let callers treat an
+// unresolved target as a usable host.
+var _ trafficmanager.NodeResolver = (*Resolver)(nil)
 
 // ErrNoTarget is returned when no reachable host could be resolved for the
 // requested server/node. Callers must surface it, never substitute a default.
-var ErrNoTarget = errors.New("crossnode: no reachable target")
+var ErrNoTarget = errors.New("crossnode: no reachable target for request")
 
 type Resolver struct {
 	store     ResolutionStore
@@ -34,6 +40,9 @@ type resolutionCacheEntry struct {
 	ExpiresAt time.Time
 }
 
+// maxCacheEntries ceilings the resolution cache independently of the TTL.
+const maxCacheEntries = 1024
+
 func NewResolver(store ResolutionStore) *Resolver {
 	return &Resolver{
 		store:    store,
@@ -43,9 +52,10 @@ func NewResolver(store ResolutionStore) *Resolver {
 }
 
 // ResolveTargetHost resolves the reachable host for a server or a node.
-// It returns ErrNoTarget (with an empty host) instead of falling back: a
-// guessed host would proxy cross-node traffic to the wrong machine.
-func (r *Resolver) ResolveTargetHost(ctx context.Context, serverID string, nodeID string) (string, error) {
+// There is no localhost fallback: an unresolved target returns ErrNoTarget with
+// an empty host, because a guessed host would proxy cross-node traffic to the
+// control-plane machine.
+func (r *Resolver) ResolveTargetHost(ctx context.Context, serverID, nodeID string) (string, error) {
 	if serverID == "" && nodeID == "" {
 		return "", ErrNoTarget
 	}
@@ -63,18 +73,35 @@ func (r *Resolver) ResolveTargetHost(ctx context.Context, serverID string, nodeI
 		return "", err
 	}
 
-	r.mu.Lock()
-	r.cache[cacheKey] = resolutionCacheEntry{
-		Host:      host,
-		ExpiresAt: time.Now().Add(r.cacheTTL),
-	}
-	r.mu.Unlock()
+	r.storeToCache(cacheKey, host)
 
 	return host, nil
 }
 
-func (r *Resolver) resolveFromStore(ctx context.Context, serverID string, nodeID string) (string, error) {
-	if host := r.resolveFromDiscovery(ctx, r.serviceDiscovery(), serverID, nodeID); host != "" {
+// storeToCache keeps only successful resolutions, so a transient store failure
+// cannot poison a key for the whole TTL.
+func (r *Resolver) storeToCache(cacheKey, host string) {
+	if host == "" {
+		return
+	}
+
+	now := time.Now()
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for key, existing := range r.cache {
+		if !now.Before(existing.ExpiresAt) {
+			delete(r.cache, key)
+		}
+	}
+	// Pruning only drops expired keys, so a long TTL still needs a hard ceiling.
+	if len(r.cache) >= maxCacheEntries {
+		r.cache = make(map[string]resolutionCacheEntry)
+	}
+	r.cache[cacheKey] = resolutionCacheEntry{Host: host, ExpiresAt: now.Add(r.cacheTTL)}
+}
+
+func (r *Resolver) resolveFromStore(ctx context.Context, serverID, nodeID string) (string, error) {
+	if host := r.resolveFromDiscovery(ctx, r.discoveryService(), serverID, nodeID); host != "" {
 		return host, nil
 	}
 
@@ -136,15 +163,19 @@ func (r *Resolver) SetServiceDiscovery(d *servicediscovery.Service) {
 	r.discovery = d
 }
 
-// serviceDiscovery snapshots the field: main.go installs it at startup while
+// discoveryService snapshots the field: main.go installs it at startup while
 // handlers resolve concurrently, so a lock-free read would race.
-func (r *Resolver) serviceDiscovery() *servicediscovery.Service {
+func (r *Resolver) discoveryService() *servicediscovery.Service {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.discovery
 }
 
-func (r *Resolver) resolveFromDiscovery(ctx context.Context, d *servicediscovery.Service, serverID string, nodeID string) string {
+// resolveFromDiscovery prefers a healthy endpoint for the server, then a healthy
+// endpoint on the node, then any registered endpoint on the node: the last step
+// is an address lookup, not a health verdict, and HealthFilter still culls
+// unhealthy backends before traffic is routed.
+func (r *Resolver) resolveFromDiscovery(ctx context.Context, d *servicediscovery.Service, serverID, nodeID string) string {
 	if d == nil {
 		return ""
 	}
@@ -178,7 +209,7 @@ func (r *Resolver) resolveFromDiscovery(ctx context.Context, d *servicediscovery
 }
 
 func (r *Resolver) ResolveNodeAddress(ctx context.Context, nodeID string) (netip.Addr, bool) {
-	d := r.serviceDiscovery()
+	d := r.discoveryService()
 	if d == nil || nodeID == "" {
 		return netip.Addr{}, false
 	}
@@ -190,6 +221,8 @@ func (r *Resolver) ResolveNodeAddress(ctx context.Context, nodeID string) (netip
 		}
 	}
 
+	// An unhealthy endpoint still names the right host; the caller's health view
+	// decides whether it may be used.
 	endpoints = d.ListEndpoints(ctx, servicediscovery.EndpointFilter{NodeID: nodeID})
 	for _, ep := range endpoints {
 		if ep.Address.IsValid() {

@@ -4,7 +4,7 @@
 
 ## Finding
 
-- Ups: 243 migrations (`001_init.sql` … `233_a_git_push.sql`)
+- Ups: 244 migrations (`001_init.sql` … `234_target_group_targets_fks.sql`) <!-- generated: ls forge/api/migrations/*.sql | wc -l -->
 - Downs: 9 rollbacks in `forge/api/migrations/rollbacks/` (only for selected batches: `104`, `127`, `138`, `139`, `140`, `170`, `171`, `172`, `212`)
 - Coverage: ~3.7% — `migrate down` cannot reconstruct the full history and was never the vetted production path.
 

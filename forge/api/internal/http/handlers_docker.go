@@ -64,34 +64,37 @@ func registerDockerRoutes(protected fiber.Router, cfg Config, mutationLimiter fi
 	docker.Post("/volumes/prune", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), dockerPruneVolumes(cfg))
 }
 
+// dockerNodeQuery returns the explicit node target. Canonical param is
+// `?node=`; `?nodeId=` is accepted as an alias so Docker (`?node=`) and
+// host/firewall (`?nodeId=`) clients do not diverge. Empty means unnamed.
+func dockerNodeQuery(c *fiber.Ctx) string {
+	if v := strings.TrimSpace(c.Query("node")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.Query("nodeId"))
+}
+
 func resolveDockerNode(cfg Config, c *fiber.Ctx) (*nodeAdminRequest, error) {
-	nodeID := c.Query("node")
-	if nodeID != "" {
-		target, err := resolveSingleNodeTarget(cfg, nodeID)
-		if err != nil {
-			return nil, err
-		}
-		return target, nil
+	// Reads and mutations both require an explicit ?node= (?nodeId= alias):
+	// operating on whichever node happens to be listed first would silently
+	// target the wrong host when the caller omits the node. Never guess.
+	nodeID := dockerNodeQuery(c)
+	if nodeID == "" {
+		return nil, fiber.NewError(fiber.StatusBadRequest, "node query parameter is required (use ?node=<id>, alias ?nodeId=<id>)")
 	}
-	targets, err := resolveAdminNodeTargets(cfg)
-	if err != nil {
-		return nil, respondInternalError(c, err)
-	}
-	if len(targets) == 0 {
-		return nil, fiber.NewError(fiber.StatusNotFound, "no available nodes")
-	}
-	return &targets[0], nil
+	return resolveSingleNodeTarget(cfg, nodeID)
 }
 
 // requireDockerNode resolves the explicit `?node=` target for mutating Docker
 // operations. A mutation without an explicit node would silently act on
 // whichever node happens to be listed first, so it is rejected with 400
-// instead of guessing. Read-only handlers keep the resolveDockerNode
-// fallback; fleet-wide fan-outs (list/prune) address all nodes explicitly.
+// instead of guessing. Read-only handlers use resolveDockerNode, which now
+// enforces the same explicit-node rule; fleet-wide fan-outs (list/prune)
+// address all nodes explicitly.
 func requireDockerNode(cfg Config, c *fiber.Ctx) (*nodeAdminRequest, error) {
-	nodeID := c.Query("node")
+	nodeID := dockerNodeQuery(c)
 	if nodeID == "" {
-		return nil, fiber.NewError(fiber.StatusBadRequest, "node query parameter is required for this operation")
+		return nil, fiber.NewError(fiber.StatusBadRequest, "node query parameter is required for this operation (use ?node=<id>, alias ?nodeId=<id>)")
 	}
 	return resolveSingleNodeTarget(cfg, nodeID)
 }
@@ -369,9 +372,9 @@ func dockerPullImage(cfg Config) fiber.Handler {
 func dockerDeleteImage(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		imageID := c.Params("id")
-		nodeID := c.Query("node")
+		nodeID := dockerNodeQuery(c)
 		if nodeID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required")
+			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required (use ?node=<id>, alias ?nodeId=<id>)")
 		}
 		target, err := resolveSingleNodeTarget(cfg, nodeID)
 		if err != nil {
@@ -453,9 +456,9 @@ func dockerCreateNetwork(cfg Config) fiber.Handler {
 func dockerDeleteNetwork(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		networkID := c.Params("id")
-		nodeID := c.Query("node")
+		nodeID := dockerNodeQuery(c)
 		if nodeID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required")
+			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required (use ?node=<id>, alias ?nodeId=<id>)")
 		}
 		target, err := resolveSingleNodeTarget(cfg, nodeID)
 		if err != nil {
@@ -537,9 +540,9 @@ func dockerCreateVolume(cfg Config) fiber.Handler {
 func dockerDeleteVolume(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		volumeName := c.Params("id")
-		nodeID := c.Query("node")
+		nodeID := dockerNodeQuery(c)
 		if nodeID == "" {
-			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required")
+			return fiber.NewError(fiber.StatusBadRequest, "node query parameter is required (use ?node=<id>, alias ?nodeId=<id>)")
 		}
 		target, err := resolveSingleNodeTarget(cfg, nodeID)
 		if err != nil {

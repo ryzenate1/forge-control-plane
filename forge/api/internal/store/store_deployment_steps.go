@@ -2,8 +2,14 @@ package store
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"time"
 )
+
+// ErrDeploymentStepNotFound is returned when a step write matches no row: an
+// UPDATE that changed nothing is not a recorded transition.
+var ErrDeploymentStepNotFound = errors.New("deployment step not found")
 
 type DeploymentStep struct {
 	ID           string     `json:"id"`
@@ -24,6 +30,30 @@ func (s *Store) CreateDeploymentStep(ctx context.Context, step *DeploymentStep) 
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 	`, step.ID, step.DeploymentID, step.StepNumber, step.StepName, step.Status, step.StartedAt, step.CompletedAt, step.Error, step.CreatedAt, step.UpdatedAt)
 	return err
+}
+
+// CreateDeploymentSteps inserts a whole plan in one transaction. A step list
+// written row by row can fail half way and leave a truncated plan, which the
+// executor would then "complete" having skipped the remaining steps.
+func (s *Store) CreateDeploymentSteps(ctx context.Context, steps []*DeploymentStep) error {
+	if len(steps) == 0 {
+		return errors.New("deployment step plan is empty")
+	}
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	for _, step := range steps {
+		if _, err := tx.Exec(ctx, `
+			INSERT INTO deployment_steps (id, deployment_id, step_number, step_name, status, started_at, completed_at, error, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+		`, step.ID, step.DeploymentID, step.StepNumber, step.StepName, step.Status, step.StartedAt, step.CompletedAt, step.Error, step.CreatedAt, step.UpdatedAt); err != nil {
+			return fmt.Errorf("create step %d (%s): %w", step.StepNumber, step.StepName, err)
+		}
+	}
+	return tx.Commit(ctx)
 }
 
 func (s *Store) ListDeploymentSteps(ctx context.Context, deploymentID string) ([]DeploymentStep, error) {
@@ -60,12 +90,18 @@ func (s *Store) GetDeploymentStep(ctx context.Context, stepID string) (Deploymen
 }
 
 func (s *Store) UpdateDeploymentStep(ctx context.Context, step *DeploymentStep) error {
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployment_steps
 		SET status = $2, started_at = $3, completed_at = $4, error = $5, updated_at = now()
 		WHERE id = $1
 	`, step.ID, step.Status, step.StartedAt, step.CompletedAt, step.Error)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeploymentStepNotFound
+	}
+	return nil
 }
 
 func (s *Store) UpdateDeploymentStepStatus(ctx context.Context, stepID string, status string, errMsg string) error {
@@ -77,7 +113,7 @@ func (s *Store) UpdateDeploymentStepStatus(ctx context.Context, stepID string, s
 	if status == "completed" || status == "failed" || status == "cancelled" {
 		completedAt = &now
 	}
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployment_steps
 		SET status = $2, started_at = CASE WHEN $2 = 'in_progress' AND started_at IS NULL THEN $3 ELSE started_at END,
 		    completed_at = CASE WHEN $2 IN ('completed', 'failed', 'cancelled') THEN $4 ELSE completed_at END,
@@ -85,16 +121,28 @@ func (s *Store) UpdateDeploymentStepStatus(ctx context.Context, stepID string, s
 		    updated_at = now()
 		WHERE id = $1
 	`, stepID, status, startedAt, completedAt, errMsg)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrDeploymentStepNotFound
+	}
+	return nil
 }
 
 func (s *Store) UpdateDeploymentProgressVersioned(ctx context.Context, deploymentID string, version int, progressPct int, nextStep int, timeoutAt *time.Time) error {
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE deployments
 		SET progress_pct = $2, next_step = $3, timeout_at = $4, version = version + 1, updated_at = now()
 		WHERE id = $1 AND version = $5
 	`, deploymentID, progressPct, nextStep, timeoutAt, version)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrVersionConflict
+	}
+	return nil
 }
 
 // UpdateDeploymentProgress is a compatibility shim for callers that do not

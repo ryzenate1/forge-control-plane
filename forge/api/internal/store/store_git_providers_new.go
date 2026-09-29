@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -28,14 +29,18 @@ type GitProvider struct {
 	UpdatedAt    time.Time       `json:"updatedAt"`
 }
 
+// ErrGitProviderNotFound distinguishes a missing git_providers row from a
+// store failure.
+var ErrGitProviderNotFound = errors.New("git provider not found")
+
 func (s *Store) ListGitProviders(ctx context.Context) ([]GitProvider, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id, user_id::text, name, type,
-		       (COALESCE(access_token_plaintext,'') <> '' OR COALESCE(access_token_encrypted,'') <> ''),
+		       (COALESCE(access_token_encrypted,'') <> ''),
 		       COALESCE(token_type,'bearer'), expires_at, COALESCE(scope,''),
 		       COALESCE(base_url,''), COALESCE(username,''), COALESCE(avatar_url,''),
 		       COALESCE(metadata,'{}'::jsonb), created_at, updated_at
-		FROM git_providers ORDER BY name
+		FROM git_providers ORDER BY name LIMIT 500
 	`)
 	if err != nil {
 		return nil, err
@@ -60,46 +65,81 @@ func (s *Store) ListGitProviders(ctx context.Context) ([]GitProvider, error) {
 	return providers, rows.Err()
 }
 
-func (s *Store) GetGitProvider(ctx context.Context, id string) (GitProvider, error) {
+// getGitProviderInternal decrypts the token pair. git_providers has no
+// *_plaintext columns (unlike git_provider_tokens), so reading them used to
+// fail the query outright.
+func (s *Store) getGitProviderInternal(ctx context.Context, id string) (GitProvider, error) {
 	var p GitProvider
-	var accessPlain, accessEncrypted, refreshPlain, refreshEncrypted string
+	var accessEncrypted, refreshEncrypted string
 	err := s.db.QueryRow(ctx, `
 		SELECT id, user_id::text, name, type,
-		       COALESCE(access_token_plaintext,''), COALESCE(access_token_encrypted,''),
-		       COALESCE(refresh_token_plaintext,''), COALESCE(refresh_token_encrypted,''),
+		       COALESCE(access_token_encrypted,''), COALESCE(refresh_token_encrypted,''),
 		       COALESCE(token_type,'bearer'), expires_at, COALESCE(scope,''),
 		       COALESCE(base_url,''), COALESCE(username,''), COALESCE(avatar_url,''),
 		       COALESCE(metadata,'{}'::jsonb), created_at, updated_at
 		FROM git_providers WHERE id = $1
 	`, id).Scan(&p.ID, &p.UserID, &p.Name, &p.Type,
-		&accessPlain, &accessEncrypted, &refreshPlain, &refreshEncrypted,
+		&accessEncrypted, &refreshEncrypted,
 		&p.TokenType, &p.ExpiresAt, &p.Scope,
 		&p.BaseURL, &p.Username, &p.AvatarURL,
 		&p.Metadata, &p.CreatedAt, &p.UpdatedAt)
-	if err != nil {
-		return GitProvider{}, errors.New("git provider not found")
+	if isGitNoRows(err) {
+		return GitProvider{}, ErrGitProviderNotFound
 	}
-	plainToken, err := s.decryptSecret(accessEncrypted, accessPlain, secretAAD("git_providers", p.ID, "access_token"))
 	if err != nil {
-		return GitProvider{}, err
+		return GitProvider{}, fmt.Errorf("git provider lookup: %w", err)
 	}
-	p.AccessToken = plainToken
-	refreshToken, err := s.decryptSecret(refreshEncrypted, refreshPlain, secretAAD("git_providers", p.ID, "refresh_token"))
-	if err == nil {
-		p.RefreshToken = refreshToken
+	p.AccessToken, err = s.decryptSecret(accessEncrypted, "", secretAAD("git_providers", p.ID, "access_token"))
+	if err != nil {
+		return GitProvider{}, fmt.Errorf("git provider %s: %w", p.ID, err)
+	}
+	p.RefreshToken, err = s.decryptSecret(refreshEncrypted, "", secretAAD("git_providers", p.ID, "refresh_token"))
+	if err != nil {
+		return GitProvider{}, fmt.Errorf("git provider %s: %w", p.ID, err)
 	}
 	return p, nil
 }
 
+// GetGitProvider is the read path for responses: both token columns come back
+// masked, never decrypted, so a caller cannot harvest another integration's
+// credentials through a list/get endpoint.
+func (s *Store) GetGitProvider(ctx context.Context, id string) (GitProvider, error) {
+	p, err := s.getGitProviderInternal(ctx, id)
+	if err != nil {
+		return GitProvider{}, err
+	}
+	if p.AccessToken != "" {
+		p.AccessToken = maskedStoreSecret
+	}
+	if p.RefreshToken != "" {
+		p.RefreshToken = maskedStoreSecret
+	}
+	return p, nil
+}
+
+// GetGitProviderUnmasked hands the decrypted token to provider API callers
+// only; it must never be marshalled into an API response.
+func (s *Store) GetGitProviderUnmasked(ctx context.Context, id string) (GitProvider, error) {
+	return s.getGitProviderInternal(ctx, id)
+}
+
 func (s *Store) CreateGitProvider(ctx context.Context, req CreateGitProviderRequest) (GitProvider, error) {
+	switch req.Type {
+	case GitProviderGitHub, GitProviderGitLab, GitProviderBitbucket, GitProviderGitea, GitProviderGeneric:
+	default:
+		return GitProvider{}, fmt.Errorf("unsupported provider type %q", req.Type)
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		return GitProvider{}, errors.New("userId is required")
+	}
 	if strings.TrimSpace(req.Name) == "" {
 		return GitProvider{}, errors.New("name is required")
 	}
-	if req.Type == "" {
-		return GitProvider{}, errors.New("type is required")
-	}
 	if strings.TrimSpace(req.AccessToken) == "" {
 		return GitProvider{}, errors.New("accessToken is required")
+	}
+	if req.AccessToken == maskedStoreSecret || req.RefreshToken == maskedStoreSecret {
+		return GitProvider{}, errors.New("accessToken is masked; supply the real token")
 	}
 	if req.TokenType == "" {
 		req.TokenType = "bearer"
@@ -121,10 +161,10 @@ func (s *Store) CreateGitProvider(ctx context.Context, req CreateGitProviderRequ
 	now := time.Now().UTC()
 	_, err = s.db.Exec(ctx, `
 		INSERT INTO git_providers (id, user_id, name, type,
-			access_token_encrypted, access_token_plaintext,
-			refresh_token_encrypted, refresh_token_plaintext,
+			access_token_encrypted,
+			refresh_token_encrypted,
 			token_type, expires_at, scope, base_url, username, avatar_url, metadata, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, '', $6, '', $7, $8, $9, $10, $11, $12, $13, $14, $15)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 	`, id, req.UserID, req.Name, req.Type,
 		accessEncrypted, refreshEncrypted,
 		req.TokenType, req.ExpiresAt, req.Scope,
@@ -132,12 +172,7 @@ func (s *Store) CreateGitProvider(ctx context.Context, req CreateGitProviderRequ
 	if err != nil {
 		return GitProvider{}, err
 	}
-	p, err := s.GetGitProvider(ctx, id)
-	if err != nil {
-		return GitProvider{}, err
-	}
-	p.AccessToken = maskedStoreSecret
-	return p, nil
+	return s.GetGitProvider(ctx, id)
 }
 
 func (s *Store) DeleteGitProvider(ctx context.Context, id string) error {
@@ -146,7 +181,7 @@ func (s *Store) DeleteGitProvider(ctx context.Context, id string) error {
 		return err
 	}
 	if cmd.RowsAffected() == 0 {
-		return errors.New("git provider not found")
+		return ErrGitProviderNotFound
 	}
 	return nil
 }

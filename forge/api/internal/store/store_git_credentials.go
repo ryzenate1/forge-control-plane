@@ -2,11 +2,14 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 type GitCredentialType string
@@ -17,6 +20,14 @@ const (
 	GitCredentialHTTPSToken   GitCredentialType = "https_token"
 	maskedGitSecret           string            = "********"
 )
+
+// ErrGitCredentialNotFound lets handlers answer 404 without echoing the
+// driver's text; every other failure stays distinguishable from "missing".
+var ErrGitCredentialNotFound = errors.New("git credential not found")
+
+func isGitNoRows(err error) bool {
+	return errors.Is(err, pgx.ErrNoRows) || errors.Is(err, sql.ErrNoRows)
+}
 
 type GitCredential struct {
 	ID             string            `json:"id"`
@@ -79,12 +90,15 @@ func (s *Store) getGitCredentialInternal(ctx context.Context, id string) (GitCre
 	`, id).Scan(&gc.ID, &gc.UserID, &gc.Name, &gc.CredentialType,
 		&plaintext, &encrypted, &gc.PublicKey, &gc.Description,
 		&gc.CreatedAt, &gc.UpdatedAt)
+	if isGitNoRows(err) {
+		return GitCredential{}, ErrGitCredentialNotFound
+	}
 	if err != nil {
-		return GitCredential{}, errors.New("git credential not found")
+		return GitCredential{}, fmt.Errorf("git credential lookup: %w", err)
 	}
 	gc.Credential, err = s.decryptSecret(encrypted, plaintext, secretAAD("git_credentials", gc.ID, "credential"))
 	if err != nil {
-		return GitCredential{}, err
+		return GitCredential{}, fmt.Errorf("git credential %s: %w", gc.ID, err)
 	}
 	return gc, nil
 }
@@ -105,6 +119,9 @@ func (s *Store) GetGitCredentialUnmasked(ctx context.Context, id string) (GitCre
 }
 
 func (s *Store) CreateGitCredential(ctx context.Context, req CreateGitCredentialRequest) (GitCredential, error) {
+	if strings.TrimSpace(req.UserID) == "" {
+		return GitCredential{}, errors.New("userId is required")
+	}
 	if strings.TrimSpace(req.Name) == "" {
 		return GitCredential{}, errors.New("name is required")
 	}
@@ -116,6 +133,11 @@ func (s *Store) CreateGitCredential(ctx context.Context, req CreateGitCredential
 	}
 	if (req.CredentialType == GitCredentialHTTPSPass || req.CredentialType == GitCredentialHTTPSToken) && strings.TrimSpace(req.Credential) == "" {
 		return GitCredential{}, errors.New("credential is required")
+	}
+	// A client that round-trips a masked read back into create would store the
+	// mask itself as the secret; every later clone then fails on authentication.
+	if strings.TrimSpace(req.Credential) == maskedGitSecret {
+		return GitCredential{}, errors.New("credential is masked; supply the real secret")
 	}
 
 	id := uuid.NewString()
@@ -135,6 +157,39 @@ func (s *Store) CreateGitCredential(ctx context.Context, req CreateGitCredential
 	return s.GetGitCredential(ctx, id)
 }
 
+// UpdateGitCredentialSecret rotates the secret of an existing credential in
+// place. Callers must use this instead of delete+recreate: git_sources and
+// server rows reference credentials by id, and a recreated row lands under a
+// new id whose FK silently falls to NULL.
+func (s *Store) UpdateGitCredentialSecret(ctx context.Context, id, credential, publicKey string) (GitCredential, error) {
+	if strings.TrimSpace(credential) == "" {
+		return GitCredential{}, errors.New("credential is required")
+	}
+	if strings.TrimSpace(credential) == maskedGitSecret {
+		return GitCredential{}, errors.New("credential is masked; supply the real secret")
+	}
+	existing, err := s.getGitCredentialInternal(ctx, id)
+	if err != nil {
+		return GitCredential{}, err
+	}
+	encrypted, err := s.encryptSecret(credential, secretAAD("git_credentials", existing.ID, "credential"))
+	if err != nil {
+		return GitCredential{}, err
+	}
+	cmd, err := s.db.Exec(ctx, `
+		UPDATE git_credentials
+		SET credential_encrypted = $1, credential_plaintext = '', public_key = $2, updated_at = $3
+		WHERE id = $4
+	`, encrypted, publicKey, time.Now().UTC(), existing.ID)
+	if err != nil {
+		return GitCredential{}, err
+	}
+	if cmd.RowsAffected() == 0 {
+		return GitCredential{}, ErrGitCredentialNotFound
+	}
+	return s.GetGitCredential(ctx, existing.ID)
+}
+
 func (s *Store) UpdateGitCredentialPublicKey(ctx context.Context, id, publicKey string) (GitCredential, error) {
 	_, err := s.db.Exec(ctx, `
 		UPDATE git_credentials SET public_key = $1, updated_at = $2 WHERE id = $3
@@ -151,7 +206,7 @@ func (s *Store) DeleteGitCredential(ctx context.Context, id string) error {
 		return err
 	}
 	if cmd.RowsAffected() == 0 {
-		return errors.New("git credential not found")
+		return ErrGitCredentialNotFound
 	}
 	return nil
 }

@@ -80,12 +80,38 @@ check_prereqs() {
 # ---------------------------------------------------------------------------
 # Environment detection & generation
 # ---------------------------------------------------------------------------
+# Restricted .env parser: only bare KEY=VALUE lines for an explicit allowlist.
+# Never `source` .env — it runs as root here, so executing it would hand code
+# execution to whoever last wrote the file. Mirrors bootstrap-*.sh.
+load_env_allowlist() {
+  local file="$1"
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="$(printf '%s' "$line" | tr -d '\r')"
+    case "$line" in ''|'#'*) continue ;; esac
+    case "$line" in *"="*) ;; *) echo "Ignoring malformed line in $file: $line" >&2; continue ;; esac
+    local key="${line%%=*}" value="${line#*=}"
+    case "$key" in
+      ''|*[!A-Za-z0-9_]*|[0-9]*) echo "Ignoring bad key in $file: $key" >&2; continue ;;
+    esac
+    case "$key" in
+      TAG|POSTGRES_DB|POSTGRES_USER|POSTGRES_PASSWORD|DATABASE_URL|REDIS_ADDR|REDIS_PASSWORD|PANEL_URL|PANEL_DOMAIN|API_DOMAIN|API_ADDR|API_AUTH_SECRET|APP_KEY|APP_ENV|FORGE_MASTER_KEY|FORGE_MASTER_KEY_ID|FORGE_PREVIOUS_MASTER_KEYS|FORGE_ALLOW_EPHEMERAL_MASTER_KEY|DAEMON_NODE_ID|DAEMON_NODE_TOKEN|DAEMON_ADDR|DAEMON_SFTP_BIND_ADDR|DAEMON_SFTP_HOST_KEY_PASSPHRASE|DAEMON_UPGRADE_PUBLIC_KEY|DAEMON_DATA_DIR|DAEMON_BACKUP_DIR|GAME_SERVERS_HOST_DIR|BEACON_DATABASE_PATH|PANEL_API_URL|METRICS_TOKEN|METRICS_TOKEN_FILE|GRAFANA_ADMIN_USER|GRAFANA_ADMIN_PASSWORD|BACKUP_ADAPTER|S3_BUCKET|S3_REGION|S3_ACCESS_KEY_ID|S3_SECRET_ACCESS_KEY|S3_ENDPOINT|S3_PREFIX|S3_USE_PATH_STYLE|S3_BACKUP_BUCKET|S3_BACKUP_REGION|S3_BACKUP_ACCESS_KEY_ID|S3_BACKUP_SECRET_ACCESS_KEY|S3_BACKUP_PREFIX|PUSHGATEWAY_URL|CADDY_ADMIN|CADDY_HTTP_BIND|CADDY_HTTPS_BIND|POSTGRES_BACKUP_HOST_DIR|POSTGRES_BACKUP_INTERVAL_SECONDS|POSTGRES_BACKUP_RETENTION_DAYS|ALERTMANAGER_SMTP_HOST|ALERTMANAGER_SMTP_PORT|ALERTMANAGER_SMTP_USER|ALERTMANAGER_SMTP_PASS|ALERTMANAGER_SMTP_FROM|ALERTMANAGER_ADMIN_EMAIL|ALERTMANAGER_WEBHOOK_URL|TRAEFIK_ACME_EMAIL|TRAEFIK_CERTIFICATE_RESOLVER|API_IMAGE|WEB_IMAGE|DAEMON_IMAGE|API_INTERNAL_URL|LOAD_BALANCER_ENABLED|LOAD_BALANCER_BIND_HOST|LOAD_BALANCER_PORT_MIN|LOAD_BALANCER_PORT_MAX) ;;
+      *) continue ;;
+    esac
+    case "$value" in
+      '"'*'"') value="${value#\"}"; value="${value%\"}" ;;
+      "'"*"'") value="${value#\'}"; value="${value%\'}";;
+    esac
+    printf -v "$key" '%s' "$value"
+    export "$key"
+  done < "$file"
+}
+
 ensure_env() {
   header "Environment setup"
 
   if [[ -f "$INFRA/.env" ]]; then
-    info "Found existing .env — sourcing"
-    set -a; source "$INFRA/.env"; set +a
+    info "Found existing .env — loading via restricted parser"
+    load_env_allowlist "$INFRA/.env"
     MODE="upgrade"
     warn "Upgrade mode: existing .env detected"
   else
@@ -102,7 +128,7 @@ ensure_env() {
     fi
 
     PANEL_DOMAIN="${PANEL_DOMAIN:-panel.example.com}" bash "$INFRA/gen-env.sh" "$INFRA/.env"
-    set -a; source "$INFRA/.env"; set +a
+    load_env_allowlist "$INFRA/.env"
     ok ".env generated with secure secrets"
   fi
 
@@ -327,7 +353,7 @@ beacon_mode() {
     exit 1
   fi
 
-  set -a; source "$INFRA/.env"; set +a
+  load_env_allowlist "$INFRA/.env"
   : "${DAEMON_NODE_ID:?Set DAEMON_NODE_ID in .env}"
   : "${DAEMON_NODE_TOKEN:?Set DAEMON_NODE_TOKEN in .env}"
   : "${PANEL_API_URL:?Set PANEL_API_URL in .env}"

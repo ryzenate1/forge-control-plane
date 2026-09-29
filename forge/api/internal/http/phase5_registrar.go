@@ -41,6 +41,13 @@ func registerPhase5PipelineRoutes(v1 fiber.Router, protected fiber.Router, cfg *
 	if cfg.Store == nil {
 		return fmt.Errorf("%w: store not configured, pipeline routes not mounted", ErrPhaseSkipped)
 	}
+	// Single validated surface: prefer the injected service main wires so the
+	// DI container stays the authority; only build inline for dev/test when
+	// the field is unset.
+	if cfg.PipelineService != nil {
+		pipelineRoutes(v1, protected, cfg, cfg.PipelineService)
+		return nil
+	}
 	pool := cfg.Store.DB()
 	if pool == nil {
 		return fmt.Errorf("%w: no postgres pool, pipeline routes not mounted", ErrPhaseSkipped)

@@ -66,12 +66,25 @@ func scanGitPushApp(row interface{ Scan(dest ...any) error }) (*GitPushApp, erro
 	return &a, nil
 }
 
+// maxGitPushApps bounds the admin listing. The table is small by design (one
+// row per repository an operator has registered) but an unbounded read of it
+// turns a compromised or slow database into an unbounded response.
+const maxGitPushApps = 500
+
+var errGitPushNoDB = errors.New("no database connection")
+
 func (s *Store) CreateGitPushApp(ctx context.Context, a *GitPushApp) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	if a.ID == "" {
 		return errors.New("git-push app id is required")
+	}
+	if a.Slug == "" {
+		return errors.New("git-push app slug is required")
+	}
+	if a.SharedSecret == "" {
+		return errors.New("git-push app shared secret is required")
 	}
 	if a.Builder == "" {
 		a.Builder = "dockerfile"
@@ -92,20 +105,12 @@ func (s *Store) CreateGitPushApp(ctx context.Context, a *GitPushApp) error {
 	if a.UpdatedAt.IsZero() {
 		a.UpdatedAt = a.CreatedAt
 	}
+	// A plain INSERT, not an upsert: rewriting an existing row through the
+	// create path would silently replace a live app's name, node and branch
+	// while leaving its slug and secret untouched.
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO git_push_apps (id, name, slug, node_id, server_id, builder, branch, repo_path, shared_secret, deployed_sha, last_deploy_at, status, auto_deploy, env_vars, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
-		ON CONFLICT (id) DO UPDATE SET
-			name = EXCLUDED.name,
-			node_id = EXCLUDED.node_id,
-			server_id = EXCLUDED.server_id,
-			builder = EXCLUDED.builder,
-			branch = EXCLUDED.branch,
-			repo_path = EXCLUDED.repo_path,
-			status = EXCLUDED.status,
-			auto_deploy = EXCLUDED.auto_deploy,
-			env_vars = EXCLUDED.env_vars,
-			updated_at = EXCLUDED.updated_at
 	`, a.ID, a.Name, a.Slug, a.NodeID, a.ServerID, a.Builder, a.Branch, a.RepoPath, a.SharedSecret,
 		a.DeployedSHA, a.LastDeployAt, a.Status, a.AutoDeploy, env, a.CreatedAt, a.UpdatedAt)
 	return err
@@ -113,7 +118,7 @@ func (s *Store) CreateGitPushApp(ctx context.Context, a *GitPushApp) error {
 
 func (s *Store) GetGitPushApp(ctx context.Context, id string) (*GitPushApp, error) {
 	if s.db == nil {
-		return nil, ErrGitPushAppNotFound
+		return nil, errGitPushNoDB
 	}
 	row := s.db.QueryRow(ctx, `SELECT `+gitPushAppColumns+` FROM git_push_apps WHERE id = $1`, id)
 	a, err := scanGitPushApp(row)
@@ -130,7 +135,7 @@ func (s *Store) GetGitPushApp(ctx context.Context, id string) (*GitPushApp, erro
 // unique, so this is the receive endpoint's only lookup.
 func (s *Store) GetGitPushAppBySlug(ctx context.Context, slug string) (*GitPushApp, error) {
 	if s.db == nil {
-		return nil, ErrGitPushAppNotFound
+		return nil, errGitPushNoDB
 	}
 	row := s.db.QueryRow(ctx, `SELECT `+gitPushAppColumns+` FROM git_push_apps WHERE slug = $1`, slug)
 	a, err := scanGitPushApp(row)
@@ -145,9 +150,9 @@ func (s *Store) GetGitPushAppBySlug(ctx context.Context, slug string) (*GitPushA
 
 func (s *Store) ListGitPushApps(ctx context.Context) ([]GitPushApp, error) {
 	if s.db == nil {
-		return []GitPushApp{}, nil
+		return nil, errGitPushNoDB
 	}
-	rows, err := s.db.Query(ctx, `SELECT `+gitPushAppColumns+` FROM git_push_apps ORDER BY created_at DESC`)
+	rows, err := s.db.Query(ctx, `SELECT `+gitPushAppColumns+` FROM git_push_apps ORDER BY created_at DESC LIMIT $1`, maxGitPushApps)
 	if err != nil {
 		return nil, err
 	}
@@ -164,13 +169,41 @@ func (s *Store) ListGitPushApps(ctx context.Context) ([]GitPushApp, error) {
 	return apps, rows.Err()
 }
 
+// UpdateGitPushApp writes the mutable fields of an existing row. It is not the
+// create path: updating an app that no longer exists reports that instead of
+// re-inserting a row nobody asked for.
 func (s *Store) UpdateGitPushApp(ctx context.Context, a *GitPushApp) error {
-	return s.CreateGitPushApp(ctx, a)
+	if s.db == nil {
+		return errGitPushNoDB
+	}
+	tag, err := s.db.Exec(ctx, `
+		UPDATE git_push_apps
+		SET name = $2, node_id = $3, server_id = $4, builder = $5, branch = $6,
+		    repo_path = $7, status = $8, auto_deploy = $9, env_vars = $10, updated_at = now()
+		WHERE id = $1
+	`, a.ID, a.Name, a.NodeID, a.ServerID, a.Builder, a.Branch, a.RepoPath,
+		a.Status, a.AutoDeploy, gitPushEnvJSON(a.EnvVars))
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrGitPushAppNotFound
+	}
+	return nil
+}
+
+// gitPushEnvJSON keeps a NULL/empty JSONB column from being written back as an
+// empty byte slice, which Postgres rejects.
+func gitPushEnvJSON(env []byte) []byte {
+	if len(env) == 0 {
+		return []byte(`{}`)
+	}
+	return env
 }
 
 func (s *Store) DeleteGitPushApp(ctx context.Context, id string) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	tag, err := s.db.Exec(ctx, `DELETE FROM git_push_apps WHERE id = $1`, id)
 	if err != nil {
@@ -187,7 +220,7 @@ func (s *Store) DeleteGitPushApp(ctx context.Context, id string) error {
 // write so a concurrent env-var edit cannot be clobbered.
 func (s *Store) SetGitPushAppStatus(ctx context.Context, id string, status string) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE git_push_apps SET status = $2, updated_at = now() WHERE id = $1`, id, status)
 	if err != nil {
@@ -201,12 +234,9 @@ func (s *Store) SetGitPushAppStatus(ctx context.Context, id string, status strin
 
 func (s *Store) SetGitPushAppEnvVars(ctx context.Context, id string, envVars []byte) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
-	if len(envVars) == 0 {
-		envVars = []byte(`{}`)
-	}
-	tag, err := s.db.Exec(ctx, `UPDATE git_push_apps SET env_vars = $2::jsonb, updated_at = now() WHERE id = $1`, id, envVars)
+	tag, err := s.db.Exec(ctx, `UPDATE git_push_apps SET env_vars = $2::jsonb, updated_at = now() WHERE id = $1`, id, gitPushEnvJSON(envVars))
 	if err != nil {
 		return err
 	}
@@ -222,7 +252,7 @@ func (s *Store) SetGitPushAppEnvVars(ctx context.Context, id string, envVars []b
 // secret the caller no longer holds.
 func (s *Store) RotateGitPushSecret(ctx context.Context, id string, secret string) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	if secret == "" {
 		return errors.New("git-push shared secret is required")
@@ -237,24 +267,35 @@ func (s *Store) RotateGitPushSecret(ctx context.Context, id string, secret strin
 	return nil
 }
 
-// MarkGitPushAppDeployed records the SHA a successful deploy landed on, which
-// is what the UI shows as "currently running code".
+// MarkGitPushAppDeployed records the SHA a deploy *completed* on. Nothing calls
+// it yet: the git-push receive path only hands a push to the deployer, and a
+// handoff is not a completed deploy. The deploy-completion callback is the
+// caller this is waiting for; until it exists, deployed_sha stays NULL.
 func (s *Store) MarkGitPushAppDeployed(ctx context.Context, id string, sha string) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
+	}
+	if sha == "" {
+		return errors.New("git-push deployed sha is required")
 	}
 	now := time.Now().UTC()
-	_, err := s.db.Exec(ctx, `
+	tag, err := s.db.Exec(ctx, `
 		UPDATE git_push_apps
 		SET deployed_sha = $2, last_deploy_at = $3, status = 'ready', updated_at = $3
 		WHERE id = $1
 	`, id, sha, now)
-	return err
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrGitPushAppNotFound
+	}
+	return nil
 }
 
 func (s *Store) RecordGitPushEvent(ctx context.Context, e *GitPushEvent) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	if e.ID == "" {
 		return errors.New("git-push event id is required")
@@ -274,21 +315,29 @@ func (s *Store) RecordGitPushEvent(ctx context.Context, e *GitPushEvent) error {
 
 // UpdatePushEventStatus advances a recorded push. An empty errorMessage stores
 // NULL so the events table only carries a message when there genuinely is one.
+// Updating an event that is not there is an error: the receive path reports the
+// state it wrote, and a no-op write would report a state that was never stored.
 func (s *Store) UpdatePushEventStatus(ctx context.Context, eventID string, status string, errorMessage string) error {
 	if s.db == nil {
-		return nil
+		return errGitPushNoDB
 	}
 	var msg *string
 	if errorMessage != "" {
 		msg = &errorMessage
 	}
-	_, err := s.db.Exec(ctx, `UPDATE git_push_events SET status = $2, error = $3 WHERE id = $1`, eventID, status, msg)
-	return err
+	tag, err := s.db.Exec(ctx, `UPDATE git_push_events SET status = $2, error = $3 WHERE id = $1`, eventID, status, msg)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("git-push event not found")
+	}
+	return nil
 }
 
 func (s *Store) ListGitPushEvents(ctx context.Context, appID string, limit int) ([]GitPushEvent, error) {
 	if s.db == nil {
-		return []GitPushEvent{}, nil
+		return nil, errGitPushNoDB
 	}
 	if limit <= 0 || limit > 200 {
 		limit = 50

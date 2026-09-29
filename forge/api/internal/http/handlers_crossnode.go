@@ -68,17 +68,24 @@ func registerCrossNodeRoutes(protected fiber.Router, cfg Config, resolver *cross
 			return c.JSON(fiber.Map{"message": "cache ttl set", "ttl": ttl.String()})
 		})
 
-		// Describe unreachable backend
+		// Describe a backend using what the prober actually recorded. An unbounded
+		// port is rejected here: the health key is host:port, so a nonsense port
+		// would silently alias onto another backend's record.
 		crossnodeGroup.Get("/describe/:host/:port", requireRole("admin"), requireAdminScope("routing.read"), func(c *fiber.Ctx) error {
-			host := c.Params("host")
-			portStr := c.Params("port")
+			host := strings.TrimSpace(c.Params("host"))
+			if host == "" {
+				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "host is required"})
+			}
 
-			port, err := strconv.Atoi(portStr)
-			if err != nil {
-				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "invalid port"})
+			port, err := strconv.Atoi(c.Params("port"))
+			if err != nil || port < 1 || port > 65535 {
+				return c.Status(http.StatusBadRequest).JSON(fiber.Map{"error": "port must be an integer between 1 and 65535"})
 			}
 
 			description := resolver.DescribeUnreachable(host, port)
+			if ingressSync != nil {
+				description = ingressSync.DescribeBackend(host, port)
+			}
 			return c.JSON(fiber.Map{"data": fiber.Map{"description": description}})
 		})
 	}
@@ -95,16 +102,35 @@ func registerCrossNodeRoutes(protected fiber.Router, cfg Config, resolver *cross
 			return c.JSON(fiber.Map{"data": ingressSync.CurrentPolicies()})
 		})
 
-		// Trigger immediate sync
+		// Observed cross-node backend verdicts. These were previously unexposed, so
+		// an operator had no way to see which node backends the prober believed up.
+		crossnodeGroup.Get("/ingress/backends", requireRole("admin"), requireAdminScope("routing.read"), func(c *fiber.Ctx) error {
+			return c.JSON(fiber.Map{"data": ingressSync.Backends()})
+		})
+
+		crossnodeGroup.Get("/ingress/route-groups", requireRole("admin"), requireAdminScope("routing.read"), func(c *fiber.Ctx) error {
+			return c.JSON(fiber.Map{"data": ingressSync.RouteGenerationRecords()})
+		})
+
+		// Reconcile is the only route here that can change the gateway, and it
+		// converges through trafficmanager, which owns the live rule set.
 		crossnodeGroup.Post("/ingress/sync", mutationLimiter, requireRole("admin"), requireAdminScope("routing.write"), func(c *fiber.Ctx) error {
 			ctx, cancel := requestContext()
 			defer cancel()
 
-			if err := ingressSync.Sync(ctx); err != nil {
+			result, err := ingressSync.Reconcile(ctx)
+			if errors.Is(err, crossnode.ErrNoReconciler) {
+				return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
+					"synced":  false,
+					"skipped": true,
+					"error":   err.Error(),
+					"detail":  "cross-node ingress is observation-only until a gateway reconciler is wired",
+				})
+			}
+			if err != nil {
 				return respondInternalError(c, err)
 			}
-
-			return c.JSON(fiber.Map{"message": "sync triggered successfully"})
+			return c.JSON(fiber.Map{"data": result, "synced": true})
 		})
 
 		// Get health filter stats
@@ -114,16 +140,21 @@ func registerCrossNodeRoutes(protected fiber.Router, cfg Config, resolver *cross
 			return c.JSON(fiber.Map{"data": ingressSync.Health(ctx)})
 		})
 
-		// Cleanup stale routes
 		crossnodeGroup.Post("/ingress/cleanup", mutationLimiter, requireRole("admin"), requireAdminScope("routing.write"), func(c *fiber.Ctx) error {
 			ctx, cancel := requestContext()
 			defer cancel()
 
 			if err := ingressSync.CleanupStale(ctx); err != nil {
+				if errors.Is(err, crossnode.ErrNoReconciler) {
+					return c.Status(http.StatusServiceUnavailable).JSON(fiber.Map{
+						"cleaned": false,
+						"error":   err.Error(),
+						"detail":  "refusing to clean routes without the reconciler's live rule set: an empty active set would withdraw every live route",
+					})
+				}
 				return respondInternalError(c, err)
 			}
-
-			return c.JSON(fiber.Map{"message": "stale routes cleaned up"})
+			return c.JSON(fiber.Map{"cleaned": true, "message": "stale routes cleaned up"})
 		})
 
 		// Get sync statistics
@@ -132,21 +163,43 @@ func registerCrossNodeRoutes(protected fiber.Router, cfg Config, resolver *cross
 		})
 	}
 
-	// Cross-node routing health check
 	crossnodeGroup.Get("/health", requireRole("admin"), requireAdminScope("routing.read"), func(c *fiber.Ctx) error {
+		ctx, cancel := requestContext()
+		defer cancel()
+
 		status := fiber.Map{
 			"resolver_available":     resolver != nil,
 			"ingress_sync_available": ingressSync != nil,
 		}
-
-		if resolver != nil {
-			status["resolver_status"] = "active"
+		var reasons []string
+		if resolver == nil {
+			reasons = append(reasons, "no cross-node resolver configured")
 		}
 
 		if ingressSync != nil {
-			status["ingress_sync_status"] = "active"
+			stats := ingressSync.Stats()
+			status["ingress"] = stats
+			status["gateway"] = ingressSync.Health(ctx)
+			if !stats.ReconcilerConfigured {
+				reasons = append(reasons, "no gateway reconciler wired: ingress is observation-only")
+			}
+			if stats.RuleCount == 0 {
+				reasons = append(reasons, "no enabled routing rules observed")
+			}
+			if stats.BackendCount == 0 {
+				reasons = append(reasons, "no backend has a probe result yet")
+			}
+		} else {
+			reasons = append(reasons, "no ingress synchronizer configured")
 		}
 
+		// "active" used to be derived from a nil check, which reported a component
+		// that provably did no work as healthy.
+		status["status"] = "ok"
+		if len(reasons) > 0 {
+			status["status"] = "degraded"
+			status["reasons"] = reasons
+		}
 		return c.JSON(fiber.Map{"data": status})
 	})
 }

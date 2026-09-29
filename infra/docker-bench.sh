@@ -27,10 +27,16 @@ check_container() {
   echo "--- Container: $c ---"
 
   # 1. Running as non-root user
+  # NOTE: WARN (not FAIL) when the image declares no USER. Base images such as
+  # postgres/redis/caddy must start as root to chown data dirs and bind
+  # privileged ports before dropping privileges; compose mitigates with
+  # no-new-privileges + cap_drop ALL. FAIL only on an explicit root user.
   local user
   user=$(docker inspect "$c" --format '{{.Config.User}}' 2>/dev/null || echo "")
-  if [ -z "$user" ] || [ "$user" = "" ] || [ "$user" = "root" ] || [ "$user" = "0" ]; then
-    fail "$c runs as root"
+  if [ "$user" = "root" ] || [ "$user" = "0" ] || [ "$user" = "0:0" ]; then
+    fail "$c explicitly runs as root (User: $user)"
+  elif [ -z "$user" ]; then
+    warn "$c declares no USER (runs as root by default; mitigated by no-new-privileges + cap_drop ALL)"
   else
     pass "$c runs as user '$user'"
   fi
@@ -100,10 +106,16 @@ else
   warn "Docker socket not found at /var/run/docker.sock"
 fi
 
-# Find GamePanel containers
-CONTAINERS=$(docker ps --format "{{.Names}}" 2>/dev/null \
-  | grep -E '(gamepanel|forge|beacon|api|daemon|web|postgres|redis|prometheus|alertmanager|grafana)' \
-  || true)
+# Find GamePanel containers by compose label first (exact project match), then
+# fall back to the gamepanel/forge/beacon name prefix. The previous broad
+# substring match (api|daemon|web|postgres|redis|...) also swept up unrelated
+# containers (e.g. a dev's `my-api`) and graded them against our posture.
+CONTAINERS=$(docker ps --filter "label=app.organization=gamepanel" --format "{{.Names}}" 2>/dev/null || true)
+if [ -z "$CONTAINERS" ]; then
+  CONTAINERS=$(docker ps --format "{{.Names}}" 2>/dev/null \
+    | grep -E '^(gamepanel|forge|beacon)[-_]' \
+    || true)
+fi
 
 if [ -z "$CONTAINERS" ]; then
   echo ""

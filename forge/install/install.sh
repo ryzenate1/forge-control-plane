@@ -339,7 +339,11 @@ check_ports() {
     if [ "$available" = false ]; then
         log_warn "Some required ports are already in use"
         if [ "$SKIP_CHECKS" = false ]; then
-            read -p "Continue anyway? [y/N]: " -n 1 -r
+            if [ ! -t 0 ]; then
+                log_error "Ports in use and no TTY to confirm. Free the ports or re-run with --skip-checks."
+                exit 1
+            fi
+            read -p "Continue anyway? [y/N]: " -n 1 -r || REPLY="n"
             echo
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                 exit 1
@@ -356,7 +360,11 @@ check_existing_installation() {
     if [ -d "$INSTALL_DIR" ] || [ -d "$DATA_DIR" ] || [ -d "$CONFIG_DIR" ]; then
         if [ "$FORCE_REINSTALL" = false ]; then
             log_warn "Existing installation detected"
-            read -p "Reinstall over existing installation? [y/N]: " -n 1 -r
+            if [ ! -t 0 ]; then
+                log_error "Existing installation found and no TTY to confirm. Re-run with --force or remove it first."
+                exit 1
+            fi
+            read -p "Reinstall over existing installation? [y/N]: " -n 1 -r || REPLY="n"
             echo
             if [[ ! $REPLY =~ ^[Yy]$ ]]; then
                 log_info "Aborting installation"
@@ -508,6 +516,31 @@ create_directories() {
 generate_configuration() {
     log_step "Generating configuration"
 
+    # Service secrets: generated once per install, never logged. Reuse
+    # existing values when re-running against $CONFIG_DIR/.env so a
+    # reinstall does not invalidate encrypted data.
+    if [ -f "$CONFIG_DIR/.env" ]; then
+        # Restricted load: bare KEY=VALUE allowlist only, never sourced.
+        while IFS= read -r line || [ -n "$line" ]; do
+            line="$(printf '%s' "$line" | tr -d '\r')"
+            case "$line" in ''|'#'*) continue ;; esac
+            case "$line" in *"="*) ;; *) continue ;; esac
+            _k="${line%%=*}" _v="${line#*=}"
+            case "$_k" in API_AUTH_SECRET|APP_KEY|FORGE_MASTER_KEY|FORGE_TAG) ;;
+                *) continue ;;
+            esac
+            case "$_v" in '"'*'"') _v="${_v#\"}"; _v="${_v%\"}" ;;
+                "'"*"'") _v="${_v#\'}"; _v="${_v%\'}";;
+            esac
+            printf -v "$_k" '%s' "$_v"
+        done < "$CONFIG_DIR/.env"
+    fi
+    : "${API_AUTH_SECRET:=$(openssl rand -base64 32 | tr -d '\n')}"
+    : "${APP_KEY:=base64:$(openssl rand -base64 32 | tr -d '\n')}"
+    : "${FORGE_MASTER_KEY:=$(openssl rand -base64 32 | tr -d '\n')}"
+    : "${FORGE_TAG:=${FORGE_RELEASE_TAG:-v1.0.0}}"
+    export API_AUTH_SECRET APP_KEY FORGE_MASTER_KEY FORGE_TAG
+
     # Secrets are shell-quoted with %q so values containing spaces, $, quotes
     # or newlines survive a later `set -a; . /etc/gamepanel/.env` re-source.
     # Never log or echo these values.
@@ -517,6 +550,11 @@ generate_configuration() {
         printf 'GAMEPANEL_ADMIN_EMAIL=%q\n' "$ADMIN_EMAIL"
         printf 'GAMEPANEL_ADMIN_PASSWORD=%q\n' "$ADMIN_PASSWORD"
         printf 'GAMEPANEL_DB_PASSWORD=%q\n' "$DB_PASSWORD"
+        printf 'API_AUTH_SECRET=%q\n' "$API_AUTH_SECRET"
+        printf 'APP_KEY=%q\n' "$APP_KEY"
+        printf 'FORGE_MASTER_KEY=%q\n' "$FORGE_MASTER_KEY"
+        printf 'FORGE_MASTER_KEY_ID=%q\n' "primary"
+        printf 'FORGE_TAG=%q\n' "$FORGE_TAG"
         cat << 'STATIC'
 # Database Configuration
 DB_HOST=localhost
@@ -546,22 +584,33 @@ generate_docker_compose() {
     # generate time. Secrets are double-quoted in YAML so special characters
     # ($, :, #, spaces) do not break parsing; embedded double-quotes and
     # backslashes are escaped first.
-    local db_pw_esc fqdn_esc
+    # Images are pinned to $FORGE_TAG (never :latest) for reproducible
+    # installs. Internal ports bind loopback-only; the public entrypoint is
+    # the nginx proxy on 80/443.
+    local db_pw_esc fqdn_esc api_secret_esc app_key_esc master_key_esc tag_esc
     db_pw_esc=${DB_PASSWORD//\\/\\\\}
     db_pw_esc=${db_pw_esc//\"/\\\"}
     fqdn_esc=${FQDN//\\/\\\\}
     fqdn_esc=${fqdn_esc//\"/\\\"}
+    api_secret_esc=${API_AUTH_SECRET//\\/\\\\}
+    api_secret_esc=${api_secret_esc//\"/\\\"}
+    app_key_esc=${APP_KEY//\\/\\\\}
+    app_key_esc=${app_key_esc//\"/\\\"}
+    master_key_esc=${FORGE_MASTER_KEY//\\/\\\\}
+    master_key_esc=${master_key_esc//\"/\\\"}
+    tag_esc=${FORGE_TAG//\\/\\\\}
+    tag_esc=${tag_esc//\"/\\\"}
 
     cat > "$INSTALL_DIR/docker-compose.yml" << EOF
 version: '3.8'
 
 services:
   api:
-    image: ghcr.io/gamepanel/forge-api:latest
+    image: ghcr.io/gamepanel/forge-api:"$tag_esc"
     container_name: gamepanel-api
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - gamepanel_data:/data
       - gamepanel_config:/config
@@ -569,17 +618,33 @@ services:
       - TZ=UTC
       - PUID=1000
       - PGID=1000
+      - API_AUTH_SECRET="$api_secret_esc"
+      - APP_KEY="$app_key_esc"
+      - FORGE_MASTER_KEY="$master_key_esc"
+      - FORGE_MASTER_KEY_ID=primary
+      - APP_ENV=production
+      - DATABASE_URL=postgres://gamepanel:$db_pw_esc@database:5432/gamepanel?sslmode=disable
     networks:
       - gamepanel_network
     depends_on:
       - database
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/api/v1/health/ready > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   database:
     image: postgres:15-alpine
     container_name: gamepanel-db
     restart: unless-stopped
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - gamepanel_db_data:/var/lib/postgresql/data
     environment:
@@ -589,13 +654,29 @@ services:
       - TZ=UTC
     networks:
       - gamepanel_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gamepanel -d gamepanel"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
 
   web:
-    image: ghcr.io/gamepanel/forge-web:latest
+    image: ghcr.io/gamepanel/forge-web:"$tag_esc"
     container_name: gamepanel-web
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     volumes:
       - gamepanel_data:/data
     environment:
@@ -606,6 +687,16 @@ services:
       - gamepanel_network
     depends_on:
       - api
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/ > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   proxy:
     image: nginx:alpine
@@ -622,6 +713,22 @@ services:
     depends_on:
       - api
       - web
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- https://127.0.0.1/ -k > /dev/null 2>&1 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - NET_BIND_SERVICE
+      - SETGID
+      - SETUID
 
 networks:
   gamepanel_network:
@@ -636,12 +743,38 @@ volumes:
     driver: local
 EOF
 
-    log_info "Docker Compose configuration generated"
+    log_info "Docker Compose configuration generated (images pinned to $FORGE_TAG, loopback-only internal ports)"
+}
+
+ensure_ssl_certs() {
+    log_step "Ensuring TLS certificates"
+    # The nginx proxy mounts ./ssl and requires fullchain.pem + privkey.pem.
+    # With no certs the proxy crash-loops and verify_installation fails on a
+    # missing gamepanel-proxy. Generate a self-signed pair as a bootstrap so
+    # the stack comes up; replace with real (Let's Encrypt) certs after.
+    mkdir -p "$INSTALL_DIR/ssl"
+    if [ -f "$INSTALL_DIR/ssl/fullchain.pem" ] && [ -f "$INSTALL_DIR/ssl/privkey.pem" ]; then
+        log_info "TLS certificates already present in $INSTALL_DIR/ssl/"
+        return 0
+    fi
+    if ! command -v openssl >/dev/null 2>&1; then
+        log_error "openssl is required to bootstrap TLS certificates"
+        exit 1
+    fi
+    openssl req -x509 -newkey rsa:2048 -sha256 -days 90 -nodes \
+        -keyout "$INSTALL_DIR/ssl/privkey.pem" \
+        -out "$INSTALL_DIR/ssl/fullchain.pem" \
+        -subj "/CN=${FQDN}" \
+        -addext "subjectAltName=DNS:${FQDN}" 2>/dev/null
+    chmod 600 "$INSTALL_DIR/ssl/privkey.pem"
+    chmod 644 "$INSTALL_DIR/ssl/fullchain.pem"
+    log_warn "Self-signed certificate generated for ${FQDN} (bootstrap only)"
+    log_warn "Replace $INSTALL_DIR/ssl/ with real certificates, then: cd $INSTALL_DIR && docker compose restart proxy"
 }
 
 generate_nginx_config() {
     log_step "Generating Nginx configuration"
-    
+
     cat > "$INSTALL_DIR/nginx.conf" << EOF
 worker_processes auto;
 
@@ -652,6 +785,11 @@ events {
 http {
     include /etc/nginx/mime.types;
     default_type application/octet-stream;
+
+    # Rate limiting: generic API bucket + strict auth bucket.
+    limit_req_zone \$binary_remote_addr zone=api:10m rate=10r/s;
+    limit_req_zone \$binary_remote_addr zone=auth:10m rate=5r/m;
+    limit_req_status 429;
 
     upstream api {
         server api:8080;
@@ -680,15 +818,23 @@ http {
         ssl_session_timeout 1d;
         ssl_session_cache shared:SSL:50m;
         ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
+        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384:ECDHE-ECDSA-CHACHA20-POLY1305:ECDHE-RSA-CHACHA20-POLY1305;
         ssl_prefer_server_ciphers on;
 
-        # Security headers
+        # Security headers (HSTS + CSP included; X-XSS-Protection disabled —
+        # legacy header that re-enables exploitable XSS auditors).
+        add_header Strict-Transport-Security "max-age=63072000; includeSubDomains; preload" always;
+        add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' wss: ws:; frame-ancestors 'none'" always;
         add_header X-Frame-Options "SAMEORIGIN" always;
         add_header X-Content-Type-Options "nosniff" always;
-        add_header X-XSS-Protection "1; mode=block" always;
+        add_header X-XSS-Protection "0" always;
+        add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+        add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+        client_max_body_size 64m;
 
         location / {
+            limit_req zone=api burst=20 nodelay;
             proxy_pass http://web;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
@@ -699,6 +845,16 @@ http {
         }
 
         location /api/ {
+            limit_req zone=api burst=20 nodelay;
+            proxy_pass http://api;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+        }
+
+        location /api/v1/auth/ {
+            limit_req zone=auth burst=5 nodelay;
             proxy_pass http://api;
             proxy_set_header Host \$host;
             proxy_set_header X-Real-IP \$remote_addr;
@@ -787,11 +943,22 @@ verify_installation() {
     # Test web connectivity
     local web_health
     web_health=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:3000 || echo "000")
-    
+
     if [[ "$web_health" != "200" ]]; then
         log_warn "Web health check failed (HTTP $web_health)"
     else
         log_info "Web health check passed"
+    fi
+
+    # Test proxy TLS (self-signed bootstrap cert is expected on first install;
+    # -k skips chain verification, failure here is a warning, not fatal).
+    local proxy_health
+    proxy_health=$(curl -sk -o /dev/null -w "%{http_code}" https://localhost/ || echo "000")
+
+    if [[ "$proxy_health" != "200" && "$proxy_health" != "404" && "$proxy_health" != "502" ]]; then
+        log_warn "Proxy health check failed (HTTPS $proxy_health)"
+    else
+        log_info "Proxy health check passed (HTTPS $proxy_health)"
     fi
 }
 
@@ -824,8 +991,8 @@ show_summary() {
     echo "   Update:     cd $INSTALL_DIR && docker compose pull && docker compose up -d"
     echo ""
     echo "⚠️  Important Notes:"
-    echo "   - SSL certificates are not automatically configured"
-    echo "   - Please set up SSL certificates in $INSTALL_DIR/ssl/"
+    echo "   - A self-signed TLS bootstrap cert was generated in $INSTALL_DIR/ssl/"
+    echo "   - Replace it with real certificates, then: cd $INSTALL_DIR && docker compose restart proxy"
     echo "   - Default credentials: $ADMIN_EMAIL / [your password]"
     echo ""
 }
@@ -856,6 +1023,7 @@ main() {
     create_directories
     generate_configuration
     generate_docker_compose
+    ensure_ssl_certs
     generate_nginx_config
     start_services
     verify_installation

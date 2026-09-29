@@ -10,9 +10,11 @@ const nextConfig: NextConfig = {
   output: "standalone",
   outputFileTracingRoot: projectRoot,
   images: {
-    remotePatterns: [
-      { protocol: 'https', hostname: '**' },
-    ],
+    // No remote optimizer patterns: branding artwork renders through <img>
+    // and app-store icons pass `unoptimized`, so every remote host must be
+    // allow-listed here before next/image is used for it. A '**' wildcard
+    // would let the optimizer fetch from any host on the internet.
+    remotePatterns: [],
   },
   async rewrites() {
     return [

@@ -6,8 +6,14 @@ import (
 )
 
 func TestGeneratePassword(t *testing.T) {
-	pw1 := generatePassword(32)
-	pw2 := generatePassword(32)
+	pw1, err := generatePassword(32)
+	if err != nil {
+		t.Fatalf("generatePassword: %v", err)
+	}
+	pw2, err := generatePassword(32)
+	if err != nil {
+		t.Fatalf("generatePassword: %v", err)
+	}
 	if pw1 == pw2 {
 		t.Error("generated passwords should be different")
 	}
@@ -17,8 +23,14 @@ func TestGeneratePassword(t *testing.T) {
 }
 
 func TestGenerateDBName(t *testing.T) {
-	name1 := generateDBName()
-	name2 := generateDBName()
+	name1, err := generateDBName()
+	if err != nil {
+		t.Fatalf("generateDBName: %v", err)
+	}
+	name2, err := generateDBName()
+	if err != nil {
+		t.Fatalf("generateDBName: %v", err)
+	}
 	if name1 == name2 {
 		t.Error("generated db names should be different")
 	}
@@ -28,8 +40,14 @@ func TestGenerateDBName(t *testing.T) {
 }
 
 func TestGenerateUsername(t *testing.T) {
-	u1 := generateUsername()
-	u2 := generateUsername()
+	u1, err := generateUsername()
+	if err != nil {
+		t.Fatalf("generateUsername: %v", err)
+	}
+	u2, err := generateUsername()
+	if err != nil {
+		t.Fatalf("generateUsername: %v", err)
+	}
 	if u1 == u2 {
 		t.Error("generated usernames should be different")
 	}
@@ -85,7 +103,10 @@ func TestEnvVarsForDB(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.engine, func(t *testing.T) {
-			env := envVarsForDB(tt.engine, tt.dbName, tt.username, tt.password)
+			env, err := envVarsForDB(tt.engine, tt.dbName, tt.username, tt.password)
+			if err != nil {
+				t.Fatalf("envVarsForDB: %v", err)
+			}
 			for _, want := range tt.contains {
 				found := false
 				for _, e := range env {

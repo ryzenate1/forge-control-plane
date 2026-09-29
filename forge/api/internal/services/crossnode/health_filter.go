@@ -44,6 +44,10 @@ type HealthFilter struct {
 	reaperDone    chan struct{}
 }
 
+// defaultHealthTrustWindow is the freshness window used when no usable interval
+// was configured, so an unset window never means "healthy forever".
+const defaultHealthTrustWindow = 30 * time.Second
+
 // NewHealthFilter builds a filter that marks a backend down after threshold
 // consecutive failures and stops trusting a healthy backend once its record is
 // older than interval (see isTrustedLocked). Both arguments are clamped to sane
@@ -53,7 +57,7 @@ func NewHealthFilter(threshold int, interval time.Duration) *HealthFilter {
 		threshold = 2
 	}
 	if interval <= 0 {
-		interval = 30 * time.Second
+		interval = defaultHealthTrustWindow
 	}
 	return &HealthFilter{
 		healthState: make(map[string]*BackendHealth),
@@ -123,6 +127,16 @@ func (hf *HealthFilter) RecordFailure(host string, port int, reason string) {
 	}
 }
 
+// trustWindow makes hf.interval meaningful even for a hand-built filter: a
+// non-positive interval falls back to the default rather than trusting healthy
+// records forever.
+func (hf *HealthFilter) trustWindow() time.Duration {
+	if hf.interval <= 0 {
+		return defaultHealthTrustWindow
+	}
+	return hf.interval
+}
+
 // isTrustedLocked reports whether a recorded entry may currently receive
 // traffic. Callers must hold at least hf.mu.RLock().
 //
@@ -136,10 +150,7 @@ func (hf *HealthFilter) isTrustedLocked(entry *BackendHealth) bool {
 	if entry == nil || entry.Status != HealthHealthy {
 		return false
 	}
-	if hf.interval <= 0 {
-		return true
-	}
-	return !entry.LastChecked.Before(time.Now().Add(-hf.interval))
+	return !entry.LastChecked.Before(time.Now().Add(-hf.trustWindow()))
 }
 
 func (hf *HealthFilter) IsHealthy(host string, port int) bool {
@@ -194,6 +205,17 @@ func (hf *HealthFilter) GetHealth(host string, port int) *BackendHealth {
 	return &cp
 }
 
+// sortHealthEntries fixes the list order: map iteration is randomised per run,
+// and these lists back an admin view that is polled, not refetched on demand.
+func sortHealthEntries(entries []BackendHealth) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].Host != entries[j].Host {
+			return entries[i].Host < entries[j].Host
+		}
+		return entries[i].Port < entries[j].Port
+	})
+}
+
 // GetAllHealth returns every recorded entry, sorted by host then port so that
 // repeated polling (the admin backends view) yields a stable, diffable ordering
 // instead of Go's per-iteration map order.
@@ -205,21 +227,36 @@ func (hf *HealthFilter) GetAllHealth() []BackendHealth {
 	for _, entry := range hf.healthState {
 		result = append(result, *entry)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		if result[i].Host != result[j].Host {
-			return result[i].Host < result[j].Host
-		}
-		return result[i].Port < result[j].Port
-	})
+	sortHealthEntries(result)
 	return result
 }
 
+// Count reports how many backends currently carry a recorded verdict. A backend
+// with no verdict is absent from the map and is reported by IsHealthy /
+// FilterHealthy as unknown, so it is not counted here.
+func (hf *HealthFilter) Count() int {
+	hf.mu.RLock()
+	defer hf.mu.RUnlock()
+
+	return len(hf.healthState)
+}
+
+// Clear forgets the record for one backend, leaving it unknown.
 func (hf *HealthFilter) Clear(host string, port int) {
 	hf.mu.Lock()
 	defer hf.mu.Unlock()
 
 	key := backendKey(host, port)
 	delete(hf.healthState, key)
+}
+
+// MarkUnknown drops a backend's recorded verdict so it reads unknown again,
+// e.g. after its target changed and the old probe no longer describes it.
+func (hf *HealthFilter) MarkUnknown(host string, port int) {
+	hf.mu.Lock()
+	defer hf.mu.Unlock()
+
+	delete(hf.healthState, backendKey(host, port))
 }
 
 func (hf *HealthFilter) ClearAll() {
@@ -229,6 +266,8 @@ func (hf *HealthFilter) ClearAll() {
 	hf.healthState = make(map[string]*BackendHealth)
 }
 
+// StaleEntries returns copies of the records last touched before the cutoff,
+// sorted like GetAllHealth so polled views stay stable.
 func (hf *HealthFilter) StaleEntries(olderThan time.Duration) []BackendHealth {
 	hf.mu.RLock()
 	defer hf.mu.RUnlock()
@@ -240,6 +279,7 @@ func (hf *HealthFilter) StaleEntries(olderThan time.Duration) []BackendHealth {
 			stale = append(stale, *entry)
 		}
 	}
+	sortHealthEntries(stale)
 	return stale
 }
 
@@ -340,18 +380,22 @@ func (hf *HealthFilter) StopReaper() {
 	slog.Info("health filter reaper stopped")
 }
 
+// reapStaleEntries drops records untouched for olderThan. The cutoff test and
+// the delete share one write lock so a backend that recovered in between is not
+// deleted on the strength of an out-of-date reading.
 func (hf *HealthFilter) reapStaleEntries(olderThan time.Duration) {
-	stale := hf.StaleEntries(olderThan)
-	if len(stale) == 0 {
-		return
-	}
-
 	hf.mu.Lock()
-	for _, entry := range stale {
-		key := backendKey(entry.Host, entry.Port)
-		delete(hf.healthState, key)
+	cutoff := time.Now().Add(-olderThan)
+	reaped := 0
+	for key, entry := range hf.healthState {
+		if entry.LastChecked.Before(cutoff) {
+			delete(hf.healthState, key)
+			reaped++
+		}
 	}
 	hf.mu.Unlock()
 
-	slog.Info("health filter reaped stale entries", "count", len(stale))
+	if reaped > 0 {
+		slog.Info("health filter reaped stale entries", "count", reaped)
+	}
 }

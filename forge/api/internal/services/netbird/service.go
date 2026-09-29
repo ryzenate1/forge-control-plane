@@ -20,10 +20,10 @@ import (
 	"gamepanel/forge/internal/store"
 )
 
-// errNotConfigured is returned by mutating calls when NETBIRD_API_URL or
-// NETBIRD_API_TOKEN is missing; read calls return empty results instead so
-// admin dashboards render cleanly on deployments without a VPN control plane.
-var errNotConfigured = errors.New("netbird management API is not configured (set NETBIRD_API_URL and NETBIRD_API_TOKEN)")
+// ErrNotConfigured is returned by every call — reads included — when
+// NETBIRD_API_URL or NETBIRD_API_TOKEN is missing. An absent mesh reports
+// itself as unavailable; it is never rendered as an empty one.
+var ErrNotConfigured = errors.New("Forge Mesh management API (driver: NetBird) is not configured (set NETBIRD_API_URL and NETBIRD_API_TOKEN)")
 
 // GroupRef is the minimum group representation embedded in peer, route and
 // ACL payloads (NetBird's GroupMinimum).
@@ -208,7 +208,7 @@ func (s *Service) log() *slog.Logger {
 // 204/empty bodies.
 func (s *Service) do(ctx context.Context, method, path string, body, out any) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 
 	var reqBody io.Reader
@@ -255,11 +255,12 @@ func (s *Service) do(ctx context.Context, method, path string, body, out any) er
 // Peers
 // ---------------------------------------------------------------------------
 
-// ListPeers returns every peer enrolled in the mesh, or an empty slice when
-// NetBird is not configured.
+// ListPeers returns every peer enrolled in the mesh, or ErrNotConfigured when
+// NetBird is not configured — an empty list must not stand in for an absent
+// control plane.
 func (s *Service) ListPeers(ctx context.Context) ([]Peer, error) {
 	if !s.Configured() {
-		return []Peer{}, nil
+		return nil, ErrNotConfigured
 	}
 	var peers []Peer
 	if err := s.do(ctx, http.MethodGet, "/api/peers", nil, &peers); err != nil {
@@ -271,10 +272,10 @@ func (s *Service) ListPeers(ctx context.Context) ([]Peer, error) {
 	return peers, nil
 }
 
-// GetPeer fetches a single peer by ID; returns (nil, nil) when unconfigured.
+// GetPeer fetches a single peer by ID; ErrNotConfigured when unconfigured.
 func (s *Service) GetPeer(ctx context.Context, peerID string) (*Peer, error) {
 	if !s.Configured() {
-		return nil, nil
+		return nil, ErrNotConfigured
 	}
 	var peer Peer
 	path := "/api/peers/" + url.PathEscape(peerID)
@@ -288,7 +289,7 @@ func (s *Service) GetPeer(ctx context.Context, peerID string) (*Peer, error) {
 // mechanism on the PUT /api/peers/{id} endpoint).
 func (s *Service) updatePeerApproval(ctx context.Context, peerID string, approved bool) (*Peer, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	path := "/api/peers/" + url.PathEscape(peerID)
 	body := map[string]any{"pending_approval": !approved}
@@ -313,7 +314,7 @@ func (s *Service) DenyPeer(ctx context.Context, peerID string) (*Peer, error) {
 // DeletePeer removes a peer from the mesh.
 func (s *Service) DeletePeer(ctx context.Context, peerID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	if err := s.do(ctx, http.MethodDelete, "/api/peers/"+url.PathEscape(peerID), nil, nil); err != nil {
 		return err
@@ -326,10 +327,10 @@ func (s *Service) DeletePeer(ctx context.Context, peerID string) error {
 // Networks
 // ---------------------------------------------------------------------------
 
-// ListNetworks returns all mesh networks, or an empty slice when unconfigured.
+// ListNetworks returns all mesh networks, or ErrNotConfigured when unconfigured.
 func (s *Service) ListNetworks(ctx context.Context) ([]Network, error) {
 	if !s.Configured() {
-		return []Network{}, nil
+		return nil, ErrNotConfigured
 	}
 	var networks []Network
 	if err := s.do(ctx, http.MethodGet, "/api/networks", nil, &networks); err != nil {
@@ -344,7 +345,7 @@ func (s *Service) ListNetworks(ctx context.Context) ([]Network, error) {
 // CreateNetwork posts a new network.
 func (s *Service) CreateNetwork(ctx context.Context, network Network) (*Network, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	body := map[string]any{"name": network.Name}
 	if network.Description != "" {
@@ -360,7 +361,7 @@ func (s *Service) CreateNetwork(ctx context.Context, network Network) (*Network,
 // UpdateNetwork replaces name/description of an existing network.
 func (s *Service) UpdateNetwork(ctx context.Context, networkID string, network Network) (*Network, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	body := map[string]any{"name": network.Name}
 	if network.Description != "" {
@@ -377,7 +378,7 @@ func (s *Service) UpdateNetwork(ctx context.Context, networkID string, network N
 // DeleteNetwork removes a network.
 func (s *Service) DeleteNetwork(ctx context.Context, networkID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	return s.do(ctx, http.MethodDelete, "/api/networks/"+url.PathEscape(networkID), nil, nil)
 }
@@ -386,10 +387,10 @@ func (s *Service) DeleteNetwork(ctx context.Context, networkID string) error {
 // Groups
 // ---------------------------------------------------------------------------
 
-// ListGroups returns all peer groups, or an empty slice when unconfigured.
+// ListGroups returns all peer groups, or ErrNotConfigured when unconfigured.
 func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 	if !s.Configured() {
-		return []Group{}, nil
+		return nil, ErrNotConfigured
 	}
 	var groups []Group
 	if err := s.do(ctx, http.MethodGet, "/api/groups", nil, &groups); err != nil {
@@ -404,7 +405,7 @@ func (s *Service) ListGroups(ctx context.Context) ([]Group, error) {
 // CreateGroup creates a group, optionally seeded with peer IDs.
 func (s *Service) CreateGroup(ctx context.Context, name string, peers []string) (*Group, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	body := map[string]any{"name": name}
 	if len(peers) > 0 {
@@ -421,7 +422,7 @@ func (s *Service) CreateGroup(ctx context.Context, name string, peers []string) 
 // routes or ACLs; the upstream error is surfaced verbatim).
 func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	return s.do(ctx, http.MethodDelete, "/api/groups/"+url.PathEscape(groupID), nil, nil)
 }
@@ -430,10 +431,10 @@ func (s *Service) DeleteGroup(ctx context.Context, groupID string) error {
 // Routes
 // ---------------------------------------------------------------------------
 
-// ListRoutes returns all mesh routes, or an empty slice when unconfigured.
+// ListRoutes returns all mesh routes, or ErrNotConfigured when unconfigured.
 func (s *Service) ListRoutes(ctx context.Context) ([]Route, error) {
 	if !s.Configured() {
-		return []Route{}, nil
+		return nil, ErrNotConfigured
 	}
 	var routes []Route
 	if err := s.do(ctx, http.MethodGet, "/api/routes", nil, &routes); err != nil {
@@ -448,7 +449,7 @@ func (s *Service) ListRoutes(ctx context.Context) ([]Route, error) {
 // CreateRoute publishes a subnet or domain route.
 func (s *Service) CreateRoute(ctx context.Context, route Route) (*Route, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	var created Route
 	if err := s.do(ctx, http.MethodPost, "/api/routes", route, &created); err != nil {
@@ -460,7 +461,7 @@ func (s *Service) CreateRoute(ctx context.Context, route Route) (*Route, error) 
 // DeleteRoute removes a route.
 func (s *Service) DeleteRoute(ctx context.Context, routeID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	return s.do(ctx, http.MethodDelete, "/api/routes/"+url.PathEscape(routeID), nil, nil)
 }
@@ -469,11 +470,11 @@ func (s *Service) DeleteRoute(ctx context.Context, routeID string) error {
 // ACLs (policies)
 // ---------------------------------------------------------------------------
 
-// ListACLs returns all access-control policies, or an empty slice when
+// ListACLs returns all access-control policies, or ErrNotConfigured when
 // unconfigured.
 func (s *Service) ListACLs(ctx context.Context) ([]ACLRule, error) {
 	if !s.Configured() {
-		return []ACLRule{}, nil
+		return nil, ErrNotConfigured
 	}
 	var rules []ACLRule
 	if err := s.do(ctx, http.MethodGet, "/api/policies", nil, &rules); err != nil {
@@ -488,7 +489,7 @@ func (s *Service) ListACLs(ctx context.Context) ([]ACLRule, error) {
 // CreateACL adds an access-control policy.
 func (s *Service) CreateACL(ctx context.Context, rule ACLRule) (*ACLRule, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	var created ACLRule
 	if err := s.do(ctx, http.MethodPost, "/api/policies", rule, &created); err != nil {
@@ -500,7 +501,7 @@ func (s *Service) CreateACL(ctx context.Context, rule ACLRule) (*ACLRule, error)
 // DeleteACL removes an access-control policy.
 func (s *Service) DeleteACL(ctx context.Context, aclID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	return s.do(ctx, http.MethodDelete, "/api/policies/"+url.PathEscape(aclID), nil, nil)
 }
@@ -509,10 +510,10 @@ func (s *Service) DeleteACL(ctx context.Context, aclID string) error {
 // DNS
 // ---------------------------------------------------------------------------
 
-// GetDNSSettings returns account DNS settings; (nil, nil) when unconfigured.
+// GetDNSSettings returns account DNS settings, or ErrNotConfigured.
 func (s *Service) GetDNSSettings(ctx context.Context) (*DNSConfig, error) {
 	if !s.Configured() {
-		return nil, nil
+		return nil, ErrNotConfigured
 	}
 	var cfg DNSConfig
 	if err := s.do(ctx, http.MethodGet, "/api/dns/settings", nil, &cfg); err != nil {
@@ -524,7 +525,7 @@ func (s *Service) GetDNSSettings(ctx context.Context) (*DNSConfig, error) {
 // UpdateDNSSettings replaces account DNS settings.
 func (s *Service) UpdateDNSSettings(ctx context.Context, cfg DNSConfig) (*DNSConfig, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	if cfg.DisabledManagementGroups == nil {
 		cfg.DisabledManagementGroups = []string{}
@@ -544,7 +545,7 @@ func (s *Service) UpdateDNSSettings(ctx context.Context, cfg DNSConfig) (*DNSCon
 // plaintext secret exactly once (NetBird only reveals it on creation).
 func (s *Service) CreateSetupKey(ctx context.Context, req SetupKeyRequest) (*SetupKey, error) {
 	if !s.Configured() {
-		return nil, errNotConfigured
+		return nil, ErrNotConfigured
 	}
 	if req.Type == "" {
 		req.Type = "reusable"
@@ -560,7 +561,7 @@ func (s *Service) CreateSetupKey(ctx context.Context, req SetupKeyRequest) (*Set
 // RevokeSetupKey marks a setup key revoked so it can no longer enroll peers.
 func (s *Service) RevokeSetupKey(ctx context.Context, keyID string) error {
 	if !s.Configured() {
-		return errNotConfigured
+		return ErrNotConfigured
 	}
 	body := map[string]any{"valid": false, "revoked": true}
 	path := "/api/setup-keys/" + url.PathEscape(keyID)

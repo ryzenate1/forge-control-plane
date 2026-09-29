@@ -43,7 +43,7 @@ if [ -f "$ROOT/.env" ]; then
       ''|*[!A-Za-z0-9_]*|[0-9]*) warn "Ignoring bad key in $ROOT/.env: $key"; continue ;;
     esac
     case "$key" in
-      API_AUTH_SECRET|APP_KEY|FORGE_MASTER_KEY|DAEMON_NODE_TOKEN|DAEMON_SFTP_HOST_KEY_PASSPHRASE|REDIS_PASSWORD|DATABASE_URL|API_ADDR|APP_ENV|API_DEMO_MODE|REDIS_ADDR|MIGRATIONS_DIR|NEXT_PUBLIC_API_URL|SEED_NODE_BASE_URL|FORGE_MASTER_KEY_ID|FORGE_ALLOW_EPHEMERAL_MASTER_KEY|DAEMON_NODE_ID|DAEMON_ALLOW_MOCK_RUNTIME|DB_USER|DB_PASS|DB_NAME) ;;
+      API_AUTH_SECRET|APP_KEY|FORGE_MASTER_KEY|DAEMON_NODE_TOKEN|DAEMON_SFTP_HOST_KEY_PASSPHRASE|DAEMON_SFTP_BIND_ADDR|METRICS_TOKEN|REDIS_PASSWORD|DATABASE_URL|API_ADDR|APP_ENV|API_DEMO_MODE|REDIS_ADDR|MIGRATIONS_DIR|NEXT_PUBLIC_API_URL|SEED_NODE_BASE_URL|FORGE_MASTER_KEY_ID|FORGE_ALLOW_EPHEMERAL_MASTER_KEY|DAEMON_NODE_ID|DAEMON_ALLOW_MOCK_RUNTIME|DB_USER|DB_PASS|DB_NAME) ;;
       *) warn "Ignoring unknown key in $ROOT/.env: $key"; continue ;;
     esac
     # Strip one layer of matching quotes (dotenv convention).
@@ -248,7 +248,7 @@ start_daemon() {
     cd "$ROOT/beacon"
     nohup env \
       DAEMON_ADDR=":${DAEMON_PORT}" \
-      DAEMON_SFTP_ADDR=":${DAEMON_SFTP_PORT}" \
+      DAEMON_SFTP_BIND_ADDR="127.0.0.1:${DAEMON_SFTP_PORT}" \
       DAEMON_DATA_DIR="$ROOT/.dev-data/servers" \
       DAEMON_NODE_ID="${DAEMON_NODE_ID:-22222222-2222-2222-2222-222222222222}" \
       DAEMON_NODE_TOKEN="$DAEMON_NODE_TOKEN" \
@@ -392,6 +392,6 @@ printf "\n%sGamePanel dev environment is running.%s\n" "$green" "$reset"
 printf "  Frontend: http://localhost:%s\n" "$FRONTEND_PORT"
 printf "  API:      http://localhost:%s/api/v1\n" "$API_PORT"
 printf "  Daemon:   http://localhost:%s\n" "$DAEMON_PORT"
-printf "  Node token (DAEMON_NODE_TOKEN): %s\n" "$DAEMON_NODE_TOKEN"
+printf "  Node token: stored in .dev-data/secrets.env (not printed)\n"
 printf "  Logs:     ./scripts/logs.sh\n"
 printf "  Stop:     ./scripts/stop-dev.sh\n"

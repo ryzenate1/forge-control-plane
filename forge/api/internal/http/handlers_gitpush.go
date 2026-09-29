@@ -63,6 +63,30 @@ func (r *gitPushResponse) decorate(ctx context.Context, svc *gitpushsvc.Service,
 	r.ProvisionHint = "Repository path " + app.RepoPath + " is reserved on the node; the bare repository and its post-receive hook still need to be created there (Beacon exposes host file operations but no host exec)."
 }
 
+// mergeGitPushEnvSets merges the `set`/`vars` aliases for PUT env. Both keys
+// exist for backward compatibility; when both carry values they are unioned,
+// and a key present in both with different values is rejected instead of
+// silently dropping one alias.
+func mergeGitPushEnvSets(set, vars map[string]string) (map[string]string, error) {
+	if len(set) == 0 {
+		return vars, nil
+	}
+	if len(vars) == 0 {
+		return set, nil
+	}
+	merged := make(map[string]string, len(set)+len(vars))
+	for k, v := range set {
+		merged[k] = v
+	}
+	for k, v := range vars {
+		if existing, ok := merged[k]; ok && existing != v {
+			return nil, errors.New("conflicting values for environment variable " + k + ": set and vars disagree")
+		}
+		merged[k] = v
+	}
+	return merged, nil
+}
+
 // gitPushService resolves the configured service, falling back to one built
 // inline so the routes work even before main wires the deployer. The fallback
 // deliberately passes a nil deployer: pushes are then recorded and marked
@@ -257,9 +281,9 @@ func registerGitPushRoutes(protected fiber.Router, cfg Config, mutationLimiter, 
 				return writeGitPushError(c, err)
 			}
 		}
-		set := req.Set
-		if len(set) == 0 {
-			set = req.Vars
+		set, err := mergeGitPushEnvSets(req.Set, req.Vars)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		if len(set) > 0 {
 			if app, err = svc.SetEnv(ctx, app.ID, set); err != nil {

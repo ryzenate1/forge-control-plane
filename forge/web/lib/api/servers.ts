@@ -1,5 +1,6 @@
 // Server management API functions
 import { fetchJSON, postJSON, putJSON, patchJSON, deleteJSON, requestBlob, getApiBaseUrl, ApiError } from './http';
+import type { PaginationMeta as SharedPaginationMeta } from '@forge/shared-types';
 import type {
   ApiServerSubuser,
   ApiAuditEvent,
@@ -19,8 +20,18 @@ import type { ApiServer, ApiAllocation, ApiDatabase, ApiBackup, ApiSchedule, Api
 /** @deprecated Use `ApiStartupVariable` from `@forge/shared-types` instead. */
 export type ServerStartupVariable = ApiStartupVariable;
 
-async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>> {
-  const body = await fetchJSON<PaginatedEnvelope<T> | T[]>(path);
+async function fetchWithEnvelope<T>(
+  path: string,
+  init?: RequestInit,
+  options?: { retry?: boolean },
+): Promise<PaginatedEnvelope<T>> {
+  // Signal travels via `init.signal`; retry is opt-in per call (GET pages are
+  // idempotent so fan-out retries are safe).
+  const body = await fetchJSON<PaginatedEnvelope<T> | T[]>(
+    path,
+    init,
+    options?.retry ? { retry: true } : undefined,
+  );
   // Backend paginated lists return `{ data, meta.pagination }`; older routes
   // may return a bare array. Normalize to the envelope so callers never
   // branch on the shape.
@@ -32,8 +43,15 @@ async function fetchWithEnvelope<T>(path: string): Promise<PaginatedEnvelope<T>>
   throw new Error(`Unexpected response: expected an array or { data: [...] }`);
 }
 
-/** Page count from a pagination meta. `total_records / per_page` is authoritative; `total`/`total_pages` are fallback. */
-function pageCountOf(pagination?: { total?: number; total_pages?: number; total_records?: number; per_page?: number }): number {
+/**
+ * Page count from a pagination meta. `total_records / per_page` is
+ * authoritative; `total`/`total_pages` are fallback. This is the canonical
+ * implementation — `@/lib/api` re-exports it as `getTotalPages` rather than
+ * keeping a second copy (a previous revision had both and they diverged).
+ */
+export function getTotalPages(
+  pagination?: { total?: number; total_pages?: number; total_records?: number; per_page?: number; current?: number; count?: number } | SharedPaginationMeta,
+): number {
   if (!pagination) return 1;
   if (
     typeof pagination.total_records === 'number' &&
@@ -49,22 +67,55 @@ function pageCountOf(pagination?: { total?: number; total_pages?: number; total_
   return 1;
 }
 
-export async function fetchServers(): Promise<ApiServer[]> {
-  const firstPage = await fetchWithEnvelope<ApiServer>('/servers?page=1&per_page=100');
-  const totalPages = pageCountOf(firstPage.meta?.pagination);
+/** @deprecated Use {@link getTotalPages} — kept for existing deep imports. */
+export const pageCountOf = getTotalPages;
+
+export type FetchAllOptions = {
+  /** AbortSignal cancelling the whole fan-out (per-page requests share it). */
+  signal?: AbortSignal;
+  /** Max concurrent page requests. Defaults to 5. */
+  concurrency?: number;
+  /** Rows per page. Defaults to 100. */
+  perPage?: number;
+};
+
+/**
+ * Run page fetches with bounded concurrency, preserving order. A failed page
+ * fails the whole aggregation loudly (never a silent partial list); pass an
+ * AbortSignal to cancel the remaining pages.
+ */
+async function mapWithConcurrency<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const workers = Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, async () => {
+    while (next < items.length) {
+      const index = next++;
+      results[index] = await fn(items[index]);
+    }
+  });
+  await Promise.all(workers);
+  return results;
+}
+
+export async function fetchServers(opts?: FetchAllOptions): Promise<ApiServer[]> {
+  const perPage = opts?.perPage ?? 100;
+  const concurrency = opts?.concurrency ?? 5;
+  const init = opts?.signal ? { signal: opts.signal } : undefined;
+  const firstPage = await fetchWithEnvelope<ApiServer>(`/servers?page=1&per_page=${perPage}`, init, { retry: true });
+  const totalPages = getTotalPages(firstPage.meta?.pagination);
   if (totalPages <= 1) {
     return firstPage.data ?? [];
   }
 
-  const remainingPages = await Promise.all(
-    Array.from({ length: totalPages - 1 }, (_, i) =>
-      fetchWithEnvelope<ApiServer>(`/servers?page=${i + 2}&per_page=100`),
-    ),
+  const remaining = await mapWithConcurrency(
+    Array.from({ length: totalPages - 1 }, (_, i) => i + 2),
+    concurrency,
+    (page) => fetchWithEnvelope<ApiServer>(`/servers?page=${page}&per_page=${perPage}`, init, { retry: true }),
   );
 
   return [
     ...firstPage.data,
-    ...remainingPages.flatMap((r) => r.data ?? []),
+    ...remaining.flatMap((r) => r.data ?? []),
   ];
 }
 

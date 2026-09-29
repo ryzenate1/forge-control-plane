@@ -110,6 +110,33 @@ export const queryKeys = {
     all: ["session"] as const,
     currentUser: () => [...queryKeys.session.all, "currentUser"] as const,
   },
+  tenancy: {
+    all: ["tenancy"] as const,
+    /** Organization list — read by TenancyHydrator and the scope switcher. */
+    organizations: () => [...queryKeys.tenancy.all, "organizations"] as const,
+    /** Projects scoped to one org. */
+    projects: (orgId: string) => [...queryKeys.tenancy.all, "projects", orgId] as const,
+    /** Environments scoped to one project. */
+    environments: (projectId: string) => [...queryKeys.tenancy.all, "environments", projectId] as const,
+  },
+  envVars: {
+    all: ["env-vars"] as const,
+    /** Variables scoped to a project or environment scope id. */
+    byScope: (scope: "project" | "environment", scopeId: string) =>
+      [...queryKeys.envVars.all, scope, scopeId] as const,
+    byEnv: (envId: string) => [...queryKeys.envVars.all, "environment", envId] as const,
+  },
+  files: {
+    all: ["files"] as const,
+    byServer: (serverId: string, path?: string): readonly string[] =>
+      path === undefined
+        ? [...queryKeys.files.all, "server", serverId]
+        : [...queryKeys.files.all, "server", serverId, path],
+  },
+  deployments: {
+    all: ["deployments"] as const,
+    byApp: (appId: string) => [...queryKeys.deployments.all, "app", appId] as const,
+  },
 } as const;
 
 /**
@@ -141,4 +168,38 @@ export function invalidateDomains(queryClient: QueryClient, serverId?: string): 
     void queryClient.invalidateQueries({ queryKey: queryKeys.domains.byServer(serverId) });
   }
   void queryClient.invalidateQueries({ queryKey: queryKeys.domains.all });
+}
+
+/**
+ * Invalidate cached env-var reads for a scope. Prefix-scoped so both the
+ * `byScope` and legacy `byEnv` keys for the same environment are covered.
+ */
+export function invalidateEnvVars(
+  queryClient: QueryClient,
+  scope?: { type: "project" | "environment"; id: string } | { envId: string },
+): void {
+  if (!scope) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.envVars.all });
+    return;
+  }
+  if ("envId" in scope) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.envVars.byEnv(scope.envId) });
+    return;
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.envVars.byScope(scope.type, scope.id) });
+}
+
+export function invalidateFiles(queryClient: QueryClient, serverId?: string): void {
+  if (serverId) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.files.byServer(serverId) });
+    return;
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.files.all });
+}
+
+export function invalidateDeployments(queryClient: QueryClient, appId?: string): void {
+  if (appId) {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.deployments.byApp(appId) });
+  }
+  void queryClient.invalidateQueries({ queryKey: queryKeys.deployments.all });
 }

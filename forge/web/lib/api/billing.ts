@@ -1,4 +1,4 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON } from "./http";
+import { fetchJSON, postJSON, putJSON, deleteJSON, unwrapData, unwrapList } from "./http";
 
 export type BillingPlan = {
   id: string;
@@ -51,15 +51,11 @@ export type BillingWebhookReceipt = {
 };
 
 export async function fetchBillingPlans(): Promise<BillingPlan[]> {
-  const res = await fetchJSON<{ data: BillingPlan[] } | BillingPlan[]>("/billing/plans");
-  if (Array.isArray(res)) return res;
-  return (res as { data: BillingPlan[] }).data ?? [];
+  return unwrapList(await fetchJSON<{ data: BillingPlan[] } | BillingPlan[]>("/billing/plans"));
 }
 
 export async function fetchBillingPlanByCode(code: string): Promise<BillingPlan> {
-  const res = await fetchJSON<{ data: BillingPlan } | BillingPlan>(`/billing/plans/${encodeURIComponent(code)}`);
-  const maybeData = (res as { data: BillingPlan }).data;
-  return maybeData ?? (res as BillingPlan);
+  return unwrapData(await fetchJSON<{ data: BillingPlan } | BillingPlan>(`/billing/plans/${encodeURIComponent(code)}`));
 }
 
 export async function createBillingPlan(input: {
@@ -70,31 +66,35 @@ export async function createBillingPlan(input: {
   trialDays?: number;
   active?: boolean;
 }): Promise<BillingPlan> {
-  const res = await postJSON<{ data: BillingPlan } | BillingPlan>("/billing/plans", {
-    code: input.code,
-    name: input.name,
-    centsPerMonth: input.centsPerMonth,
-    entitlements: input.entitlements ?? {},
-    trialDays: input.trialDays ?? 0,
-    active: input.active ?? true,
-  });
-  const maybeData = (res as { data: BillingPlan }).data;
-  return maybeData ?? (res as BillingPlan);
+  return unwrapData(
+    await postJSON<{ data: BillingPlan } | BillingPlan>("/billing/plans", {
+      code: input.code,
+      name: input.name,
+      centsPerMonth: input.centsPerMonth,
+      entitlements: input.entitlements ?? {},
+      trialDays: input.trialDays ?? 0,
+      active: input.active ?? true,
+    }),
+  );
 }
 
 export async function updateBillingPlan(
   id: string,
   patch: { name?: string; centsPerMonth?: number; entitlements?: unknown; trialDays?: number; active?: boolean },
 ): Promise<BillingPlan> {
-  const res = await putJSON<{ data: BillingPlan } | BillingPlan>(`/billing/plans/${encodeURIComponent(id)}`, {
-    name: patch.name,
-    centsPerMonth: patch.centsPerMonth,
-    entitlements: patch.entitlements,
-    trialDays: patch.trialDays,
-    active: patch.active,
-  });
-  const maybeData = (res as { data: BillingPlan }).data;
-  return maybeData ?? (res as BillingPlan);
+  // Strip `undefined` fields so a partial patch never serializes explicit
+  // `null`s/overwrites for keys the caller did not set. `JSON.stringify`
+  // drops `undefined` anyway, but building the body explicitly keeps the
+  // intent visible and avoids sending `{ name: undefined }` shapes to mocks.
+  const body: Record<string, unknown> = {};
+  if (patch.name !== undefined) body.name = patch.name;
+  if (patch.centsPerMonth !== undefined) body.centsPerMonth = patch.centsPerMonth;
+  if (patch.entitlements !== undefined) body.entitlements = patch.entitlements;
+  if (patch.trialDays !== undefined) body.trialDays = patch.trialDays;
+  if (patch.active !== undefined) body.active = patch.active;
+  return unwrapData(
+    await putJSON<{ data: BillingPlan } | BillingPlan>(`/billing/plans/${encodeURIComponent(id)}`, body),
+  );
 }
 
 export async function deleteBillingPlan(id: string): Promise<{ ok: boolean }> {
@@ -102,18 +102,18 @@ export async function deleteBillingPlan(id: string): Promise<{ ok: boolean }> {
 }
 
 export async function fetchOrgQuota(orgId: string): Promise<OrgQuota> {
-  const res = await fetchJSON<{ data: OrgQuota } | OrgQuota>(`/billing/org/${encodeURIComponent(orgId)}/quota`);
-  const maybeData = (res as { data: OrgQuota }).data;
-  return maybeData ?? (res as OrgQuota);
+  return unwrapData(
+    await fetchJSON<{ data: OrgQuota } | OrgQuota>(`/billing/org/${encodeURIComponent(orgId)}/quota`),
+  );
 }
 
 export async function setOrgPlan(orgId: string, planCode: string, trial = false): Promise<OrgQuota> {
-  const res = await postJSON<{ data: OrgQuota } | OrgQuota>(`/billing/org/${encodeURIComponent(orgId)}/plan`, {
-    planCode,
-    trial,
-  });
-  const maybeData = (res as { data: OrgQuota }).data;
-  return maybeData ?? (res as OrgQuota);
+  return unwrapData(
+    await postJSON<{ data: OrgQuota } | OrgQuota>(`/billing/org/${encodeURIComponent(orgId)}/plan`, {
+      planCode,
+      trial,
+    }),
+  );
 }
 
 export type UsageSummary = {
@@ -129,19 +129,20 @@ export type UsageSummary = {
 };
 
 export async function fetchOrgUsage(orgId: string): Promise<UsageSummary> {
-  const res = await fetchJSON<{ data: UsageSummary } | UsageSummary>(`/billing/org/${encodeURIComponent(orgId)}/usage`);
-  return (res as { data: UsageSummary }).data ?? (res as UsageSummary);
+  return unwrapData(
+    await fetchJSON<{ data: UsageSummary } | UsageSummary>(`/billing/org/${encodeURIComponent(orgId)}/usage`),
+  );
 }
 
 export async function fetchOrgUsageEvents(orgId: string, since?: string, limit = 100): Promise<UsageEvent[]> {
   const q = new URLSearchParams();
   if (since) q.set("since", since);
   q.set("limit", String(limit));
-  const res = await fetchJSON<{ data: UsageEvent[] } | UsageEvent[]>(
-    `/billing/org/${encodeURIComponent(orgId)}/usage-events?${q.toString()}`,
+  return unwrapList(
+    await fetchJSON<{ data: UsageEvent[] } | UsageEvent[]>(
+      `/billing/org/${encodeURIComponent(orgId)}/usage-events?${q.toString()}`,
+    ),
   );
-  if (Array.isArray(res)) return res;
-  return (res as { data: UsageEvent[] }).data ?? [];
 }
 
 export async function recordBillingUsage(orgId: string, resource: string, quantity: number): Promise<unknown> {
@@ -149,9 +150,9 @@ export async function recordBillingUsage(orgId: string, resource: string, quanti
 }
 
 export async function fetchBillingSettings(): Promise<BillingSettings> {
-  const res = await fetchJSON<{ data: BillingSettings } | BillingSettings>("/billing/settings");
-  const maybeData = (res as { data: BillingSettings }).data;
-  return maybeData ?? (res as BillingSettings);
+  return unwrapData(
+    await fetchJSON<{ data: BillingSettings } | BillingSettings>("/billing/settings"),
+  );
 }
 
 export async function updateBillingSettings(input: {
@@ -159,9 +160,9 @@ export async function updateBillingSettings(input: {
   externalProcessor?: string;
   clearWebhookSecret?: boolean;
 }): Promise<BillingSettings> {
-  const res = await putJSON<{ data: BillingSettings } | BillingSettings>("/billing/settings", input);
-  const maybeData = (res as { data: BillingSettings }).data;
-  return maybeData ?? (res as BillingSettings);
+  return unwrapData(
+    await putJSON<{ data: BillingSettings } | BillingSettings>("/billing/settings", input),
+  );
 }
 
 export async function sendBillingWebhookTest(input: { provider?: string; eventId: string; eventType?: string; payload?: unknown }): Promise<BillingWebhookReceipt> {
@@ -172,11 +173,11 @@ export async function sendBillingWebhookTest(input: { provider?: string; eventId
   };
   if (input.provider) headers["X-Billing-Provider"] = input.provider;
   if (input.eventType) headers["X-Billing-Event-Type"] = input.eventType;
-  const res = await fetchJSON<{ data: BillingWebhookReceipt } | BillingWebhookReceipt>("/billing/webhook", {
-    method: "POST",
-    headers: { "Content-Type": "application/json", ...headers },
-    body: JSON.stringify(input.payload ?? { type: input.eventType ?? "test", test: true }),
-  });
-  const maybeData = (res as { data: BillingWebhookReceipt }).data;
-  return maybeData ?? (res as BillingWebhookReceipt);
+  return unwrapData(
+    await postJSON<{ data: BillingWebhookReceipt } | BillingWebhookReceipt>(
+      "/billing/webhook",
+      input.payload ?? { type: input.eventType ?? "test", test: true },
+      { headers },
+    ),
+  );
 }

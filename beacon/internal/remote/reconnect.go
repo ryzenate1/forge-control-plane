@@ -15,10 +15,10 @@ const (
 	// defaultOfflineTimeout is used when a caller does not configure one; a
 	// zero timeout would make the offline ticker panic and the offline check
 	// fire on every tick.
-	defaultOfflineTimeout = 30 * time.Second
-	heartbeatProbeInterval = 15 * time.Second
+	defaultOfflineTimeout   = 30 * time.Second
+	heartbeatProbeInterval  = 15 * time.Second
 	minOfflineCheckInterval = time.Second
-	panelProbeTimeout      = 10 * time.Second
+	panelProbeTimeout       = 10 * time.Second
 	initialReconnectBackoff = time.Second
 	maxReconnectBackoff     = 5 * time.Minute
 	// circuitBreakerFailures caps how often the loop retries a panel that is
@@ -57,22 +57,27 @@ type ReconnectClient struct {
 	token          string
 	offlineTimeout time.Duration
 
-	state     int32
-	stopCh    chan struct{}
-	stopped   chan struct{}
-	mu        sync.Mutex
-	lastHb    time.Time
-	onHB      func()
-	attempts  int64
-	startOnce sync.Once
-	stopOnce  sync.Once
-	started   chan struct{}
-	newClient func() Client
+	state   int32
+	stopCh  chan struct{}
+	stopped chan struct{}
+	// stopCtx is done once stopCh closes, so context.AfterFunc can bound an
+	// in-flight probe by shutdown without spawning a watcher per round-trip.
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
+	mu         sync.Mutex
+	lastHb     time.Time
+	onHB       func()
+	attempts   int64
+	startOnce  sync.Once
+	stopOnce   sync.Once
+	started    chan struct{}
+	newClient  func() Client
 	// Circuit breaker: consecutive failed round-trips. Reset on any success.
 	consecutiveFails int
 }
 
 func NewReconnectClient(panelURL, token string, offlineTimeout time.Duration) *ReconnectClient {
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	return &ReconnectClient{
 		inner:          NewClient(panelURL, token),
 		panelURL:       panelURL,
@@ -81,6 +86,8 @@ func NewReconnectClient(panelURL, token string, offlineTimeout time.Duration) *R
 		state:          int32(StateDisconnected),
 		stopCh:         make(chan struct{}),
 		stopped:        make(chan struct{}),
+		stopCtx:        stopCtx,
+		stopCancel:     stopCancel,
 		started:        make(chan struct{}),
 		newClient:      func() Client { return NewClient(panelURL, token) },
 	}
@@ -90,10 +97,12 @@ func NewReconnectClientWithClient(inner Client, reconnect func() Client, offline
 	if reconnect == nil {
 		reconnect = func() Client { return inner }
 	}
+	stopCtx, stopCancel := context.WithCancel(context.Background())
 	client := &ReconnectClient{
 		inner: inner, offlineTimeout: normalizeOfflineTimeout(offlineTimeout),
 		state: int32(StateDisconnected), stopCh: make(chan struct{}),
-		stopped: make(chan struct{}), started: make(chan struct{}), newClient: reconnect,
+		stopped: make(chan struct{}), stopCtx: stopCtx, stopCancel: stopCancel,
+		started: make(chan struct{}), newClient: reconnect,
 	}
 	return client
 }
@@ -248,23 +257,15 @@ func (rc *ReconnectClient) linkExpired() bool {
 // probeContext bounds a round-trip by the parent context, the probe timeout and
 // Stop(), so no probe can outlive shutdown.
 //
-// Shutdown is signalled by closing stopCh, not by cancelling a context, so the
-// stop watch is an explicit goroutine: context.AfterFunc takes a Context and
-// cannot watch a channel. The returned CancelFunc stops that goroutine as well
-// as the timeout, and is safe to call more than once.
+// Shutdown cancels stopCtx alongside closing stopCh, so context.AfterFunc can
+// watch shutdown directly instead of spawning a watcher goroutine per probe.
+// The returned CancelFunc stops that watch as well as the timeout, and is safe
+// to call more than once.
 func (rc *ReconnectClient) probeContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	done := make(chan struct{})
-	go func() {
-		select {
-		case <-rc.stopCh:
-			cancel()
-		case <-done:
-		}
-	}()
-	var once sync.Once
+	stopWatch := context.AfterFunc(rc.stopCtx, cancel)
 	return probeCtx, func() {
-		once.Do(func() { close(done) })
+		stopWatch()
 		cancel()
 	}
 }
@@ -318,7 +319,10 @@ func waitOrCancelled(ctx context.Context, stopCh <-chan struct{}, d time.Duratio
 }
 
 func (rc *ReconnectClient) Stop() {
-	rc.stopOnce.Do(func() { close(rc.stopCh) })
+	rc.stopOnce.Do(func() {
+		close(rc.stopCh)
+		rc.stopCancel()
+	})
 	select {
 	case <-rc.started:
 		select {

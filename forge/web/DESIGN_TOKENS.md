@@ -1,8 +1,8 @@
 # Forge Design Tokens — Industrial Terminal
 
-Single source: `forge/web/app/globals.css:5` (`:root` + `[data-theme="light"]`).  
+Single source: `forge/web/app/globals.css:12` (`:root` + `[data-theme="light"]`).  
 Typed JS re-export: `forge/web/lib/design-tokens.ts:1`.  
-Tailwind mapping: `forge/web/tailwind.config.ts:10`.
+Tailwind mapping: `forge/web/tailwind.config.ts` (`theme.extend`).
 
 > **Rule:** Do not hardcode hex/rgba in CSS or TSX. Use `var(--*)` in CSS/Tailwind or `tokens.*` in JS (charts, canvas, timelines). All raw `#161b28` etc. must map to a token.
 
@@ -25,17 +25,17 @@ Spec from `audits/FORGE_IMPLEMENTATION_PLAN.md:25` §1 (Industrial Terminal):
 ### Canonical dark tokens (`:root`)
 
 ```css
---brand: #dc2626; --brand-hover: #ef4444; --brand-dark: #991b1b; --brand-subtle: rgba(220,38,38,0.10);
---canvas: #0a0e16; --surface: #111722; --surface-raised: #171f2d; --surface-input: #0d131d; --surface-hover: #1a2233; --nav: #0f141f;
---line: rgba(148,163,184,0.14); --line-strong: rgba(148,163,184,0.25); --border: var(--line); --border-strong: var(--line-strong);
---text: #f1f5f9; --text-subtle: #94a3b8; --focus: #fb7185;
---success: #059669; --success-subtle: rgba(5,150,105,0.12);
---warning: #d97706; --warning-subtle: rgba(217,119,6,0.12);
---danger: #dc2626; --danger-subtle: rgba(220,38,38,0.10);
+--brand: #dc2626; --brand-hover: #ef4444; --brand-dark: #991b1b; --brand-subtle: rgba(220,38,38,0.10); --brand-line: rgba(220,38,38,0.32);
+--canvas: #0a0e16; --surface: #111722; --surface-raised: #171f2d; --surface-input: #0d131d; --surface-well: #080c13; --surface-hover: #1a2233; --nav: #0f141f;
+--overlay-subtle: rgba(148,163,184,0.035); --overlay: rgba(148,163,184,0.06); --overlay-strong: rgba(148,163,184,0.10);
+--line: rgba(148,163,184,0.14); --line-strong: rgba(148,163,184,0.26); --border: var(--line); --border-strong: var(--line-strong);
+--text: #f1f5f9; --text-subtle: #94a3b8; --text-muted: #64748b; --focus: #fb7185;
+--ok: #10b981 (+subtle/line); --warn: #f59e0b (+subtle/line); --danger: #f43f5e (+subtle/line); --info: #38bdf8 (+subtle/line); --unknown: #64748b (+subtle/line);
+--success/--warning (+subtle) /* legacy aliases of --ok/--warn */;
 --ink / --steel / --concrete / --paper / --phosphor / --fault  /* spec aliases */
 ```
 
-Light (`[data-theme="light"]`): `--canvas: #f4f7fb`, `--surface: #ffffff`, `--surface-raised: #eef2f7`, `--surface-input: #ffffff`, `--surface-hover: #e2e8f0`, `--nav: #ffffff`, `--line: rgba(15,23,42,0.13)` etc., `--brand-subtle: rgba(220,38,38,0.06)`.
+Light (`[data-theme="light"]`): `--canvas: #f4f7fb`, `--surface: #ffffff`, `--surface-raised: #eef2f7`, `--surface-input: #ffffff`, `--surface-well: #f1f5f9`, `--surface-hover: #eef2f7`, `--nav: #ffffff`, `--line: rgba(15,23,42,0.11)` etc., `--brand-subtle: rgba(220,38,38,0.07)`, status `--ok: #047857` / `--warn: #b45309` / `--danger: #be123c` / `--info: #0369a1` / `--unknown: #64748b` (each +subtle/line).
 
 ---
 
@@ -47,7 +47,7 @@ Light (`[data-theme="light"]`): `--canvas: #f4f7fb`, `--surface: #ffffff`, `--su
 | **Display** | `Space Grotesk` | 400/500/600/700 | Opt-in only via the `.font-display` utility (`globals.css:102`) |
 | **Mono** | `JetBrains Mono` | 400 (variable) | Badges, log lines, server IDs, env keys (`app/fonts.ts` `var(--font-mono)`, `globals.css:106`) |
 
-Implementation: `forge/web/app/fonts.ts` exports `sans` (Manrope → `var(--font-sans)`), `display` (Space Grotesk → `var(--font-display)`), `mono` (JetBrains Mono → `var(--font-mono)`), loaded with `next/font/google`; self-hosting via `next/font/local` is pending the vendored woff2 files. `lib/design-tokens.ts` `type.body` / `type.display` keep the legacy `IBM Plex Sans` / `Space Grotesk` names as registry aliases only — IBM Plex Sans is no longer requested by the app.
+Implementation: `forge/web/app/fonts.ts` exports `sans` (Manrope → `var(--font-sans)`), `display` (Space Grotesk → `var(--font-display)`), `mono` (JetBrains Mono → `var(--font-mono)`), loaded with `next/font/google`; self-hosting via `next/font/local` is pending the vendored woff2 files. `lib/design-tokens.ts` `type.body` is `Manrope`, `type.display` is `Space Grotesk`, `type.mono` is `JetBrains Mono` — no legacy font names remain. Historical note: earlier revisions named IBM Plex Sans as the body face; the app now uses Manrope exclusively.
 Tailwind: `tailwind.config.ts:13` `fontFamily.sans: ["var(--font-sans)","Manrope",...]`, `display: ["var(--font-display)","Space Grotesk",...]`, `mono: ["var(--font-mono)","JetBrains Mono",...]`. Root applies `font-family: var(--font-sans)` in `globals.css:89`.
 
 Scale: 11 utility / 12-14 body / 20-24 display; tracking -0.02 display caps; `prefers-reduced-motion` disables animation (`globals.css:63`).
@@ -77,12 +77,15 @@ CSS: `transition-[background-color,border-color,color,box-shadow,transform] dura
 ## 5. Shadow / Radius
 
 ```css
---shadow-card: 0 12px 30px rgba(0,0,0,0.14);   /* .ui-card globals.css:88 */
---shadow-elevated: 0 4px 24px rgba(0,0,0,0.30); /* tailwind.config.ts boxShadow.elevated */
---shadow-dialog: 0 20px 60px rgba(0,0,0,0.45);   /* .ui-dialog */
---radius-sm: 8px; --radius: 12px; --radius-lg: 16px; --radius-full: 9999px;
+--shadow-flat: 0 1px 2px rgba(0,0,0,0.20);      /* buttons, chips */
+--shadow-card: 0 1px 2px rgba(0,0,0,0.20);      /* .ui-card — hairline carries hierarchy, not shadow */
+--shadow-raised: 0 4px 16px rgba(0,0,0,0.28);   /* table heads, raised panels */
+--shadow-elevated: 0 4px 16px rgba(0,0,0,0.28);
+--shadow-popover: 0 12px 32px rgba(0,0,0,0.42);
+--shadow-dialog: 0 24px 64px rgba(0,0,0,0.55);  /* .ui-dialog */
+--radius-xs: 4px; --radius-sm: 6px; --radius: 8px; --radius-lg: 12px; --radius-full: 9999px;
 ```
-Tailwind: `borderRadius: { sm:"var(--radius-sm)", DEFAULT:"var(--radius)", lg:"var(--radius-lg)", xl:"var(--radius)", "2xl":"var(--radius-lg)" }`, `boxShadow: { card:"var(--shadow-card)", elevated:"var(--shadow-elevated)", dialog:"var(--shadow-dialog)" }` (`tailwind.config.ts:73-79`).
+Tailwind: `borderRadius: { sm:"var(--radius-xs)", DEFAULT:"var(--radius-sm)", md:"var(--radius-sm)", lg:"var(--radius)", xl:"var(--radius-lg)", "2xl":"var(--radius-lg)", full:"var(--radius-full)" }`, `boxShadow: { flat/card/raised/elevated/popover/dialog → var(--shadow-*) }` (`tailwind.config.ts`).
 
 ---
 
@@ -90,33 +93,46 @@ Tailwind: `borderRadius: { sm:"var(--radius-sm)", DEFAULT:"var(--radius)", lg:"v
 
 All families required by audit must resolve via `var(--*)`:
 
-- `brand / canvas / line / border / text / focus / success / warning / danger` ✅ (`globals.css:8-27`)
-- `nav / surface / surface-hover / brand-subtle` ✅ (`--nav` `#0f141f`, `--surface-hover` `#1a2233`, `--brand-subtle`)
-- `shadow / radius` ✅ (`--shadow-*`, `--radius*`)
+- `brand / canvas / line / border / text / focus / ok / warn / danger / info / unknown` ✅ (`globals.css:12-70`)
+- `nav / surface / surface-hover / surface-well / brand-subtle / brand-line / overlay` ✅
+- `shadow / radius` ✅ (`--shadow-flat/card/raised/elevated/popover/dialog`, `--radius-xs/sm/*/lg/full`)
 
-`design-tokens.ts:13-78` re-exports each group (`brand`, `canvas`, `line`, `text`, `status`, `shadow`, `radius`) and `tokens` aggregate. `colors` retains spec `ink/steel/concrete/paper/phosphor/fault` for chart/tooltip non-theme uses.
+`design-tokens.ts` re-exports each group (`brand`, `canvas`, `line`, `overlay`, `text`, `status`, `shadow`, `radius`) and the `tokens` aggregate; `status` carries the canonical seven (`ok/warn/danger/info/unknown` +subtle/line) plus the `--success`/`--warning` legacy aliases. `colors` retains spec `ink/steel/concrete/paper/phosphor/fault` for chart/tooltip non-theme uses. Status meaning lives in `components/ui/forge/status.ts` (`forgeStatusTones`); `generation-fenced-dot` keeps its own lane hues (violet transfer, sky queued) as a documented exception.
 
 ---
 
 ## 7. Tailwind Mapping
 
-`tailwind.config.ts:16-72`
+`tailwind.config.ts:theme.extend`
 
 ```
 colors.canvas → var(--canvas)
 colors.nav → var(--nav)
-colors.surface.{DEFAULT,raised,input,hover} → var(--surface*)
+colors.surface.{DEFAULT,base,secondary,card,card-header,elevated,raised,input,hover,well} → var(--surface*)
+colors.well → var(--surface-well)
+colors.overlay.{DEFAULT,subtle,strong} → var(--overlay*)
 colors.border.{DEFAULT,strong} → var(--border*)
 colors.line.{DEFAULT,strong} → var(--line*)
-colors.text.{DEFAULT,subtle} → var(--text*)
-colors.brand.{DEFAULT,hover,dark,subtle} → var(--brand*)
-colors.success/warning/danger → var(--* )
+colors.text.{DEFAULT,subtle,muted,focus} → var(--text*)
+colors.brand.{DEFAULT,hover,dark,subtle,line} → var(--brand*)
+colors.ok/warn/info/unknown.{DEFAULT,subtle,line} → var(--*)
+colors.success/warning.{DEFAULT,subtle} → var(--*)  /* legacy aliases */
+colors.danger.{DEFAULT,subtle,line} → var(--danger*)
 colors.ink/steel/concrete/paper/phosphor/fault → var(--*)
-boxShadow.card/elevated/dialog → var(--shadow-*)
-borderRadius sm/DEFAULT/lg/full → var(--radius-*)
+boxShadow.flat/card/raised/elevated/popover/dialog → var(--shadow-*)
+borderRadius sm/DEFAULT/md/lg/xl/2xl/full → var(--radius-xs/sm/sm/radius/lg/lg/full)
 ```
 
 No hardcoded hex remains in `tailwind.config.ts`.
+
+> Tailwind v3 caveat: the `/opacity` modifier does not emit for colors backed
+> by `var(--*)` (e.g. `bg-brand/10` compiles to nothing). Opacity over a token
+> must use `bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]` (see
+> `globals.css` scrollbar/focus treatments and `admin-shell.tsx` nav active
+> state). Raw `border-white/10`, `bg-white/[0.0x]`, `bg-black/20` and
+> `text-slate-*` are likewise banned outside data-driven color (tag pills,
+> chart SVG via `lib/design-tokens.ts` `chart`): use `border-line`,
+> `bg-overlay(-subtle/-strong)`, `bg-well` and `text-text(-subtle/-muted)`.
 
 ---
 
@@ -157,7 +173,7 @@ Never: `bg-[#161b28]`, `border-white/10` for cards, `text-[#dc2626]`. Lint by `g
 
 ## 10. Files
 
-- `forge/web/app/globals.css:5` — 32 vars (dark) + 28 (light) across 10 families
-- `forge/web/lib/design-tokens.ts:1` — 7 exports + `tokens`, `colors`, `type`, `space`, `motion`
-- `forge/web/tailwind.config.ts:10` — theme.extend maps to `var(--*)`
-- `forge/web/app/fonts.ts` — Manrope / Space Grotesk / JetBrains Mono via `next/font` (IBM Plex Sans survives only as the `type.body` legacy alias)
+- `forge/web/app/globals.css:12` — dark `:root` + `[data-theme="light"]` token blocks
+- `forge/web/lib/design-tokens.ts:1` — `brand/canvas/line/overlay/text/status/shadow/radius` + `tokens`, `colors`, `type`, `space`, `motion`, plus `chart`/`terminalTheme` literal palettes for SVG/canvas contexts
+- `forge/web/tailwind.config.ts` — theme.extend maps to `var(--*)`
+- `forge/web/app/fonts.ts` — Manrope / Space Grotesk / JetBrains Mono via `next/font`

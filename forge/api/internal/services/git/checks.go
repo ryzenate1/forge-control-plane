@@ -50,31 +50,64 @@ func (s *Service) ReportCommitStatus(ctx context.Context, provider store.GitProv
 	}
 }
 
-// ReportCommitStatusForUser resolves the first unmasked token of the given
-// provider for a user and posts a status. Used by the preview environment
-// worker which only knows the preview creator (created_by).
+// ReportCommitStatusForUser posts a status through the caller's explicit
+// provider token. It resolves the token by ID so multi-token accounts cannot
+// silently report under the wrong credential.
 func (s *Service) ReportCommitStatusForUser(ctx context.Context, userID string, provider store.GitProviderType, owner, repo, sha string, st CommitStatus) error {
+	return s.ReportCommitStatusForToken(ctx, userID, "", provider, owner, repo, sha, st)
+}
+
+// ReportCommitStatusForToken posts a status through an explicit provider token
+// ID. When tokenID is empty, exactly one usable token must exist for
+// (user, provider); zero yields not-found and more than one yields an
+// ambiguity error instead of silently picking the first.
+func (s *Service) ReportCommitStatusForToken(ctx context.Context, userID, tokenID string, provider store.GitProviderType, owner, repo, sha string, st CommitStatus) error {
 	if userID == "" || owner == "" || repo == "" || sha == "" {
 		return fmt.Errorf("report commit status for user: user, repo and sha are required")
+	}
+	if s.store == nil {
+		return fmt.Errorf("report commit status: store is not available")
+	}
+	if tokenID != "" {
+		unmasked, err := s.store.GetGitProviderTokenUnmasked(ctx, tokenID)
+		if err != nil {
+			return fmt.Errorf("report commit status: load token: %w", err)
+		}
+		if unmasked.UserID != userID {
+			return fmt.Errorf("report commit status: provider token not found")
+		}
+		if unmasked.Provider != provider {
+			return fmt.Errorf("report commit status: token is for %s, not %s", unmasked.Provider, provider)
+		}
+		if unmasked.AccessToken == "" {
+			return fmt.Errorf("report commit status: token has no access token")
+		}
+		return s.ReportCommitStatus(ctx, unmasked.Provider, unmasked.AccessToken, unmasked.BaseURL, owner, repo, sha, st)
 	}
 	tokens, err := s.store.ListGitProviderTokens(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("report commit status: list tokens: %w", err)
 	}
+	var candidates []store.GitProviderToken
 	for _, t := range tokens {
-		if t.Provider != provider {
-			continue
+		if t.Provider == provider {
+			candidates = append(candidates, t)
 		}
-		unmasked, err := s.store.GetGitProviderTokenUnmasked(ctx, t.ID)
-		if err != nil {
-			continue
-		}
-		if unmasked.AccessToken == "" {
-			continue
-		}
-		return s.ReportCommitStatus(ctx, unmasked.Provider, unmasked.AccessToken, unmasked.BaseURL, owner, repo, sha, st)
 	}
-	return fmt.Errorf("report commit status: no usable %s provider token for user %s", provider, userID)
+	if len(candidates) == 0 {
+		return fmt.Errorf("report commit status: no usable %s provider token for user %s", provider, userID)
+	}
+	if len(candidates) > 1 {
+		return fmt.Errorf("report commit status: %d %s provider tokens for user %s — specify providerTokenId", len(candidates), provider, userID)
+	}
+	unmasked, err := s.store.GetGitProviderTokenUnmasked(ctx, candidates[0].ID)
+	if err != nil {
+		return fmt.Errorf("report commit status: load token: %w", err)
+	}
+	if unmasked.AccessToken == "" {
+		return fmt.Errorf("report commit status: token has no access token")
+	}
+	return s.ReportCommitStatus(ctx, unmasked.Provider, unmasked.AccessToken, unmasked.BaseURL, owner, repo, sha, st)
 }
 
 // -------- per-provider payloads --------

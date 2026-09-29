@@ -237,7 +237,7 @@ func (s *Store) ListRetryableBackupJobs(ctx context.Context, limit int) ([]Backu
 func (s *Store) FailBackupJob(ctx context.Context, id, status string, retryCount int, lastRetryAt, completedAt *time.Time, errMsg string) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE backup_jobs
-		SET status = $2, error_message = CASE WHEN $7 = '' THEN error_message ELSE $7 END,
+		SET status = $2, error_message = CASE WHEN $6 = '' THEN error_message ELSE $6 END,
 		    retry_count = $3, last_retry_at = $4,
 		    completed_at = CASE WHEN $5 IS NULL THEN completed_at ELSE $5 END,
 		    updated_at = now()

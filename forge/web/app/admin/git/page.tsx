@@ -86,17 +86,23 @@ interface GitProviderBranch {
 type Tab = "credentials" | "providers" | "sources";
 
 function ProviderIcon({ provider }: { provider: string }) {
+  // Allowlist: provider ids are fixed union members, never raw user input —
+  // an unknown id falls back to the local placeholder instead of building a
+  // `https://<input>/favicon.ico` URL (which would let a crafted provider name
+  // exfiltrate the admin's session via favicon fetch / onError probing).
   const icons: Record<string, string> = {
     github: "https://github.com/favicon.ico",
     gitlab: "https://gitlab.com/favicon.ico",
     bitbucket: "https://bitbucket.org/favicon.ico",
     gitea: "/gitea-favicon.ico",
   };
+  const src = icons[provider];
+  if (!src) return <GitBranch size={20} className="text-[var(--text-subtle)]" />;
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
-      src={icons[provider] || `https://${provider}.com/favicon.ico`}
-      alt={provider}
+      src={src}
+      alt={`${provider} icon`}
       className="w-5 h-5 rounded"
       onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }}
     />

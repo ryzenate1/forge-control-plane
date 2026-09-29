@@ -1181,8 +1181,10 @@ func run() error {
 
 		healthFilter = crossnode.NewHealthFilter(2, 30*time.Second)
 		healthFilter.StartReaper(appCtx, 5*time.Minute)
-		ingressSync = crossnode.NewIngressSynchronizer(caddyProxy, crossNodeResolver, healthFilter, outboxPub)
-		ingressSync.Start(appCtx, 30*time.Second)
+		ingressSync = crossnode.NewIngressSynchronizer(caddyProxy, healthFilter, outboxPub)
+		// Started below, after tmSvc exists: the synchronizer observes tmSvc's rule
+		// set and delegates gateway convergence to it, so starting the loop here
+		// would spend every tick failing for want of a reconciler.
 
 		// NetBird mesh VPN control plane client (nil-safe when NETBIRD_API_URL /
 		// NETBIRD_API_TOKEN are unset).
@@ -1282,6 +1284,15 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeOffline, tmSvc)
 		eventRegistry.Subscribe(events.EventNodeRecovered, tmSvc)
 		tmSvc.Start(appCtx)
+		// cross-node ingress observes trafficmanager's live rule set and delegates
+		// every gateway change back to it: trafficmanager is the only writer allowed
+		// on the shared Caddy admin API. Start therefore has to follow tmSvc, or the
+		// first ticks run with no source and report an unconfigured observer.
+		if ingressSync != nil {
+			ingressSync.SetReconciler(tmSvc, tmSvc)
+			ingressSync.SetEndpointSource(discoverySvc)
+			ingressSync.Start(appCtx, 30*time.Second)
+		}
 		previewDeploySvc = previewenv.New(db, previewenv.Options{
 			Publisher:   outboxPub,
 			Logger:      slogLogger,
@@ -1297,7 +1308,7 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeOnline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				if err := ingressSync.Sync(ctx); err != nil {
+				if _, err := ingressSync.Sync(ctx); err != nil {
 					slogLogger.Error("ingress sync failed", slog.String("event", "node.online"), slog.String("error", err.Error()))
 				}
 			}
@@ -1306,7 +1317,7 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeOffline, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				if err := ingressSync.Sync(ctx); err != nil {
+				if _, err := ingressSync.Sync(ctx); err != nil {
 					slogLogger.Error("ingress sync failed", slog.String("event", "node.offline"), slog.String("error", err.Error()))
 				}
 			}
@@ -1315,7 +1326,7 @@ func run() error {
 		eventRegistry.Subscribe(events.EventNodeRecovered, events.HandlerFunc(func(ctx context.Context, _ events.Envelope) error {
 			crossNodeResolver.ClearCache()
 			if ingressSync != nil {
-				if err := ingressSync.Sync(ctx); err != nil {
+				if _, err := ingressSync.Sync(ctx); err != nil {
 					slogLogger.Error("ingress sync failed", slog.String("event", "node.recovered"), slog.String("error", err.Error()))
 				}
 			}
@@ -1648,6 +1659,8 @@ func run() error {
 		CrashDetector:              crashDetector,
 		DeploymentSvc:              deploySvc,
 		PreviewDeploymentSvc:       previewDeploySvc,
+		PreviewEnvService:          previewDeploySvc,
+		WebhookService:             whSvc,
 		CloudManager:               cloudMgr,
 		LoadBalancer:               lbSvc,
 		FailoverSvc:                failSvc,

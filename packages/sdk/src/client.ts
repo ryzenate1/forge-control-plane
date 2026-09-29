@@ -145,18 +145,23 @@ export function isApiError(err: unknown): err is ApiError {
 }
 
 /**
- * Unwrap a list payload that may be a bare array or a `{ data: T[] }`
- * envelope. List endpoints historically returned both shapes, so every SDK
- * list accessor normalises through this helper instead of assuming one.
- *
- * Naming note: the web client (`forge/web/lib/api/http.ts`) spells this
- * `unwrapList`, with `unwrapData` reserved for single-object `{ data: T }`
- * envelopes. The SDK keeps `unwrapData` as a deprecated alias for backward
- * compatibility — new code should call `unwrapList`.
+ * Unwrap a list payload that must be a bare array or a `{ data: T[] }`
+ * envelope. `null`/`undefined` unwrap to `[]`, but any other unexpected shape
+ * throws — silently presenting "no data" for a shape the backend never emits
+ * hides contract drift as an empty list. Same strictness as the web client's
+ * `unwrapList` (`forge/web/lib/api/http.ts`).
  */
 export function unwrapList<T>(value: T[] | { data?: T[] } | undefined | null): T[] {
+  if (value == null) return [];
   if (Array.isArray(value)) return value;
-  return value?.data ?? [];
+  if (typeof value === 'object' && Array.isArray((value as { data?: unknown }).data)) {
+    return (value as { data: T[] }).data;
+  }
+  // Never silently present "no data" for a shape the backend never emits: a
+  // non-empty unexpected body means the contract drifted and must surface,
+  // not render as an empty list. An empty object is not an empty list
+  // either — returning [] for `{}` would hide the drift the same way.
+  throw new Error('Unexpected response: expected an array or { data: [...] }');
 }
 
 /** @deprecated Use `unwrapList` instead (matches the web client's naming). */
@@ -220,8 +225,8 @@ export type CreateNodeResult = {
   meta: { resource?: string };
 };
 
-/** Paginated response of `GET /servers/:id/backups`. Canonical alias of `PaginatedResponse<ApiBackup>`. */
-export type BackupListResponse = PaginatedResponse<ApiBackup>;
+/** Response of `GET /servers/:id/backups`. Canonical alias of `BackupListResponse` from `@forge/shared-types` (flat `{ data, pagination }`, not `PaginatedResponse`). */
+export type BackupListResponse = import('@forge/shared-types').BackupListResponse;
 
 /** Generic `{ "ok": true }` body returned by several DELETE endpoints. */
 export type OkResponse = {
@@ -633,7 +638,7 @@ export class ForgeApiClient {
         }
 
         if (response.status === 204) {
-          return {} as T;
+          return undefined as T;
         }
 
         if (opts.raw) {
@@ -642,7 +647,7 @@ export class ForgeApiClient {
 
         const text = await response.text();
         if (!text) {
-          return {} as T;
+          return undefined as T;
         }
         try {
           return JSON.parse(text) as T;
@@ -925,8 +930,13 @@ export class ForgeApiClient {
     return this.request<ApiAllocation[]>(`/nodes/${nodeId}/allocations`);
   }
 
-  /** Create allocations (admin, `nodeId` in body). `POST /allocations`. */
+  /** Create allocations (admin, `nodeId` in body; `port` or `ports` required). `POST /allocations`. */
   public async createAllocation(allocation: CreateAllocationInput): Promise<ApiAllocation[]> {
+    if (allocation.port == null && (allocation.ports ?? '').trim() === '') {
+      throw new ApiError(400, 'Bad Request', {
+        message: 'port or ports is required',
+      });
+    }
     return this.request<ApiAllocation[]>('/allocations', {
       method: 'POST',
       body: JSON.stringify(allocation),
@@ -1016,15 +1026,21 @@ export class ForgeApiClient {
     });
   }
 
-  /** Create a task on a schedule; the API only accepts `timeOffsetSeconds`. `POST /servers/:id/schedules/:scheduleId/tasks`. */
+  /**
+   * Create a task on a schedule. `action` is required server-side (the store
+   * 400s on a missing/unsupported action), so the full
+   * `ScheduleTaskCreateInput` is accepted and forwarded — never a bare
+   * `timeOffsetSeconds`, which can never succeed on its own.
+   * `POST /servers/:id/schedules/:scheduleId/tasks`.
+   */
   public async createScheduleTask(
     serverId: string,
     scheduleId: string,
-    timeOffsetSeconds: number,
+    input: ScheduleTaskCreateInput,
   ): Promise<ApiScheduleTask> {
     return this.request<ApiScheduleTask>(`/servers/${serverId}/schedules/${scheduleId}/tasks`, {
       method: 'POST',
-      body: JSON.stringify({ timeOffsetSeconds }),
+      body: JSON.stringify(input),
     });
   }
 
@@ -1037,14 +1053,16 @@ export class ForgeApiClient {
     return this.request<BackupListResponse>(`/servers/${serverId}/backups`);
   }
 
-  /** Create a backup; the API only accepts an optional `ignored` file list. `POST /servers/:id/backups`. */
-  public async createBackup(
-    serverId: string,
-    input?: Pick<BackupCreateInput, 'ignored'>,
-  ): Promise<ApiBackup> {
+  /**
+   * Create a backup. The server only honors the `ignored` file list (it
+   * generates the backup name itself; see `BackupCreateInput`), so the full
+   * input is forwarded as-is and nothing is silently dropped.
+   * `POST /servers/:id/backups`.
+   */
+  public async createBackup(serverId: string, input?: BackupCreateInput): Promise<ApiBackup> {
     return this.request<ApiBackup>(`/servers/${serverId}/backups`, {
       method: 'POST',
-      body: JSON.stringify({ ignored: input?.ignored ?? [] }),
+      body: JSON.stringify(input ?? {}),
     });
   }
 

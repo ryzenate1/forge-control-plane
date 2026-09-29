@@ -1,4 +1,5 @@
 import type { FC, SVGProps } from "react";
+import { useId } from "react";
 import { chart } from "@/lib/design-tokens";
 
 // SVG fill/stroke attributes are not a CSS context, so `var(--token)` cannot be
@@ -419,7 +420,12 @@ export const StoragePlattersIcon: FC<IconProps> = ({ size = 18, className, ...pr
 );
 
 // ─── 20. Planet Icon for Bottom Project Switcher ───────────────────────────
-export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...props }) => (
+export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...props }) => {
+  // Gradient ids live in the global document namespace: a hardcoded id would
+  // collide when the icon renders twice on one page and both instances would
+  // resolve `url(#…)` to the first definition.
+  const gradientId = useId().replace(/[^a-zA-Z0-9]/g, "");
+  return (
   <svg
     width={size}
     height={size}
@@ -430,13 +436,13 @@ export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...prop
     {...props}
   >
     <defs>
-      <linearGradient id="planetGrad" x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
+      <linearGradient id={gradientId} x1="0" y1="0" x2="24" y2="24" gradientUnits="userSpaceOnUse">
         <stop stopColor={chart.success} />
         <stop offset="0.5" stopColor={chart.blue} />
         <stop offset="1" stopColor={chart.indigo} />
       </linearGradient>
     </defs>
-    <circle cx="12" cy="12" r="7" fill="url(#planetGrad)" />
+    <circle cx="12" cy="12" r="7" fill={`url(#${gradientId})`} />
     <ellipse
       cx="12"
       cy="12"
@@ -448,7 +454,8 @@ export const PlanetDefaultIcon: FC<IconProps> = ({ size = 16, className, ...prop
       strokeDasharray="20 4 6 4"
     />
   </svg>
-);
+  );
+};
 
 // ─── 21. System Health Green Operational Circular Badge ────────────────────
 export const SystemHealthOperationalIcon: FC<IconProps> = ({ size = 28, className, ...props }) => (

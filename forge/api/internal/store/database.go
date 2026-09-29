@@ -16,16 +16,24 @@ type DatabaseType string
 
 const (
 	DatabasePostgres DatabaseType = "postgres"
-	// DatabaseMySQL and DatabaseMariaDB are best-effort targets: the
-	// deployed and CI-verified path is PostgreSQL (SQLite for local
-	// dev/tests). The MigrationRunner applies mysqlCompatibleMigration for
-	// the common PG-isms and per-file mysql/ dialect overrides take
-	// precedence; migrations outside that coverage fail with the raw
-	// driver error rather than silently diverging. Do not claim full
-	// MySQL parity for migrations without an override.
+	// DatabaseMySQL and DatabaseMariaDB are best-effort targets scoped to
+	// MigrationRunner use in tests and local dev: the MigrationRunner applies
+	// mysqlCompatibleMigration for the common PG-isms and per-file mysql/
+	// dialect overrides take precedence; migrations outside that coverage
+	// fail with the raw driver error rather than silently diverging. Do not
+	// claim full MySQL parity for migrations without an override.
+	//
+	// Store queries NEVER run on MySQL/MariaDB/SQLite: they use
+	// PostgreSQL-only syntax (DISTINCT ON, FOR UPDATE/SHARE + SKIP LOCKED,
+	// ::casts, ON CONFLICT, RETURNING, pg_advisory_lock). ConnectWithKeyring
+	// fails fast on non-Postgres DSNs for this reason.
 	DatabaseMySQL   DatabaseType = "mysql"
 	DatabaseMariaDB DatabaseType = "mariadb"
-	DatabaseSQLite  DatabaseType = "sqlite"
+	// DatabaseSQLite is scoped to MigrationRunner use in tests and local
+	// dev (sqliteCompatibleMigration + sqlite/ overrides + documented
+	// sqliteSkippedDDL gaps surfaced via MigrationIntegrity.SkippedDDL).
+	// Never for Store queries.
+	DatabaseSQLite DatabaseType = "sqlite"
 )
 
 type DatabaseDriver interface {
@@ -129,6 +137,31 @@ func (c DBConfig) DSN() string {
 		return c.SQLitePath
 	default:
 		return ""
+	}
+}
+
+// RedactedDSN returns the DSN with password material removed for logging.
+// It never contains the raw password or its percent-encoded form.
+func (c DBConfig) RedactedDSN() string {
+	switch c.Type {
+	case DatabasePostgres:
+		dsn := c.DSN()
+		if at := strings.LastIndex(dsn, "@"); at >= 0 {
+			if scheme := strings.Index(dsn, "://"); scheme >= 0 {
+				dsn = dsn[:scheme+3] + dsn[at+1:]
+			}
+		}
+		return dsn
+	case DatabaseMySQL, DatabaseMariaDB:
+		dsn := c.DSN()
+		if at := strings.LastIndex(dsn, "@"); at >= 0 {
+			if colon := strings.Index(dsn, ":"); colon >= 0 && colon < at {
+				dsn = dsn[:colon+1] + "***" + dsn[at:]
+			}
+		}
+		return dsn
+	default:
+		return c.DSN()
 	}
 }
 

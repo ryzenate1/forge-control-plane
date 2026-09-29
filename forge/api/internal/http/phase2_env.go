@@ -2,7 +2,16 @@ package http
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"gamepanel/forge/internal/services/domainsenv"
@@ -15,6 +24,202 @@ import (
 	fiberws "github.com/gofiber/contrib/websocket"
 	"github.com/gofiber/fiber/v2"
 )
+
+// envLogTicket is a short-lived, single-use credential for the per-service
+// log WebSocket. It binds the issuing user to one environment + service so a
+// leaked URL cannot be replayed for another env/service or by another user.
+type envLogTicket struct {
+	Subject   string    `json:"subject"`
+	UserID    string    `json:"userId"`
+	EnvID     string    `json:"envId"`
+	Service   string    `json:"service"`
+	ExpiresAt time.Time `json:"expiresAt"`
+	Consumed  bool      `json:"consumed"`
+}
+
+type envLogTicketStore struct {
+	mu      sync.RWMutex
+	tickets map[string]envLogTicket
+	cfg     *Config
+}
+
+func newEnvLogTicketStore(cfg *Config) *envLogTicketStore {
+	return &envLogTicketStore{tickets: make(map[string]envLogTicket), cfg: cfg}
+}
+
+func (s *envLogTicketStore) useShared() bool {
+	return s != nil && s.cfg != nil && s.cfg.RedisEnabled && s.cfg.Redis != nil
+}
+
+func signEnvLogTicket(secret, subject string) string {
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("forge:env-log-ticket:v1\x00"))
+	mac.Write([]byte(subject))
+	sig := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return subject + "." + sig
+}
+
+func verifyEnvLogTicketSignature(secret, token string) (string, bool) {
+	parts := strings.SplitN(token, ".", 2)
+	if len(parts) != 2 {
+		return "", false
+	}
+	subject, sig := parts[0], parts[1]
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte("forge:env-log-ticket:v1\x00"))
+	mac.Write([]byte(subject))
+	expected := base64.RawURLEncoding.EncodeToString(mac.Sum(nil))
+	return subject, hmac.Equal([]byte(sig), []byte(expected))
+}
+
+func (s *envLogTicketStore) put(t envLogTicket) {
+	if s.useShared() {
+		data, err := json.Marshal(t)
+		if err == nil {
+			ttl := time.Until(t.ExpiresAt)
+			if ttl > 0 {
+				_ = s.cfg.Redis.Set(context.Background(), "env_log_ticket:"+t.Subject, data, ttl).Err()
+			}
+		}
+		return
+	}
+	s.mu.Lock()
+	s.tickets[t.Subject] = t
+	s.mu.Unlock()
+	time.AfterFunc(time.Until(t.ExpiresAt)+30*time.Second, func() {
+		s.mu.Lock()
+		delete(s.tickets, t.Subject)
+		s.mu.Unlock()
+	})
+}
+
+func (s *envLogTicketStore) peek(subject string) (envLogTicket, bool) {
+	if s.useShared() {
+		val, err := s.cfg.Redis.Get(context.Background(), "env_log_ticket:"+subject).Result()
+		if err != nil {
+			return envLogTicket{}, false
+		}
+		var t envLogTicket
+		if err := json.Unmarshal([]byte(val), &t); err != nil {
+			return envLogTicket{}, false
+		}
+		if t.Consumed || time.Now().After(t.ExpiresAt) {
+			return envLogTicket{}, false
+		}
+		return t, true
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	t, ok := s.tickets[subject]
+	if !ok || t.Consumed || time.Now().After(t.ExpiresAt) {
+		return envLogTicket{}, false
+	}
+	return t, true
+}
+
+func (s *envLogTicketStore) consume(subject string) (envLogTicket, bool) {
+	if s.useShared() {
+		val, err := consumeScript.Run(context.Background(), s.cfg.Redis, []string{"env_log_ticket:" + subject}).Result()
+		if err != nil || val == nil {
+			return envLogTicket{}, false
+		}
+		strVal, ok := val.(string)
+		if !ok {
+			return envLogTicket{}, false
+		}
+		var t envLogTicket
+		if err := json.Unmarshal([]byte(strVal), &t); err != nil {
+			return envLogTicket{}, false
+		}
+		if t.Consumed || time.Now().After(t.ExpiresAt) {
+			return envLogTicket{}, false
+		}
+		return t, true
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	t, ok := s.tickets[subject]
+	if !ok || t.Consumed || time.Now().After(t.ExpiresAt) {
+		return envLogTicket{}, false
+	}
+	t.Consumed = true
+	s.tickets[subject] = t
+	return t, true
+}
+
+func inspectEnvLogTicket(secret string, st *envLogTicketStore, token string) (envLogTicket, bool) {
+	subject, ok := verifyEnvLogTicketSignature(secret, token)
+	if !ok {
+		return envLogTicket{}, false
+	}
+	return st.peek(subject)
+}
+
+// validateEnvLogWSUpgrade validates the ticket + session + org binding for an
+// env-log WebSocket upgrade. It inspects (not consumes) the ticket; callers
+// consume only after every check succeeds so a failed upgrade never burns a
+// legitimate ticket.
+func validateEnvLogWSUpgrade(conn *fiberws.Conn, cfg *Config, st *envLogTicketStore) (envLogTicket, tokenClaims, error) {
+	if cfg == nil || cfg.Store == nil || st == nil {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusServiceUnavailable, "store unavailable")
+	}
+	raw := conn.Query("token")
+	if strings.TrimSpace(raw) == "" {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "log stream ticket is required")
+	}
+	ticket, ok := inspectEnvLogTicket(cfg.AuthSecret, st, raw)
+	if !ok {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "invalid or expired log stream ticket")
+	}
+	if ticket.EnvID != conn.Params("id") || ticket.Service != conn.Params("service") {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusForbidden, "ticket does not match this log stream")
+	}
+	sessionToken := wsSessionToken(conn)
+	if sessionToken == "" {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "ticket requires session cookie or Authorization header")
+	}
+	claims, err := parseToken(cfg.AuthSecret, sessionToken)
+	if err != nil {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "unauthorized")
+	}
+	lookupCtx, lookupCancel := sessionLookupCtx()
+	validated, err := validateCurrentSession(lookupCtx, cfg.Store, claims)
+	lookupCancel()
+	if err != nil {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "invalid or revoked session")
+	}
+	if validated.Sub != ticket.UserID {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusUnauthorized, "ticket identity mismatch")
+	}
+	// Org authorization mirrors phase2EnvAccess: admins short-circuit,
+	// others must be members of the environment's org. Fail closed on error.
+	orgCtx, orgCancel := sessionLookupCtx()
+	envCtx, err := cfg.Store.ResolveEnvContext(orgCtx, ticket.EnvID)
+	orgCancel()
+	if err != nil {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusNotFound, "environment not found")
+	}
+	if envCtx.Environment.ID != ticket.EnvID {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusForbidden, "ticket does not match this log stream")
+	}
+	if validated.Role != "admin" {
+		memberCtx, memberCancel := sessionLookupCtx()
+		member, err := cfg.Store.UserIsOrgMember(memberCtx, envCtx.Org.ID, validated.Sub)
+		memberCancel()
+		if err != nil || !member {
+			return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusForbidden, "not a member of the environment's organization")
+		}
+	}
+	// Re-check 2FA posture: the session's 2FA state can change within the
+	// ticket's window, so enforce the panel policy on upgrade as well.
+	twoFactorCtx, twoFactorCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	twoFactorErr := checkRealtimeTwoFactor(twoFactorCtx, cfg, validated)
+	twoFactorCancel()
+	if twoFactorErr != nil {
+		return envLogTicket{}, tokenClaims{}, fiber.NewError(fiber.StatusForbidden, "two-factor authentication is required")
+	}
+	return ticket, validated, nil
+}
 
 // Phase 2 — Environment engine.
 //
@@ -55,6 +260,8 @@ func registerPhase2EnvironmentEngine(v1 fiber.Router, protected fiber.Router, cf
 	if cfg.BackgroundContext != nil {
 		domainSvc.Start(cfg.BackgroundContext)
 	}
+
+	envLogTickets := newEnvLogTicketStore(cfg)
 
 	// ---- Environment manifest ----
 
@@ -197,6 +404,10 @@ func registerPhase2EnvironmentEngine(v1 fiber.Router, protected fiber.Router, cf
 		}
 		applied, err := applyGroupEnvVars(ctx, applier, envCtx.Environment.ID, group.Variables, &actorID)
 		if err != nil {
+			var fe *fiber.Error
+			if errors.As(err, &fe) {
+				return fe
+			}
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
 		return c.JSON(fiber.Map{"ok": true, "applied": applied})
@@ -222,14 +433,62 @@ func registerPhase2EnvironmentEngine(v1 fiber.Router, protected fiber.Router, cf
 		return c.JSON(entries)
 	})
 
+	// Short-lived ticket for the service-log WebSocket, minted behind the
+	// same org authorization as every other env route (like IssueWSTicket).
+	protected.Post("/envs/:id/services/:service/logs/ticket", func(c *fiber.Ctx) error {
+		envCtx, err := phase2EnvAccess(c, cfg)
+		if err != nil {
+			return err
+		}
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok || claims.Sub == "" {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		service := strings.TrimSpace(c.Params("service"))
+		if service == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "service is required")
+		}
+		raw := make([]byte, 16)
+		if _, err := rand.Read(raw); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "could not generate log stream ticket")
+		}
+		subject := hex.EncodeToString(raw)
+		expiresAt := time.Now().Add(60 * time.Second)
+		token := signEnvLogTicket(cfg.AuthSecret, subject)
+		envLogTickets.put(envLogTicket{
+			Subject:   subject,
+			UserID:    claims.Sub,
+			EnvID:     envCtx.Environment.ID,
+			Service:   service,
+			ExpiresAt: expiresAt,
+		})
+		return c.JSON(fiber.Map{
+			"token":     token,
+			"expiresAt": expiresAt.UTC().Format(time.RFC3339),
+			"env":       envCtx.Environment.ID,
+			"service":   service,
+		})
+	})
+
 	protected.Get("/envs/:id/services/:service/logs/ws", fiberws.New(func(conn *fiberws.Conn) {
 		defer conn.Close()
 		if cfg.Store == nil {
 			_ = conn.WriteJSON(fiber.Map{"error": "store unavailable"})
 			return
 		}
-		envID := conn.Params("id")
-		service := conn.Params("service")
+		// Ticket + session + org are validated on upgrade, before any log
+		// data flows. A failed upgrade never consumes the ticket.
+		ticket, _, err := validateEnvLogWSUpgrade(conn, cfg, envLogTickets)
+		if err != nil {
+			_ = conn.WriteJSON(fiber.Map{"error": "unauthorized"})
+			return
+		}
+		if _, ok := envLogTickets.consume(ticket.Subject); !ok {
+			_ = conn.WriteJSON(fiber.Map{"error": "invalid or expired log stream ticket"})
+			return
+		}
+		envID := ticket.EnvID
+		service := ticket.Service
 
 		var since *time.Time
 		if raw := conn.Query("since"); raw != "" {
@@ -347,10 +606,12 @@ func parseSinceQuery(c *fiber.Ctx) (*time.Time, error) {
 }
 
 // applyGroupEnvVars upserts each group variable at environment-scope using
-// the env-var service.
+// the env-var service. A nil store is a 503 (unknown is not zero): answering
+// ok:true with applied:0 would claim success that never happened. Upsert
+// failures propagate so a partial apply is never reported as fully applied.
 func applyGroupEnvVars(ctx context.Context, envVarStore envVarApplicator, envID string, variables map[string]string, actorID *string) (int, error) {
 	if envVarStore == nil {
-		return 0, nil
+		return 0, fiber.NewError(fiber.StatusServiceUnavailable, "environment variable service is not available")
 	}
 	existing, err := envVarStore.List(ctx, "environment", envID)
 	if err != nil {
@@ -362,7 +623,7 @@ func applyGroupEnvVars(ctx context.Context, envVarStore envVarApplicator, envID 
 			continue
 		}
 		if _, err := envVarStore.Upsert(ctx, envID, key, value, actorID, existing); err != nil {
-			continue
+			return applied, err
 		}
 		applied++
 	}

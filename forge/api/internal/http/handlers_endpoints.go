@@ -18,7 +18,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 	// ---- Infrastructure Endpoints (Portainer-style Environment abstraction) ----
 	// These are logical groupings over one or more Nodes, NOT project environments.
 
-	protected.Get("/endpoints", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints", requireRole("admin"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		endpoints, err := svc.List(ctx)
@@ -48,7 +48,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 		return c.Status(fiber.StatusCreated).JSON(ep)
 	})
 
-	protected.Get("/endpoints/:id", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id", requireRole("admin"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		ep, err := svc.Get(ctx, c.Params("id"))
@@ -87,7 +87,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 
 	// ---- Node membership ----
 
-	protected.Get("/endpoints/:id/nodes", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id/nodes", requireRole("admin"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -140,7 +140,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 
 	// ---- Access Policies ----
 
-	protected.Get("/endpoints/:id/policies", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id/policies", requireRole("admin"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		policies, err := svc.ListAccessPolicies(ctx, c.Params("id"))
@@ -179,7 +179,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 
 	// ---- Diagnostics ----
 
-	protected.Get("/endpoints/:id/diagnostics", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id/diagnostics", requireRole("admin"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		diag, err := svc.Diagnostics(ctx, c.Params("id"))
@@ -189,7 +189,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 		return c.JSON(diag)
 	})
 
-	protected.Get("/endpoints/:id/inventory", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id/inventory", requireRole("admin"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		summary, err := svc.Inventory(ctx, c.Params("id"))
@@ -201,7 +201,7 @@ func registerEndpointRoutes(protected fiber.Router, cfg Config, svc *envsvc.Serv
 
 	// ---- Health History ----
 
-	protected.Get("/endpoints/:id/health", func(c *fiber.Ctx) error {
+	protected.Get("/endpoints/:id/health", requireRole("admin"), func(c *fiber.Ctx) error {
 		limit := 50
 		if l := c.Query("limit"); l != "" {
 			if parsed, err := strconv.Atoi(l); err == nil && parsed > 0 && parsed <= 200 {

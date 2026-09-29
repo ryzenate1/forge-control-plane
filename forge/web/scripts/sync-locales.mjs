@@ -4,8 +4,10 @@
  *
  * Diffs every locale against lang/en.json (the reference) and completes
  * missing keys by copying the English value. Keys present in a locale but
- * absent from en.json (orphans) are removed. Existing translations are
- * preserved and key order follows en.json for readability.
+ * absent from en.json (orphans) are reported but preserved — deleting them
+ * automatically destroyed in-progress translations for renamed keys, so
+ * removal is a deliberate human edit, not a sync side effect. Existing
+ * translations are preserved and key order follows en.json for readability.
  *
  * Also verifies that the `lang/*.json` catalog matches the
  * `supportedLocales` declared in `packages/shared-types/src/i18n.ts` and
@@ -13,8 +15,10 @@
  * declaration (or vice versa) is a mismatch.
  *
  * Usage: node scripts/sync-locales.mjs [--dry-run]
- * Exit code is non-zero in --dry-run when keys are missing/orphaned or the
+ * Exit code is non-zero in --dry-run when keys are missing or the
  * locale list mismatches, so `sync:locales:check` fails CI on drift.
+ * Orphan keys are listed for human cleanup but never fail the check,
+ * because sync preserves them.
  */
 import { readFileSync, writeFileSync, readdirSync, existsSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -25,6 +29,9 @@ const LANG_DIR = join(SCRIPTS_DIR, "..", "..", "..", "lang");
 const SHARED_I18N = join(SCRIPTS_DIR, "..", "..", "..", "packages", "shared-types", "src", "i18n.ts");
 const REFERENCE = "en";
 const DRY_RUN = process.argv.includes("--dry-run");
+// Destructive: drop keys absent from en.json. Without this flag orphans are
+// preserved in place and reported, never silently deleted.
+const PRUNE_ORPHANS = process.argv.includes("--prune-orphans");
 
 function load(file) {
   return JSON.parse(readFileSync(join(LANG_DIR, file), "utf8"));
@@ -33,18 +40,29 @@ function load(file) {
 
 /**
  * Rebuild `target` to match `template`'s structure and key order, keeping
- * target's own value when it exists, otherwise falling back to template's.
+ * target's own value when it exists. Missing keys are backfilled from the
+ * template but marked with a `TODO-i18n: ` prefix (string leaves only) so a
+ * silent English copy — e.g. the untranslated `lang/de.json` values that used
+ * to be indistinguishable from real translations — can never again pass as a
+ * finished translation. Non-string leaves are copied as-is; JSON has no
+ * comment syntax to mark them with.
  */
-function mergeInto(template, target) {
+const TODO_I18N_PREFIX = 'TODO-i18n: ';
+function mergeInto(template, target, prefix = "", backfilled = []) {
   const out = {};
   for (const [key, value] of Object.entries(template)) {
-    if (value && typeof value === "object" && !Array.isArray(value)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
       const next = target?.[key];
-      out[key] = next && typeof next === "object" && !Array.isArray(next)
-        ? mergeInto(value, next)
-        : mergeInto(value, {});
+      out[key] =
+        next && typeof next === 'object' && !Array.isArray(next)
+          ? mergeInto(value, next, path, backfilled)
+          : mergeInto(value, {}, path, backfilled);
+    } else if (target?.[key] === undefined) {
+      backfilled.push(path);
+      out[key] = typeof value === 'string' ? `${TODO_I18N_PREFIX}${value}` : value;
     } else {
-      out[key] = target?.[key] ?? value;
+      out[key] = target[key];
     }
   }
   return out;
@@ -58,7 +76,7 @@ function diff(a, b) {
       const path = prefix ? `${prefix}.${key}` : key;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         walkA(value, path);
-      } else if (!resolve(b, path)) {
+      } else if (resolve(b, path) === undefined) {
         missing.push(path);
       }
     }
@@ -68,7 +86,7 @@ function diff(a, b) {
       const path = prefix ? `${prefix}.${key}` : key;
       if (value && typeof value === "object" && !Array.isArray(value)) {
         walkB(value, path);
-      } else if (!resolve(a, path)) {
+      } else if (resolve(a, path) === undefined) {
         orphans.push(path);
       }
     }
@@ -85,6 +103,26 @@ function resolve(obj, path) {
     current = current[segment];
   }
   return current;
+}
+
+/**
+ * Deep-set a dotted path on `obj`, creating intermediate objects. Used to
+ * carry orphan keys forward: sync fills missing keys from English but never
+ * deletes keys English does not have (unless `--prune-orphans` is passed),
+ * so in-progress translations for renamed keys survive until a human removes
+ * them.
+ */
+function setPath(obj, path, value) {
+  const segments = path.split(".");
+  let current = obj;
+  for (let i = 0; i < segments.length - 1; i++) {
+    const segment = segments[i];
+    if (!current[segment] || typeof current[segment] !== "object" || Array.isArray(current[segment])) {
+      current[segment] = {};
+    }
+    current = current[segment];
+  }
+  current[segments[segments.length - 1]] = value;
 }
 
 function readSupportedLocales() {
@@ -115,15 +153,21 @@ for (const file of files.sort()) {
   const { missing, orphans } = diff(reference, messages);
 
   const merged = mergeInto(reference, messages);
+  // Carry orphan keys forward so sync never deletes translations.
+  for (const orphan of orphans) {
+    const value = resolve(messages, orphan);
+    if (value !== undefined) setPath(merged, orphan, value);
+  }
   const { missing: stillMissing, orphans: stillOrphans } = diff(reference, merged);
 
   totalBefore += missing.length;
   totalAfter += stillMissing.length;
-  if (missing.length || orphans.length) drift = true;
+  // Orphans are preserved by design, so only missing keys count as drift.
+  if (missing.length) drift = true;
 
   const summary = [
     `${locale}: ${missing.length} missing -> ${stillMissing.length}`,
-    orphans.length ? `${orphans.length} orphans removed` : "",
+    orphans.length ? `${orphans.length} orphans preserved` : "",
     stillOrphans.length ? `${stillOrphans.length} orphans remaining` : "",
   ].filter(Boolean).join(", ");
 
@@ -148,7 +192,7 @@ for (const file of files.sort()) {
     }
   }
 
-  if (!DRY_RUN && (missing.length || orphans.length)) {
+  if (!DRY_RUN && missing.length) {
     writeFileSync(join(LANG_DIR, file), `${JSON.stringify(merged, null, 2)}\n`);
   }
 }
@@ -179,6 +223,6 @@ if (declared) {
 }
 
 if (DRY_RUN && drift) {
-  console.error("\n[dry-run] locale drift detected (missing/orphan keys or locale list mismatch)");
+  console.error("\n[dry-run] locale drift detected (missing keys or locale list mismatch)");
   process.exit(1);
 }

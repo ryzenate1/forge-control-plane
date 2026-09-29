@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ const (
 	GitProviderGitea     GitProviderType = "gitea"
 	GitProviderGeneric   GitProviderType = "generic"
 )
+
+// ErrGitProviderTokenNotFound keeps "missing" distinguishable from "the
+// database failed", so handlers never answer 404 for a store outage.
+var ErrGitProviderTokenNotFound = errors.New("git provider token not found")
 
 type GitProviderToken struct {
 	ID           string          `json:"id"`
@@ -101,16 +106,19 @@ func (s *Store) getGitProviderTokenInternal(ctx context.Context, id string) (Git
 		&pt.TokenType, &pt.ExpiresAt, &pt.Scope,
 		&pt.BaseURL, &pt.Username, &pt.AvatarURL,
 		&pt.Metadata, &pt.CreatedAt, &pt.UpdatedAt)
+	if isGitNoRows(err) {
+		return GitProviderToken{}, ErrGitProviderTokenNotFound
+	}
 	if err != nil {
-		return GitProviderToken{}, errors.New("git provider token not found")
+		return GitProviderToken{}, fmt.Errorf("git provider token lookup: %w", err)
 	}
 	pt.AccessToken, err = s.decryptSecret(accessEncrypted, accessPlain, secretAAD("git_provider_tokens", pt.ID, "access_token"))
 	if err != nil {
-		return GitProviderToken{}, err
+		return GitProviderToken{}, fmt.Errorf("git provider token %s: %w", pt.ID, err)
 	}
 	pt.RefreshToken, err = s.decryptSecret(refreshEncrypted, refreshPlain, secretAAD("git_provider_tokens", pt.ID, "refresh_token"))
 	if err != nil {
-		return GitProviderToken{}, err
+		return GitProviderToken{}, fmt.Errorf("git provider token %s: %w", pt.ID, err)
 	}
 	return pt, nil
 }
@@ -130,11 +138,21 @@ func (s *Store) GetGitProviderToken(ctx context.Context, id string) (GitProvider
 }
 
 func (s *Store) CreateGitProviderToken(ctx context.Context, req CreateGitProviderTokenRequest) (GitProviderToken, error) {
-	if req.Provider == "" {
-		return GitProviderToken{}, errors.New("provider is required")
+	switch req.Provider {
+	case GitProviderGitHub, GitProviderGitLab, GitProviderBitbucket, GitProviderGitea:
+	default:
+		// git_provider_tokens.provider has a CHECK of exactly these four;
+		// anything else used to surface as a raw driver error.
+		return GitProviderToken{}, fmt.Errorf("unsupported provider %q: expected github, gitlab, bitbucket or gitea", req.Provider)
+	}
+	if strings.TrimSpace(req.UserID) == "" {
+		return GitProviderToken{}, errors.New("userId is required")
 	}
 	if strings.TrimSpace(req.AccessToken) == "" {
 		return GitProviderToken{}, errors.New("accessToken is required")
+	}
+	if req.AccessToken == maskedStoreSecret || req.RefreshToken == maskedStoreSecret {
+		return GitProviderToken{}, errors.New("accessToken is masked; supply the real token")
 	}
 	if req.TokenType == "" {
 		req.TokenType = "bearer"
@@ -179,7 +197,7 @@ func (s *Store) DeleteGitProviderToken(ctx context.Context, id string) error {
 		return err
 	}
 	if cmd.RowsAffected() == 0 {
-		return errors.New("git provider token not found")
+		return ErrGitProviderTokenNotFound
 	}
 	return nil
 }
@@ -231,7 +249,7 @@ func (s *Store) UpdateGitProviderToken(ctx context.Context, id string, req Updat
 		return GitProviderToken{}, err
 	}
 	if cmd.RowsAffected() == 0 {
-		return GitProviderToken{}, errors.New("git provider token not found")
+		return GitProviderToken{}, ErrGitProviderTokenNotFound
 	}
 	return s.GetGitProviderToken(ctx, id)
 }

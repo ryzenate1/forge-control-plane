@@ -43,11 +43,11 @@ interface ServerNavProps {
 }
 
 function statusTone(server: ApiServer) {
-  if (server.suspended) return "border-rose-500/40 bg-rose-500/15 text-rose-300";
-  if (server.transferring) return "border-sky-500/40 bg-sky-500/15 text-sky-300";
-  if (server.status === "running") return "border-emerald-500/40 bg-emerald-500/15 text-emerald-300";
-  if (server.status === "installing") return "border-amber-500/40 bg-amber-500/15 text-amber-300";
-  return "border-slate-500/40 bg-slate-700/50 text-slate-300";
+  if (server.suspended) return "border-[var(--danger-line)] bg-[var(--danger-subtle)] text-[var(--danger)]";
+  if (server.transferring) return "border-[var(--info-line)] bg-[var(--info-subtle)] text-[var(--info)]";
+  if (server.status === "running") return "border-[var(--ok-line)] bg-[var(--ok-subtle)] text-[var(--ok)]";
+  if (server.status === "installing") return "border-[var(--warn-line)] bg-[var(--warn-subtle)] text-[var(--warn)]";
+  return "border-[var(--unknown-line)] bg-[var(--unknown-subtle)] text-[var(--unknown)]";
 }
 
 export function ServerNav({ serverId, server, access, activeTab }: ServerNavProps) {

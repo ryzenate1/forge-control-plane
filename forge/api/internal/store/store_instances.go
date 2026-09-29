@@ -467,6 +467,10 @@ func (s *Store) ListPlacementDecisionsByApp(ctx context.Context, appID string) (
 }
 
 func (s *Store) ListLatestPlacementPerInstance(ctx context.Context, appID string) ([]PlacementDecision, error) {
+	// PostgreSQL-only (DISTINCT ON) by design: Store requires PostgreSQL
+	// (see ConnectWithKeyring fail-fast). DISTINCT ON picks the newest
+	// decision per instance in one scan; there is no MySQL/SQLite spelling
+	// and none is attempted — non-Postgres drivers are MigrationRunner-only.
 	rows, err := s.db.Query(ctx, `
 		SELECT DISTINCT ON (pd.instance_id) pd.id::text, pd.instance_id::text, pd.node_id::text, pd.app_id::text,
 		       pd.idx, pd.score, pd.accepted, pd.reasons, pd.runtime_provider, pd.created_at

@@ -84,7 +84,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		gitOpsSvc = compose.NewGitOpsService(cfg.Store, composeSvc, cfg.GitDeployService, nil, slog.Default(), cfg.Daemon)
 	}
 
-	protected.Post("/compose/validate", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/validate", requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req ComposeValidateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -104,7 +104,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(result)
 	})
 
-	protected.Post("/compose/import", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/import", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -156,7 +156,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 
 	// ---- GitOps Routes ----
 
-	protected.Post("/compose/git/deploy", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/git/deploy", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req GitOpsDeployRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -191,7 +191,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.Status(fiber.StatusCreated).JSON(result)
 	})
 
-	protected.Post("/compose/git/:id/redeploy", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/git/:id/redeploy", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		result, err := gitOpsSvc.RedeployFromGit(ctx, c.Params("id"))
@@ -201,7 +201,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(result)
 	})
 
-	protected.Get("/compose/git/:id/check-update", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/git/:id/check-update", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		preview, err := gitOpsSvc.CheckForUpdates(ctx, c.Params("id"))
@@ -211,7 +211,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(preview)
 	})
 
-	protected.Get("/compose/git/:id/preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/git/:id/preview", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		preview, err := gitOpsSvc.GetUpdatePreview(ctx, c.Params("id"))
@@ -221,7 +221,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(preview)
 	})
 
-	protected.Post("/compose/git/:id/rollback", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/git/:id/rollback", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		result, err := gitOpsSvc.RollbackToPrevious(ctx, c.Params("id"))
@@ -231,7 +231,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(result)
 	})
 
-	protected.Post("/compose/git/:id/pull-redeploy", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/git/:id/pull-redeploy", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		result, err := gitOpsSvc.PullAndRedeploy(ctx, c.Params("id"))
@@ -241,7 +241,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(result)
 	})
 
-	protected.Put("/compose/git/:id/branch", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Put("/compose/git/:id/branch", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req struct {
 			Branch string `json:"branch"`
 		}
@@ -257,7 +257,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Put("/compose/git/:id/auto-update", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Put("/compose/git/:id/auto-update", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req struct {
 			Enabled         bool `json:"enabled"`
 			PollIntervalSec int  `json:"pollIntervalSec,omitempty"`
@@ -274,7 +274,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Get("/compose/git/:id/drift", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/git/:id/drift", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		result, err := gitOpsSvc.DetectDrift(ctx, c.Params("id"))
@@ -284,7 +284,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(result)
 	})
 
-	protected.Get("/compose/git/:id/status", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/git/:id/status", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		status, err := gitOpsSvc.GetGitStatus(ctx, c.Params("id"))
@@ -294,7 +294,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(status)
 	})
 
-	protected.Get("/compose/git/:id/last-webhook", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/git/:id/last-webhook", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		lastAt, err := gitOpsSvc.GetLastWebhookAt(ctx, c.Params("id"))
@@ -333,7 +333,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 
 	// ---- Compose Stack CRUD + Lifecycle Routes ----
 
-	protected.Post("/compose", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -376,7 +376,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.Status(fiber.StatusCreated).JSON(stack)
 	})
 
-	protected.Get("/compose", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -390,7 +390,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stacks)
 	})
 
-	protected.Get("/compose/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/:id", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -403,7 +403,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Patch("/compose/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/compose/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -426,7 +426,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Delete("/compose/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/compose/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -438,7 +438,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	protected.Post("/compose/:id/deploy", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/:id/deploy", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -467,7 +467,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Post("/compose/:id/stop", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/:id/stop", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -480,7 +480,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Post("/compose/:id/start", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/:id/start", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -493,7 +493,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Post("/compose/:id/restart", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/:id/restart", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -506,7 +506,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Post("/compose/:id/pull", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/:id/pull", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -519,7 +519,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(stack)
 	})
 
-	protected.Get("/compose/:id/logs", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/:id/logs", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -534,7 +534,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(logs)
 	})
 
-	protected.Get("/compose/:id/status", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/:id/status", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -549,7 +549,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 
 	// ---- Legacy Compose Project Routes ----
 
-	protected.Get("/compose/projects", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/projects", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -562,7 +562,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(projects)
 	})
 
-	protected.Get("/compose/projects/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/projects/:id", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -575,7 +575,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(project)
 	})
 
-	protected.Put("/compose/projects/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Put("/compose/projects/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -615,7 +615,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.JSON(existing)
 	})
 
-	protected.Delete("/compose/projects/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/compose/projects/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -627,7 +627,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	protected.Post("/compose/projects/:id/export", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/compose/projects/:id/export", requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -642,7 +642,7 @@ func registerComposeRoutes(protected fiber.Router, cfg Config, mutationLimiter f
 		return c.SendString(project.ComposeContent)
 	})
 
-	protected.Get("/compose/projects/:id/summary", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/compose/projects/:id/summary", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

@@ -225,25 +225,35 @@ func (s *Store) ListProcedures(ctx context.Context, tenantID *string) ([]Procedu
 			procIDs[i] = procedures[i].ID
 			procMap[procedures[i].ID] = &procedures[i]
 		}
+		// Batch prefetch must fail loudly: swallowing the query/scan error
+		// here would return procedures with empty Steps and nil error,
+		// which callers cannot distinguish from "no steps".
 		stepRows, err := s.db.Query(ctx, `
 			SELECT id::text, procedure_id::text, position, name, action, config, max_retries, timeout_seconds, requires_approval, continue_on_failure, rollback_enabled, created_at
 			FROM procedure_steps WHERE procedure_id = ANY($1) ORDER BY position
 		`, procIDs)
-		if err == nil {
-			defer stepRows.Close()
-			for stepRows.Next() {
-				var step ProcedureStep
-				var configRaw []byte
-				if err := stepRows.Scan(&step.ID, &step.ProcedureID, &step.Position, &step.Name, &step.Action, &configRaw, &step.MaxRetries, &step.TimeoutSeconds, &step.RequiresApproval, &step.ContinueOnFailure, &step.RollbackEnabled, &step.CreatedAt); err == nil {
-					step.Config = map[string]any{}
-					if len(configRaw) > 0 {
-						_ = json.Unmarshal(configRaw, &step.Config)
-					}
-					if proc, ok := procMap[step.ProcedureID]; ok {
-						proc.Steps = append(proc.Steps, step)
-					}
+		if err != nil {
+			return nil, err
+		}
+		defer stepRows.Close()
+		for stepRows.Next() {
+			var step ProcedureStep
+			var configRaw []byte
+			if err := stepRows.Scan(&step.ID, &step.ProcedureID, &step.Position, &step.Name, &step.Action, &configRaw, &step.MaxRetries, &step.TimeoutSeconds, &step.RequiresApproval, &step.ContinueOnFailure, &step.RollbackEnabled, &step.CreatedAt); err != nil {
+				return nil, err
+			}
+			step.Config = map[string]any{}
+			if len(configRaw) > 0 {
+				if err := json.Unmarshal(configRaw, &step.Config); err != nil {
+					return nil, err
 				}
 			}
+			if proc, ok := procMap[step.ProcedureID]; ok {
+				proc.Steps = append(proc.Steps, step)
+			}
+		}
+		if err := stepRows.Err(); err != nil {
+			return nil, err
 		}
 	}
 	return procedures, nil
@@ -502,20 +512,27 @@ func (s *Store) ListProcedureExecutions(ctx context.Context, procedureID string,
 			execIDs[i] = execs[i].ID
 			execMap[execs[i].ID] = &execs[i]
 		}
+		// Batch prefetch must fail loudly: swallowing the query/scan error
+		// would return executions with empty Steps and nil error.
 		stepRows, err := s.db.Query(ctx, `
 			SELECT id::text, execution_id::text, step_id::text, position, status, attempt, max_attempts, output, error, started_at, completed_at, operation_id::text
 			FROM procedure_step_executions WHERE execution_id = ANY($1) ORDER BY position
 		`, execIDs)
-		if err == nil {
-			defer stepRows.Close()
-			for stepRows.Next() {
-				var pse ProcedureStepExecution
-				if err := stepRows.Scan(&pse.ID, &pse.ExecutionID, &pse.StepID, &pse.Position, &pse.Status, &pse.Attempt, &pse.MaxAttempts, &pse.Output, &pse.Error, &pse.StartedAt, &pse.CompletedAt, &pse.OperationID); err == nil {
-					if pe, ok := execMap[pse.ExecutionID]; ok {
-						pe.Steps = append(pe.Steps, pse)
-					}
-				}
+		if err != nil {
+			return nil, err
+		}
+		defer stepRows.Close()
+		for stepRows.Next() {
+			var pse ProcedureStepExecution
+			if err := stepRows.Scan(&pse.ID, &pse.ExecutionID, &pse.StepID, &pse.Position, &pse.Status, &pse.Attempt, &pse.MaxAttempts, &pse.Output, &pse.Error, &pse.StartedAt, &pse.CompletedAt, &pse.OperationID); err != nil {
+				return nil, err
 			}
+			if pe, ok := execMap[pse.ExecutionID]; ok {
+				pe.Steps = append(pe.Steps, pse)
+			}
+		}
+		if err := stepRows.Err(); err != nil {
+			return nil, err
 		}
 	}
 	return execs, nil
@@ -693,8 +710,18 @@ func (s *Store) CreateRollbackExecution(ctx context.Context, originalExecutionID
 	if err != nil {
 		return "", err
 	}
+	// Atomic by design: the rollback header and its step rows must commit
+	// together. Without a transaction a crash between the header insert and
+	// the step inserts leaves a step-less 'rolling_back' execution that the
+	// worker would treat as complete.
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return "", err
+	}
+	defer tx.Rollback(ctx)
+
 	rollbackID := uuid.NewString()
-	_, err = s.db.Exec(ctx, `
+	_, err = tx.Exec(ctx, `
 		INSERT INTO procedure_executions (id, procedure_id, status, trigger, tenant_id, actor_id)
 		VALUES ($1, $2, 'rolling_back', 'rollback', $3, $4)
 	`, rollbackID, original.ProcedureID, original.TenantID, original.ActorID)
@@ -708,7 +735,7 @@ func (s *Store) CreateRollbackExecution(ctx context.Context, originalExecutionID
 	for _, step := range steps {
 		if step.RollbackEnabled {
 			stepExecID := uuid.NewString()
-			_, err = s.db.Exec(ctx, `
+			_, err = tx.Exec(ctx, `
 				INSERT INTO procedure_step_executions (id, execution_id, step_id, position, status, max_attempts)
 				VALUES ($1, $2, $3, $4, 'queued', $5)
 			`, stepExecID, rollbackID, step.ID, step.Position, step.MaxRetries)
@@ -716,6 +743,9 @@ func (s *Store) CreateRollbackExecution(ctx context.Context, originalExecutionID
 				return "", err
 			}
 		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return "", err
 	}
 	return rollbackID, nil
 }

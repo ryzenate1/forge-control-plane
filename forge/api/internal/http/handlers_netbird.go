@@ -1,6 +1,7 @@
 package http
 
 import (
+	"errors"
 	"net/http"
 
 	netbirdsvc "gamepanel/forge/internal/services/netbird"
@@ -8,11 +9,20 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
-// registerNetBirdRoutes exposes the NetBird mesh-VPN control plane to admins.
-// Every route is admin-only and additionally gated by the netbird.read /
-// netbird.write API scopes. The service itself is nil-safe: when NETBIRD_API_URL
-// / NETBIRD_API_TOKEN are unset, list endpoints return empty data and mutations
-// fail with a "not configured" error.
+// respondNetBirdError answers 503 when the mesh control plane is not
+// configured, so the dashboard shows "unavailable" rather than an empty list.
+func respondNetBirdError(c *fiber.Ctx, err error) error {
+	if errors.Is(err, netbirdsvc.ErrNotConfigured) {
+		return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+	}
+	return respondInternalError(c, err)
+}
+
+// registerNetBirdRoutes exposes the Forge Mesh control plane (driver: NetBird)
+// to admins. Every route is admin-only and additionally gated by the
+// netbird.read / netbird.write API scopes. The service is nil-safe: when
+// NETBIRD_API_URL / NETBIRD_API_TOKEN are unset every endpoint answers 503
+// Forge Mesh is not configured — never an empty list that reads as an empty mesh.
 func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mutationLimiter fiber.Handler) {
 	svc := cfg.NetBirdService
 
@@ -24,7 +34,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		peers, err := svc.ListPeers(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": peers})
 	})
@@ -34,7 +44,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		peer, err := svc.GetPeer(ctx, c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": peer})
 	})
@@ -44,7 +54,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		peer, err := svc.ApprovePeer(ctx, c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": peer})
 	})
@@ -54,7 +64,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		peer, err := svc.DenyPeer(ctx, c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": peer})
 	})
@@ -63,7 +73,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeletePeer(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "peer deleted"})
 	})
@@ -74,7 +84,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		networks, err := svc.ListNetworks(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": networks})
 	})
@@ -88,7 +98,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		network, err := svc.CreateNetwork(ctx, req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": network})
 	})
@@ -102,7 +112,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		network, err := svc.UpdateNetwork(ctx, c.Params("id"), req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": network})
 	})
@@ -111,7 +121,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeleteNetwork(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "network deleted"})
 	})
@@ -122,7 +132,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		groups, err := svc.ListGroups(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": groups})
 	})
@@ -139,7 +149,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		group, err := svc.CreateGroup(ctx, req.Name, req.Peers)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": group})
 	})
@@ -148,7 +158,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeleteGroup(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "group deleted"})
 	})
@@ -159,7 +169,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		routes, err := svc.ListRoutes(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": routes})
 	})
@@ -173,7 +183,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		route, err := svc.CreateRoute(ctx, req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": route})
 	})
@@ -182,7 +192,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeleteRoute(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "route deleted"})
 	})
@@ -193,7 +203,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		acls, err := svc.ListACLs(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": acls})
 	})
@@ -207,7 +217,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		acl, err := svc.CreateACL(ctx, req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": acl})
 	})
@@ -216,7 +226,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeleteACL(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "acl deleted"})
 	})
@@ -227,7 +237,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		settings, err := svc.GetDNSSettings(ctx)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": settings})
 	})
@@ -241,7 +251,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		settings, err := svc.UpdateDNSSettings(ctx, req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": settings})
 	})
@@ -256,7 +266,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		defer cancel()
 		key, err := svc.CreateSetupKey(ctx, req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": key})
 	})
@@ -265,7 +275,7 @@ func registerNetBirdRoutes(protected fiber.Router, cfg Config, adminIPAccess, mu
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.RevokeSetupKey(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondNetBirdError(c, err)
 		}
 		return c.JSON(fiber.Map{"message": "setup key revoked"})
 	})

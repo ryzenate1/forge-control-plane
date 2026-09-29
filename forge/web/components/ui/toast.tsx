@@ -7,7 +7,14 @@ type ToastTone = "success" | "error" | "warning" | "info" | "loading";
 type Toast = { id: number; title: string; message?: string; tone: ToastTone };
 type ToastContextValue = { toast: (input: Omit<Toast, "id">) => number; dismiss: (id: number) => void };
 
-const ToastContext = createContext<ToastContextValue>({ toast: () => 0, dismiss: () => undefined });
+function fallbackToast(): number {
+  throw new Error("useToast must be used inside ToastProvider");
+}
+function fallbackDismiss(): void {
+  throw new Error("useToast must be used inside ToastProvider");
+}
+
+const ToastContext = createContext<ToastContextValue>({ toast: fallbackToast, dismiss: fallbackDismiss });
 let nextToastId = 1;
 
 let toastPusher: ((input: Omit<Toast, "id">) => void) | null = null;
@@ -38,7 +45,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, []);
   const toast = useCallback((input: Omit<Toast, "id">) => {
     const id = nextToastId++;
-    setToasts((items) => [...items, { ...input, id }].slice(-3));
+    // Five visible toasts max; the oldest is dismissed so a burst of parallel
+    // mutations cannot stack over the content underneath.
+    setToasts((items) => [...items, { ...input, id }].slice(-5));
     if (input.tone !== "loading") {
       const tid = window.setTimeout(() => dismiss(id), input.tone === "error" ? 7000 : 4500);
       timeoutsRef.current.set(id, tid);
@@ -58,4 +67,6 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   })}</div></ToastContext.Provider>;
 }
 
-export function useToast() { return useContext(ToastContext); }
+export function useToast() {
+  return useContext(ToastContext);
+}

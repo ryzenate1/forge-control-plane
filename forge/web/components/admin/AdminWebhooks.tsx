@@ -5,6 +5,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { fetchJSON, postJSON, patchJSON, deleteJSON, fetchWebhookDeliveries, retryWebhookDelivery, type ApiWebhook, type ApiWebhookDelivery } from "@/lib/api";
 import { Input as SharedInput } from "@/components/ui/primitives";
+import { safeExternalUrl } from "@/lib/safe-url";
+import { chart } from "@/lib/design-tokens";
 import { AdminFormSection, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "./admin-ui";
 import { DashHeader } from "./dashboard-cards";
 import { TableSkeleton } from "@/components/ui/loading-skeleton";
@@ -87,6 +89,7 @@ export function AdminWebhooks() {
   const [historyId, setHistoryId] = useState<string | null>(null);
 
   const urlError = url.trim() && !isValidUrl(url.trim()) ? "Must be a valid HTTP or HTTPS URL" : null;
+  const safeDiscordAvatarUrl = safeExternalUrl(discordAvatarUrl);
 
   const resetForm = () => {
     setName(""); setDescription(""); setUrl(""); setWebhookType("regular");
@@ -258,12 +261,16 @@ export function AdminWebhooks() {
                 <Input label="Content" value={discordContent} onChange={setDiscordContent} placeholder="Optional message content" />
                 <div className="rounded-lg bg-[var(--surface-raised)] p-3">
                   <div className="flex items-center gap-2.5 mb-2">
-                    {discordAvatarUrl ? <span aria-label="Webhook avatar preview" className="h-6 w-6 rounded-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${discordAvatarUrl})` }} /> : <div className="h-6 w-6 rounded-full bg-[#5865f2]" />}
-                    <span className="text-sm font-medium text-white leading-none">{discordUsername || "Webhook"}</span>
+                    {safeDiscordAvatarUrl ? (
+                      <span aria-label="Webhook avatar preview" className="h-6 w-6 rounded-full bg-cover bg-center" role="img" style={{ backgroundImage: `url(${safeDiscordAvatarUrl})` }} />
+                    ) : (
+                      <div aria-hidden="true" className="h-6 w-6 rounded-full" style={{ backgroundColor: chart.discord }} />
+                    )}
+                    <span className="text-sm font-medium text-[var(--text)] leading-none">{discordUsername || "Webhook"}</span>
                     <span className="text-xs text-[var(--text-subtle)]">Today at 12:00</span>
                   </div>
                   {discordContent && <p className="text-sm leading-relaxed text-[var(--text)]">{discordContent}</p>}
-                  <div className="mt-2 rounded-lg border-l-[4px] border-l-[#5865f2] bg-[var(--surface-raised)] p-3">
+                  <div className="mt-2 rounded-lg border-l-[4px] bg-[var(--surface-raised)] p-3" style={{ borderLeftColor: chart.discord }}>
                     <p className="text-sm font-semibold text-[var(--text)]">Event Notification</p>
                     <p className="text-xs text-[var(--text-subtle)] mt-1">This is a preview of how the webhook will appear in Discord.</p>
                     {events.length > 0 && <p className="text-xs text-[var(--text-subtle)] mt-1">Triggered on: {events.join(", ")}</p>}

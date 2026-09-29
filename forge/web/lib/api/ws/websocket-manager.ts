@@ -217,9 +217,17 @@ export function useWebSocket(config: WebSocketConfig) {
   onStatusChangeRef.current = onStatusChange;
   onErrorRef.current = onError;
 
+  // url/factory identities are ref-held: an inline `() => new WebSocket(...)`
+  // factory would otherwise re-run this effect every render and reconnect-loop.
+  const urlRef = useRef(url);
+  urlRef.current = url;
+  const factoryRef = useRef(factory);
+  factoryRef.current = factory;
+  const urlKey = typeof url === "string" ? url : null;
+
   useEffect(() => {
     const manager = new WebSocketManager({
-      url, factory, maxRetries, baseDelay, maxDelay, deliverRawText,
+      url: urlRef.current, factory: factoryRef.current, maxRetries, baseDelay, maxDelay, deliverRawText,
       onMessage: (data) => onMessageRef.current?.(data),
       onStatusChange: (status) => onStatusChangeRef.current?.(status),
       onError: (err) => onErrorRef.current?.(err),
@@ -230,7 +238,9 @@ export function useWebSocket(config: WebSocketConfig) {
       manager.disconnect();
       managerRef.current = null;
     };
-  }, [url, factory, maxRetries, baseDelay, maxDelay, deliverRawText]);
+  // url/factory are ref-held (see above); only the string urlKey and numeric
+  // options retrigger the connection.
+  }, [urlKey, maxRetries, baseDelay, maxDelay, deliverRawText]);
 
   return useMemo(
     () => ({

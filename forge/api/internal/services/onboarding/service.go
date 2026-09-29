@@ -175,25 +175,24 @@ func templateKeys() []string {
 	return []string{"static", "node", "next", "nixpacks", "dockerfile", "heroku"}
 }
 
-// ListRepos lists provider repos for the user (autocomplete listing source).
-// providerTokenID may be empty to auto-pick the user's first token.
+// ListRepos lists provider repos for the user's explicit provider token.
+// providerTokenID is required: auto-picking the first token silently listed
+// repos under a credential the caller never named, which misattributes access
+// in multi-token accounts.
 func (s *Service) ListRepos(ctx context.Context, userID, providerTokenID string) ([]store.GitProviderRepo, error) {
 	if s.gitSvc == nil || s.store == nil {
 		return nil, errors.New("git service is not available")
 	}
 	tokenID := strings.TrimSpace(providerTokenID)
 	if tokenID == "" {
-		tokens, err := s.store.ListGitProviderTokens(ctx, userID)
-		if err != nil {
-			return nil, err
-		}
-		for _, t := range tokens {
-			tokenID = t.ID
-			break
-		}
-		if tokenID == "" {
-			return nil, errors.New("no git provider connected — paste a token or configure GITHUB_CLIENT_ID first")
-		}
+		return nil, errors.New("providerTokenId is required")
+	}
+	token, err := s.store.GetGitProviderToken(ctx, tokenID)
+	if err != nil {
+		return nil, err
+	}
+	if token.UserID != userID {
+		return nil, errors.New("provider token not found")
 	}
 	return s.gitSvc.ListProviderRepos(ctx, tokenID)
 }

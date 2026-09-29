@@ -7,6 +7,7 @@ import {
   postJSON,
   putJSON,
   requestJSON,
+  resetSessionExpiredNotification,
 } from './http';
 import type { ApiUser, ApiUserSession, LoginResponse } from './types';
 
@@ -21,18 +22,27 @@ const CREDENTIAL_HEADERS: Record<string, string> = {
 
 export async function login(email: string, password: string): Promise<LoginResponse> {
   try {
-    return await requestJSON<LoginResponse>(
+    const res = await requestJSON<LoginResponse>(
       '/auth/login',
       { method: 'POST', headers: CREDENTIAL_HEADERS, body: JSON.stringify({ email, password }) },
       { suppressSessionExpired: true },
     );
+    // A successful login starts a new session lifetime — re-arm the once-per-
+    // expiry 401 signal so a future expiry in this page lifetime still fires.
+    resetSessionExpiredNotification();
+    return res;
   } catch (err) {
     if (err instanceof ApiError) {
-      if (err.status === 401 || err.status === 404) throw new Error('Invalid email or password.');
-      if (err.status === 429) throw new Error('Too many login attempts. Please try again later.');
+      // Friendly message for the UI, original ApiError kept as `cause` so
+      // status/details survive for callers that inspect them.
+      if (err.status === 401 || err.status === 404)
+        throw new Error('Invalid email or password.', { cause: err });
+      if (err.status === 429)
+        throw new Error('Too many login attempts. Please try again later.', { cause: err });
       if (err.status === 0) throw err;
+      throw new Error(err.message ? `Unable to sign in. ${err.message}` : 'Unable to sign in. Please try again.', { cause: err });
     }
-    throw new Error('Unable to sign in. Please try again.');
+    throw err instanceof Error ? err : new Error('Unable to sign in. Please try again.');
   }
 }
 
@@ -42,7 +52,7 @@ export async function loginCheckpoint(
   recoveryToken?: string,
 ): Promise<LoginResponse> {
   try {
-    return await requestJSON<LoginResponse>(
+    const res = await requestJSON<LoginResponse>(
       '/auth/login/checkpoint',
       {
         method: 'POST',
@@ -51,30 +61,44 @@ export async function loginCheckpoint(
       },
       { suppressSessionExpired: true },
     );
+    resetSessionExpiredNotification();
+    return res;
   } catch (err) {
     if (err instanceof ApiError) {
-      if (err.status === 400 || err.status === 401) throw new Error('Invalid authentication code.');
-      if (err.status === 429) throw new Error('Too many verification attempts. Please try again later.');
+      if (err.status === 400 || err.status === 401)
+        throw new Error('Invalid authentication code.', { cause: err });
+      if (err.status === 429)
+        throw new Error('Too many verification attempts. Please try again later.', { cause: err });
       if (err.status === 0) throw err;
+      throw new Error(err.message ? `Unable to verify the authentication code. ${err.message}` : 'Unable to verify the authentication code.', { cause: err });
     }
-    throw new Error('Unable to verify the authentication code.');
+    throw err instanceof Error ? err : new Error('Unable to verify the authentication code.');
   }
 }
 
 export async function logout(): Promise<void> {
   try {
-    await requestJSON<void>('/auth/logout', { method: 'POST' });
+    // An explicit logout is never an expired session: a 401 here means the
+    // server-side session is already gone, and firing the global
+    // session-expired event would race the caller's own logout flow
+    // (reset + redirect in `finally`) with a second reset + toast + redirect.
+    await requestJSON<void>('/auth/logout', { method: 'POST' }, { suppressSessionExpired: true });
   } catch (err) {
     if (err instanceof ApiError) {
-      throw new ApiError(`Logout failed with ${err.status}`, err.status);
+      throw new ApiError(err.message ? `Logout failed: ${err.message}` : `Logout failed with ${err.status}`, err.status, err.details);
     }
     throw err;
+  } finally {
+    resetSessionExpiredNotification();
   }
 }
 
 export async function fetchCurrentUser(): Promise<ApiUser | null> {
   try {
-    return await fetchJSON<ApiUser>('/auth/me');
+    // A 401 here usually means "not signed in", not "session died mid-use" —
+    // suppress the global session-expired signal so a logged-out state reports
+    // exactly once via the `null` return (SessionLoader redirects from that).
+    return await fetchJSON<ApiUser>('/auth/me', {}, { suppressSessionExpired: true });
   } catch (error) {
     if (error instanceof ApiError && error.status === 401) return null;
     throw error;
@@ -89,13 +113,17 @@ export async function fetchCurrentUser(): Promise<ApiUser | null> {
  */
 export async function verifyBearerToken(token: string): Promise<ApiUser> {
   try {
+    // `credentials: 'omit'` keeps the browser session cookie off this call:
+    // the Bearer token alone must authenticate, so a stale/foreign session
+    // cookie can neither leak nor confuse the "is this token valid" answer.
     return await requestJSON<ApiUser>(
       '/auth/me',
-      { headers: { Authorization: `Bearer ${token}` } },
+      { headers: { Authorization: `Bearer ${token}` }, credentials: 'omit' },
       { suppressSessionExpired: true },
     );
   } catch (err) {
-    if (err instanceof ApiError) throw new Error(`Token verification failed with ${err.status}: ${err.message}`);
+    if (err instanceof ApiError)
+      throw new Error(err.message ? `Token verification failed: ${err.message}` : `Token verification failed with ${err.status}`, { cause: err });
     throw err;
   }
 }
@@ -105,7 +133,7 @@ export async function refreshSession(): Promise<void> {
     await requestJSON<void>('/auth/session/refresh', { method: 'POST' });
   } catch (err) {
     if (err instanceof ApiError) {
-      throw new ApiError(`Session refresh failed with ${err.status}`, err.status);
+      throw new ApiError(err.message ? `Session refresh failed: ${err.message}` : `Session refresh failed with ${err.status}`, err.status, err.details);
     }
     throw err;
   }
@@ -171,9 +199,14 @@ export async function revokeAllUserSessions(
   exceptSessionId?: string,
   reason?: string,
 ): Promise<{ status: string }> {
-  await deleteJSON('/auth/sessions', {
-    exceptSessionId,
-    reason,
-  });
+  // DELETE bodies are unreliable (proxies/stacks may drop them) and the
+  // backend `DELETE /auth/sessions` handler reads no body — pass the selector
+  // via the query string like the single-session route (`?reason=`), with an
+  // empty body. Unknown is not silently dropped: params absent means "all".
+  const params = new URLSearchParams();
+  if (exceptSessionId) params.set('except', exceptSessionId);
+  if (reason) params.set('reason', reason);
+  const qs = params.toString();
+  await deleteJSON(`/auth/sessions${qs ? `?${qs}` : ''}`);
   return { status: 'revoked' };
 }

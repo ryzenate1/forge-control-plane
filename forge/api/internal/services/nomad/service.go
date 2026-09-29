@@ -27,6 +27,10 @@ import (
 // handlers only to label/filter nodes when a per-node target is requested.
 const RuntimeProvider = "nomad"
 
+// ErrNotConfigured reports that no Forge Orchestration control plane is
+// configured; handlers answer 503 instead of rendering an empty cluster.
+var ErrNotConfigured = errors.New("Forge Orchestration (driver: nomad) is not configured (set NOMAD_ADDR)")
+
 // Job mirrors the subset of the Nomad job API shape (/v1/job, /v1/jobs).
 type Job struct {
 	Region            string            `json:"Region,omitempty"`
@@ -168,7 +172,7 @@ func (s *Service) Available() bool {
 // envelope); the query parameters are always augmented with region when set.
 func (s *Service) do(ctx context.Context, method, path string, query url.Values, body any, out any) error {
 	if s == nil || s.addr == "" {
-		return errors.New("nomad not configured (set NOMAD_ADDR)")
+		return ErrNotConfigured
 	}
 	target := s.addr + path
 	if query == nil {
@@ -215,6 +219,10 @@ func (s *Service) do(ctx context.Context, method, path string, query url.Values,
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("nomad %s %s: status %d: %s", method, path, res.StatusCode, strings.TrimSpace(string(payload)))
 	}
+	// A truncated first page must never read as a complete listing.
+	if res.Header.Get("X-Nomad-Result-Is-Truncated") == "true" {
+		return fmt.Errorf("nomad %s %s: result set truncated by the server; retry with an explicit limit/prefix", method, path)
+	}
 	if out == nil {
 		return nil
 	}
@@ -224,7 +232,7 @@ func (s *Service) do(ctx context.Context, method, path string, query url.Values,
 // ListJobs returns every job (optionally scoped to a namespace).
 func (s *Service) ListJobs(ctx context.Context, namespace string) ([]Job, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	q := url.Values{}
 	if namespace != "" {
@@ -242,7 +250,7 @@ func (s *Service) ListJobs(ctx context.Context, namespace string) ([]Job, error)
 // reaches this method (see the admin page notes).
 func (s *Service) SubmitJob(ctx context.Context, job map[string]any) (*Job, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	// Allow the caller to pass the raw job document as a string under an
 	// "hcl"/"HCL" key. The Nomad HTTP API only accepts a JSON job descriptor, so
@@ -282,7 +290,7 @@ func (s *Service) SubmitJob(ctx context.Context, job map[string]any) (*Job, erro
 // StopJob stops (deregisters when purge=true) a job via PUT /v1/job/:id/stop.
 func (s *Service) StopJob(ctx context.Context, jobID string, purge bool) (string, error) {
 	if s == nil {
-		return "", errors.New("nomad service unavailable")
+		return "", errors.New("Forge Orchestration service unavailable")
 	}
 	q := url.Values{}
 	if purge {
@@ -300,7 +308,7 @@ func (s *Service) StopJob(ctx context.Context, jobID string, purge bool) (string
 // GetJobStatus returns a single job's full definition.
 func (s *Service) GetJobStatus(ctx context.Context, jobID string) (*Job, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	var out Job
 	if err := s.do(ctx, http.MethodGet, "/v1/job/"+url.PathEscape(jobID), nil, nil, &out); err != nil {
@@ -312,7 +320,7 @@ func (s *Service) GetJobStatus(ctx context.Context, jobID string) (*Job, error) 
 // ListAllocations returns a job's allocations (all jobs when jobID is empty).
 func (s *Service) ListAllocations(ctx context.Context, jobID string) ([]Allocation, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	path := "/v1/job/" + url.PathEscape(jobID) + "/allocations"
 	if jobID == "" {
@@ -328,7 +336,7 @@ func (s *Service) ListAllocations(ctx context.Context, jobID string) ([]Allocati
 // ListNodes returns every client node.
 func (s *Service) ListNodes(ctx context.Context) ([]NodeList, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	var out []NodeList
 	if err := s.do(ctx, http.MethodGet, "/v1/nodes", url.Values{}, nil, &out); err != nil {
@@ -340,7 +348,7 @@ func (s *Service) ListNodes(ctx context.Context) ([]NodeList, error) {
 // GetNode returns a single client node.
 func (s *Service) GetNode(ctx context.Context, nodeID string) (*Node, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	var out Node
 	if err := s.do(ctx, http.MethodGet, "/v1/node/"+url.PathEscape(nodeID), nil, nil, &out); err != nil {
@@ -354,7 +362,7 @@ func (s *Service) GetNode(ctx context.Context, nodeID string) (*Node, error) {
 // with defaults, and eligibility can be reversed by setting drain=false.
 func (s *Service) DrainNode(ctx context.Context, nodeID string, drain bool) error {
 	if s == nil {
-		return errors.New("nomad service unavailable")
+		return errors.New("Forge Orchestration service unavailable")
 	}
 	q := url.Values{}
 	if !drain {
@@ -371,7 +379,7 @@ func (s *Service) DrainNode(ctx context.Context, nodeID string, drain bool) erro
 // ListDeployments returns every deployment, newest handled first by the caller.
 func (s *Service) ListDeployments(ctx context.Context) ([]Deployment, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	var out []Deployment
 	if err := s.do(ctx, http.MethodGet, "/v1/deployments", url.Values{}, nil, &out); err != nil {
@@ -383,7 +391,7 @@ func (s *Service) ListDeployments(ctx context.Context) ([]Deployment, error) {
 // GetDeployment returns a single deployment.
 func (s *Service) GetDeployment(ctx context.Context, deploymentID string) (*Deployment, error) {
 	if s == nil {
-		return nil, errors.New("nomad service unavailable")
+		return nil, errors.New("Forge Orchestration service unavailable")
 	}
 	var out Deployment
 	if err := s.do(ctx, http.MethodGet, "/v1/deployment/"+url.PathEscape(deploymentID), nil, nil, &out); err != nil {
@@ -396,7 +404,7 @@ func (s *Service) GetDeployment(ctx context.Context, deploymentID string) (*Depl
 // allocation's owning deployment then issues POST /v1/deployment/:id/promote.
 func (s *Service) PromoteAllocation(ctx context.Context, allocID string) (string, error) {
 	if s == nil {
-		return "", errors.New("nomad service unavailable")
+		return "", errors.New("Forge Orchestration service unavailable")
 	}
 	var alloc Allocation
 	if err := s.do(ctx, http.MethodGet, "/v1/allocation/"+url.PathEscape(allocID), nil, nil, &alloc); err != nil {

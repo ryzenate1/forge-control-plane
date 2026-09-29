@@ -27,7 +27,8 @@ function LoginContent() {
   const { replace } = router;
   const params = useSearchParams();
   const qc = useQueryClient();
-  const { currentUser, setCurrentUser } = useServerStore();
+  const currentUser = useServerStore((s) => s.currentUser);
+  const setCurrentUser = useServerStore((s) => s.setCurrentUser);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);

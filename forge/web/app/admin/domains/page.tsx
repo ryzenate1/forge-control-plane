@@ -4,8 +4,8 @@ import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { Globe, Plus, Trash2, ShieldCheck, ShieldAlert, RotateCw, Network } from "lucide-react";
-import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
-import { checkDNS as checkDNSApi } from "@/lib/api/domains";
+import { fetchServers } from "@/lib/api/servers";
+import { fetchServerDomains, addServerDomain, removeServerDomain, verifyDomain, checkDNS as checkDNSApi } from "@/lib/api/domains";
 import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import Link from "next/link";
@@ -19,15 +19,6 @@ type DomainRecord = {
   verifiedAt?: string;
   verificationToken?: string;
   createdAt: string;
-};
-
-type VerificationResult = {
-  domain: string;
-  verified: boolean;
-  dnsResolved: boolean;
-  expectedIp?: string;
-  resolvedIps?: string[];
-  error?: string;
 };
 
 type DNSResult = {
@@ -51,21 +42,15 @@ export default function AdminDomainsPage() {
   const [showDNSModal, setShowDNSModal] = useState(false);
   const [dnsResult, setDnsResult] = useState<DNSResult | null>(null);
 
-  const domainsQuery = useQuery({
+  const domainsQuery = useQuery<DomainRecord[]>({
     queryKey: ["domains", serverFilter || "all"],
-    queryFn: async () => {
-      if (serverFilter) {
-        const result = await fetchJSON<DomainRecord[]>("/servers/" + encodeURIComponent(serverFilter) + "/domains");
-        return result;
-      }
-      return [] as DomainRecord[];
-    },
+    queryFn: async () => (await fetchServerDomains(serverFilter)) as unknown as DomainRecord[],
     enabled: !!serverFilter,
   });
 
-  const serversQuery = useQuery<Array<{ id: string; name: string }>>({
+  const serversQuery = useQuery({
     queryKey: ["admin", "servers", "list"],
-    queryFn: () => fetchJSON<Array<{ id: string; name: string }>>("/servers"),
+    queryFn: () => fetchServers(),
   });
 
   const domains = useMemo(() => domainsQuery.data ?? [], [domainsQuery.data]);
@@ -76,31 +61,36 @@ export default function AdminDomainsPage() {
   );
 
   const addMutation = useMutation({
-    mutationFn: () =>
-      postJSON<DomainRecord>("/servers/" + encodeURIComponent(addForm.serverId) + "/domains", {
-        domain: addForm.domain,
-      }),
+    mutationFn: () => addServerDomain(addForm.serverId, addForm.domain),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
       setShowAddModal(false);
       setAddForm({ serverId: "", domain: "" });
+      toast({ tone: "success", title: "Domain added" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to add domain", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const deleteMutation = useMutation({
     mutationFn: ({ serverId, id }: { serverId: string; id: string }) =>
-      deleteJSON("/servers/" + encodeURIComponent(serverId) + "/domains/" + encodeURIComponent(id)),
+      removeServerDomain(serverId, id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
+      toast({ tone: "success", title: "Domain removed" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to delete domain", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const verifyMutation = useMutation({
-    mutationFn: (id: string) => postJSON<VerificationResult>("/domains/verify", { id }),
-    onSuccess: () => {
+    mutationFn: (id: string) => verifyDomain(id),
+    onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ["domains"] });
+      const reason = (result as unknown as { error?: string }).error ?? result.message;
+      if (result.verified) {
+        toast({ tone: "success", title: "Domain verified" });
+      } else {
+        toast({ tone: "error", title: "Verification failed", message: reason ?? "Ownership could not be confirmed." });
+      }
     },
     onError: (err) => toast({ tone: "error", title: "Verification failed", message: err instanceof Error ? err.message : "An error occurred" }),
   });
@@ -108,14 +98,15 @@ export default function AdminDomainsPage() {
   const checkDNSMutation = useMutation({
     mutationFn: (data: { domain: string; expectedIp: string }) =>
       checkDNSApi(data.domain, data.expectedIp || undefined),
-    onSuccess: (result) => {
+    onSuccess: (raw) => {
+      const result = raw as unknown as DNSResult;
       setDnsResult({
-        domain: dnsForm.domain,
-        resolved: result.configured,
-        ips: result.currentIp ? [result.currentIp] : [],
+        domain: result.domain ?? dnsForm.domain,
+        resolved: result.resolved ?? false,
+        ips: result.ips ?? [],
         expectedIp: result.expectedIp,
-        match: result.configured,
-        error: result.message,
+        match: result.match ?? false,
+        error: result.error,
       });
     },
     onError: (err, data) => setDnsResult({

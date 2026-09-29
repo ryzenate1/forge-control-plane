@@ -211,7 +211,8 @@ describe("useTenancyStore", () => {
     it("sets error on failure", async () => {
       mockFetchProjects.mockRejectedValueOnce(new Error("api down"));
       await useTenancyStore.getState().selectOrg(organization());
-      expect(useTenancyStore.getState().error).toBe("api down");
+      expect(useTenancyStore.getState().error).toContain("api down");
+      expect(useTenancyStore.getState().error).toContain("projects");
       expect(useTenancyStore.getState().loading).toBe(false);
     });
   });

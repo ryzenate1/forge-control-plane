@@ -38,6 +38,11 @@ type firecrackerInstance struct {
 	createReq  CreateRequest
 	pid        int
 	createdAt  time.Time
+	// startedAt is the zero time until InstanceStart is accepted. It must
+	// never be backfilled from createdAt: a VM that was created but never
+	// booted has no uptime, and reporting createdAt as start time would
+	// fabricate it.
+	startedAt  time.Time
 	running    bool
 	cmd        *exec.Cmd
 	stdout     io.ReadCloser
@@ -441,6 +446,9 @@ func (r *FirecrackerRuntime) ensureInstanceRunning(ctx context.Context, vmID, so
 	r.mu.Lock()
 	if inst, ok := r.instances[vmID]; ok {
 		inst.running = true
+		if inst.startedAt.IsZero() {
+			inst.startedAt = time.Now()
+		}
 	}
 	r.mu.Unlock()
 
@@ -519,7 +527,7 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 	}
 
 	if req.Image == "" {
-		req.Image = "alpine:3.21"
+		req.Image = "docker.io/library/alpine:3.21@sha256:21a3deaa0d32a8057914f36584b5288d2e5da9845c690f493846b7b90a70dbcd"
 	}
 	if req.Entrypoint == "" {
 		req.Entrypoint = "sh"
@@ -572,6 +580,9 @@ func (r *FirecrackerRuntime) Install(ctx context.Context, req InstallRequest) (I
 	r.mu.Lock()
 	if inst, ok := r.instances[vmID]; ok {
 		inst.running = true
+		if inst.startedAt.IsZero() {
+			inst.startedAt = time.Now()
+		}
 	}
 	r.mu.Unlock()
 
@@ -634,7 +645,7 @@ func (r *FirecrackerRuntime) Inspect(ctx context.Context, serverID string) (Cont
 		Exists:    true,
 		Running:   running,
 		Status:    status,
-		StartedAt: inst.createdAt,
+		StartedAt: inst.startedAt,
 	}, nil
 }
 
@@ -663,7 +674,7 @@ func (r *FirecrackerRuntime) List(ctx context.Context) ([]ContainerState, error)
 			Exists:    true,
 			Running:   running,
 			Status:    status,
-			StartedAt: inst.createdAt,
+			StartedAt: inst.startedAt,
 		})
 	}
 	return states, nil
@@ -851,6 +862,11 @@ func (r *FirecrackerRuntime) Logs(ctx context.Context, serverID string) (io.Read
 	if !ok {
 		return nil, fmt.Errorf("instance %s not found", serverID)
 	}
+	// A VM that was created but never booted has no output. An empty
+	// stream would read as "healthy but quiet", so refuse it instead.
+	if inst.startedAt.IsZero() {
+		return nil, fmt.Errorf("instance %s has never started: no logs to report", serverID)
+	}
 
 	reader, writer := io.Pipe()
 	go func() {
@@ -880,6 +896,9 @@ func (r *FirecrackerRuntime) LogsStream(ctx context.Context, serverID string, ta
 	inst, ok := r.getInstance(serverID)
 	if !ok {
 		return nil, fmt.Errorf("instance %s not found", serverID)
+	}
+	if inst.startedAt.IsZero() {
+		return nil, fmt.Errorf("instance %s has never started: no logs to report", serverID)
 	}
 
 	reader, writer := io.Pipe()

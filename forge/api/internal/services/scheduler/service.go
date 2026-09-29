@@ -238,7 +238,13 @@ func (s *Scheduler) FilterNodes(ctx context.Context, req domain.PlacementRequest
 			s.recordCapacityExceeded(ctx, node.ID, "disk", snapshot.AvailableDisk, req.DiskMB)
 			continue
 		}
-		if isLocalStorageLocality(req.StorageLocality) && storageLocalityForProvider(node.RuntimeProvider) != "local" {
+		// Storage locality is a hard filter here, identical to the replica
+		// engine's prepareReplicaPlacement: any requested locality must match
+		// the node's canonical locality. Scoring adds the soft preference on
+		// top; both layers share one vocabulary (see
+		// placement.CanonicalStorageLocality) so they cannot disagree about
+		// what matches.
+		if req.StorageLocality != "" && !storageLocalityEqual(req.StorageLocality, storageLocalityForProvider(node.RuntimeProvider)) {
 			s.recordPlacementRejection()
 			continue
 		}

@@ -29,7 +29,9 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 	lb := protected.Group("/admin/load-balancer", adminIPAccess)
 
 	lb.Get("/groups", requireRole("admin"), requireAdminScope("loadbalancer.read"), func(c *fiber.Ctx) error {
-		groups, err := svc.ListGroups(c.Context())
+		ctx, cancel := requestContext()
+		defer cancel()
+		groups, err := svc.ListGroups(ctx)
 		if err != nil {
 			return loadBalancerError(c, err)
 		}
@@ -42,14 +44,18 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid target group payload"})
 		}
 		group.ID = uuid.NewString()
-		if err := svc.CreateTargetGroup(c.Context(), &group); err != nil {
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := svc.CreateTargetGroup(ctx, &group); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"data": group})
 	})
 
 	lb.Get("/groups/:id", requireRole("admin"), requireAdminScope("loadbalancer.read"), func(c *fiber.Ctx) error {
-		group, err := svc.GetTargetGroup(c.Context(), c.Params("id"))
+		ctx, cancel := requestContext()
+		defer cancel()
+		group, err := svc.GetTargetGroup(ctx, c.Params("id"))
 		if err != nil {
 			return loadBalancerError(c, err)
 		}
@@ -61,21 +67,25 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 		if err := c.BodyParser(&group); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid target group payload"})
 		}
-		existing, err := svc.GetTargetGroup(c.Context(), c.Params("id"))
+		ctx, cancel := requestContext()
+		defer cancel()
+		existing, err := svc.GetTargetGroup(ctx, c.Params("id"))
 		if err != nil {
 			return loadBalancerError(c, err)
 		}
 		group.ID = existing.ID
 		group.Targets = existing.Targets
 		group.CreatedAt = existing.CreatedAt
-		if err := svc.UpdateTargetGroup(c.Context(), &group); err != nil {
+		if err := svc.UpdateTargetGroup(ctx, &group); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": err.Error()})
 		}
 		return c.JSON(fiber.Map{"data": group})
 	})
 
 	lb.Delete("/groups/:id", mutationLimiter, requireRole("admin"), requireAdminScope("loadbalancer.write"), func(c *fiber.Ctx) error {
-		if err := svc.DeleteTargetGroup(c.Context(), c.Params("id")); err != nil {
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := svc.DeleteTargetGroup(ctx, c.Params("id")); err != nil {
 			return loadBalancerError(c, err)
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -97,7 +107,9 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 		if req.ServerID == "" || req.IP == "" || req.Port < 1 || req.Port > 65535 || req.Weight < 1 {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "serverId, ip, a valid port, and a positive weight are required"})
 		}
-		target, err := svc.AddTarget(c.Context(), c.Params("id"), req.ServerID, strings.TrimSpace(req.NodeID), req.IP, req.Port, req.Weight)
+		ctx, cancel := requestContext()
+		defer cancel()
+		target, err := svc.AddTarget(ctx, c.Params("id"), req.ServerID, strings.TrimSpace(req.NodeID), req.IP, req.Port, req.Weight)
 		if err != nil {
 			return loadBalancerError(c, err)
 		}
@@ -105,7 +117,9 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 	})
 
 	lb.Delete("/groups/:groupId/targets/:targetId", mutationLimiter, requireRole("admin"), requireAdminScope("loadbalancer.write"), func(c *fiber.Ctx) error {
-		if err := svc.RemoveTarget(c.Context(), c.Params("groupId"), c.Params("targetId")); err != nil {
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := svc.RemoveTarget(ctx, c.Params("groupId"), c.Params("targetId")); err != nil {
 			return loadBalancerError(c, err)
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -118,14 +132,18 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "invalid target payload"})
 		}
-		if err := svc.SetTargetStatus(c.Context(), c.Params("groupId"), c.Params("targetId"), req.Status); err != nil {
+		ctx, cancel := requestContext()
+		defer cancel()
+		if err := svc.SetTargetStatus(ctx, c.Params("groupId"), c.Params("targetId"), req.Status); err != nil {
 			return loadBalancerError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
 	lb.Get("/groups/:id/next", requireRole("admin"), requireAdminScope("loadbalancer.read"), func(c *fiber.Ctx) error {
-		target, err := svc.NextTarget(c.Context(), c.Params("id"), ExtractClientIP(c))
+		ctx, cancel := requestContext()
+		defer cancel()
+		target, err := svc.NextTarget(ctx, c.Params("id"), ExtractClientIP(c))
 		if err != nil {
 			return loadBalancerError(c, err)
 		}
@@ -133,6 +151,8 @@ func registerLoadBalancerRoutes(protected fiber.Router, cfg Config, svc *loadbal
 	})
 
 	lb.Get("/metrics", requireRole("admin"), requireAdminScope("loadbalancer.read"), func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{"data": svc.Metrics(c.Context())})
+		ctx, cancel := requestContext()
+		defer cancel()
+		return c.JSON(fiber.Map{"data": svc.Metrics(ctx)})
 	})
 }

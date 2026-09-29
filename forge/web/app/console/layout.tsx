@@ -39,7 +39,7 @@ function ConsoleFrame({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const { companyName } = useBranding();
-  const { currentUser } = useServerStore();
+  const currentUser = useServerStore((s) => s.currentUser);
   const [mobileOpen, setMobileOpen] = useState(false);
   const drawerRef = useRef<HTMLElement>(null);
   const drawerCloseRef = useRef<HTMLButtonElement>(null);

@@ -69,7 +69,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		svc = composetemplatessvc.New(cfg.Store, composeSvc)
 	}
 
-	protected.Get("/admin/compose-templates", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/admin/compose-templates", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		templates, err := svc.ListTemplates(ctx)
@@ -79,7 +79,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		return c.JSON(templates)
 	})
 
-	protected.Post("/admin/compose-templates", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/compose-templates", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req CreateComposeTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -105,7 +105,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 
 	// Static route registered before the :id parameter routes so "preview" is
 	// never treated as a template id.
-	protected.Post("/admin/compose-templates/preview", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/compose-templates/preview", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		var req PreviewComposeTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -129,7 +129,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		return c.JSON(fiber.Map{"composeYaml": rendered})
 	})
 
-	protected.Get("/admin/compose-templates/:id", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Get("/admin/compose-templates/:id", requireRole("admin"), requireAdminScope("deployments.read"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		tpl, err := svc.GetTemplate(ctx, c.Params("id"))
@@ -142,7 +142,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		return c.JSON(tpl)
 	})
 
-	protected.Patch("/admin/compose-templates/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Patch("/admin/compose-templates/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req UpdateComposeTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -170,7 +170,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		return c.JSON(updated)
 	})
 
-	protected.Delete("/admin/compose-templates/:id", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/admin/compose-templates/:id", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := svc.DeleteTemplate(ctx, c.Params("id")); err != nil {
@@ -182,7 +182,7 @@ func registerComposeTemplateRoutes(protected fiber.Router, cfg Config, mutationL
 		return c.SendStatus(fiber.StatusNoContent)
 	})
 
-	protected.Post("/admin/compose-templates/:id/instantiate", mutationLimiter, requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/admin/compose-templates/:id/instantiate", mutationLimiter, requireRole("admin"), requireAdminScope("deployments.write"), func(c *fiber.Ctx) error {
 		var req InstantiateComposeTemplateRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")

@@ -30,6 +30,10 @@ type dockerStats struct {
 }
 
 func DecodeDockerStats(reader io.Reader) (Stats, error) {
+	// The first sample after a container starts has no previous CPU
+	// counter to delta against, so dockerCPUPercent reports 0. That zero
+	// is "no baseline yet", not "idle": callers must not treat a single
+	// zero-CPU reading as a measurement.
 	var payload dockerStats
 	if err := json.NewDecoder(reader).Decode(&payload); err != nil {
 		return Stats{}, err

@@ -77,7 +77,7 @@ func registerAutoScalerRoutes(protected fiber.Router, cfg Config, svc *autoscale
 		return c.JSON(fiber.Map{"data": event})
 	})
 
-	auto.Get("/metrics", requireRole("admin"), func(c *fiber.Ctx) error {
+	auto.Get("/metrics", requireRole("admin"), requireAdminScope("autoscaler.read"), func(c *fiber.Ctx) error {
 		return c.JSON(fiber.Map{"data": svc.Metrics()})
 	})
 }

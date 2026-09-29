@@ -3,15 +3,15 @@ package store
 import "strings"
 
 // splitSQLStatements splits a SQL string into individual statements,
-// respecting dollar-quoted blocks ($$, $tag$), single-quoted literals, and
-// stripping single-line comments.
+// respecting dollar-quoted blocks ($$, $tag$), single-quoted literals,
+// double-quoted identifiers, and stripping both comment styles.
 func splitSQLStatements(input string) []string {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
 	}
 
-	// First pass: strip single-line comments outside quoted text.
+	// First pass: strip both comment styles outside quoted text.
 	cleaned := strings.TrimSpace(stripSQLComments(input))
 	if cleaned == "" {
 		return nil
@@ -41,9 +41,18 @@ func splitSQLStatements(input string) []string {
 			}
 		}
 
-		// A semicolon inside a string literal does not end a statement.
+		// A semicolon inside a string literal or quoted identifier does not end
+		// a statement.
 		if ch == '\'' && len(openTags) == 0 {
 			pos = skipSingleQuoted(runes, pos)
+			continue
+		}
+
+		// A semicolon inside a double-quoted identifier (e.g. a COMMENT ON
+		// label or an exotic column name like "ratio;2024") does not end a
+		// statement either.
+		if ch == '"' && len(openTags) == 0 {
+			pos = skipDoubleQuoted(runes, pos)
 			continue
 		}
 
@@ -80,8 +89,9 @@ func splitSQLStatements(input string) []string {
 	return statements
 }
 
-// stripSQLComments removes single-line comments (-- ... \n) from SQL text,
-// leaving dollar-quoted blocks and string literals untouched.
+// stripSQLComments removes single-line (-- ... \n) and block (/* ... */)
+// comments from SQL text, leaving dollar-quoted blocks, string literals, and
+// double-quoted identifiers untouched.
 func stripSQLComments(input string) string {
 	runes := []rune(input)
 	var result []rune
@@ -109,9 +119,18 @@ func stripSQLComments(input string) string {
 			}
 		}
 
-		// String literals may contain "--" that is not a comment.
+		// String literals may contain "--", "/*", or ";" that is not a comment.
 		if ch == '\'' {
 			end := skipSingleQuoted(runes, pos)
+			result = append(result, runes[pos:end]...)
+			pos = end
+			continue
+		}
+
+		// Quoted identifiers may contain comment openers ("weird--name",
+		// "ratio/*x") that are not comments.
+		if ch == '"' {
+			end := skipDoubleQuoted(runes, pos)
 			result = append(result, runes[pos:end]...)
 			pos = end
 			continue
@@ -131,6 +150,24 @@ func stripSQLComments(input string) string {
 			continue
 		}
 
+		// Handle block comments outside quoted text. Newlines inside are kept
+		// so statement line numbers stay stable for error messages; the rest
+		// of the comment is dropped.
+		if ch == '/' && pos+1 < len(runes) && runes[pos+1] == '*' {
+			pos += 2
+			for pos < len(runes) {
+				if runes[pos] == '*' && pos+1 < len(runes) && runes[pos+1] == '/' {
+					pos += 2
+					break
+				}
+				if runes[pos] == '\n' {
+					result = append(result, '\n')
+				}
+				pos++
+			}
+			continue
+		}
+
 		result = append(result, ch)
 		pos++
 	}
@@ -145,6 +182,23 @@ func skipSingleQuoted(runes []rune, pos int) int {
 	for pos < len(runes) {
 		if runes[pos] == '\'' {
 			if pos+1 < len(runes) && runes[pos+1] == '\'' {
+				pos += 2
+				continue
+			}
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipDoubleQuoted returns the index just past the double-quoted identifier
+// that starts at pos, treating "" as an escaped quote.
+func skipDoubleQuoted(runes []rune, pos int) int {
+	pos++
+	for pos < len(runes) {
+		if runes[pos] == '"' {
+			if pos+1 < len(runes) && runes[pos+1] == '"' {
 				pos += 2
 				continue
 			}

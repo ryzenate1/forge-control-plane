@@ -262,7 +262,7 @@ export default function ComposeTemplatesPage() {
               <div className="flex items-start gap-3">
                 {t.logoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
-                  <img src={t.logoUrl} alt="" className="h-10 w-10 shrink-0 rounded-lg bg-white/[0.04] object-contain" />
+                  <img src={t.logoUrl} alt={`${t.name} logo`} className="h-10 w-10 shrink-0 rounded-lg bg-white/[0.04] object-contain" />
                 ) : (
                   <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-white/[0.04]">
                     <Boxes className="h-5 w-5 text-slate-400" />

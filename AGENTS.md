@@ -12,7 +12,7 @@ workloads across distributed infrastructure. Forge decides what should happen;
 | `beacon` | Go per-host agent. Runs workloads, reports health, exposes host inspection, SFTP, console. |
 | `forge/web` | Next.js 15 App Router dashboard (`@forge/web`). The product UI. |
 | `packages/*` | npm workspace packages: `shared-types`, `sdk`, `ui`, `game-templates`. |
-| `forge/api/migrations` | SQL migrations (~246), applied by `Store.RunMigrations`. |
+| `forge/api/migrations` | SQL migrations (244), applied by `Store.RunMigrations`. |
 | `forge/install` | `install.sh` / `uninstall.sh` / `install-dependencies.sh` for production hosts. |
 | `lang/` | Translation catalogs for eight locales; synced into web via `npm --workspace @forge/web run sync:locales`. |
 | `infra/` | Compose stacks, Caddy/Nginx, Prometheus/Grafana/Alertmanager, bootstrap and backup scripts. |

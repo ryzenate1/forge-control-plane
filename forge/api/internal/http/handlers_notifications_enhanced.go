@@ -13,7 +13,7 @@ import (
 )
 
 // registerEnhancedNotificationRoutes registers routes for the enhanced notification system
-func registerEnhancedNotificationRoutes(protected fiber.Router, notificationService *notificationsvc.Service, mutationLimiter fiber.Handler) {
+func registerEnhancedNotificationRoutes(protected fiber.Router, cfg Config, notificationService *notificationsvc.Service, mutationLimiter fiber.Handler) {
 	// Alert Rules endpoints
 	alerts := protected.Group("/notifications/alerts", requireRole("admin"))
 	alerts.Get("/", handleListAlertRules(notificationService))
@@ -37,7 +37,7 @@ func registerEnhancedNotificationRoutes(protected fiber.Router, notificationServ
 	protected.Post("/notifications/test", mutationLimiter, requireRole("admin"), handleTestNotification(notificationService))
 
 	// WebSocket notification endpoint
-	protected.Get("/notifications/ws", handleNotificationWebSocket(notificationService))
+	protected.Get("/notifications/ws", handleNotificationWebSocket(cfg, notificationService))
 
 	// Enhanced channels endpoints with tenant support
 	channels := protected.Group("/notifications/channels", requireRole("admin"))
@@ -376,7 +376,7 @@ func handleTestNotification(svc *notificationsvc.Service) fiber.Handler {
 
 // WebSocket Notification Handler
 
-func handleNotificationWebSocket(svc *notificationsvc.Service) fiber.Handler {
+func handleNotificationWebSocket(cfg Config, svc *notificationsvc.Service) fiber.Handler {
 	upgrader := websocket.New(func(conn *websocket.Conn) {
 		claims, ok := conn.Locals("user").(tokenClaims)
 		if !ok || claims.Sub == "" || svc == nil {
@@ -418,6 +418,12 @@ func handleNotificationWebSocket(svc *notificationsvc.Service) fiber.Handler {
 				}
 			}
 		}
+	}, websocket.Config{
+		// Origin allowlist shared with the realtime proxies: a cross-origin
+		// page must not be able to open an authenticated notification stream
+		// with the victim's cookies. Auth itself still rides the protected
+		// chain (c.Locals("user")) before the upgrade.
+		Origins: getWebSocketAllowedOrigins(cfg),
 	})
 	return func(c *fiber.Ctx) error {
 		if !websocket.IsWebSocketUpgrade(c) {
@@ -434,14 +440,17 @@ func handleListNotificationChannelsEnhanced(svc *notificationsvc.Service) fiber.
 		ctx, cancel := requestContext()
 		defer cancel()
 
-		tenantID := c.Query("tenantId")
-		userID := c.Query("userId")
-
-		// The current notification store is not tenant-scoped. Preserve the
-		// query parameters in the public contract until tenant filtering is
-		// supported end-to-end, rather than constructing unused pointers.
-		_ = tenantID
-		_ = userID
+		// The channel store is global, not tenant-scoped. Accepting
+		// tenantId/userId here would silently ignore the caller's filter and
+		// return channels from every tenant — a tenancy violation that looks
+		// like filtering. Reject them so callers fail closed instead of
+		// receiving unfiltered data they believe is scoped.
+		if tenantID := c.Query("tenantId"); tenantID != "" {
+			return fiber.NewError(fiber.StatusBadRequest, "tenant filtering is not supported by the notification channel store")
+		}
+		if userID := c.Query("userId"); userID != "" {
+			return fiber.NewError(fiber.StatusBadRequest, "user filtering is not supported by the notification channel store")
+		}
 
 		// Fall back to the existing method.
 		channels, err := svc.ListChannels(ctx)
@@ -470,6 +479,15 @@ func handleCreateNotificationChannelEnhanced(svc *notificationsvc.Service) fiber
 		}
 		if req.Type == "" || req.Name == "" {
 			return fiber.NewError(fiber.StatusBadRequest, "type and name are required")
+		}
+		// The channel store is global: tenantId/userId in the body would be
+		// silently dropped, creating channels the caller believes are scoped.
+		// Reject them (fail closed) until tenant scoping is supported.
+		if req.TenantID != "" {
+			return fiber.NewError(fiber.StatusBadRequest, "tenant scoping is not supported by the notification channel store")
+		}
+		if req.UserID != nil && *req.UserID != "" {
+			return fiber.NewError(fiber.StatusBadRequest, "user scoping is not supported by the notification channel store")
 		}
 
 		// Convert to store request
