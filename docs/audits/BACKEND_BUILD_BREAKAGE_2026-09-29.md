@@ -295,25 +295,36 @@ touched. Flagged only so it is not mistaken for a manual edit later, and
 deliberately kept out of the build-fix commits: reformatting untouched lines
 would have buried the actual repairs in noise.
 
-**Do not reach for `make format` as the remedy without choosing to.** Measured
-on this branch, `gofmt -l -s` reports **124 files in `forge/api` and 2 in
-`beacon`**, and `scripts/dev/format.sh` additionally runs `prettier --write`
-across all of `forge/web` and `packages/*`. The fix for a three-file alignment
-nit is therefore a 126-file Go rewrite plus an unbounded frontend rewrite. Note
-the `-s`: it applies gofmt's simplifications, so the result is not purely
-whitespace.
+**`make format` is not a three-file fix.** Measured on this branch, `gofmt -l -s`
+reports **124 files in `forge/api` and 2 in `beacon`**, and
+`scripts/dev/format.sh` additionally runs `prettier --write` across all of
+`forge/web` and `packages/*`. The remedy for a three-file alignment nit is
+therefore a 126-file Go rewrite plus a frontend rewrite of unknown size.
 
-Two measurements narrow it slightly. The drifted file set is identical with and
-without `-s` (124 either way in `forge/api`), so `-s` widens what changes inside
-those files but not which files change. And `goimports` is not installed here,
-so `format.sh` takes its fallback branch and will not reorder imports. The
-prettier half could not be sized at all: `prettier` is absent from local
-`node_modules` and `registry.npmjs.org` is denied by the sandbox proxy.
+What that sweep actually contains, measured rather than assumed:
 
-This is a whole-branch formatting decision, not part of this breakage. It wants
-its own commit, taken when no other work is in flight — running it while other
-sessions hold uncommitted changes in the same checkout would rewrite files
-underneath them.
+- **`-s` is a no-op on this branch.** `gofmt -d .` and `gofmt -d -s .` produce
+  byte-identical output in *both* modules (193,184 bytes in `forge/api`, 2,158
+  in `beacon`). So the equal file counts do not mean "every simplifiable file
+  also has whitespace drift" — they mean **no file has a simplification
+  opportunity at all**. The entire sweep is column alignment inside `const`,
+  `var` and struct blocks. Nothing semantic moves.
+- `goimports` is not installed here, so `format.sh` takes its fallback branch
+  and will not reorder imports either.
+- The prettier half could not be sized: `prettier` is absent from local
+  `node_modules` and `registry.npmjs.org` is denied by the sandbox proxy.
+  Unsized is the honest entry; do not substitute a guess.
+
+So the reason to hold is **not** that the sweep is risky in itself — on this
+branch it is mechanically inert. It is that a 126-file rewrite lands on top of
+whatever other sessions are holding uncommitted in the same checkout. This is a
+whole-branch formatting decision wanting its own commit, taken when nothing is
+in flight.
+
+None of the fixes in §8.3 introduced any of this drift.
+`scheduler_nomad.go` and `ingress_sync.go` are `gofmt`-clean;
+`reconnect.go`'s drift is the `const` block at lines 18–23, which `29d1600`
+never touched (it came in with `7389900`, which added those constants).
 
 ---
 
