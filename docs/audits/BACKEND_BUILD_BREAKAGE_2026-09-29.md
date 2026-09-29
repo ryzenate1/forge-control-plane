@@ -304,11 +304,17 @@ therefore a 126-file Go rewrite plus a frontend rewrite of unknown size.
 What that sweep actually contains, measured rather than assumed:
 
 - **`-s` is a no-op on this branch.** `gofmt -d .` and `gofmt -d -s .` produce
-  byte-identical output in *both* modules (193,184 bytes in `forge/api`, 2,158
-  in `beacon`). So the equal file counts do not mean "every simplifiable file
-  also has whitespace drift" — they mean **no file has a simplification
-  opportunity at all**. The entire sweep is column alignment inside `const`,
-  `var` and struct blocks. Nothing semantic moves.
+  byte-identical output in *both* modules. So the equal file counts do not mean
+  "every simplifiable file also has whitespace drift" — they mean **no file has
+  a simplification opportunity at all**. Nothing semantic moves. (Equal *counts*
+  cannot distinguish those two cases, since a file with both kinds of drift
+  appears once in each list either way. Only diffing the content settles it.)
+- **The sweep is 226 hunks in two whitespace categories**, not one: column
+  alignment inside `const`, `var` and struct blocks, **and 26 files missing a
+  trailing newline** (all in `forge/api`, e.g. `cmd/api/river.go`). 223 hunks
+  across 124 files in `forge/api`, 3 across 2 in `beacon`. Run `gofmt -d` from
+  inside each module to reproduce those figures — from the repo root the diff
+  headers carry the module prefix and the byte totals differ.
 - `goimports` is not installed here, so `format.sh` takes its fallback branch
   and will not reorder imports either.
 - The prettier half could not be sized: `prettier` is absent from local
