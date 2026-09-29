@@ -306,8 +306,13 @@ func (s *NomadScheduler) GetResources(ctx context.Context, name string) (Resourc
 			totalCPU += t.Resources.CPU
 		}
 	}
+	// Both readings were taken, so both are reported. DiskMB and CPUPercent stay
+	// nil: `nomad job status` returns the job's resource *allocation*, not live
+	// utilisation, and it carries no filesystem figure — "not reported" must not
+	// be encoded as zero, and an allocation must not be passed off as a percentage.
 	return ResourceUsage{
-		MemoryMB: totalMem,
+		MemoryMB: &totalMem,
+		CPUMHz:   &totalCPU,
 	}, nil
 }
 

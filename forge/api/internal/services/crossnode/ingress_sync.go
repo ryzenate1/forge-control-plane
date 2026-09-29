@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -167,8 +168,8 @@ func (is *IngressSynchronizer) Sync(ctx context.Context) error {
 
 		for i := 1; i < len(healthyBackends); i++ {
 			replicaRule := &trafficmanager.RoutingRule{
-				ID:         primary.ID + "-replica-" + itoa(i),
-				Name:       primary.Name + "-replica-" + itoa(i),
+				ID:         primary.ID + "-replica-" + strconv.Itoa(i),
+				Name:       primary.Name + "-replica-" + strconv.Itoa(i),
 				ServerID:   primary.ServerID,
 				Domain:     primary.Domain,
 				Path:       primary.Path,

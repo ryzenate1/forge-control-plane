@@ -247,11 +247,24 @@ func (rc *ReconnectClient) linkExpired() bool {
 
 // probeContext bounds a round-trip by the parent context, the probe timeout and
 // Stop(), so no probe can outlive shutdown.
+//
+// Shutdown is signalled by closing stopCh, not by cancelling a context, so the
+// stop watch is an explicit goroutine: context.AfterFunc takes a Context and
+// cannot watch a channel. The returned CancelFunc stops that goroutine as well
+// as the timeout, and is safe to call more than once.
 func (rc *ReconnectClient) probeContext(ctx context.Context, timeout time.Duration) (context.Context, context.CancelFunc) {
 	probeCtx, cancel := context.WithTimeout(ctx, timeout)
-	watchStop := context.AfterFunc(rc.stopCh, cancel)
+	done := make(chan struct{})
+	go func() {
+		select {
+		case <-rc.stopCh:
+			cancel()
+		case <-done:
+		}
+	}()
+	var once sync.Once
 	return probeCtx, func() {
-		watchStop()
+		once.Do(func() { close(done) })
 		cancel()
 	}
 }
