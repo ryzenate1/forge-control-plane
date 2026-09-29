@@ -12,6 +12,17 @@ import { OfflineBanner } from "@/components/shared/states-offline";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 // Backend contract types
+//
+// Mirrors scheduler.PredictiveScore in
+// forge/api/internal/services/scheduler/predictive.go, where every field is a
+// plain float64 with no `omitempty` — the encoder always emits all of them.
+// There is therefore no "field absent" state to defend against on this
+// endpoint, and a `?? 0` fallback could only invent a score the API never
+// withholds. Uncertainty is carried by `confidence`, not by missing numbers.
+//
+// The previously declared `score`, `cpuLoad`, `memoryUsage`, `diskUsage`,
+// `networkLoad` and `activeServers` fields were never part of that response;
+// they only made dead fallbacks look load-bearing.
 type PredictiveScore = {
   nodeId: string;
   baseScore: number;
@@ -21,12 +32,6 @@ type PredictiveScore = {
   totalScore: number;
   predictedLoad: number;
   confidence: number;
-  score?: number;
-  cpuLoad?: number;
-  memoryUsage?: number;
-  diskUsage?: number;
-  networkLoad?: number;
-  activeServers?: number;
 };
 
 type AffinityRule = {
@@ -313,7 +318,7 @@ export default function AdminSchedulerPage() {
     },
   });
 
-  const maxScore = Math.max(...scores.map((s) => (s.totalScore ?? s.score ?? 0)), 1);
+  const maxScore = Math.max(...scores.map((s) => s.totalScore), 1);
 
   return (
     <AdminPageLayout>
@@ -336,8 +341,8 @@ export default function AdminSchedulerPage() {
             ) : (
             <div className="space-y-3 p-4">
               {scores.map((node) => {
-                const scoreVal = node.totalScore ?? node.score ?? 0;
-                const cpuVal = node.predictedLoad ?? node.cpuLoad ?? 0;
+                const scoreVal = node.totalScore;
+                const cpuVal = node.predictedLoad;
                 return (
                 <div key={node.nodeId} className="rounded-lg border border-white/[0.06] bg-[var(--surface-raised)] p-4">
                   <div className="flex items-center justify-between mb-3">
@@ -364,21 +369,21 @@ export default function AdminSchedulerPage() {
                       <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Trend</p>
                       <div className="flex items-center justify-center gap-1 mt-1">
                         <Activity size={12} className="text-slate-400" />
-                        <span className="text-xs text-slate-300">{(node.trendScore ?? 0).toFixed(2)}</span>
+                        <span className="text-xs text-slate-300">{node.trendScore.toFixed(2)}</span>
                       </div>
                     </div>
                     <div>
                       <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Affinity</p>
                       <div className="flex items-center justify-center gap-1 mt-1">
                         <Zap size={12} className="text-slate-400" />
-                        <span className="text-xs text-slate-300">{(node.affinityScore ?? 0).toFixed(2)}</span>
+                        <span className="text-xs text-slate-300">{node.affinityScore.toFixed(2)}</span>
                       </div>
                     </div>
                     <div>
                       <p className="text-[10px] font-semibold uppercase tracking-widest text-slate-400">Anti-Affinity</p>
                       <div className="flex items-center justify-center gap-1 mt-1">
                         <HardDrive size={12} className="text-slate-400" />
-                        <span className="text-xs text-slate-300">{(node.antiAffinityScore ?? 0).toFixed(2)}</span>
+                        <span className="text-xs text-slate-300">{node.antiAffinityScore.toFixed(2)}</span>
                       </div>
                     </div>
                     <div>

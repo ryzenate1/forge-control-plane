@@ -3,7 +3,6 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
 import { LogOut, Menu, User, X } from "lucide-react";
 import { logout } from "@/lib/api";
 import { useCurrentUser } from "@/lib/api/use-current-user";

@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { Download } from "lucide-react";
 import { Btn, Input, Pill, cn } from "./admin-ui";
+import { NotReported } from "./telemetry-ui";
 import type { AppStatus, DeploymentStatus, AppPort, AppVolume, AppLogEntry } from "@/lib/api/apps";
 import { statusTone } from "@/lib/api/status";
 
@@ -13,21 +14,49 @@ export function DeployStatusBadge({ status, type = "app" }: { status?: AppStatus
   return <Pill tone={tone}>{label}</Pill>;
 }
 
-export function ResourceGauge({ label, value, limit, unit }: { label: string; value: number; limit: number; unit?: string }) {
-  const pct = limit > 0 ? Math.min(100, Math.max(0, (value / limit) * 100)) : 0;
-  const tone = pct > 90 ? "bg-red-500" : pct > 70 ? "bg-amber-500" : "bg-emerald-500";
-  const display = unit ?? (limit >= 1024 ? "MiB" : "cores");
+/**
+ * Usage-against-limit gauge.
+ *
+ * `value` and `limit` are deliberately nullable: the control plane does not
+ * report per-app usage for every workload, and a limit may simply be unset.
+ * Both cases render as "—" with a reason, never as a zero — a zero-width green
+ * bar is indistinguishable from a genuinely idle workload, which is the exact
+ * confusion `telemetry-ui.tsx` exists to prevent. NaN is treated as unknown
+ * too, so a malformed limit string cannot reach the DOM as "NaN".
+ */
+export function ResourceGauge({ label, value, limit, unit }: { label: string; value?: number | null; limit?: number | null; unit?: string }) {
+  const known = (n: number | null | undefined): n is number => typeof n === "number" && Number.isFinite(n);
+  const usage = known(value) ? value : null;
+  const cap = known(limit) && limit > 0 ? limit : null;
+  const pct = usage !== null && cap !== null ? Math.min(100, Math.max(0, (usage / cap) * 100)) : null;
+  const tone = pct === null ? "" : pct > 90 ? "bg-red-500" : pct > 70 ? "bg-amber-500" : "bg-emerald-500";
+  const display = unit ?? (cap !== null && cap >= 1024 ? "MiB" : "cores");
 
   return (
     <div className="space-y-1">
       <div className="flex justify-between text-xs text-slate-400">
         <span>{label}</span>
         <span className="font-mono text-slate-300">
-          {value.toFixed(1)} / {limit.toFixed(0)} {display}
+          {usage === null ? (
+            <NotReported reason={`${label} usage is not reported for this app`} />
+          ) : cap === null ? (
+            <>
+              {usage.toFixed(1)} {display} used ·{" "}
+              <NotReported reason="No limit configured for this app" />
+            </>
+          ) : (
+            <>
+              {usage.toFixed(1)} / {cap.toFixed(0)} {display}
+            </>
+          )}
         </span>
       </div>
       <div className="h-2 w-full overflow-hidden rounded-full bg-white/[0.06]">
-        <div className={cn("h-full rounded-full transition-all duration-500", tone)} style={{ width: `${pct}%` }} />
+        {/* No bar at all when there is no ratio to draw — an empty track reads
+            as "no data", a 0%-width bar reads as "zero load". */}
+        {pct === null ? null : (
+          <div className={cn("h-full rounded-full transition-all duration-500", tone)} style={{ width: `${pct}%` }} />
+        )}
       </div>
     </div>
   );

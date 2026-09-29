@@ -1,6 +1,6 @@
 "use client";
 
-import { requestJSON, type ForgeRequestOptions, type ForgeRetryPolicy } from "./http";
+import { requestJSON, type ForgeRetryPolicy } from "./http";
 
 /**
  * Retry knobs for the legacy retrying client. These are a 1:1 view onto the

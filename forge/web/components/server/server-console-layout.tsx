@@ -32,7 +32,10 @@ export function ServerConsoleLayout(props: ServerConsoleLayoutProps) {
 function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsoleLayoutProps) {
   const params = useParams();
   const pathname = usePathname();
-  const router = useRouter();
+  // Only `replace` is needed here, and depending on the method rather than the
+  // router object keeps the effect's dependency exact: `useRouter()` can return
+  // a fresh object per render, which would re-run the redirect every render.
+  const { replace } = useRouter();
   const serverId = String(params.id ?? "");
   const [server, setServer] = useState<ApiServer | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
@@ -81,8 +84,8 @@ function ServerConsoleShell({ activeTab: activeTabProp, children }: ServerConsol
   useEffect(() => { void load(); return () => { abortRef.current = true; }; }, [load]);
 
   useEffect(() => {
-    if (sessionExpired) router.replace(`/?reason=session-expired&next=${encodeURIComponent(pathname)}`);
-  }, [pathname, router.replace, sessionExpired]);
+    if (sessionExpired) replace(`/?reason=session-expired&next=${encodeURIComponent(pathname)}`);
+  }, [pathname, replace, sessionExpired]);
 
   if (loading) {
     return <div className="grid min-h-screen place-items-center bg-[var(--canvas)] text-slate-300" role="status"><div className="text-center"><div className="mx-auto h-9 w-9 animate-spin rounded-full border-2 border-slate-700 border-t-red-500" /><p className="mt-3 text-sm">Loading server…</p></div></div>;

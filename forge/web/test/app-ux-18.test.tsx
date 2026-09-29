@@ -4,7 +4,7 @@ import { resolve } from "node:path";
 
 // --- 1. statusTone centralization ---
 import { statusTone, deploymentStatusTone, appStatusTone } from "@/lib/api/status";
-import { DeployStatusBadge } from "@/components/admin/AdminAppsShared";
+import { DeployStatusBadge, ResourceGauge } from "@/components/admin/AdminAppsShared";
 import { renderWithQuery } from "@/test/render";
 import { APP_TYPE_ICONS } from "@/lib/app-type-icons";
 import { DEPLOYMENT_STEPS_POLL_INTERVAL_MS, DEPLOYMENT_STEPS_MAX_DURATION_MS, isDeploymentStepsTerminal } from "@/hooks/useDeploymentSteps";
@@ -319,5 +319,67 @@ describe("triple env editors shadow fix", () => {
     expect(src).toContain("EnvVarEditor");
     // Should document that it's scoped to project/environment, not app record editor
     expect(src).toMatch(/scopeType|scopeId/);
+  });
+});
+
+describe("ResourceGauge reports unknown usage as unknown", () => {
+  // `mapApplication` (lib/api/apps.ts) never populates cpu/memory/diskUsage —
+  // no endpoint reports per-app usage — and `mapApplicationDetail` hands back
+  // `resourceLimits.*` as "" when no limit is configured. The gauge used to
+  // coerce both, rendering "0.0 / NaN cores" on a green bar: a workload we have
+  // no reading for looked idle and within limits. These cases lock that shut.
+
+  /** The gauge's progress bar lives as the sole child of its track element. */
+  function barOf(container: HTMLElement) {
+    const track = container.querySelector(".h-2.w-full");
+    expect(track).not.toBeNull();
+    return track!.firstElementChild;
+  }
+
+  it("renders a reasoned dash, and no bar, when usage is not reported", () => {
+    const { container, getByTitle } = renderWithQuery(
+      <ResourceGauge label="CPU" value={undefined} limit={2} unit="cores" />,
+    );
+    expect(getByTitle("CPU usage is not reported for this app").textContent).toBe("—");
+    // A 0%-width bar reads as "zero load"; an empty track reads as "no data".
+    expect(barOf(container)).toBeNull();
+    expect(container.textContent).not.toContain("0.0");
+  });
+
+  it("never lets an unparseable limit reach the DOM as NaN", () => {
+    // parseFloat("") === NaN was the exact path that produced "0.0 / NaN".
+    const { container } = renderWithQuery(
+      <ResourceGauge label="Memory" value={undefined} limit={Number.NaN} unit="MiB" />,
+    );
+    expect(container.textContent).not.toContain("NaN");
+    expect(barOf(container)).toBeNull();
+  });
+
+  it("distinguishes a known reading with no configured limit from a zero limit", () => {
+    const { container, getByTitle } = renderWithQuery(
+      <ResourceGauge label="Disk" value={512} limit={undefined} unit="MiB" />,
+    );
+    expect(container.textContent).toContain("512.0 MiB used");
+    expect(getByTitle("No limit configured for this app")).toBeTruthy();
+    // No ratio exists without a cap, so there is still nothing to draw.
+    expect(barOf(container)).toBeNull();
+  });
+
+  it("draws the ratio only when both usage and limit are known", () => {
+    const { container } = renderWithQuery(
+      <ResourceGauge label="CPU" value={1} limit={4} unit="cores" />,
+    );
+    expect(container.textContent).toContain("1.0 / 4 cores");
+    const bar = barOf(container);
+    expect(bar).not.toBeNull();
+    expect((bar as HTMLElement).style.width).toBe("25%");
+  });
+
+  it("treats a zero limit as unset rather than dividing by it", () => {
+    const { container } = renderWithQuery(
+      <ResourceGauge label="CPU" value={1} limit={0} unit="cores" />,
+    );
+    expect(container.textContent).not.toContain("Infinity");
+    expect(barOf(container)).toBeNull();
   });
 });

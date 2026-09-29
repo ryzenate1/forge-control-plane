@@ -436,9 +436,10 @@ describe("GenerationFencedDots — two-dot badge", () => {
   it("applies fenced ring to actual dot when generation < fenceGeneration", () => {
     const { container } = render(<GenerationFencedDots desired="running" actual="pending" generation={1} fenceGeneration={5} />);
     const dots = container.firstElementChild!.querySelectorAll("span[aria-hidden]");
-    // second dot should have fenced ring
+    // second dot should have fenced ring, tinted from --danger rather than the
+    // flat token so the ring reads as a warning outline, not a solid border.
     expect(dots[1].className).toContain("ring-2");
-    expect(dots[1].className).toContain("ring-[var(--danger)]");
+    expect(dots[1].className).toContain("ring-[color-mix(in_srgb,var(--danger)_70%,transparent)]");
     // title should contain fenced
     expect(screen.getByLabelText(/fenced/)).toBeInTheDocument();
   });

@@ -16,6 +16,9 @@ function errorMessage(err: unknown): string {
 export default function OrganizationsPage() {
   const t = useT();
   const router = useRouter();
+  // Depend on `replace`, not `router`: `useRouter()` can return a fresh object
+  // per render, so `[router]` would re-run the redirect effect every render.
+  const { replace } = router;
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
@@ -31,8 +34,8 @@ export default function OrganizationsPage() {
   });
 
   useEffect(() => {
-    if (userQuery.data === null) router.replace('/?reason=session-expired&next=%2Forganizations');
-  }, [router.replace, userQuery.data]);
+    if (userQuery.data === null) replace('/?reason=session-expired&next=%2Forganizations');
+  }, [replace, userQuery.data]);
 
   // Server state lives in react-query only — same ["organizations"] key the
   // TenancyHydrator already populates, so this screen shares the cached list

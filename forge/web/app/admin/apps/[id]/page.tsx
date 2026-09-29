@@ -39,6 +39,21 @@ const TABS: { id: TabId; label: string; icon: typeof Settings }[] = [
   { id: "backups", label: "Backups", icon: Database },
 ];
 
+/**
+ * Resolve a configured resource limit to a number, or `undefined` when none is
+ * set. `mapApplicationDetail` always hands back `resourceLimits.*` as a string
+ * and uses "" for "not configured", so parsing unconditionally yields NaN —
+ * which used to reach the UI as the literal text "NaN". An unset limit is
+ * unknown, not zero and not an invented default.
+ */
+function resolveLimit(configured: string | undefined, fallback: number | undefined): number | undefined {
+  if (configured != null && configured.trim() !== "") {
+    const parsed = Number.parseFloat(configured);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
 function AdminAppDetailContent({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -178,12 +193,13 @@ function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
     onError: (error) => toast({ tone: "error", title: "Deploy failed", message: error instanceof Error ? error.message : "Failed to trigger deploy" }),
   });
 
-  const cpuUsage = app.cpuUsage ?? 0;
-  const cpuLimit = typeof app.resourceLimits?.cpu === "string" ? parseFloat(app.resourceLimits.cpu) : (app.cpuLimit ?? 1);
-  const memUsage = app.memoryUsage ?? 0;
-  const memLimit = typeof app.resourceLimits?.memory === "string" ? parseInt(app.resourceLimits.memory) : (app.memoryLimit ?? 1024);
-  const diskUsage = app.diskUsage ?? 0;
-  const diskLimit = typeof app.resourceLimits?.disk === "string" ? parseInt(app.resourceLimits.disk) : (app.diskLimit ?? 10240);
+  // Usage is passed through unchanged, including `undefined`: `mapApplication`
+  // (lib/api/apps.ts) never populates cpu/memory/diskUsage because no endpoint
+  // reports it yet, and coercing that to 0 would draw an idle-looking gauge for
+  // a workload we have no reading for. ResourceGauge renders "—" instead.
+  const cpuLimit = resolveLimit(app.resourceLimits?.cpu, app.cpuLimit);
+  const memLimit = resolveLimit(app.resourceLimits?.memory, app.memoryLimit);
+  const diskLimit = resolveLimit(app.resourceLimits?.disk, app.diskLimit);
 
   return (
     <div className="space-y-6">
@@ -212,9 +228,14 @@ function OverviewTab({ app, id }: { app: ApiAppDetail; id: string }) {
         <Card>
           <CardHeader title="Resource Usage" icon={Cpu} />
           <div className="space-y-4 p-4">
-            <ResourceGauge label="CPU" value={cpuUsage} limit={cpuLimit} unit="cores" />
-            <ResourceGauge label="Memory" value={memUsage} limit={memLimit} unit="MiB" />
-            <ResourceGauge label="Disk" value={diskUsage} limit={diskLimit} unit="MiB" />
+            <ResourceGauge label="CPU" value={app.cpuUsage} limit={cpuLimit} unit="cores" />
+            <ResourceGauge label="Memory" value={app.memoryUsage} limit={memLimit} unit="MiB" />
+            <ResourceGauge label="Disk" value={app.diskUsage} limit={diskLimit} unit="MiB" />
+            {app.cpuUsage == null && app.memoryUsage == null && app.diskUsage == null ? (
+              <p className="text-xs text-[var(--text-subtle)]">
+                Per-app usage is not collected yet — these gauges show the configured limits only.
+              </p>
+            ) : null}
           </div>
         </Card>
 

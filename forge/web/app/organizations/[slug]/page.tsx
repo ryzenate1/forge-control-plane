@@ -27,6 +27,9 @@ const MEMBERS_KEY = ['organization-members'] as const;
 export default function OrganizationDetailPage() {
   const params = useParams<{ slug: string }>();
   const router = useRouter();
+  // Depend on `replace`, not `router`: `useRouter()` can return a fresh object
+  // per render, so `[router]` would re-run the redirect effect every render.
+  const { replace } = router;
   const [tab, setTab] = useState<'projects' | 'members' | 'servers'>('projects');
 
   // Session guard — same contract as /servers: an explicit null means the
@@ -39,8 +42,8 @@ export default function OrganizationDetailPage() {
   });
 
   useEffect(() => {
-    if (userQuery.data === null) router.replace(`/?reason=session-expired&next=${encodeURIComponent(`/organizations/${params.slug}`)}`);
-  }, [router.replace, userQuery.data, params.slug]);
+    if (userQuery.data === null) replace(`/?reason=session-expired&next=${encodeURIComponent(`/organizations/${params.slug}`)}`);
+  }, [replace, userQuery.data, params.slug]);
 
   const orgQuery = useQuery({
     queryKey: ['organization', params.slug],

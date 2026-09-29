@@ -95,8 +95,13 @@ describe("WebSocket ticket contract", () => {
     expect(socket).not.toHaveBeenCalled();
   });
 
-  it("constructs relative API websocket URLs", () => {
-    expect(serverWebSocketURL("srv", "stats")).toBe("/api/v1/servers/srv/ws/stats");
+  it("constructs absolute API websocket URLs, because `new WebSocket` rejects relative ones", () => {
+    // Derived from the page origin with the scheme swapped http->ws (see
+    // buildWebSocketUrl). Asserting against window.location keeps this honest
+    // if the jsdom origin ever changes; only SSR, with no window, may return
+    // the bare relative path.
+    const expected = `${window.location.origin.replace(/^http/, "ws")}/api/v1/servers/srv/ws/stats`;
+    expect(serverWebSocketURL("srv", "stats")).toBe(expected);
   });
 });
 

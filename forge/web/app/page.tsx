@@ -18,6 +18,13 @@ type SetupStatus = "checking" | "ready" | "required" | "unreachable";
 function LoginContent() {
   const t = useT();
   const router = useRouter();
+  // Effects below depend on `replace`, not on `router`. `useRouter()` may hand
+  // back a fresh object identity per render (every test mock returns a new
+  // object literal), so a `[router]` dependency would re-run these effects on
+  // every render — looping the setup probe and draining mocked fetch queues.
+  // Extracting the method keeps the dependency exact and lets
+  // react-hooks/exhaustive-deps verify it instead of being suppressed.
+  const { replace } = router;
   const params = useSearchParams();
   const qc = useQueryClient();
   const { currentUser, setCurrentUser } = useServerStore();
@@ -38,7 +45,7 @@ function LoginContent() {
         if (cancelled) return;
         if (data.required) {
           setSetupStatus("required");
-          router.replace("/setup");
+          replace("/setup");
         } else {
           setSetupStatus("ready");
         }
@@ -49,16 +56,12 @@ function LoginContent() {
         setSetupStatus("unreachable");
       });
     return () => { cancelled = true; };
-    // Depend on the stable `replace` function, not the whole router object:
-    // `useRouter()` may return a fresh object identity per render (as in
-    // tests), which would re-run this probe in a loop and exhaust mocked
-    // fetch queues. Call sites still use `router.replace(...)` directly.
-  }, [router.replace]);
+  }, [replace]);
 
   // Block the authenticated redirect until the setup probe resolves: with an
   // initial "checking" state a signed-in user cannot be bounced to /servers
   // on first run before we know setup is required.
-  useEffect(() => { if (currentUser && setupStatus === "ready") { router.replace(currentUser.role === "admin" ? "/admin/overview" : "/servers"); } }, [currentUser, router.replace, setupStatus]);
+  useEffect(() => { if (currentUser && setupStatus === "ready") { replace(currentUser.role === "admin" ? "/admin/overview" : "/servers"); } }, [currentUser, replace, setupStatus]);
   useEffect(() => { if (cooldown <= 0) return; const timer = window.setInterval(() => setCooldown((value) => Math.max(0, value - 1)), 1000); return () => window.clearInterval(timer); }, [cooldown]);
 
   function finishLogin(data: LoginResponse) {
