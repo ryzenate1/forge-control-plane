@@ -48,6 +48,7 @@ INSTALL_DIR="/opt/gamepanel"
 
 API_PORT=8080
 FRONTEND_PORT=3000
+MIN_DOCKER_VERSION="29.3.1"
 
 echo ""
 echo -e "  ${RED}+==========================================+${NC}"
@@ -141,14 +142,29 @@ fi
 # ============================================================
 header "Checking Docker (for game servers only)"
 
-if command -v docker &>/dev/null; then
-    info "Docker already installed: $(docker --version)"
-else
+install_docker() {
     curl -fsSL https://get.docker.com | sh
     systemctl enable docker
     systemctl start docker
-    info "Docker installed (used ONLY for game server containers)"
+}
+
+if command -v docker &>/dev/null; then
+    docker_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+    if [ -n "${docker_version}" ] && dpkg --compare-versions "${docker_version}" ge "${MIN_DOCKER_VERSION}"; then
+        info "Docker Engine ${docker_version} meets the minimum ${MIN_DOCKER_VERSION}"
+    else
+        warn "Docker Engine ${docker_version:-unknown} is below the required ${MIN_DOCKER_VERSION}; upgrading"
+        install_docker
+    fi
+else
+    install_docker
 fi
+
+docker_version="$(docker version --format '{{.Server.Version}}' 2>/dev/null || true)"
+if [ -z "${docker_version}" ] || ! dpkg --compare-versions "${docker_version}" ge "${MIN_DOCKER_VERSION}"; then
+    fail "Docker Engine ${MIN_DOCKER_VERSION} or later is required for workload containers"
+fi
+info "Docker Engine ${docker_version} installed (used ONLY for game server containers)"
 
 # ============================================================
 # Step 5: Create panel user and directories
