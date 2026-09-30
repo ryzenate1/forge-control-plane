@@ -91,7 +91,10 @@ export function VolumesView() {
         {volumesQuery.isLoading ? (
           <div className="p-4"><AdminLoadingState label="Loading volumes…" /></div>
         ) : volumesQuery.isError ? (
-          <div className="p-4 text-sm text-red-400">Failed to load volumes.</div>
+          <div className="space-y-1 p-4 text-sm">
+            <p className="text-red-400">Volumes could not be loaded: {volumesQuery.error instanceof Error ? volumesQuery.error.message : "request failed"}. This is a failed read, not an empty host.</p>
+            <p className="text-xs text-slate-500">A node running with DAEMON_ALLOW_MOCK_RUNTIME=true answers every runtime call with “container runtime is unavailable” by design — no volume operation can succeed there.</p>
+          </div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={RefreshCw} message={search ? "No volumes match your search." : "No volumes found."} title={search ? "No results" : "No volumes"} />
         ) : (

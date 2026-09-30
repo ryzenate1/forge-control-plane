@@ -9,6 +9,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog";
 import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, StatsRow, AdminSelect, AdminFormSection, AdminPageLayout, AdminErrorState } from "./admin-ui";
 import { DashHeader } from "./dashboard-cards";
 import { Skeleton } from "@/components/ui/loading-skeleton";
+import { PasswordRequirements, isPasswordValid } from "@/components/ui/password-requirements";
 import { UserLimitsGrid, type LimitValue } from "./user-limits";
 
 /** A limit the record never carried stays `null` (rendered "Not reported"),
@@ -232,9 +233,10 @@ export function AdminUsers() {
  <th className="px-4 py-3">
  <input aria-label="Select all filtered users" type="checkbox" checked={allFilteredSelected} onChange={toggleAllFiltered} />
  </th>
- <th className="px-4 py-3">Email</th>
- <th className="px-4 py-3">Role</th>
- <th className="px-4 py-3">Servers</th>
+  <th className="px-4 py-3">Email</th>
+  <th className="px-4 py-3">Role</th>
+  <th className="px-4 py-3">2FA</th>
+  <th className="px-4 py-3">Servers</th>
  <th className="px-4 py-3">ID</th>
  <th className="px-4 py-3" />
  </tr>
@@ -255,6 +257,9 @@ export function AdminUsers() {
  </td>
  <td className="px-4 py-3">
   <Pill tone={user.role === "admin" ? "red" : "neutral"}>{user.role}</Pill>
+ </td>
+ <td className="px-4 py-3">
+  <Pill tone={user.useTotp ? "green" : "neutral"}>{user.useTotp ? "TOTP on" : "TOTP off"}</Pill>
  </td>
  <td className="px-4 py-3 text-xs text-text-subtle">{serversQuery.isSuccess ? ownedCount(user) : "—"}</td>
  <td className="px-4 py-3 font-mono text-xs text-text-muted">{user.id.slice(0, 8)}...</td>
@@ -284,6 +289,7 @@ export function AdminUsers() {
     pill={{ tone: selectedUser.role === "admin" ? "red" : "neutral", label: selectedUser.role }}
     meta={[
       { label: "Owned servers", value: serversQuery.isSuccess ? String(ownedCount(selectedUser)) : "unknown" },
+      { label: "2FA (TOTP)", value: selectedUser.useTotp ? "Enabled" : "Not enabled" },
       { label: "ID", value: <span key="id" className="font-mono">{selectedUser.id.slice(0, 8)}…</span> },
     ]}
   />
@@ -292,6 +298,10 @@ export function AdminUsers() {
   <Input label="Email Address" value={editEmail} onChange={setEditEmail} type="email" />
   <AdminSelect label="Role" value={editRole} onChange={(v) => setEditRole(v as "admin" | "user")} options={[{ value: "user", label: "User" }, { value: "admin", label: "Administrator" }]} />
   <Input label="New Password" value={editPassword} onChange={setEditPassword} placeholder="Leave blank to keep current password" type="password" autoComplete="new-password" />
+  <p className="text-xs leading-5 text-slate-400">
+    TOTP 2FA: {selectedUser.useTotp ? "enabled (useTotp from GET /users)" : "not enabled"}. Passkeys are self-service —{" "}
+    GET /account/webauthn/credentials is caller-scoped, so an admin cannot list another user&apos;s WebAuthn credentials.
+  </p>
   </AdminFormSection>
   <AdminFormSection title="Owned Servers">
   <div className="rounded-lg border border-line bg-[var(--surface-input)] p-3 text-sm text-text">
@@ -333,6 +343,7 @@ export function AdminUsers() {
   <AdminFormSection title="Account">
   <Input label="Email Address" value={email} onChange={setEmail} placeholder="user@example.com" type="email" />
   <Input label="Password" value={password} onChange={setPassword} placeholder="********" type="password" autoComplete="new-password" />
+  <PasswordRequirements password={password} />
   <AdminSelect label="Role" value={role} onChange={(v) => setRole(v as "admin" | "user")} options={[{ value: "user", label: "User" }, { value: "admin", label: "Administrator" }]} />
   </AdminFormSection>
   <AdminFormSection title="Resource Limits">
@@ -352,7 +363,7 @@ export function AdminUsers() {
   <ModalFooter
  onCancel={() => setModal(false)}
  onConfirm={() => createMut.mutate()}
-  disabled={email.trim() === "" || password.length < 8 || createMut.isPending}
+  disabled={email.trim() === "" || !isPasswordValid(password) || createMut.isPending}
  confirmLabel="Create User"
  />
  </Modal>

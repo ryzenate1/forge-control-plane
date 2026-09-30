@@ -6,11 +6,31 @@ import { useEffect, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, Database, Eye, EyeOff, Globe, Mail, Server, ShieldCheck, HardDrive, Building2 } from "lucide-react";
 import { fetchSetupStatus, runSetup } from "@/lib/api";
+import type { SetupSkippableStep } from "@/lib/api/types";
+import { PasswordRequirements, firstPasswordError } from "@/components/ui/password-requirements";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input, Select } from "@/components/ui/primitives";
 import { useT } from "@/components/TranslationProvider";
 
 type SetupStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+
+/** Wizard step number → skippable contract id. Steps 1, 2 and 8 are never skippable. */
+const SKIPPABLE_STEP_ID: Partial<Record<SetupStep, SetupSkippableStep>> = {
+  3: "organization",
+  4: "node",
+  5: "email",
+  6: "backup",
+  7: "domain",
+};
+
+/** Optional steps from `from` through the end of the wizard, in order. */
+const REMAINING_SKIPPABLE: Record<number, SetupSkippableStep[]> = {
+  3: ["organization", "node", "email", "backup", "domain"],
+  4: ["node", "email", "backup", "domain"],
+  5: ["email", "backup", "domain"],
+  6: ["backup", "domain"],
+  7: ["domain"],
+};
 
 const EMAIL_RE = /^\S+@\S+\.\S+$/;
 const FQDN_RE = /^(?=.{4,253}$)([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/i;
@@ -27,6 +47,7 @@ export default function SetupPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showSmtpPass, setShowSmtpPass] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [skippedSteps, setSkippedSteps] = useState<SetupSkippableStep[]>([]);
   const [setupData, setSetupData] = useState({
     orgName: "",
     nodeName: "",
@@ -116,6 +137,75 @@ export default function SetupPage() {
     if (Object.keys(next).length === 0) setStep(nextStep);
   }
 
+  /** Defaults for one wizard step's fields, used when the step is skipped. */
+  function clearedStepData(step: SetupStep) {
+    switch (step) {
+      case 3:
+        return { orgName: "" };
+      case 4:
+        return { nodeName: "", nodeFqdn: "" };
+      case 5:
+        return { smtpHost: "", smtpPort: "587", smtpUser: "", smtpPass: "", smtpFrom: "", smtpEncryption: "tls" };
+      case 6:
+        return { backupDriver: "local", s3Bucket: "", s3Region: "", s3Endpoint: "" };
+      case 7:
+        return { domainName: "", tlsEmail: "" };
+      default:
+        return {};
+    }
+  }
+
+  function markSkipped(ids: SetupSkippableStep[]) {
+    setSkippedSteps((prev) => {
+      const next = [...prev];
+      for (const id of ids) {
+        if (!next.includes(id)) next.push(id);
+      }
+      return next;
+    });
+  }
+
+  /**
+   * Skip a single step: record the skip, reset its fields and advance.
+   * Submitting from step 7 needs the just-cleared values, but setState is
+   * async — so the payload overrides are computed synchronously and passed
+   * to the mutation directly. The backend clears skipped fields again
+   * server-side, so skip always wins over stale input.
+   */
+  function skipStep(step: SetupStep) {
+    const id = SKIPPABLE_STEP_ID[step];
+    if (!id) return;
+    const cleared = clearedStepData(step);
+    const nextSkipped = skippedSteps.includes(id) ? skippedSteps : [...skippedSteps, id];
+    setSetupData((prev) => ({ ...prev, ...cleared }));
+    markSkipped([id]);
+    setErrors({});
+    if (step === 7) {
+      setupMutation.mutate({ setupData: { ...setupData, ...cleared }, skippedSteps: nextSkipped });
+    } else {
+      setStep((step + 1) as SetupStep);
+    }
+  }
+
+  /** Skip this and all remaining optional steps, then complete setup now. */
+  function setUpLater(from: SetupStep) {
+    const ids = REMAINING_SKIPPABLE[from] ?? [];
+    const cleared = ids.reduce((acc, id) => {
+      const step = (Object.keys(SKIPPABLE_STEP_ID) as unknown as SetupStep[]).find(
+        (n) => SKIPPABLE_STEP_ID[n] === id,
+      );
+      return step ? { ...acc, ...clearedStepData(step) } : acc;
+    }, {});
+    const nextSkipped = [...skippedSteps];
+    for (const id of ids) {
+      if (!nextSkipped.includes(id)) nextSkipped.push(id);
+    }
+    setSetupData((prev) => ({ ...prev, ...cleared }));
+    markSkipped(ids);
+    setErrors({});
+    setupMutation.mutate({ setupData: { ...setupData, ...cleared }, skippedSteps: nextSkipped });
+  }
+
   useEffect(() => {
     if (statusQuery.data && !statusQuery.data.required && step !== 8) {
       router.replace("/");
@@ -123,11 +213,12 @@ export default function SetupPage() {
   }, [router, statusQuery.data, step]);
 
   const setupMutation = useMutation({
-    mutationFn: () =>
+    mutationFn: (overrides?: { setupData?: typeof setupData; skippedSteps?: SetupSkippableStep[] }) =>
       runSetup({
         email: email.trim().toLowerCase(),
         password,
-        ...setupData,
+        ...(overrides?.setupData ?? setupData),
+        skippedSteps: overrides?.skippedSteps ?? skippedSteps,
       }),
     onSuccess: () => {
       void queryClient.invalidateQueries({ queryKey: ["setup-status"] });
@@ -231,24 +322,31 @@ export default function SetupPage() {
       }
     >
       <ol aria-label={t("setupWizard.progressLabel")} className="mb-5 flex flex-wrap gap-2 text-xs">
-        {visibleSteps.map((item) => (
+        {visibleSteps.map((item) => {
+          const skippedId = SKIPPABLE_STEP_ID[item.n as SetupStep];
+          const wasSkipped = skippedId ? skippedSteps.includes(skippedId) && step > item.n : false;
+          return (
           <li
             aria-current={step === item.n ? "step" : undefined}
             className={`flex items-center gap-2 rounded-lg border px-3 py-2 ${
-              step === item.n
-                ? "border-l-2 border-l-red-400 border-red-500/30 bg-red-500/10 text-red-200"
-                : step > item.n
-                  ? "border-red-500/30 bg-red-500/10 text-red-200"
-                  : "border-white/10 text-slate-500"
+              wasSkipped
+                ? "border-dashed border-white/15 text-slate-400"
+                : step === item.n
+                  ? "border-l-2 border-l-red-400 border-red-500/30 bg-red-500/10 text-red-200"
+                  : step > item.n
+                    ? "border-red-500/30 bg-red-500/10 text-red-200"
+                    : "border-white/10 text-slate-500"
             }`}
             key={item.n}
           >
             <span className="grid h-5 w-5 place-items-center rounded-full border border-current text-[10px]">
-              {step > item.n ? <Check className="h-3 w-3" /> : item.n}
+              {step > item.n && !wasSkipped ? <Check className="h-3 w-3" /> : item.n}
             </span>
             {item.label}
+            {wasSkipped ? <span className="opacity-70">· {t("setupWizard.skipped")}</span> : null}
           </li>
-        ))}
+          );
+        })}
       </ol>
 
       {/* Step 1: Readiness */}
@@ -294,7 +392,11 @@ export default function SetupPage() {
             const next: Record<string, string> = {};
             if (!/^\S+@\S+\.\S+$/.test(email.trim())) next.email = t("setupWizard.step2.errors.invalidEmail");
             if (password.length < 12) next.password = t("setupWizard.step2.errors.tooShort");
-            else if (password === email.trim().toLowerCase()) next.password = t("setupWizard.step2.errors.sameAsEmail");
+            else {
+              const policyError = firstPasswordError(password);
+              if (policyError) next.password = policyError;
+              else if (password === email.trim().toLowerCase()) next.password = t("setupWizard.step2.errors.sameAsEmail");
+            }
             if (confirm !== password) next.confirm = t("setupWizard.step2.errors.mismatch");
             setErrors(next);
             if (!next.email && !next.password && !next.confirm) setStep(3);
@@ -338,6 +440,7 @@ export default function SetupPage() {
                 {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
               </button>
             </div>
+            <PasswordRequirements password={password} />
           </Field>
           <Field error={errors.confirm} id="setup-confirm" label={t("setupWizard.step2.confirmLabel")}>
             <Input
@@ -400,11 +503,21 @@ export default function SetupPage() {
             />
           </Field>
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-            <Button onClick={() => setStep(2)} type="button" variant="ghost">
-              {t("common.back")}
-            </Button>
-            <Button type="submit">{t("common.continue")}</Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setStep(2)} type="button" variant="ghost">
+                {t("common.back")}
+              </Button>
+              <Button onClick={() => skipStep(3)} type="button" variant="ghost">
+                {t("setupWizard.skip")}
+              </Button>
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setUpLater(3)} type="button" variant="secondary">
+                {t("setupWizard.setUpLater")}
+              </Button>
+              <Button type="submit">{t("common.continue")}</Button>
+            </div>
           </div>
         </form>
       ) : null}
@@ -469,11 +582,21 @@ export default function SetupPage() {
             />
           </Field>
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-            <Button onClick={() => setStep(3)} type="button" variant="ghost">
-              {t("common.back")}
-            </Button>
-            <Button type="submit">{t("common.continue")}</Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setStep(3)} type="button" variant="ghost">
+                {t("common.back")}
+              </Button>
+              <Button onClick={() => skipStep(4)} type="button" variant="ghost">
+                {t("setupWizard.skip")}
+              </Button>
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setUpLater(4)} type="button" variant="secondary">
+                {t("setupWizard.setUpLater")}
+              </Button>
+              <Button type="submit">{t("common.continue")}</Button>
+            </div>
           </div>
         </form>
       ) : null}
@@ -589,11 +712,21 @@ export default function SetupPage() {
             />
           </Field>
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-            <Button onClick={() => setStep(4)} type="button" variant="ghost">
-              {t("common.back")}
-            </Button>
-            <Button type="submit">{t("common.continue")}</Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setStep(4)} type="button" variant="ghost">
+                {t("common.back")}
+              </Button>
+              <Button onClick={() => skipStep(5)} type="button" variant="ghost">
+                {t("setupWizard.skip")}
+              </Button>
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setUpLater(5)} type="button" variant="secondary">
+                {t("setupWizard.setUpLater")}
+              </Button>
+              <Button type="submit">{t("common.continue")}</Button>
+            </div>
           </div>
         </form>
       ) : null}
@@ -674,11 +807,21 @@ export default function SetupPage() {
             </>
           ) : null}
           {errors.form ? <Alert tone="error">{errors.form}</Alert> : null}
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-            <Button onClick={() => setStep(5)} type="button" variant="ghost">
-              {t("common.back")}
-            </Button>
-            <Button type="submit">{t("common.continue")}</Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setStep(5)} type="button" variant="ghost">
+                {t("common.back")}
+              </Button>
+              <Button onClick={() => skipStep(6)} type="button" variant="ghost">
+                {t("setupWizard.skip")}
+              </Button>
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setUpLater(6)} type="button" variant="secondary">
+                {t("setupWizard.setUpLater")}
+              </Button>
+              <Button type="submit">{t("common.continue")}</Button>
+            </div>
           </div>
         </form>
       ) : null}
@@ -692,7 +835,7 @@ export default function SetupPage() {
             event.preventDefault();
             const next = validateStep7();
             setErrors(next);
-            if (Object.keys(next).length === 0) setupMutation.mutate();
+            if (Object.keys(next).length === 0) setupMutation.mutate(undefined);
           }}
         >
           <div className="flex items-start gap-4">
@@ -750,13 +893,23 @@ export default function SetupPage() {
           <Alert tone="info">
             {t("setupWizard.step7.tlsInfo")}
           </Alert>
-          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-between">
-            <Button onClick={() => setStep(6)} type="button" variant="ghost">
-              {t("common.back")}
-            </Button>
-            <Button loading={setupMutation.isPending} type="submit">
-              {t("setupWizard.step7.completeSetup")}
-            </Button>
+          <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setStep(6)} type="button" variant="ghost">
+                {t("common.back")}
+              </Button>
+              <Button onClick={() => skipStep(7)} type="button" variant="ghost">
+                {t("setupWizard.skip")}
+              </Button>
+            </div>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row">
+              <Button onClick={() => setUpLater(7)} type="button" variant="secondary">
+                {t("setupWizard.setUpLater")}
+              </Button>
+              <Button loading={setupMutation.isPending} type="submit">
+                {t("setupWizard.step7.completeSetup")}
+              </Button>
+            </div>
           </div>
         </form>
       ) : null}
@@ -776,11 +929,11 @@ export default function SetupPage() {
             <p className="font-medium text-slate-300">{t("setupWizard.step8.whatConfigured")}</p>
             <ul className="mt-2 list-inside list-disc space-y-1">
               <li>{t("setupWizard.step8.adminCreated")}</li>
-              {setupData.orgName ? <li>{t("setupWizard.step8.organizationLine", { name: setupData.orgName })}</li> : null}
-              {setupData.nodeName ? <li>{t("setupWizard.step8.nodeLine", { name: setupData.nodeName })}</li> : null}
+              {setupData.orgName ? <li>{t("setupWizard.step8.organizationLine", { name: setupData.orgName })}</li> : <li>{t("setupWizard.step8.organizationNotConfigured")}</li>}
+              {setupData.nodeName ? <li>{t("setupWizard.step8.nodeLine", { name: setupData.nodeName })}</li> : <li>{t("setupWizard.step8.nodeNotConfigured")}</li>}
               {setupData.smtpHost ? <li>{t("setupWizard.step8.smtpLine", { host: setupData.smtpHost })}</li> : <li>{t("setupWizard.step8.smtpNotConfigured")}</li>}
               <li>{t("setupWizard.step8.backupLine", { driver: setupData.backupDriver === "s3" ? t("setupWizard.step6.s3") : t("setupWizard.step6.local") })}</li>
-              {setupData.domainName ? <li>{t("setupWizard.step8.domainLine", { domain: setupData.domainName })}</li> : null}
+              {setupData.domainName ? <li>{t("setupWizard.step8.domainLine", { domain: setupData.domainName })}</li> : <li>{t("setupWizard.step8.domainNotConfigured")}</li>}
             </ul>
           </div>
           <Link className="ui-button ui-button-primary mt-6 w-full" href="/?setup=complete">

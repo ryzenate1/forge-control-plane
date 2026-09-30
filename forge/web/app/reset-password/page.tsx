@@ -5,6 +5,7 @@ import { useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { resetPassword } from "@/lib/api";
+import { PasswordRequirements, firstPasswordError } from "@/components/ui/password-requirements";
 import { AuthShell } from "@/components/ui/auth-shell";
 import { Alert, Button, Field, Input } from "@/components/ui/primitives";
 import { useT } from "@/components/TranslationProvider";
@@ -47,13 +48,14 @@ function ResetForm() {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault(); setError(null);
-    if (password.length < 8) { setError(t("resetPassword.tooShort")); return; }
+    const policyError = firstPasswordError(password);
+    if (policyError) { setError(policyError); return; }
     if (password !== confirm) { setError(t("validation.passwordMatch")); return; }
     setLoading(true);
     try { await resetPassword(email.toLowerCase(), token, password); setSuccess(true); setPassword(""); setConfirm(""); } catch (caught) { setError(caught instanceof Error ? caught.message : t("resetPassword.resetFailed")); } finally { setLoading(false); }
   }
 
-  return <form className="ui-card space-y-5 p-5 sm:p-6" noValidate onSubmit={submit}><div className="rounded-lg border border-white/[0.07] bg-black/10 px-3.5 py-3"><p className="text-xs text-slate-500">{t("resetPassword.resettingFor")}</p><p className="mt-1 truncate text-sm font-medium text-slate-200">{email}</p></div><Field hint={t("resetPassword.passwordHint")} id="new-password" label={t("resetPassword.newPassword")}><div className="relative"><Input autoComplete="new-password" className="pr-11" id="new-password" minLength={8} onChange={(event) => setPassword(event.target.value)} type={show ? "text" : "password"} value={password} /><button aria-label={show ? t("setupWizard.step2.hidePasswords") : t("setupWizard.step2.showPasswords")} className="ui-icon-button absolute right-1 top-1" onClick={() => setShow((value) => !value)} type="button">{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></Field><Field id="confirm-password" label={t("resetPassword.confirmNewPassword")}><Input autoComplete="new-password" id="confirm-password" onChange={(event) => setConfirm(event.target.value)} type={show ? "text" : "password"} value={confirm} /></Field>{error ? <Alert title={t("resetPassword.notChanged")} tone="error">{error}</Alert> : null}<Button className="w-full" loading={loading} type="submit">{t("resetPassword.submit")}</Button></form>;
+  return <form className="ui-card space-y-5 p-5 sm:p-6" noValidate onSubmit={submit}><div className="rounded-lg border border-white/[0.07] bg-black/10 px-3.5 py-3"><p className="text-xs text-slate-500">{t("resetPassword.resettingFor")}</p><p className="mt-1 truncate text-sm font-medium text-slate-200">{email}</p></div><Field hint={t("resetPassword.passwordHint")} id="new-password" label={t("resetPassword.newPassword")}><div className="relative"><Input autoComplete="new-password" className="pr-11" id="new-password" minLength={12} onChange={(event) => setPassword(event.target.value)} type={show ? "text" : "password"} value={password} /><button aria-label={show ? t("setupWizard.step2.hidePasswords") : t("setupWizard.step2.showPasswords")} className="ui-icon-button absolute right-1 top-1" onClick={() => setShow((value) => !value)} type="button">{show ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div><PasswordRequirements password={password} /></Field><Field id="confirm-password" label={t("resetPassword.confirmNewPassword")}><Input autoComplete="new-password" id="confirm-password" onChange={(event) => setConfirm(event.target.value)} type={show ? "text" : "password"} value={confirm} /></Field>{error ? <Alert title={t("resetPassword.notChanged")} tone="error">{error}</Alert> : null}<Button className="w-full" loading={loading} type="submit">{t("resetPassword.submit")}</Button></form>;
 }
 
 function ResetPasswordFallback() {

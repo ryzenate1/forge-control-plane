@@ -350,7 +350,7 @@ export function AdminOverview() {
   const [isRefreshing, setIsRefreshing] = useState(false);
 
   const nodesQuery = useQuery({
-    queryKey: ["nodes", "all"],
+    queryKey: queryKeys.nodes.allLists(),
     queryFn: fetchAllNodes,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
@@ -358,7 +358,7 @@ export function AdminOverview() {
   });
 
   const serversQuery = useQuery({
-    queryKey: ["servers", "all"],
+    queryKey: queryKeys.servers.allLists(),
     queryFn: fetchAllServers,
     refetchInterval: 30_000,
     refetchIntervalInBackground: false,
@@ -374,7 +374,7 @@ export function AdminOverview() {
   });
 
   const usersQuery = useQuery({
-    queryKey: ["users"],
+    queryKey: queryKeys.users.all,
     queryFn: fetchUsers,
     refetchInterval: 60_000,
     refetchIntervalInBackground: false,
@@ -388,7 +388,9 @@ export function AdminOverview() {
   const healthQuery = useHealthQuery();
 
   const activityQuery = useQuery<ApiAdminAuditEvent[]>({
-    queryKey: ["admin-audit"],
+    // Canonical audit key so Overview shares the cache with useAuditQuery
+    // instead of holding a second copy of the same feed on its own clock.
+    queryKey: queryKeys.activity.audit(),
     queryFn: fetchAdminAudit,
     retry: 2,
     refetchInterval: 15_000,

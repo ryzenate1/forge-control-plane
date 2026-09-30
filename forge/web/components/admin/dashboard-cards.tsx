@@ -120,19 +120,11 @@ export interface KpiDatum {
 export function Sparkline({ data, color }: { data: number[]; color: string }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `dash-${uid}`;
+  // No invented trend: fewer than two real points means no line. Callers hide
+  // the container (see KpiCard), so a card with no history shows no chart
+  // rather than a decorative wave that reads as data. Matches AdminMonitoring.
   if (data.length < 2) {
-    return (
-      <svg viewBox="0 0 120 34" className="h-full w-full" aria-hidden="true">
-        <defs>
-          <linearGradient id={`${gid}-g`} x1="0" y1="0" x2="0" y2="1">
-            <stop offset="0%" stopColor={color} stopOpacity={0.22} />
-            <stop offset="100%" stopColor={color} stopOpacity={0} />
-          </linearGradient>
-        </defs>
-        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6 L 120,34 L 0,34 Z" fill={`url(#${gid}-g)`} />
-        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" opacity={0.5} />
-      </svg>
-    );
+    return null;
   }
   const min = Math.min(...data);
   const max = Math.max(...data);
@@ -176,7 +168,7 @@ export function KpiCard({ kpi }: { kpi: KpiDatum }) {
           <p className={cn("font-mono text-xl font-bold", kpi.value ? (kpi.valueClass ?? "text-text") : "text-text")}>{kpi.value ?? "— —"}</p>
           <p className="mt-0.5 max-w-36 truncate text-[11px] text-text-muted" title={kpi.sub}>{kpi.sub}</p>
         </div>
-        {kpi.trend ? (
+        {kpi.trend && kpi.trend.length >= 2 ? (
           <div className="h-9 w-24 shrink-0 overflow-hidden sm:w-28">
             <Sparkline data={kpi.trend} color={kpi.color} />
           </div>

@@ -1,5 +1,11 @@
 "use client";
 import { useNodesQuery } from "@/lib/admin/telemetry";
+import {
+  nodeHeartbeatIso,
+  nodeLastSeenLabel,
+  nodeLastSeenTitle,
+  nodeRuntimeSummary,
+} from "@/lib/admin/node-display";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
@@ -24,6 +30,12 @@ import { DashHeader, InfoCard, KpiGrid, QuickActionsCard, type KpiDatum, type Qu
 import { chart } from "@/lib/design-tokens";
 
 type Tab = "about" | "settings" | "configuration" | "allocation" | "servers" | "capabilities";
+
+// Node display helpers (runtime summary, last-seen labels) are canonical in
+// `@/lib/admin/node-display` so the list, detail and workspace cannot disagree.
+// Re-exported here so existing `./AdminNodes` importers keep working.
+export { nodeHeartbeatIso, nodeLastSeenLabel, nodeLastSeenTitle, nodeRuntimeSummary } from "@/lib/admin/node-display";
+export type { NodeRuntimeSummary } from "@/lib/admin/node-display";
 
 const ADMIN_TABS: Array<{ id: Tab; label: string }> = [
   { id: "about", label: "About" },
@@ -70,6 +82,7 @@ export function AdminNodes() {
     [nodes, search],
   );
   const healthy = nodes.filter((n) => n.heartbeatState === "healthy").length;
+  const degraded = nodes.filter((n) => (n.actualState ?? "").toLowerCase() === "degraded").length;
 
   return (
     <div className="space-y-6">
@@ -84,7 +97,7 @@ export function AdminNodes() {
       />
       <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
         <span className="font-semibold text-text">Beacons</span> is the product term for <span className="font-mono text-[11px]">store.go:129 Node</span> — API alias <code className="font-mono">GET /beacons</code> → <code className="font-mono">GET /nodes</code> compat kept. Click a row for the 8-tab workspace (Overview/Metrics/Workloads/Networking/Storage/Capabilities/Placement/Config).
-        <span className="ml-2 font-mono text-[11px] text-text-muted">{nodes.length} total · {healthy} healthy · 8-tab detail → /admin/nodes/[id]</span>
+        <span className="ml-2 font-mono text-[11px] text-text-muted">{nodes.length} total · {healthy} healthy{degraded > 0 ? ` · ${degraded} degraded (mock runtime)` : ""} · 8-tab detail → /admin/nodes/[id]</span>
       </div>
 
       {locationsQuery.isError ? (
@@ -115,7 +128,20 @@ export function AdminNodes() {
             <div className="mt-3"><Btn size="sm" onClick={() => void nodesQuery.refetch()}>Retry</Btn></div>
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon={Network} message={search ? "No nodes match your search." : "Setup required — create a node before hosting workloads."} />
+          search ? (
+            <EmptyState icon={Network} message="No nodes match your search." />
+          ) : (
+            <div className="space-y-3 p-8 text-center">
+              <Network className="mx-auto text-text-muted" size={20} />
+              <p className="text-sm font-semibold text-text">No nodes registered yet</p>
+              <ol className="mx-auto max-w-xl space-y-1.5 text-left text-xs leading-5 text-text-subtle">
+                <li><span className="font-mono text-text">1.</span> Click <span className="font-semibold text-text">Create Node</span> above — Forge shows a one-time <code className="font-mono text-[11px]">DAEMON_NODE_ID</code> + <code className="font-mono text-[11px]">DAEMON_NODE_TOKEN</code> pair. Save it; it is never shown again.</li>
+                <li><span className="font-mono text-text">2.</span> On the macOS host, set <code className="font-mono text-[11px]">DAEMON_NODE_ID</code>, <code className="font-mono text-[11px]">DAEMON_NODE_TOKEN</code> and <code className="font-mono text-[11px]">PANEL_API_URL=http://127.0.0.1:8080/api/v1</code> in the Beacon environment (local dev seed: <code className="font-mono text-[11px]">~/Library/LaunchAgents/com.gamepanel.beacon.plist</code>, token from <code className="font-mono text-[11px]">.dev-secrets.env</code> → <code className="font-mono text-[11px]">DAEMON_NODE_TOKEN</code>), then restart Beacon.</li>
+                <li><span className="font-mono text-text">3.</span> The node appears here once its heartbeat lands (~30s) — watch <span className="font-semibold text-text">Last seen</span> go live. Without Docker the runtime reads <span className="font-semibold text-text">mock</span>/<span className="font-semibold text-text">degraded</span>: heartbeats work, workloads need a container runtime.</li>
+              </ol>
+              <p className="text-xs text-text-muted">Lost the token? Open the node → Settings → Rotate Token, then update the Beacon environment.</p>
+            </div>
+          )
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-sm text-text">
@@ -125,6 +151,10 @@ export function AdminNodes() {
                   <th className="px-4 py-3">Name</th>
                   <th className="px-4 py-3">State</th>
                   <th className="px-4 py-3">Heartbeat</th>
+                  <th className="px-4 py-3">Last seen</th>
+                  <th className="px-4 py-3">Runtime</th>
+                  <th className="px-4 py-3">Version</th>
+                  <th className="px-4 py-3">Address</th>
                   <th className="px-4 py-3">Location</th>
                   <th className="px-4 py-3">Region</th>
                   <th className="px-4 py-3">Memory</th>
@@ -188,6 +218,9 @@ function NodeRow({ node, locations, regions, onClick, onQuick, serverCount }: {
   const location = locations.find((candidate) => candidate.id === node.locationId);
   const region = regions.find((candidate) => candidate.id === node.regionId);
   const ssl = (node.scheme ?? "https") === "https";
+  const runtime = nodeRuntimeSummary(node);
+  const lastSeen = nodeLastSeenLabel(node);
+  const lastSeenTitle = nodeLastSeenTitle(node);
   return (
     <tr className="border-b border-line transition hover:bg-overlay-subtle">
       <td className="px-4 py-3">
@@ -207,6 +240,15 @@ function NodeRow({ node, locations, regions, onClick, onQuick, serverCount }: {
       </td>
       <td className="px-4 py-3 font-mono text-xs capitalize">{actualState}</td>
       <td className="px-4 py-3 font-mono text-xs capitalize text-text-subtle">{heartbeatState}</td>
+      <td className="px-4 py-3 font-mono text-xs text-text-subtle" title={lastSeenTitle ?? undefined}>{lastSeen}</td>
+      <td className="px-4 py-3 font-mono text-xs" title={runtime.detail ?? undefined}>
+        <span className={runtime.mock ? "text-warn" : "text-text"}>{runtime.label}</span>
+      </td>
+      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{node.version ?? "Not reported"}</td>
+      <td className="px-4 py-3 font-mono text-xs text-text-subtle">
+        <div>{node.fqdn || "—"}</div>
+        <div className="text-[11px] text-text-muted">{node.daemonListen ?? 9090}/{node.daemonSftp ?? 2022}</div>
+      </td>
       <td className="px-4 py-3 text-text-subtle">
         {location ? <><div>{location.short}</div><div className="text-xs text-text-muted">{location.long}</div></> : "—"}
       </td>
@@ -373,9 +415,11 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
           ["CPU Threads", <span key="cpu" className="font-mono text-text">{sys?.cpuThreads ?? "—"}</span>],
           ["Docker", <span key="docker" className={cn("font-mono", sys?.dockerAvailable ? "text-ok" : "text-danger")}>{sys?.dockerStatus ?? "unknown"}</span>],
           ["FQDN", <span key="fqdn" className="font-mono text-text">{node?.fqdn ?? "—"}</span>],
-          ["Runtime / scheduler", <span key="rt" className="font-mono text-text">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>],
+          ["Runtime", <span key="rt" className={cn("font-mono", node && nodeRuntimeSummary(node).mock ? "text-warn" : "text-text")} title={node ? nodeRuntimeSummary(node).detail : undefined}>{node ? nodeRuntimeSummary(node).label : "Docker"}</span>],
+          ["Runtime status", <span key="rts" className="font-mono text-text">{node?.runtimeStatus ?? node?.dockerStatus ?? "Not reported"}</span>],
+          ["Heartbeat", <span key="hb" className="font-mono capitalize text-text">{node?.heartbeatState ?? "unknown"}{node?.heartbeatError ? ` · ${node.heartbeatError}` : ""}</span>],
           ["Beacon version", <span key="bv" className="font-mono text-text">{sys?.version ?? node?.version ?? "Not reported"}</span>],
-          ["Last seen", <span key="seen" className="font-mono text-text">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>],
+          ["Last seen", <span key="seen" className="font-mono text-text" title={node ? nodeLastSeenTitle(node) : undefined}>{node ? nodeLastSeenLabel(node) : "Not reported"}</span>],
           ["Labels", <span key="labels" className="font-mono text-xs text-text">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>],
           ["Desired state", <span key="ds" className="font-mono capitalize text-text">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>],
           ["Daemon ports", <span key="ports" className="font-mono text-text">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>],

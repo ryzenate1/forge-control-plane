@@ -115,11 +115,15 @@ export default function AdminTrafficPage() {
   const routesQuery = useQuery({
     queryKey: ["admin", "traffic", "rules"],
     queryFn: async () => unwrapList(await fetchJSON<RouteRule[]>("/admin/traffic/rules")),
+    // Gateway state moves under this page (sync, other operators): poll so a
+    // rule changed elsewhere stops being shown as current.
+    refetchInterval: 30_000,
   });
 
   const policiesQuery = useQuery({
     queryKey: ["admin", "traffic", "policies"],
     queryFn: async () => unwrapList(await fetchJSON<TrafficPolicy[]>("/admin/traffic/policies")),
+    refetchInterval: 30_000,
   });
 
   const routes = useMemo(() => routesQuery.data ?? [], [routesQuery.data]);

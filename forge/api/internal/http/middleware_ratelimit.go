@@ -274,11 +274,17 @@ func getTTL(cfg RateLimitConfig, key string) (time.Duration, error) {
 func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClosedOnRedisError bool) RateLimitConfig {
 	switch endpointType {
 	case "auth":
+		// Generous on purpose: a single sign-in can cost several requests
+		// against this shared per-IP bucket (login + TOTP checkpoint +
+		// session refresh, plus client retries/double-submits), so a tight
+		// budget locks legitimate users out after a couple of tries.
+		// Brute force is still capped by the per-account failure counter
+		// (loginMaxAttempts per loginAttemptWindow in server.go).
 		return RateLimitConfig{
 			Enabled:                true,
 			Redis:                  redis,
 			WindowSeconds:          60,
-			MaxRequests:            5,
+			MaxRequests:            20,
 			KeyPrefix:              "api:auth",
 			FailClosedOnRedisError: failClosedOnRedisError,
 		}

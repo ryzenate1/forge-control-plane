@@ -26,6 +26,7 @@ import {
   AdminTabs, Btn, Card, CardHeader, EmptyState, Pill, cn,
 } from "./admin-ui";
 import { NodeDetailView } from "./AdminNodes";
+import { nodeHeartbeatIso, nodeRuntimeSummary } from "@/lib/admin/node-display";
 import {
   fetchNode, fetchNodeAllocations, fetchNodeCapacity, fetchNodeLifecycle,
   fetchNodeServers, fetchNodeSystemInformation,
@@ -229,6 +230,9 @@ export function BeaconWorkspace() {
   const capacity = capacityQuery.data;
   const sys = sysQuery.data;
   const healthScore = lifecycle?.healthScore;
+  const runtime = nodeRuntimeSummary(node);
+  const heartbeatIso = nodeHeartbeatIso(node);
+  const lastSeenAbsolute = heartbeatIso ? new Date(heartbeatIso).toLocaleString() : undefined;
 
   return (
     <div className="space-y-5">
@@ -236,7 +240,7 @@ export function BeaconWorkspace() {
         title={node.name}
         description={[
           node.fqdn ?? node.baseUrl ?? "—",
-          `Heartbeat ${heartbeatAge(node.lastHeartbeatAt)}`,
+          `Heartbeat ${heartbeatAge(heartbeatIso)}`,
           sys ? `${sys.os} · ${sys.architecture}` : undefined,
           `${actualState}${node.maintenanceMode ? " · Maintenance" : ""}${node.draining ? " · Draining" : ""}`,
         ].filter(Boolean).join("  ·  ")}
@@ -270,6 +274,12 @@ export function BeaconWorkspace() {
         </div>
       ) : null}
 
+      {runtime.mock ? (
+        <div className="rounded-xl border border-amber-500/25 bg-amber-950/20 p-3 text-sm text-amber-200">
+          Mock runtime — {runtime.detail ?? "no container runtime on this host"}. Heartbeats are live; workloads need Docker (or another runtime) installed on the Beacon host.
+        </div>
+      ) : null}
+
       <AdminTabs tabs={[...TABS]} active={tab} onChange={(id) => setTab(id as Tab)} label="Beacon sections" />
 
       {tab === "overview" ? (
@@ -281,13 +291,17 @@ export function BeaconWorkspace() {
                 ["Operating system", sys?.os ?? "—"],
                 ["Architecture", sys?.architecture ?? "—"],
                 ["Kernel", sys?.kernelVersion ?? "—"],
-                ["Daemon version", sys?.version ?? "—"],
-                ["Docker", sys ? `${sys.dockerAvailable ? "Available" : "Unavailable"}${sys.dockerStatus ? ` · ${sys.dockerStatus}` : ""}` : "—"],
+                ["Daemon version", sys?.version ?? node.version ?? "—"],
+                ["Runtime", `${runtime.label}${node.runtimeStatus ? ` (${node.runtimeStatus})` : ""}`],
+                ["Heartbeat", `${node.heartbeatState ?? "unknown"} · ${heartbeatAge(heartbeatIso)}`],
+                ["Last seen", lastSeenAbsolute ?? "Not reported"],
+                ["Docker", sys ? `${sys.dockerAvailable ? "Available" : "Unavailable"}${sys.dockerStatus ? ` · ${sys.dockerStatus}` : ""}` : (node.dockerStatus ?? "—")],
                 ["Uptime", fmtUptime(sys?.daemonUptimeSeconds ?? sys?.uptime)],
                 ["CPU threads", sys?.cpuThreads != null ? String(sys.cpuThreads) : node.cpuCores != null ? String(node.cpuCores) : "—"],
                 ["Memory limit", fmtMiB(node.memoryMb)],
                 ["Disk limit", fmtMiB(node.diskMb)],
                 ["FQDN", node.fqdn ?? "—"],
+                ["Address", `${node.fqdn ?? "—"} :${node.daemonListen ?? 9090}/${node.daemonSftp ?? 2022}`],
                 ["Scheme", (node.scheme ?? "https").toUpperCase()],
                 ["Region", node.region ?? "—"],
               ].map(([label, value]) => (

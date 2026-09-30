@@ -89,10 +89,13 @@ export function AdminDiscovery() {
   const endpointsQuery = useQuery({
     queryKey: ["discovery-endpoints", filterService, filterNodeId, healthyOnly],
     queryFn: () => fetchDiscoveryEndpoints({ service: filterService || undefined, nodeId: filterNodeId || undefined, healthyOnly: healthyOnly || undefined }),
+    // Endpoints self-register via beacon heartbeats every 30s and are reaped
+    // after 3m TTL: a one-shot read goes stale while it is on screen.
+    refetchInterval: 30_000,
   });
-  const servicesQuery = useQuery({ queryKey: ["discovery-services"], queryFn: fetchDiscoveryServices });
-  const visibilityQuery = useQuery({ queryKey: ["discovery-visibility"], queryFn: fetchNetworkVisibility });
-  const reaperQuery = useQuery({ queryKey: ["discovery-reaper"], queryFn: fetchReaperStats });
+  const servicesQuery = useQuery({ queryKey: ["discovery-services"], queryFn: fetchDiscoveryServices, refetchInterval: 30_000 });
+  const visibilityQuery = useQuery({ queryKey: ["discovery-visibility"], queryFn: fetchNetworkVisibility, refetchInterval: 30_000 });
+  const reaperQuery = useQuery({ queryKey: ["discovery-reaper"], queryFn: fetchReaperStats, refetchInterval: 30_000 });
   // Probed only when the tab opens: until the policy routes exist this is a
   // guaranteed 404 and firing it on every visit to /admin/discovery just turns
   // a missing capability into background request noise.

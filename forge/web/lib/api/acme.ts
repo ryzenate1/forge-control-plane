@@ -1,13 +1,34 @@
-import { fetchJSON, postJSON, putJSON, deleteJSON, requestBlob } from './http';
+import { fetchJSON, postJSON, putJSON, deleteJSON, requestBlob, unwrapList, unwrapData } from './http';
+
+// Backend wraps single objects and lists in a `{ data: ... }` envelope
+// (see forge/api/internal/http/handlers_acme_accounts.go,
+// handlers_certificates.go, handlers_certificates_ext.go). Unwrap both the
+// envelope and the legacy bare shape so the admin UI works against the real
+// API instead of rendering an empty list.
+type Envelope<T> = { data: T } | T;
+type ListEnvelope<T> = { data: T[] } | T[];
 
 export interface Certificate {
   id: string;
-  domain: string;
+  domains: string[];
   issuer: string;
-  notBefore: string;
-  notAfter: string;
+  certificate?: string;
+  expiresAt: string;
   autoRenew: boolean;
-  status: string;
+  provider: string;
+  challengeType: string;
+  wildcard: boolean;
+  createdAt: string;
+  updatedAt: string;
+  // Legacy aliases kept for callers written against the pre-envelope shape.
+  /** @deprecated use `domains[0]` */
+  domain?: string;
+  /** @deprecated use `expiresAt` */
+  notAfter?: string;
+  /** @deprecated certificates carry no issued-at; kept for compat */
+  notBefore?: string;
+  /** @deprecated use `provider` */
+  status?: string;
 }
 
 export interface AcmeAccount {
@@ -26,40 +47,44 @@ export interface DNSProviderAccount {
 }
 
 export function listAcmeAccounts(): Promise<AcmeAccount[]> {
-  return fetchJSON<AcmeAccount[]>('/acme/accounts');
+  return fetchJSON<ListEnvelope<AcmeAccount>>('/acme/accounts').then(unwrapList);
 }
 
 export function createAcmeAccount(config: { email: string; caUrl?: string; privateKey?: string }): Promise<AcmeAccount> {
-  return postJSON<AcmeAccount>('/acme/accounts', config);
+  return postJSON<Envelope<AcmeAccount>>('/acme/accounts', config).then(unwrapData);
 }
 
 export function getAcmeAccount(id: string): Promise<AcmeAccount> {
-  return fetchJSON<AcmeAccount>(`/acme/accounts/${encodeURIComponent(id)}`);
+  return fetchJSON<Envelope<AcmeAccount>>(`/acme/accounts/${encodeURIComponent(id)}`).then(unwrapData);
 }
 
 export function updateAcmeAccount(id: string, config: { email?: string; caUrl?: string; isDefault?: boolean }): Promise<AcmeAccount> {
-  return putJSON<AcmeAccount>(`/acme/accounts/${encodeURIComponent(id)}`, config);
+  return putJSON<Envelope<AcmeAccount>>(`/acme/accounts/${encodeURIComponent(id)}`, config).then(unwrapData);
 }
 
 export function deleteAcmeAccount(id: string): Promise<void> {
   return deleteJSON(`/acme/accounts/${encodeURIComponent(id)}`);
 }
 
+export function setDefaultAcmeAccount(id: string): Promise<AcmeAccount> {
+  return updateAcmeAccount(id, { isDefault: true });
+}
+
 export function listDNSAccounts(provider?: string): Promise<DNSProviderAccount[]> {
   const query = provider ? `?provider=${encodeURIComponent(provider)}` : '';
-  return fetchJSON<DNSProviderAccount[]>(`/acme/dns-accounts${query}`);
+  return fetchJSON<ListEnvelope<DNSProviderAccount>>(`/acme/dns-accounts${query}`).then(unwrapList);
 }
 
 export function createDNSAccount(config: { name: string; provider: string; credentials: Record<string, string> }): Promise<DNSProviderAccount> {
-  return postJSON<DNSProviderAccount>('/acme/dns-accounts', config);
+  return postJSON<Envelope<DNSProviderAccount>>('/acme/dns-accounts', config).then(unwrapData);
 }
 
 export function getDNSAccount(id: string): Promise<DNSProviderAccount> {
-  return fetchJSON<DNSProviderAccount>(`/acme/dns-accounts/${encodeURIComponent(id)}`);
+  return fetchJSON<Envelope<DNSProviderAccount>>(`/acme/dns-accounts/${encodeURIComponent(id)}`).then(unwrapData);
 }
 
 export function updateDNSAccount(id: string, config: { name?: string; provider?: string; credentials?: Record<string, string> }): Promise<DNSProviderAccount> {
-  return putJSON<DNSProviderAccount>(`/acme/dns-accounts/${encodeURIComponent(id)}`, config);
+  return putJSON<Envelope<DNSProviderAccount>>(`/acme/dns-accounts/${encodeURIComponent(id)}`, config).then(unwrapData);
 }
 
 export function deleteDNSAccount(id: string): Promise<void> {
@@ -67,7 +92,7 @@ export function deleteDNSAccount(id: string): Promise<void> {
 }
 
 export function uploadCertificate(cert: string, key: string, chain?: string): Promise<Certificate> {
-  return postJSON<Certificate>('/certificates/upload', { certificate: cert, privateKey: key, chain });
+  return postJSON<Envelope<Certificate>>('/certificates/upload', { certificate: cert, privateKey: key, chain }).then(unwrapData);
 }
 
 export function downloadCertificate(id: string): Promise<Blob> {
@@ -75,7 +100,7 @@ export function downloadCertificate(id: string): Promise<Blob> {
 }
 
 export function exportCertificate(id: string): Promise<{ certificate: string; privateKey: string }> {
-  return postJSON<{ certificate: string; privateKey: string }>(`/certificates/${encodeURIComponent(id)}/export`);
+  return postJSON<Envelope<{ certificate: string; privateKey: string }>>(`/certificates/${encodeURIComponent(id)}/export`).then(unwrapData);
 }
 
 // ---- Certificate inventory + ACME issuance (POST /certificates/issue, etc.) ----
@@ -121,4 +146,33 @@ export function deleteCertificate(id: string): Promise<void> {
 
 export function renewCertificate(id: string): Promise<Certificate> {
   return postJSON<{ data: Certificate }>(`/certificates/${encodeURIComponent(id)}/renew`, {}).then((r) => r.data);
+}
+
+// ---- Domain-bound import + attach (POST /certificates with domainId,
+// PUT /domains/:id) ----
+
+export type ImportDomainCertificateRequest = {
+  domainId: string;
+  domains?: string[];
+  certificate: string;
+  privateKey: string;
+  issuer?: string;
+  autoRenew?: boolean;
+};
+
+export function importDomainCertificate(req: ImportDomainCertificateRequest): Promise<Certificate> {
+  return postJSON<Envelope<Certificate>>("/certificates", req).then(unwrapData);
+}
+
+export type AttachLetsEncryptRequest = {
+  certType: "letsencrypt" | "custom" | "none";
+  certData?: string;
+  certKey?: string;
+  autoRenew?: boolean;
+  https?: boolean;
+};
+
+/** Attach (or detach with certType "none") TLS on a proxy domain. PUT /domains/:id */
+export function attachCertificateToDomain(domainId: string, req: AttachLetsEncryptRequest): Promise<unknown> {
+  return putJSON<Envelope<unknown>>(`/domains/${encodeURIComponent(domainId)}`, req).then(unwrapData);
 }

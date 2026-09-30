@@ -68,6 +68,7 @@ export function ProceduresManager() {
   const proceduresQuery = useQuery({
     queryKey: ["procedures"],
     queryFn: () => api.listProcedures(),
+    refetchInterval: 15_000,
   });
   const procedures = useMemo(() => proceduresQuery.data ?? [], [proceduresQuery.data]);
 
@@ -75,6 +76,7 @@ export function ProceduresManager() {
     queryKey: ["procedure-executions", selected?.id],
     queryFn: () => api.listExecutions(selected!.id, 20),
     enabled: Boolean(selected?.id),
+    refetchInterval: 10_000,
   });
   const executions = useMemo(() => executionsQuery.data ?? [], [executionsQuery.data]);
 

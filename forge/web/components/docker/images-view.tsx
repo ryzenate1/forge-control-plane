@@ -86,7 +86,10 @@ export function ImagesView() {
         {imagesQuery.isLoading ? (
           <div className="p-4"><AdminLoadingState label="Loading images…" /></div>
         ) : imagesQuery.isError ? (
-          <div className="p-4 text-sm text-red-400">Failed to load images.</div>
+          <div className="space-y-1 p-4 text-sm">
+            <p className="text-red-400">Images could not be loaded: {imagesQuery.error instanceof Error ? imagesQuery.error.message : "request failed"}. This is a failed read, not an empty host.</p>
+            <p className="text-xs text-slate-500">A node running with DAEMON_ALLOW_MOCK_RUNTIME=true answers every runtime call with “container runtime is unavailable” by design — no image operation can succeed there.</p>
+          </div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Download} message={search ? "No images match your search." : "No images found. Pull an image from a registry."} title={search ? "No results" : "No images"} />
         ) : (

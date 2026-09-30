@@ -91,6 +91,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
 	       COALESCE(n.tags, '[]'),
 	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text,
+	       COALESCE(n.runtime_provider, ''), n.runtime_status,
 	       n.load_average, n.uptime_seconds
 		FROM nodes n
 		LEFT JOIN locations l ON l.id = n.location_id
@@ -134,6 +135,7 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
 			&node.SchedulerType, &schedulerConfig,
+			&node.RuntimeProvider, &node.RuntimeStatus,
 			&node.LoadAverage, &node.UptimeSeconds,
 		); err != nil {
 			return nil, 0, err
@@ -141,6 +143,12 @@ func (s *Store) ListNodesPaginated(ctx context.Context, offset, limit int) ([]No
 		if schedulerConfig.Valid && schedulerConfig.String != "" {
 			raw := json.RawMessage(schedulerConfig.String)
 			node.SchedulerConfig = &raw
+		}
+		// last_seen_at is the persisted heartbeat evidence; the heartbeat
+		// endpoint updates it on every accepted heartbeat, so it doubles as
+		// the last-heartbeat timestamp the API exposes.
+		if node.LastSeenAt != nil {
+			node.LastHeartbeatAt = *node.LastSeenAt
 		}
 		nodes = append(nodes, node)
 	}
@@ -186,7 +194,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 	       COALESCE(n.daemon_sftp_alias, ''), COALESCE(n.daemon_connect, 8080), COALESCE(n.cpu_overallocate, 0),
 	       COALESCE(n.tags, '[]'),
 	       COALESCE(n.scheduler_type, 'docker'), COALESCE(n.scheduler_config, NULL)::text,
-	       COALESCE(n.runtime_provider, ''),
+	       COALESCE(n.runtime_provider, ''), n.runtime_status,
 	       n.load_average, n.uptime_seconds
 	FROM nodes n
 	LEFT JOIN locations l ON l.id = n.location_id
@@ -220,7 +228,7 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 			&node.DaemonSFTPAlias, &node.DaemonConnect, &node.CPUOverallocate,
 			&node.Tags,
 			&node.SchedulerType, &schedulerConfig,
-			&node.RuntimeProvider,
+			&node.RuntimeProvider, &node.RuntimeStatus,
 			&node.LoadAverage, &node.UptimeSeconds,
 		)
 	if err != nil {
@@ -229,6 +237,12 @@ func (s *Store) GetNode(ctx context.Context, nodeID string) (Node, error) {
 	if schedulerConfig.Valid && schedulerConfig.String != "" {
 		raw := json.RawMessage(schedulerConfig.String)
 		node.SchedulerConfig = &raw
+	}
+	// See ListNodesPaginated: expose the persisted heartbeat evidence as the
+	// last-heartbeat timestamp. A node that never reported keeps the zero
+	// time so "never seen" stays distinguishable from "seen".
+	if node.LastSeenAt != nil {
+		node.LastHeartbeatAt = *node.LastSeenAt
 	}
 	if err != nil {
 		return Node{}, err

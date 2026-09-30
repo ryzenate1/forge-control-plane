@@ -2,8 +2,8 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { Shield, Plus, Trash2 } from "lucide-react";
-import { listAcmeAccounts, createAcmeAccount, deleteAcmeAccount, listDNSAccounts } from "@/lib/api/acme";
+import { Shield, Plus, Trash2, Star } from "lucide-react";
+import { listAcmeAccounts, createAcmeAccount, deleteAcmeAccount, setDefaultAcmeAccount, listDNSAccounts, deleteDNSAccount } from "@/lib/api/acme";
 import { AdminPageLayout, SectionHeader, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, Pill, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -27,6 +27,16 @@ export default function AdminAcmePage() {
   const deleteMut = useMutation({
     mutationFn: (id: string) => deleteAcmeAccount(id),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["acme", "accounts"] }); toast({ tone: "success", title: "ACME account deleted" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
+  });
+  const defaultMut = useMutation({
+    mutationFn: (id: string) => setDefaultAcmeAccount(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["acme", "accounts"] }); toast({ tone: "success", title: "Default ACME account set" }); },
+    onError: (e: Error) => toast({ tone: "error", title: "Set default failed", message: e.message }),
+  });
+  const deleteDnsMut = useMutation({
+    mutationFn: (id: string) => deleteDNSAccount(id),
+    onSuccess: () => { qc.invalidateQueries({ queryKey: ["acme", "dns-accounts"] }); toast({ tone: "success", title: "DNS account deleted" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
 
@@ -53,7 +63,7 @@ export default function AdminAcmePage() {
                       <td className="px-4 py-3 text-xs text-text-subtle truncate max-w-[200px]">{a.caUrl}</td>
                       <td className="px-4 py-3">{a.isDefault ? <Pill tone="green">default</Pill> : <Pill>—</Pill>}</td>
                       <td className="px-4 py-3 text-xs text-text-subtle">{a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}</td>
-                      <td className="px-4 py-3 text-right"><Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete ACME account ${a.email}?`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(a.id); })(); }}><Trash2 size={12} /></Btn></td>
+                      <td className="px-4 py-3 text-right"><Btn size="sm" tone="ghost" disabled={a.isDefault || defaultMut.isPending} onClick={() => defaultMut.mutate(a.id)} title="Set as default ACME account"><Star size={12} /></Btn><Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete ACME account ${a.email}?`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(a.id); })(); }}><Trash2 size={12} /></Btn></td>
                     </tr>
                   ))}
                 </tbody>
@@ -72,7 +82,7 @@ export default function AdminAcmePage() {
           : (
             <div className="p-4">
               {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-text-subtle">No DNS accounts yet. Add one from DNS Providers.</p>
-                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-line px-3 py-2 text-xs flex justify-between"><span className="font-mono text-text">{d.name} · {d.provider}</span><span className="text-text-subtle">{new Date(d.createdAt).toLocaleDateString()}</span></div>)}</div>}
+                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-line px-3 py-2 text-xs flex justify-between items-center"><span className="font-mono text-text">{d.name} · {d.provider}</span><span className="flex items-center gap-2"><span className="text-text-subtle">{d.createdAt ? new Date(d.createdAt).toLocaleDateString() : "—"}</span><Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete DNS account ${d.name}?`, danger: true, confirmLabel: "Delete" })) deleteDnsMut.mutate(d.id); })(); }}><Trash2 size={12} /></Btn></span></div>)}</div>}
             </div>
           )}
       </Card>
@@ -82,7 +92,7 @@ export default function AdminAcmePage() {
           <div className="space-y-4">
             <Input label="Email *" value={email} onChange={setEmail} placeholder="admin@example.com" />
             <Input label="CA URL (optional)" value={caUrl} onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" />
-            <p className="text-xs text-text-subtle">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>
+            <p className="text-xs text-text-subtle">Defaults to Let&apos;s Encrypt when no CA URL is given. Use the staging directory (<span className="font-mono">https://acme-staging-v02.api.letsencrypt.org/directory</span>) to validate before switching the account to production.</p>
           </div>
           <ModalFooter onCancel={() => setShowCreate(false)} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create"} disabled={!email || createMut.isPending} />
         </Modal>

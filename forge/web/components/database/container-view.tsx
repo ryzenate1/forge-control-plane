@@ -403,7 +403,7 @@ export function DBContainerView() {
                       {db.containerId ? `${db.containerId.slice(0, 12)}:${db.port}` : "-"}
                     </td>
                     <td className="px-2 py-3 text-meta text-text-subtle">
-                      {db.memoryMb}MB / {db.cpuShares} CPU
+                      {resourcesLabel(db.memoryMb || undefined, db.cpuShares || undefined)}
                     </td>
                     <td className="px-2 py-3">
                       <ContainerActions

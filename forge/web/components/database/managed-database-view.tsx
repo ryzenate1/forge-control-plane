@@ -492,6 +492,7 @@ export function ManagedDatabaseView() {
           saving={updateMut.isPending}
         />
       )}
+      {renderConfirm()}
     </div>
   );
 }
@@ -739,7 +740,7 @@ function ManagedDBCard({
                 {backups.map((b) => (
                   <div key={b.id} className="flex items-center justify-between rounded bg-overlay-subtle px-3 py-2 text-xs">
                     <div className="flex items-center gap-2">
-                      <Pill tone={b.status === "completed" ? "green" : b.status === "failed" ? "red" : "yellow"}>{b.status}</Pill>
+                      <Pill tone={operationTone(b.status)}>{b.status || "not reported"}</Pill>
                       <span className="text-text-subtle">{b.name}</span>
                     </div>
                     <div className="flex items-center gap-2">
@@ -767,13 +768,13 @@ function ManagedDBCard({
                 {restores.map((r) => (
                   <div key={r.id} className="flex items-center justify-between rounded bg-overlay-subtle px-3 py-2 text-xs">
                     <div className="flex items-center gap-2">
-                      <Pill tone={r.status === "completed" ? "green" : r.status === "failed" ? "red" : "yellow"}>{r.status}</Pill>
+                      <Pill tone={operationTone(r.status)}>{r.status || "not reported"}</Pill>
                       <span className="text-text-subtle">{r.id.slice(0,8)}</span>
                       {r.backupId && <span className="text-text-subtle">backup:{r.backupId.slice(0,8)}</span>}
                     </div>
                     <div className="flex items-center gap-2">
-                      {r.errorMessage && <span className="text-danger truncate max-w-[200px]">{r.errorMessage}</span>}
-                      <span className="text-text-muted">{new Date(r.createdAt).toLocaleDateString()}</span>
+                      {r.errorMessage && <span className="text-danger truncate max-w-[200px]" title={r.errorMessage}>{r.errorMessage}</span>}
+                      <span className="text-text-muted">{r.createdAt ? formatDate(r.createdAt, "—") : "—"}</span>
                     </div>
                   </div>
                 ))}

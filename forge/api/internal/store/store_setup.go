@@ -6,7 +6,48 @@ import (
 	"strings"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
+
+// SetupPendingState flags setup-wizard sections that still hold default
+// values after setup completed. It is derived from live state — no extra
+// persistence — so the login page and dashboard can nudge the operator to
+// finish skipped sections later.
+type SetupPendingState struct {
+	Organization bool `json:"organization"`
+	Node         bool `json:"node"`
+	Email        bool `json:"email"`
+}
+
+// GetSetupPendingState reports which wizard sections are still unconfigured.
+// A nil state with a nil error is impossible; a nil state always comes with
+// an error, so callers omit the field rather than claim "all configured"
+// when the database could not be read.
+func (s *Store) GetSetupPendingState(ctx context.Context) (*SetupPendingState, error) {
+	if s.db == nil {
+		return nil, errors.New("no database connection")
+	}
+	var orgs, nodes int
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM organizations`).Scan(&orgs); err != nil {
+		return nil, err
+	}
+	if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM nodes`).Scan(&nodes); err != nil {
+		return nil, err
+	}
+	var smtpHost string
+	err := s.db.QueryRow(ctx, `SELECT COALESCE(smtp_host,'') FROM panel_mail_settings WHERE id = TRUE`).Scan(&smtpHost)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		smtpHost = ""
+	}
+	return &SetupPendingState{
+		Organization: orgs == 0,
+		Node:         nodes == 0,
+		Email:        strings.TrimSpace(smtpHost) == "",
+	}, nil
+}
 
 func (s *Store) HasAnyAdmin(ctx context.Context) (bool, error) {
 	if s.db == nil {

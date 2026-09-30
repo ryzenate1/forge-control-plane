@@ -72,7 +72,10 @@ export function NetworksView() {
         {networksQuery.isLoading ? (
           <div className="p-4"><AdminLoadingState label="Loading networks…" /></div>
         ) : networksQuery.isError ? (
-          <div className="p-4 text-sm text-red-400">Failed to load networks.</div>
+          <div className="space-y-1 p-4 text-sm">
+            <p className="text-red-400">Networks could not be loaded: {networksQuery.error instanceof Error ? networksQuery.error.message : "request failed"}. This is a failed read, not an empty host.</p>
+            <p className="text-xs text-slate-500">A node running with DAEMON_ALLOW_MOCK_RUNTIME=true answers every runtime call with “container runtime is unavailable” by design — no network operation can succeed there.</p>
+          </div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={RefreshCw} message={search ? "No networks match your search." : "No networks found."} title={search ? "No results" : "No networks"} />
         ) : (

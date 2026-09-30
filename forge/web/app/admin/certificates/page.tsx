@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
 import { Shield, Plus, Trash2, RotateCw, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
+import { importDomainCertificate, attachCertificateToDomain } from "@/lib/api/acme";
 import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
@@ -29,6 +30,8 @@ export default function AdminCertificatesPage() {
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
   const [uploadForm, setUploadForm] = useState({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
+  const [showAttachModal, setShowAttachModal] = useState(false);
+  const [attachForm, setAttachForm] = useState({ certId: "", domainId: "", mode: "letsencrypt" as "letsencrypt" | "custom" });
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [issueForm, setIssueForm] = useState({ domains: "", email: "", challengeType: "http-01" as "http-01" | "dns-01", dnsProvider: "" });
 
@@ -44,11 +47,27 @@ export default function AdminCertificatesPage() {
   );
 
   const uploadMutation = useMutation({
-    mutationFn: () => postJSON("/certificates/upload", { certificate: uploadForm.certificate, privateKey: uploadForm.privateKey }),
+    mutationFn: () => {
+      // POST /certificates/upload stores an inventory certificate; POST
+      // /certificates (domainId required) binds an operator certificate to a
+      // proxy domain. The Domain ID field selects between the two so it is
+      // never silently dropped.
+      if (uploadForm.domainId.trim()) {
+        return importDomainCertificate({
+          domainId: uploadForm.domainId.trim(),
+          certificate: uploadForm.certificate,
+          privateKey: uploadForm.privateKey,
+          issuer: uploadForm.issuer || undefined,
+          autoRenew: false,
+        });
+      }
+      return postJSON("/certificates/upload", { certificate: uploadForm.certificate, privateKey: uploadForm.privateKey });
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
       setShowUploadModal(false);
       setUploadForm({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
+      toast({ tone: "success", title: "Certificate uploaded" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to upload certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
@@ -75,13 +94,28 @@ export default function AdminCertificatesPage() {
         ...(issueForm.challengeType === "dns-01" && issueForm.dnsProvider ? { dnsProvider: issueForm.dnsProvider } : {}),
         autoRenew: true,
       });
-    },
-    onSuccess: () => {
+    },    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
       setShowIssueModal(false);
       setIssueForm({ domains: "", email: "", challengeType: "http-01", dnsProvider: "" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to issue certificate", message: err instanceof Error ? err.message : "An error occurred" }),
+  });
+
+  const attachMutation = useMutation({
+    mutationFn: () => {
+      // PUT /domains/:id { certType: "letsencrypt" } provisions via the Caddy
+      // TLS manager; custom PEM binding is done at upload time through POST
+      // /certificates with a domainId (see upload modal).
+      return attachCertificateToDomain(attachForm.domainId.trim(), { certType: "letsencrypt", autoRenew: true, https: true });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
+      setShowAttachModal(false);
+      setAttachForm({ certId: "", domainId: "", mode: "letsencrypt" });
+      toast({ tone: "success", title: "Let's Encrypt enabled on domain" });
+    },
+    onError: (err) => toast({ tone: "error", title: "Failed to attach certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const isExpiring = (expiresAt: string) => {
@@ -103,6 +137,9 @@ export default function AdminCertificatesPage() {
             </Btn>
             <Btn size="sm" tone="ghost" onClick={() => setShowUploadModal(true)}>
               <Plus size={12} /> Upload Certificate
+            </Btn>
+            <Btn size="sm" tone="ghost" onClick={() => setShowAttachModal(true)}>
+              <Shield size={12} /> Attach to Domain
             </Btn>
           </div>
         }
@@ -223,7 +260,7 @@ export default function AdminCertificatesPage() {
       {showUploadModal && (
         <Modal title="Upload Custom Certificate" onClose={() => setShowUploadModal(false)}>
           <div className="space-y-4">
-            <Input label="Domain ID" value={uploadForm.domainId} onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Domain UUID" />
+            <Input label="Domain ID (optional — binds to a proxy domain)" value={uploadForm.domainId} onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Domain UUID (empty = inventory only)" />
             <div>
               <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Certificate (PEM)</label>
               <textarea
@@ -247,12 +284,28 @@ export default function AdminCertificatesPage() {
               <input type="checkbox" checked={uploadForm.autoRenew} onChange={(e) => setUploadForm({ ...uploadForm, autoRenew: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
               Auto-renew (Caddy managed)
             </label>
+            <p className="text-xs text-text-subtle">With a Domain ID the PEM is imported and bound to that proxy domain (POST /certificates). Without one it is stored as inventory (POST /certificates/upload). Imported certificates are never auto-renewed via ACME.</p>
           </div>
           <ModalFooter
             onCancel={() => setShowUploadModal(false)}
             onConfirm={() => uploadMutation.mutate()}
             confirmLabel={uploadMutation.isPending ? "Uploading..." : "Upload"}
-            disabled={uploadMutation.isPending || !uploadForm.domainId || !uploadForm.certificate}
+            disabled={uploadMutation.isPending || !uploadForm.certificate || !uploadForm.privateKey}
+          />
+        </Modal>
+      )}
+
+      {showAttachModal && (
+        <Modal title="Attach Let's Encrypt to Domain" onClose={() => setShowAttachModal(false)}>
+          <div className="space-y-4">
+            <Input label="Proxy Domain ID" value={attachForm.domainId} onChange={(v) => setAttachForm({ ...attachForm, domainId: v })} placeholder="Domain UUID from /admin/domains" />
+            <p className="text-xs text-slate-400">Sets PUT /domains/:id {"{ certType: \"letsencrypt\", autoRenew: true }"} so the Caddy gateway provisions and renews the certificate for that hostname. The hostname must already resolve to this panel and ports 80/443 must be reachable.</p>
+          </div>
+          <ModalFooter
+            onCancel={() => setShowAttachModal(false)}
+            onConfirm={() => attachMutation.mutate()}
+            confirmLabel={attachMutation.isPending ? "Attaching..." : "Attach"}
+            disabled={attachMutation.isPending || !attachForm.domainId.trim()}
           />
         </Modal>
       )}

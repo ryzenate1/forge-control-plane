@@ -285,8 +285,9 @@ export_env() {
     export API_ADDR=":${API_PORT}"
     export APP_ENV=development
     export APP_CIPHER=AES-256-GCM
-    # Seeds the demo admin and pairs the demo node with DAEMON_NODE_TOKEN so
-    export API_SEED_DEMO=true
+    # Demo seeding is disabled: first boot goes through /setup to create a
+    # real admin, and every node/server is user-created (no Ubuntu Demo Node).
+    export API_SEED_DEMO=false
     export REDIS_ADDR="127.0.0.1:${REDIS_PORT}"
     # Only export a Redis password when one is actually configured (local
     # Homebrew Redis ships with no password; sending a default "gamepanel"
