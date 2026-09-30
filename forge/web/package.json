@@ -24,37 +24,38 @@
     "@xterm/xterm": "^5.5.0",
     "clsx": "^2.1.1",
     "lucide-react": "^0.468.0",
-    "next": "^15.5.22",
+    "monaco-editor": "^0.57.0",
+    "next": "^15.5.26",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "recharts": "^2.15.0",
-    "sharp": "^0.35.3",
+    "sharp": "^0.35.5",
     "tailwind-merge": "^3.6.0",
     "zustand": "^5.0.2"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.1",
     "@playwright/test": "^1.62.1",
-    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/jest-dom": "^7.0.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@types/node": "^22.10.2",
     "@types/react": "^19.0.2",
     "@types/react-dom": "^19.0.2",
-    "@vitest/coverage-v8": "^3.2.7",
+    "@vitest/coverage-v8": "^5.0.2",
     "autoprefixer": "^10.4.20",
     "eslint": "^9.39.5",
-    "eslint-config-next": "^15.5.22",
+    "eslint-config-next": "^15.5.26",
     "eslint-plugin-jsx-a11y": "^6.10.2",
     "jsdom": "^26.1.0",
-    "postcss": "^8.4.49",
+    "postcss": "^8.5.28",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vitest": "^3.2.7"
+    "vitest": "^5.0.2"
   },
   "overrides": {
-    "dompurify": "^3.4.12",
-    "postcss": "^8.5.22",
-    "sharp": "^0.35.3"
+    "dompurify": "^3.4.13",
+    "postcss": "^8.5.23",
+    "sharp": "^0.35.4"
   }
 }
