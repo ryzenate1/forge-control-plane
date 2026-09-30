@@ -1,11 +1,10 @@
 <div align="center">
 
-# ⚔️ Forge Plane
+# Forge Control Plane
 
-### Forge Control Plane · Beacon Node Agent
+### Self-hosted game-server and application control plane
 
-A modern, self-hosted game-server control plane built with Go, Next.js,
-PostgreSQL, Redis, and Docker.
+**Forge decides what should happen. Beacon — the per-host agent — makes it happen on the machine.**
 
 [![Status](https://img.shields.io/badge/status-active_development-22c55e?style=for-the-badge)](#project-status)
 [![Go](https://img.shields.io/badge/Go-1.26-00ADD8?style=for-the-badge&logo=go&logoColor=white)](https://go.dev/)
@@ -16,51 +15,129 @@ PostgreSQL, Redis, and Docker.
 
 [Quick start](#quick-start-for-development) ·
 [Ubuntu deployment](#production-deployment-on-ubuntu) ·
-[Documentation](#documentation) ·
+[Screenshots](#product-tour) ·
 [Architecture](#architecture) ·
+[Documentation](#documentation) ·
 [Testing](#testing-and-quality-checks)
+
+![Forge overview dashboard — live fleet state, allocation and health](images/overview-dashboard.png)
 
 </div>
 
 ---
 
-## What is Forge Plane?
+## What is Forge?
 
-Forge Plane manages game servers across one or more Linux machines. The **Forge**
-control plane provides the web dashboard, API, scheduling, placement, recovery,
-and administration features. A **Beacon** agent runs on each game node and
-controls its Docker workloads, files, console, backups, networking, and SFTP.
+Forge manages game servers **and** general application workloads across one or
+more machines. The **Forge** control plane provides the web dashboard, API,
+scheduling, placement, recovery and administration. A **Beacon** agent runs on
+each host and controls its Docker workloads, files, console, backups,
+networking and SFTP.
 
-It can begin as an all-in-one Ubuntu VPS and grow into a multi-node deployment
-with planned evacuation, shared S3-compatible backups, recovery, AWS EC2 node
-bootstrap, and TCP/UDP load balancing.
+It starts as an all-in-one VPS and grows into a multi-node deployment with
+planned evacuation, shared S3-compatible backups, offline recovery, AWS EC2
+node bootstrap and TCP/UDP load balancing.
 
 > [!IMPORTANT]
 > The recommended production runtime is Docker on Ubuntu. Kubernetes,
-> containerd, and Firecracker adapters exist in the codebase, but the documented
-> and verified deployment path in this repository is Docker Compose plus Beacon.
+> containerd and Firecracker adapters exist in the codebase, but the documented
+> and verified production path in this repository is Docker Compose plus Beacon.
 
 ## Highlights
 
 | Area | Included capabilities |
 |---|---|
-| 🎮 Game management | Server lifecycle, console, files, SFTP, schedules, databases, mounts, eggs and startup variables |
-| 🌐 Networking | TCP and UDP allocations, container-port remapping, real L4 TCP/UDP target groups and draining |
-| 🧭 Orchestration | Placement, reservations, migrations, evacuation, recovery, reconciliation and failover policies |
-| 💾 Backups | Local and S3-compatible game backups, verification, retention and PostgreSQL dumps |
+| 🎮 Game management | Server lifecycle, live console, files, SFTP, schedules, databases, mounts, eggs and startup variables |
+| 📦 App hosting | Service catalog (PostgreSQL, MySQL, Redis…), app store templates, Compose projects, preview environments |
+| 🌐 Networking | Custom domains with DNS verification, ACME TLS, TCP/UDP allocations, load-balancer target groups and draining |
+| 🔁 GitOps | Git providers, credentials, repository sources, webhooks, pipelines and source deployments |
+| 🧭 Orchestration | Placement with scoring and spread, reservations, migrations, evacuation, recovery, reconciliation and failover |
+| 💾 Backups | Local and S3-compatible backups with verification, retention schedules and PostgreSQL dumps |
 | 🔐 Security | First-run setup, sessions, API keys, roles/scopes, TOTP, WebAuthn, rate limits and encryption at rest |
 | ☁️ Cloud | AWS EC2 provisioning with automatic Beacon cloud-init bootstrap |
 | 📈 Operations | Health endpoints, Prometheus, Grafana, Alertmanager, activity logs and audit events |
-| 🌍 Interface | Responsive Next.js dashboard and translations for eight languages |
+| 🌍 Interface | Responsive Next.js dashboard with light and dark themes, translations for eight languages |
+
+## Product tour
+
+### Fleet overview
+
+Live state, allocation trends and health across every node and workload — CPU,
+memory and storage allocation, system health, recent activity.
+
+![Fleet overview with allocation charts and health](images/overview-dashboard.png)
+
+### Server management
+
+Inspect live state and manage a workload: start/stop/restart, open console,
+build configuration, startup, allocations, database, mounts — with live
+CPU/memory/disk/network telemetry and desired-vs-actual state.
+
+![Server details dialog with live telemetry](images/server-details-dialog.png)
+
+### Monitoring
+
+Allocation trends across nodes and workloads with honest empty states: an
+unreported reading is never rendered as healthy — missing history reads as
+missing, not as zero.
+
+![Monitoring with allocation trends and system health](images/overview-monitoring.png)
+
+### Git integrations
+
+Connect GitHub, GitLab or Bitbucket: credentials → provider → repository
+sources → webhook auto-deploy, managed in one place.
+
+![Git integrations with credentials and providers](images/deploy-git-integrations.png)
+
+### Service catalog
+
+Provision supported databases, caches, queues and storage services with
+versions, defaults and one-click provisioning.
+
+![Service catalog with database cards](images/workloads-service-catalog.png)
+
+### Domains and TLS
+
+Custom domains with DNS verification and TLS status, alongside DNS providers,
+certificates, ACME accounts and security headers.
+
+![Domain management](images/networking-domains.png)
+
+### Node inspection
+
+Per-Beacon system identity, capacity, hardware, firewall, terminal and
+maintenance — with an explicit health score.
+
+![Node detail with capacity and system identity](images/infra-node-detail.png)
+
+### Operations and recovery
+
+Preview evacuation capacity, save explicit plans, then migrate or recover
+workloads. Recovery restores verified backup data without moving ownership.
+
+![Operations with migration and evacuation planning](images/operations-evacuation.png)
+
+### Access and environments
+
+Organizations, projects and color-coded environments with per-environment
+variables, roles, API keys, OAuth clients and Vault integration.
+
+![Environment creation with organization and project scoping](images/access-environments.png)
 
 ## Architecture
+
+Forge is the authority for state, auth and orchestration. Panel → Beacon
+traffic is **HTTP** via an internal daemon client; WebSockets carry
+console/stats/log **streams only, never commands**. Beacon authenticates over
+`/api/remote` with node credentials, not user sessions.
 
 ```mermaid
 flowchart LR
     Player["Players<br/>TCP / UDP"]
     Browser["Browser"]
-    Proxy["Nginx + TLS"]
-    Web["Forge Web<br/>Next.js"]
+    Proxy["Caddy + TLS"]
+    Web["Forge Web<br/>Next.js 15"]
     API["Forge API<br/>Go + Fiber"]
     DB[("PostgreSQL")]
     Cache[("Redis")]
@@ -89,11 +166,12 @@ flowchart LR
 | Component | Location | Purpose |
 |---|---|---|
 | Forge API | [`forge/api/`](./forge/api/) | REST API, authentication, persistence and orchestration |
-| Forge Web | [`forge/web/`](./forge/web/) | User and administrator dashboard |
-| Beacon | [`beacon/`](./beacon/) | Per-node Docker, filesystem, console, backup and SFTP agent |
-| Infrastructure | [`infra/`](./infra/) | Compose, Nginx, monitoring, bootstrap and backup configuration |
-| Shared packages | [`packages/`](./packages/) | TypeScript SDK, API types and UI primitives |
-| Documentation | [`docs/`](./docs/) | Architecture, operations, API, development and historical audits |
+| Forge Web | [`forge/web/`](./forge/web/) | Operator and administrator dashboard |
+| Beacon | [`beacon/`](./beacon/) | Per-host Docker, filesystem, console, backup and SFTP agent |
+| Infrastructure | [`infra/`](./infra/) | Compose, Caddy, monitoring, bootstrap and backup configuration |
+| Shared packages | [`packages/`](./packages/) | TypeScript SDK, API types, UI primitives, game templates |
+| Translations | [`lang/`](./lang/) | Translation catalogs for eight locales |
+| Documentation | [`docs/`](./docs/) | Architecture, operations and development docs |
 
 ## Choose your installation
 
@@ -136,8 +214,8 @@ OpenSSL.
 | Ubuntu | 20.04 LTS (Focal) | amd64 | 24.0+ | Untested |
 | Debian | 11 (Bullseye) | amd64 | 24.0+ | Untested |
 
-The installer (`scripts/install.sh`) auto-detects OS, architecture, Docker
-version, available ports, and system resources before beginning. Use
+The installer (`scripts/install/install.sh`) auto-detects OS, architecture,
+Docker version, available ports, and system resources before beginning. Use
 `--skip-checks` to bypass on untested platforms.
 
 ### For an Ubuntu production host
@@ -157,15 +235,15 @@ version, available ports, and system resources before beginning. Use
 | Beacon game node | Determined by the games; reserve at least 1 GiB RAM for the OS and Beacon |
 
 Game workloads consume most of the memory and storage. Size nodes for peak
-player load, backups, world growth, and container image cache—not only idle use.
+player load, backups, world growth, and container image cache — not only idle use.
 
 ## Quick start for development
 
 ### 1. Download the source and dependencies
 
 ```bash
-git clone https://github.com/your-org/forge-plane.git
-cd forge-plane
+git clone https://github.com/ryzenate1/forge-control-plane.git
+cd forge-control-plane
 npm ci
 go work sync
 ```
@@ -188,11 +266,8 @@ npm run dev:logs     # follow development logs
 npm run dev:stop     # stop managed development processes
 ```
 
-If PostgreSQL and Redis already run locally, use:
-
-```bash
-./start-dev.sh --native
-```
+On macOS you can also use `./native.sh start|stop|restart|status|logs`,
+which runs Postgres and Redis as Homebrew services with logs under `.dev-logs/`.
 
 ### Local service addresses
 
@@ -201,8 +276,7 @@ If PostgreSQL and Redis already run locally, use:
 | Web dashboard | `http://localhost:3000` |
 | First-run setup | `http://localhost:3000/setup` |
 | Forge API | `http://localhost:8080/api/v1` |
-| API health | `http://localhost:8080/api/v1/health/ready` |
-| Swagger UI | `http://localhost:8080/api/docs` |
+| API docs | `http://localhost:8080/api/docs` |
 | Beacon health | `http://localhost:9090/health` |
 | Beacon SFTP | `localhost:2022` |
 | PostgreSQL | `localhost:5432` |
@@ -216,8 +290,8 @@ load-balancer, evacuation and recovery instructions are in this section.
 The short version is:
 
 ```bash
-git clone https://github.com/your-org/forge-plane.git
-cd forge-plane/infra
+git clone https://github.com/ryzenate1/forge-control-plane.git
+cd forge-control-plane/infra
 
 # Generates API, database, encryption, node and Grafana secrets.
 PANEL_DOMAIN=panel.example.com ./gen-env.sh .env
@@ -252,7 +326,7 @@ docker compose \
 ```
 
 Production Compose keeps PostgreSQL, Redis, Forge Web, Forge API, Beacon API,
-Prometheus, Grafana, and Alertmanager private or loopback-only. Nginx terminates
+Prometheus, Grafana, and Alertmanager private or loopback-only. Caddy terminates
 public HTTPS. Only explicitly selected SFTP, game, and load-balancer ports
 should be exposed.
 
@@ -282,7 +356,7 @@ Create another node in the panel, copy its UUID and credential into a
 node-specific `infra/.env` on the additional Ubuntu host, then run:
 
 ```bash
-cd forge-plane/infra
+cd forge-control-plane/infra
 ./bootstrap-beacon.sh
 curl --fail http://127.0.0.1:9090/health
 ```
@@ -337,16 +411,14 @@ the same control-plane host.
 Before submitting or deploying a change:
 
 ```bash
-npm run lint
-npm run typecheck
-npm test
-npm run build
+make build            # Go builds for both modules + Next.js build
+make test             # Go tests with -race for both modules + frontend tests
+make lint             # repository lint checks
 
-(cd forge/api && go test ./... && go vet ./...)
-(cd beacon && go test ./... && go vet ./...)
+go test -race ./...   # per Go module: cd forge/api or cd beacon
 ```
 
-Or use the Makefile:
+Or target a single area:
 
 | Command | Action |
 |---|---|
@@ -357,25 +429,28 @@ Or use the Makefile:
 | `make api-test` | Run Forge API tests only |
 | `make beacon-test` | Run Beacon tests only |
 | `make web-test` | Run frontend tests only |
-| `make clean` | Remove generated build artifacts |
 
-CI definitions are under [`.github/workflows/`](./.github/workflows/). The API
-migration validation workflow starts a fresh PostgreSQL database and verifies
-that every SQL migration is recorded.
+Frontend checks run from `forge/web`: `npx tsc --noEmit`, `npx eslint .`,
+`npx vitest run`. CI definitions are under
+[`.github/workflows/`](./.github/workflows/). The API migration validation
+workflow starts a fresh PostgreSQL database and verifies that every SQL
+migration is recorded.
 
 ## Repository layout
 
 ```text
-forge-plane/
+forge-control-plane/
 ├── forge/
 │   ├── api/                 # Go control-plane API and SQL migrations
 │   └── web/                 # Next.js dashboard
 ├── beacon/                  # Go node agent
-├── infra/                   # Compose, Nginx, monitoring and bootstraps
+├── images/                  # Product screenshots used by this README
+├── infra/                   # Compose, Caddy, monitoring and bootstraps
 ├── packages/
 │   ├── sdk/                 # TypeScript API SDK
 │   ├── shared-types/        # Shared contracts
-│   └── ui/                  # Shared UI primitives
+│   ├── ui/                  # Shared UI primitives
+│   └── game-templates/      # Game server templates
 ├── lang/                    # Translation catalogs
 ├── docs/                    # Maintainer and operator documentation
 ├── scripts/                 # Development, validation and operations helpers
@@ -400,11 +475,6 @@ forge-plane/
 | [OpenAPI specification](./forge/api/docs/openapi.json) | Machine-readable API schema |
 | [Server lifecycle](./forge/api/docs/server-lifecycle.md) | Provisioning and runtime lifecycle |
 | [Encryption at rest](./forge/api/docs/encryption-at-rest.md) | Master-key management and rotation |
-| [Docker Compose audit](./docs/audits/docker-compose-audit.md) | Historical infrastructure audit |
-
-Historical audits and research are preserved in `docs/audits/`. For current
-deployment instructions, prefer the
-[Production deployment](#production-deployment-on-ubuntu) section.
 
 ## Security checklist
 
@@ -433,7 +503,7 @@ of publishing credentials or exploit details in a public issue.
 | Game port is unreachable | Check allocation protocol, container port, Docker publishing, VPS firewall and provider security group |
 | Recovery has no target | Bring a second Beacon online, add capacity/allocations and verify a shared backup exists |
 | Load-balancer group does not listen | Enable it, choose a port inside the reserved range and ensure the port is not already allocated |
-| Web UI cannot reach API | Verify Nginx routing and `NEXT_PUBLIC_API_URL` for source builds |
+| Web UI cannot reach API | Verify Caddy routing and `NEXT_PUBLIC_API_URL` for source builds |
 
 Useful commands:
 
@@ -449,7 +519,7 @@ docker compose -f compose.yml -f compose.production.yml --env-file .env logs --t
 
 ## Project status
 
-Forge Plane is under active development. The Docker Compose production path,
+Forge is under active development. The Docker Compose production path,
 TCP/UDP allocations, integrated L4 proxy, multi-node evacuation, shared-backup
 recovery, and AWS Beacon bootstrap are implemented. Operators should still use
 staged upgrades, off-host backups, monitoring, and recovery drills before
@@ -467,14 +537,13 @@ hosting critical workloads.
 ## License
 
 This repository is proprietary software. All rights are reserved unless the
-repository owner provides a separate license. Material under `reference/` keeps
-the licensing terms of its respective upstream project.
+repository owner provides a separate license.
 
 ---
 
 <div align="center">
 
-Made with ❤️ by **Riyaz**
+Made with ❤️ by **Riyaz Akthar**
 
 <sub>Go · Next.js · React · TypeScript · PostgreSQL · Redis · Docker</sub>
 
