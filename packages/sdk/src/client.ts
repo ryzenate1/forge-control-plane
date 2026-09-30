@@ -183,13 +183,14 @@ export function unwrapSingleData<T>(value: { data: T } | T | undefined | null): 
 /** Body accepted by `POST /setup` (initial panel setup). Alias of `ApiSetupRequest` from `@forge/shared-types` (only `email` and `password` are required). */
 export type SetupRequest = import('@forge/shared-types').ApiSetupRequest;
 
-/** Response of `POST /setup`. */
+/** Response of `POST /setup`. `skippedSteps` echoes the normalized skip list. */
 export type SetupResponse = {
   ok: boolean;
   userId: string;
   email: string;
   nodeId?: string;
   nodeToken?: string;
+  skippedSteps?: string[];
 };
 
 /** Body accepted by `POST /auth/login/checkpoint` (2FA step of session login). */

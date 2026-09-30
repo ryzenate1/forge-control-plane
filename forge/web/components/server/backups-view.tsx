@@ -11,11 +11,16 @@ import { formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
-export function formatBackupBytes(value: number) {
-  if (!Number.isFinite(value) || value < 0) return "Unknown size";
-  if (value < 1024) return `${value} Bytes`;
-  if (value < 1024 * 1024) return `${(value / 1024).toFixed(value > 100000 ? 0 : 2)} kB`;
-  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+export function formatBackupBytes(value: number | null | undefined, opts?: { completed?: boolean }) {
+  // The API omits size until the upload lands. Rendering that absence as
+  // "0 Bytes" claims an empty backup the daemon never measured.
+  if (value === null || value === undefined) return "Not reported";
+  if (!Number.isFinite(value) || (value as number) < 0) return "Unknown size";
+  if ((value as number) === 0) return opts?.completed ? "0 Bytes" : "Not reported";
+  const n = value as number;
+  if (n < 1024) return `${n} Bytes`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n > 100000 ? 0 : 2)} kB`;
+  return `${(n / 1024 / 1024).toFixed(2)} MB`;
 }
 
 function isUsable(backup: ApiBackup) {
@@ -133,7 +138,7 @@ export function BackupsView({ server }: { server?: ApiServer }) {
               <Archive size={20} />
               <div>
                 <p className="text-base font-semibold text-text">{backup.name}</p>
-                <p className="mt-1 text-xs"><span className="uppercase">{backup.status || "unknown"}</span> · {backup.size == null ? "Unknown size" : formatBackupBytes(backup.size)}</p>
+                <p className="mt-1 text-xs"><span className="uppercase">{backup.status || "unknown"}</span> · {formatBackupBytes(backup.size, { completed: usable })}</p>
                 <p className="mt-1 break-all font-mono text-xs text-[var(--text-muted)]">{backup.checksum ? `Checksum: ${backup.checksum}` : "Checksum not available"}</p>
                 {verification ? <p className="mt-1 text-xs font-semibold text-[var(--text-muted)]">{verification.verified ? `Verified against node copy · checksum match: ${verification.checksumMatch ? "yes" : "panel copy only"}` : "Node copy missing or checksum mismatch"}</p> : null}
               </div>

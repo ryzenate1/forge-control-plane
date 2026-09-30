@@ -210,6 +210,9 @@ export function AdminReconciliation() {
   const events = useQuery({
     queryKey: ["reconcile-events"],
     queryFn: () => fetchReconcileEvents(undefined, 20),
+    // Plans and the summary already poll above; without this the event feed
+    // froze at first paint while its neighbours kept ticking.
+    refetchInterval: 15_000,
   });
 
   const triggerMut = useMutation({

@@ -44,6 +44,9 @@ export function AdminFirewall() {
     queryKey: ["firewall-status", activeNodeId],
     queryFn: () => fetchFirewallStatus(activeNodeId),
     enabled: !!activeNodeId,
+    // Rules can change outside this page (discovery policy sync, other
+    // operators): re-read on an interval so enable/disable stops lying.
+    refetchInterval: 30_000,
   });
   const status = statusQuery.data;
   const statusLoading = statusQuery.isLoading;
@@ -53,6 +56,7 @@ export function AdminFirewall() {
     queryKey: ["firewall-rules", activeNodeId],
     queryFn: () => fetchFirewallRules(activeNodeId),
     enabled: !!activeNodeId,
+    refetchInterval: 30_000,
   });
   const rules = useMemo(() => rulesQuery.data ?? [], [rulesQuery.data]);
 
@@ -60,6 +64,7 @@ export function AdminFirewall() {
     queryKey: ["firewall-forwards", activeNodeId],
     queryFn: () => fetchPortForwards(activeNodeId),
     enabled: !!activeNodeId,
+    refetchInterval: 30_000,
   });
   const forwards = useMemo(() => forwardsQuery.data ?? [], [forwardsQuery.data]);
 

@@ -31,7 +31,7 @@ export default function AdminDatabaseServicesRedirect() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader />
+      <SectionHeader title="Database Services" sub="Opening Database Services inside Databases…" />
       <AdminLoadingState label="Opening Database Services inside Databases…" />
     </AdminPageLayout>
   );

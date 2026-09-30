@@ -13,6 +13,7 @@ import { useServerStore } from "@/stores/use-server-store";
 import { useTenancyStore } from "@/stores/use-tenancy-store";
 import { useBranding } from "@/components/branding";
 import { Alert, Badge, Button, Card, CopyButton, Dialog, EmptyState, Field, Input, Textarea } from "@/components/ui/primitives";
+import { PasswordRequirements, firstPasswordError, isPasswordValid } from "@/components/ui/password-requirements";
 import { ScopePicker } from "@/components/ui/scope-picker";
 import { FullPageSpinner, Skeleton } from "@/components/ui/loading-skeleton";
 import { useToast } from "@/components/ui/toast";
@@ -46,9 +47,11 @@ function PasswordCard() {
     },
     onError: (caught) => setError(errorMessage(caught, "Password change failed.")),
   });
-  const mismatch = Boolean(confirm && next !== confirm); const invalid = !current || next.length < 8 || next === current || next !== confirm;
+  const mismatch = Boolean(confirm && next !== confirm);
+  const policyError = next ? firstPasswordError(next) : null;
+  const invalid = !current || !isPasswordValid(next) || next === current || next !== confirm;
   return <Card description="Changing your password invalidates your local session." icon={<LockKeyhole className="h-5 w-5" />} title="Password">
-    <div className="grid gap-4 lg:grid-cols-3"><Field id="current-password" label="Current password"><Input autoComplete="current-password" id="current-password" onChange={(event) => setCurrent(event.target.value)} type="password" value={current} /></Field><Field hint="At least 8 characters and different from your current password." id="account-new-password" label="New password"><Input autoComplete="new-password" id="account-new-password" minLength={8} onChange={(event) => setNext(event.target.value)} type="password" value={next} /></Field><Field error={mismatch ? "Passwords do not match." : undefined} id="account-confirm-password" label="Confirm new password"><Input autoComplete="new-password" id="account-confirm-password" invalid={mismatch} minLength={8} onChange={(event) => setConfirm(event.target.value)} type="password" value={confirm} /></Field></div>
+    <div className="grid gap-4 lg:grid-cols-3"><Field id="current-password" label="Current password"><Input autoComplete="current-password" id="current-password" onChange={(event) => setCurrent(event.target.value)} type="password" value={current} /></Field><Field error={policyError ?? undefined} hint="Must meet all requirements below and be different from your current password." id="account-new-password" label="New password"><Input autoComplete="new-password" id="account-new-password" invalid={Boolean(policyError)} minLength={12} onChange={(event) => setNext(event.target.value)} type="password" value={next} /><PasswordRequirements password={next} /></Field><Field error={mismatch ? "Passwords do not match." : undefined} id="account-confirm-password" label="Confirm new password"><Input autoComplete="new-password" id="account-confirm-password" invalid={mismatch} minLength={12} onChange={(event) => setConfirm(event.target.value)} type="password" value={confirm} /></Field></div>
     {error ? <Alert className="mt-4" tone="error">{error}</Alert> : null}<div className="mt-5 flex flex-col items-start justify-between gap-3 border-t border-white/[0.07] pt-5 sm:flex-row sm:items-center"><p className="text-xs leading-5 text-slate-500">You will be returned to sign in after this change.</p><Button disabled={invalid} loading={mutation.isPending} onClick={() => { setError(""); mutation.mutate(); }}>Change Password</Button></div>
   </Card>;
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { AlertTriangle, RefreshCw, Trash2, Database, Layers } from "lucide-react";
+import { AlertTriangle, RefreshCw, Trash2, Database, Layers, Clock } from "lucide-react";
 import { inspectCleanup, runCleanup } from "@/lib/api/cleanup";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
@@ -60,6 +60,12 @@ export function AdminCleanup() {
 
   const countPhrase = (value: number | undefined, noun: string) =>
     typeof value === "number" ? `${value} ${noun}` : `an unknown number of ${noun}`;
+  // The inspect endpoint reports counts only — it carries no timestamp, so the
+  // "last" moment this page can honestly name is its own last successful read,
+  // not a server-side run time. dataUpdatedAt is 0 until the first success.
+  const lastReadLabel = inspectQ.dataUpdatedAt
+    ? new Date(inspectQ.dataUpdatedAt).toLocaleTimeString()
+    : "—";
 
   return (
     <AdminPageLayout>
@@ -114,6 +120,7 @@ export function AdminCleanup() {
               { label: "Stale reservations", value: readout(stale), icon: AlertTriangle, tone: stale === undefined ? "unknown" : stale > 0 ? "yellow" : "neutral" },
               { label: "Orphaned allocations", value: readout(orphaned), icon: Layers, tone: orphaned === undefined ? "unknown" : orphaned > 0 ? "red" : "neutral" },
               { label: "Total stale", value: readout(totalStale), icon: Database, tone: totalStale === undefined ? "unknown" : totalStale > 0 ? "yellow" : "green" },
+              { label: "Last read", value: lastReadLabel, icon: Clock, tone: "neutral" },
             ]}
           />
 

@@ -60,15 +60,15 @@ func TestGetRateLimitForEndpointCarriesFailClosedFlag(t *testing.T) {
 	if !cfg.FailClosedOnRedisError {
 		t.Fatal("expected auth limiter to carry fail-closed flag")
 	}
-	if cfg.MaxRequests != 5 {
-		t.Fatalf("expected auth max requests 5, got %d", cfg.MaxRequests)
+	if cfg.MaxRequests != 20 {
+		t.Fatalf("expected auth max requests 20, got %d", cfg.MaxRequests)
 	}
 }
 
 func TestGetRateLimitForEndpointUsesDistinctKeyPrefixes(t *testing.T) {
 	// Every limiter tier shares the key shape "<prefix>:ratelimit:<clientIP>".
 	// If two tiers share a prefix they share one Redis counter, so reads burn
-	// the login budget (5/min) and mutations inherit read traffic: a user who
+	// the login budget (20/min) and mutations inherit read traffic: a user who
 	// browses a few pages can no longer log in, and parallel smoke tracks
 	// permanently 429 each other on loopback. Distinct prefixes keep each
 	// tier's budget independent.

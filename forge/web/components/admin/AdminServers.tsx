@@ -194,6 +194,7 @@ export function AdminServers() {
         // ("Game Servers" / "Game server instances and their lifecycle" /
         // GamepadIcon). A hand-passed "Servers" here disagreed with the sidebar
         // row and the breadcrumb tail — three strings, one source.
+        title="Game servers"
         info={{
           title: "Game servers",
           eyebrow: "Architecture & Semantics",

@@ -334,6 +334,16 @@ func loginRateLimitKey(prefix, value string) string {
 	return "login:" + prefix + ":" + hex.EncodeToString(sum[:])
 }
 
+// Login brute-force guard: per-account attempt counting with a short lockout.
+// Generous on purpose — a legitimate user mistyping a few times must not be
+// locked out, while automated guessing is still capped. The auth-tier request
+// limiter (see GetRateLimitForEndpoint) sits in front of this and counts every
+// request, so this failure counter is the binding constraint on guessing.
+const (
+	loginMaxAttempts   = 10
+	loginAttemptWindow = 5 * time.Minute
+)
+
 var (
 	inMemLoginMu    sync.Mutex
 	inMemLoginCount = map[string]int{}
@@ -388,7 +398,7 @@ func checkLoginRateLimit(ctx context.Context, cfg Config, c *fiber.Ctx, email st
 	if cfg.Redis != nil && cfg.RedisEnabled {
 		for _, key := range keys {
 			count, err := cfg.Redis.Get(ctx, key).Int()
-			if err == nil && count >= 5 {
+			if err == nil && count >= loginMaxAttempts {
 				return fiber.NewError(fiber.StatusTooManyRequests, "too many login attempts; try again later")
 			}
 			if err != nil && err != redis.Nil {
@@ -401,7 +411,7 @@ func checkLoginRateLimit(ctx context.Context, cfg Config, c *fiber.Ctx, email st
 	inMemLoginMu.Lock()
 	defer inMemLoginMu.Unlock()
 	for _, key := range keys {
-		if count, ok := inMemLoginCount[key]; ok && count >= 5 {
+		if count, ok := inMemLoginCount[key]; ok && count >= loginMaxAttempts {
 			return fiber.NewError(fiber.StatusTooManyRequests, "too many login attempts; try again later")
 		}
 	}
@@ -417,7 +427,7 @@ func recordLoginFailure(ctx context.Context, cfg Config, c *fiber.Ctx, email str
 		for _, key := range keys {
 			count, err := cfg.Redis.Incr(ctx, key).Result()
 			if err == nil && count == 1 {
-				if err := cfg.Redis.Expire(ctx, key, time.Minute).Err(); err != nil && cfg.Logger != nil {
+				if err := cfg.Redis.Expire(ctx, key, loginAttemptWindow).Err(); err != nil && cfg.Logger != nil {
 					cfg.Logger.Error("failed to set login rate limit expiry", "key", key, "error", err)
 				}
 			}
@@ -431,7 +441,7 @@ func recordLoginFailure(ctx context.Context, cfg Config, c *fiber.Ctx, email str
 	for _, key := range keys {
 		inMemLoginCount[key]++
 		if inMemLoginCount[key] == 1 {
-			expiry := now.Add(time.Minute)
+			expiry := now.Add(loginAttemptWindow)
 			k := key
 			go func() {
 				defer func() {
@@ -2641,7 +2651,9 @@ func NewServer(cfg Config) *fiber.App {
 		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "user not found")
 		}
-		return c.JSON(user)
+		// Sanitize: never echo TOTPSecret/password hashes to API clients.
+		// List/create/update routes already return ToPublicUser(s).
+		return c.JSON(ToPublicUser(user))
 	})
 
 	// GET /mounts/:id is registered by registerAdminRoutes with

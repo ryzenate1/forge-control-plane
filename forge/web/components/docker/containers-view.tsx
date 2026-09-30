@@ -135,7 +135,10 @@ export function ContainersView() {
         {containersQuery.isLoading ? (
           <div className="p-4"><AdminLoadingState label="Loading containers…" /></div>
         ) : containersQuery.isError ? (
-          <div className="p-4 text-sm text-danger">Failed to load containers. Verify the node connection and try again.</div>
+          <div className="space-y-1 p-4 text-sm">
+            <p className="text-danger">Containers could not be loaded: {containersQuery.error instanceof Error ? containersQuery.error.message : "request failed"}. This is a failed read, not an empty host.</p>
+            <p className="text-xs text-text-subtle">A node running with DAEMON_ALLOW_MOCK_RUNTIME=true answers every runtime call with “container runtime is unavailable” by design — no container operation can succeed there.</p>
+          </div>
         ) : filtered.length === 0 ? (
           <EmptyState icon={Terminal} message={search ? "No containers match your search." : "No containers found. Pull an image and create one."} title={search ? "No results" : "No containers"} />
         ) : (

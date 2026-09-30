@@ -1,8 +1,10 @@
 package http
 
 import (
+	"fmt"
 	"os"
 	"strconv"
+	"strings"
 
 	"gamepanel/forge/internal/store"
 
@@ -14,6 +16,73 @@ type SetupStatus struct {
 	Required   bool   `json:"required"`
 	HasAdmin   bool   `json:"hasAdmin"`
 	AppVersion string `json:"appVersion"`
+	// PendingSetup flags wizard sections that still hold default values.
+	// Omitted when it could not be determined — unknown is not configured.
+	PendingSetup *store.SetupPendingState `json:"pendingSetup,omitempty"`
+}
+
+// SetupSkippableStep mirrors SetupSkippableStep in
+// packages/shared-types/src/api.ts. The administrator step is absent on
+// purpose: setup cannot complete without an admin account.
+var setupSkippableSteps = map[string]bool{
+	"organization": true,
+	"node":         true,
+	"email":        true,
+	"backup":       true,
+	"domain":       true,
+}
+
+// normalizeSetupSkippedSteps lowercases, trims, dedupes and validates the
+// skip list. An unknown step is a 400, never a silent ignore: accepting an
+// unknown skip would let a client believe a section was recorded as skipped
+// when it was not.
+func normalizeSetupSkippedSteps(raw []string) ([]string, error) {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, step := range raw {
+		normalized := strings.ToLower(strings.TrimSpace(step))
+		if normalized == "" {
+			continue
+		}
+		if !setupSkippableSteps[normalized] {
+			return nil, fmt.Errorf("unknown setup step %q", step)
+		}
+		if !seen[normalized] {
+			seen[normalized] = true
+			out = append(out, normalized)
+		}
+	}
+	return out, nil
+}
+
+// applySetupSkips clears the fields of skipped steps so values smuggled in
+// alongside a skip are ignored rather than persisted. Skip wins over input.
+func applySetupSkips(req *SetupRequest, skipped map[string]bool) {
+	if skipped["organization"] {
+		req.OrgName = ""
+	}
+	if skipped["node"] {
+		req.NodeName = ""
+		req.NodeFqdn = ""
+	}
+	if skipped["email"] {
+		req.SmtpHost = ""
+		req.SmtpPort = ""
+		req.SmtpUser = ""
+		req.SmtpPass = ""
+		req.SmtpFrom = ""
+		req.SmtpEncryption = ""
+	}
+	if skipped["backup"] {
+		req.BackupDriver = ""
+		req.S3Bucket = ""
+		req.S3Region = ""
+		req.S3Endpoint = ""
+	}
+	if skipped["domain"] {
+		req.DomainName = ""
+		req.TlsEmail = ""
+	}
 }
 
 type SetupRequest struct {
@@ -35,6 +104,10 @@ type SetupRequest struct {
 	S3Endpoint     string `json:"s3Endpoint"`
 	DomainName     string `json:"domainName"`
 	TlsEmail       string `json:"tlsEmail"`
+	// SkippedSteps records wizard steps the operator explicitly skipped
+	// ("organization", "node", "email", "backup", "domain"). Skipped steps'
+	// fields are cleared server-side before anything is persisted.
+	SkippedSteps []string `json:"skippedSteps"`
 }
 
 func registerSetupRoutes(public fiber.Router, cfg Config, authLimiter fiber.Handler) {
@@ -55,6 +128,9 @@ func registerSetupRoutes(public fiber.Router, cfg Config, authLimiter fiber.Hand
 		}
 		status.HasAdmin = has
 		status.Required = !has
+		if pending, err := cfg.Store.GetSetupPendingState(ctx); err == nil {
+			status.PendingSetup = pending
+		}
 		return c.JSON(status)
 	})
 
@@ -66,6 +142,15 @@ func registerSetupRoutes(public fiber.Router, cfg Config, authLimiter fiber.Hand
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, T(c, "setup.invalid_request", "invalid request body"))
 		}
+		skipped, err := normalizeSetupSkippedSteps(req.SkippedSteps)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, T(c, "setup.invalid_skip_step", "unknown skipped setup step")+": "+err.Error())
+		}
+		skipSet := map[string]bool{}
+		for _, step := range skipped {
+			skipSet[step] = true
+		}
+		applySetupSkips(&req, skipSet)
 		if req.Email == "" || req.Password == "" {
 			return fiber.NewError(fiber.StatusBadRequest, T(c, "setup.email_password_required", "email and password are required"))
 		}
@@ -186,7 +271,7 @@ func registerSetupRoutes(public fiber.Router, cfg Config, authLimiter fiber.Hand
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue session token")
 		}
 		setSessionCookies(c, token, deriveSessionCSRFToken(cfg.AuthSecret, token), tokenExpiry(cfg))
-		response := fiber.Map{"ok": true, "userId": user.ID, "email": user.Email}
+		response := fiber.Map{"ok": true, "userId": user.ID, "email": user.Email, "skippedSteps": skipped}
 		if setupNodeID != "" {
 			response["nodeId"] = setupNodeID
 			response["nodeToken"] = setupNodeToken

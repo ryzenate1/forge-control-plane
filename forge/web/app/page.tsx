@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Suspense, useEffect, useState } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Eye, EyeOff, KeyRound, ShieldCheck } from "lucide-react";
-import { login, loginCheckpoint, fetchSetupStatus, type LoginResponse } from "@/lib/api";
+import { login, loginCheckpoint, fetchSetupStatus, type ApiSetupStatus, type LoginResponse } from "@/lib/api";
 import { queryKeys } from "@/lib/api/query-keys";
 import { useServerStore } from "@/stores/use-server-store";
 import { AuthShell } from "@/components/ui/auth-shell";
@@ -38,12 +38,37 @@ function LoginContent() {
   const [isRecovery, setIsRecovery] = useState(false);
   const [cooldown, setCooldown] = useState(0);
   const [setupStatus, setSetupStatus] = useState<SetupStatus>("checking");
+  const [setupInfo, setSetupInfo] = useState<ApiSetupStatus | null>(null);
+  const [pendingDismissed, setPendingDismissed] = useState(() => {
+    try {
+      return typeof window !== "undefined" && window.localStorage.getItem("forge:setup-pending-dismissed") === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  function dismissPendingReminder() {
+    try {
+      window.localStorage.setItem("forge:setup-pending-dismissed", "1");
+    } catch {
+      // Dismissal is a convenience; a blocked store must not break sign-in.
+    }
+    setPendingDismissed(true);
+  }
+
+  const pendingSetup = setupInfo?.pendingSetup;
+  const pendingLabels = [
+    pendingSetup?.organization ? t("setupWizard.steps.organization") : null,
+    pendingSetup?.node ? t("setupWizard.steps.node") : null,
+    pendingSetup?.email ? t("setupWizard.steps.smtp") : null,
+  ].filter((value): value is string => value !== null);
 
   useEffect(() => {
     let cancelled = false;
     fetchSetupStatus()
       .then((data) => {
         if (cancelled) return;
+        setSetupInfo(data);
         if (data.required) {
           setSetupStatus("required");
           replace("/setup");
@@ -93,8 +118,9 @@ function LoginContent() {
 
   return <AuthShell eyebrow={t("auth.welcomeBack")} title={t("auth.login")} description={t("auth.useCredentialsToContinue")} footer={<>{t("auth.needAccessHelp")}</>}>
     <form className="ui-card space-y-5 p-5 sm:p-6" noValidate onSubmit={(event) => { event.preventDefault(); const nextErrors: typeof errors = {}; if (!/^\S+@\S+\.\S+$/.test(email.trim())) nextErrors.email = t("auth.enterValidEmail"); if (!password) nextErrors.password = t("auth.enterYourPassword"); setErrors(nextErrors); if (!nextErrors.email && !nextErrors.password) loginMutation.mutate(); }}>
-      {setupStatus === "unreachable" ? <Alert actions={<Button onClick={() => { setSetupStatus("checking"); fetchSetupStatus().then((data) => { if (data.required) { setSetupStatus("required"); router.replace("/setup"); } else { setSetupStatus("ready"); } }).catch(() => setSetupStatus("unreachable")); }} variant="secondary">{t("common.retry")}</Button>} className="mb-4" title={t("auth.unableToReachApi")} tone="warning">{t("auth.outageNotConfigured")}</Alert> : null}
+      {setupStatus === "unreachable" ? <Alert actions={<Button onClick={() => { setSetupStatus("checking"); fetchSetupStatus().then((data) => { setSetupInfo(data); if (data.required) { setSetupStatus("required"); router.replace("/setup"); } else { setSetupStatus("ready"); } }).catch(() => setSetupStatus("unreachable")); }} variant="secondary">{t("common.retry")}</Button>} className="mb-4" title={t("auth.unableToReachApi")} tone="warning">{t("auth.outageNotConfigured")}</Alert> : null}
       {params.get("setup") === "complete" ? <Alert tone="success" title={t("auth.administratorCreated")}>{t("auth.setupCompleteSignIn")}</Alert> : null}
+      {setupStatus === "ready" && pendingLabels.length > 0 && !pendingDismissed ? <Alert actions={<Button onClick={dismissPendingReminder} variant="ghost">{t("setupWizard.setUpLater")}</Button>} className="mb-4" title={t("setupWizard.pendingTitle")} tone="info">{t("setupWizard.pendingDesc", { items: pendingLabels.join(", ") })}</Alert> : null}
       {params.get("reason") === "session-expired" ? <Alert tone="warning" title={t("auth.sessionExpiredTitle")}>{t("auth.signInAgainToContinue")}</Alert> : null}
       <Field error={errors.email} id="email" label={t("auth.email")}><Input aria-describedby={errors.email ? "email-error" : undefined} autoComplete="email" autoFocus id="email" invalid={Boolean(errors.email)} onChange={(event) => { setEmail(event.target.value); if (errors.email) setErrors((value) => ({ ...value, email: undefined })); }} placeholder="you@example.com" type="email" value={email} /></Field>
       <Field error={errors.password} id="password" label={t("auth.password")}><div className="relative"><Input aria-describedby={errors.password ? "password-error" : undefined} autoComplete="current-password" className="pr-11" id="password" invalid={Boolean(errors.password)} onChange={(event) => { setPassword(event.target.value); if (errors.password) setErrors((value) => ({ ...value, password: undefined })); }} placeholder={t("auth.enterYourPasswordPlaceholder")} type={showPassword ? "text" : "password"} value={password} /><button aria-label={showPassword ? t("auth.hidePassword") : t("auth.showPassword")} aria-pressed={showPassword} className="ui-icon-button absolute right-1 top-1" onClick={() => setShowPassword((value) => !value)} type="button">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div></Field>

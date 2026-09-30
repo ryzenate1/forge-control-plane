@@ -610,13 +610,38 @@ export type ApiSetupStatus = {
   required: boolean;
   hasAdmin: boolean;
   appVersion: string;
+  /**
+   * Post-setup reminder state for steps that were skipped in the wizard.
+   * Derived from live state (no extra persistence): true means the section
+   * still holds its default/unconfigured value. Omitted when the API could
+   * not determine it — unknown is not "configured".
+   */
+  pendingSetup?: ApiSetupPendingState;
+};
+
+/**
+ * Sections of the setup wizard that can be skipped with "Skip" (this step)
+ * or "Set up later" (this and all remaining optional steps). The
+ * administrator step is never skippable — setup cannot complete without it.
+ */
+export type SetupSkippableStep = 'organization' | 'node' | 'email' | 'backup' | 'domain';
+
+/** Sections of a completed setup that still hold default/unconfigured values. */
+export type ApiSetupPendingState = {
+  organization: boolean;
+  node: boolean;
+  email: boolean;
 };
 
 /**
  * Body accepted by `POST /setup` (initial panel setup). Only `email` and
  * `password` are required. Field names mirror `SetupRequest` in
- * `forge/api/internal/http/handlers_setup.go:19-25`; the SDK's
+ * `forge/api/internal/http/handlers_setup.go`; the SDK's
  * `SetupRequest` is an alias of this type so the three can never drift.
+ *
+ * `skippedSteps` records wizard steps the operator explicitly skipped. The
+ * backend clears the skipped steps' fields server-side, so smuggled values
+ * for a skipped step are ignored rather than persisted.
  */
 export type ApiSetupRequest = {
   email: string;
@@ -637,6 +662,7 @@ export type ApiSetupRequest = {
   s3Endpoint?: string;
   domainName?: string;
   tlsEmail?: string;
+  skippedSteps?: SetupSkippableStep[];
 };
 
 export type LoginResponse = {
