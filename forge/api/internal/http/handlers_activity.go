@@ -18,19 +18,19 @@ func registerActivityRoutes(protected fiber.Router, cfg Config) {
 	// /account/activity is reserved for the current user's audit log, registered
 	// by registerAuthRoutes. Service activity is administrative and global.
 	admin := protected.Group("/admin", requireRole("admin"))
-	admin.Get("/activity", func(c *fiber.Ctx) error {
+	admin.Get("/activity", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
 		return handleQueryActivity(c, cfg)
 	})
-	admin.Get("/activity/stats", func(c *fiber.Ctx) error {
+	admin.Get("/activity/stats", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
 		return handleActivityStats(c, cfg)
 	})
-	admin.Get("/activity/export", func(c *fiber.Ctx) error {
+	admin.Get("/activity/export", requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if err := requireActivityService(cfg); err != nil {
 			return err
 		}
@@ -51,11 +51,11 @@ func handleQueryActivity(c *fiber.Ctx, cfg Config) error {
 
 	events, err := svc.Query(ctx, filter)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return respondInternalError(c, err)
 	}
 	total, err := svc.Count(ctx, filter)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return respondInternalError(c, err)
 	}
 
 	return c.JSON(fiber.Map{
@@ -75,7 +75,7 @@ func handleActivityStats(c *fiber.Ctx, cfg Config) error {
 
 	stats, err := svc.Stats(ctx)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return respondInternalError(c, err)
 	}
 	return c.JSON(stats)
 }
@@ -88,10 +88,10 @@ func handleExportActivity(c *fiber.Ctx, cfg Config) error {
 
 	format := strings.ToLower(c.Query("format", "json"))
 
-	// Export uses the same filter contract as the canonical admin activity query,
-	// while requesting the largest result set supported by the service.
 	filter := activityFilterFromRequest(c)
-	filter.Limit = 200
+	if filter.Limit <= 0 || filter.Limit > 1000 {
+		filter.Limit = 1000
+	}
 	filter.Offset = 0
 
 	ctx, cancel := requestContext()
@@ -99,7 +99,7 @@ func handleExportActivity(c *fiber.Ctx, cfg Config) error {
 
 	events, err := svc.Query(ctx, filter)
 	if err != nil {
-		return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+		return respondInternalError(c, err)
 	}
 
 	switch format {
@@ -151,7 +151,7 @@ func handleExportActivity(c *fiber.Ctx, cfg Config) error {
 		c.Set("Content-Disposition", fmt.Sprintf("attachment; filename=activity_export_%s.json", time.Now().Format("20060102_150405")))
 		data, err := json.Marshal(events)
 		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{"error": err.Error()})
+			return respondInternalError(c, err)
 		}
 		return c.Send(data)
 	}
@@ -198,8 +198,17 @@ func activityFilterFromRequest(c *fiber.Ctx) activity.ActivityFilter {
 	}
 	if v := c.Query("limit"); v != "" {
 		if limit, err := strconv.Atoi(v); err == nil {
+			if limit < 0 {
+				limit = 0
+			}
+			if limit > 1000 {
+				limit = 1000
+			}
 			filter.Limit = limit
 		}
+	}
+	if filter.Limit > 1000 {
+		filter.Limit = 1000
 	}
 	if v := c.Query("offset"); v != "" {
 		if offset, err := strconv.Atoi(v); err == nil {

@@ -125,6 +125,48 @@ func (s *Store) CreateFailoverEvent(ctx context.Context, e *FailoverEvent) error
 	return err
 }
 
+// CreateFailoverIncident serializes incident creation per node across API
+// replicas and inserts only when no active incident exists in the window.
+func (s *Store) CreateFailoverIncident(ctx context.Context, e *FailoverEvent, window time.Duration) (bool, error) {
+	tx, err := s.db.Begin(ctx)
+	if err != nil {
+		return false, err
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, e.NodeID); err != nil {
+		return false, err
+	}
+	var active bool
+	// make_interval(secs => $2) carries the window as seconds: Go's
+	// Duration.String ("1m0s") is not a Postgres interval literal and
+	// $2::interval would reject it.
+	if err := tx.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM failover_events
+			WHERE node_id=$1
+			  AND status IN ('detected','evacuating','restarting')
+			  AND created_at > NOW()-make_interval(secs => $2)
+		)
+	`, e.NodeID, window.Seconds()).Scan(&active); err != nil {
+		return false, err
+	}
+	if active {
+		return false, nil
+	}
+	e.ID = uuid.NewString()
+	e.CreatedAt = time.Now().UTC()
+	if _, err := tx.Exec(ctx, `
+		INSERT INTO failover_events (id, policy_id, node_id, server_id, event_type, action, status, message, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+	`, e.ID, nullableUUID(e.PolicyID), e.NodeID, e.ServerID, e.EventType, e.Action, e.Status, e.Message, e.CreatedAt); err != nil {
+		return false, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
 func (s *Store) ListFailoverEvents(ctx context.Context, policyID string, limit int) ([]FailoverEvent, error) {
 	rows, err := s.db.Query(ctx, `
 		SELECT id::text, COALESCE(policy_id::text, ''), node_id::text, server_id, event_type, action, status, message, created_at
@@ -133,6 +175,30 @@ func (s *Store) ListFailoverEvents(ctx context.Context, policyID string, limit i
 		ORDER BY created_at DESC
 		LIMIT $2
 	`, policyID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var events []FailoverEvent
+	for rows.Next() {
+		var e FailoverEvent
+		if err := rows.Scan(&e.ID, &e.PolicyID, &e.NodeID, &e.ServerID, &e.EventType, &e.Action, &e.Status, &e.Message, &e.CreatedAt); err != nil {
+			return nil, err
+		}
+		events = append(events, e)
+	}
+	return events, rows.Err()
+}
+
+func (s *Store) ListRecentFailoverEvents(ctx context.Context, nodeID string, limit int) ([]FailoverEvent, error) {
+	rows, err := s.db.Query(ctx, `
+		SELECT id::text, COALESCE(policy_id::text, ''), node_id::text, server_id, event_type, action, status, message, created_at
+		FROM failover_events
+		WHERE node_id = $1
+		ORDER BY created_at DESC
+		LIMIT $2
+	`, nodeID, limit)
 	if err != nil {
 		return nil, err
 	}

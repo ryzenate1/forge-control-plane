@@ -11,14 +11,12 @@ func TestRegionCRUD(t *testing.T) {
 	s := migrationTestStore(t, false)
 	ctx := context.Background()
 
-	// ListRegions empty
+	// Migrations seed a default region.
 	regions, err := s.ListRegions(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(regions) != 0 {
-		t.Fatalf("expected 0 regions, got %d", len(regions))
-	}
+	initialRegionCount := len(regions)
 
 	// CreateRegion
 	req := CreateRegionRequest{
@@ -96,10 +94,10 @@ func TestRegionCRUD(t *testing.T) {
 		t.Fatal("expected error for empty name")
 	}
 
-	// CreateRegion with invalid slug fails
-	_, err = s.CreateRegion(ctx, CreateRegionRequest{Name: "Bad", Slug: "  ", Description: "", Enabled: true}, nil)
+	// CreateRegion with a slug containing no usable characters fails.
+	_, err = s.CreateRegion(ctx, CreateRegionRequest{Name: "Bad", Slug: "---", Description: "", Enabled: true}, nil)
 	if err == nil {
-		t.Fatal("expected error for whitespace-only slug")
+		t.Fatal("expected error for invalid slug")
 	}
 
 	// ListRegions with count
@@ -107,8 +105,8 @@ func TestRegionCRUD(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(regions) != 1 {
-		t.Fatalf("expected 1 region, got %d", len(regions))
+	if len(regions) != initialRegionCount+1 {
+		t.Fatalf("expected %d regions, got %d", initialRegionCount+1, len(regions))
 	}
 	if regions[0].NodeCount != 0 {
 		t.Fatalf("expected 0 nodes, got %d", regions[0].NodeCount)

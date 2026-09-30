@@ -19,7 +19,7 @@ func registerFailoverRoutes(protected fiber.Router, cfg Config, svc *failover.Se
 	fo.Get("/policies", requireRole("admin"), requireAdminScope("failover.read"), func(c *fiber.Ctx) error {
 		policies, err := svc.ListPolicies(c.Context())
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": policies})
 	})
@@ -66,7 +66,7 @@ func registerFailoverRoutes(protected fiber.Router, cfg Config, svc *failover.Se
 	fo.Get("/policies/node/:nodeId", requireRole("admin"), requireAdminScope("failover.read"), func(c *fiber.Ctx) error {
 		policies, err := svc.ListPoliciesByNode(c.Context(), c.Params("nodeId"))
 		if err != nil {
-			return c.Status(500).JSON(fiber.Map{"error": err.Error()})
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": policies})
 	})

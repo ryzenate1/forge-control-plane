@@ -1,16 +1,6 @@
 #!/bin/bash
-set -e
-
-echo "=== Running Go linters ==="
-cd forge/api && golangci-lint run ./... && cd ../..
-cd beacon && golangci-lint run ./... && cd ..
-
-echo "=== Running TypeScript checks ==="
-cd forge/web && npm run lint && cd ../..
-cd packages/sdk && npm run lint && cd ../..
-cd packages/shared-types && npm run lint && cd ../..
-
-echo "=== Running Prettier check ==="
-npx prettier --check "forge/web/**/*.{ts,tsx,js,jsx,json,css}" "packages/**/*.{ts,tsx,js,jsx,json}"
-
-echo "=== All checks passed ==="
+set -euo pipefail
+# Canonical lint lives in scripts/dev/lint.sh. This shim exists so `make lint`
+# and legacy callers converge on one implementation instead of drifting.
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "$ROOT/scripts/dev/lint.sh" "$@"

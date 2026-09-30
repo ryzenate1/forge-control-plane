@@ -1,5 +1,29 @@
-# Local overrides intentionally do not publish PostgreSQL or Redis. Use
-# `docker compose exec postgres psql ...` and `docker compose exec redis
-# redis-cli ...` for development access. Publishing these ports by default is
-# unsafe on developer laptops and VPS hosts alike.
-services: {}
+# Local overrides publish PostgreSQL and Redis on the loopback interface only.
+# Binding to 0.0.0.0 would expose the databases to every interface on developer
+# laptops and VPS hosts alike; `127.0.0.1:` keeps `psql`/`redis-cli` working from
+# the host while leaving the ports unreachable from the network. `docker compose
+# exec postgres psql ...` / `docker compose exec redis redis-cli ...` also still
+# work and need no port publishing at all.
+services:
+  postgres:
+    ports:
+      - "127.0.0.1:${DB_PORT:-5432}:5432"
+    # The base compose drops ALL capabilities for production hardening, but the
+    # postgres:16-alpine entrypoint must chown/chmod its data directory and
+    # su-exec to the postgres user during first-time init. Grant back only the
+    # minimal capabilities required so local development bootstraps cleanly.
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+  redis:
+    ports:
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID

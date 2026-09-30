@@ -63,6 +63,12 @@ type predictiveStore interface {
 	NodeCapacitySnapshot(ctx context.Context, nodeID string) (store.NodeCapacitySnapshot, error)
 	ListNodes(ctx context.Context) ([]store.Node, error)
 	ListServersByNode(ctx context.Context, nodeID string) ([]store.Server, error)
+	ListAffinityRulesDB(ctx context.Context) ([]store.AffinityRuleRow, error)
+	UpsertAffinityRuleDB(ctx context.Context, r store.AffinityRuleRow) (store.AffinityRuleRow, error)
+	DeleteAffinityRuleDB(ctx context.Context, id string) error
+	ListAntiAffinityRulesDB(ctx context.Context) ([]store.AntiAffinityRuleRow, error)
+	UpsertAntiAffinityRuleDB(ctx context.Context, r store.AntiAffinityRuleRow) (store.AntiAffinityRuleRow, error)
+	DeleteAntiAffinityRuleDB(ctx context.Context, id string) error
 }
 
 func NewPredictiveScorer(store predictiveStore) *PredictiveScorer {
@@ -71,6 +77,41 @@ func NewPredictiveScorer(store predictiveStore) *PredictiveScorer {
 		metricsHistory:    make(map[string][]ResourceMetric),
 		affinityRules:     make([]AffinityRule, 0),
 		antiAffinityRules: make([]AntiAffinityRule, 0),
+	}
+}
+
+// LoadRules hydrates affinity/anti-affinity rules from the database. Call
+// once at startup after the scorer is created.
+func (s *PredictiveScorer) LoadRules(ctx context.Context) {
+	if s == nil || s.store == nil {
+		return
+	}
+	if rules, err := s.store.ListAffinityRulesDB(ctx); err == nil {
+		s.mu.Lock()
+		for _, r := range rules {
+			s.affinityRules = append(s.affinityRules, AffinityRule{
+				ID:      r.ID,
+				NodeID:  r.NodeID,
+				Label:   r.TargetTag,
+				Weight:  r.Weight,
+				Name:    r.TargetTag,
+			})
+		}
+		s.mu.Unlock()
+	}
+	if rules, err := s.store.ListAntiAffinityRulesDB(ctx); err == nil {
+		s.mu.Lock()
+		for _, r := range rules {
+			s.antiAffinityRules = append(s.antiAffinityRules, AntiAffinityRule{
+				ID:        r.ID,
+				ServerID:  r.NodeID,
+				Label:     r.TargetTag,
+				Name:      r.TargetTag,
+				Scope:     "node",
+				Weight:    1.0,
+			})
+		}
+		s.mu.Unlock()
 	}
 }
 
@@ -87,6 +128,9 @@ func (s *PredictiveScorer) RecordMetric(ctx context.Context, nodeID string, metr
 func (s *PredictiveScorer) PredictLoad(ctx context.Context, nodeID string) (float64, float64) {
 	s.mu.RLock()
 	metrics, ok := s.metricsHistory[nodeID]
+	if ok {
+		metrics = append([]ResourceMetric(nil), metrics...)
+	}
 	s.mu.RUnlock()
 
 	if !ok || len(metrics) < 2 {
@@ -152,10 +196,14 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 	}
 
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	affinityRules := make([]AffinityRule, len(s.affinityRules))
+	copy(affinityRules, s.affinityRules)
+	antiAffinityRules := make([]AntiAffinityRule, len(s.antiAffinityRules))
+	copy(antiAffinityRules, s.antiAffinityRules)
+	s.mu.RUnlock()
 
 	var affinityScore float64
-	for _, rule := range s.affinityRules {
+	for _, rule := range affinityRules {
 		if matchesAffinity(rule, req, nodeID) {
 			affinityScore += rule.Weight
 		}
@@ -163,13 +211,19 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 
 	var antiAffinityScore float64
 	servers, _ := s.store.ListServersByNode(ctx, nodeID)
-	for _, rule := range s.antiAffinityRules {
+	for _, rule := range antiAffinityRules {
 		if matchesAntiAffinity(ctx, rule, req, nodeID, servers) {
 			antiAffinityScore += rule.Weight
 		}
 	}
 
-	totalScore := baseScore*(1+trendScore) + affinityScore - antiAffinityScore
+	// TotalScore is the operator-facing roll-up, so it lives in [0,1]: the
+	// mean available-capacity ratio (neutral 0.5 when the node reports no
+	// totals), shifted by the bounded trend term and a damped affinity delta.
+	// The raw BaseScore stays exposed as a component for debugging, but it
+	// must never be the comparable number — it spans orders of magnitude and
+	// would drown every other signal it is added to.
+	totalScore := clampPredictiveScore(capacityRatio(snapshot) + trendScore + predictiveAffinityDamp*(affinityScore-antiAffinityScore))
 
 	return &PredictiveScore{
 		NodeID:            nodeID,
@@ -181,6 +235,50 @@ func (s *PredictiveScorer) ScorePredictive(ctx context.Context, nodeID string, r
 		PredictedLoad:     predictedLoad,
 		Confidence:        confidence,
 	}, nil
+}
+
+// predictiveAffinityDamp scales unbounded rule-weight sums into the [0,1]
+// band the total assumes. Rule weights are operator-chosen magnitudes, not
+// ratios, so without damping a single heavy rule would pin the total at 0
+// or 1 regardless of capacity or trend.
+const predictiveAffinityDamp = 0.05
+
+// capacityRatio is the mean available-over-total ratio across the resources a
+// node reports totals for, clamped to [0,1]. A node reporting no totals has
+// unknown capacity — neutral 0.5, with the scarcity recorded in Confidence,
+// never a fabricated 0 or 1.
+func capacityRatio(snapshot store.NodeCapacitySnapshot) float64 {
+	var sum float64
+	var known int
+	if snapshot.TotalCPU > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableCPU) / float64(snapshot.TotalCPU))
+		known++
+	}
+	if snapshot.TotalMemory > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableMemory) / float64(snapshot.TotalMemory))
+		known++
+	}
+	if snapshot.TotalDisk > 0 {
+		sum += clampPredictiveScore(float64(snapshot.AvailableDisk) / float64(snapshot.TotalDisk))
+		known++
+	}
+	if known == 0 {
+		return 0.5
+	}
+	return sum / float64(known)
+}
+
+func clampPredictiveScore(value float64) float64 {
+	if math.IsNaN(value) {
+		return 0.5
+	}
+	if value < 0 {
+		return 0
+	}
+	if value > 1 {
+		return 1
+	}
+	return value
 }
 
 func matchesAffinity(rule AffinityRule, req domain.PlacementRequest, nodeID string) bool {
@@ -222,6 +320,15 @@ func (s *PredictiveScorer) AddAffinityRule(ctx context.Context, rule AffinityRul
 		rule.ID = generateID()
 	}
 	s.affinityRules = append(s.affinityRules, rule)
+	// Persist to DB (non-fatal if store doesn't support it yet).
+	if s.store != nil {
+		_, _ = s.store.UpsertAffinityRuleDB(ctx, store.AffinityRuleRow{
+			ID:        rule.ID,
+			NodeID:    rule.NodeID,
+			TargetTag: rule.Label,
+			Weight:    rule.Weight,
+		})
+	}
 	return nil
 }
 
@@ -232,6 +339,9 @@ func (s *PredictiveScorer) RemoveAffinityRule(ctx context.Context, ruleID string
 	for i, rule := range s.affinityRules {
 		if rule.ID == ruleID {
 			s.affinityRules = append(s.affinityRules[:i], s.affinityRules[i+1:]...)
+			if s.store != nil {
+				_ = s.store.DeleteAffinityRuleDB(ctx, ruleID)
+			}
 			return nil
 		}
 	}
@@ -246,6 +356,13 @@ func (s *PredictiveScorer) AddAntiAffinityRule(ctx context.Context, rule AntiAff
 		rule.ID = generateID()
 	}
 	s.antiAffinityRules = append(s.antiAffinityRules, rule)
+	if s.store != nil {
+		_, _ = s.store.UpsertAntiAffinityRuleDB(ctx, store.AntiAffinityRuleRow{
+			ID:        rule.ID,
+			NodeID:    rule.ServerID,
+			TargetTag: rule.Label,
+		})
+	}
 	return nil
 }
 
@@ -256,25 +373,46 @@ func (s *PredictiveScorer) RemoveAntiAffinityRule(ctx context.Context, ruleID st
 	for i, rule := range s.antiAffinityRules {
 		if rule.ID == ruleID {
 			s.antiAffinityRules = append(s.antiAffinityRules[:i], s.antiAffinityRules[i+1:]...)
+			if s.store != nil {
+				_ = s.store.DeleteAntiAffinityRuleDB(ctx, ruleID)
+			}
 			return nil
 		}
 	}
 	return nil
 }
 
+func (s *PredictiveScorer) ListAllScores(ctx context.Context) ([]*PredictiveScore, error) {
+	nodes, err := s.store.ListNodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var scores []*PredictiveScore
+	for _, n := range nodes {
+		score, err := s.ScorePredictive(ctx, n.ID, domain.PlacementRequest{})
+		if err != nil {
+			continue
+		}
+		score.NodeID = n.ID
+		scores = append(scores, score)
+	}
+	return scores, nil
+}
+
+// ListAffinityRules returns a copy of the current affinity rules, served from the
+// in-memory cache under a read lock. ctx is accepted for interface stability.
 func (s *PredictiveScorer) ListAffinityRules(ctx context.Context) ([]AffinityRule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
 	rules := make([]AffinityRule, len(s.affinityRules))
 	copy(rules, s.affinityRules)
 	return rules, nil
 }
 
+// ListAntiAffinityRules returns a copy of the current anti-affinity rules.
 func (s *PredictiveScorer) ListAntiAffinityRules(ctx context.Context) ([]AntiAffinityRule, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-
 	rules := make([]AntiAffinityRule, len(s.antiAffinityRules))
 	copy(rules, s.antiAffinityRules)
 	return rules, nil

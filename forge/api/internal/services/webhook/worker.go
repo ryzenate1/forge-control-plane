@@ -9,7 +9,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -28,22 +28,47 @@ type deliveryResult struct {
 }
 
 func (s *Service) Start(ctx context.Context) {
-	if s != nil && s.store != nil {
-		s.wg.Add(1)
-		go func() { defer s.wg.Done(); s.loop(ctx) }()
+	if s == nil || s.store == nil {
+		return
 	}
+	s.startRateLimiterCleanup(ctx)
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		defer func() {
+			if r := recover(); r != nil {
+				slog.Error("webhook worker panic", "panic", r)
+			}
+		}()
+		s.loop(ctx)
+	}()
 }
 func (s *Service) loop(ctx context.Context) {
 	workerID := "webhook-" + uuid.NewString()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
+	const (
+		minInterval   = time.Second
+		maxInterval   = 30 * time.Second
+		idleThreshold = 5
+	)
+	interval := minInterval
+	consecutiveIdle := 0
 	for {
 		if !s.processOne(ctx, workerID) {
+			consecutiveIdle++
+			if consecutiveIdle >= idleThreshold {
+				interval = interval * 2
+				if interval > maxInterval {
+					interval = maxInterval
+				}
+			}
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-time.After(interval):
 			}
+		} else {
+			consecutiveIdle = 0
+			interval = minInterval
 		}
 		if ctx.Err() != nil {
 			return
@@ -56,13 +81,22 @@ func (s *Service) processOne(ctx context.Context, workerID string) bool {
 	cancel()
 	if err != nil {
 		if ctx.Err() == nil {
-			log.Printf("webhook worker claim: %v", err)
+			slog.Error("webhook worker claim", "error", err)
 		}
 		return false
 	}
 	if d == nil {
 		return false
 	}
+
+	if !s.rateLimiter.allow(d.TargetURL) {
+		slog.Warn("webhook rate limited, re-queuing", "id", d.ID, "targetURL", d.TargetURL)
+		finishCtx, finishCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		_ = s.store.FailWebhookDelivery(finishCtx, d.ID, workerID, nil, "", "rate limited", true, 5*time.Second)
+		finishCancel()
+		return true
+	}
+
 	sendCtx, sendCancel := context.WithTimeout(ctx, 15*time.Second)
 	result, err := sendDelivery(sendCtx, *d, netResolver{net.DefaultResolver})
 	sendCancel()
@@ -70,13 +104,13 @@ func (s *Service) processOne(ctx context.Context, workerID string) bool {
 	defer finishCancel()
 	if err == nil {
 		if e := s.store.CompleteWebhookDelivery(finishCtx, d.ID, workerID, *result.status, result.excerpt); e != nil {
-			log.Printf("webhook complete %s: %v", d.ID, e)
+			slog.Error("webhook complete", "id", d.ID, "error", e)
 		}
 		return true
 	}
 	retry := d.Attempts < maxAttempts
 	if e := s.store.FailWebhookDelivery(finishCtx, d.ID, workerID, result.status, result.excerpt, err.Error(), retry, webhookRetryDelay(d.Attempts)); e != nil {
-		log.Printf("webhook retry %s: %v", d.ID, e)
+		slog.Error("webhook retry", "id", d.ID, "error", e)
 	}
 	return true
 }

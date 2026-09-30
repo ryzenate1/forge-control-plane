@@ -32,9 +32,9 @@ describe("safe post-login redirects", () => {
       jsonResponse({ complete: true, token: "token", user: { id: "u1", email: "user@example.com", role: "user" } }),
     );
     renderWithQuery(<LoginPage />);
-    await userEvent.type(await screen.findByLabelText("Email address"), "USER@example.com");
+    await userEvent.type(await screen.findByLabelText("Email Address"), "USER@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "secret-password");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign In" }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/account"));
     expect(requestJSON(fetch.calls[1])).toEqual({ email: "user@example.com", password: "secret-password" });
   });
@@ -48,12 +48,12 @@ describe("login checkpoint", () => {
       jsonResponse({ complete: true, token: "token", user: { id: "u1", email: "user@example.com", role: "user", useTotp: true } }),
     );
     renderWithQuery(<LoginPage />);
-    await userEvent.type(await screen.findByLabelText("Email address"), "user@example.com");
+    await userEvent.type(await screen.findByLabelText("Email Address"), "user@example.com");
     await userEvent.type(screen.getByLabelText("Password"), "secret-password");
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }));
+    await userEvent.click(screen.getByRole("button", { name: "Sign In" }));
     await userEvent.click(await screen.findByRole("button", { name: "Use a recovery code instead" }));
-    expect(screen.getByLabelText("Recovery code")).toHaveAttribute("autocomplete", "one-time-code");
-    await userEvent.type(screen.getByLabelText("Recovery code"), "backup-code");
+    expect(screen.getByLabelText("Recovery Code")).toHaveAttribute("autocomplete", "one-time-code");
+    await userEvent.type(screen.getByLabelText("Recovery Code"), "backup-code");
     await userEvent.click(screen.getByRole("button", { name: "Verify and continue" }));
     await waitFor(() => expect(replace).toHaveBeenCalledWith("/servers"));
   });
@@ -63,7 +63,7 @@ describe("password recovery", () => {
   it("uses a privacy-preserving success state after mail is accepted", async () => {
     mockFetch(jsonResponse({ status: "sent" }));
     renderWithQuery(<ForgotPasswordPage />);
-    await userEvent.type(screen.getByLabelText("Email address"), "person@example.com");
+    await userEvent.type(screen.getByLabelText("Email Address"), "person@example.com");
     await userEvent.click(screen.getByRole("button", { name: "Send reset link" }));
     expect(await screen.findByText("Check your inbox")).toBeInTheDocument();
     expect(screen.getByText(/response is the same whether or not/i)).toBeInTheDocument();

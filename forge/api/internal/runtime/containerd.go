@@ -23,7 +23,7 @@ func (r *ContainerdAdapter) Capabilities() Capabilities {
 }
 
 func (r *ContainerdAdapter) SupportsMigration() bool {
-	return r != nil && r.client != nil
+	return false
 }
 
 func (r *ContainerdAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
@@ -87,7 +87,7 @@ func (r *ContainerdAdapter) SyncServerConfiguration(ctx context.Context, target 
 		UUID: config.UUID, Name: config.Name, Suspended: config.Suspended, Environment: config.Environment,
 		Invocation: config.Invocation, DockerImage: config.DockerImage, Egg: config.Egg, Build: config.Build,
 		Allocations: config.Allocations, Config: config.Config, Mounts: daemonMounts(config.Mounts),
-		Provider: ContainerdProvider,
+		UID: config.UID, GID: config.GID, Provider: ContainerdProvider,
 	})
 }
 
@@ -96,7 +96,7 @@ func (r *ContainerdAdapter) ResizeServer(ctx context.Context, target Target, mem
 		return ErrRuntimeUnavailable
 	}
 	return r.client.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, target.ServerID, daemon.ServerConfiguration{
-		UUID: target.ServerID,
+		UUID:  target.ServerID,
 		Build: map[string]any{"memoryLimit": memoryMB, "cpuShares": cpu},
 	})
 }
@@ -143,30 +143,23 @@ func (r *ContainerdAdapter) Stats(ctx context.Context, target Target) (Stats, er
 }
 
 func (r *ContainerdAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, ContainerdProvider)
 }
 
 func (r *ContainerdAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: ContainerdProvider}, nil
+	return inspectWorkload(ctx, r.client, target, ContainerdProvider)
 }
 
 func (r *ContainerdAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *ContainerdAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {

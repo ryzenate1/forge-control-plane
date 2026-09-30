@@ -2,8 +2,12 @@ package events
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/binary"
 	"fmt"
+	"reflect"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,6 +27,7 @@ type Metrics struct {
 }
 
 type subscriberEntry struct {
+	id         uint64
 	subscriber Subscriber
 	maxRetries int
 }
@@ -40,7 +45,10 @@ type Registry struct {
 	failures    map[string]map[string]*failureRecord
 	metrics     Metrics
 	maxRetries  int
+	nextID      atomic.Uint64
 }
+
+const maxDeadLetters = 10_000
 
 func NewRegistry(source string) *Registry {
 	if source == "" {
@@ -72,6 +80,7 @@ func (r *Registry) Subscribe(eventType EventType, subscriber Subscriber) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subscribers[eventType] = append(r.subscribers[eventType], subscriberEntry{
+		id:         r.nextID.Add(1),
 		subscriber: subscriber,
 		maxRetries: r.maxRetries,
 	})
@@ -90,9 +99,46 @@ func (r *Registry) SubscribeWithRetries(eventType EventType, subscriber Subscrib
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.subscribers[eventType] = append(r.subscribers[eventType], subscriberEntry{
+		id:         r.nextID.Add(1),
 		subscriber: subscriber,
 		maxRetries: maxRetries,
 	})
+}
+
+func (r *Registry) Unsubscribe(eventType EventType, subscriber Subscriber) {
+	if r == nil || subscriber == nil {
+		return
+	}
+	if eventType == "" {
+		eventType = WildcardEventType
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	entries := r.subscribers[eventType]
+	filtered := entries[:0]
+	for _, entry := range entries {
+		if !sameSubscriber(entry.subscriber, subscriber) {
+			filtered = append(filtered, entry)
+		}
+	}
+	if len(filtered) == 0 {
+		delete(r.subscribers, eventType)
+		return
+	}
+	r.subscribers[eventType] = filtered
+}
+
+func sameSubscriber(a, b Subscriber) bool {
+	av, bv := reflect.ValueOf(a), reflect.ValueOf(b)
+	if !av.IsValid() || !bv.IsValid() || av.Type() != bv.Type() {
+		return false
+	}
+	switch av.Kind() {
+	case reflect.Chan, reflect.Func, reflect.Map, reflect.Pointer, reflect.Slice, reflect.UnsafePointer:
+		return av.Pointer() == bv.Pointer()
+	default:
+		return av.Type().Comparable() && av.Interface() == bv.Interface()
+	}
 }
 
 func (r *Registry) Publish(ctx context.Context, event Envelope) error {
@@ -118,24 +164,29 @@ func (r *Registry) Publish(ctx context.Context, event Envelope) error {
 	r.metrics.EventsByType[string(event.Type)]++
 	r.mu.Unlock()
 
+	var wg sync.WaitGroup
 	for _, entry := range entries {
-		subscriberKey := fmt.Sprintf("%p", entry.subscriber)
-		eventKey := event.ID
-
-		if r.deadLettered(eventKey, subscriberKey) {
-			continue
-		}
-
-		if err := r.handleWithRetry(ctx, entry, event, subscriberKey, eventKey); err != nil {
+		entry := entry
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			subscriberKey := fmt.Sprintf("%d", entry.id)
+			eventKey := event.ID
+			if r.deadLettered(eventKey, subscriberKey) {
+				return
+			}
+			if err := r.handleWithRetry(ctx, entry, event, subscriberKey, eventKey); err != nil {
+				r.mu.Lock()
+				r.metrics.EventHandlerFailuresTotal++
+				r.mu.Unlock()
+				return
+			}
 			r.mu.Lock()
-			r.metrics.EventHandlerFailuresTotal++
+			r.metrics.EventsDeliveredTotal++
 			r.mu.Unlock()
-			continue
-		}
-		r.mu.Lock()
-		r.metrics.EventsDeliveredTotal++
-		r.mu.Unlock()
+		}()
 	}
+	wg.Wait()
 	return nil
 }
 
@@ -144,14 +195,15 @@ func (r *Registry) handleWithRetry(ctx context.Context, entry subscriberEntry, e
 	wait := defaultRetryBaseWait
 	for attempt := 0; attempt <= entry.maxRetries; attempt++ {
 		if attempt > 0 {
+			jitter := randomDuration(wait / 4)
 			select {
 			case <-ctx.Done():
 				return ctx.Err()
-			case <-time.After(wait):
+			case <-time.After(wait + jitter):
 			}
 			wait *= 2
 		}
-		if err := entry.subscriber.Handle(ctx, event); err != nil {
+		if err := safeHandle(ctx, entry.subscriber, event); err != nil {
 			lastErr = err
 			continue
 		}
@@ -162,17 +214,49 @@ func (r *Registry) handleWithRetry(ctx context.Context, entry subscriberEntry, e
 	return lastErr
 }
 
+func safeHandle(ctx context.Context, subscriber Subscriber, event Envelope) (err error) {
+	defer func() {
+		if recovered := recover(); recovered != nil {
+			err = fmt.Errorf("subscriber panic: %v", recovered)
+		}
+	}()
+	return subscriber.Handle(ctx, event)
+}
+
+func randomDuration(max time.Duration) time.Duration {
+	if max <= 0 {
+		return 0
+	}
+	var raw [8]byte
+	if _, err := rand.Read(raw[:]); err != nil {
+		return 0
+	}
+	return time.Duration(binary.LittleEndian.Uint64(raw[:]) % uint64(max))
+}
+
 func (r *Registry) recordFailure(eventKey, subscriberKey string, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.failures[eventKey] == nil {
+		if len(r.failures) >= maxDeadLetters {
+			var oldestKey string
+			var oldest time.Time
+			for key, records := range r.failures {
+				for _, record := range records {
+					if oldestKey == "" || record.lastTime.Before(oldest) {
+						oldestKey, oldest = key, record.lastTime
+					}
+				}
+			}
+			delete(r.failures, oldestKey)
+		}
 		r.failures[eventKey] = map[string]*failureRecord{}
 	}
 	rec, ok := r.failures[eventKey][subscriberKey]
 	if !ok {
 		r.failures[eventKey][subscriberKey] = &failureRecord{
-			count:   1,
-			lastErr: err.Error(),
+			count:    1,
+			lastErr:  err.Error(),
 			lastTime: time.Now(),
 		}
 		r.metrics.EventsDeadLetteredTotal++

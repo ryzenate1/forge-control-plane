@@ -27,6 +27,19 @@ func (s *Store) CreateEvacuationPlan(ctx context.Context, nodeID string, status 
 		if item.TargetNodeID != "" {
 			target = item.TargetNodeID
 		}
+		if item.Eligible && item.TargetNodeID != "" {
+			tag, err := tx.Exec(ctx, `
+				UPDATE servers
+				SET generation=generation+1, workload_lease_expiry=NOW()+INTERVAL '1 hour', updated_at=NOW()
+				WHERE id=$1
+			`, item.ServerID)
+			if err != nil {
+				return EvacuationPlan{}, err
+			}
+			if tag.RowsAffected() != 1 {
+				return EvacuationPlan{}, fmt.Errorf("server %s not found while fencing evacuation plan", item.ServerID)
+			}
+		}
 		if _, err := tx.Exec(ctx, `
 			INSERT INTO evacuation_items (id, plan_id, server_id, source_node_id, target_node_id, eligible, reason, status, error)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)

@@ -9,13 +9,15 @@ import (
 // ErrLockerLocked is returned when attempting to acquire a lock that is
 // already held.
 var ErrLockerLocked = errors.New("locker: cannot acquire lock, already locked")
+var ErrLockerDestroyed = errors.New("locker: has been destroyed")
 
 // Locker provides a channel-based lock that returns an error immediately if
 // already locked rather than blocking. This non-blocking behaviour is critical
 // for the console throttle's strike-once pattern.
 type Locker struct {
-	mu sync.RWMutex
-	ch chan bool
+	mu        sync.RWMutex
+	ch        chan bool
+	destroyed bool
 }
 
 // NewLocker returns a new Locker instance.
@@ -38,6 +40,9 @@ func (l *Locker) IsLocked() bool {
 func (l *Locker) Acquire() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if l.destroyed {
+		return ErrLockerDestroyed
+	}
 	select {
 	case l.ch <- true:
 	default:
@@ -49,16 +54,16 @@ func (l *Locker) Acquire() error {
 // TryAcquire will attempt to acquire a power-lock until the context provided
 // is canceled.
 func (l *Locker) TryAcquire(ctx context.Context) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.destroyed {
+		return ErrLockerDestroyed
+	}
 	select {
 	case l.ch <- true:
 		return nil
-	case <-ctx.Done():
-		if err := ctx.Err(); err != nil {
-			if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
-				return ErrLockerLocked
-			}
-		}
-		return nil
+	default:
+		return ErrLockerLocked
 	}
 }
 
@@ -67,6 +72,10 @@ func (l *Locker) TryAcquire(ctx context.Context) error {
 // no-op and will immediately return.
 func (l *Locker) Release() {
 	l.mu.Lock()
+	if l.destroyed {
+		l.mu.Unlock()
+		return
+	}
 	select {
 	case <-l.ch:
 	default:
@@ -77,12 +86,12 @@ func (l *Locker) Release() {
 // Destroy cleans up the power locker by closing the channel.
 func (l *Locker) Destroy() {
 	l.mu.Lock()
-	if l.ch != nil {
+	if !l.destroyed {
 		select {
 		case <-l.ch:
 		default:
 		}
-		close(l.ch)
+		l.destroyed = true
 	}
 	l.mu.Unlock()
 }

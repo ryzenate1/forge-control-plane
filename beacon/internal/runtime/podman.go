@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/docker/docker/client"
 )
@@ -18,16 +19,14 @@ func NewPodmanRuntime(cfg PodmanConfig) (*PodmanRuntime, error) {
 	if cfg.URI == "" {
 		cfg.URI = "unix:///run/podman/podman.sock"
 	}
-
-	apiVersion := os.Getenv("PODMAN_API_VERSION")
-	if apiVersion == "" {
-		apiVersion = "5.0.0"
+	if err := validateDockerEndpoint(cfg.URI); err != nil {
+		return nil, fmt.Errorf("invalid Podman endpoint: %w", err)
 	}
 
 	cli, err := client.NewClientWithOpts(
 		client.WithHost(cfg.URI),
-		client.WithAPIVersionNegotiation(),
-		client.WithHTTPClient(&http.Client{}),
+		client.WithVersion("1.43"),
+		client.WithHTTPClient(&http.Client{Timeout: 30 * time.Second}),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("connect to podman: %w", err)
@@ -42,6 +41,7 @@ func NewPodmanRuntime(cfg PodmanConfig) (*PodmanRuntime, error) {
 		DockerRuntime: DockerRuntime{
 			client:         cli,
 			defaultNetwork: networkName,
+			hostSettings:   loadDockerHostSettings(),
 		},
 	}, nil
 }

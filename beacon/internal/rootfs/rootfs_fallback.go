@@ -13,6 +13,11 @@ import (
 
 var fallbackLocks sync.Map
 
+type fallbackLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 // fallbackFS rejects symlinks at every observed component and serializes
 // operations performed through a given root. Platforms without descriptor-
 // relative APIs cannot prevent an external process from replacing a checked
@@ -20,7 +25,7 @@ var fallbackLocks sync.Map
 // Linux openat2 guarantee must run on Linux 5.6 or newer.
 type fallbackFS struct {
 	root string
-	mu   *sync.Mutex
+	lock *fallbackLock
 }
 
 func newPlatformFS(root string) (platformFS, error) {
@@ -34,11 +39,24 @@ func newPlatformFS(root string) (platformFS, error) {
 	if !info.IsDir() {
 		return nil, errors.New("root is not a directory")
 	}
-	value, _ := fallbackLocks.LoadOrStore(root, &sync.Mutex{})
-	return &fallbackFS{root: root, mu: value.(*sync.Mutex)}, nil
+	value, _ := fallbackLocks.LoadOrStore(root, &fallbackLock{})
+	lock, _ := value.(*fallbackLock)
+	lock.mu.Lock()
+	lock.refs++
+	lock.mu.Unlock()
+	return &fallbackFS{root: root, lock: lock}, nil
 }
 
-func (f *fallbackFS) close() error { return nil }
+func (f *fallbackFS) close() error {
+	f.lock.mu.Lock()
+	f.lock.refs--
+	unused := f.lock.refs == 0
+	f.lock.mu.Unlock()
+	if unused {
+		fallbackLocks.CompareAndDelete(f.root, f.lock)
+	}
+	return nil
+}
 
 func (f *fallbackFS) checked(name string, allowMissingFinal bool) (string, error) {
 	parts := strings.Split(name, "/")
@@ -66,8 +84,8 @@ func (f *fallbackFS) checked(name string, allowMissingFinal bool) (string, error
 }
 
 func (f *fallbackFS) open(name string, flags int, perm os.FileMode) (*os.File, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	allowMissing := flags&os.O_CREATE != 0
 	target, err := f.checked(name, allowMissing)
 	if err != nil {
@@ -77,8 +95,8 @@ func (f *fallbackFS) open(name string, flags int, perm os.FileMode) (*os.File, e
 }
 
 func (f *fallbackFS) mkdirAll(name string, perm os.FileMode) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	current := f.root
 	for _, part := range strings.Split(name, "/") {
 		current = filepath.Join(current, part)
@@ -103,8 +121,8 @@ func (f *fallbackFS) mkdirAll(name string, perm os.FileMode) error {
 }
 
 func (f *fallbackFS) removeAll(name string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	target, err := f.checked(name, false)
 	if os.IsNotExist(err) {
 		return nil
@@ -116,8 +134,8 @@ func (f *fallbackFS) removeAll(name string) error {
 }
 
 func (f *fallbackFS) rename(oldName, newName string) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	oldPath, err := f.checked(oldName, false)
 	if err != nil {
 		return err
@@ -130,8 +148,8 @@ func (f *fallbackFS) rename(oldName, newName string) error {
 }
 
 func (f *fallbackFS) chtimes(name string, atime, mtime time.Time) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	target, err := f.checked(name, false)
 	if err != nil {
 		return err
@@ -140,8 +158,8 @@ func (f *fallbackFS) chtimes(name string, atime, mtime time.Time) error {
 }
 
 func (f *fallbackFS) chmod(name string, mode os.FileMode) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
+	f.lock.mu.Lock()
+	defer f.lock.mu.Unlock()
 	target, err := f.checked(name, false)
 	if err != nil {
 		return err

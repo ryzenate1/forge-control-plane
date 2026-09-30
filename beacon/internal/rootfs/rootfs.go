@@ -229,7 +229,11 @@ func (f *FS) CreateAtomic(name string, perm os.FileMode) (*AtomicFile, error) {
 	if err := f.MkdirAll(parent, 0o750); err != nil {
 		return nil, err
 	}
-	temp := path.Join(parent, ".rootfs-tmp-"+randomName())
+	suffix, err := randomName()
+	if err != nil {
+		return nil, err
+	}
+	temp := path.Join(parent, ".rootfs-tmp-"+suffix)
 	file, err := f.OpenFile(temp, os.O_CREATE|os.O_EXCL|os.O_RDWR, perm)
 	if err != nil {
 		return nil, err
@@ -260,7 +264,17 @@ func (f *AtomicFile) Close() error {
 		_ = f.fs.RemoveAll(f.temp)
 		return err
 	}
-	return nil
+	parent := path.Dir(f.target)
+	if parent == "." {
+		parent = ""
+	}
+	directory, err := f.fs.Open(parent)
+	if err != nil {
+		return err
+	}
+	syncErr := directory.Sync()
+	closeErr := directory.Close()
+	return errors.Join(syncErr, closeErr)
 }
 
 func (f *AtomicFile) Abort() error {
@@ -274,10 +288,11 @@ func (f *AtomicFile) Abort() error {
 // Usage returns the total size of non-symlink, non-directory entries beneath
 // the opened root without resolving paths through the root pathname.
 func (f *FS) Usage() (int64, error) {
-	return f.usageDir("")
+	seen := make([]fs.FileInfo, 0)
+	return f.usageDir("", &seen)
 }
 
-func (f *FS) usageDir(directory string) (int64, error) {
+func (f *FS) usageDir(directory string, seen *[]fs.FileInfo) (int64, error) {
 	entries, err := f.ReadDir(directory)
 	if err != nil {
 		return 0, err
@@ -293,7 +308,7 @@ func (f *FS) usageDir(directory string) (int64, error) {
 			return 0, err
 		}
 		if info.IsDir() {
-			size, err := f.usageDir(name)
+			size, err := f.usageDir(name, seen)
 			if err != nil {
 				return 0, err
 			}
@@ -303,6 +318,17 @@ func (f *FS) usageDir(directory string) (int64, error) {
 			total += size
 			continue
 		}
+		duplicate := false
+		for _, previous := range *seen {
+			if os.SameFile(previous, info) {
+				duplicate = true
+				break
+			}
+		}
+		if duplicate {
+			continue
+		}
+		*seen = append(*seen, info)
 		if info.Size() < 0 || info.Size() > int64(^uint64(0)>>1)-total {
 			return 0, errors.New("filesystem usage overflow")
 		}

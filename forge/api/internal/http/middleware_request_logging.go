@@ -1,8 +1,7 @@
 package http
 
 import (
-	"encoding/json"
-	"log"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -67,7 +66,7 @@ func RequestLoggingMiddleware(cfg RequestLoggingConfig) fiber.Handler {
 			Path:      c.Path(),
 			Status:    status,
 			Duration:  duration.String(),
-			ClientIP:  c.IP(),
+			ClientIP:  ExtractClientIP(c),
 			UserAgent: c.Get("User-Agent"),
 			RequestID: requestID,
 			Timestamp: start.UTC().Format(time.RFC3339),
@@ -76,8 +75,16 @@ func RequestLoggingMiddleware(cfg RequestLoggingConfig) fiber.Handler {
 		if cfg.Logger != nil {
 			cfg.Logger(entry)
 		} else {
-			data, _ := json.Marshal(entry)
-			log.Println(string(data))
+			slog.Info("request",
+				"method", entry.Method,
+				"path", entry.Path,
+				"status", entry.Status,
+				"duration", entry.Duration,
+				"client_ip", entry.ClientIP,
+				"user_agent", entry.UserAgent,
+				"request_id", entry.RequestID,
+				"timestamp", entry.Timestamp,
+			)
 		}
 
 		return err

@@ -3,12 +3,16 @@ package database
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
+	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
+
+var migrationNamePattern = regexp.MustCompile(`^[0-9]+_[a-z0-9][a-z0-9_]*\.sql$`)
 
 type Migrator struct {
 	db     Database
@@ -37,13 +41,22 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 	}
 
 	// Get list of migration files
-	files, err := ioutil.ReadDir(m.dir)
+	files, err := os.ReadDir(m.dir)
 	if err != nil {
 		return fmt.Errorf("failed to read migration directory: %w", err)
 	}
 
-	// Sort files by name
+	// Sort by the leading numeric migration version, then by name. Lexical
+	// sorting places "10_..." before "2_...".
 	sort.Slice(files, func(i, j int) bool {
+		left, leftOK := migrationVersion(files[i].Name())
+		right, rightOK := migrationVersion(files[j].Name())
+		if leftOK && rightOK && left != right {
+			return left < right
+		}
+		if leftOK != rightOK {
+			return leftOK
+		}
 		return files[i].Name() < files[j].Name()
 	})
 
@@ -62,11 +75,24 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 		}
 		applied[name] = true
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate applied migrations: %w", err)
+	}
 
 	// Apply pending migrations
 	for _, file := range files {
 		if file.IsDir() || !strings.HasSuffix(file.Name(), ".sql") {
 			continue
+		}
+		if !migrationNamePattern.MatchString(file.Name()) {
+			return fmt.Errorf("invalid migration filename %q", file.Name())
+		}
+		info, err := file.Info()
+		if err != nil {
+			return fmt.Errorf("inspect migration file %s: %w", file.Name(), err)
+		}
+		if !info.Mode().IsRegular() || file.Type()&os.ModeSymlink != 0 {
+			return fmt.Errorf("migration %s must be a regular non-symlink file", file.Name())
 		}
 
 		if applied[file.Name()] {
@@ -77,7 +103,7 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 		m.logger.Printf("Applying migration %s", file.Name())
 
 		// Read migration file
-		content, err := ioutil.ReadFile(filepath.Join(m.dir, file.Name()))
+		content, err := os.ReadFile(filepath.Join(m.dir, file.Name()))
 		if err != nil {
 			return fmt.Errorf("failed to read migration file %s: %w", file.Name(), err)
 		}
@@ -112,4 +138,16 @@ func (m *Migrator) Migrate(ctx context.Context) error {
 
 	m.logger.Println("Migrations applied successfully")
 	return nil
+}
+
+func migrationVersion(name string) (uint64, bool) {
+	prefix := name
+	if index := strings.IndexAny(prefix, "_-."); index >= 0 {
+		prefix = prefix[:index]
+	}
+	if prefix == "" {
+		return 0, false
+	}
+	version, err := strconv.ParseUint(prefix, 10, 64)
+	return version, err == nil
 }

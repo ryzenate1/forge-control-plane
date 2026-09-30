@@ -15,7 +15,6 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
-	"golang.org/x/crypto/bcrypt"
 )
 
 type discordUser struct {
@@ -54,15 +53,24 @@ type socialAuthState struct {
 	Expires  int64  `json:"expires"`
 }
 
-func registerSocialAuthRoutes(v1 fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
+// registerSocialAuthRoutes mounts the public OAuth redirect/callback flow on v1
+// and the authenticated identity-management routes on the canonical `protected`
+// router (session auth + dual-session guard + 2FA enforcement + CSRF + per-method
+// rate limit). It must NOT re-create a shadow protected group: the shadow chain
+// omitted requireTwoFactorAuthentication and the method limiter.
+func registerSocialAuthRoutes(v1 fiber.Router, protected fiber.Router, cfg Config, mutationLimiter fiber.Handler, authLimiters ...fiber.Handler) {
 	v1.Get("/auth/social/:provider", func(c *fiber.Ctx) error {
 		return handleSocialAuthRedirect(c, cfg)
 	})
-	v1.Get("/auth/social/:provider/callback", func(c *fiber.Ctx) error {
+	callback := func(c *fiber.Ctx) error {
 		return handleSocialAuthCallback(c, cfg)
-	})
+	}
+	if len(authLimiters) > 0 && authLimiters[0] != nil {
+		v1.Get("/auth/social/:provider/callback", authLimiters[0], callback)
+	} else {
+		v1.Get("/auth/social/:provider/callback", callback)
+	}
 
-	protected := v1.Group("", authMiddleware(cfg.AuthSecret, cfg.Store))
 	protected.Get("/account/social/identities", func(c *fiber.Ctx) error {
 		return listSocialIdentities(c, cfg)
 	})
@@ -111,15 +119,22 @@ func handleSocialAuthRedirect(c *fiber.Ctx, cfg Config) error {
 	state := hex.EncodeToString(stateBytes)
 
 	stateKey := fmt.Sprintf("social:state:%s", state)
-	stateData, _ := json.Marshal(socialAuthState{
+	stateData, err := json.Marshal(socialAuthState{
 		State:    state,
 		Provider: provider,
 		Action:   "login",
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	})
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to encode state")
+	}
 
 	if cfg.Redis != nil && cfg.RedisEnabled {
-		cfg.Redis.Set(c.Context(), stateKey, string(stateData), 10*time.Minute)
+		if err := cfg.Redis.Set(c.Context(), stateKey, string(stateData), 10*time.Minute).Err(); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to store state")
+		}
+	} else {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "redis is required for oauth state")
 	}
 
 	redirectURI := fmt.Sprintf("%s/api/v1/auth/social/%s/callback", strings.TrimRight(cfg.PanelURL, "/"), provider)
@@ -155,15 +170,18 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 	stateKey := fmt.Sprintf("social:state:%s", state)
 	var storedState socialAuthState
 
-	if cfg.Redis != nil && cfg.RedisEnabled {
-		data, err := cfg.Redis.Get(c.Context(), stateKey).Result()
-		if err != nil || data == "" {
-			return fiber.NewError(fiber.StatusUnauthorized, "invalid state")
-		}
-		json.Unmarshal([]byte(data), &storedState)
-		cfg.Redis.Del(c.Context(), stateKey)
-	} else {
+	if cfg.Redis == nil || !cfg.RedisEnabled {
 		return fiber.NewError(fiber.StatusServiceUnavailable, "state validation unavailable")
+	}
+	data, err := cfg.Redis.Get(c.Context(), stateKey).Result()
+	if err != nil || data == "" {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid state")
+	}
+	if err := json.Unmarshal([]byte(data), &storedState); err != nil {
+		return fiber.NewError(fiber.StatusUnauthorized, "invalid state data")
+	}
+	if err := cfg.Redis.Del(c.Context(), stateKey).Err(); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to clear state")
 	}
 
 	if storedState.Provider != provider || storedState.Expires < time.Now().Unix() {
@@ -177,6 +195,14 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 		user, err := exchangeDiscordCode(c.Context(), cfg, code)
 		if err != nil {
 			return fiber.NewError(fiber.StatusUnauthorized, err.Error())
+		}
+		// Discord only vouches for the email address when the account owner
+		// completed email verification. Accepting an unverified email would let
+		// an attacker register a Discord account with someone else's address
+		// (Discord does not require the address to be validated) and then take
+		// over the matching panel account via the email link flow.
+		if !user.Verified || user.Email == "" {
+			return fiber.NewError(fiber.StatusForbidden, "discord email must be verified to use Discord sign-in")
 		}
 		providerID = user.ID
 		providerName = user.Username
@@ -255,15 +281,18 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 			return fiber.NewError(fiber.StatusForbidden, "account is disabled")
 		}
 
-		token, err := issueToken(cfg.AuthSecret, user)
+		token, err := issueConfiguredToken(cfg, user)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
-		csrfToken, _ := generateCSRFToken()
-		expires := time.Now().Add(tokenTTL)
+		csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
+		expires := tokenExpiry(cfg)
 		setSessionCookies(c, token, csrfToken, expires)
 
-		code, _ = issueExchangeCode(token, csrfToken)
+		code, err = issueExchangeCode(c.Context(), cfg, token, csrfToken)
+		if err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "could not create exchange code")
+		}
 		redirectURL := strings.TrimRight(cfg.PanelURL, "/")
 		if code != "" {
 			redirectURL += "/?code=" + code
@@ -279,14 +308,15 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 	user, err := cfg.Store.GetUserByEmail(c.Context(), email)
 	if err != nil {
 		randomPass := make([]byte, 24)
-		rand.Read(randomPass)
+		if _, err := rand.Read(randomPass); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to generate password")
+		}
 		passStr := hex.EncodeToString(randomPass)
-		hashedPass, _ := bcrypt.GenerateFromPassword([]byte(passStr), store.BcryptCost())
 
 		newUser, err := cfg.Store.CreateUser(c.Context(), store.CreateUserRequest{
 			Email:    email,
-			Password: string(hashedPass),
-			Role:     "user",
+			Password: passStr,
+			Role:     RoleUser,
 		}, nil)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "failed to create user")
@@ -301,17 +331,22 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 			prURL = nil
 		}
 
-		cfg.Store.LinkSocialIdentity(c.Context(), newUser.ID, provider, providerID, providerName, avURL, prURL)
+		if _, err := cfg.Store.LinkSocialIdentity(c.Context(), newUser.ID, provider, providerID, providerName, avURL, prURL); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to link social identity")
+		}
 
-		token, err := issueToken(cfg.AuthSecret, newUser)
+		token, err := issueConfiguredToken(cfg, newUser)
 		if err != nil {
 			return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 		}
-		csrfToken, _ := generateCSRFToken()
-		expires := time.Now().Add(tokenTTL)
+		csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
+		expires := tokenExpiry(cfg)
 		setSessionCookies(c, token, csrfToken, expires)
 
-		code, _ = issueExchangeCode(token, csrfToken)
+		code, err = issueExchangeCode(c.Context(), cfg, token, csrfToken)
+		if err != nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "could not create exchange code")
+		}
 		redirectURL := strings.TrimRight(cfg.PanelURL, "/")
 		if code != "" {
 			redirectURL += "/?code=" + code
@@ -328,21 +363,33 @@ func handleSocialAuthCallback(c *fiber.Ctx, cfg Config) error {
 		prURL = nil
 	}
 
-	cfg.Store.LinkSocialIdentity(c.Context(), user.ID, provider, providerID, providerName, avURL, prURL)
+	if _, err := cfg.Store.LinkSocialIdentity(c.Context(), user.ID, provider, providerID, providerName, avURL, prURL); err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to link social identity")
+	}
 
-	token, err := issueToken(cfg.AuthSecret, user)
+	token, err := issueConfiguredToken(cfg, user)
 	if err != nil {
 		return fiber.NewError(fiber.StatusInternalServerError, "could not issue token")
 	}
-	csrfToken, _ := generateCSRFToken()
-	expires := time.Now().Add(tokenTTL)
+	csrfToken := deriveSessionCSRFToken(cfg.AuthSecret, token)
+	expires := tokenExpiry(cfg)
 	setSessionCookies(c, token, csrfToken, expires)
 
-	code, _ = issueExchangeCode(token, csrfToken)
-	redirectURL := strings.TrimRight(cfg.PanelURL, "/")
-	if code != "" {
-		redirectURL += "/?code=" + code
+	code, err = issueExchangeCode(c.Context(), cfg, token, csrfToken)
+	if err != nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "could not create exchange code")
 	}
+	if code != "" {
+		c.Cookie(&fiber.Cookie{
+			Name:     "exchange_code",
+			Value:    code,
+			Expires:  time.Now().Add(30 * time.Second),
+			HTTPOnly: true,
+			Secure:   true,
+			SameSite: "lax",
+		})
+	}
+	redirectURL := strings.TrimRight(cfg.PanelURL, "/")
 	return c.Redirect(redirectURL, fiber.StatusFound)
 }
 
@@ -391,7 +438,8 @@ func exchangeDiscordCode(ctx context.Context, cfg Config, code string) (*discord
 	req, _ := http.NewRequestWithContext(ctx, "GET", "https://discord.com/api/users/@me", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenResult.AccessToken)
 
-	userResp, err := http.DefaultClient.Do(req)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	userResp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -418,14 +466,27 @@ func verifySteamAssertion(c *fiber.Ctx, cfg Config) error {
 	})
 	params.Set("openid.mode", "check_authentication")
 
-	resp, err := http.PostForm("https://steamcommunity.com/openid/login", params)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	resp, err := httpClient.PostForm("https://steamcommunity.com/openid/login", params)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
 
-	body, _ := io.ReadAll(resp.Body)
-	if !strings.Contains(string(body), "is_valid:true") {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("failed to read Steam verification response: %w", err)
+	}
+	lines := strings.Split(string(body), "\n")
+	valid := false
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "is_valid:true" {
+			valid = true
+			break
+		}
+	}
+	if !valid {
 		return fmt.Errorf("Steam authentication verification failed")
 	}
 
@@ -450,7 +511,12 @@ func fetchSteamPlayerSummary(ctx context.Context, cfg Config, steamID string) (*
 	}
 
 	reqURL := fmt.Sprintf("https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v0002/?key=%s&steamids=%s", apiKey, steamID)
-	resp, err := http.DefaultClient.Get(reqURL)
+	httpClient := &http.Client{Timeout: 10 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -526,6 +592,10 @@ func exchangeAuthentikCode(ctx context.Context, cfg Config, code string) (*authe
 }
 
 func listSocialIdentities(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	claims, ok := c.Locals("user").(tokenClaims)
 	if !ok {
 		return fiber.NewError(fiber.StatusUnauthorized, "missing user")
@@ -536,7 +606,7 @@ func listSocialIdentities(c *fiber.Ctx, cfg Config) error {
 
 	identities, err := cfg.Store.ListSocialIdentities(ctx, claims.Sub)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return respondInternalError(c, err)
 	}
 
 	return c.JSON(identities)
@@ -576,16 +646,23 @@ func handleSocialLinkRedirect(c *fiber.Ctx, cfg Config) error {
 	state := hex.EncodeToString(stateBytes)
 
 	stateKey := fmt.Sprintf("social:state:%s", state)
-	stateData, _ := json.Marshal(socialAuthState{
+	stateData, err := json.Marshal(socialAuthState{
 		State:    state,
 		Provider: provider,
 		Action:   "link",
 		UserID:   claims.Sub,
 		Expires:  time.Now().Add(10 * time.Minute).Unix(),
 	})
+	if err != nil {
+		return fiber.NewError(fiber.StatusInternalServerError, "failed to encode state")
+	}
 
 	if cfg.Redis != nil && cfg.RedisEnabled {
-		cfg.Redis.Set(c.Context(), stateKey, string(stateData), 10*time.Minute)
+		if err := cfg.Redis.Set(c.Context(), stateKey, string(stateData), 10*time.Minute).Err(); err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to store state")
+		}
+	} else {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "redis is required for oauth state")
 	}
 
 	redirectURI := fmt.Sprintf("%s/api/v1/auth/social/%s/callback", strings.TrimRight(cfg.PanelURL, "/"), provider)
@@ -608,6 +685,10 @@ func handleSocialLinkRedirect(c *fiber.Ctx, cfg Config) error {
 }
 
 func unlinkSocialIdentity(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	provider := strings.ToLower(c.Params("provider"))
 	claims, ok := c.Locals("user").(tokenClaims)
 	if !ok {
@@ -618,7 +699,7 @@ func unlinkSocialIdentity(c *fiber.Ctx, cfg Config) error {
 	defer cancel()
 
 	if err := cfg.Store.UnlinkSocialIdentity(ctx, claims.Sub, provider); err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return respondInternalError(c, err)
 	}
 
 	return c.JSON(fiber.Map{"ok": true})
@@ -649,12 +730,16 @@ func socialProviderPublicView(provider store.SocialProvider) socialProviderRespo
 }
 
 func listSocialProviders(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	ctx, cancel := requestContext()
 	defer cancel()
 
 	providers, err := cfg.Store.GetSocialProviders(ctx)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return respondInternalError(c, err)
 	}
 
 	response := make([]socialProviderResponse, 0, len(providers))
@@ -665,6 +750,10 @@ func listSocialProviders(c *fiber.Ctx, cfg Config) error {
 }
 
 func updateSocialProvider(c *fiber.Ctx, cfg Config) error {
+	if cfg.Store == nil {
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	}
+
 	var req struct {
 		Enabled      *bool    `json:"enabled"`
 		ClientID     *string  `json:"clientId"`
@@ -681,7 +770,7 @@ func updateSocialProvider(c *fiber.Ctx, cfg Config) error {
 
 	provider, err := cfg.Store.UpdateSocialProvider(ctx, c.Params("id"), req.Enabled, req.ClientID, req.ClientSecret, req.IssuerURL, req.Scopes)
 	if err != nil {
-		return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		return respondInternalError(c, err)
 	}
 
 	return c.JSON(socialProviderPublicView(*provider))

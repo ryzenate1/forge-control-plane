@@ -1,19 +1,9 @@
-CREATE TABLE IF NOT EXISTS job_queue (
-    id uuid PRIMARY KEY,
-    type text NOT NULL,
-    status text NOT NULL DEFAULT 'pending',
-    server_id uuid,
-    node_id uuid,
-    payload jsonb DEFAULT '{}',
-    result jsonb DEFAULT '{}',
-    error text DEFAULT '',
-    priority integer NOT NULL DEFAULT 0,
-    max_retries integer NOT NULL DEFAULT 3,
-    retry_count integer NOT NULL DEFAULT 0,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    started_at timestamptz,
-    completed_at timestamptz
-);
-
-CREATE INDEX IF NOT EXISTS idx_job_queue_status ON job_queue(status, priority, created_at);
-CREATE INDEX IF NOT EXISTS idx_job_queue_node ON job_queue(node_id, status);
+-- No-op guard: this filename once held a byte-identical copy of 057_a_job_queue.sql
+-- (job_queue table). The schema effect lives entirely in 057_a_job_queue.sql.
+--
+-- This file is kept (not deleted, not renamed) because the filename is the
+-- primary key in schema_migrations: hosts that already applied either name
+-- must never see a "new" migration here. The runners treat the pair as
+-- renames (see migrationAliases in internal/store/migration.go): if either
+-- side applied, the other is recorded without re-running DDL.
+SELECT 1;

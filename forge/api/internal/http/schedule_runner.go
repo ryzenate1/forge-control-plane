@@ -3,6 +3,8 @@ package http
 import (
 	"context"
 	"fmt"
+	"log/slog"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -21,7 +23,12 @@ type scheduleRunner struct {
 	running  bool
 	lastTick time.Time
 	lastErr  string
+	cancel   context.CancelFunc
 	wg       sync.WaitGroup
+
+	// lastRetention gates the once-daily metrics-retention sweep. It is only
+	// touched from tick (single goroutine), so it needs no lock.
+	lastRetention time.Time
 }
 
 func newScheduleRunner(cfg Config) *scheduleRunner {
@@ -34,12 +41,41 @@ func newScheduleRunner(cfg Config) *scheduleRunner {
 	}
 }
 
-func (r *scheduleRunner) Start(ctx context.Context) {
-	r.wg.Add(1)
-	go func() { defer r.wg.Done(); r.loop(ctx) }()
+func (r *scheduleRunner) log() *slog.Logger {
+	// The runner is built from Config in tests and minimal wirings where no
+	// logger is set. Fall back to slog.Default() so background sweeps never
+	// panic on a nil Logger — the phase registry uses the same fallback.
+	if r.cfg.Logger != nil {
+		return r.cfg.Logger
+	}
+	return slog.Default()
 }
 
-func (r *scheduleRunner) Wait() { r.wg.Wait() }
+func (r *scheduleRunner) Start(ctx context.Context) {
+	runnerCtx, cancel := context.WithCancel(ctx)
+	r.cancel = cancel
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		defer func() {
+			if recovered := recover(); recovered != nil {
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				r.log().Error("schedule runner panic recovered", "panic", recovered, "stack", string(buf[:n]))
+			}
+		}()
+		r.loop(runnerCtx)
+	}()
+}
+
+func (r *scheduleRunner) Stop() {
+	if r.cancel != nil {
+		r.cancel()
+	}
+	r.wg.Wait()
+}
+
+func (r *scheduleRunner) Wait() { r.Stop() }
 
 func (r *scheduleRunner) loop(ctx context.Context) {
 	if r.cfg.Store == nil {
@@ -138,6 +174,12 @@ func (r *scheduleRunner) tick(ctx context.Context) {
 	// Fail stale backups stuck in pending/running state
 	r.runBackupPrune(ctx)
 
+	// Evaluate resource alerts against observed node metrics + heartbeat
+	// staleness, and prune time-series retention daily. Without this the alert
+	// engine never runs and node_metrics is never bounded.
+	r.runAlertEvaluation(ctx)
+	r.runMetricsRetention(ctx, now)
+
 	pollCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	schedules, err := r.cfg.Store.ListDueSchedules(pollCtx, now, 64)
 	cancel()
@@ -175,39 +217,76 @@ func (r *scheduleRunner) tick(ctx context.Context) {
 	r.recordTick(nil)
 }
 
+// runAlertEvaluation refreshes the notification routes and evaluates heartbeat
+// staleness per node. It reuses the schedule runner's tick rather than starting
+// a dedicated goroutine, so it inherits the same lifecycle and shutdown drain.
+func (r *scheduleRunner) runAlertEvaluation(ctx context.Context) {
+	if r.cfg.AlertService == nil || r.cfg.Store == nil {
+		return
+	}
+	evalCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_ = r.cfg.AlertService.RefreshRoutes(evalCtx)
+	nodes, err := r.cfg.Store.ListNodes(evalCtx)
+	if err != nil {
+		return
+	}
+	for _, node := range nodes {
+		_ = r.cfg.AlertService.CheckStaleHeartbeat(evalCtx, node.ID, node.LastSeenAt, 5*time.Minute)
+	}
+}
+
+// runMetricsRetention enforces the time-series retention policies once a day.
+func (r *scheduleRunner) runMetricsRetention(ctx context.Context, now time.Time) {
+	if r.cfg.Observability == nil {
+		return
+	}
+	if !r.lastRetention.IsZero() && now.Sub(r.lastRetention) < 24*time.Hour {
+		return
+	}
+	retCtx, cancel := context.WithTimeout(ctx, 2*time.Minute)
+	defer cancel()
+	if _, err := r.cfg.Observability.EnforceRetention(retCtx); err != nil {
+		r.log().Error("metrics retention failed", "error", err.Error())
+		return
+	}
+	r.lastRetention = now
+}
+
 // runBackupCleanup performs automatic backup cleanup based on retention policies
 func (r *scheduleRunner) runBackupCleanup(ctx context.Context) {
 	if r.cfg.Store == nil {
 		return
 	}
 
-	// Get panel settings for retention policy
 	settings, err := r.cfg.Store.GetPanelSettings(ctx)
 	if err != nil {
-		// Log error but don't fail the tick
 		return
 	}
 
-	// Only run cleanup if auto-cleanup is enabled
 	if !settings.BackupAutoCleanup {
 		return
 	}
 
-	// Run global backup cleanup
-	deleted, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup)
-	if err != nil {
-		// Log error but don't fail the tick
-		return
+	// A retention sweep is best-effort per backup: it reports how many it
+	// actually deleted alongside an error describing whatever failed. Log the
+	// failures instead of swallowing them, and keep going — invitation cleanup
+	// below is independent work that used to be skipped whenever a single
+	// backup deletion failed.
+	if r.cfg.BackupSvc != nil {
+		deleted, err := r.cfg.BackupSvc.CleanupExpiredBackups(ctx)
+		if err != nil {
+			r.log().Error("backup retention sweep incomplete", "deleted", deleted, "error", err.Error())
+		}
+	} else {
+		if _, err := r.cfg.Store.CleanupOldBackups(ctx, settings.BackupRetentionDays, settings.BackupAutoCleanup); err != nil {
+			r.log().Error("backup retention sweep failed", "error", err.Error())
+		}
 	}
 
-	// If backups were deleted, this could be logged for monitoring
-	if deleted > 0 {
-		// Could add metrics logging here
-		_ = deleted
+	if _, err := r.cfg.Store.CleanupExpiredInvitations(ctx); err != nil {
+		r.log().Error("expired invitation cleanup failed", "error", err.Error())
 	}
-
-	// Also cleanup expired invitations
-	_, _ = r.cfg.Store.CleanupExpiredInvitations(ctx)
 }
 
 // runBackupPrune fails backups stuck in pending/running state past the configured threshold
@@ -384,19 +463,17 @@ func (r *scheduleRunner) executeTask(ctx context.Context, serverID string, task 
 		if signal == "" {
 			return fmt.Errorf("power task missing payload.signal")
 		}
-		if r.cfg.Daemon == nil || r.cfg.Store == nil {
-			return fmt.Errorf("daemon/store unavailable for power task")
+		if r.cfg.Store == nil || r.cfg.ClusterManager == nil {
+			return fmt.Errorf("store and cluster manager unavailable for power task")
 		}
 		targetCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
-		target, err := r.cfg.Store.ServerControlTarget(targetCtx, serverID)
-		if err != nil {
-			return err
-		}
-		if _, err := r.cfg.Daemon.SendPower(targetCtx, target.NodeURL, target.NodeToken, target.ServerID, signal); err != nil {
-			return err
-		}
-		return r.cfg.Store.SetServerPowerState(targetCtx, serverID, signal)
+		// Power signals go through the cluster manager, not straight at the
+		// daemon: it is what enforces the suspension guard, records desired
+		// state and writes the actual-state transition. A scheduled start on a
+		// suspended server must fail, not bypass the flag.
+		_, _, err := r.cfg.ClusterManager.RequestServerPower(targetCtx, serverID, signal)
+		return err
 	case "backup":
 		if r.cfg.Daemon == nil || r.cfg.Store == nil {
 			return fmt.Errorf("daemon/store unavailable for backup task")

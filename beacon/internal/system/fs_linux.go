@@ -6,7 +6,9 @@
 package system
 
 import (
+	"errors"
 	"os"
+	"strings"
 	"sync"
 
 	"golang.org/x/sys/unix"
@@ -63,6 +65,9 @@ func OpenRoot(path string) (int, error) {
 // This provides kernel-level protection against symlink-based TOCTOU attacks
 // that userspace path validation cannot fully prevent.
 func SafeOpen(rootFD int, name string, flag int, mode uint32) (int, error) {
+	if strings.ContainsRune(name, 0) {
+		return 0, &os.PathError{Op: "openat2", Path: name, Err: errors.New("invalid path: contains null byte")}
+	}
 	// Ensure O_CLOEXEC is set.
 	if flag&o_CLOEXEC == 0 {
 		flag |= o_CLOEXEC

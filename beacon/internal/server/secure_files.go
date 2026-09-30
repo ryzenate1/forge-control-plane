@@ -37,11 +37,11 @@ var uploadLocks sync.Map
 func lockUpload(serverID, uploadID string) func() {
 	key := serverID + "/" + uploadID
 	value, _ := uploadLocks.LoadOrStore(key, &sync.Mutex{})
-	mu := value.(*sync.Mutex)
+	mu, _ := value.(*sync.Mutex)
 	mu.Lock()
 	return func() {
-		mu.Unlock()
 		uploadLocks.Delete(key)
+		mu.Unlock()
 	}
 }
 
@@ -90,6 +90,60 @@ func cleanupExpiredUploads(fsys *rootfs.FS, now time.Time) {
 		if err == nil && now.Sub(info.ModTime()) > uploadExpiry {
 			_ = fsys.RemoveAll(path.Join(".uploads", entry.Name()))
 		}
+	}
+}
+
+// uploadCleanupInterval controls how often the background reaper started by
+// startUploadCleanupLoop scans for and removes stale chunked-upload temp
+// files. Previously, cleanupExpiredUploads only ran opportunistically when a
+// new chunk arrived for the same server/upload, so a crash (or an upload
+// that's simply abandoned) mid-upload left orphaned .uploads/*.part files on
+// disk indefinitely, until the process happened to receive another upload
+// request for that server.
+const uploadCleanupInterval = 30 * time.Minute
+
+// startUploadCleanupLoop periodically scans every server directory under
+// dataDir and removes chunked-upload temp files older than uploadExpiry
+// from each one's .uploads directory. It runs until ctx is cancelled, so
+// callers should tie ctx to the server's lifetime (see Server.Shutdown) to
+// avoid leaking the goroutine.
+func startUploadCleanupLoop(ctx context.Context, dataDir string) {
+	go func() {
+		ticker := time.NewTicker(uploadCleanupInterval)
+		defer ticker.Stop()
+		cleanupAllExpiredUploads(dataDir)
+		for {
+			select {
+			case <-ticker.C:
+				cleanupAllExpiredUploads(dataDir)
+			case <-ctx.Done():
+				return
+			}
+		}
+	}()
+}
+
+// cleanupAllExpiredUploads scans dataDir for per-server directories and
+// removes stale chunked-upload temp files from each one's .uploads
+// directory. Errors opening or reading an individual server's filesystem
+// are ignored so that one problematic directory doesn't stop the reaper
+// from cleaning up the rest.
+func cleanupAllExpiredUploads(dataDir string) {
+	entries, err := os.ReadDir(dataDir)
+	if err != nil {
+		return
+	}
+	now := time.Now()
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		fsys, err := rootfs.New(path.Join(dataDir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		cleanupExpiredUploads(fsys, now)
+		_ = fsys.Close()
 	}
 }
 
@@ -243,7 +297,22 @@ func extractZipStaged(fsys *rootfs.FS, reader *zip.Reader, stage string, limits 
 			return err
 		}
 		remaining := limits.bytes - written
-		count, copyErr := io.Copy(destination, io.LimitReader(source, remaining+1))
+		// Bound each entry read to its *declared* uncompressed size (validateZip
+		// already guaranteed that size fits the global limit) rather than to the
+		// whole remaining budget. A malicious zip can advertise a tiny
+		// UncompressedSize64 while its deflate stream expands to gigabytes;
+		// without this cap we would write up to the full limit into staging before
+		// the size mismatch is detected — a decompression-bomb write amplification
+		// and quota bypass.
+		declared := int64(entry.UncompressedSize64)
+		if declared < 0 {
+			declared = 0
+		}
+		entryCap := declared
+		if entryCap > remaining {
+			entryCap = remaining
+		}
+		count, copyErr := io.Copy(destination, io.LimitReader(source, entryCap+1))
 		closeErr := destination.Close()
 		_ = source.Close()
 		written += count
@@ -253,7 +322,7 @@ func extractZipStaged(fsys *rootfs.FS, reader *zip.Reader, stage string, limits 
 		if count > remaining {
 			return errors.New("archive expanded size exceeds limit")
 		}
-		if count != int64(entry.UncompressedSize64) {
+		if count != declared {
 			return errors.New("archive entry size is incomplete")
 		}
 		if closeErr != nil {
@@ -333,7 +402,11 @@ type archiveCommit struct {
 }
 
 func mergeStaging(fsys *rootfs.FS, stage, destination string) error {
-	backupRoot := ".extract-backup-" + randomHex(12)
+	suffix, err := randomHex(12)
+	if err != nil {
+		return err
+	}
+	backupRoot := ".extract-backup-" + suffix
 	if err := fsys.MkdirAll(backupRoot, 0o700); err != nil {
 		return err
 	}
@@ -432,7 +505,11 @@ func extractArchive(fsys *rootfs.FS, archiveName, destination string, manager *S
 		return 0, errors.New("archive is not a regular file")
 	}
 	limits := archiveLimits{bytes: envBytes("DAEMON_ARCHIVE_MAX_EXPANDED_BYTES", defaultMaxArchiveBytes), entries: defaultMaxArchiveEntries}
-	stage := ".extract-" + randomHex(12)
+	suffix, err := randomHex(12)
+	if err != nil {
+		return 0, err
+	}
+	stage := ".extract-" + suffix
 	if err := fsys.MkdirAll(stage, 0o700); err != nil {
 		return 0, err
 	}

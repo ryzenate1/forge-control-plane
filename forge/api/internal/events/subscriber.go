@@ -1,6 +1,9 @@
 package events
 
-import "context"
+import (
+	"context"
+	"fmt"
+)
 
 type Subscriber interface {
 	Handle(context.Context, Envelope) error
@@ -28,7 +31,7 @@ func SubscriberWithRecovery(next Subscriber) Subscriber {
 				if recoveredErr, ok := r.(error); ok {
 					err = recoveredErr
 				} else {
-					err = context.DeadlineExceeded
+					err = fmt.Errorf("subscriber panic: %v", r)
 				}
 			}
 		}()

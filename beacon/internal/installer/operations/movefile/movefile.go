@@ -30,8 +30,14 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 }
 
 func (op *MoveFile) Execute(ctx context.Context, serverDir string) error {
-	source := operations.ResolvePath(serverDir, op.Source)
-	dest := operations.ResolvePath(serverDir, op.Dest)
+	source, err := operations.ResolvePath(serverDir, op.Source)
+	if err != nil {
+		return err
+	}
+	dest, err := operations.ResolvePath(serverDir, op.Dest)
+	if err != nil {
+		return err
+	}
 
 	if err := operations.EnsureParentDir(dest); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)

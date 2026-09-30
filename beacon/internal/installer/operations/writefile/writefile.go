@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"gamepanel/beacon/internal/installer/operations"
 )
@@ -31,7 +32,10 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 }
 
 func (op *WriteFile) Execute(ctx context.Context, serverDir string) error {
-	dest := operations.ResolvePath(serverDir, op.Dest)
+	dest, err := operations.ResolvePath(serverDir, op.Dest)
+	if err != nil {
+		return err
+	}
 	if err := operations.EnsureParentDir(dest); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
@@ -40,9 +44,34 @@ func (op *WriteFile) Execute(ctx context.Context, serverDir string) error {
 	if op.Mode > 0 {
 		mode = os.FileMode(op.Mode)
 	}
+	mode &= 0o666
+	if mode == 0 {
+		return fmt.Errorf("writeFile: mode must grant owner read or write access")
+	}
 
-	if err := os.WriteFile(dest, []byte(op.Content), mode); err != nil {
+	temp, err := os.CreateTemp(filepath.Dir(dest), "."+filepath.Base(dest)+".write-*")
+	if err != nil {
+		return fmt.Errorf("create temporary file: %w", err)
+	}
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(mode); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.WriteString(op.Content); err != nil {
+		_ = temp.Close()
 		return fmt.Errorf("write %q: %w", dest, err)
 	}
-	return nil
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, dest); err != nil {
+		return fmt.Errorf("write %q: %w", dest, err)
+	}
+	return operations.SyncDirectory(filepath.Dir(dest))
 }

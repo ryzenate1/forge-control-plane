@@ -27,13 +27,14 @@ $FRONTEND_PORT = 3000
 
 $env:DATABASE_URL      = "postgres://${DB_USER}:${DB_PASS}@localhost:${DB_PORT}/${DB_NAME}?sslmode=disable"
 $env:API_ADDR           = ":${API_PORT}"
-$env:API_AUTH_SECRET     = "dev-api-secret"
+$env:API_AUTH_SECRET     = "dev-$([Guid]::NewGuid().ToString('N'))"
 $env:APP_ENV             = "development"
-$env:DAEMON_NODE_TOKEN   = "dev-node-token"
+$env:DAEMON_NODE_TOKEN   = "dev-$([Guid]::NewGuid().ToString('N'))"
 $env:API_DEMO_MODE       = "false"
 $env:REDIS_ADDR          = "localhost:${REDIS_PORT}"
 $env:MIGRATIONS_DIR      = "$ROOT\forge\api\migrations"
 $env:NEXT_PUBLIC_API_URL = "http://localhost:${API_PORT}/api/v1"
+Write-Host "  [dev] development node token: $env:DAEMON_NODE_TOKEN" -ForegroundColor Yellow
 
 # --- Helpers ---
 function Write-Status($icon, $msg, $color) { Write-Host "  $icon " -NoNewline -ForegroundColor $color; Write-Host $msg }

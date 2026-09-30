@@ -9,6 +9,10 @@ import (
 )
 
 func TestMaintenanceMode_DisabledByDefault(t *testing.T) {
+	origMode := os.Getenv("FORGE_MAINTENANCE_MODE")
+	origBypass := os.Getenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
+	defer os.Setenv("FORGE_MAINTENANCE_MODE", origMode)
+	defer os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", origBypass)
 	os.Unsetenv("FORGE_MAINTENANCE_MODE")
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
@@ -28,8 +32,11 @@ func TestMaintenanceMode_DisabledByDefault(t *testing.T) {
 }
 
 func TestMaintenanceMode_EnabledReturns503(t *testing.T) {
+	origMode := os.Getenv("FORGE_MAINTENANCE_MODE")
+	origBypass := os.Getenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
+	defer os.Setenv("FORGE_MAINTENANCE_MODE", origMode)
+	defer os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", origBypass)
 	os.Setenv("FORGE_MAINTENANCE_MODE", "true")
-	defer os.Unsetenv("FORGE_MAINTENANCE_MODE")
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(MaintenanceModeMiddleware(Config{}))
@@ -48,10 +55,12 @@ func TestMaintenanceMode_EnabledReturns503(t *testing.T) {
 }
 
 func TestMaintenanceMode_EnabledWithValidBypassHeader(t *testing.T) {
+	origMode := os.Getenv("FORGE_MAINTENANCE_MODE")
+	origBypass := os.Getenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
+	defer os.Setenv("FORGE_MAINTENANCE_MODE", origMode)
+	defer os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", origBypass)
 	os.Setenv("FORGE_MAINTENANCE_MODE", "true")
 	os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", "my-bypass-token")
-	defer os.Unsetenv("FORGE_MAINTENANCE_MODE")
-	defer os.Unsetenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(MaintenanceModeMiddleware(Config{}))
@@ -71,10 +80,12 @@ func TestMaintenanceMode_EnabledWithValidBypassHeader(t *testing.T) {
 }
 
 func TestMaintenanceMode_EnabledWithInvalidBypassHeader(t *testing.T) {
+	origMode := os.Getenv("FORGE_MAINTENANCE_MODE")
+	origBypass := os.Getenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
+	defer os.Setenv("FORGE_MAINTENANCE_MODE", origMode)
+	defer os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", origBypass)
 	os.Setenv("FORGE_MAINTENANCE_MODE", "true")
 	os.Setenv("FORGE_MAINTENANCE_BYPASS_TOKEN", "my-bypass-token")
-	defer os.Unsetenv("FORGE_MAINTENANCE_MODE")
-	defer os.Unsetenv("FORGE_MAINTENANCE_BYPASS_TOKEN")
 
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(MaintenanceModeMiddleware(Config{}))

@@ -43,6 +43,8 @@ func TestAdminActivityRoutesAreCanonicalAndProtected(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("user", tokenClaims{Role: "admin"})
+		c.Locals("apiScopes", []string{"*"})
+		c.Locals("scopedAuth", false)
 		return c.Next()
 	})
 	registerActivityRoutes(app, Config{ActivityService: activity.New(store)})
@@ -76,8 +78,8 @@ func TestAdminActivityRoutesAreCanonicalAndProtected(t *testing.T) {
 	if store.filter.ActorID == nil || *store.filter.ActorID != "user-2" || store.filter.SubjectID == nil || *store.filter.SubjectID != "server-1" {
 		t.Fatalf("export filter = %#v, want actor and subject filters", store.filter)
 	}
-	if store.filter.Limit != 200 || store.filter.Offset != 0 {
-		t.Fatalf("export pagination = limit %d, offset %d; want limit 200, offset 0", store.filter.Limit, store.filter.Offset)
+	if store.filter.Limit != 50 || store.filter.Offset != 0 {
+		t.Fatalf("export pagination = limit %d, offset %d; want limit 50, offset 0", store.filter.Limit, store.filter.Offset)
 	}
 
 	legacyGlobalRequest := httptest.NewRequest(http.MethodGet, "/activity/events", nil)
@@ -123,6 +125,8 @@ func TestAdminActivityQueryRejectsNonAdmin(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
 	app.Use(func(c *fiber.Ctx) error {
 		c.Locals("user", tokenClaims{Role: "user"})
+		c.Locals("apiScopes", []string{})
+		c.Locals("scopedAuth", false)
 		return c.Next()
 	})
 	registerActivityRoutes(app, Config{ActivityService: activity.New(&fakeActivityStore{})})

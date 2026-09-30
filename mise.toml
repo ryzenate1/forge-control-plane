@@ -1,0 +1,9 @@
+[tools]
+go = "1.26"
+node = "22"
+python = "3.14"
+
+[tasks.test-web]
+description = "Run Forge web tests"
+dir = "forge/web"
+run = "npm test"

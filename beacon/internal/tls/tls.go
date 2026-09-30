@@ -1,6 +1,7 @@
 package tls
 
 import (
+	"context"
 	"crypto/tls"
 	"errors"
 	"fmt"
@@ -23,6 +24,16 @@ type Config struct {
 	Hostname  string
 	CacheDir  string
 	ACMEEmail string
+
+	challengeServerCancel context.CancelFunc
+}
+
+// StopChallengeServer cancels the AutoTLS challenge server context,
+// causing it to shut down gracefully.
+func (c *Config) StopChallengeServer() {
+	if c.challengeServerCancel != nil {
+		c.challengeServerCancel()
+	}
 }
 
 func DefaultTLSConfig() *tls.Config {
@@ -84,6 +95,11 @@ func (c *Config) Apply(server *http.Server) error {
 		return nil
 	case ModeManual:
 		cfg := DefaultTLSConfig()
+		certificate, err := tls.LoadX509KeyPair(c.CertFile, c.KeyFile)
+		if err != nil {
+			return fmt.Errorf("load manual TLS certificate: %w", err)
+		}
+		cfg.Certificates = []tls.Certificate{certificate}
 		server.TLSConfig = cfg
 		return nil
 	case ModeAutoTLS:
@@ -96,7 +112,9 @@ func (c *Config) Apply(server *http.Server) error {
 		cfg.GetCertificate = mgr.GetCertificate
 		cfg.NextProtos = append(cfg.NextProtos, "acme-tls/1")
 		server.TLSConfig = cfg
-		return mgr.StartChallengeServer()
+		ctx, cancel := context.WithCancel(context.Background())
+		c.challengeServerCancel = cancel
+		return mgr.StartChallengeServer(ctx)
 	default:
 		return fmt.Errorf("unknown TLS mode: %s", c.Mode)
 	}

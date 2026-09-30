@@ -3,6 +3,7 @@ package logger
 import (
 	"context"
 	"io"
+	"log"
 	"log/slog"
 	"os"
 	"strings"
@@ -27,6 +28,8 @@ func New(cfg Config) *slog.Logger {
 	default:
 		if f, err := os.OpenFile(cfg.Output, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644); err == nil {
 			writer = f
+		} else {
+			log.Printf("failed to open log file %s, falling back to stdout: %v", cfg.Output, err)
 		}
 	}
 

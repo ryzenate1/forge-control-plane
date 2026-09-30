@@ -1,11 +1,9 @@
--- Add scoped permissions to API keys.
--- Stored as a JSON array of permission strings, e.g. ["servers.read","nodes.read"].
--- An empty/null array means NO permissions (fail-closed).
--- The special scope "*" grants full access.
-
-ALTER TABLE api_keys
-    ADD COLUMN IF NOT EXISTS scopes JSONB NOT NULL DEFAULT '[]'::jsonb;
-
--- Add allowed_ips for IP restriction
-ALTER TABLE api_keys
-    ADD COLUMN IF NOT EXISTS allowed_ips TEXT[] NOT NULL DEFAULT '{}';
+-- No-op guard: this filename once held a byte-identical copy of 121_api_key_scopes.sql
+-- (api_keys scopes/allowed_ips columns). The schema effect lives entirely in 121_api_key_scopes.sql.
+--
+-- This file is kept (not deleted, not renamed) because the filename is the
+-- primary key in schema_migrations: hosts that already applied either name
+-- must never see a "new" migration here. The runners treat the pair as
+-- renames (see migrationAliases in internal/store/migration.go): if either
+-- side applied, the other is recorded without re-running DDL.
+SELECT 1;

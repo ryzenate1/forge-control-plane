@@ -1,10 +1,14 @@
 -- Canonicalize regions created before the slug contract was enforced.
 -- Stage values first so canonicalization can safely resolve case/punctuation collisions.
 -- Fresh installs receive this generated name from the original table definition.
+-- Idempotent: the staging UPDATE skips rows already staged (WHERE NOT LIKE),
+-- and the inner REGEXP strips a previous staging suffix, so re-runs converge
+-- instead of appending another '__region_slug_migration__<id>' suffix.
 ALTER TABLE regions DROP CONSTRAINT IF EXISTS regions_slug_check;
 
 UPDATE regions
-SET slug = slug || '__region_slug_migration__' || REPLACE(id::text, '-', '');
+SET slug = slug || '__region_slug_migration__' || REPLACE(id::text, '-', '')
+WHERE slug NOT LIKE '%__region_slug_migration__%';
 
 WITH normalized AS (
     SELECT
@@ -33,6 +37,7 @@ SET slug = ranked.slug,
 FROM ranked
 WHERE r.id = ranked.id;
 
-ALTER TABLE regions
-    ADD CONSTRAINT regions_slug_format_check
+DO $$ BEGIN
+    ALTER TABLE regions ADD CONSTRAINT regions_slug_format_check
     CHECK (slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;

@@ -186,18 +186,31 @@ func TestStepsUnknownType(t *testing.T) {
 func strPtr(s string) *string { return &s }
 
 func TestResolvePath(t *testing.T) {
+	root := t.TempDir()
+	canonicalRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		t.Fatal(err)
+	}
 	tests := []struct {
 		serverDir string
 		target    string
 		expected  string
+		wantErr   bool
 	}{
-		{"/srv/server", "file.txt", "/srv/server/file.txt"},
-		{"/srv/server", "/abs/path", "/abs/path"},
-		{"/srv/server", "sub/file.txt", "/srv/server/sub/file.txt"},
+		{root, "file.txt", filepath.Join(canonicalRoot, "file.txt"), false},
+		{root, "/abs/path", "", true},
+		{root, "sub/file.txt", filepath.Join(canonicalRoot, "sub/file.txt"), false},
+		{root, "../etc/passwd", "", true},
 	}
 	for _, tc := range tests {
-		got := ResolvePath(tc.serverDir, tc.target)
-		if got != tc.expected {
+		got, err := ResolvePath(tc.serverDir, tc.target)
+		if tc.wantErr && err == nil {
+			t.Errorf("ResolvePath(%q, %q) expected error", tc.serverDir, tc.target)
+		}
+		if !tc.wantErr && err != nil {
+			t.Errorf("ResolvePath(%q, %q) unexpected error: %v", tc.serverDir, tc.target, err)
+		}
+		if !tc.wantErr && got != tc.expected {
 			t.Errorf("ResolvePath(%q, %q) = %q; want %q", tc.serverDir, tc.target, got, tc.expected)
 		}
 	}

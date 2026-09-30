@@ -2,11 +2,12 @@ package fabricdl
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"os"
 	"time"
 
 	"gamepanel/beacon/internal/installer/operations"
@@ -15,7 +16,8 @@ import (
 const fabricMetaURL = "https://meta.fabricmc.net/v2/versions/installer"
 
 type FabricDl struct {
-	Filename string `json:"filename"`
+	Filename       string `json:"filename"`
+	ExpectedSHA256 string `json:"expectedSha256"`
 }
 
 func init() {
@@ -29,6 +31,9 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 	}
 	if op.Filename == "" {
 		op.Filename = "fabric-installer.jar"
+	}
+	if decoded, err := hex.DecodeString(op.ExpectedSHA256); err != nil || len(decoded) != sha256.Size {
+		return nil, fmt.Errorf("fabricDl: expectedSha256 is required")
 	}
 	return &op, nil
 }
@@ -47,47 +52,22 @@ func (op *FabricDl) Execute(ctx context.Context, serverDir string) error {
 	}
 
 	dlURL := installers[0].URL
-	dest := operations.ResolvePath(serverDir, op.Filename)
+	dest, err := operations.ResolvePath(serverDir, op.Filename)
+	if err != nil {
+		return err
+	}
 	if err := operations.EnsureParentDir(dest); err != nil {
 		return fmt.Errorf("create parent dir: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, dlURL, nil)
-	if err != nil {
-		return err
-	}
-	req.Header.Set("User-Agent", "GamePanel-Beacon/1.0")
-
-	client := &http.Client{Timeout: 10 * time.Minute}
-	resp, err := client.Do(req)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %q: status %d", dlURL, resp.StatusCode)
-	}
-
-	out, err := os.Create(dest)
-	if err != nil {
-		return err
-	}
-	defer out.Close()
-
-	_, err = io.Copy(out, resp.Body)
-	return err
+	return operations.DownloadVerified(ctx, dlURL, dest, op.ExpectedSHA256, 2<<30, 10*time.Minute)
 }
 
 func (op *FabricDl) fetchInstallers(ctx context.Context) ([]fabricInstallerInfo, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fabricMetaURL, nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", "GamePanel-Beacon/1.0")
-
-	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err := client.Do(req)
+	client := operations.SecureHTTPClient(30 * time.Second)
+	resp, err := operations.DoWithRetry(ctx, client, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, fabricMetaURL, nil)
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -98,7 +78,7 @@ func (op *FabricDl) fetchInstallers(ctx context.Context) ([]fabricInstallerInfo,
 	}
 
 	var installers []fabricInstallerInfo
-	if err := json.NewDecoder(resp.Body).Decode(&installers); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 2<<20)).Decode(&installers); err != nil {
 		return nil, err
 	}
 	return installers, nil

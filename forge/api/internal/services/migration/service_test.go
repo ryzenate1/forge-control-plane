@@ -11,32 +11,32 @@ import (
 	"gamepanel/forge/internal/store"
 )
 
-func TestExecuteMigrationReturnsTypedNotImplementedWithoutStore(t *testing.T) {
+func TestExecuteMigrationReturnsTypedUnavailableWithoutStore(t *testing.T) {
 	service := New(nil, nil, nil, nil, nil)
 
 	_, err := service.ExecuteMigration(context.Background(), "migration-1")
 	if err == nil {
 		t.Fatal("expected migration execution to be unavailable")
 	}
-	var notImplemented *NotImplementedError
-	if !errors.As(err, &notImplemented) {
-		t.Fatalf("expected *NotImplementedError, got %T", err)
+	var unavailable *ExecutorUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected *ExecutorUnavailableError, got %T", err)
 	}
-	if notImplemented.MigrationID != "migration-1" {
-		t.Fatalf("unexpected migration id %q", notImplemented.MigrationID)
+	if unavailable.MigrationID != "migration-1" {
+		t.Fatalf("unexpected migration id %q", unavailable.MigrationID)
 	}
-	if !errors.Is(err, gpruntime.ErrNotImplemented) {
-		t.Fatalf("expected error to wrap runtime.ErrNotImplemented: %v", err)
+	if !errors.Is(err, gpruntime.ErrRuntimeUnavailable) {
+		t.Fatalf("expected error to wrap runtime.ErrRuntimeUnavailable: %v", err)
 	}
 }
 
-func TestPrepareMigrationReturnsTypedNotImplementedWithoutStore(t *testing.T) {
+func TestPrepareMigrationReturnsTypedUnavailableWithoutStore(t *testing.T) {
 	service := New(nil, nil, nil, nil, nil)
 
 	_, err := service.PrepareMigration(context.Background(), "migration-1")
-	var notImplemented *NotImplementedError
-	if !errors.As(err, &notImplemented) {
-		t.Fatalf("expected *NotImplementedError, got %T (%v)", err, err)
+	var unavailable *ExecutorUnavailableError
+	if !errors.As(err, &unavailable) {
+		t.Fatalf("expected *ExecutorUnavailableError, got %T (%v)", err, err)
 	}
 }
 
@@ -124,22 +124,22 @@ func TestRuntimeTarget(t *testing.T) {
 
 func TestRuntimeCreateRequest(t *testing.T) {
 	req := runtimeCreateRequest(store.ServerProvisionTarget{
-		ServerID:      "srv-001",
-		Name:          "my-server",
-		Image:         "ubuntu:22.04",
-		MemoryMB:      2048,
-		SwapMB:        512,
-		CPUShares:     1024,
-		CPULimit:      2048,
-		DiskMB:        10000,
-		IOWeight:      500,
-		Threads:       "2",
-		OOMDisabled:   false,
-		AllocationIP:  "10.0.0.1",
+		ServerID:       "srv-001",
+		Name:           "my-server",
+		Image:          "ubuntu:22.04",
+		MemoryMB:       2048,
+		SwapMB:         512,
+		CPUShares:      1024,
+		CPULimit:       2048,
+		DiskMB:         10000,
+		IOWeight:       500,
+		Threads:        "2",
+		OOMDisabled:    false,
+		AllocationIP:   "10.0.0.1",
 		AllocationPort: 25565,
-		Environment:   map[string]string{"FOO": "bar"},
-		Allocations:   nil,
-		Mounts:        nil,
+		Environment:    map[string]string{"FOO": "bar"},
+		Allocations:    nil,
+		Mounts:         nil,
 		StartupCommand: "./start.sh",
 	})
 	if req.ServerID != "srv-001" {
@@ -170,7 +170,7 @@ func TestRuntimeCreateRequest(t *testing.T) {
 
 func TestRuntimeCreateRequestMinecraft(t *testing.T) {
 	req := runtimeCreateRequest(store.ServerProvisionTarget{
-		Image:         "itzg/minecraft-server:latest",
+		Image:          "itzg/minecraft-server:latest",
 		StartupCommand: "./start.sh",
 	})
 	if req.Command != nil {
@@ -229,13 +229,13 @@ func TestServiceMetricsInitialZero(t *testing.T) {
 	}
 }
 
-func TestNotImplementedError(t *testing.T) {
-	e := &NotImplementedError{Operation: "test", MigrationID: "mig-1"}
-	if !errors.Is(e, gpruntime.ErrNotImplemented) {
-		t.Error("expected NotImplementedError to wrap ErrNotImplemented")
+func TestExecutorUnavailableError(t *testing.T) {
+	e := &ExecutorUnavailableError{Operation: "test", MigrationID: "mig-1"}
+	if !errors.Is(e, gpruntime.ErrRuntimeUnavailable) {
+		t.Error("expected ExecutorUnavailableError to wrap ErrRuntimeUnavailable")
 	}
 	msg := e.Error()
-	if !strings.Contains(msg, "test") || !strings.Contains(msg, "not implemented") {
+	if !strings.Contains(msg, "test") || !strings.Contains(msg, "unavailable") {
 		t.Errorf("unexpected error message: %s", msg)
 	}
 }

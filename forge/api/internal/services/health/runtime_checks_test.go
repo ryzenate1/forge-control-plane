@@ -19,8 +19,13 @@ func TestAPIRuntimeCheck(t *testing.T) {
 	if result.Status != StatusOK {
 		t.Fatalf("status = %q, want ok", result.Status)
 	}
-	if _, ok := result.Details["heapAllocBytes"]; !ok {
-		t.Fatalf("details missing heapAllocBytes: %#v", result.Details)
+	if _, ok := result.Details["uptimeSeconds"]; !ok {
+		t.Fatalf("details missing uptimeSeconds: %#v", result.Details)
+	}
+	for _, sensitiveKey := range []string{"goroutines", "heapAllocBytes", "heapSysBytes", "goVersion", "goArch", "goOS"} {
+		if _, ok := result.Details[sensitiveKey]; ok {
+			t.Fatalf("public health details leak %s: %#v", sensitiveKey, result.Details)
+		}
 	}
 }
 

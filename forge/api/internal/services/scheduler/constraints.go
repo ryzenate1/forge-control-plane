@@ -66,67 +66,98 @@ func (s *ConstraintScheduler) EvaluateConstraints(ctx context.Context, req domai
 
 	var result []store.Node
 	for _, node := range nodes {
-		if s.meetsAllConstraints(ctx, req, node) {
+		if err := ctx.Err(); err != nil {
+			return nil, fmt.Errorf("constraint evaluation cancelled: %w", err)
+		}
+		ok, err := s.meetsAllConstraints(ctx, req, node)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
 			result = append(result, node)
 		}
 	}
 	return result, nil
 }
 
-func (s *ConstraintScheduler) meetsAllConstraints(ctx context.Context, req domain.PlacementRequest, node store.Node) bool {
+// meetsAllConstraints enforces every configured constraint: a required
+// constraint the node does not satisfy excludes it, and a forbidden
+// constraint the node does satisfy excludes it. Preferred constraints never
+// exclude; they are scoring hints, not filters.
+func (s *ConstraintScheduler) meetsAllConstraints(ctx context.Context, req domain.PlacementRequest, node store.Node) (bool, error) {
 	for _, c := range s.constraints {
-		if !s.evaluateConstraint(ctx, c, req, node) {
-			if c.Type == ConstraintRequired {
-				return false
+		matched, err := s.evaluateConstraint(ctx, c, req, node)
+		if err != nil {
+			return false, err
+		}
+		switch c.Type {
+		case ConstraintRequired:
+			if !matched {
+				return false, nil
 			}
+		case ConstraintForbidden:
+			if matched {
+				return false, nil
+			}
+		case ConstraintPreferred:
+			continue
+		default:
+			return false, fmt.Errorf("unknown constraint type %q", c.Type)
 		}
 	}
-	return true
+	return true, nil
 }
 
-func (s *ConstraintScheduler) evaluateConstraint(ctx context.Context, c Constraint, req domain.PlacementRequest, node store.Node) bool {
-	value := s.getConstraintValue(ctx, c.Key, node)
+// evaluateConstraint reports whether the node matches the constraint. An
+// unknown operator or key is an error, never a pass: silently treating an
+// unrecognized constraint as satisfied would admit nodes the operator meant
+// to exclude.
+func (s *ConstraintScheduler) evaluateConstraint(ctx context.Context, c Constraint, req domain.PlacementRequest, node store.Node) (bool, error) {
+	value, err := s.getConstraintValue(ctx, c.Key, node)
+	if err != nil {
+		return false, err
+	}
 	switch c.Operator {
 	case "eq":
-		return value == c.Value
+		return value == c.Value, nil
 	case "neq":
-		return value != c.Value
+		return value != c.Value, nil
 	case "in":
 		parts := strings.Split(c.Value, ",")
 		for _, p := range parts {
 			if strings.TrimSpace(p) == value {
-				return true
+				return true, nil
 			}
 		}
-		return false
+		return false, nil
 	case "notin":
 		parts := strings.Split(c.Value, ",")
 		for _, p := range parts {
 			if strings.TrimSpace(p) == value {
-				return false
+				return false, nil
 			}
 		}
-		return true
+		return true, nil
 	case "exists":
-		return value != ""
+		return value != "", nil
 	default:
-		return true
+		return false, fmt.Errorf("unknown constraint operator %q", c.Operator)
 	}
 }
 
-func (s *ConstraintScheduler) getConstraintValue(ctx context.Context, key string, node store.Node) string {
+func (s *ConstraintScheduler) getConstraintValue(ctx context.Context, key string, node store.Node) (string, error) {
 	switch key {
 	case "region":
 		if node.RegionID != nil {
-			return *node.RegionID
+			return *node.RegionID, nil
 		}
-		return ""
+		return "", nil
 	case "node_id":
-		return node.ID
+		return node.ID, nil
 	case "name":
-		return node.Name
+		return node.Name, nil
 	default:
-		return ""
+		return "", fmt.Errorf("unknown constraint key %q", key)
 	}
 }
 

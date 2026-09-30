@@ -201,7 +201,7 @@ func (s *Service) HealthScore(node store.Node, capacity store.NodeCapacitySnapsh
 		Heartbeat: heartbeatScore(node.LastSeenAt),
 		Status:    statusScore(node.ActualState),
 	}
-	score.Total = (score.CPU + score.Memory + score.Disk + score.Heartbeat + score.Status) / 5
+	score.Total = averageKnownScores(score.CPU, score.Memory, score.Disk, score.Heartbeat, score.Status)
 	return score
 }
 
@@ -300,11 +300,14 @@ func healthFromStatus(status string) string {
 }
 
 // resourceScore returns 0–100 based on the fraction of capacity in use.
+// Unknown capacity (total <= 0, nothing reported) returns -1 so callers can
+// exclude it from averages instead of treating "not reported" as a middling
+// 50. Unknown is not healthy, not unhealthy — it is excluded.
 // When available > total (overcommitted), used becomes negative, is clamped
 // to 0, and the node scores 100 — i.e. overcommit is treated as fully healthy.
 func resourceScore(total, available int) int {
 	if total <= 0 {
-		return 50
+		return -1
 	}
 	used := total - available
 	if used < 0 {
@@ -320,9 +323,29 @@ func resourceScore(total, available int) int {
 	return score
 }
 
+// averageKnownScores averages only reported (>= 0) components. Unknown (-1)
+// components are excluded; when nothing is known the total is -1 (unknown),
+// never a fabricated 0 or 50.
+func averageKnownScores(scores ...int) int {
+	sum, count := 0, 0
+	for _, v := range scores {
+		if v < 0 {
+			continue
+		}
+		sum += v
+		count++
+	}
+	if count == 0 {
+		return -1
+	}
+	return sum / count
+}
+
 func heartbeatScore(lastSeen *time.Time) int {
 	if lastSeen == nil {
-		return 0
+		// Never seen: unknown, not 0. A 0 would drag a healthy-but-unreported
+		// node toward "offline" and fabricate a ~30 total out of unknowns.
+		return -1
 	}
 	return heartbeatScoreAge(time.Since(*lastSeen))
 }
@@ -349,7 +372,12 @@ func statusScore(status string) int {
 		return 100
 	case domain.NodeActualStateDegraded:
 		return 40
-	default:
+	case domain.NodeActualStateOffline:
 		return 0
+	default:
+		// Empty or unrecognised state means "not reported": unknown (-1),
+		// not offline (0). Treating unknown as 0 silently fences nodes that
+		// simply never reported.
+		return -1
 	}
 }

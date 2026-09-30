@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -211,7 +212,7 @@ func (s *Store) ClaimMigrationRun(ctx context.Context, migrationID, worker strin
 		       attempt = attempt + 1, updated_at = now()
 		WHERE migration_id = $1 AND phase NOT IN ('completed','failed','cancelled')
 		  AND (lease_expires_at IS NULL OR lease_expires_at < now() OR lease_owner = $2)
-	`, migrationID, worker, lease.String())
+	`, migrationID, worker, fmt.Sprintf("%d seconds", int(lease.Seconds())))
 	if err != nil {
 		return MigrationRun{}, err
 	}

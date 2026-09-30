@@ -17,11 +17,11 @@ func (m *mockTokenStore) CreateToken(ctx context.Context, token *RecoveryToken) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.tokens[token.ID] = token
-	m.byHash[token.TokenHash] = token
+	m.byHash[token.TokenLookup] = token
 	return nil
 }
 
-func (m *mockTokenStore) GetTokenByHash(ctx context.Context, hash string) (*RecoveryToken, error) {
+func (m *mockTokenStore) GetTokenByLookup(ctx context.Context, hash string) (*RecoveryToken, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	token, ok := m.byHash[hash]

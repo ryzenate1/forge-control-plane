@@ -34,15 +34,59 @@ BEACON_PORT=9090
 # Environment variables
 export DATABASE_URL="postgres://${DB_USER}:${DB_PASS}@localhost:${DB_PORT}/${DB_NAME}?sslmode=disable"
 export API_ADDR=":${API_PORT}"
-export API_AUTH_SECRET="dev-api-secret"
 export APP_ENV="development"
-export DAEMON_NODE_TOKEN="dev-node-token"
-export DAEMON_NODE_ID="1"
-export API_SEED_DEMO="false"
+export APP_CIPHER="AES-256-GCM"
+# Seed the demo node/admin so the daemon can authenticate against the panel.
+export API_SEED_DEMO="true"
 export REDIS_ADDR="localhost:${REDIS_PORT}"
-export MIGRATIONS_DIR="${ROOT}/forge/api/migrations"
-export NEXT_PUBLIC_API_URL="http://localhost:${API_PORT}/api/v1"
-export FORGE_ALLOW_EPHEMERAL_MASTER_KEY="true"
+export REDIS_PASSWORD="CHANGE_ME"
+export NEXT_PUBLIC_API_URL="/api/v1"
+export SESSION_COOKIE_SECURE="false"
+export FORGE_MASTER_KEY_ID="primary"
+export FORGE_ALLOW_EPHEMERAL_MASTER_KEY="false"
+# Demo node id seeded by the API (API_SEED_DEMO=true). Not a secret.
+export DAEMON_NODE_ID="22222222-2222-2222-2222-222222222222"
+# Local development secrets are generated once and persisted in
+# .dev-secrets.env (git-ignored) so encrypted demo data stays decryptable
+# across restarts. Values provided via the environment always win.
+# NOTE: the API demo seed (API_SEED_DEMO) pins its own node token; to pair the
+# daemon with the seeded demo node, override DAEMON_NODE_TOKEN with that value.
+SECRETS_FILE="$ROOT/.dev-secrets.env"
+if [ -f "$SECRETS_FILE" ]; then
+    set -a
+    . "$SECRETS_FILE"
+    set +a
+fi
+if [ -z "$DAEMON_NODE_TOKEN" ]; then
+    DAEMON_NODE_TOKEN="dev-$(openssl rand -hex 8).$(openssl rand -hex 24)"
+fi
+if [ -z "$API_AUTH_SECRET" ]; then
+    API_AUTH_SECRET="dev-$(openssl rand -hex 32)"
+fi
+if [ -z "$APP_KEY" ]; then
+    APP_KEY="base64:$(openssl rand -base64 32)"
+fi
+if [ -z "$FORGE_MASTER_KEY" ]; then
+    FORGE_MASTER_KEY="$(openssl rand -base64 32)"
+fi
+if [ -z "$GRAFANA_ADMIN_PASSWORD" ]; then
+    GRAFANA_ADMIN_PASSWORD="$(openssl rand -hex 24)"
+fi
+if [ -z "$DAEMON_SFTP_HOST_KEY_PASSPHRASE" ]; then
+    DAEMON_SFTP_HOST_KEY_PASSPHRASE="dev-$(openssl rand -hex 16)"
+fi
+export DAEMON_NODE_TOKEN API_AUTH_SECRET APP_KEY FORGE_MASTER_KEY GRAFANA_ADMIN_PASSWORD DAEMON_SFTP_HOST_KEY_PASSPHRASE
+umask 077
+cat > "$SECRETS_FILE" <<EOF
+DAEMON_NODE_TOKEN=$DAEMON_NODE_TOKEN
+API_AUTH_SECRET=$API_AUTH_SECRET
+APP_KEY=$APP_KEY
+FORGE_MASTER_KEY=$FORGE_MASTER_KEY
+GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
+DAEMON_SFTP_HOST_KEY_PASSPHRASE=$DAEMON_SFTP_HOST_KEY_PASSPHRASE
+EOF
+umask 022
+echo "  [dev] development node token: $DAEMON_NODE_TOKEN"
 
 # Colors
 RED='\033[0;31m'
@@ -82,7 +126,7 @@ stop_process_by_port() {
 
     if [ -n "$pids" ]; then
         for pid in $pids; do
-            kill -9 $pid 2>/dev/null || true
+            kill "$pid" 2>/dev/null || true
         done
     fi
 }
@@ -161,10 +205,10 @@ else
             echo "  Creating infra/.env file..."
             cat > .env << EOF
 POSTGRES_PASSWORD=gamepanel
-API_AUTH_SECRET=dev-api-secret
-DAEMON_NODE_TOKEN=dev-node-token
-DAEMON_NODE_ID=1
-GRAFANA_ADMIN_PASSWORD=admin
+API_AUTH_SECRET=$API_AUTH_SECRET
+DAEMON_NODE_TOKEN=$DAEMON_NODE_TOKEN
+DAEMON_NODE_ID=$DAEMON_NODE_ID
+GRAFANA_ADMIN_PASSWORD=$GRAFANA_ADMIN_PASSWORD
 DATABASE_URL=postgres://gamepanel:gamepanel@postgres:5432/gamepanel?sslmode=disable
 EOF
         fi
@@ -193,21 +237,25 @@ fi
 write_header "Starting Go API"
 
 echo "  Building API..."
+API_BUILD_LOG=$(mktemp)
 (cd "$ROOT/forge/api" && \
     if [ ! -f "go.mod" ]; then
         echo -e "  ${RED}API go.mod not found!${NC}"
         exit 1
     fi
 
-    go build -o "$ROOT/forge/api/api" ./cmd/api >/dev/null 2>&1)
+    go build -o "$ROOT/forge/api/api" ./cmd/api > /dev/null 2>"$API_BUILD_LOG")
 
 if [ $? -ne 0 ]; then
     echo -e "  ${RED}API build failed!${NC}"
+    cat "$API_BUILD_LOG" 2>/dev/null
+    rm -f "$API_BUILD_LOG"
     exit 1
 fi
+rm -f "$API_BUILD_LOG"
 
-# Start API in background
-"$ROOT/forge/api/api" > "$ROOT/api-dev.log" 2> "$ROOT/api-dev.err.log" &
+# Start API in background FROM ITS OWN DIRECTORY (required for relative migration paths)
+(cd "$ROOT/forge/api" && nohup ./api > "$ROOT/api-dev.log" 2> "$ROOT/api-dev.err.log" &)
 API_PID=$!
 
 echo -n "  Waiting for API..."
@@ -243,35 +291,93 @@ else
 fi
 write_status "[ok]" "Frontend on http://localhost:${FRONTEND_PORT} (PID: $FE_PID)" "$GREEN"
 
-# Step 4: Beacon Daemon
-write_header "Starting Beacon Daemon"
+# Step 4: Beacon Daemon (macOS launchd native daemon)
+write_header "Starting Beacon Daemon (launchd)"
 
 echo "  Building Beacon..."
+BEACON_BUILD_LOG=$(mktemp)
 (cd "$ROOT/beacon" && \
     if [ ! -f "go.mod" ]; then
         echo -e "  ${RED}Beacon go.mod not found!${NC}"
         exit 1
     fi
 
-    go build -o "$ROOT/beacon/daemon" ./cmd/daemon >/dev/null 2>&1)
+    go build -o "$ROOT/beacon/daemon" ./cmd/daemon > /dev/null 2>"$BEACON_BUILD_LOG")
 
 if [ $? -ne 0 ]; then
     echo -e "  ${RED}Beacon build failed!${NC}"
+    cat "$BEACON_BUILD_LOG" 2>/dev/null
+    rm -f "$BEACON_BUILD_LOG"
     exit 1
 fi
+rm -f "$BEACON_BUILD_LOG"
 
-# Start beacon in background with required env vars
-(cd "$ROOT/beacon" && \
-    DAEMON_ALLOW_INSECURE_NO_AUTH=true \
-    DAEMON_DATA_DIR=/tmp/beacon-data \
-    PANEL_API_URL=http://localhost:8080/api/v1 \
-    ./daemon > "$ROOT/beacon-dev.log" 2> "$ROOT/beacon-dev.err.log" &)
-BEACON_PID=$!
+# Create beacon data directory
+mkdir -p /tmp/beacon-data
+
+# Use macOS launchd for native demonizing
+PLIST_PATH="$HOME/Library/LaunchAgents/com.gamepanel.beacon.plist"
+mkdir -p "$HOME/Library/LaunchAgents"
+
+# Write the launchd plist
+cat > "$PLIST_PATH" << PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.gamepanel.beacon</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>$ROOT/beacon/daemon</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>DAEMON_ADDR</key>
+        <string>:$BEACON_PORT</string>
+        <key>DAEMON_DATA_DIR</key>
+        <string>/tmp/beacon-data</string>
+        <key>DAEMON_NODE_ID</key>
+        <string>$DAEMON_NODE_ID</string>
+        <key>DAEMON_NODE_TOKEN</key>
+        <string>$DAEMON_NODE_TOKEN</string>
+        <key>PANEL_API_URL</key>
+        <string>http://localhost:${API_PORT}/api/v1</string>
+        <key>DAEMON_ALLOW_MOCK_RUNTIME</key>
+        <string>true</string>
+        <key>DAEMON_SFTP_HOST_KEY_PASSPHRASE</key>
+        <string>$DAEMON_SFTP_HOST_KEY_PASSPHRASE</string>
+        <key>APP_ENV</key>
+        <string>development</string>
+    </dict>
+    <key>WorkingDirectory</key>
+    <string>/tmp/beacon-data</string>
+    <key>StandardOutPath</key>
+    <string>$ROOT/beacon-dev.log</string>
+    <key>StandardErrorPath</key>
+    <string>$ROOT/beacon-dev.err.log</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <dict>
+        <key>Crashed</key>
+        <true/>
+    </dict>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+</dict>
+</plist>
+PLIST
+
+# Unload existing instance if running, then load fresh
+launchctl unload "$PLIST_PATH" 2>/dev/null || true
+sleep 1
+launchctl load "$PLIST_PATH" 2>&1
 
 echo -n "  Waiting for Beacon..."
 if test_port $BEACON_PORT 15; then
     echo -e " ${GREEN}Ready!${NC}"
-    write_status "[ok]" "Beacon on http://localhost:${BEACON_PORT}/health (PID: $BEACON_PID)" "$GREEN"
+    write_status "[ok]" "Beacon on http://localhost:${BEACON_PORT}/health (launchd)" "$GREEN"
 else
     echo -e " ${YELLOW}(daemon may take longer to start)${NC}"
 fi

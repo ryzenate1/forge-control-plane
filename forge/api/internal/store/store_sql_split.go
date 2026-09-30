@@ -3,47 +3,68 @@ package store
 import "strings"
 
 // splitSQLStatements splits a SQL string into individual statements,
-// respecting dollar-quoted blocks ($$, $tag$) and stripping single-line comments.
+// respecting dollar-quoted blocks ($$, $tag$), single-quoted literals,
+// double-quoted identifiers, and stripping both comment styles.
 func splitSQLStatements(input string) []string {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return nil
 	}
 
-	// First pass: strip single-line comments outside dollar quotes.
-	cleaned := stripSQLComments(input)
-
-	cleaned = strings.TrimSpace(cleaned)
+	// First pass: strip both comment styles outside quoted text.
+	cleaned := strings.TrimSpace(stripSQLComments(input))
 	if cleaned == "" {
 		return nil
 	}
 
-	// Second pass: split on semicolons outside dollar quotes.
+	// Second pass: split on semicolons outside quoted text. Dollar tags are
+	// tracked on a stack so a nested body (for example $f$ inside DO $$) only
+	// closes when its own tag is seen again.
 	var statements []string
 	runes := []rune(cleaned)
 	pos := 0
 	start := 0
-	depth := 0
+	var openTags []string
 
 	for pos < len(runes) {
 		ch := runes[pos]
 
-		// Enter/exit dollar-quoted block
 		if ch == '$' {
 			if tag := scanDollarTag(runes, pos); tag != "" {
-				if depth == 0 {
-					depth++
+				if len(openTags) > 0 && openTags[len(openTags)-1] == tag {
+					openTags = openTags[:len(openTags)-1]
 				} else {
-					// Check if this is the matching closing tag
-					depth--
+					openTags = append(openTags, tag)
 				}
 				pos += len(tag)
 				continue
 			}
 		}
 
-		// Split on semicolon outside dollar quotes
-		if ch == ';' && depth == 0 {
+		// A semicolon inside a string literal or quoted identifier does not end
+		// a statement.
+		if ch == '\'' && len(openTags) == 0 {
+			pos = skipSingleQuoted(runes, pos)
+			continue
+		}
+
+		// A semicolon inside a double-quoted identifier (e.g. a COMMENT ON
+		// label or an exotic column name like "ratio;2024") does not end a
+		// statement either.
+		if ch == '"' && len(openTags) == 0 {
+			pos = skipDoubleQuoted(runes, pos)
+			continue
+		}
+
+		if ch == ';' && len(openTags) == 0 {
+			candidate := string(runes[start:pos])
+			if isTriggerStart(candidate) && !triggerTerminated(candidate) {
+				// Inside a SQLite BEGIN ... END trigger body: the semicolon
+				// separates body statements, it does not end the migration
+				// statement. The terminator is the closing END; line.
+				pos++
+				continue
+			}
 			stmt := strings.TrimSpace(string(runes[start:pos]))
 			if stmt != "" {
 				statements = append(statements, stmt)
@@ -68,8 +89,9 @@ func splitSQLStatements(input string) []string {
 	return statements
 }
 
-// stripSQLComments removes single-line comments (-- ... \n) from SQL text,
-// respecting dollar-quoted blocks where comments should be preserved.
+// stripSQLComments removes single-line (-- ... \n) and block (/* ... */)
+// comments from SQL text, leaving dollar-quoted blocks, string literals, and
+// double-quoted identifiers untouched.
 func stripSQLComments(input string) string {
 	runes := []rune(input)
 	var result []rune
@@ -97,7 +119,24 @@ func stripSQLComments(input string) string {
 			}
 		}
 
-		// Handle single-line comments outside dollar quotes
+		// String literals may contain "--", "/*", or ";" that is not a comment.
+		if ch == '\'' {
+			end := skipSingleQuoted(runes, pos)
+			result = append(result, runes[pos:end]...)
+			pos = end
+			continue
+		}
+
+		// Quoted identifiers may contain comment openers ("weird--name",
+		// "ratio/*x") that are not comments.
+		if ch == '"' {
+			end := skipDoubleQuoted(runes, pos)
+			result = append(result, runes[pos:end]...)
+			pos = end
+			continue
+		}
+
+		// Handle single-line comments outside quoted text
 		if ch == '-' && pos+1 < len(runes) && runes[pos+1] == '-' {
 			// Skip to end of line
 			for pos < len(runes) && runes[pos] != '\n' {
@@ -111,11 +150,63 @@ func stripSQLComments(input string) string {
 			continue
 		}
 
+		// Handle block comments outside quoted text. Newlines inside are kept
+		// so statement line numbers stay stable for error messages; the rest
+		// of the comment is dropped.
+		if ch == '/' && pos+1 < len(runes) && runes[pos+1] == '*' {
+			pos += 2
+			for pos < len(runes) {
+				if runes[pos] == '*' && pos+1 < len(runes) && runes[pos+1] == '/' {
+					pos += 2
+					break
+				}
+				if runes[pos] == '\n' {
+					result = append(result, '\n')
+				}
+				pos++
+			}
+			continue
+		}
+
 		result = append(result, ch)
 		pos++
 	}
 
 	return string(result)
+}
+
+// skipSingleQuoted returns the index just past the single-quoted literal that
+// starts at pos, treating ” as an escaped quote.
+func skipSingleQuoted(runes []rune, pos int) int {
+	pos++
+	for pos < len(runes) {
+		if runes[pos] == '\'' {
+			if pos+1 < len(runes) && runes[pos+1] == '\'' {
+				pos += 2
+				continue
+			}
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
+}
+
+// skipDoubleQuoted returns the index just past the double-quoted identifier
+// that starts at pos, treating "" as an escaped quote.
+func skipDoubleQuoted(runes []rune, pos int) int {
+	pos++
+	for pos < len(runes) {
+		if runes[pos] == '"' {
+			if pos+1 < len(runes) && runes[pos+1] == '"' {
+				pos += 2
+				continue
+			}
+			return pos + 1
+		}
+		pos++
+	}
+	return pos
 }
 
 // scanDollarTag checks if there's a dollar-quote tag starting at pos.
@@ -142,4 +233,48 @@ func scanDollarTag(runes []rune, pos int) string {
 
 func isAlphaNumeric(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// isTriggerStart reports whether a partial statement is the head of a
+// CREATE TRIGGER definition. Only the SQLite form (plain BEGIN ... END body,
+// no dollar quoting) reaches this check; PostgreSQL trigger functions are
+// dollar-quoted and protected by the openTags tracking above.
+func isTriggerStart(candidate string) bool {
+	upper := strings.ToUpper(strings.TrimSpace(candidate))
+	rest := strings.TrimPrefix(upper, "CREATE ")
+	rest = strings.TrimPrefix(rest, "TEMP ")
+	rest = strings.TrimPrefix(rest, "TEMPORARY ")
+	return strings.HasPrefix(rest, "TRIGGER ")
+}
+
+// triggerTerminated reports whether a CREATE TRIGGER head already contains
+// its closing END; line. The check requires BEGIN to be present as a whole
+// word so a trigger name ending in "end" cannot false-positive. Limitation:
+// an "\nEND;" sequence inside a single-quoted trigger literal would
+// terminate early; migration triggers keep literals single-line to avoid it.
+func triggerTerminated(candidate string) bool {
+	upper := strings.ToUpper(candidate)
+	hasBegin := false
+	for _, field := range strings.Fields(upper) {
+		if field == "BEGIN" {
+			hasBegin = true
+			break
+		}
+	}
+	if !hasBegin {
+		// No body yet (e.g. DROP TRIGGER, or the head before BEGIN): a bare
+		// semicolon still ends the statement.
+		return true
+	}
+	// The splitter hands us the candidate WITHOUT the semicolon under the
+	// cursor, so the closing "END;" appears as a trailing whole-word END.
+	// (An "\nEND;" already inside would mean we missed the terminator.)
+	// Limitation: a trigger body statement that itself ends with the keyword
+	// END (e.g. a CASE ... END; assignment inside the body) terminates early;
+	// migration triggers avoid that shape.
+	trimmed := strings.TrimRight(upper, " \t\r\n")
+	if fields := strings.Fields(trimmed); len(fields) > 0 && fields[len(fields)-1] == "END" {
+		return true
+	}
+	return strings.Contains(upper, "\nEND;") || strings.Contains(upper, "\nEND ;")
 }

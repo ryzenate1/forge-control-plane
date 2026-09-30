@@ -10,8 +10,8 @@ import (
 )
 
 type RemoveFile struct {
-	Target string `json:"target"`
-	Recursive bool `json:"recursive,omitempty"`
+	Target    string `json:"target"`
+	Recursive bool   `json:"recursive,omitempty"`
 }
 
 func init() {
@@ -30,7 +30,10 @@ func factory(args json.RawMessage) (operations.Operation, error) {
 }
 
 func (op *RemoveFile) Execute(ctx context.Context, serverDir string) error {
-	target := operations.ResolvePath(serverDir, op.Target)
+	target, err := operations.ResolvePath(serverDir, op.Target)
+	if err != nil {
+		return err
+	}
 
 	info, err := os.Lstat(target)
 	if err != nil {

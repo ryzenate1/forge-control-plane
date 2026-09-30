@@ -3,7 +3,10 @@ package tls
 import (
 	"context"
 	"crypto/tls"
+	"log"
+	"net"
 	"net/http"
+	"time"
 
 	"golang.org/x/crypto/acme/autocert"
 )
@@ -15,18 +18,12 @@ type AutoTLSManager struct {
 }
 
 func NewAutoTLSManager(hostname, cacheDir, email string) *AutoTLSManager {
-	var emailContact []string
-	if email != "" {
-		emailContact = []string{"mailto:" + email}
-	}
-
 	m := &autocert.Manager{
 		Prompt:     autocert.AcceptTOS,
 		Cache:      autocert.DirCache(cacheDir),
 		HostPolicy: autocert.HostWhitelist(hostname),
 		Email:      email,
 	}
-	_ = emailContact
 
 	return &AutoTLSManager{
 		manager:  m,
@@ -43,19 +40,32 @@ func (m *AutoTLSManager) HTTPHandler() http.Handler {
 	return m.manager.HTTPHandler(nil)
 }
 
-func (m *AutoTLSManager) StartChallengeServer() error {
+func (m *AutoTLSManager) StartChallengeServer(ctx context.Context) error {
 	srv := &http.Server{
-		Addr:    ":80",
-		Handler: m.HTTPHandler(),
+		Addr:              ":80",
+		Handler:           m.HTTPHandler(),
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       15 * time.Second,
+		WriteTimeout:      30 * time.Second,
+		IdleTimeout:       60 * time.Second,
+		MaxHeaderBytes:    32 << 10,
 	}
 
 	go func() {
-		_ = srv.ListenAndServe()
+		<-ctx.Done()
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+		defer shutdownCancel()
+		_ = srv.Shutdown(shutdownCtx)
 	}()
 
+	listener, err := net.Listen("tcp", srv.Addr)
+	if err != nil {
+		return err
+	}
 	go func() {
-		<-context.Background().Done()
-		_ = srv.Close()
+		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
+			log.Printf("tls challenge server error: %v", err)
+		}
 	}()
 
 	return nil

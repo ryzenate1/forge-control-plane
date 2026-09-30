@@ -4,8 +4,11 @@ import (
 	"database/sql/driver"
 	"encoding/json"
 	"errors"
+	"net/mail"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Base columns shared by integer-primary-key models. The gorm struct-tag
@@ -42,7 +45,7 @@ type Server struct {
 	Env         map[string]string `json:"env" gorm:"type:jsonb"`
 	CreatedAt   time.Time         `json:"created_at" gorm:"autoCreateTime"`
 	UpdatedAt   time.Time         `json:"updated_at" gorm:"autoUpdateTime"`
-	DeletedAt   *time.Time        `json:"deleted_at,omitempty" gorm:"index"`
+	DeletedAt   *time.Time        `json:"deleted_at,omitempty" gorm:"index;softDelete"`
 }
 
 func (s *Server) Validate() error {
@@ -54,6 +57,9 @@ func (s *Server) Validate() error {
 	}
 	if s.NodeID == "" {
 		return errors.New("node_id is required")
+	}
+	if s.MemoryMB < 0 || s.DiskMB < 0 || s.CPUShares < 0 || s.SwapMB < 0 {
+		return errors.New("server resource values must not be negative")
 	}
 	return nil
 }
@@ -86,6 +92,12 @@ func (u *User) Validate() error {
 	}
 	if u.PasswordHash == "" {
 		return errors.New("password_hash is required")
+	}
+	if _, err := mail.ParseAddress(u.Email); err != nil || strings.ContainsAny(u.Email, "\r\n") {
+		return errors.New("email is invalid")
+	}
+	if _, err := bcrypt.Cost([]byte(u.PasswordHash)); err != nil {
+		return errors.New("password_hash must be a valid bcrypt hash")
 	}
 	return nil
 }
@@ -192,6 +204,20 @@ func (n *Node) Validate() error {
 	if n.FQDN == "" {
 		return errors.New("fqdn is required")
 	}
+	if n.ListenPort < 1 || n.ListenPort > 65535 {
+		return errors.New("listen_port must be between 1 and 65535")
+	}
+	if n.Scheme != "http" && n.Scheme != "https" {
+		return errors.New("scheme must be http or https")
+	}
+	switch n.RuntimeProvider {
+	case "", "docker", "containerd", "podman", "firecracker":
+	default:
+		return errors.New("runtime_provider is unsupported")
+	}
+	if n.MemoryMB < 0 || n.DiskMB < 0 {
+		return errors.New("node resource values must not be negative")
+	}
 	return nil
 }
 
@@ -210,6 +236,19 @@ type Backup struct {
 func (b *Backup) Validate() error {
 	if b.ServerID == "" {
 		return errors.New("server_id is required")
+	}
+	if b.SizeBytes < 0 {
+		return errors.New("size_bytes must not be negative")
+	}
+	switch b.Status {
+	case "pending", "running", "completed", "failed", "deleted":
+	default:
+		return errors.New("backup status is invalid")
+	}
+	switch b.Adapter {
+	case "", "local", "s3", "gcs", "azure":
+	default:
+		return errors.New("backup adapter is invalid")
 	}
 	return nil
 }
@@ -292,3 +331,32 @@ func unquoteArrayElement(s string) string {
 	}
 	return s
 }
+
+// SourceType represents the origin of an application workload.
+type SourceType string
+
+const (
+	SourceTypeGit         SourceType = "GIT"
+	SourceTypeDockerImage SourceType = "DOCKER_IMAGE"
+	SourceTypeCompose     SourceType = "COMPOSE"
+)
+
+// ServiceStatus represents the observed runtime condition.
+type ServiceStatus string
+
+const (
+	ServiceStatusIdle      ServiceStatus = "idle"
+	ServiceStatusRunning   ServiceStatus = "running"
+	ServiceStatusDone      ServiceStatus = "done"
+	ServiceStatusError     ServiceStatus = "error"
+	ServiceStatusDeploying ServiceStatus = "deploying"
+)
+
+// AppDesiredState is the operator-intended state for an application.
+type AppDesiredState string
+
+const (
+	AppDesiredStateRunning AppDesiredState = "running"
+	AppDesiredStateStopped AppDesiredState = "stopped"
+	AppDesiredStateRemoved AppDesiredState = "removed"
+)

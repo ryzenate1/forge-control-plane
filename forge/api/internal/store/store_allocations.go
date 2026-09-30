@@ -42,12 +42,57 @@ func (s *Store) ListAllocations(ctx context.Context) ([]Allocation, error) {
 	return s.ListAllocationsPaginated(ctx, 0, 1000)
 }
 
+func (s *Store) GetAllocation(ctx context.Context, id string) (Allocation, error) {
+	var allocation Allocation
+	var server, alias sql.NullString
+	err := s.db.QueryRow(ctx, `
+		SELECT a.id::text, n.name, s.name, host(a.ip), a.port, a.container_port,
+		       a.protocol, a.alias, COALESCE(a.notes, '')
+		FROM allocations a
+		JOIN nodes n ON n.id=a.node_id
+		LEFT JOIN servers s ON s.id=a.server_id
+		WHERE a.id=$1
+	`, id).Scan(&allocation.ID, &allocation.Node, &server, &allocation.IP, &allocation.Port,
+		&allocation.ContainerPort, &allocation.Protocol, &alias, &allocation.Notes)
+	if err != nil {
+		return Allocation{}, err
+	}
+	if server.Valid {
+		allocation.Server = &server.String
+	}
+	if alias.Valid && alias.String != "" {
+		allocation.Alias = &alias.String
+	}
+	return allocation, nil
+}
+
+func (s *Store) ListAllocationsWithTotal(ctx context.Context, page, perPage int) ([]Allocation, int, error) {
+	if page < 1 {
+		page = 1
+	}
+	if perPage <= 0 {
+		perPage = 50
+	}
+	offset := (page - 1) * perPage
+
+	var total int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM allocations`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+
+	allocations, err := s.ListAllocationsPaginated(ctx, offset, perPage)
+	if err != nil {
+		return nil, 0, err
+	}
+	return allocations, total, nil
+}
+
 func (s *Store) ListAllocationsPaginated(ctx context.Context, offset, limit int) ([]Allocation, error) {
 	if limit <= 0 {
 		limit = 1000
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT a.id::text, n.name, s.name, a.ip::text, a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
+		SELECT a.id::text, n.name, s.name, host(a.ip), a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
 		FROM allocations a
 		JOIN nodes n ON n.id = a.node_id
 		LEFT JOIN servers s ON s.id = a.server_id
@@ -217,15 +262,10 @@ func (s *Store) UpdateAllocation(ctx context.Context, allocationID string, req U
 		return Allocation{}, errors.New("allocation not found")
 	}
 	_ = s.AppendAudit(ctx, actorID, "allocation updated", "allocation", &allocationID, fmt.Sprintf(`{"alias":"%s"}`, strings.TrimSpace(req.Alias)))
-	allocations, listErr := s.ListAllocations(ctx)
-	if listErr == nil {
-		for _, candidate := range allocations {
-			if candidate.ID == allocationID {
-				return candidate, nil
-			}
-		}
-	}
-	return Allocation{ID: allocationID, Alias: alias, Notes: notes}, nil
+	// Re-read by id: scanning the whole allocation inventory (up to 1000 rows) to
+	// find one record, and discarding the list error when it failed, used to
+	// return a half-populated Allocation as if it were the stored row.
+	return s.GetAllocation(ctx, allocationID)
 }
 
 func (s *Store) UpdateServerAllocation(ctx context.Context, serverID, allocationID string, req UpdateAllocationRequest, actorID *string) (Allocation, error) {
@@ -243,20 +283,16 @@ func (s *Store) UpdateServerAllocation(ctx context.Context, serverID, allocation
 		return Allocation{}, errors.New("allocation is not assigned to this server")
 	}
 	_ = s.AppendAudit(ctx, actorID, "server allocation updated", "server", &serverID, fmt.Sprintf(`{"allocationId":"%s","alias":"%s"}`, allocationID, strings.TrimSpace(req.Alias)))
-	for _, allocation := range mustListServerAllocations(ctx, s, serverID) {
+	allocations, err := s.ListServerAllocations(ctx, serverID)
+	if err != nil {
+		return Allocation{}, err
+	}
+	for _, allocation := range allocations {
 		if allocation.ID == allocationID {
 			return allocation, nil
 		}
 	}
 	return Allocation{ID: allocationID, Alias: alias, Notes: notes}, nil
-}
-
-func mustListServerAllocations(ctx context.Context, s *Store, serverID string) []Allocation {
-	allocations, err := s.ListServerAllocations(ctx, serverID)
-	if err != nil {
-		return nil
-	}
-	return allocations
 }
 
 func (s *Store) ListServerAllocations(ctx context.Context, serverID string) ([]Allocation, error) {
@@ -299,9 +335,18 @@ func (s *Store) AssignAllocationToServer(ctx context.Context, serverID, allocati
 	if allocationNodeID != serverNodeID {
 		return errors.New("allocation does not belong to server node")
 	}
-	_, err := s.db.Exec(ctx, `UPDATE allocations SET server_id = $1 WHERE id = $2`, serverID, allocationID)
+	// The claim is guarded by the same predicates the pre-read checked so a
+	// concurrent assign cannot silently steal the allocation: the UPDATE is the
+	// atomic compare-and-set, not the read above it.
+	commandTag, err := s.db.Exec(ctx, `
+		UPDATE allocations SET server_id = $1, assigned_at = now()
+		WHERE id = $2 AND server_id IS NULL AND node_id = $3
+	`, serverID, allocationID, serverNodeID)
 	if err != nil {
 		return err
+	}
+	if commandTag.RowsAffected() == 0 {
+		return errors.New("allocation already assigned")
 	}
 	return s.AppendAudit(ctx, actorID, "allocation assigned", "server", &serverID, fmt.Sprintf(`{"allocationId":"%s"}`, allocationID))
 }

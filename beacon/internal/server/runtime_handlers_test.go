@@ -1,14 +1,19 @@
 package server
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -27,8 +32,11 @@ type stubRuntime struct {
 	consoleErr   error
 	deleteErr    error
 	createCalled bool
+	deleteCalled bool
 	createReq    runtime.CreateRequest
 }
+
+func (*stubRuntime) Close() error { return nil }
 
 func (r *stubRuntime) Create(_ context.Context, req runtime.CreateRequest) error {
 	r.createCalled = true
@@ -82,7 +90,10 @@ func (r *stubRuntime) AttachConsole(context.Context, string) (runtime.ConsoleSes
 	}
 	return &stubConsole{}, nil
 }
-func (r *stubRuntime) Delete(context.Context, string) error { return r.deleteErr }
+func (r *stubRuntime) Delete(context.Context, string) error {
+	r.deleteCalled = true
+	return r.deleteErr
+}
 
 type stubConsole struct {
 	bytes.Buffer
@@ -119,6 +130,33 @@ func TestRuntimeBackedEndpointsReturn503WithoutRuntime(t *testing.T) {
 				t.Fatalf("expected status 503, got %d: %s", rec.Code, rec.Body.String())
 			}
 		})
+	}
+}
+
+func TestDeleteRemovesRuntimeAndServerData(t *testing.T) {
+	dataDir := t.TempDir()
+	serverRoot := filepath.Join(dataDir, testServerID)
+	if err := os.MkdirAll(filepath.Join(serverRoot, ".config"), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(serverRoot, "world.dat"), []byte("tenant data"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	rt := &stubRuntime{}
+	_, handler := NewServer(rt, dataDir)
+	req := httptest.NewRequest(http.MethodDelete, "/servers/"+testServerID, nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected status 202, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if !rt.deleteCalled {
+		t.Fatal("expected runtime container deletion")
+	}
+	if _, err := os.Stat(serverRoot); !os.IsNotExist(err) {
+		t.Fatalf("expected server data root to be removed, stat error = %v", err)
 	}
 }
 
@@ -178,28 +216,61 @@ func TestIncomingTransferRejectsTraversalServerID(t *testing.T) {
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("expected status 400, got %d", rec.Code)
 	}
-	entries, err := os.ReadDir(dataDir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(entries) != 0 {
-		t.Fatalf("unexpected files created for traversal id: %v", entries)
+	if _, err := os.Stat(filepath.Join(dataDir, "outside")); !os.IsNotExist(err) {
+		t.Fatalf("traversal request created an outside path: %v", err)
 	}
 }
 
-func TestIncomingTransferRejectsUnsupportedResume(t *testing.T) {
-	_, handler := NewServer(nil, t.TempDir())
-	req := httptest.NewRequest(http.MethodPost, "/api/transfers", strings.NewReader("archive"))
-	req.Header.Set("X-Transfer-ServerID", testServerID)
-	req.Header.Set("X-Transfer-ID", "transfer-id")
-	req.Header.Set("X-Transfer-Resume-Offset", "1")
-	req.Header.Set("X-Checksum", "checksum")
-	rec := httptest.NewRecorder()
+func TestIncomingTransferResumesPersistedArchive(t *testing.T) {
+	dataDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dataDir, testServerID), 0o750); err != nil {
+		t.Fatal(err)
+	}
+	_, handler := NewServer(nil, dataDir)
+	var archive bytes.Buffer
+	gz := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gz)
+	payload := []byte("resumed")
+	if err := tw.WriteHeader(&tar.Header{Name: "hello.txt", Mode: 0o600, Size: int64(len(payload))}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tw.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := gz.Close(); err != nil {
+		t.Fatal(err)
+	}
+	body := archive.Bytes()
+	sum := sha256.Sum256(body)
+	checksum := hex.EncodeToString(sum[:])
+	split := len(body) / 2
 
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("expected status 501, got %d: %s", rec.Code, rec.Body.String())
+	send := func(offset int, chunk []byte) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/transfers", bytes.NewReader(chunk))
+		req.Header.Set("X-Transfer-ServerID", testServerID)
+		req.Header.Set("X-Transfer-ID", "transfer-id")
+		req.Header.Set("X-Transfer-Resume-Offset", strconv.Itoa(offset))
+		req.Header.Set("X-Transfer-Size", strconv.Itoa(len(body)))
+		req.Header.Set("X-Checksum", checksum)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	if rec := send(0, body[:split]); rec.Code != http.StatusAccepted {
+		t.Fatalf("initial partial upload returned %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec := send(split, body[split:]); rec.Code != http.StatusOK {
+		t.Fatalf("resumed upload returned %d: %s", rec.Code, rec.Body.String())
+	}
+	extracted, err := os.ReadFile(filepath.Join(dataDir, testServerID, "hello.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(extracted, payload) {
+		t.Fatalf("unexpected extracted payload: %q", extracted)
 	}
 }
 

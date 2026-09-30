@@ -3,6 +3,12 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"gamepanel/forge/internal/daemon"
 )
 
 const (
@@ -11,6 +17,8 @@ const (
 	PodmanProvider      = "podman"
 	FirecrackerProvider = "firecracker"
 	KubernetesProvider  = "kubernetes"
+	KVMProvider         = "kvm"
+	LXCProvider         = "lxc"
 )
 
 type Target struct {
@@ -100,6 +108,8 @@ type ServerConfiguration struct {
 	Allocations map[string]any
 	Config      map[string]any
 	Mounts      []Mount
+	UID         int
+	GID         int
 }
 
 type PowerResponse struct {
@@ -127,6 +137,63 @@ type Inspection struct {
 	ServerID string `json:"serverId"`
 	Exists   bool   `json:"exists"`
 	Provider string `json:"provider"`
+	// Running and Status carry the workload's observed lifecycle. They are only
+	// meaningful when StateKnown is true: an older Beacon that does not expose
+	// container state yields an inspection where existence was inferred from
+	// telemetry, and treating that as a lifecycle reading would let a stopped
+	// container look missing or a crashed one look fine.
+	Running    bool      `json:"running"`
+	Status     string    `json:"status,omitempty"`
+	StartedAt  time.Time `json:"startedAt,omitempty"`
+	StateKnown bool      `json:"stateKnown"`
+}
+
+// inspectWorkload reads a workload's lifecycle straight from the node instead
+// of inferring it from the presence of metrics. A container that has exited
+// still exists but streams no stats, so the old "the stats call worked, so it
+// is running" reading conflated running, stopped and missing into one signal.
+//
+// Against a Beacon that predates the state endpoint the call degrades to the
+// stats heuristic and marks the result not state-known, so callers can say they
+// observed less rather than claiming a lifecycle they never read.
+func inspectWorkload(ctx context.Context, client *daemon.Client, target Target, provider string) (Inspection, error) {
+	if client == nil {
+		return Inspection{}, ErrRuntimeUnavailable
+	}
+	serverID := target.ServerID
+	state, err := client.ContainerState(ctx, target.NodeURL, target.NodeToken, serverID)
+	if errors.Is(err, daemon.ErrContainerStateUnsupported) {
+		_, statsErr := client.Stats(ctx, target.NodeURL, target.NodeToken, serverID)
+		if statsErr != nil {
+			return Inspection{ServerID: serverID, Provider: provider}, statsErr
+		}
+		return Inspection{ServerID: serverID, Exists: true, Provider: provider, StateKnown: false}, nil
+	}
+	if err != nil {
+		return Inspection{ServerID: serverID, Provider: provider}, err
+	}
+	if state.ServerID != "" {
+		serverID = state.ServerID
+	}
+	return Inspection{
+		ServerID:   serverID,
+		Exists:     state.Exists,
+		Running:    state.Running,
+		Status:     state.Status,
+		StartedAt:  state.StartedAt,
+		Provider:   provider,
+		StateKnown: true,
+	}, nil
+}
+
+// existsWorkload reports only whether the node holds a container for the
+// server, using the same state-first reading as inspectWorkload.
+func existsWorkload(ctx context.Context, client *daemon.Client, target Target, provider string) (bool, error) {
+	inspection, err := inspectWorkload(ctx, client, target, provider)
+	if err != nil {
+		return false, err
+	}
+	return inspection.Exists, nil
 }
 
 type MigrationRequest struct {
@@ -170,4 +237,81 @@ type Runtime interface {
 }
 
 var ErrRuntimeUnavailable = errors.New("runtime unavailable")
-var ErrNotImplemented = errors.New("runtime operation not implemented")
+var ErrMigrationManagedByControlPlane = errors.New("migration is managed by the control-plane migration service")
+var ErrUnsupportedRuntimeOperation = errors.New("runtime operation is unsupported")
+
+// ErrUnsupportedProvider is returned for a runtime provider Forge cannot
+// actually run. Handlers map it to HTTP 400.
+var ErrUnsupportedProvider = errors.New("unsupported runtime provider")
+
+// experimentalRuntimesEnabled reports whether providers that exist as adapters
+// but have no verified execution path may be selected.
+func experimentalRuntimesEnabled() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv("ENABLE_EXPERIMENTAL_RUNTIMES"))) {
+	case "", "0", "false", "no":
+		return false
+	default:
+		return true
+	}
+}
+
+// NormalizeProvider trims and lowercases a provider name so that lookups and
+// validation agree regardless of how a caller spelled it.
+func NormalizeProvider(provider string) string {
+	return strings.ToLower(strings.TrimSpace(provider))
+}
+
+// IsSupportedProvider reports whether Forge can run a workload with the given
+// provider. An empty provider means "use the node's default" and is allowed.
+//
+// KVM and LXC have adapters but advertise no capabilities and have no verified
+// path through beacon, which still creates a Docker container whatever the
+// request asked for. Accepting them by default let a user select a hypervisor
+// and silently receive a container, so they are gated behind
+// ENABLE_EXPERIMENTAL_RUNTIMES.
+func IsSupportedProvider(provider string) bool {
+	switch NormalizeProvider(provider) {
+	case "", DockerProvider, ContainerdProvider, PodmanProvider, FirecrackerProvider, KubernetesProvider:
+		return true
+	case KVMProvider, LXCProvider:
+		return experimentalRuntimesEnabled()
+	default:
+		return false
+	}
+}
+
+// ValidateProvider returns ErrUnsupportedProvider for anything Forge cannot run.
+func ValidateProvider(provider string) error {
+	if IsSupportedProvider(provider) {
+		return nil
+	}
+	return fmt.Errorf("%q: %w", NormalizeProvider(provider), ErrUnsupportedProvider)
+}
+
+// AllProviders is the canonical, ordered set of runtime providers Forge models.
+// It is a superset of IsSupportedProvider: engines that exist as adapters but
+// are gated or unwired still appear, so a reporting surface can say *why* each
+// one is or is not usable rather than silently omitting it.
+func AllProviders() []string {
+	return []string{
+		DockerProvider,
+		ContainerdProvider,
+		PodmanProvider,
+		FirecrackerProvider,
+		KubernetesProvider,
+		KVMProvider,
+		LXCProvider,
+	}
+}
+
+// IsExperimentalProvider reports whether a provider is behind the
+// ENABLE_EXPERIMENTAL_RUNTIMES opt-in. Kept adjacent to IsSupportedProvider so
+// the two views of the same rule cannot drift.
+func IsExperimentalProvider(provider string) bool {
+	switch NormalizeProvider(provider) {
+	case KVMProvider, LXCProvider:
+		return true
+	default:
+		return false
+	}
+}

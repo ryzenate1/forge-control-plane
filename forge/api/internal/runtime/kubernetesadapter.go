@@ -23,7 +23,7 @@ func (r *KubernetesAdapter) Capabilities() Capabilities {
 }
 
 func (r *KubernetesAdapter) SupportsMigration() bool {
-	return r != nil && r.client != nil
+	return false
 }
 
 func (r *KubernetesAdapter) CreateServer(ctx context.Context, target Target, req CreateServerRequest) (CreateResponse, error) {
@@ -96,7 +96,7 @@ func (r *KubernetesAdapter) ResizeServer(ctx context.Context, target Target, mem
 		return ErrRuntimeUnavailable
 	}
 	return r.client.SyncServerConfiguration(ctx, target.NodeURL, target.NodeToken, target.ServerID, daemon.ServerConfiguration{
-		UUID: target.ServerID,
+		UUID:  target.ServerID,
 		Build: map[string]any{"memoryLimit": memoryMB, "cpuShares": cpu},
 	})
 }
@@ -143,30 +143,23 @@ func (r *KubernetesAdapter) Stats(ctx context.Context, target Target) (Stats, er
 }
 
 func (r *KubernetesAdapter) Exists(ctx context.Context, target Target) (bool, error) {
-	if _, err := r.Stats(ctx, target); err != nil {
-		return false, err
-	}
-	return true, nil
+	return existsWorkload(ctx, r.client, target, KubernetesProvider)
 }
 
 func (r *KubernetesAdapter) Inspect(ctx context.Context, target Target) (Inspection, error) {
-	exists, err := r.Exists(ctx, target)
-	if err != nil {
-		return Inspection{}, err
-	}
-	return Inspection{ServerID: target.ServerID, Exists: exists, Provider: KubernetesProvider}, nil
+	return inspectWorkload(ctx, r.client, target, KubernetesProvider)
 }
 
 func (r *KubernetesAdapter) PrepareMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *KubernetesAdapter) ExecuteMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *KubernetesAdapter) CancelMigration(ctx context.Context, req MigrationRequest) (MigrationResponse, error) {
-	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "not_implemented"}, ErrNotImplemented
+	return MigrationResponse{MigrationID: req.MigrationID, Accepted: false, Mode: "control_plane"}, ErrMigrationManagedByControlPlane
 }
 
 func (r *KubernetesAdapter) sendPower(ctx context.Context, target Target, signal string) (PowerResponse, error) {

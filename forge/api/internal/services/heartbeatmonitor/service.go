@@ -2,6 +2,10 @@ package heartbeatmonitor
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"runtime"
 	"sort"
 	"sync"
 	"time"
@@ -15,6 +19,7 @@ import (
 type Config struct {
 	WarningThreshold  time.Duration `json:"warningThreshold"`
 	OfflineThreshold  time.Duration `json:"offlineThreshold"`
+	UnavailableAfter  time.Duration `json:"unavailableAfter"`
 	RecoveryThreshold int           `json:"recoveryThreshold"`
 	Interval          time.Duration `json:"interval"`
 }
@@ -22,8 +27,15 @@ type Config struct {
 type Metrics struct {
 	HeartbeatEvaluationsTotal uint64 `json:"heartbeat_evaluations_total"`
 	NodesSuspectedTotal       uint64 `json:"nodes_suspected_total"`
+	NodesUnreachableTotal     uint64 `json:"nodes_unreachable_total"`
 	NodesOfflineTotal         uint64 `json:"nodes_offline_total"`
 	NodesRecoveredTotal       uint64 `json:"nodes_recovered_total"`
+	NodesReconcilingTotal     uint64 `json:"nodes_reconciling_total"`
+	NodesUnavailableTotal     uint64 `json:"nodes_unavailable_total"`
+	// EventPublishErrorsTotal counts heartbeat transition events that failed
+	// to publish. A failed publish must not look like a healthy monitor, so
+	// every Publisher.Publish error increments this counter (and is logged).
+	EventPublishErrorsTotal uint64 `json:"event_publish_errors_total"`
 }
 
 type Evaluation struct {
@@ -53,12 +65,14 @@ type Service struct {
 	config    Config
 	mu        sync.Mutex
 	metrics   Metrics
+	cancel    context.CancelFunc
 }
 
 func DefaultConfig() Config {
 	return Config{
 		WarningThreshold:  30 * time.Second,
 		OfflineThreshold:  90 * time.Second,
+		UnavailableAfter:  300 * time.Second,
 		RecoveryThreshold: 2,
 		Interval:          30 * time.Second,
 	}
@@ -96,6 +110,7 @@ func (s *Service) Start(ctx context.Context) {
 	if s == nil || s.store == nil {
 		return
 	}
+	ctx, s.cancel = context.WithCancel(ctx)
 	go func() {
 		ticker := time.NewTicker(s.config.Interval)
 		defer ticker.Stop()
@@ -104,31 +119,58 @@ func (s *Service) Start(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				_ = s.EvaluateAll(ctx)
+				s.evaluateAllSafe(ctx)
 			}
 		}
 	}()
 }
 
+// evaluateAllSafe runs one evaluation sweep, recovering from a panic so a single
+// bad node's classification cannot terminate the monitor goroutine and silently
+// stop all future heartbeat evaluations (leaving every node's health stale).
+func (s *Service) evaluateAllSafe(ctx context.Context) {
+	defer func() {
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			slog.Error("heartbeat monitor panic recovered", "panic", r, "stack", string(buf[:n]))
+		}
+	}()
+	if err := s.EvaluateAll(ctx); err != nil {
+		slog.Error("heartbeat monitor evaluation sweep failed", "error", err)
+	}
+}
+
+func (s *Service) Stop() {
+	if s != nil && s.cancel != nil {
+		s.cancel()
+	}
+}
+
 func (s *Service) EvaluateAll(ctx context.Context) error {
 	if s == nil || s.store == nil {
-		return nil
+		return fmt.Errorf("heartbeat monitor: store is nil")
 	}
 	nodes, err := s.store.ListNodes(ctx)
 	if err != nil {
-		return err
+		return fmt.Errorf("heartbeat monitor: list nodes: %w", err)
 	}
+	var errs []error
 	for _, node := range nodes {
 		if _, err := s.evaluate(ctx, node, true); err != nil {
-			continue
+			errs = append(errs, fmt.Errorf("node %s: %w", node.ID, err))
 		}
+	}
+	if len(errs) > 0 {
+		return fmt.Errorf("heartbeat monitor: %d of %d node evaluations failed: %w",
+			len(errs), len(nodes), errors.Join(errs...))
 	}
 	return nil
 }
 
 func (s *Service) EvaluateNode(ctx context.Context, nodeID string) (Evaluation, error) {
 	if s == nil || s.store == nil {
-		return Evaluation{}, nil
+		return Evaluation{}, fmt.Errorf("heartbeat monitor: store is nil")
 	}
 	node, err := s.store.GetNode(ctx, nodeID)
 	if err != nil {
@@ -139,7 +181,7 @@ func (s *Service) EvaluateNode(ctx context.Context, nodeID string) (Evaluation, 
 
 func (s *Service) InspectNode(ctx context.Context, nodeID string) (Evaluation, error) {
 	if s == nil || s.store == nil {
-		return Evaluation{}, nil
+		return Evaluation{}, fmt.Errorf("heartbeat monitor: store is nil")
 	}
 	node, err := s.store.GetNode(ctx, nodeID)
 	if err != nil {
@@ -153,10 +195,6 @@ func (s *Service) evaluate(ctx context.Context, node store.Node, persist bool) (
 	if err != nil {
 		return Evaluation{}, err
 	}
-	// The store returns history ordered by observed_at DESC, id DESC.
-	// Re-sort to guarantee most-recent-first order so classify() and
-	// consecutiveSuccessfulHeartbeats() work correctly regardless of
-	// store-level ordering changes.
 	sort.SliceStable(history, func(i, j int) bool {
 		return history[i].ObservedAt.After(history[j].ObservedAt)
 	})
@@ -178,19 +216,26 @@ func (s *Service) evaluate(ctx context.Context, node store.Node, persist bool) (
 		return evaluation, nil
 	}
 
-	s.increment(func(metrics *Metrics) {
-		metrics.HeartbeatEvaluationsTotal++
-	})
 	previous, updated, err := s.store.SetNodeHeartbeatClassification(ctx, node.ID, state, actualState, recoveryCount, reason)
 	if err != nil {
 		return Evaluation{}, err
 	}
+	s.increment(func(metrics *Metrics) {
+		metrics.HeartbeatEvaluationsTotal++
+	})
 	evaluation.Node = updated
 	evaluation.PreviousState = previous.HeartbeatState
 	evaluation.PreviousActualState = previous.ActualState
 	evaluation.Changed = previous.HeartbeatState != string(state) || previous.ActualState != string(actualState)
 	if evaluation.Changed {
 		s.publishTransitions(ctx, previous, updated, evaluation)
+	}
+	if evaluation.Changed && evaluation.State == string(store.NodeHeartbeatStateOffline) {
+		if ageSeconds > int(s.config.UnavailableAfter.Seconds()) {
+			s.increment(func(metrics *Metrics) {
+				metrics.NodesUnavailableTotal++
+			})
+		}
 	}
 	return evaluation, nil
 }
@@ -200,20 +245,25 @@ func (s *Service) evaluate(ctx context.Context, node store.Node, persist bool) (
 // history must be ordered most-recent-first (index 0 = newest).
 func (s *Service) classify(node store.Node, history []store.NodeHeartbeatHistory, now time.Time) (store.NodeHeartbeatState, store.NodeActualState, int, int, string) {
 	successes := consecutiveSuccessfulHeartbeats(history)
-	ageSeconds := 0
+	ageSeconds := -1
 	if node.LastSeenAt == nil {
 		return store.NodeHeartbeatStateOffline, store.NodeActualStateOffline, 0, ageSeconds, "node has never reported heartbeat"
 	}
 	age := now.Sub(*node.LastSeenAt)
 	if age < 0 {
+		if -age > 30*time.Second {
+			return store.NodeHeartbeatStateSuspected, store.NodeActualStateDegraded, 0, 0, "heartbeat timestamp is too far in the future"
+		}
 		age = 0
 	}
 	ageSeconds = int(age.Seconds())
 	if len(history) > 0 && !history[0].Success && age < s.config.OfflineThreshold {
 		return store.NodeHeartbeatStateSuspected, store.NodeActualStateDegraded, 0, ageSeconds, "latest heartbeat reported failure"
 	}
-	if age >= s.config.OfflineThreshold*2 {
-		return store.NodeHeartbeatStateOffline, store.NodeActualStateOffline, 0, ageSeconds, "heartbeat expired beyond offline threshold"
+	if age >= s.config.UnavailableAfter {
+		state := store.NodeHeartbeatStateOffline
+		actual := store.NodeActualStateOffline
+		return state, actual, 0, ageSeconds, "heartbeat expired beyond unavailable threshold"
 	}
 	if age >= s.config.OfflineThreshold {
 		if node.HeartbeatState == string(store.NodeHeartbeatStateUnreachable) || node.HeartbeatState == string(store.NodeHeartbeatStateOffline) {
@@ -229,9 +279,15 @@ func (s *Service) classify(node store.Node, history []store.NodeHeartbeatHistory
 		node.HeartbeatState == string(store.NodeHeartbeatStateSuspected) ||
 		node.HeartbeatState == string(store.NodeHeartbeatStateRecovering) {
 		if successes >= s.config.RecoveryThreshold {
-			return store.NodeHeartbeatStateHealthy, store.NodeActualStateOnline, successes, ageSeconds, "recovery threshold satisfied"
+			if node.HeartbeatState == string(store.NodeHeartbeatStateRecovering) {
+				return store.NodeHeartbeatStateReconciling, store.NodeActualStateReconciling, successes, ageSeconds, "recovery threshold met; entering reconciliation"
+			}
+			return store.NodeHeartbeatStateReconciling, store.NodeActualStateReconciling, successes, ageSeconds, "fast recovery; entering reconciliation"
 		}
 		return store.NodeHeartbeatStateRecovering, store.NodeActualStateDegraded, successes, ageSeconds, "successful heartbeat observed but recovery threshold not met"
+	}
+	if node.HeartbeatState == string(store.NodeHeartbeatStateReconciling) {
+		return store.NodeHeartbeatStateHealthy, store.NodeActualStateOnline, successes, ageSeconds, "reconciliation complete"
 	}
 	return store.NodeHeartbeatStateHealthy, store.NodeActualStateOnline, successes, ageSeconds, "heartbeat healthy"
 }
@@ -252,6 +308,9 @@ func (s *Service) publishTransitions(ctx context.Context, previous, updated stor
 		})
 	case string(store.NodeHeartbeatStateUnreachable):
 		eventType = events.EventNodeUnreachable
+		s.increment(func(metrics *Metrics) {
+			metrics.NodesUnreachableTotal++
+		})
 	case string(store.NodeHeartbeatStateOffline):
 		eventType = events.EventNodeOffline
 		s.increment(func(metrics *Metrics) {
@@ -262,12 +321,30 @@ func (s *Service) publishTransitions(ctx context.Context, previous, updated stor
 		s.increment(func(metrics *Metrics) {
 			metrics.NodesRecoveredTotal++
 		})
+	case string(store.NodeHeartbeatStateReconciling):
+		eventType = events.EventNodeReconciling
+		s.increment(func(metrics *Metrics) {
+			metrics.NodesReconcilingTotal++
+		})
 	default:
 		eventType = events.EventActualStateChanged
 	}
 	payload := s.transitionPayload(previous, updated, evaluation)
-	_ = s.publisher.Publish(ctx, events.NewEnvelope(eventType, "heartbeat-monitor", "node", updated.ID, payload))
+	s.publish(ctx, eventType, updated.ID, payload)
 	s.publishActualStateChanged(ctx, previous, updated, evaluation, payload)
+}
+
+func (s *Service) publish(ctx context.Context, eventType events.EventType, nodeID string, payload map[string]any) {
+	if s.publisher == nil {
+		return
+	}
+	if err := s.publisher.Publish(ctx, events.NewEnvelope(eventType, "heartbeat-monitor", "node", nodeID, payload)); err != nil {
+		s.increment(func(metrics *Metrics) {
+			metrics.EventPublishErrorsTotal++
+		})
+		slog.Error("heartbeat monitor: failed to publish transition event",
+			"eventType", string(eventType), "nodeId", nodeID, "error", err)
+	}
 }
 
 func (s *Service) publishActualStateChanged(ctx context.Context, previous, updated store.Node, evaluation Evaluation, payload map[string]any) {
@@ -277,7 +354,7 @@ func (s *Service) publishActualStateChanged(ctx context.Context, previous, updat
 	if payload == nil {
 		payload = s.transitionPayload(previous, updated, evaluation)
 	}
-	_ = s.publisher.Publish(ctx, events.NewEnvelope(events.EventActualStateChanged, "heartbeat-monitor", "node", updated.ID, payload))
+	s.publish(ctx, events.EventActualStateChanged, updated.ID, payload)
 }
 
 func (s *Service) transitionPayload(previous, updated store.Node, evaluation Evaluation) map[string]any {
@@ -322,6 +399,12 @@ func normalizeConfig(config Config) Config {
 	}
 	if config.OfflineThreshold < config.WarningThreshold {
 		config.OfflineThreshold = config.WarningThreshold
+	}
+	if config.UnavailableAfter <= 0 {
+		config.UnavailableAfter = defaults.UnavailableAfter
+	}
+	if config.UnavailableAfter < config.OfflineThreshold {
+		config.UnavailableAfter = config.OfflineThreshold
 	}
 	if config.RecoveryThreshold <= 0 {
 		config.RecoveryThreshold = defaults.RecoveryThreshold

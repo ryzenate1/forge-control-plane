@@ -16,7 +16,7 @@ func setupTransferMigration(t *testing.T) (*Store, Migration, string, string) {
 		t.Fatal(err)
 	}
 	sourceNodeID := "22222222-2222-2222-2222-222222222222"
-	serverID := "44444444-4444-4444-4444-444444444444"
+	serverID := "44444444-4444-4444-8444-444444444444"
 	targetNodeID := uuid.NewString()
 	targetAllocationID := uuid.NewString()
 	if _, err := s.db.Exec(ctx, `INSERT INTO nodes (id,name,region,base_url,token_hash,daemon_token_id,daemon_token,memory_mb,disk_mb)

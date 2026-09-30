@@ -7,6 +7,7 @@ import (
 )
 
 func TestGenerateSessionToken(t *testing.T) {
+	t.Parallel()
 	token, err := GenerateSessionToken()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -25,6 +26,7 @@ func TestGenerateSessionToken(t *testing.T) {
 }
 
 func TestGenerateSessionID(t *testing.T) {
+	t.Parallel()
 	id, err := GenerateSessionID()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -35,6 +37,7 @@ func TestGenerateSessionID(t *testing.T) {
 }
 
 func TestInMemorySessionStoreCreate(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -56,6 +59,7 @@ func TestInMemorySessionStoreCreate(t *testing.T) {
 }
 
 func TestInMemorySessionStoreCreateNil(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -66,6 +70,7 @@ func TestInMemorySessionStoreCreateNil(t *testing.T) {
 }
 
 func TestInMemorySessionStoreCreateMissingFields(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -76,6 +81,7 @@ func TestInMemorySessionStoreCreateMissingFields(t *testing.T) {
 }
 
 func TestInMemorySessionStoreGet(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -98,6 +104,7 @@ func TestInMemorySessionStoreGet(t *testing.T) {
 }
 
 func TestInMemorySessionStoreGetNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -108,6 +115,7 @@ func TestInMemorySessionStoreGetNotFound(t *testing.T) {
 }
 
 func TestInMemorySessionStoreGetByToken(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -130,6 +138,7 @@ func TestInMemorySessionStoreGetByToken(t *testing.T) {
 }
 
 func TestInMemorySessionStoreGetByTokenNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -140,6 +149,7 @@ func TestInMemorySessionStoreGetByTokenNotFound(t *testing.T) {
 }
 
 func TestInMemorySessionStoreUpdate(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -166,6 +176,7 @@ func TestInMemorySessionStoreUpdate(t *testing.T) {
 }
 
 func TestInMemorySessionStoreUpdateNotFound(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -176,6 +187,7 @@ func TestInMemorySessionStoreUpdateNotFound(t *testing.T) {
 }
 
 func TestInMemorySessionStoreDelete(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -205,6 +217,7 @@ func TestInMemorySessionStoreDelete(t *testing.T) {
 }
 
 func TestInMemorySessionStoreDeleteNonexistent(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -215,6 +228,7 @@ func TestInMemorySessionStoreDeleteNonexistent(t *testing.T) {
 }
 
 func TestInMemorySessionStoreDeleteByUser(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -241,6 +255,7 @@ func TestInMemorySessionStoreDeleteByUser(t *testing.T) {
 }
 
 func TestInMemorySessionStoreCleanup(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -278,6 +293,7 @@ func TestInMemorySessionStoreCleanup(t *testing.T) {
 }
 
 func TestInMemorySessionStoreListByUser(t *testing.T) {
+	t.Parallel()
 	store := NewInMemorySessionStore()
 	ctx := context.Background()
 
@@ -304,6 +320,7 @@ func TestInMemorySessionStoreListByUser(t *testing.T) {
 }
 
 func TestSessionContext(t *testing.T) {
+	t.Parallel()
 	sess := &Session{ID: "s1", UserID: "u1"}
 	ctx := ContextWithSession(context.Background(), sess)
 
@@ -317,6 +334,7 @@ func TestSessionContext(t *testing.T) {
 }
 
 func TestSessionContextNil(t *testing.T) {
+	t.Parallel()
 	got := SessionFromContext(context.Background())
 	if got != nil {
 		t.Error("expected nil session from empty context")

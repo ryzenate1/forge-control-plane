@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Globe, Eye, EyeOff, Save } from 'lucide-react';
 import { fetchJSON, putJSON, type SocialProvider } from '@/lib/api';
-import { Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from '@/components/admin/admin-ui';
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, SectionHeader } from '@/components/admin/admin-ui';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 
@@ -51,7 +51,7 @@ export default function SocialProvidersPage() {
   const saveMut = useMutation({
     mutationFn: async (provider: SocialProvider) => {
       const cfg = local[provider.name];
-      if (!cfg) return;
+      if (!cfg) throw new Error(`No editable configuration found for ${provider.name}.`);
       const body: ProviderUpdate = { enabled: cfg.enabled };
       if (cfg.clientId !== provider.clientId) body.clientId = cfg.clientId;
       if (cfg.issuerUrl !== (provider.issuerUrl ?? '')) body.issuerUrl = cfg.issuerUrl;
@@ -62,11 +62,12 @@ export default function SocialProvidersPage() {
       toast({ tone: 'success', title: 'Provider saved', message: 'The provider settings were updated. Credentials are not verified until a user completes the provider sign-in flow.' });
       qc.invalidateQueries({ queryKey: ['admin-social-providers'] });
     },
+    onError: (err) => toast({ tone: 'error', title: 'Failed to save provider', message: err instanceof Error ? err.message : 'An error occurred' }),
   });
 
   return (
-    <div>
-      <SectionHeader title="Social Login Providers" sub="Configure real Discord OAuth, Steam OpenID, and Authentik OAuth settings. This page does not test or claim provider connectivity." />
+    <AdminPageLayout>
+      <SectionHeader title="Single Sign-On" sub="Discord OAuth, Steam OpenID and Authentik OAuth sign-in providers. This page does not test or claim provider connectivity." />
       <Card>
         <CardHeader title={`${providers.length} providers`} icon={Globe} />
         {query.isLoading ? (
@@ -98,7 +99,7 @@ export default function SocialProvidersPage() {
           </div>
         ) : null}
       </Card>
-    </div>
+    </AdminPageLayout>
   );
 }
 
@@ -129,7 +130,7 @@ function ProviderRow({
           <p className="text-xs text-slate-500">Provider key: {provider.name}</p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
-          <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[#dc2626]" />
+          <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[var(--brand)]" />
           <span className="text-slate-300">Enabled</span>
         </label>
       </div>
@@ -150,6 +151,7 @@ function ProviderRow({
             onChange={(value) => onChange({ clientSecret: value })}
             type={showSecret ? 'text' : 'password'}
             placeholder={provider.hasClientSecret ? 'Stored securely — enter a new value to replace it' : secretLabel}
+            autoComplete="off"
           />
           <button type="button" aria-label={showSecret ? 'Hide secret' : 'Show secret'} className="absolute right-2 top-7 text-slate-400 hover:text-slate-200" onClick={() => setShowSecret(!showSecret)}>
             {showSecret ? <EyeOff size={14} /> : <Eye size={14} />}

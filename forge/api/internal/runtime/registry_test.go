@@ -17,30 +17,44 @@ func (m *mockPublisher) Publish(_ context.Context, envelope events.Envelope) err
 }
 
 type registryRuntimeStub struct {
-	name             string
-	caps             Capabilities
-	supportsMigrate  bool
+	name            string
+	caps            Capabilities
+	supportsMigrate bool
 }
 
-func (r *registryRuntimeStub) Name() string                                { return r.name }
-func (r *registryRuntimeStub) Capabilities() Capabilities                   { return r.caps }
-func (r *registryRuntimeStub) SupportsMigration() bool                     { return r.supportsMigrate }
+func (r *registryRuntimeStub) Name() string               { return r.name }
+func (r *registryRuntimeStub) Capabilities() Capabilities { return r.caps }
+func (r *registryRuntimeStub) SupportsMigration() bool    { return r.supportsMigrate }
 func (r *registryRuntimeStub) CreateServer(context.Context, Target, CreateServerRequest) (CreateResponse, error) {
 	return CreateResponse{}, nil
 }
 func (r *registryRuntimeStub) InstallServer(context.Context, Target, InstallRequest) (InstallResponse, error) {
 	return InstallResponse{}, nil
 }
-func (r *registryRuntimeStub) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error { return nil }
-func (r *registryRuntimeStub) DeleteServer(context.Context, Target) (PowerResponse, error)                 { return PowerResponse{}, nil }
-func (r *registryRuntimeStub) StartServer(context.Context, Target) (PowerResponse, error)                  { return PowerResponse{}, nil }
-func (r *registryRuntimeStub) StopServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (r *registryRuntimeStub) RestartServer(context.Context, Target) (PowerResponse, error)                { return PowerResponse{}, nil }
-func (r *registryRuntimeStub) KillServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (r *registryRuntimeStub) ResizeServer(context.Context, Target, int64, int64) error                   { return nil }
-func (r *registryRuntimeStub) Stats(context.Context, Target) (Stats, error)                                { return Stats{}, nil }
-func (r *registryRuntimeStub) Exists(context.Context, Target) (bool, error)                                { return true, nil }
-func (r *registryRuntimeStub) Inspect(context.Context, Target) (Inspection, error)                         { return Inspection{}, nil }
+func (r *registryRuntimeStub) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error {
+	return nil
+}
+func (r *registryRuntimeStub) DeleteServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (r *registryRuntimeStub) StartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (r *registryRuntimeStub) StopServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (r *registryRuntimeStub) RestartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (r *registryRuntimeStub) KillServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (r *registryRuntimeStub) ResizeServer(context.Context, Target, int64, int64) error { return nil }
+func (r *registryRuntimeStub) Stats(context.Context, Target) (Stats, error)             { return Stats{}, nil }
+func (r *registryRuntimeStub) Exists(context.Context, Target) (bool, error)             { return true, nil }
+func (r *registryRuntimeStub) Inspect(context.Context, Target) (Inspection, error) {
+	return Inspection{}, nil
+}
 func (r *registryRuntimeStub) PrepareMigration(context.Context, MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{}, nil
 }

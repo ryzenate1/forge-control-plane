@@ -27,13 +27,15 @@ END $$;
 -- 4) server_crash_events: add missing index on node_id
 CREATE INDEX IF NOT EXISTS idx_crash_events_node_id ON server_crash_events (node_id);
 
--- 5) deployments: add FK on server_id -> servers(id)
+-- 5) deployments: add FK on server_id -> servers(id) (table created later in 127)
 DO $$
 BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_deployments_server') THEN
-        ALTER TABLE deployments
-            ADD CONSTRAINT fk_deployments_server
-            FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE;
+    IF EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'deployments') THEN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_deployments_server') THEN
+            EXECUTE 'ALTER TABLE deployments
+                ADD CONSTRAINT fk_deployments_server
+                FOREIGN KEY (server_id) REFERENCES servers(id) ON DELETE CASCADE';
+        END IF;
     END IF;
 END $$;
 

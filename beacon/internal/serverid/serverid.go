@@ -24,6 +24,13 @@ func Validate(value string) error {
 			}
 		}
 	}
+	// Accept standardized UUID versions used by imported and current records,
+	// while rejecting nil, unversioned, and non-RFC variants.
+	if value == "00000000-0000-0000-0000-000000000000" ||
+		(value[14] < '1' || value[14] > '5') ||
+		(value[19] != '8' && value[19] != '9' && value[19] != 'a' && value[19] != 'A' && value[19] != 'b' && value[19] != 'B') {
+		return errInvalid
+	}
 	return nil
 }
 

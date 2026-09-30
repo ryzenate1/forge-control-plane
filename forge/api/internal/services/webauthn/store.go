@@ -72,6 +72,24 @@ func (s *PostgresCredentialStore) RemoveCredential(ctx context.Context, userID, 
 	return nil
 }
 
+// RecordCredentialUsage stores the ratcheted sign counter, the clone verdict
+// and the last-use timestamp for one credential. It is scoped to the owning
+// user and reports a miss rather than silently succeeding.
+func (s *PostgresCredentialStore) RecordCredentialUsage(ctx context.Context, userID, credentialRowID string, signCount uint32, cloneWarning bool, lastUsedAt time.Time) error {
+	tag, err := s.pool.Exec(ctx, `
+		UPDATE webauthn_credentials
+		SET sign_count = $3, clone_warning = $4, last_used_at = $5
+		WHERE id = $1 AND user_id = $2
+	`, credentialRowID, userID, signCount, cloneWarning, lastUsedAt)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() == 0 {
+		return errors.New("webauthn credential no longer exists")
+	}
+	return nil
+}
+
 type RedisSessionStore struct {
 	client *redis.Client
 }
@@ -79,6 +97,10 @@ type RedisSessionStore struct {
 func NewRedisSessionStore(client *redis.Client) *RedisSessionStore {
 	return &RedisSessionStore{client: client}
 }
+
+// ErrSessionNotFound is returned when a ceremony session is absent or expired.
+// Callers match on it instead of parsing an error string.
+var ErrSessionNotFound = errors.New("session not found or expired")
 
 func (s *RedisSessionStore) Save(ctx context.Context, key string, data []byte, expiry time.Duration) error {
 	return s.client.Set(ctx, key, data, expiry).Err()
@@ -88,7 +110,20 @@ func (s *RedisSessionStore) Get(ctx context.Context, key string) ([]byte, error)
 	data, err := s.client.Get(ctx, key).Bytes()
 	if err != nil {
 		if errors.Is(err, redis.Nil) {
-			return nil, errors.New("session not found or expired")
+			return nil, ErrSessionNotFound
+		}
+		return nil, err
+	}
+	return data, nil
+}
+
+// GetDelete atomically redeems a session so a challenge cannot be consumed
+// twice, even by two concurrent finish requests.
+func (s *RedisSessionStore) GetDelete(ctx context.Context, key string) ([]byte, error) {
+	data, err := s.client.GetDel(ctx, key).Bytes()
+	if err != nil {
+		if errors.Is(err, redis.Nil) {
+			return nil, ErrSessionNotFound
 		}
 		return nil, err
 	}

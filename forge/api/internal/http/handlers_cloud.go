@@ -3,6 +3,7 @@ package http
 import (
 	"os"
 	"strings"
+	"time"
 
 	"gamepanel/forge/internal/cloud"
 	"gamepanel/forge/internal/store"
@@ -85,21 +86,25 @@ func registerCloudRoutes(protected fiber.Router, cfg Config, svc *cloud.Manager,
 		}
 		if strings.TrimSpace(req.NodeID) != "" {
 			if cfg.Store == nil {
-				return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required to link a cloud instance to a node")
+				return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 			}
 			if _, err := cfg.Store.GetNode(c.Context(), req.NodeID); err != nil {
 				return fiber.NewError(fiber.StatusBadRequest, "node not found")
 			}
-			credential, err := cfg.Store.GetNodeDaemonCredential(c.Context(), req.NodeID)
+			bootstrapToken, err := cfg.Store.CreateOnboardingToken(c.Context(), req.NodeID, time.Now().UTC().Add(15*time.Minute))
 			if err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, "load node bootstrap credential")
+				return fiber.NewError(fiber.StatusInternalServerError, "create node bootstrap token")
+			}
+			claims, _ := c.Locals("user").(tokenClaims)
+			if err := cfg.Store.ApproveOnboardingToken(c.Context(), bootstrapToken.ID, claims.Sub); err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "approve node bootstrap token")
 			}
 			panelAPIURL := strings.TrimSpace(os.Getenv("BEACON_PANEL_API_URL"))
 			image := strings.TrimSpace(req.Request.BeaconImage)
 			if image == "" {
 				image = strings.TrimSpace(os.Getenv("AWS_BEACON_IMAGE"))
 			}
-			userData, err := cloud.BeaconCloudInit(req.NodeID, credential, panelAPIURL, image, cloud.BeaconBackupConfig{
+			userData, err := cloud.BeaconCloudInit(req.NodeID, bootstrapToken.PlainToken, panelAPIURL, image, cloud.BeaconBackupConfig{
 				Adapter:      strings.TrimSpace(os.Getenv("BACKUP_ADAPTER")),
 				Bucket:       strings.TrimSpace(os.Getenv("S3_BUCKET")),
 				Region:       strings.TrimSpace(os.Getenv("S3_REGION")),
@@ -111,15 +116,11 @@ func registerCloudRoutes(protected fiber.Router, cfg Config, svc *cloud.Manager,
 				return fiber.NewError(fiber.StatusBadRequest, err.Error())
 			}
 			req.Request.UserData = userData
-			if req.Request.SubnetID == "" {
-				req.Request.SubnetID = strings.TrimSpace(os.Getenv("AWS_SUBNET_ID"))
-			}
-			if len(req.Request.SecurityGroupIDs) == 0 {
-				req.Request.SecurityGroupIDs = splitCSV(os.Getenv("AWS_SECURITY_GROUP_IDS"))
-			}
-			if req.Request.IAMInstanceProfile == "" {
-				req.Request.IAMInstanceProfile = strings.TrimSpace(os.Getenv("AWS_IAM_INSTANCE_PROFILE"))
-			}
+			// Node bootstrap networking and instance identity must come from
+			// operator-controlled configuration, never the request body.
+			req.Request.SubnetID = strings.TrimSpace(os.Getenv("AWS_SUBNET_ID"))
+			req.Request.SecurityGroupIDs = splitCSV(os.Getenv("AWS_SECURITY_GROUP_IDS"))
+			req.Request.IAMInstanceProfile = strings.TrimSpace(os.Getenv("AWS_IAM_INSTANCE_PROFILE"))
 		}
 
 		instance, err := svc.ProvisionNode(c.Context(), req.Provider, req.Request)

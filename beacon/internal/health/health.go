@@ -1,6 +1,10 @@
 package health
 
-import "context"
+import (
+	"context"
+	"errors"
+	"time"
+)
 
 // HealthChecker defines an interface for health checks
 type HealthChecker interface {
@@ -15,7 +19,7 @@ type ComponentHealthChecker struct {
 
 // HealthStatus represents the result of a composite health check
 type HealthStatus struct {
-	Status     string             `json:"status"`
+	Status     string            `json:"status"`
 	Components []ComponentResult `json:"components,omitempty"`
 }
 
@@ -39,7 +43,10 @@ func NewCompositeHealthChecker(checkers []ComponentHealthChecker) *CompositeHeal
 // Check runs all health checks and returns the first error encountered
 func (c *CompositeHealthChecker) Check(ctx context.Context) error {
 	for _, checker := range c.checkers {
-		if err := checker.Checker(ctx); err != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := checker.Checker(checkCtx)
+		cancel()
+		if err != nil {
 			return err
 		}
 	}
@@ -51,9 +58,16 @@ func (c *CompositeHealthChecker) CheckStatus(ctx context.Context) HealthStatus {
 	status := HealthStatus{Status: "healthy", Components: make([]ComponentResult, 0, len(c.checkers))}
 	for _, checker := range c.checkers {
 		cr := ComponentResult{Name: checker.Name, Status: "ok"}
-		if err := checker.Checker(ctx); err != nil {
+		checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		err := checker.Checker(checkCtx)
+		cancel()
+		if err != nil {
 			cr.Status = "error"
-			cr.Error = err.Error()
+			if errors.Is(err, context.DeadlineExceeded) {
+				cr.Error = "health check timed out"
+			} else {
+				cr.Error = "health check failed"
+			}
 			status.Status = "unhealthy"
 		}
 		status.Components = append(status.Components, cr)

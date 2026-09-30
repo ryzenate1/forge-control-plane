@@ -3,13 +3,13 @@ package rootfs
 import (
 	"crypto/rand"
 	"encoding/hex"
-	"time"
+	"fmt"
 )
 
-func randomName() string {
+func randomName() (string, error) {
 	var body [12]byte
-	if _, err := rand.Read(body[:]); err == nil {
-		return hex.EncodeToString(body[:])
+	if _, err := rand.Read(body[:]); err != nil {
+		return "", fmt.Errorf("generate secure temporary name: %w", err)
 	}
-	return time.Now().UTC().Format("20060102150405.000000000")
+	return hex.EncodeToString(body[:]), nil
 }

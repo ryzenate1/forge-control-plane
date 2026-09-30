@@ -1,0 +1,61 @@
+# Beacon daemon configuration.
+# Keep the real file mode at 0600 because it may contain node credentials.
+debug: false
+
+# Optional legacy file-based identity. Prefer DAEMON_NODE_ID and
+# DAEMON_NODE_TOKEN environment variables in deployed environments.
+uuid: ""
+token_id: ""
+token: ""
+panel_url: https://panel.example.com/api/v1
+remote: https://panel.example.com/api/remote
+
+system:
+  data_directory: /srv/game-panel/servers
+  temp_directory: /srv/game-panel/tmp
+  root_directory: /srv/game-panel
+  log_directory: /var/log/beacon
+  archive_directory: /srv/game-panel/archives
+  backup_directory: /srv/game-panel/backups
+  username: beacon
+  sftp:
+    bind_address: 127.0.0.1
+    bind_port: 2022
+    read_only: false
+  api:
+    host: 127.0.0.1
+    port: 9090
+    tls:
+      enabled: true
+      cert_file: /etc/beacon/tls/cert.pem
+      key_file: /etc/beacon/tls/key.pem
+
+docker:
+  timezone: UTC
+  memory_overhead: 10
+  rootless_enabled: false
+  network:
+    # Set this to the actual host interface used for allocations.
+    interface: ""
+    name: gamepanel
+    mode: bridge
+
+backup:
+  write_limit: 0
+
+log:
+  max_size: 10m
+  max_file: 3
+
+# Only dedicated, non-sensitive host data roots belong here. Protected host
+# paths and symlinked paths are rejected.
+allowed_mounts:
+  - /mnt/game-data
+
+allowed_origins:
+  - https://panel.example.com
+
+remote_query: {}
+
+crash_detection:
+  detect_clean_exit_as_crash: false

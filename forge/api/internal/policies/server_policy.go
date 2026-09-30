@@ -29,7 +29,7 @@ func (p *ServerPolicy) Can(ctx context.Context, user store.User, action Action, 
 	case ActionRead:
 		return p.checkPermission(ctx, user.ID, serverID, store.PermServerView)
 	case ActionCreate:
-		return true
+		return p.st != nil && p.st.CheckUserCanCreateServer(ctx, user.ID, 0, 0, 0) == nil
 	case ActionUpdate:
 		return p.checkPermission(ctx, user.ID, serverID, store.PermServerSettings)
 	case ActionDelete:

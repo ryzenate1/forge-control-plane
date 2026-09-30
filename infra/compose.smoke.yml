@@ -1,24 +1,24 @@
-# Loopback-only ephemeral port bindings for production-image smoke tests.
+# Deterministic loopback port bindings for production-image smoke tests.
 services:
   api:
-    image: infra-api:latest
+    image: ${API_SMOKE_IMAGE:-ghcr.io/gamepanel/forge-api:latest}
     ports: !override
-      - "127.0.0.1::8080"
+      - "127.0.0.1:8080:8080"
   web:
-    image: infra-web:latest
+    image: ${WEB_SMOKE_IMAGE:-ghcr.io/gamepanel/forge-web:latest}
     ports: !override
-      - "127.0.0.1::3000"
+      - "127.0.0.1:3000:3000"
   daemon:
-    image: infra-daemon:latest
+    image: ${DAEMON_SMOKE_IMAGE:-ghcr.io/gamepanel/beacon:latest}
     ports: !override
-      - "127.0.0.1::9090"
-      - "127.0.0.1::2022"
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:2022:2022"
   prometheus:
     ports: !override
-      - "127.0.0.1::9090"
+      - "127.0.0.1:9091:9090"
   alertmanager:
     ports: !override
-      - "127.0.0.1::9093"
+      - "127.0.0.1:9093:9093"
   grafana:
     ports: !override
-      - "127.0.0.1::3000"
+      - "127.0.0.1:3001:3000"

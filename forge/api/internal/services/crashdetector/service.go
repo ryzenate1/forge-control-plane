@@ -2,6 +2,8 @@ package crashdetector
 
 import (
 	"context"
+	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -78,7 +80,7 @@ func (d *Detector) ReportCrash(ctx context.Context, serverID, nodeID string, exi
 	crashCount := len(recent)
 
 	if d.store != nil {
-		_, _ = d.store.CreateCrashEvent(ctx, store.CreateCrashEventRequest{
+		_, err := d.store.CreateCrashEvent(ctx, store.CreateCrashEventRequest{
 			ServerID:      serverID,
 			NodeID:        nodeID,
 			ExitCode:      exitCode,
@@ -87,6 +89,19 @@ func (d *Detector) ReportCrash(ctx context.Context, serverID, nodeID string, exi
 			AutoRestarted: d.config.AutoRestart && crashCount >= d.config.Threshold,
 			CrashCount:    crashCount,
 		})
+		// ReportCrash has no error return and the in-memory decision below
+		// proceeds regardless, but the persisted event is what the crash
+		// timeline and CountRecentCrashes are read from. A dropped write that
+		// is also unlogged makes a crashing server look like it never crashed,
+		// so it is reported even though it cannot be returned.
+		//
+		// ErrCrashEventUnreadable means the row was written and only the
+		// read-back failed; the event is discarded here anyway, so that case
+		// is not a problem for this caller.
+		if err != nil && !errors.Is(err, store.ErrCrashEventUnreadable) {
+			slog.Default().Error("crash event not persisted",
+				"server_id", serverID, "node_id", nodeID, "crash_count", crashCount, "error", err)
+		}
 	}
 
 	if !state.LastAction.IsZero() && now.Sub(state.LastAction) < d.config.Cooldown {

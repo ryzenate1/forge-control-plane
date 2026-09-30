@@ -19,7 +19,8 @@ func TestDockerAdapterPropagatesResourceContractWithoutAliasingShares(t *testing
 		_ = json.NewEncoder(w).Encode(daemon.CreateResponse{ServerID: captured.ServerID, Accepted: true})
 	}))
 	defer server.Close()
-	adapter := NewDockerAdapter(daemon.NewClient())
+	daemonClient, _ := daemon.NewClient("http://localhost", "test-token")
+	adapter := NewDockerAdapter(daemonClient)
 	_, err := adapter.CreateServer(context.Background(), Target{NodeURL: server.URL, NodeToken: "token", ServerID: "server"}, CreateServerRequest{
 		Image: "image", CPUShares: 512, CPULimit: 250, SwapMB: 256, IOWeight: 600, Threads: "0-1", OOMDisabled: true,
 		PIDLimit: 64, StopSignal: "SIGINT", StopTimeout: 45, UID: 1000, GID: 1001, DNS: []string{"1.1.1.1"},

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"strconv"
 )
@@ -17,6 +18,7 @@ func envInt(key string, fallback int) int {
 		if i, err := strconv.Atoi(val); err == nil {
 			return i
 		}
+		log.Printf("WARNING: invalid integer value for %s=%q, using fallback %d", key, val, fallback)
 	}
 	return fallback
 }
@@ -26,6 +28,7 @@ func envBool(key string, fallback bool) bool {
 		if b, err := strconv.ParseBool(val); err == nil {
 			return b
 		}
+		log.Printf("WARNING: invalid boolean value for %s=%q, using fallback %t", key, val, fallback)
 	}
 	return fallback
 }

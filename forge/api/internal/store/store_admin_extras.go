@@ -6,23 +6,15 @@ import (
 	"strings"
 )
 
-const searchUsersSQL = `
-SELECT id::text, email, username, COALESCE(name_first, ''), COALESCE(name_last, ''), role, use_totp
-FROM users
-WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR username ILIKE '%' || $1 || '%')
-ORDER BY id ASC
-LIMIT $3 OFFSET $2
-`
-
-const countSearchUsersSQL = `
-SELECT COUNT(*)
-FROM users
-WHERE ($1 = '' OR email ILIKE '%' || $1 || '%' OR username ILIKE '%' || $1 || '%')
-`
+const searchUsersCols = `id::text, email, username, COALESCE(name_first, ''), COALESCE(name_last, ''), role, use_totp`
 
 // SearchUsers returns a page of users matching the filter and the total
 // number of rows that match. filter is matched case-insensitively against
 // email and username. The (page, perPage) pair is 1-indexed.
+//
+// Branched queries (not a WHERE clause matching empty filter with OR):
+// the OR form defeats index use on the list-all path. ORDER BY id ASC
+// keeps OFFSET pagination stable.
 func (s *Store) SearchUsers(ctx context.Context, filter string, page, perPage int) ([]User, int, error) {
 	if s.db == nil {
 		return nil, 0, errors.New("no database connection")
@@ -37,11 +29,22 @@ func (s *Store) SearchUsers(ctx context.Context, filter string, page, perPage in
 	offset := (page - 1) * perPage
 
 	var total int
-	if err := s.db.QueryRow(ctx, countSearchUsersSQL, filter).Scan(&total); err != nil {
+	var rows pgxRows
+	var err error
+	if filter != "" {
+		if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users WHERE email ILIKE '%' || $1 || '%' OR username ILIKE '%' || $1 || '%'`, filter).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+		rows, err = s.db.Query(ctx, `SELECT `+searchUsersCols+` FROM users WHERE email ILIKE '%' || $1 || '%' OR username ILIKE '%' || $1 || '%' ORDER BY id ASC LIMIT $3 OFFSET $2`, filter, offset, perPage)
+	} else {
+		if err := s.db.QueryRow(ctx, `SELECT COUNT(*) FROM users`).Scan(&total); err != nil {
+			return nil, 0, err
+		}
+		rows, err = s.db.Query(ctx, `SELECT `+searchUsersCols+` FROM users ORDER BY id ASC LIMIT $2 OFFSET $1`, offset, perPage)
+	}
+	if err != nil {
 		return nil, 0, err
 	}
-
-	rows, err := s.db.Query(ctx, searchUsersSQL, filter, offset, perPage)
 	if err != nil {
 		return nil, 0, err
 	}

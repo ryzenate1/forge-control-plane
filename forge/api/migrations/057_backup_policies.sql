@@ -1,13 +1,9 @@
-CREATE TABLE IF NOT EXISTS backup_policies (
-    id uuid PRIMARY KEY,
-    server_id uuid NOT NULL REFERENCES servers(id) ON DELETE CASCADE,
-    interval text NOT NULL,
-    max_backups integer NOT NULL DEFAULT 10,
-    retention_days integer NOT NULL DEFAULT 30,
-    storage text NOT NULL DEFAULT 's3',
-    enabled boolean NOT NULL DEFAULT true,
-    created_at timestamptz NOT NULL DEFAULT now(),
-    updated_at timestamptz NOT NULL DEFAULT now()
-);
-
-CREATE INDEX IF NOT EXISTS idx_backup_policies_server ON backup_policies(server_id);
+-- No-op guard: this filename once held a byte-identical copy of 119_z_backup_policies.sql
+-- (backup_policies table). The schema effect lives entirely in 119_z_backup_policies.sql.
+--
+-- This file is kept (not deleted, not renamed) because the filename is the
+-- primary key in schema_migrations: hosts that already applied either name
+-- must never see a "new" migration here. The runners treat the pair as
+-- renames (see migrationAliases in internal/store/migration.go): if either
+-- side applied, the other is recorded without re-running DDL.
+SELECT 1;

@@ -2,6 +2,7 @@
 
 import { createContext, useContext } from "react";
 import type { ApiServer, ApiUser } from "@/lib/api";
+import { can } from "@/lib/permissions";
 
 export type ServerAccess = {
   user: ApiUser | null;
@@ -32,10 +33,27 @@ export function useOptionalServerContext() {
   return useContext(Context);
 }
 
+export function computeServerAccess(server: ApiServer, user: ApiUser | null): ServerAccess {
+  const isAdmin = user?.role === "admin" || Boolean(user?.rootAdmin);
+  const isOwner = Boolean(user && server.ownerId === user.id);
+  let permissions: string[] | null;
+  if (isAdmin || isOwner) {
+    permissions = [];
+  } else if (server.permissions?.includes("*")) {
+    permissions = ["*"];
+  } else {
+    permissions = server.permissions ?? null;
+  }
+  return { user, permissions, isOwner, isAdmin };
+}
+
 export function hasServerPermission(access: ServerAccess, permission: string | string[]) {
-  if (access.isAdmin || access.isOwner) return true;
-  if (!access.permissions) return false;
-  if (access.permissions.includes("*")) return true;
   const required = Array.isArray(permission) ? permission : [permission];
-  return required.some((item) => access.permissions!.includes(item));
+  // An empty required list means "any authenticated server member": tabs that
+  // have no backend permission gate (e.g. builds, deployments) stay visible to
+  // every verified member while remaining hidden from unverified contexts.
+  if (required.length === 0) {
+    return access.isAdmin || access.isOwner || access.permissions !== null;
+  }
+  return can(access, permission);
 }

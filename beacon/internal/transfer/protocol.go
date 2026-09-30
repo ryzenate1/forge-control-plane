@@ -152,6 +152,9 @@ func (e *Engine) authorizeLocked(migrationID, direction, credential string) (Met
 	if err != nil {
 		return Metadata{}, ErrUnauthorized
 	}
+	if err := validateMetadata(meta); err != nil {
+		return Metadata{}, ErrInvalidBinding
+	}
 	if meta.Version != ProtocolVersion || meta.MigrationID != migrationID || meta.Direction != direction {
 		return Metadata{}, ErrInvalidBinding
 	}
@@ -168,6 +171,18 @@ func (e *Engine) authorizeLocked(migrationID, direction, credential string) (Met
 	return meta, nil
 }
 
+func validateMetadata(meta Metadata) error {
+	return validateClaims(CredentialClaims{
+		Version:      meta.Version,
+		MigrationID:  meta.MigrationID,
+		ServerID:     meta.ServerID,
+		SourceNodeID: meta.SourceNodeID,
+		TargetNodeID: meta.TargetNodeID,
+		Direction:    meta.Direction,
+		ExpiresAt:    meta.ExpiresAt,
+	})
+}
+
 func validateClaims(c CredentialClaims) error {
 	if c.Version != ProtocolVersion || c.MigrationID == "" || c.ServerID == "" || c.SourceNodeID == "" || c.TargetNodeID == "" || c.ExpiresAt.IsZero() {
 		return errors.New("incomplete transfer credential claims")
@@ -182,7 +197,7 @@ func validateClaims(c CredentialClaims) error {
 }
 
 func safeID(value string) bool {
-	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, `/\\\x00`) {
+	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, "/\\\x00") {
 		return false
 	}
 	return filepath.Base(value) == value
@@ -198,6 +213,10 @@ func (e *Engine) PrepareSource(ctx context.Context, migrationID, credential stri
 	if meta.Phase == "archived" || meta.Phase == "uploaded" {
 		e.mu.Unlock()
 		return meta, nil
+	}
+	if _, active := e.active[migrationID]; active {
+		e.mu.Unlock()
+		return meta, errors.New("transfer operation is already active")
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	e.active[migrationID] = cancel
@@ -239,10 +258,10 @@ func createSecureArchive(ctx context.Context, serverRoot, archivePath string) (c
 		return "", 0, err
 	}
 	defer fsys.Close()
-	if err := os.MkdirAll(filepath.Dir(archivePath), 0o750); err != nil {
+	if err := os.MkdirAll(filepath.Dir(archivePath), 0o700); err != nil {
 		return "", 0, err
 	}
-	out, err := os.OpenFile(archivePath+".tmp", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o640)
+	out, err := os.OpenFile(archivePath+".tmp", os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return "", 0, err
 	}
@@ -258,10 +277,17 @@ func createSecureArchive(ctx context.Context, serverRoot, archivePath string) (c
 	tw := tar.NewWriter(gz)
 	denylist := ignore.NewIgnoreList(nil)
 	if ignoreFile, openErr := fsys.Open(".pteroignore"); openErr == nil {
-		if loaded, loadErr := ignore.LoadIgnoreReader(ignoreFile); loadErr == nil {
-			denylist = loaded
+		loaded, loadErr := ignore.LoadIgnoreReader(ignoreFile)
+		closeErr := ignoreFile.Close()
+		if loadErr != nil {
+			return "", 0, loadErr
 		}
-		_ = ignoreFile.Close()
+		if closeErr != nil {
+			return "", 0, closeErr
+		}
+		denylist = loaded
+	} else if !errors.Is(openErr, os.ErrNotExist) {
+		return "", 0, openErr
 	}
 	if err := archiveDirectory(ctx, fsys, tw, "", denylist); err != nil {
 		_ = tw.Close()
@@ -285,6 +311,9 @@ func createSecureArchive(ctx context.Context, serverRoot, archivePath string) (c
 		return "", 0, err
 	}
 	if err := os.Rename(archivePath+".tmp", archivePath); err != nil {
+		return "", 0, err
+	}
+	if err := syncTransferDirectory(filepath.Dir(archivePath)); err != nil {
 		return "", 0, err
 	}
 	committed = true
@@ -338,6 +367,14 @@ func archiveDirectory(ctx context.Context, fsys *rootfs.FS, tw *tar.Writer, dire
 		if err != nil {
 			return err
 		}
+		openedInfo, err := file.Stat()
+		if err != nil || !os.SameFile(info, openedInfo) {
+			_ = file.Close()
+			if err != nil {
+				return err
+			}
+			return fmt.Errorf("source changed while archiving %q", name)
+		}
 		_, copyErr := io.Copy(tw, file)
 		closeErr := file.Close()
 		if copyErr != nil {
@@ -363,6 +400,10 @@ func (e *Engine) SourceArchive(migrationID, credential string, offset int64) (*o
 	if offset < 0 || offset > meta.ArchiveSize {
 		return nil, meta, ErrOffsetMismatch
 	}
+	// os.Open (os.OpenFile under the hood) already ORs in syscall.O_CLOEXEC on
+	// Unix (see src/os/file_unix.go), so this descriptor cannot leak across a
+	// later exec.Command call in this process. We rely on os.Open rather than a
+	// raw syscall.Open specifically to keep that guarantee.
 	file, err := os.Open(e.archivePath(migrationID))
 	if err != nil {
 		return nil, meta, err
@@ -402,6 +443,10 @@ func (e *Engine) AppendDestination(ctx context.Context, migrationID, credential 
 	if meta.Checksum != "" && !strings.EqualFold(meta.Checksum, checksum) {
 		e.mu.Unlock()
 		return meta, ErrChecksumMismatch
+	}
+	if _, active := e.active[migrationID]; active {
+		e.mu.Unlock()
+		return meta, errors.New("transfer operation is already active")
 	}
 	meta.ArchiveSize, meta.Checksum, meta.Phase, meta.UpdatedAt = total, strings.ToLower(checksum), "uploading", e.now().UTC()
 	if err := e.save(meta); err != nil {
@@ -489,9 +534,19 @@ func (e *Engine) RestoreDestination(ctx context.Context, migrationID, credential
 		e.mu.Unlock()
 		return meta, errors.New("destination archive is not verified")
 	}
+	if _, active := e.active[migrationID]; active {
+		e.mu.Unlock()
+		return meta, errors.New("transfer operation is already active")
+	}
 	staging := e.restorePath(migrationID)
-	_ = os.RemoveAll(staging)
-	if err := os.MkdirAll(staging, 0o750); err != nil {
+	if _, err := os.Lstat(staging); err == nil {
+		e.mu.Unlock()
+		return meta, errors.New("restore staging already exists; cancel the prior attempt before retrying")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		e.mu.Unlock()
+		return meta, err
+	}
+	if err := os.MkdirAll(staging, 0o700); err != nil {
 		e.mu.Unlock()
 		return meta, err
 	}
@@ -561,14 +616,14 @@ func extractSecureArchive(ctx context.Context, archivePath, staging string) erro
 		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := fsys.MkdirAll(name, h.FileInfo().Mode().Perm()); err != nil {
+			if err := fsys.MkdirAll(name, normalizedTransferDirMode(h.FileInfo().Mode())); err != nil {
 				return err
 			}
 		case tar.TypeReg, tar.TypeRegA:
 			if h.Size < 0 || h.Size > 32*1024*1024*1024 {
 				return ErrTransferBounds
 			}
-			if err := fsys.AtomicWriteExact(name, tr, h.Size, h.Size, h.FileInfo().Mode().Perm()); err != nil {
+			if err := fsys.AtomicWriteExact(name, tr, h.Size, h.Size, normalizedTransferFileMode(h.FileInfo().Mode())); err != nil {
 				return err
 			}
 		default:
@@ -580,7 +635,11 @@ func extractSecureArchive(ctx context.Context, archivePath, staging string) erro
 func activateWithRollback(dataDir, serverID, staging, migrationID string) error {
 	canonical := filepath.Join(dataDir, serverID)
 	backup := filepath.Join(dataDir, ".transfers", migrationID, "previous")
-	_ = os.RemoveAll(backup)
+	if _, err := os.Lstat(backup); err == nil {
+		return errors.New("prior rollback directory exists; refusing to overwrite recovery data")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	hadCanonical := false
 	if _, err := os.Lstat(canonical); err == nil {
 		hadCanonical = true
@@ -593,10 +652,37 @@ func activateWithRollback(dataDir, serverID, staging, migrationID string) error 
 	if err := os.Rename(staging, canonical); err != nil {
 		if hadCanonical {
 			_ = os.Rename(backup, canonical)
+			_ = syncTransferDirectory(filepath.Dir(canonical))
 		}
 		return err
 	}
-	return nil
+	return syncTransferDirectory(filepath.Dir(canonical))
+}
+
+func normalizedTransferFileMode(mode os.FileMode) os.FileMode {
+	mode &= 0o666
+	if mode == 0 {
+		return 0o600
+	}
+	return mode
+}
+
+func normalizedTransferDirMode(mode os.FileMode) os.FileMode {
+	mode &= 0o777
+	mode &^= 0o022
+	if mode == 0 {
+		return 0o700
+	}
+	return mode
+}
+
+func syncTransferDirectory(dir string) error {
+	handle, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	defer handle.Close()
+	return handle.Sync()
 }
 
 func (e *Engine) FinalizeDestination(migrationID, credential string) error {
@@ -625,31 +711,45 @@ func (e *Engine) FinalizeDestination(migrationID, credential string) error {
 }
 
 func (e *Engine) Cancel(migrationID string) error {
+	if !safeID(migrationID) {
+		return errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	if cancel := e.active[migrationID]; cancel != nil {
 		cancel()
 		delete(e.active, migrationID)
 	}
+	var rollbackMeta *Metadata
 	for _, direction := range []string{DirectionSourceControl, DirectionDestinationUpload} {
 		meta, err := e.load(migrationID, direction)
-		if err == nil {
+		if err == nil && validateMetadata(meta) == nil && meta.MigrationID == migrationID {
+			originalPhase := meta.Phase
 			now := e.now().UTC()
 			meta.Phase, meta.ConsumedAt, meta.UpdatedAt = "cancelled", &now, now
 			_ = e.save(meta)
+			if direction == DirectionDestinationUpload && (originalPhase == "restored" || originalPhase == "activated") {
+				copy := meta
+				rollbackMeta = &copy
+			}
 		}
 	}
 	e.mu.Unlock()
-	dir := filepath.Join(e.dataDir, ".transfers", migrationID)
+	dir := e.transferDir(migrationID)
 	previous := filepath.Join(dir, "previous")
-	if entries, err := os.ReadDir(previous); err == nil {
-		_ = entries
-		for _, direction := range []string{DirectionDestinationUpload, DirectionSourceControl} {
-			if meta, loadErr := e.load(migrationID, direction); loadErr == nil {
-				canonical := filepath.Join(e.dataDir, meta.ServerID)
-				_ = os.RemoveAll(canonical)
-				_ = os.Rename(previous, canonical)
-				break
+	if rollbackMeta != nil {
+		info, err := os.Lstat(previous)
+		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
+			canonical := filepath.Join(e.dataDir, rollbackMeta.ServerID)
+			discarded := filepath.Join(dir, "cancelled-current")
+			_ = os.RemoveAll(discarded)
+			if err := os.Rename(canonical, discarded); err != nil && !errors.Is(err, os.ErrNotExist) {
+				return fmt.Errorf("stage cancelled restore: %w", err)
 			}
+			if err := os.Rename(previous, canonical); err != nil {
+				_ = os.Rename(discarded, canonical)
+				return fmt.Errorf("roll back cancelled restore: %w", err)
+			}
+			_ = os.RemoveAll(discarded)
 		}
 	}
 	_ = os.RemoveAll(dir)
@@ -700,18 +800,38 @@ func (e *Engine) load(id, direction string) (Metadata, error) {
 }
 func (e *Engine) save(meta Metadata) error {
 	dir := e.transferDir(meta.MigrationID)
-	if err := os.MkdirAll(dir, 0o750); err != nil {
+	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err
 	}
 	body, err := json.MarshalIndent(meta, "", "  ")
 	if err != nil {
 		return err
 	}
-	tmp := e.metadataPath(meta.MigrationID, meta.Direction) + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o600); err != nil {
+	temp, err := os.CreateTemp(dir, "."+meta.Direction+"-*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, e.metadataPath(meta.MigrationID, meta.Direction))
+	tempPath := temp.Name()
+	defer os.Remove(tempPath)
+	if err := temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if _, err := temp.Write(body); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err := temp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tempPath, e.metadataPath(meta.MigrationID, meta.Direction)); err != nil {
+		return err
+	}
+	return syncTransferDirectory(dir)
 }
 
 func checksumFile(path string) (string, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 )
 
 func (s *Store) SetServerDesiredState(ctx context.Context, serverID string, desired ServerDesiredState, reason string) error {
@@ -174,4 +175,26 @@ func serverActualFromSignal(signal string) ServerActualState {
 		return ServerActualStateRunning
 	}
 	return ServerActualStateStopped
+}
+
+func (s *Store) IsServerRestoreBlocking(ctx context.Context, serverID string) (bool, error) {
+	var actual string
+	if err := s.db.QueryRow(ctx, `SELECT actual_state::text FROM servers WHERE id = $1`, serverID).Scan(&actual); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, errors.New("server not found")
+		}
+		return false, err
+	}
+	if ServerActualState(actual) == ServerActualStateRestoringBackup {
+		return true, nil
+	}
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM backups WHERE server_id = $1 AND status = 'restoring'`, serverID).Scan(&count); err != nil {
+		return false, err
+	}
+	return count > 0, nil
+}
+
+func (s *Store) IsServerRestoring(ctx context.Context, serverID string) (bool, error) {
+	return s.IsServerRestoreBlocking(ctx, serverID)
 }

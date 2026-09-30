@@ -2,6 +2,7 @@ package http
 
 import (
 	"context"
+	"crypto/subtle"
 	"os"
 	"strings"
 	"time"
@@ -35,7 +36,7 @@ func MaintenanceModeMiddleware(cfg Config) fiber.Handler {
 		}
 
 		if bypassToken != "" {
-			if h := c.Get(maintenanceBypassHeader); strings.TrimSpace(h) == bypassToken {
+			if h := c.Get(maintenanceBypassHeader); subtle.ConstantTimeCompare([]byte(strings.TrimSpace(h)), []byte(bypassToken)) == 1 {
 				return c.Next()
 			}
 		}
@@ -43,9 +44,14 @@ func MaintenanceModeMiddleware(cfg Config) fiber.Handler {
 		whitelist := os.Getenv("FORGE_MAINTENANCE_WHITELIST")
 		if whitelist != "" {
 			ips := strings.Split(whitelist, ",")
-			clientIP := c.IP()
+			// Resolved the same way every other IP-based decision is: the socket peer
+			// unless TRUSTED_PROXIES says otherwise. c.IP() would let anyone who can
+			// set a proxy header claim a whitelisted address and watch maintenance
+			// mode go by, and would hand the operator's own bypass to every visitor
+			// the moment the panel sits behind a reverse proxy.
+			clientIP := ExtractClientIP(c)
 			for _, ip := range ips {
-				if strings.TrimSpace(ip) == clientIP {
+				if isIPInList(clientIP, []string{strings.TrimSpace(ip)}) {
 					return c.Next()
 				}
 			}

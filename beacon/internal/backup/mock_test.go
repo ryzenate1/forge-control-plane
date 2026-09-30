@@ -143,7 +143,7 @@ func (m *MockBackup) Delete(backupDir, name string) error {
 	return fmt.Errorf("backup %s not found", name)
 }
 
-func (m *MockBackup) Restore(ctx context.Context, backupDir, name, serverRoot string, truncate bool) error {
+func (m *MockBackup) Restore(ctx context.Context, backupDir, name, serverRoot string, truncate bool, paths []string) error {
 	return nil
 }
 

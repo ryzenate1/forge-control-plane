@@ -5,6 +5,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { sendPowerSignal } from "@/lib/api";
 import { fetchServerCrashHistory, resetServerCrashState } from "@/lib/api/servers";
 import { useServerContext } from "./server-context";
+import { useToast } from "@/components/ui/toast";
 
 interface CrashBannerProps {
   serverId: string;
@@ -13,6 +14,7 @@ interface CrashBannerProps {
 export function CrashBanner({ serverId }: CrashBannerProps) {
   const { refreshServer } = useServerContext();
   const queryClient = useQueryClient();
+  const { toast } = useToast();
 
   const { data: crashes, isLoading } = useQuery({
     queryKey: ["crash-history", serverId],
@@ -21,18 +23,24 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
   });
 
   const resetMutation = useMutation({
-    mutationFn: () => resetServerCrashState(serverId),
+    mutationFn: async () => {
+      const result = await resetServerCrashState(serverId);
+      if (!result.ok) throw new Error("The server reported the crash state reset did not complete.");
+      return result;
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["crash-history", serverId] });
     },
+    onError: (err) => toast({ tone: "error", title: "Failed to reset crash state", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
   const restartMutation = useMutation({
     mutationFn: () => sendPowerSignal(serverId, "start"),
     onSuccess: () => void refreshServer(),
+    onError: (err) => toast({ tone: "error", title: "Failed to start server", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
-  if (isLoading || !crashes || crashes.length === 0) return null;
+  if (isLoading || !Array.isArray(crashes) || crashes.length === 0) return null;
 
   const recentCrashes = crashes.slice(0, 5);
   const lastCrash = recentCrashes[0];
@@ -46,11 +54,11 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
             Server has crashed {crashes.length} time{crashes.length !== 1 ? "s" : ""}
           </p>
           <p className="mt-1 text-xs text-red-200/70">
-            Last crash: {new Date(lastCrash.created_at).toLocaleString()}
-            {lastCrash.exit_code !== 0 && (
-              <> · Exit code: {lastCrash.exit_code}</>
+            Last crash: {new Date(lastCrash.createdAt).toLocaleString()}
+            {lastCrash.exitCode !== 0 && (
+              <> · Exit code: {lastCrash.exitCode}</>
             )}
-            {lastCrash.oom_killed && <> · Out of memory</>}
+            {lastCrash.oomKilled && <> · Out of memory</>}
           </p>
           {recentCrashes.length > 1 && (
             <details className="mt-2">
@@ -60,10 +68,10 @@ export function CrashBanner({ serverId }: CrashBannerProps) {
               <ul className="mt-2 space-y-1">
                 {recentCrashes.map((crash) => (
                   <li key={crash.id} className="flex items-center gap-2 font-mono text-[10px] text-red-200/40">
-                    <span>{new Date(crash.created_at).toLocaleString()}</span>
-                    {crash.exit_code !== 0 && <span className="text-red-200/60">exit={crash.exit_code}</span>}
-                    {crash.oom_killed && <span className="text-red-200/60">OOM</span>}
-                    {crash.auto_restarted && <span className="text-emerald-400/60">auto-restarted</span>}
+                    <span>{new Date(crash.createdAt).toLocaleString()}</span>
+                    {crash.exitCode !== 0 && <span className="text-red-200/60">exit={crash.exitCode}</span>}
+                    {crash.oomKilled && <span className="text-red-200/60">OOM</span>}
+                    {crash.autoRestarted && <span className="text-emerald-400/60">auto-restarted</span>}
                   </li>
                 ))}
               </ul>

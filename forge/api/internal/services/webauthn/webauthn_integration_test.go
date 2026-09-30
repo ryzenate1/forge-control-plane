@@ -2,6 +2,7 @@ package webauthn
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 	"time"
@@ -38,6 +39,17 @@ func (m *memoryStore) RemoveCredential(ctx context.Context, userID, credentialID
 	return nil
 }
 
+func (m *memoryStore) RecordCredentialUsage(ctx context.Context, userID, credentialRowID string, signCount uint32, cloneWarning bool, lastUsedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, c := range m.creds[userID] {
+		if c.ID == credentialRowID {
+			return nil
+		}
+	}
+	return errors.New("credential not found")
+}
+
 type memSessionStore struct {
 	mu   sync.Mutex
 	data map[string][]byte
@@ -53,7 +65,11 @@ func (m *memSessionStore) Save(ctx context.Context, key string, data []byte, exp
 func (m *memSessionStore) Get(ctx context.Context, key string) ([]byte, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.data[key], nil
+	data, ok := m.data[key]
+	if !ok {
+		return nil, ErrSessionNotFound
+	}
+	return data, nil
 }
 
 func (m *memSessionStore) Delete(ctx context.Context, key string) error {

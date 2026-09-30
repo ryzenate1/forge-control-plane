@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 
@@ -174,6 +175,16 @@ func (s *Store) UpdateMount(ctx context.Context, mountID string, req UpdateMount
 	}
 
 	args = append(args, mountID)
+	var allowedMountColumns = map[string]bool{
+		"name": true, "description": true, "source": true, "target": true,
+		"read_only": true, "user_mountable": true,
+	}
+	for _, set := range setClauses {
+		col := strings.SplitN(set, " =", 2)[0]
+		if !allowedMountColumns[col] {
+			return Mount{}, fmt.Errorf("disallowed column: %s", col)
+		}
+	}
 	query := fmt.Sprintf("UPDATE mounts SET %s WHERE id = $%d", strings.Join(setClauses, ", "), argIdx)
 	if _, err := s.db.Exec(ctx, query, args...); err != nil {
 		return Mount{}, err
@@ -251,6 +262,14 @@ func (s *Store) DeleteMount(ctx context.Context, mountID string, actorID *string
 	return s.AppendAudit(ctx, actorID, "mount deleted", "mount", &mountID, `{"reason":"admin delete"}`)
 }
 
+func (s *Store) CountServersUsingMount(ctx context.Context, mountID string) (int, error) {
+	var count int
+	if err := s.db.QueryRow(ctx, `SELECT count(*) FROM mount_server WHERE mount_id = $1`, mountID).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Store) AssignMountToServer(ctx context.Context, serverID, mountID string, actorID *string) error {
 	return s.assignMountToServer(ctx, serverID, mountID, actorID)
 }
@@ -302,6 +321,41 @@ func validateMountPaths(source, target string) error {
 	return validateMountPath(target, "target")
 }
 
+func mountsAllowedPrefixes() []string {
+	raw := strings.TrimSpace(os.Getenv("MOUNTS_ALLOWED_PREFIX"))
+	if raw == "" {
+		return nil
+	}
+	// Split by comma, semicolon, colon, or whitespace
+	raw = strings.ReplaceAll(raw, ";", ",")
+	raw = strings.ReplaceAll(raw, ":", ",")
+	parts := strings.FieldsFunc(raw, func(r rune) bool { return r == ',' || r == ' ' || r == '\t' || r == '\n' })
+	var out []string
+	for _, p := range parts {
+		p = strings.TrimSpace(p)
+		if p == "" || p == "." {
+			continue
+		}
+		cleaned := path.Clean(p)
+		if cleaned == "." {
+			continue
+		}
+		out = append(out, cleaned)
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func mountsAllowedPrefixHint() string {
+	prefixes := mountsAllowedPrefixes()
+	if len(prefixes) == 0 {
+		return "Allowed prefixes: /srv/forge-mounts, /var/lib/forge/mounts (set MOUNTS_ALLOWED_PREFIX to override)"
+	}
+	return strings.Join(prefixes, ", ")
+}
+
 func validateMountPath(value, field string) error {
 	if !path.IsAbs(value) || path.Clean(value) != value || strings.Contains(value, "\\") {
 		return fmt.Errorf("mount %s must be an absolute, clean path", field)
@@ -311,8 +365,34 @@ func validateMountPath(value, field string) error {
 			return fmt.Errorf("mount %s must not contain '..'", field)
 		}
 	}
-	if field == "source" && (value == "/etc/forge" || value == "/var/lib/forge/volumes") {
-		return errors.New("mount source or target is reserved")
+	if field == "source" {
+		// Allowlist mode: if MOUNTS_ALLOWED_PREFIX is set, only sources under those prefixes are allowed.
+		if allowedPrefixes := mountsAllowedPrefixes(); len(allowedPrefixes) > 0 {
+			allowed := false
+			for _, prefix := range allowedPrefixes {
+				if value == prefix || strings.HasPrefix(value, prefix+"/") {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				return fmt.Errorf("mount source %q is not under allowed prefixes (%s); set MOUNTS_ALLOWED_PREFIX to allow", value, mountsAllowedPrefixHint())
+			}
+		} else {
+			// Denylist mode: block sensitive host paths
+			blockedPrefixes := []string{"/etc", "/proc", "/sys", "/dev", "/boot", "/root", "/var/run", "/run", "/var/lib/forge", "/var/lib/docker", "/home/container"}
+			for _, blocked := range blockedPrefixes {
+				if value == blocked || strings.HasPrefix(value, blocked+"/") {
+					return fmt.Errorf("mount source %q is in protected host path %q", value, blocked)
+				}
+			}
+			if value == "/" {
+				return errors.New("mount source or target is reserved")
+			}
+		}
+		if value == "/etc/forge" || value == "/var/lib/forge/volumes" {
+			return errors.New("mount source or target is reserved")
+		}
 	}
 	if field == "target" && (value == "/" || value == "/home/container") {
 		return errors.New("mount source or target is reserved")

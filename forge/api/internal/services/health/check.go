@@ -11,6 +11,9 @@ const (
 	StatusOK      Status = "ok"
 	StatusWarning Status = "warning"
 	StatusFailed  Status = "failed"
+	// StatusUnknown means no health measurement exists. It is never OK:
+	// unknown is not zero and must not be reported as healthy.
+	StatusUnknown Status = "unknown"
 )
 
 type Check interface {

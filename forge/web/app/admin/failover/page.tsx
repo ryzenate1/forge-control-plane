@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AlertTriangle, BarChart3, Plus, Shield, ShieldAlert, Trash2, Zap } from "lucide-react";
 import { deleteJSON, fetchJSON, postJSON, putJSON } from "@/lib/api";
-import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader } from "@/components/admin/admin-ui";
+import { AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill } from "@/components/admin/admin-ui";
+import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type ApiResponse<T> = { data: T };
 type FailoverAction = "evacuate" | "restart" | "notify";
@@ -46,10 +47,21 @@ function errorMessage(error: unknown, fallback: string) {
 
 export default function AdminFailoverPage() {
   const queryClient = useQueryClient();
+  const [confirm, renderConfirm] = useConfirm();
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [editingPolicy, setEditingPolicy] = useState<FailoverPolicy | null>(null);
   const [form, setForm] = useState<PolicyForm>(defaultForm);
+  const [lookupPolicyId, setLookupPolicyId] = useState("");
+  const [lookupPolicyResult, setLookupPolicyResult] = useState<FailoverPolicy | null>(null);
+  const [lookupPolicyError, setLookupPolicyError] = useState<string | null>(null);
+  const [nodeLookupId, setNodeLookupId] = useState("");
+  const [nodePolicies, setNodePolicies] = useState<FailoverPolicy[] | null>(null);
+  const [nodeLookupError, setNodeLookupError] = useState<string | null>(null);
+  const [crashServerId, setCrashServerId] = useState("");
+  const [crashNodeId, setCrashNodeId] = useState("");
+  const [crashResult, setCrashResult] = useState<unknown>(null);
+  const [crashError, setCrashError] = useState<string | null>(null);
 
   const policiesQuery = useQuery({
     queryKey: ["admin", "failover", "policies"],
@@ -86,15 +98,43 @@ export default function AdminFailoverPage() {
     },
   });
   const deleteMutation = useMutation({
-    mutationFn: (id: string) => deleteJSON(`/admin/failover/policies/${id}`),
+    mutationFn: (id: string) => deleteJSON(`/admin/failover/policies/${encodeURIComponent(id)}`),
     onSuccess: invalidate,
   });
   const recordFailureMutation = useMutation({
     mutationFn: (nodeId: string) => postJSON(`/admin/failover/record-failure/${encodeURIComponent(nodeId)}`),
     onSuccess: invalidate,
   });
+  const crashMutation = useMutation({
+    mutationFn: ({ serverId, nodeId }: { serverId: string; nodeId: string }) =>
+      postJSON(`/admin/failover/crash/${encodeURIComponent(serverId)}/${encodeURIComponent(nodeId)}`),
+    onSuccess: (data) => { setCrashResult(data); setCrashError(null); invalidate(); },
+    onError: (e) => setCrashError(e instanceof Error ? e.message : "Crash simulation failed"),
+  });
 
-  const operationError = createMutation.error ?? updateMutation.error ?? deleteMutation.error ?? recordFailureMutation.error;
+  const operationError = createMutation.error ?? updateMutation.error ?? deleteMutation.error ?? recordFailureMutation.error ?? crashMutation.error;
+
+  const lookupPolicy = async () => {
+    setLookupPolicyError(null); setLookupPolicyResult(null);
+    if (!lookupPolicyId.trim()) { setLookupPolicyError("Policy ID required"); return; }
+    try {
+      const res = await fetchJSON<ApiResponse<FailoverPolicy>>(`/admin/failover/policies/${encodeURIComponent(lookupPolicyId.trim())}`);
+      setLookupPolicyResult(res.data);
+    } catch (e) { setLookupPolicyError(e instanceof Error ? e.message : "Failed to fetch policy"); }
+  };
+  const lookupByNode = async () => {
+    setNodeLookupError(null); setNodePolicies(null);
+    if (!nodeLookupId.trim()) { setNodeLookupError("Node ID required"); return; }
+    try {
+      const res = await fetchJSON<ApiResponse<FailoverPolicy[]>>(`/admin/failover/policies/node/${encodeURIComponent(nodeLookupId.trim())}`);
+      setNodePolicies(res.data);
+    } catch (e) { setNodeLookupError(e instanceof Error ? e.message : "Failed to fetch policies"); }
+  };
+  const triggerCrash = () => {
+    setCrashError(null); setCrashResult(null);
+    if (!crashServerId.trim() || !crashNodeId.trim()) { setCrashError("Server ID and Node ID required"); return; }
+    crashMutation.mutate({ serverId: crashServerId.trim(), nodeId: crashNodeId.trim() });
+  };
   const openEdit = (policy: FailoverPolicy) => {
     setEditingPolicy(policy);
     setForm({
@@ -113,17 +153,17 @@ export default function AdminFailoverPage() {
   };
 
   return (
-    <div className="space-y-6">
-      <SectionHeader
-        title="Failover Policies"
-        sub="Configure threshold-based recovery actions for node failures."
+    <AdminPageLayout>
+      <AdminPageHeader
+        title="Failover"
+        description="Configure threshold-based recovery actions for node failures."
         action={<Btn tone="primary" onClick={() => setShowCreate(true)}><Plus size={14} /> Create Policy</Btn>}
       />
 
       <div className="grid gap-4 md:grid-cols-4">
         <MetricCard icon={Shield} label="Total Policies" value={policies.length} tone="text-slate-100" />
         <MetricCard icon={AlertTriangle} label="Failures Detected" value={metrics?.failuresDetected ?? 0} tone="text-amber-400" />
-        <MetricCard icon={Zap} label="Evacuations" value={metrics?.evacuationsTriggered ?? 0} tone="text-blue-400" />
+        <MetricCard icon={Zap} label="Evacuations" value={metrics?.evacuationsTriggered ?? 0} tone="text-sky-400" />
         <MetricCard icon={BarChart3} label="Restarts / Notices" value={`${metrics?.restartsTriggered ?? 0} / ${metrics?.notificationsSent ?? 0}`} tone="text-emerald-400" />
       </div>
 
@@ -155,7 +195,7 @@ export default function AdminFailoverPage() {
                     <td className="px-4 py-3"><div className="flex gap-1">
                       <Btn size="sm" tone="ghost" onClick={() => openEdit(policy)}>Edit</Btn>
                       <Btn size="sm" tone="warning" onClick={() => recordFailureMutation.mutate(policy.nodeId)} disabled={recordFailureMutation.isPending}>Record failure</Btn>
-                      <Btn size="sm" tone="danger" onClick={() => { if (confirm("Delete this failover policy?")) deleteMutation.mutate(policy.id); }} disabled={deleteMutation.isPending}><Trash2 size={12} /></Btn>
+                      <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete failover policy for ${policy.nodeId}?`, description: "Automatic failover for this node will stop. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(policy.id); })(); }} disabled={deleteMutation.isPending}><Trash2 size={12} /></Btn>
                     </div></td>
                   </tr>
                 ))}</tbody>
@@ -183,20 +223,79 @@ export default function AdminFailoverPage() {
         </Card>
       </div>
 
+      <div className="grid gap-4 md:grid-cols-3">
+        <Card>
+          <CardHeader title="Lookup Policy" icon={Shield} />
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-slate-400">GET /admin/failover/policies/:id</p>
+            <div className="flex gap-2">
+              <Input placeholder="policy ID" value={lookupPolicyId} onChange={setLookupPolicyId} />
+              <Btn tone="primary" onClick={lookupPolicy}>Fetch</Btn>
+            </div>
+            {lookupPolicyError && <p className="text-xs text-red-400">{lookupPolicyError}</p>}
+            {lookupPolicyResult && (
+              <div className="rounded-lg border border-white/10 bg-[var(--surface-raised)] p-3 text-xs font-mono text-slate-200 space-y-1">
+                <div>id: {lookupPolicyResult.id}</div>
+                <div>nodeId: {lookupPolicyResult.nodeId}</div>
+                <div>action: {lookupPolicyResult.action}</div>
+                <div>maxFailures: {lookupPolicyResult.maxFailures}</div>
+                <div>enabled: {String(lookupPolicyResult.enabled)}</div>
+              </div>
+            )}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader title="Policies by Node" icon={ShieldAlert} />
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-slate-400">GET /admin/failover/policies/node/:nodeId</p>
+            <div className="flex gap-2">
+              <Input placeholder="node ID" value={nodeLookupId} onChange={setNodeLookupId} />
+              <Btn tone="primary" onClick={lookupByNode}>Fetch</Btn>
+            </div>
+            {nodeLookupError && <p className="text-xs text-red-400">{nodeLookupError}</p>}
+            {nodePolicies && (
+              <div className="space-y-2 max-h-48 overflow-y-auto">
+                {nodePolicies.length === 0 ? <p className="text-xs text-slate-400">No policies for this node.</p> : nodePolicies.map((p) => (
+                  <div key={p.id} className="rounded border border-white/10 bg-white/[0.03] p-2 text-xs text-slate-200">
+                    <div className="font-mono">{p.id}</div>
+                    <div>{p.action} — {p.maxFailures} failures / {p.failureWindowSec}s</div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+        <Card>
+          <CardHeader title="Simulate Crash" icon={AlertTriangle} />
+          <div className="p-4 space-y-3">
+            <p className="text-xs text-slate-400">POST /admin/failover/crash/:serverId/:nodeId</p>
+            <Input label="Server ID" value={crashServerId} onChange={setCrashServerId} placeholder="server UUID" />
+            <Input label="Node ID" value={crashNodeId} onChange={setCrashNodeId} placeholder="node UUID" />
+            {crashError && <p className="text-xs text-red-400">{crashError}</p>}
+            {crashResult ? <p className="text-xs text-emerald-400">Crash handled — {String(JSON.stringify(crashResult)).slice(0, 200)}</p> : null}
+            <Btn tone="primary" onClick={triggerCrash} disabled={crashMutation.isPending}>{crashMutation.isPending ? "Processing..." : "Trigger Crash"}</Btn>
+          </div>
+        </Card>
+      </div>
+
       {(showCreate || editingPolicy) && (
         <Modal title={showCreate ? "Create Failover Policy" : "Edit Failover Policy"} onClose={closeModal}>
+          <div className="space-y-4">
           <div className="grid gap-4 sm:grid-cols-2">
             <Input label="Node ID" value={form.nodeId} onChange={(nodeId) => setForm({ ...form, nodeId })} placeholder="node_abc" required />
-            <label className="flex items-center gap-2 pt-6 text-sm font-medium text-slate-300"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} className="rounded border-white/10 bg-[#161b28]" /> Enabled</label>
+            <label className="flex items-center gap-2 pt-6 text-sm font-medium text-slate-300"><input type="checkbox" checked={form.enabled} onChange={(event) => setForm({ ...form, enabled: event.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" /> Enabled</label>
             <Input label="Max Failures" type="number" value={String(form.maxFailures)} onChange={(value) => setForm({ ...form, maxFailures: Number(value) })} />
             <Input label="Failure Window (seconds)" type="number" value={String(form.failureWindowSec)} onChange={(value) => setForm({ ...form, failureWindowSec: Number(value) })} />
             <Input label="Cooldown (seconds)" type="number" value={String(form.cooldownSec)} onChange={(value) => setForm({ ...form, cooldownSec: Number(value) })} />
-            <div className="sm:col-span-2"><label className="mb-1.5 block text-sm font-medium text-slate-300">Action</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[#161b28] px-3 text-sm text-slate-100 outline-none focus:border-[#dc2626]/60 focus:ring-1 focus:ring-[#dc2626]/30" value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value as FailoverAction })}><option value="evacuate">Evacuate</option><option value="restart">Restart</option><option value="notify">Notify</option></select></div>
+            <div className="sm:col-span-2"><label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-slate-400">Action</label><select className="h-9 w-full rounded-lg border border-white/10 bg-[var(--surface-input)] px-3 text-sm text-slate-100 outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]" value={form.action} onChange={(event) => setForm({ ...form, action: event.target.value as FailoverAction })}><option value="evacuate">Evacuate</option><option value="restart">Restart</option><option value="notify">Notify</option></select></div>
+          </div>
+          <p className="text-xs text-slate-400">Backend: POST /admin/failover/policies creates, PUT /policies/:id updates, GET/:id and GET /policies/node/:nodeId wired via lookup cards. Crash endpoint POST /crash/:serverId/:nodeId wired.</p>
           </div>
           <ModalFooter onCancel={closeModal} onConfirm={() => showCreate ? createMutation.mutate() : updateMutation.mutate()} confirmLabel="Save" disabled={createMutation.isPending || updateMutation.isPending || !form.nodeId.trim() || form.maxFailures < 1 || form.failureWindowSec < 1 || form.cooldownSec < 1} />
         </Modal>
       )}
-    </div>
+      {renderConfirm()}
+    </AdminPageLayout>
   );
 }
 

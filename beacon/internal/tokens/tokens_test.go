@@ -237,8 +237,14 @@ func TestTokenStoreAddAndIsValid(t *testing.T) {
 	if !ts.IsValid("uid-1") {
 		t.Fatal("first IsValid call should return true")
 	}
-	if ts.IsValid("uid-1") {
-		t.Fatal("second IsValid call should return false (one-time use)")
+	if !ts.IsValid("uid-1") {
+		t.Fatal("validation must not consume the token")
+	}
+	if !ts.Consume("uid-1") {
+		t.Fatal("Consume should accept and remove a valid token")
+	}
+	if ts.Consume("uid-1") {
+		t.Fatal("a consumed token must not be reusable")
 	}
 }
 
@@ -301,17 +307,5 @@ func TestWebSocketDenylistIsDeniedUnknown(t *testing.T) {
 	d := NewWebSocketDenylist()
 	if d.IsDenied("unknown-server", "unknown-user") {
 		t.Fatal("should return false for unknown server/user")
-	}
-}
-
-func TestIsBeforeBoot(t *testing.T) {
-	past := time.Now().Add(-1 * time.Hour)
-	if !IsBeforeBoot(past) {
-		t.Fatal("past timestamp should be before boot")
-	}
-
-	future := time.Now().Add(1 * time.Hour)
-	if IsBeforeBoot(future) {
-		t.Fatal("future timestamp should not be before boot")
 	}
 }

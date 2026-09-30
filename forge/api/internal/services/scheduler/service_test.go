@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"reflect"
 	"testing"
 
 	"gamepanel/forge/internal/domain"
@@ -92,7 +93,7 @@ func TestNormalizeRequest(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := normalizeRequest(tt.input)
-			if got != tt.want {
+			if !reflect.DeepEqual(got, tt.want) {
 				t.Fatalf("normalizeRequest() = %+v, want %+v", got, tt.want)
 			}
 		})
@@ -110,8 +111,8 @@ func TestHasCapacity(t *testing.T) {
 		{name: "insufficient capacity", total: 100, available: 30, requested: 50, want: false},
 		{name: "zero requested", total: 100, available: 0, requested: 0, want: true},
 		{name: "negative requested", total: 100, available: 50, requested: -1, want: true},
-		{name: "zero total", total: 0, available: 50, requested: 50, want: true},
-		{name: "negative total", total: -1, available: 50, requested: 50, want: true},
+		{name: "zero total", total: 0, available: 50, requested: 50, want: false},
+		{name: "negative total", total: -1, available: 50, requested: 50, want: false},
 		{name: "zero available", total: 100, available: 0, requested: 10, want: false},
 		{name: "all zero", total: 0, available: 0, requested: 0, want: true},
 	}
@@ -122,6 +123,25 @@ func TestHasCapacity(t *testing.T) {
 				t.Fatalf("hasCapacity(%d, %d, %d) = %t, want %t", tt.total, tt.available, tt.requested, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWithReservations(t *testing.T) {
+	s := New(nil, nil)
+	if s.reservations != nil {
+		t.Fatal("reservations should be nil by default")
+	}
+	s.WithReservations(nil)
+	if s.reservations != nil {
+		t.Fatal("WithReservations(nil) should set field to nil")
+	}
+}
+
+func TestNormalizeRequestPReservesSkipReservation(t *testing.T) {
+	req := domain.PlacementRequest{SkipReservation: true, CPU: 1024}
+	got := normalizeRequest(req)
+	if !got.SkipReservation {
+		t.Fatal("normalizeRequest should preserve SkipReservation flag")
 	}
 }
 
@@ -146,4 +166,8 @@ func TestFirstNonEmpty(t *testing.T) {
 			}
 		})
 	}
+}
+
+func hasCapacity(total, available, requested int) bool {
+	return HasCapacity(total, available, requested)
 }

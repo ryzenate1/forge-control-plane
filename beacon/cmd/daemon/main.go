@@ -2,27 +2,32 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
 	goruntime "runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"gamepanel/beacon/config"
 	"gamepanel/beacon/internal/backup"
 	"gamepanel/beacon/internal/cron"
+	"gamepanel/beacon/internal/logrotate"
 
-	"gamepanel/beacon/internal/health"
 	"gamepanel/beacon/internal/logging"
-	"gamepanel/beacon/internal/metrics"
 	"gamepanel/beacon/internal/pprof"
 	"gamepanel/beacon/internal/ratelimit"
 	"gamepanel/beacon/internal/remote"
@@ -37,15 +42,37 @@ import (
 )
 
 func main() {
+	if err := run(); err != nil {
+		log.Printf("beacon: %v", err)
+		os.Exit(1)
+	}
+}
+
+func run() error {
+	if len(os.Args) > 1 {
+		var command *cobra.Command
+		switch os.Args[1] {
+		case "configure":
+			command = configureCmd
+		case "diagnostics":
+			command = diagnosticsCmd
+		case "update":
+			command = newUpdateCommand()
+		}
+		if command != nil {
+			command.SetArgs(os.Args[2:])
+			return command.Execute()
+		}
+	}
 	logger, logErr := logging.NewZapLogger()
 	if logErr != nil {
-		log.Fatalf("initialize logger: %v", logErr)
+		return fmt.Errorf("initialize logger: %w", logErr)
 	}
+	defer func() { _ = logger.Sync() }()
 	logger.Info("starting beacon daemon")
 
 	if len(os.Args) > 1 && os.Args[1] == "--healthcheck" {
-		healthcheck("http://127.0.0.1" + healthcheckPort(env("DAEMON_ADDR", ":9090")) + "/health")
-		return
+		return healthcheck("http://127.0.0.1" + healthcheckPort(env("DAEMON_ADDR", ":9090")) + "/health")
 	}
 	appEnv := env("APP_ENV", "development")
 	addr := env("DAEMON_ADDR", ":9090")
@@ -53,16 +80,13 @@ func main() {
 	beaconConfig, configErr := config.LoadWithOptions(config.LoadOptions{Path: os.Getenv("DAEMON_CONFIG_FILE")})
 	if configErr != nil {
 		logger.Error("failed to load beacon configuration", logging.Field{Key: "error", Value: configErr})
-		log.Fatalf("load Beacon configuration: %v", configErr)
+		return fmt.Errorf("load Beacon configuration: %w", configErr)
 	}
 
-	metricsCollector := metrics.NewPrometheusCollector()
-	_ = metricsCollector
-
-	healthChecker := &health.CompositeHealthChecker{}
-	_ = healthChecker
-
 	nodeToken := os.Getenv("DAEMON_NODE_TOKEN")
+	if nodeToken == "" {
+		nodeToken = strings.TrimSpace(beaconConfig.Token)
+	}
 	if nodeToken == "" {
 		nodeToken = os.Getenv("WINGS_TOKEN")
 		if tokenID := os.Getenv("WINGS_TOKEN_ID"); tokenID != "" && nodeToken != "" && !strings.Contains(nodeToken, ".") {
@@ -71,14 +95,20 @@ func main() {
 	}
 	nodeID := strings.TrimSpace(os.Getenv("DAEMON_NODE_ID"))
 	if nodeID == "" {
+		nodeID = strings.TrimSpace(beaconConfig.UUID)
+	}
+	if nodeID == "" {
 		nodeID = strings.TrimSpace(os.Getenv("WINGS_NODE_ID"))
 	}
 	panelAPIURL := strings.TrimSpace(os.Getenv("PANEL_API_URL"))
 	if panelAPIURL == "" {
+		panelAPIURL = strings.TrimSpace(beaconConfig.PanelURL)
+	}
+	if panelAPIURL == "" {
 		panelAPIURL = strings.TrimSpace(os.Getenv("WINGS_PANEL_URL"))
 	}
 	if err := validatePanelOnboarding(nodeID, panelAPIURL, nodeToken); err != nil {
-		log.Fatal(err)
+		return err
 	}
 	panelOnboardingEnabled := nodeID != ""
 	if panelOnboardingEnabled {
@@ -88,51 +118,70 @@ func main() {
 	}
 
 	allowInsecureNoAuth := env("DAEMON_ALLOW_INSECURE_NO_AUTH", "false") == "true"
-	if appEnv == "production" && (nodeToken == "" || nodeToken == "dev-node-token" || allowInsecureNoAuth) {
-		log.Fatal("DAEMON_NODE_TOKEN must be set to a production secret and unauthenticated mode must be disabled")
+	if appEnv == "production" && (strings.Contains(nodeToken, "CHANGE_ME") || strings.Contains(nodeID, "CHANGE_ME") || strings.Contains(panelAPIURL, "panel.example.com")) {
+		return errors.New("production Beacon configuration still contains placeholder values")
+	}
+	if appEnv == "production" && (nodeToken == "" || nodeToken == "dev-node-token" || nodeToken == "devnodetoken0001.dev-node-token" || allowInsecureNoAuth) {
+		return errors.New("DAEMON_NODE_TOKEN must be set to a production secret and unauthenticated mode must be disabled")
 	}
 	if nodeToken == "" && !allowInsecureNoAuth {
-		log.Fatal("DAEMON_NODE_TOKEN is required; set DAEMON_ALLOW_INSECURE_NO_AUTH=true only for isolated development tests")
+		return errors.New("DAEMON_NODE_TOKEN is required; set DAEMON_ALLOW_INSECURE_NO_AUTH=true only for isolated development tests")
 	}
 	if allowInsecureNoAuth {
-		log.Print("WARNING: daemon API authentication is disabled by explicit development override")
+		if !isLoopbackListenAddress(addr) {
+			return errors.New("DAEMON_ALLOW_INSECURE_NO_AUTH requires DAEMON_ADDR to bind to loopback")
+		}
+		log.Print("==================================================================")
+		log.Print("WARNING: daemon API authentication is DISABLED (DAEMON_ALLOW_INSECURE_NO_AUTH=true).")
+		log.Print("This mode is for isolated development and tests ONLY.")
+		log.Print("The daemon API is reachable without any token; it must never be used in production.")
+		log.Print("==================================================================")
 	}
 
 	// Runtime provider selection
 	runtimeProvider := env("DAEMON_RUNTIME_PROVIDER", "docker")
 	log.Printf("Using runtime provider: %s", runtimeProvider)
 
-	var rt runtime.Runtime
-	var err error
-
-	switch runtimeProvider {
-	case "docker":
-		rt, err = runtime.NewDockerRuntime()
-	case "kubernetes":
-		k8sConfig := runtime.KubernetesConfig{
+	runtimeConfig := runtime.RuntimeConfig{
+		Provider: runtimeProvider,
+		Kubernetes: runtime.KubernetesConfig{
 			KubeconfigPath: os.Getenv("KUBECONFIG"),
 			Namespace:      env("DAEMON_KUBERNETES_NAMESPACE", "forge"),
 			InCluster:      env("DAEMON_KUBERNETES_IN_CLUSTER", "false") == "true",
-		}
-		rt, err = runtime.NewKubernetesRuntime(k8sConfig)
-	case "podman":
-		rt, err = runtime.NewPodmanRuntime(runtime.PodmanConfig{})
-	case "containerd":
-		log.Printf("containerd runtime requires additional build tags: go build -tags containerd")
-		err = fmt.Errorf("containerd runtime requires additional build tags: go build -tags containerd")
-	case "firecracker":
-		log.Printf("firecracker runtime requires additional build tags: go build -tags firecracker")
-		err = fmt.Errorf("firecracker runtime requires additional build tags: go build -tags firecracker")
-	default:
-		log.Printf("unsupported runtime provider '%s', falling back to docker", runtimeProvider)
-		rt, err = runtime.NewDockerRuntime()
+		},
+		Podman: runtime.PodmanConfig{
+			URI:      strings.TrimSpace(os.Getenv("DAEMON_PODMAN_URI")),
+			Identity: strings.TrimSpace(os.Getenv("DAEMON_PODMAN_IDENTITY")),
+		},
+		Containerd: runtime.ContainerdConfig{
+			Address:   strings.TrimSpace(os.Getenv("DAEMON_CONTAINERD_ADDRESS")),
+			Namespace: strings.TrimSpace(os.Getenv("DAEMON_CONTAINERD_NAMESPACE")),
+		},
+		Firecracker: runtime.FirecrackerConfig{
+			SocketPath:     strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_SOCKET_PATH")),
+			KernelImage:    strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_KERNEL_IMAGE")),
+			RootfsImage:    strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_ROOTFS_IMAGE")),
+			CPUTemplate:    strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_CPU_TEMPLATE")),
+			JailerPath:     strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_JAILER_PATH")),
+			FirecrackerBin: strings.TrimSpace(os.Getenv("DAEMON_FIRECRACKER_BINARY")),
+		},
 	}
+	runtimeInitCtx, cancelRuntimeInit := context.WithTimeout(context.Background(), 30*time.Second)
+	rt, err := runtime.NewFactory(runtimeConfig).CreateRuntime(runtimeInitCtx)
+	cancelRuntimeInit()
 
 	if err != nil {
+		if appEnv == "production" {
+			return fmt.Errorf("runtime unavailable in production mode: %w", err)
+		}
 		if env("DAEMON_ALLOW_MOCK_RUNTIME", "false") != "true" {
-			log.Fatalf("runtime unavailable and DAEMON_ALLOW_MOCK_RUNTIME is not true: %v", err)
+			return fmt.Errorf("runtime unavailable and DAEMON_ALLOW_MOCK_RUNTIME is not true: %w", err)
 		}
 		log.Printf("runtime unavailable, using explicit mock mode: %v", err)
+		rt = runtime.NewUnavailableRuntime(err)
+	}
+	if err := ensurePrivateDataDirectory(dataDir); err != nil {
+		return fmt.Errorf("prepare daemon data directory: %w", err)
 	}
 	daemonCtx, cancelDaemon := context.WithCancel(context.Background())
 	defer cancelDaemon()
@@ -140,13 +189,60 @@ func main() {
 	backupRoot := env("DAEMON_BACKUP_DIR", filepath.Join(filepath.Dir(dataDir), "backups"))
 	backupAdapter, err := buildBackupAdapter(backupRoot, dataDir)
 	if err != nil {
-		log.Fatalf("initialize backup adapter: %v", err)
+		return fmt.Errorf("initialize backup adapter: %w", err)
 	}
 	if err := backup.RecoverRestoreJournals(dataDir); err != nil {
-		log.Fatalf("recover interrupted backup restore: %v", err)
+		return fmt.Errorf("recover interrupted backup restore: %w", err)
 	}
+
+	writeLimit := beaconConfig.BackupConfig().WriteLimit
+	if writeLimit > 0 {
+		if bw, ok := backupAdapter.(interface{ SetWriteLimit(int64) }); ok {
+			bw.SetWriteLimit(writeLimit)
+			log.Printf("backup I/O write limit set to %d bytes/sec", writeLimit)
+		}
+	}
+
+	logDirectory := beaconConfig.System.LogDirectory
+	if logDirectory == "" {
+		logDirectory = "/var/log/beacon"
+	}
+	if err := logrotate.WriteSystemConfig(logDirectory, "beacon"); err != nil {
+		log.Printf("logrotate config generation skipped (non-fatal): %v", err)
+	} else {
+		log.Printf("logrotate configuration written for %s", logDirectory)
+	}
+
 	server, handler := daemonhttp.NewServerWithBackup(rt, dataDir, backupAdapter, nodeToken)
+	server.SetVersion(Version)
 	server.SetAllowedMounts(beaconConfig.AllowedMountsList())
+	// Host file manager allowlist (comma-separated roots). When unset the handlers
+	// fall back to the conservative denylist; when set, access is confined to
+	// these roots. Applied before the server starts serving /v1/files/*.
+	if roots := strings.TrimSpace(os.Getenv("DAEMON_HOST_FILES_ALLOWLIST")); roots != "" {
+		var allowRoots []string
+		for _, r := range strings.Split(roots, ",") {
+			if t := strings.TrimSpace(r); t != "" {
+				allowRoots = append(allowRoots, t)
+			}
+		}
+		if err := server.SetHostFileAllowlist(allowRoots); err != nil {
+			return fmt.Errorf("configure host file allowlist: %w", err)
+		}
+		log.Printf("host file allowlist configured with %d root(s)", len(allowRoots))
+	}
+	metricsToken := strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
+	if metricsToken == "" && strings.TrimSpace(os.Getenv("METRICS_TOKEN_FILE")) != "" {
+		var err error
+		metricsToken, err = readSingleLineSecret(os.Getenv("METRICS_TOKEN_FILE"))
+		if err != nil {
+			return fmt.Errorf("read METRICS_TOKEN_FILE: %w", err)
+		}
+	}
+	if appEnv == "production" && len(metricsToken) < 32 {
+		return errors.New("METRICS_TOKEN must contain at least 32 characters in production")
+	}
+	server.SetMetricsToken(metricsToken)
 
 	if pprof.IsEnabled() {
 		pprofMux := http.NewServeMux()
@@ -154,7 +250,7 @@ func main() {
 		origHandler := handler
 		handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if strings.HasPrefix(r.URL.Path, "/debug/pprof/") {
-				pprofMux.ServeHTTP(w, r)
+				pprof.RequireBearer(pprofMux, nodeToken).ServeHTTP(w, r)
 				return
 			}
 			origHandler.ServeHTTP(w, r)
@@ -162,13 +258,17 @@ func main() {
 		log.Printf("pprof profiling enabled at /debug/pprof/")
 	}
 
-	rateLimiter := ratelimit.NewTieredLimiter(ratelimit.DefaultTiers())
+	rateTiers := ratelimit.DefaultTiers()
+	for index, key := range []string{"DAEMON_RATE_POWER_RPM", "DAEMON_RATE_WEBSOCKET_RPM", "DAEMON_RATE_FILES_RPM", "DAEMON_RATE_DEFAULT_RPM"} {
+		rateTiers[index].RequestsPerMinute = envInt(key, rateTiers[index].RequestsPerMinute)
+	}
+	rateLimiter := ratelimit.NewTieredLimiter(rateTiers)
 	handler = rateLimiter.Middleware()(handler)
 	log.Printf("HTTP rate limiting enabled (tiers: power=30, ws=60, files=120, default=240 req/min)")
 
 	tokenGen := tokens.NewGenerator([]byte(nodeToken))
 	if tokenGen == nil {
-		log.Fatalf("token generator initialization failed")
+		return errors.New("token generator initialization failed")
 	}
 	server.SetTokenGenerator(tokenGen)
 
@@ -190,6 +290,12 @@ func main() {
 	if panelOnboardingEnabled {
 		panelClient := remote.NewClient(panelAPIURL, nodeToken)
 		server.SetPanelClient(panelClient)
+
+		// Start the edge agent for panel-side edge connectivity/heartbeat
+		// (separate from the node heartbeat loop below).
+		edgeAgent := daemonhttp.NewEdgeAgent(panelAPIURL, nodeToken, nodeID, Version)
+		server.SetEdgeAgent(edgeAgent)
+		go edgeAgent.Start(daemonCtx)
 
 		// Report crashes to the panel API.
 		server.SetCrashHandler(func(ctx context.Context, serverID string, exitCode int, oomKilled bool) {
@@ -226,14 +332,28 @@ func main() {
 	// SFTP server
 	sftpErr := make(chan error, 1)
 	go func() {
-		sftpAddr := env("DAEMON_SFTP_ADDR", ":2022")
+		// DAEMON_SFTP_ADDR is the advertised endpoint; the bind-specific value
+		// controls the listener when supplied by containerized deployments.
+		sftpAddr := env("DAEMON_SFTP_BIND_ADDR", env("DAEMON_SFTP_ADDR", ":2022"))
+		sftpPassphrase, passErr := sftpHostKeyPassphrase(dataDir, os.Getenv("DAEMON_SFTP_HOST_KEY_PASSPHRASE"))
+		if passErr != nil {
+			log.Printf("native sftp disabled: %v", passErr)
+			return
+		}
 		sftpSrv := &sftpserver.Server{
 			Addr: sftpAddr, DataDir: dataDir, PanelAPIURL: panelAPIURL, NodeToken: nodeToken,
 			ReadOnly: env("DAEMON_SFTP_READ_ONLY", "false") == "true", IdleTimeout: envDuration("DAEMON_SFTP_IDLE_TIMEOUT", 15*time.Minute),
 			MaxConnections: envInt("DAEMON_SFTP_MAX_CONNECTIONS", 128), MaxSessionsPerUser: envInt("DAEMON_SFTP_MAX_SESSIONS_PER_USER", 8),
-			Activity: activity, Sessions: server,
+			MaxSessionLifetime: envDuration("DAEMON_SFTP_MAX_SESSION_LIFETIME", 24*time.Hour),
+			HostKeyPassphrase:  sftpPassphrase,
+			Activity:           activity, Sessions: server,
 		}
+		// Run blocks until the daemon context is cancelled, so the listener is
+		// only advertised while it is actually up. A start failure clears the flag
+		// again rather than leaving a stale claim behind.
+		server.SetSFTPEnabled(true)
 		if err := sftpSrv.Run(daemonCtx); err != nil {
+			server.SetSFTPEnabled(false)
 			sftpErr <- err
 		}
 	}()
@@ -253,7 +373,19 @@ func main() {
 				pinger = p
 			}
 		}
-		go heartbeatLoop(daemonCtx, panelAPIURL, nodeID, nodeToken, dataDir, pinger, runtimeProvider)
+		go heartbeatLoop(daemonCtx, panelAPIURL, nodeID, nodeToken, dataDir, pinger, runtimeProvider, Version)
+
+		// Container lifecycle events feed: tails the local Docker event stream and
+		// batches start/stop/die/kill/oom/recreate/destroy to the panel's
+		// /api/remote/docker/events ingest. Best effort by design - a panel that is
+		// unreachable buffers locally (capped) and never fails the daemon, and a
+		// daemon without a Docker socket just retries with backoff. Set
+		// DAEMON_DOCKER_EVENTS=false to switch it off.
+		go server.StartDockerEventStream(daemonCtx)
+	} else {
+		if err := recoverServersFromDisk(daemonCtx, dataDir, server); err != nil {
+			log.Printf("local server recovery failed: %v", err)
+		}
 	}
 
 	tlsCfg := &tls.Config{Mode: tls.ModeNone}
@@ -261,8 +393,7 @@ func main() {
 		tlsCfg.Mode = tls.ModeManual
 		tlsCfg.CertFile = cert
 		tlsCfg.KeyFile = os.Getenv("DAEMON_TLS_KEY_FILE")
-	}
-	if hostname := os.Getenv("DAEMON_AUTO_TLS_HOSTNAME"); hostname != "" {
+	} else if hostname := os.Getenv("DAEMON_AUTO_TLS_HOSTNAME"); hostname != "" {
 		tlsCfg.Mode = tls.ModeAutoTLS
 		tlsCfg.Hostname = hostname
 		tlsCfg.CacheDir = filepath.Join(dataDir, ".tls-cache")
@@ -275,11 +406,11 @@ func main() {
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      60 * time.Second,
 		IdleTimeout:       120 * time.Second,
-		MaxHeaderBytes:    1 << 20,
+		MaxHeaderBytes:    envInt("DAEMON_MAX_HEADER_BYTES", 64<<10),
 	}
 
 	if err := tlsCfg.Apply(httpServer); err != nil {
-		log.Fatalf("TLS configuration failed: %v", err)
+		return fmt.Errorf("TLS configuration failed: %w", err)
 	}
 
 	// Initialize shutdown manager
@@ -309,30 +440,125 @@ func main() {
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	stop := make(chan os.Signal, 2)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	var serveErr error
-	select {
-	case serveErr = <-serverErr:
-		log.Printf("http server stopped: %v", serveErr)
-	case err := <-sftpErr:
-		serveErr = fmt.Errorf("native sftp stopped: %w", err)
-		log.Printf("%v", serveErr)
-	case sig := <-stop:
-		log.Printf("received %s, shutting down gracefully", sig)
+waitForShutdown:
+	for {
+		select {
+		case serveErr = <-serverErr:
+			log.Printf("http server stopped: %v", serveErr)
+			break waitForShutdown
+		case err := <-sftpErr:
+			log.Printf("native sftp stopped: %v", err)
+			// The SFTP subsystem is auxiliary to the daemon's primary runtime
+			// API. A failure (bind address in use, host-key initialization
+			// problem, unexpected shutdown) must not take the whole control
+			// plane down; keep serving HTTP and let the operator investigate.
+		case sig := <-stop:
+			if sig == syscall.SIGHUP {
+				reloaded, err := config.LoadWithOptions(config.LoadOptions{Path: os.Getenv("DAEMON_CONFIG_FILE")})
+				if err != nil {
+					log.Printf("configuration reload rejected: %v", err)
+					continue
+				}
+				server.SetAllowedMounts(reloaded.AllowedMountsList())
+				if bw, ok := backupAdapter.(interface{ SetWriteLimit(int64) }); ok {
+					bw.SetWriteLimit(reloaded.BackupConfig().WriteLimit)
+				}
+				log.Print("reloaded dynamic configuration (allowed mounts and backup write limit); listener/TLS changes require restart")
+				continue
+			}
+			log.Printf("received %s, shutting down gracefully", sig)
+			break waitForShutdown
+		}
 	}
 	signal.Stop(stop)
-	cancelDaemon()
-	server.Shutdown()
-	shutdownManager.Shutdown()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := httpServer.Shutdown(shutdownCtx); err != nil {
 		log.Printf("graceful shutdown failed: %v", err)
 	}
+	cancelDaemon()
+	server.Shutdown()
+	tlsCfg.StopChallengeServer()
+	shutdownManager.Shutdown()
 	if serveErr != nil {
-		log.Printf("daemon exited with error: %v", serveErr)
+		return serveErr
 	}
+	return nil
+}
+
+func isLoopbackListenAddress(address string) bool {
+	host, _, err := net.SplitHostPort(strings.TrimSpace(address))
+	if err != nil {
+		return false
+	}
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func readSingleLineSecret(path string) (string, error) {
+	info, err := os.Lstat(strings.TrimSpace(path))
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 4096 {
+		return "", errors.New("secret file must be a non-empty regular file no larger than 4 KiB")
+	}
+	if info.Mode().Perm() != 0o600 {
+		return "", errors.New("secret file permissions must be 0600")
+	}
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSuffix(string(body), "\n")
+	if value == "" || strings.ContainsAny(value, "\r\n") {
+		return "", errors.New("secret file must contain exactly one non-empty line")
+	}
+	return value, nil
+}
+
+// sftpHostKeyPassphrase resolves the passphrase used to encrypt the SFTP host
+// key at rest. An explicit DAEMON_SFTP_HOST_KEY_PASSPHRASE (16+ bytes) wins;
+// otherwise a stable per-install secret is loaded from (or generated into)
+// <dataDir>/.sftp/host-key-passphrase so first-run bootstrap completes without
+// extra configuration and the host key survives daemon restarts and
+// node-token rotation. The stored secret is created with 0600 permissions and
+// is never logged.
+func sftpHostKeyPassphrase(dataDir, envValue string) (string, error) {
+	if passphrase := strings.TrimSpace(envValue); passphrase != "" {
+		if len(passphrase) < 16 {
+			return "", errors.New("DAEMON_SFTP_HOST_KEY_PASSPHRASE must contain at least 16 bytes")
+		}
+		return passphrase, nil
+	}
+	path := filepath.Join(dataDir, ".sftp", "host-key-passphrase")
+	if body, err := os.ReadFile(path); err == nil {
+		value := strings.TrimSuffix(string(body), "\n")
+		if value == "" || len(value) < 16 || strings.ContainsAny(value, "\r\n") {
+			return "", fmt.Errorf("stored SFTP host-key passphrase is invalid; remove %s to regenerate it", path)
+		}
+		return value, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	secret := make([]byte, 24)
+	if _, err := rand.Read(secret); err != nil {
+		return "", fmt.Errorf("generate SFTP host-key passphrase: %w", err)
+	}
+	value := hex.EncodeToString(secret)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return "", fmt.Errorf("create SFTP secret directory: %w", err)
+	}
+	if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+		return "", fmt.Errorf("persist SFTP host-key passphrase: %w", err)
+	}
+	return value, nil
 }
 
 func syncServersFromPanel(ctx context.Context, panelAPIURL, token, dataDir string, daemon *daemonhttp.Server) error {
@@ -367,7 +593,7 @@ func syncServersFromPanel(ctx context.Context, panelAPIURL, token, dataDir strin
 		if err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(root, "server.json"), body, 0o640); err != nil {
+		if err := writePrivateFileAtomic(filepath.Join(root, "server.json"), body); err != nil {
 			syncErrors = append(syncErrors, fmt.Errorf("persist server %s: %w", srv.Uuid, err))
 			continue
 		}
@@ -471,7 +697,8 @@ func panelServerState(raw json.RawMessage) (diskLimitMB int64, suspended bool, i
 			DiskMB    int64 `json:"disk_mb"`
 		} `json:"build"`
 	}
-	if json.Unmarshal(raw, &settings) != nil {
+	if err := json.Unmarshal(raw, &settings); err != nil {
+		log.Printf("panel server settings could not be decoded: %v", err)
 		return 0, false, installationState
 	}
 	suspended = settings.Suspended
@@ -490,21 +717,44 @@ func panelServerState(raw json.RawMessage) (diskLimitMB int64, suspended bool, i
 	return diskLimitMB, suspended, installationState
 }
 
-func heartbeatLoop(ctx context.Context, panelAPIURL, nodeID, token, dataDir string, pinger runtime.Pinger, runtimeProvider string) {
+func heartbeatLoop(ctx context.Context, panelAPIURL, nodeID, token, dataDir string, pinger runtime.Pinger, runtimeProvider, version string) {
 	client := remote.NewClient(panelAPIURL, token)
 	startTime := time.Now()
 
 	send := func() {
 		runtimeStatus, errText := runtimeHeartbeatStatus(pinger, runtimeProvider)
-		loadAvg := float64(goruntime.NumGoroutine()) / float64(goruntime.NumCPU())
+		loadAvg := systemLoadAverage()
+
+		// Capacity that cannot be read is unknown, not zero. Zero-on-error would
+		// silently overwrite the last real reading (or the administrator's
+		// configured node capacity) with a bogus number the scheduler then plans
+		// against, so the field is omitted from the heartbeat entirely and the
+		// reason is surfaced in Error and the daemon log instead.
+		var memoryMB, diskMB *int64
+		if value, err := readMemoryMB(); err != nil {
+			log.Printf("heartbeat: system memory capacity unknown: %v", err)
+			if errText == "" {
+				errText = "system memory capacity unavailable: " + err.Error()
+			}
+		} else {
+			memoryMB = &value
+		}
+		if value, err := readDiskMB(dataDir); err != nil {
+			log.Printf("heartbeat: disk capacity unknown: %v", err)
+			if errText == "" {
+				errText = "disk capacity unavailable: " + err.Error()
+			}
+		} else {
+			diskMB = &value
+		}
 
 		heartbeat := remote.NodeHeartbeat{
-			Version:         "beacon-dev",
+			Version:         version,
 			OS:              goruntime.GOOS,
 			Architecture:    goruntime.GOARCH,
 			CPUThreads:      goruntime.NumCPU(),
-			MemoryMB:        readMemoryMB(),
-			DiskMB:          readDiskMB(dataDir),
+			MemoryMB:        memoryMB,
+			DiskMB:          diskMB,
 			RuntimeStatus:   runtimeStatus,
 			RuntimeProvider: runtimeProvider,
 			Error:           errText,
@@ -575,18 +825,17 @@ func healthcheckPort(addr string) string {
 	return ":9090"
 }
 
-func healthcheck(target string) {
+func healthcheck(target string) error {
 	client := http.Client{Timeout: 3 * time.Second}
 	res, err := client.Get(target)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		fmt.Fprintf(os.Stderr, "unhealthy status %d\n", res.StatusCode)
-		os.Exit(1)
+		return fmt.Errorf("unhealthy status %d", res.StatusCode)
 	}
+	return nil
 }
 
 func env(key, fallback string) string {
@@ -598,8 +847,8 @@ func env(key, fallback string) string {
 }
 
 func envInt(key string, fallback int) int {
-	var value int
-	if _, err := fmt.Sscan(strings.TrimSpace(os.Getenv(key)), &value); err != nil || value <= 0 {
+	value, err := strconv.Atoi(strings.TrimSpace(os.Getenv(key)))
+	if err != nil || value <= 0 {
 		return fallback
 	}
 	return value
@@ -615,6 +864,32 @@ func envDuration(key string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return parsed
+}
+
+func ensurePrivateDataDirectory(dataDir string) error {
+	if strings.TrimSpace(dataDir) == "" {
+		return errors.New("data directory is required")
+	}
+	if err := os.MkdirAll(dataDir, 0o750); err != nil {
+		return err
+	}
+	info, err := os.Stat(dataDir)
+	if err != nil {
+		return err
+	}
+	if !info.IsDir() {
+		return errors.New("data directory path is not a directory")
+	}
+	probe, err := os.CreateTemp(dataDir, ".beacon-write-test-*")
+	if err != nil {
+		return fmt.Errorf("data directory is not writable: %w", err)
+	}
+	probePath := probe.Name()
+	if err := probe.Close(); err != nil {
+		_ = os.Remove(probePath)
+		return err
+	}
+	return os.Remove(probePath)
 }
 
 // buildBackupAdapter returns the configured backup adapter based on
@@ -662,15 +937,4 @@ func buildBackupAdapter(backupRoot string, legacyDataRoot ...string) (backup.Bac
 }
 
 // readMemoryMB is defined in mem_linux.go (Linux) and mem_other.go (other OS).
-
-func readDiskMB(dataDir string) int64 {
-	if dataDir == "" {
-		return 0
-	}
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(dataDir, &stat); err != nil {
-		return 0
-	}
-	bytes := uint64(stat.Bavail) * uint64(stat.Bsize)
-	return int64(bytes / (1024 * 1024))
-}
+// readDiskMB is defined in disk_unix.go and disk_windows.go.

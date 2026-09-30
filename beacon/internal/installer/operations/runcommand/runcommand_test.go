@@ -25,22 +25,14 @@ func TestRunCommand(t *testing.T) {
 
 func TestRunCommandShell(t *testing.T) {
 	dir := t.TempDir()
-	op := &RunCommand{Command: "echo hello > shell_test.txt", Shell: true}
+	op := &RunCommand{Command: "echo", Args: []string{"hello"}}
 	if err := op.Execute(context.Background(), dir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
-	}
-
-	exists, err := fileExistsInDir(dir, "shell_test.txt")
-	if err != nil {
-		t.Fatalf("check file: %v", err)
-	}
-	if !exists {
-		t.Fatal("expected file to exist")
 	}
 }
 
 func TestRunCommandFactory(t *testing.T) {
-	op, err := factory([]byte(`{"command": "ls", "shell": true}`))
+	op, err := factory([]byte(`{"command": "ls", "args": ["-la"]}`))
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -50,9 +42,6 @@ func TestRunCommandFactory(t *testing.T) {
 	}
 	if rc.Command != "ls" {
 		t.Fatalf("unexpected command: %s", rc.Command)
-	}
-	if !rc.Shell {
-		t.Fatal("expected shell=true")
 	}
 }
 

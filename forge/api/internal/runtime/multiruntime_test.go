@@ -14,25 +14,37 @@ type mockRuntime struct {
 	reinstallSupport bool
 }
 
-func (m *mockRuntime) Name() string                                 { return m.name }
-func (m *mockRuntime) Capabilities() Capabilities                   { return m.caps }
-func (m *mockRuntime) SupportsMigration() bool                      { return m.supportsMigrate }
+func (m *mockRuntime) Name() string               { return m.name }
+func (m *mockRuntime) Capabilities() Capabilities { return m.caps }
+func (m *mockRuntime) SupportsMigration() bool    { return m.supportsMigrate }
 func (m *mockRuntime) CreateServer(context.Context, Target, CreateServerRequest) (CreateResponse, error) {
 	return CreateResponse{}, nil
 }
 func (m *mockRuntime) InstallServer(context.Context, Target, InstallRequest) (InstallResponse, error) {
 	return InstallResponse{}, nil
 }
-func (m *mockRuntime) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error { return nil }
-func (m *mockRuntime) ResizeServer(context.Context, Target, int64, int64) error                   { return nil }
-func (m *mockRuntime) DeleteServer(context.Context, Target) (PowerResponse, error)                 { return PowerResponse{}, nil }
-func (m *mockRuntime) StartServer(context.Context, Target) (PowerResponse, error)                  { return PowerResponse{}, nil }
-func (m *mockRuntime) StopServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (m *mockRuntime) RestartServer(context.Context, Target) (PowerResponse, error)                { return PowerResponse{}, nil }
-func (m *mockRuntime) KillServer(context.Context, Target) (PowerResponse, error)                   { return PowerResponse{}, nil }
-func (m *mockRuntime) Stats(context.Context, Target) (Stats, error)                                { return Stats{}, nil }
-func (m *mockRuntime) Exists(context.Context, Target) (bool, error)                                { return true, nil }
-func (m *mockRuntime) Inspect(context.Context, Target) (Inspection, error)                         { return Inspection{}, nil }
+func (m *mockRuntime) SyncServerConfiguration(context.Context, Target, ServerConfiguration) error {
+	return nil
+}
+func (m *mockRuntime) ResizeServer(context.Context, Target, int64, int64) error { return nil }
+func (m *mockRuntime) DeleteServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) StartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) StopServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) RestartServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) KillServer(context.Context, Target) (PowerResponse, error) {
+	return PowerResponse{}, nil
+}
+func (m *mockRuntime) Stats(context.Context, Target) (Stats, error)        { return Stats{}, nil }
+func (m *mockRuntime) Exists(context.Context, Target) (bool, error)        { return true, nil }
+func (m *mockRuntime) Inspect(context.Context, Target) (Inspection, error) { return Inspection{}, nil }
 func (m *mockRuntime) PrepareMigration(context.Context, MigrationRequest) (MigrationResponse, error) {
 	return MigrationResponse{}, ErrNotImplemented
 }
@@ -66,19 +78,23 @@ func TestNewMultiRuntimeAdapter(t *testing.T) {
 func TestMultiRuntimeAdapterRegisterAndGetRuntime(t *testing.T) {
 	m := NewMultiRuntimeAdapter(nil)
 	mr := &mockRuntime{name: "test"}
-	m.Register("test", mr)
-	got, ok := m.GetRuntime("test")
+	m.Register(PodmanProvider, mr)
+	got, ok := m.GetRuntime(PodmanProvider)
 	if !ok {
 		t.Fatal("GetRuntime should find registered runtime")
 	}
 	if got != mr {
 		t.Error("GetRuntime should return the same instance")
 	}
+	// Lookup must not care how the caller spelled the provider.
+	if _, ok := m.GetRuntime(" Podman "); !ok {
+		t.Error("GetRuntime should normalise provider spelling")
+	}
 }
 
 func TestMultiRuntimeAdapterRegisterNilRuntime(t *testing.T) {
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", nil)
+	m.Register(PodmanProvider, nil)
 	_, ok := m.GetRuntime("test")
 	if ok {
 		t.Error("Register nil runtime should not store it")
@@ -102,44 +118,56 @@ func TestMultiRuntimeAdapterGetRuntimeNotFound(t *testing.T) {
 	}
 }
 
-func TestMultiRuntimeAdapterGetRuntimeForTargetUsesProvider(t *testing.T) {
+func TestMultiRuntimeAdapterResolveRuntimeUsesProvider(t *testing.T) {
 	defaultRt := &mockRuntime{name: "default"}
 	specificRt := &mockRuntime{name: DockerProvider}
 	m := NewMultiRuntimeAdapter(defaultRt)
 	m.Register(DockerProvider, specificRt)
-	target := Target{Provider: DockerProvider}
-	rt := m.getRuntimeForTarget(target)
+
+	rt, err := m.resolveRuntime(Target{Provider: DockerProvider})
+	if err != nil {
+		t.Fatalf("resolveRuntime: %v", err)
+	}
 	if rt != specificRt {
-		t.Error("getRuntimeForTarget should return the specific runtime for the provider")
+		t.Error("resolveRuntime should return the runtime registered for the provider")
 	}
 }
 
-func TestMultiRuntimeAdapterGetRuntimeForTargetFallsBackToDefault(t *testing.T) {
+// An unknown provider must be rejected rather than quietly served by the
+// default runtime. Falling back is how a request for a hypervisor used to come
+// back as a Docker container.
+func TestMultiRuntimeAdapterResolveRuntimeRejectsUnknownProvider(t *testing.T) {
+	t.Setenv("ENABLE_EXPERIMENTAL_RUNTIMES", "")
+	m := NewMultiRuntimeAdapter(&mockRuntime{name: "default"})
+
+	for _, provider := range []string{"unknown", LXCProvider, KVMProvider} {
+		if _, err := m.resolveRuntime(Target{Provider: provider}); !errors.Is(err, ErrUnsupportedProvider) {
+			t.Errorf("resolveRuntime(%q) err=%v, want ErrUnsupportedProvider", provider, err)
+		}
+	}
+}
+
+// A supported provider with no dedicated adapter legitimately uses the default
+// runtime; only unsupported providers are rejected.
+func TestMultiRuntimeAdapterResolveRuntimeFallsBackForSupportedProvider(t *testing.T) {
 	defaultRt := &mockRuntime{name: "default"}
 	m := NewMultiRuntimeAdapter(defaultRt)
-	target := Target{Provider: "unknown"}
-	rt := m.getRuntimeForTarget(target)
-	if rt != defaultRt {
-		t.Error("getRuntimeForTarget should fall back to default for unknown provider")
+
+	for _, provider := range []string{"", PodmanProvider} {
+		rt, err := m.resolveRuntime(Target{Provider: provider})
+		if err != nil {
+			t.Fatalf("resolveRuntime(%q): %v", provider, err)
+		}
+		if rt != defaultRt {
+			t.Errorf("resolveRuntime(%q) should fall back to the default runtime", provider)
+		}
 	}
 }
 
-func TestMultiRuntimeAdapterGetRuntimeForTargetEmptyProvider(t *testing.T) {
-	defaultRt := &mockRuntime{name: "default"}
-	m := NewMultiRuntimeAdapter(defaultRt)
-	target := Target{Provider: ""}
-	rt := m.getRuntimeForTarget(target)
-	if rt != defaultRt {
-		t.Error("getRuntimeForTarget should fall back to default for empty provider")
-	}
-}
-
-func TestMultiRuntimeAdapterGetRuntimeForTargetNoDefault(t *testing.T) {
+func TestMultiRuntimeAdapterResolveRuntimeNoDefault(t *testing.T) {
 	m := NewMultiRuntimeAdapter(nil)
-	target := Target{Provider: ""}
-	rt := m.getRuntimeForTarget(target)
-	if rt != nil {
-		t.Error("getRuntimeForTarget should return nil when no default and no match")
+	if _, err := m.resolveRuntime(Target{Provider: ""}); !errors.Is(err, ErrRuntimeUnavailable) {
+		t.Errorf("resolveRuntime with no default err=%v, want ErrRuntimeUnavailable", err)
 	}
 }
 
@@ -157,7 +185,7 @@ func TestMultiRuntimeAdapterCapabilitiesUnion(t *testing.T) {
 func TestMultiRuntimeAdapterCapabilitiesNoDefault(t *testing.T) {
 	rt := &mockRuntime{name: "test", caps: Capabilities{MicroVM: true}}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
+	m.Register(PodmanProvider, rt)
 	caps := m.Capabilities()
 	if !caps.MicroVM {
 		t.Error("Capabilities should include registered runtime's capabilities")
@@ -204,8 +232,8 @@ func TestMultiRuntimeAdapterSupportsMigrationNoDefault(t *testing.T) {
 func TestMultiRuntimeAdapterCreateServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.CreateServer(context.Background(), Target{Provider: "test"}, CreateServerRequest{})
+	m.Register(PodmanProvider, rt)
+	_, err := m.CreateServer(context.Background(), Target{Provider: PodmanProvider}, CreateServerRequest{})
 	if err != nil {
 		t.Errorf("CreateServer should delegate, got err: %v", err)
 	}
@@ -222,8 +250,8 @@ func TestMultiRuntimeAdapterCreateServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterInstallServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.InstallServer(context.Background(), Target{Provider: "test"}, InstallRequest{})
+	m.Register(PodmanProvider, rt)
+	_, err := m.InstallServer(context.Background(), Target{Provider: PodmanProvider}, InstallRequest{})
 	if err != nil {
 		t.Errorf("InstallServer should delegate, got err: %v", err)
 	}
@@ -240,8 +268,8 @@ func TestMultiRuntimeAdapterInstallServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterReinstallServerDelegates(t *testing.T) {
 	mr := &mockRuntime{name: "test", reinstallSupport: true}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", mr)
-	resp, err := m.ReinstallServer(context.Background(), Target{Provider: "test"}, InstallRequest{ServerID: "s1"})
+	m.Register(PodmanProvider, mr)
+	resp, err := m.ReinstallServer(context.Background(), Target{Provider: PodmanProvider}, InstallRequest{ServerID: "s1"})
 	if err != nil {
 		t.Errorf("ReinstallServer should delegate, got err: %v", err)
 	}
@@ -253,8 +281,8 @@ func TestMultiRuntimeAdapterReinstallServerDelegates(t *testing.T) {
 func TestMultiRuntimeAdapterReinstallServerNoReinstaller(t *testing.T) {
 	mr := &mockRuntime{name: "test", reinstallSupport: false}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", mr)
-	_, err := m.ReinstallServer(context.Background(), Target{Provider: "test"}, InstallRequest{})
+	m.Register(PodmanProvider, mr)
+	_, err := m.ReinstallServer(context.Background(), Target{Provider: PodmanProvider}, InstallRequest{})
 	if err != ErrNotImplemented {
 		t.Errorf("ReinstallServer without Reinstaller err = %v, want %v", err, ErrNotImplemented)
 	}
@@ -271,8 +299,8 @@ func TestMultiRuntimeAdapterReinstallServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterSyncConfigurationDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	err := m.SyncServerConfiguration(context.Background(), Target{Provider: "test"}, ServerConfiguration{})
+	m.Register(PodmanProvider, rt)
+	err := m.SyncServerConfiguration(context.Background(), Target{Provider: PodmanProvider}, ServerConfiguration{})
 	if err != nil {
 		t.Errorf("SyncServerConfiguration should delegate, got err: %v", err)
 	}
@@ -289,8 +317,8 @@ func TestMultiRuntimeAdapterSyncConfigurationNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterDeleteServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.DeleteServer(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.DeleteServer(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("DeleteServer should delegate, got err: %v", err)
 	}
@@ -307,8 +335,8 @@ func TestMultiRuntimeAdapterDeleteServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterStartServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.StartServer(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.StartServer(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("StartServer should delegate, got err: %v", err)
 	}
@@ -325,8 +353,8 @@ func TestMultiRuntimeAdapterStartServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterStopServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.StopServer(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.StopServer(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("StopServer should delegate, got err: %v", err)
 	}
@@ -343,8 +371,8 @@ func TestMultiRuntimeAdapterStopServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterRestartServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.RestartServer(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.RestartServer(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("RestartServer should delegate, got err: %v", err)
 	}
@@ -361,8 +389,8 @@ func TestMultiRuntimeAdapterRestartServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterKillServerDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.KillServer(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.KillServer(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("KillServer should delegate, got err: %v", err)
 	}
@@ -379,8 +407,8 @@ func TestMultiRuntimeAdapterKillServerNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterStatsDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.Stats(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.Stats(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("Stats should delegate, got err: %v", err)
 	}
@@ -397,8 +425,8 @@ func TestMultiRuntimeAdapterStatsNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterExistsDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	exists, err := m.Exists(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	exists, err := m.Exists(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("Exists should delegate, got err: %v", err)
 	}
@@ -418,8 +446,8 @@ func TestMultiRuntimeAdapterExistsNoRuntime(t *testing.T) {
 func TestMultiRuntimeAdapterInspectDelegates(t *testing.T) {
 	rt := &mockRuntime{name: "test"}
 	m := NewMultiRuntimeAdapter(nil)
-	m.Register("test", rt)
-	_, err := m.Inspect(context.Background(), Target{Provider: "test"})
+	m.Register(PodmanProvider, rt)
+	_, err := m.Inspect(context.Background(), Target{Provider: PodmanProvider})
 	if err != nil {
 		t.Errorf("Inspect should delegate, got err: %v", err)
 	}

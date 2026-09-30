@@ -3,31 +3,29 @@ import {
   fetchJSON,
   postJSON,
   deleteJSON,
-  getAuthHeaders,
-  getCSRFToken,
-  API_BASE_URL,
+  requestBlob,
+  requestText,
+  requestVoid,
 } from './http';
+import type { ApiFileEntry } from './types';
 
-export async function fetchServerFiles(serverId: string, path?: string): Promise<any[]> {
+export async function fetchServerFiles(serverId: string, path?: string): Promise<ApiFileEntry[]> {
   const url = path
     ? `/servers/${encodeURIComponent(serverId)}/files?path=${encodeURIComponent(path)}`
     : `/servers/${encodeURIComponent(serverId)}/files`;
-  return fetchJSON<any[]>(url);
+  const files = await fetchJSON<ApiFileEntry[]>(url);
+  // The daemon returns modTime; the web API type uses modifiedAt. Normalize so
+  // consumers never read an undefined timestamp.
+  return (files ?? []).map((file) => ({
+    ...file,
+    modifiedAt: file.modifiedAt ?? file.createdAt,
+  }));
 }
 
 export async function downloadServerFile(serverId: string, path: string): Promise<Blob> {
-  const url = `/servers/${encodeURIComponent(serverId)}/files/download?path=${encodeURIComponent(path)}`;
-  const response = await fetch(url, {
-    headers: {
-      ...getAuthHeaders(),
-    },
-  });
-
-  if (!response.ok) {
-    throw new Error(`Failed to download file: ${response.status}`);
-  }
-
-  return response.blob();
+  return requestBlob(
+    `/servers/${encodeURIComponent(serverId)}/files/download?path=${encodeURIComponent(path)}`,
+  );
 }
 
 export async function getServerFileDownloadURL(
@@ -51,25 +49,14 @@ export async function writeServerFile(
     contentType = content.type;
   }
 
-  const headers: Record<string, string> = {
-    'Content-Type': contentType,
-    ...getAuthHeaders(),
-  };
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
+  await requestVoid(
+    `/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
     {
       method: 'PUT',
-      headers,
+      headers: { 'Content-Type': contentType },
       body: content,
     },
   );
-
-  if (!response.ok) {
-    throw new Error(`Failed to write file content: ${response.status}`);
-  }
 }
 
 export async function deleteServerFile(serverId: string, path: string): Promise<void> {
@@ -141,6 +128,11 @@ export async function decompressServerFiles(serverId: string, path: string): Pro
   });
 }
 
+/**
+ * Canonical pull — POST /servers/:id/files/pull (spec contract).
+ * Backend also accepts POST /servers/:id/files/download as legacy alias
+ * (see `downloadFileToServer` in @/lib/api), both handled by PullRemoteFile.
+ */
 export async function pullServerFile(
   serverId: string,
   url: string,
@@ -152,42 +144,21 @@ export async function pullServerFile(
   );
 }
 
+// Legacy alias re-export for callers still importing from files module.
+export const downloadFileToServerViaFiles = pullServerFile;
+
 export async function readServerFile(serverId: string, path: string): Promise<string> {
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
-    {
-      headers: {
-        Accept: 'text/plain',
-        ...getAuthHeaders(),
-      },
-      credentials: 'include',
-    },
+  return requestText(
+    `/servers/${encodeURIComponent(serverId)}/files/content?path=${encodeURIComponent(path)}`,
+    { headers: { Accept: 'text/plain' } },
   );
-  if (!response.ok) {
-    throw new Error(`Failed to read file: ${response.status}`);
-  }
-  return response.text();
 }
 
 export async function archiveServerFile(serverId: string, path: string): Promise<Blob> {
-  const headers: Record<string, string> = {
-    ...getAuthHeaders(),
-  };
-  const csrf = getCSRFToken();
-  if (csrf) headers['X-CSRF-Token'] = csrf;
-
-  const response = await fetch(
-    `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/archive?path=${encodeURIComponent(path)}`,
-    {
-      method: 'POST',
-      headers,
-      credentials: 'include',
-    },
+  return requestBlob(
+    `/servers/${encodeURIComponent(serverId)}/files/archive?path=${encodeURIComponent(path)}`,
+    { method: 'POST' },
   );
-  if (!response.ok) {
-    throw new Error(`Failed to archive file: ${response.status}`);
-  }
-  return response.blob();
 }
 
 export async function uploadFileChunked(
@@ -195,13 +166,21 @@ export async function uploadFileChunked(
   path: string,
   file: File | Blob,
   onProgress?: (loaded: number, total: number) => void,
+  options?: { signal?: AbortSignal; chunkSize?: number; retry?: boolean },
 ): Promise<void> {
-  const chunkSize = 8 * 1024 * 1024;
+  const chunkSize = options?.chunkSize ?? 8 * 1024 * 1024;
   const totalSize = file.size;
   let offset = 0;
-  const uploadId = crypto.randomUUID();
+  // `crypto.randomUUID` is unavailable on non-secure contexts (plain http on
+  // LAN IPs) — fall back to a unique-enough id so chunked uploads still work
+  // there instead of throwing before the first byte.
+  const uploadId =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `${Date.now()}-${Math.random().toString(36).slice(2)}-${Math.random().toString(36).slice(2)}`;
 
   while (offset < totalSize) {
+    options?.signal?.throwIfAborted?.();
     const end = Math.min(offset + chunkSize, totalSize);
     const chunk = file.slice(offset, end);
     const isLast = end >= totalSize;
@@ -213,26 +192,18 @@ export async function uploadFileChunked(
     });
     if (isLast) params.set('final', 'true');
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/octet-stream',
-      ...getAuthHeaders(),
-    };
-    const csrf = getCSRFToken();
-    if (csrf) headers['X-CSRF-Token'] = csrf;
-
-    const response = await fetch(
-      `${API_BASE_URL}/servers/${encodeURIComponent(serverId)}/files/upload?${params}`,
+    await requestVoid(
+      `/servers/${encodeURIComponent(serverId)}/files/upload?${params}`,
       {
         method: 'PUT',
-        headers,
-        credentials: 'include',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        ...(options?.signal ? { signal: options.signal } : {}),
         body: chunk,
       },
+      // Chunk PUTs are offset-addressed, so a retried chunk overwrites the
+      // same range rather than duplicating data. Opt-in via options.
+      options?.retry ? { retry: { retries: 2, idempotent: true } } : {},
     );
-
-    if (!response.ok) {
-      throw new Error(`Upload failed at offset ${offset}: ${response.status}`);
-    }
 
     offset = end;
     onProgress?.(offset, totalSize);

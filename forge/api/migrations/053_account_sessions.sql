@@ -17,16 +17,16 @@ CREATE TABLE IF NOT EXISTS user_sessions (
 );
 
 -- Index for efficient session lookups by user
-CREATE INDEX idx_user_sessions_user_id ON user_sessions(user_id) WHERE NOT is_revoked;
+CREATE INDEX IF NOT EXISTS idx_user_sessions_user_id ON user_sessions(user_id) WHERE NOT is_revoked;
 
 -- Index for token-based session lookup
-CREATE INDEX idx_user_sessions_token_hash ON user_sessions(session_token_hash) WHERE NOT is_revoked;
+CREATE INDEX IF NOT EXISTS idx_user_sessions_token_hash ON user_sessions(session_token_hash) WHERE NOT is_revoked;
 
 -- Index for expired session cleanup
-CREATE INDEX idx_user_sessions_expires_at ON user_sessions(expires_at) WHERE NOT is_revoked;
+CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at) WHERE NOT is_revoked;
 
 -- Index for last activity sorting
-CREATE INDEX idx_user_sessions_last_activity ON user_sessions(user_id, last_activity DESC) WHERE NOT is_revoked;
+CREATE INDEX IF NOT EXISTS idx_user_sessions_last_activity ON user_sessions(user_id, last_activity DESC) WHERE NOT is_revoked;
 
 -- Function to clean up expired sessions
 CREATE OR REPLACE FUNCTION cleanup_expired_sessions()

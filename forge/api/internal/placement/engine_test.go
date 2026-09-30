@@ -172,3 +172,22 @@ func TestEngine_Place_WithSoftConstraint(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "node-1", result.NodeID)
 }
+
+func TestEngine_PlaceReplicas_ReturnsErrorWhenAllFail(t *testing.T) {
+	engine := NewEngine(&LeastLoadedScorer{}, NewConstraintChecker())
+	candidates := []Candidate{
+		{NodeID: "node-1", AvailableMemory: 128, AvailableCPU: 1, AvailableDisk: 1000},
+	}
+	req := ReplicaPlacementRequest{
+		Replicas: []ReplicaSpec{
+			// Far exceeds every candidate, so no viable node exists.
+			{Index: 0, CPU: 1 << 20, MemoryMB: 1 << 20, DiskMB: 1 << 20, RuntimeProvider: "docker"},
+			{Index: 1, CPU: 1 << 20, MemoryMB: 1 << 20, DiskMB: 1 << 20, RuntimeProvider: "docker"},
+		},
+	}
+	result, err := engine.PlaceReplicas(context.Background(), candidates, req)
+	require.Error(t, err, "all replicas failed but PlaceReplicas returned nil error")
+	require.NotNil(t, result, "result must be non-nil so callers can report per-replica reasons")
+	assert.Len(t, result.Placements, 0)
+	assert.Len(t, result.Failures, 2)
+}

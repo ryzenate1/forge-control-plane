@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
+	"sync"
 )
 
 type Operation interface {
@@ -38,9 +40,14 @@ func (c *Condition) ShouldExecute(serverDir string) (bool, error) {
 
 type OperationFactory func(args json.RawMessage) (Operation, error)
 
-var registry = map[string]OperationFactory{}
+var (
+	registryMu sync.RWMutex
+	registry   = map[string]OperationFactory{}
+)
 
 func Register(name string, factory OperationFactory) {
+	registryMu.Lock()
+	defer registryMu.Unlock()
 	if _, ok := registry[name]; ok {
 		panic(fmt.Sprintf("operation %q already registered", name))
 	}
@@ -48,14 +55,19 @@ func Register(name string, factory OperationFactory) {
 }
 
 func GetFactory(name string) (OperationFactory, bool) {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	f, ok := registry[name]
 	return f, ok
 }
 
 func ListRegistered() []string {
+	registryMu.RLock()
+	defer registryMu.RUnlock()
 	names := make([]string, 0, len(registry))
 	for n := range registry {
 		names = append(names, n)
 	}
+	sort.Strings(names)
 	return names
 }

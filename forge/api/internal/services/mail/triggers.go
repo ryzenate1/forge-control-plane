@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"strings"
 )
 
 type EmailTrigger interface {
@@ -28,6 +30,21 @@ type TriggerService struct {
 
 func (ts *TriggerService) Worker() *Worker {
 	return ts.worker
+}
+
+// sanitizeHeaderValue makes a user-controlled string safe for use in an email
+// Subject header. Server names, backup names and actor display names are
+// operator/user input; a value containing CR or LF would split the Subject
+// header and inject arbitrary SMTP headers (header injection). Collapsing
+// whitespace also keeps subjects to a single log line.
+func sanitizeHeaderValue(s string) string {
+	s = strings.ReplaceAll(s, "\r", " ")
+	s = strings.ReplaceAll(s, "\n", " ")
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) > 200 {
+		s = s[:200]
+	}
+	return s
 }
 
 func NewTriggerService(renderer *TemplateRenderer, worker *Worker, panelURL, companyName, productName string) *TriggerService {
@@ -55,14 +72,32 @@ func (ts *TriggerService) SendPasswordReset(ctx context.Context, email, resetURL
 	return ts.worker.Enqueue(ctx, email, "Password Reset Request", text, html)
 }
 
-func (ts *TriggerService) SendWelcome(ctx context.Context, email, recipientName, password string) error {
+// SendWelcome sends the account-created email for a new user.
+//
+// Security: this MUST NOT include the user's plaintext password. Emails are
+// routinely stored well beyond the panel's control (mailbox, SMTP relay
+// logs, spam filters, forwarding rules), so any plaintext credential placed
+// in an email body is effectively a durable, hard-to-revoke leak of that
+// credential.
+//
+// setPasswordURL should be a single-use, time-limited link that lets the new
+// user set their own password (the same kind of link used by
+// SendPasswordReset). It is passed through as the template's ResetURL field
+// so the welcome email can render a "Set your password" call-to-action
+// instead of showing a temporary password.
+func (ts *TriggerService) SendWelcome(ctx context.Context, email, recipientName, setPasswordURL string) error {
+	if setPasswordURL == "" {
+		// The recipient address is PII; log that the link is missing without
+		// echoing the address into server logs.
+		slog.Warn("mail: SendWelcome called without a setPasswordURL; welcome email will omit the password/setup link")
+	}
 	text, html, err := ts.renderer.Render(TemplateWelcome, EmailData{
 		RecipientName:  recipientName,
 		RecipientEmail: email,
 		PanelURL:       ts.panelURL,
 		CompanyName:    ts.companyName,
 		ProductName:    ts.productName,
-		NewPassword:    password,
+		ResetURL:       setPasswordURL,
 	})
 	if err != nil {
 		return err
@@ -83,7 +118,7 @@ func (ts *TriggerService) SendServerCreated(ctx context.Context, email, recipien
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Created: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Created: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendServerSuspended(ctx context.Context, email, serverName, reason string) error {
@@ -98,7 +133,7 @@ func (ts *TriggerService) SendServerSuspended(ctx context.Context, email, server
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Suspended: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Suspended: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendServerUnsuspended(ctx context.Context, email, serverName string) error {
@@ -112,7 +147,7 @@ func (ts *TriggerService) SendServerUnsuspended(ctx context.Context, email, serv
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Unsuspended: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Server Unsuspended: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendBackupComplete(ctx context.Context, email, serverName, backupName, backupSize string) error {
@@ -128,7 +163,7 @@ func (ts *TriggerService) SendBackupComplete(ctx context.Context, email, serverN
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Backup Complete: %s", backupName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Backup Complete: %s", sanitizeHeaderValue(backupName)), text, html)
 }
 
 func (ts *TriggerService) SendPasswordChanged(ctx context.Context, email string) error {
@@ -182,7 +217,7 @@ func (ts *TriggerService) SendInvitation(ctx context.Context, email, inviterName
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Invitation from %s", inviterName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Invitation from %s", sanitizeHeaderValue(inviterName)), text, html)
 }
 
 func (ts *TriggerService) SendSubuserInvited(ctx context.Context, email, recipientName, actorName, serverName, serverID string) error {
@@ -199,7 +234,7 @@ func (ts *TriggerService) SendSubuserInvited(ctx context.Context, email, recipie
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Access Granted: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Access Granted: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendSubuserRemoved(ctx context.Context, email, recipientName, actorName, serverName string) error {
@@ -215,7 +250,7 @@ func (ts *TriggerService) SendSubuserRemoved(ctx context.Context, email, recipie
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Access Removed: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Access Removed: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendInstallComplete(ctx context.Context, email, recipientName, serverName, serverID string) error {
@@ -231,7 +266,7 @@ func (ts *TriggerService) SendInstallComplete(ctx context.Context, email, recipi
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Installation Complete: %s", serverName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Installation Complete: %s", sanitizeHeaderValue(serverName)), text, html)
 }
 
 func (ts *TriggerService) SendBackupFailed(ctx context.Context, email, serverName, backupName, failureReason string) error {
@@ -247,5 +282,5 @@ func (ts *TriggerService) SendBackupFailed(ctx context.Context, email, serverNam
 	if err != nil {
 		return err
 	}
-	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Backup Failed: %s", backupName), text, html)
+	return ts.worker.Enqueue(ctx, email, fmt.Sprintf("Backup Failed: %s", sanitizeHeaderValue(backupName)), text, html)
 }

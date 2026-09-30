@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -22,9 +24,20 @@ const (
 	JobBackupCreate    JobType = "backup.create"
 	JobBackupRestore   JobType = "backup.restore"
 	JobServerTransfer  JobType = "server.transfer"
+	JobComposeDeploy   JobType = "compose.deploy"
+	JobComposeUpdate   JobType = "compose.update"
+	JobComposeDelete   JobType = "compose.delete"
+	JobComposeStart    JobType = "compose.start"
+	JobComposeStop     JobType = "compose.stop"
+	JobComposeRestart  JobType = "compose.restart"
 )
 
 type JobStatus string
+
+// ErrNoJobHandler means nothing in this process is wired to run a job type. It
+// is reported by Dispatch rather than after the fact, so no caller can be told
+// their work was accepted when no worker will ever pick it up.
+var ErrNoJobHandler = errors.New("no handler registered for job type")
 
 const (
 	JobStatusPending   JobStatus = "pending"
@@ -69,27 +82,49 @@ type QueueStore interface {
 type HandlerFunc func(context.Context, *Job) error
 
 type Service struct {
-	store    QueueStore
-	handlers map[JobType]HandlerFunc
-	workers  int
-	workerID string
-	lease    time.Duration
-	mu       sync.RWMutex
-	wg       sync.WaitGroup
-	cancel   context.CancelFunc
+	store      QueueStore
+	handlers   map[JobType]HandlerFunc
+	workers    int
+	workerID   string
+	lease      time.Duration
+	jobTimeout time.Duration
+	mu         sync.RWMutex
+	wg         sync.WaitGroup
+	cancel     context.CancelFunc
+	active     map[string]context.CancelFunc
+	activeMu   sync.Mutex
 }
 
 func New(store QueueStore, workers int) *Service {
 	if workers <= 0 {
 		workers = 5
 	}
-	return &Service{store: store, handlers: make(map[JobType]HandlerFunc), workers: workers, workerID: uuid.NewString(), lease: 30 * time.Second}
+	return &Service{
+		store: store, handlers: make(map[JobType]HandlerFunc), workers: workers,
+		workerID: uuid.NewString(), lease: 30 * time.Second, jobTimeout: 30 * time.Minute,
+		active: make(map[string]context.CancelFunc),
+	}
+}
+
+func (s *Service) SetJobTimeout(timeout time.Duration) {
+	if timeout > 0 {
+		s.jobTimeout = timeout
+	}
 }
 
 func (s *Service) RegisterHandler(jobType JobType, handler HandlerFunc) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handlers[jobType] = handler
+}
+
+// HasHandler reports whether something is actually wired to run this job type.
+// Callers consult it before telling a client their work was accepted.
+func (s *Service) HasHandler(jobType JobType) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.handlers[jobType]
+	return ok
 }
 
 func (s *Service) Start(ctx context.Context) {
@@ -104,6 +139,11 @@ func (s *Service) Stop() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	s.activeMu.Lock()
+	for _, cancel := range s.active {
+		cancel()
+	}
+	s.activeMu.Unlock()
 	s.wg.Wait()
 }
 
@@ -129,6 +169,30 @@ func (s *Service) worker(ctx context.Context) {
 }
 
 func (s *Service) process(ctx context.Context, job *Job) {
+	jobCtx, jobCancel := context.WithTimeout(ctx, s.jobTimeout)
+	s.activeMu.Lock()
+	s.active[job.ID] = jobCancel
+	s.activeMu.Unlock()
+
+	defer func() {
+		s.activeMu.Lock()
+		delete(s.active, job.ID)
+		s.activeMu.Unlock()
+		jobCancel()
+
+		if r := recover(); r != nil {
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			err := fmt.Errorf("panic in job %s: %v\nstack: %s", job.ID, r, buf[:n])
+			if job.RetryCount+1 >= job.MaxRetries {
+				_ = s.store.Fail(ctx, job.ID, err)
+			} else {
+				backoff := time.Duration(1<<min(job.RetryCount, 6)) * time.Second
+				_ = s.store.Retry(ctx, job.ID, err, time.Now().UTC().Add(backoff))
+			}
+		}
+	}()
+
 	s.mu.RLock()
 	handler, ok := s.handlers[job.Type]
 	s.mu.RUnlock()
@@ -137,8 +201,8 @@ func (s *Service) process(ctx context.Context, job *Job) {
 		return
 	}
 	done := make(chan struct{})
-	go s.keepLease(ctx, job.ID, done)
-	err := handler(ctx, job)
+	go s.keepLease(jobCtx, job.ID, done)
+	err := handler(jobCtx, job)
 	close(done)
 	if err != nil {
 		if job.RetryCount+1 >= job.MaxRetries {
@@ -172,6 +236,13 @@ func (s *Service) Dispatch(ctx context.Context, jobType JobType, serverID, nodeI
 }
 
 func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string, jobType JobType, serverID, nodeID string, payload any, priority int) (*Job, error) {
+	// Refuse at enqueue time rather than after the caller has been told their
+	// request was accepted. A job nobody handles only surfaces as "failed" once a
+	// worker picks it up, which is far too late: the client already holds a 202
+	// and an operation id for work that was never going to happen.
+	if !s.HasHandler(jobType) {
+		return nil, ErrNoJobHandler
+	}
 	data, err := json.Marshal(payload)
 	if err != nil {
 		return nil, err
@@ -184,6 +255,15 @@ func (s *Service) DispatchIdempotent(ctx context.Context, idempotencyKey string,
 	job := &Job{ID: id, Type: jobType, Status: JobStatusPending, ServerID: serverID, NodeID: nodeID,
 		Payload: data, Priority: priority, MaxRetries: 3, IdempotencyKey: idempotencyKey, AvailableAt: now, CreatedAt: now}
 	return job, s.store.Enqueue(ctx, job)
+}
+
+func (s *Service) Cancel(ctx context.Context, id string) error {
+	s.activeMu.Lock()
+	if cancel, ok := s.active[id]; ok {
+		cancel()
+	}
+	s.activeMu.Unlock()
+	return s.store.Fail(ctx, id, errors.New("job cancelled"))
 }
 
 func (s *Service) Get(ctx context.Context, id string) (*Job, error) { return s.store.GetJob(ctx, id) }

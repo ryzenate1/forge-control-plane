@@ -1,0 +1,25 @@
+# Logging override — customize logging driver and options (e.g., syslog, journald, or larger file retention)
+# Apply with:
+#   docker compose -f compose.yml -f compose.logging.yml --env-file .env up -d
+
+services:
+  api:
+    logging:
+      driver: "${LOG_DRIVER:-json-file}"
+      options:
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"
+
+  daemon:
+    logging:
+      driver: "${LOG_DRIVER:-json-file}"
+      options:
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"
+
+  web:
+    logging:
+      driver: "${LOG_DRIVER:-json-file}"
+      options:
+        max-size: "${LOG_MAX_SIZE:-20m}"
+        max-file: "${LOG_MAX_FILE:-5}"

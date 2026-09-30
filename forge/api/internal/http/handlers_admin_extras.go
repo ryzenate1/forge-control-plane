@@ -3,6 +3,7 @@ package http
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -15,13 +16,25 @@ import (
 // registerAdminExtras registers admin AJAX endpoints that don't fit the
 // standard CRUD or server-detail buckets. They live under the existing
 // `protected` group so the auth middleware applies.
-func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Service) {
+//
+// Every route here is an admin-only node or user accessor, so each one carries
+// the same explicit scope its canonical sibling in registerAdminRoutes carries:
+// reads nodes.read, writes nodes.write, the user directory users.read. The
+// credential-minting endpoint also takes the admin IP allowlist and the
+// mutation limiter, which the /nodes/:id/rotate-token route it mirrors has
+// always required.
+func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Service, adminIPAccess, mutationLimiter fiber.Handler) {
 	// GET /admin/users/accounts.json?filter[email]=&page=
 	// Used by select2 user search when creating a server or assigning subusers.
 	// Returns: { data: [ { id, name_first, name_last, email, username, md5 } ] }
-	protected.Get("/admin/users/accounts.json", func(c *fiber.Ctx) error {
+	//
+	// A failed user search is an error, not an empty directory: this used to
+	// answer 200 with data: [] and total: 0 whenever the store was missing or the
+	// query failed, so the picker rendered "no such user" for a database outage
+	// and operators created duplicate accounts. Unknown is not zero.
+	protected.Get("/admin/users/accounts.json", requireRole("admin"), requireAdminScope("users.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
-			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0, "per_page": 50, "current_page": 1, "total_pages": 1, "links": fiber.Map{}}}})
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -36,7 +49,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		}
 		users, total, err := cfg.Store.SearchUsers(ctx, filter, page, perPage)
 		if err != nil {
-			return c.JSON(fiber.Map{"data": []fiber.Map{}, "meta": fiber.Map{"pagination": fiber.Map{"total": 0, "count": 0}}})
+			return respondInternalError(c, err)
 		}
 		data := make([]fiber.Map, 0, len(users))
 		for _, u := range users {
@@ -55,12 +68,14 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 			"data": data,
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
-					"total":        total,
-					"count":        len(data),
-					"per_page":     perPage,
-					"current_page": page,
-					"total_pages":  totalPages,
-					"links":        fiber.Map{},
+					"total":         total,
+					"count":         len(data),
+					"per_page":      perPage,
+					"current":       page,
+					"total_records": total,
+					"current_page":  page,
+					"total_pages":   totalPages,
+					"links":         fiber.Map{},
 				},
 			},
 		})
@@ -68,47 +83,25 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 
 	// GET /admin/nodes/view/{id}/system-information
 	// Server-side proxy that pings the daemon (HMAC) and returns its info.
-	protected.Get("/nodes/:id/system", func(c *fiber.Ctx) error {
-		if probe == nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"error":  "node probe unavailable",
-				"online": false,
-			})
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		info, err := probe.ProbeNode(ctx, c.Params("id"))
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error":  err.Error(),
-				"online": false,
-			})
-		}
-		return c.JSON(info)
+	//
+	// Both spellings of this route answer the same probe. The error from a probe
+	// is reported as a failure of the probe, not as the node's own answer, and the
+	// raw store/daemon error text is logged rather than echoed to the client.
+	protected.Get("/nodes/:id/system", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
+		return nodeSystemInformation(c, probe)
 	})
 
-	protected.Get("/nodes/:id/system-information", func(c *fiber.Ctx) error {
-		if probe == nil {
-			return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
-				"error":  "node probe unavailable",
-				"online": false,
-			})
-		}
-		ctx, cancel := requestContext()
-		defer cancel()
-		info, err := probe.ProbeNode(ctx, c.Params("id"))
-		if err != nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error":  err.Error(),
-				"online": false,
-			})
-		}
-		return c.JSON(info)
+	protected.Get("/nodes/:id/system-information", requireRole("admin"), requireAdminScope("nodes.read"), func(c *fiber.Ctx) error {
+		return nodeSystemInformation(c, probe)
 	})
 
 	// POST /admin/nodes/view/{id}/configuration/token
 	// Generates a one-shot auto-deploy token for the beacon configure command.
-	protected.Post("/nodes/:id/configuration/token", requireRole("admin"), func(c *fiber.Ctx) error {
+	//
+	// This mints a live node credential, so it is gated exactly like its sibling
+	// /nodes/:id/rotate-token: admin role, nodes.write scope, admin IP allowlist
+	// and the mutation limiter.
+	protected.Post("/nodes/:id/configuration/token", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("nodes.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -126,7 +119,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		// existing secret. Consumers receive the complete credential exactly once.
 		token, err := cfg.Store.RotateNodeToken(ctx, node.ID, actorID)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{
 			"token":  token,
@@ -138,7 +131,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 
 	// POST /admin/nodes/view/{id}/allocation/alias
 	// Body: { allocation_id, alias }
-	protected.Post("/nodes/:id/allocations/alias", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Post("/nodes/:id/allocations/alias", mutationLimiter, requireRole("admin"), requireAdminScope("allocations.write"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -162,7 +155,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 
 	// DELETE /admin/nodes/view/{id}/allocations
 	// Body: { allocations: [{id: N}, ...] }
-	protected.Delete("/nodes/:id/allocations/bulk", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/nodes/:id/allocations/bulk", mutationLimiter, requireRole("admin"), requireAdminScope("allocations.delete"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -177,15 +170,24 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		if len(body.Allocations) == 0 {
 			return fiber.NewError(fiber.StatusBadRequest, "allocations list is required")
 		}
+		// An entry without an id is a malformed request, not an entry with
+		// nothing to do. Skipping it used to answer 204 for a batch that never
+		// touched those allocations, so the caller believed they were gone.
+		ids := make([]string, 0, len(body.Allocations))
+		for _, a := range body.Allocations {
+			if strings.TrimSpace(a.ID) == "" {
+				return fiber.NewError(fiber.StatusBadRequest, "every allocation entry must carry an id")
+			}
+			ids = append(ids, a.ID)
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		nodeID := c.Params("id")
-		for _, a := range body.Allocations {
-			if a.ID == "" {
-				continue
-			}
-			if err := cfg.Store.DeleteNodeAllocation(ctx, nodeID, a.ID); err != nil {
-				return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		// Deleting stops at the first failure and says which allocation failed:
+		// a partially applied batch is reported as a failure, never as 204.
+		for _, id := range ids {
+			if err := cfg.Store.DeleteNodeAllocation(ctx, nodeID, id); err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, fmt.Sprintf("allocation %s: %s", id, err.Error()))
 			}
 		}
 		return c.SendStatus(fiber.StatusNoContent)
@@ -193,7 +195,7 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 
 	// DELETE /admin/nodes/view/{id}/allocation/remove/{allocationId}
 	// Single allocation delete (separate endpoint from bulk).
-	protected.Delete("/nodes/:id/allocations/:allocationId", requireRole("admin"), func(c *fiber.Ctx) error {
+	protected.Delete("/nodes/:id/allocations/:allocationId", mutationLimiter, requireRole("admin"), requireAdminScope("allocations.delete"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -204,6 +206,32 @@ func registerAdminExtras(protected fiber.Router, cfg Config, probe *nodeprobe.Se
 		}
 		return c.SendStatus(fiber.StatusNoContent)
 	})
+}
+
+// nodeSystemInformation answers both /nodes/:id/system routes. A missing probe
+// service is 503 (nothing could ask the node), and a failed probe is reported
+// as a failed probe with online: false; the daemon's raw error text is logged
+// rather than echoed to the client.
+func nodeSystemInformation(c *fiber.Ctx, probe *nodeprobe.Service) error {
+	if probe == nil {
+		return c.Status(fiber.StatusServiceUnavailable).JSON(fiber.Map{
+			"error":  "node probe unavailable",
+			"online": false,
+		})
+	}
+	ctx, cancel := requestContext()
+	defer cancel()
+	info, err := probe.ProbeNode(ctx, c.Params("id"))
+	if err != nil {
+		// Keep the documented {error, online:false} shape for the node view, but
+		// log the real cause server-side and echo only a generic reason.
+		logInternalError(c, err)
+		return c.Status(fiber.StatusBadGateway).JSON(fiber.Map{
+			"error":  "node probe failed",
+			"online": false,
+		})
+	}
+	return c.JSON(info)
 }
 
 // md5OfEmail returns a 32-char hex md5 of the email for the Gravatar URL hint
@@ -219,10 +247,18 @@ func md5OfEmail(email string) string {
 	return md5Hex(e)
 }
 
-func generateRandomTokenHex(n int) string {
+// generateRandomTokenHex returns n random bytes as hex. Entropy failure is
+// returned, never masked with a deterministic fallback: callers must fail the
+// request rather than mint a guessable token.
+func generateRandomTokenHex(n int) (string, error) {
+	if n <= 0 {
+		return "", fmt.Errorf("token length must be positive")
+	}
 	buf := make([]byte, n)
-	_, _ = rand.Read(buf)
-	return hex.EncodeToString(buf)
+	if _, err := rand.Read(buf); err != nil {
+		return "", fmt.Errorf("generate random token: %w", err)
+	}
+	return hex.EncodeToString(buf), nil
 }
 
 // silenceUnusedGenerate keeps the random helper available for future use

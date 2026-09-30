@@ -46,22 +46,30 @@ func (s *PostgresStore) Enqueue(ctx context.Context, job *Job) error {
 	return tx.Commit(ctx)
 }
 
+// dequeueSQL claims the next runnable job. It MUST NOT modify retry_count: a
+// lease steal (worker death) and the subsequent real failure must not each
+// consume a retry. Retry (retrySQL) is the sole writer of retry_count.
+const dequeueSQL = `WITH candidate AS (
+	SELECT id,status FROM job_queue
+	WHERE ((status='pending' AND available_at<=NOW()) OR (status='running' AND locked_until<NOW()))
+	AND ($1='' OR node_id=NULLIF($1,'')::uuid)
+	ORDER BY priority DESC,available_at ASC,created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED)
+	UPDATE job_queue j SET status='running',started_at=COALESCE(started_at,NOW()),locked_by=$2,
+	locked_until=NOW()+$3::interval,last_heartbeat_at=NOW()
+	FROM candidate WHERE j.id=candidate.id
+	RETURNING j.id,j.type,j.status,COALESCE(j.server_id::text,''),COALESCE(j.node_id::text,''),j.payload,
+	j.priority,j.max_retries,j.retry_count,COALESCE(j.idempotency_key,''),j.available_at,j.locked_by,
+	j.locked_until,j.created_at,j.started_at`
+
+// retrySQL is the single place retry_count is incremented, on genuine failure.
+const retrySQL = `UPDATE job_queue SET status='pending',retry_count=retry_count+1,error=$2,
+	available_at=$3,locked_by=NULL,locked_until=NULL,last_heartbeat_at=NULL WHERE id=$1`
+
 func (s *PostgresStore) Dequeue(ctx context.Context, nodeID, workerID string, lease time.Duration) (*Job, error) {
 	var job Job
 	var payload []byte
 	var status, jobType string
-	err := s.pool.QueryRow(ctx, `WITH candidate AS (
-		SELECT id,status FROM job_queue
-		WHERE ((status='pending' AND available_at<=NOW()) OR (status='running' AND locked_until<NOW()))
-		AND ($1='' OR node_id=NULLIF($1,'')::uuid)
-		ORDER BY priority DESC,available_at ASC,created_at ASC LIMIT 1 FOR UPDATE SKIP LOCKED)
-		UPDATE job_queue j SET status='running',started_at=COALESCE(started_at,NOW()),locked_by=$2,
-		locked_until=NOW()+$3::interval,last_heartbeat_at=NOW(),
-		retry_count=j.retry_count+CASE WHEN candidate.status='running' THEN 1 ELSE 0 END
-		FROM candidate WHERE j.id=candidate.id
-		RETURNING j.id,j.type,j.status,COALESCE(j.server_id::text,''),COALESCE(j.node_id::text,''),j.payload,
-		j.priority,j.max_retries,j.retry_count,COALESCE(j.idempotency_key,''),j.available_at,j.locked_by,
-		j.locked_until,j.created_at,j.started_at`, nodeID, workerID, lease.String()).Scan(
+	err := s.pool.QueryRow(ctx, dequeueSQL, nodeID, workerID, lease.String()).Scan(
 		&job.ID, &jobType, &status, &job.ServerID, &job.NodeID, &payload, &job.Priority, &job.MaxRetries,
 		&job.RetryCount, &job.IdempotencyKey, &job.AvailableAt, &job.LockedBy, &job.LockedUntil, &job.CreatedAt, &job.StartedAt)
 	if err != nil {
@@ -119,8 +127,7 @@ func (s *PostgresStore) Retry(ctx context.Context, id string, jobErr error, avai
 	if jobErr != nil {
 		msg = jobErr.Error()
 	}
-	_, err := s.pool.Exec(ctx, `UPDATE job_queue SET status='pending',retry_count=retry_count+1,error=$2,
-		available_at=$3,locked_by=NULL,locked_until=NULL,last_heartbeat_at=NULL WHERE id=$1`, id, msg, availableAt)
+	_, err := s.pool.Exec(ctx, retrySQL, id, msg, availableAt)
 	if err != nil {
 		return err
 	}

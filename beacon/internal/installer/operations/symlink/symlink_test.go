@@ -24,8 +24,12 @@ func TestSymlink(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
 	}
-	if linkTarget != src {
-		t.Fatalf("expected symlink target %q, got %q", src, linkTarget)
+	canonicalSrc, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkTarget != canonicalSrc {
+		t.Fatalf("expected symlink target %q, got %q", canonicalSrc, linkTarget)
 	}
 }
 
@@ -50,8 +54,12 @@ func TestSymlinkOverwrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("readlink: %v", err)
 	}
-	if linkTarget != src {
-		t.Fatalf("expected symlink target %q, got %q", src, linkTarget)
+	canonicalSrc, err := filepath.EvalSymlinks(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if linkTarget != canonicalSrc {
+		t.Fatalf("expected symlink target %q, got %q", canonicalSrc, linkTarget)
 	}
 }
 

@@ -3,19 +3,27 @@ package http
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/crypto/bcrypt"
+
 	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/domain"
+	gpruntime "gamepanel/forge/internal/runtime"
 	"gamepanel/forge/internal/services/activity"
 	"gamepanel/forge/internal/services/clustermanager"
+	"gamepanel/forge/internal/services/migration"
 	"gamepanel/forge/internal/services/queue"
 	"gamepanel/forge/internal/store"
 
@@ -32,6 +40,37 @@ func safeAuditMeta(kv map[string]string) string {
 	return string(b)
 }
 
+// backupNameCandidates returns the stored-name forms a client identifier may
+// reference. Backups are stored on the daemon as "<name>.zip" while some
+// legacy and pending records use the bare name, so both forms are tried in
+// order of exactness.
+func backupNameCandidates(identifier string) []string {
+	if strings.HasSuffix(identifier, ".zip") {
+		return []string{identifier, strings.TrimSuffix(identifier, ".zip")}
+	}
+	return []string{identifier, identifier + ".zip"}
+}
+
+// resolveBackupName resolves a client-supplied backup identifier to the
+// stored backup record. Identifiers may arrive with or without the ".zip"
+// suffix (the daemon stores archives under "<name>.zip" while some legacy and
+// pending records use a bare name), so the stored row is the source of truth
+// that callers forward to the daemon.
+func resolveBackupName(ctx context.Context, st *store.Store, serverID, identifier string) (store.Backup, error) {
+	var lastErr error
+	for _, name := range backupNameCandidates(identifier) {
+		if name == "" {
+			continue
+		}
+		backup, err := st.GetBackupByName(ctx, serverID, name)
+		if err == nil {
+			return backup, nil
+		}
+		lastErr = err
+	}
+	return store.Backup{}, lastErr
+}
+
 func validFileMode(mode string) bool {
 	if len(mode) != 3 && len(mode) != 4 {
 		return false
@@ -45,7 +84,7 @@ func validFileMode(mode string) bool {
 }
 
 func legacyServerTransferUnavailable(c *fiber.Ctx) error {
-	return fiber.NewError(fiber.StatusNotImplemented, "legacy server transfer endpoints are not implemented")
+	return fiber.NewError(fiber.StatusGone, "legacy server transfer endpoint retired; use /migrations")
 }
 
 func legacyServerTransferCallbackUnavailable(c *fiber.Ctx) error {
@@ -61,7 +100,7 @@ func createResourceValue(value *int, fallback int) int {
 
 func ensureTransferIdle(c *fiber.Ctx, cfg Config, serverID string) error {
 	if cfg.Store == nil {
-		return nil
+		return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 	}
 	ctx, cancel := requestContext()
 	defer cancel()
@@ -84,9 +123,9 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		defer cancel()
 		users, err := cfg.Store.ListUsers(ctx)
 		if err != nil {
-			return err
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to list users")
 		}
-		return c.JSON(users)
+		return c.JSON(ToPublicUsers(users))
 	})
 
 	protected.Post("/users", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.write"), func(c *fiber.Ctx) error {
@@ -123,10 +162,19 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		if cfg.MailTriggerService != nil {
-			cfg.MailTriggerService.SendWelcome(ctx, user.Email, user.Email, req.Password)
+		if cfg.MailTriggerService != nil && cfg.PanelURL != "" {
+			raw := make([]byte, 32)
+			if _, err := rand.Read(raw); err == nil {
+				plain := hex.EncodeToString(raw)
+				tokenHash, err := bcrypt.GenerateFromPassword([]byte(plain), store.BcryptCost())
+				if err == nil {
+					setPwdURL := strings.TrimRight(cfg.PanelURL, "/") + "/reset-password#token=" + url.QueryEscape(plain) + "&email=" + url.QueryEscape(user.Email)
+					cfg.Store.EnqueuePasswordReset(ctx, user.Email, string(tokenHash), 7*24*time.Hour, ExtractClientIP(c), setPwdURL)
+					cfg.MailTriggerService.SendWelcome(ctx, user.Email, user.Email, setPwdURL)
+				}
+			}
 		}
-		return c.Status(fiber.StatusCreated).JSON(user)
+		return c.Status(fiber.StatusCreated).JSON(ToPublicUser(user))
 	})
 
 	protected.Patch("/users/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.write"), func(c *fiber.Ctx) error {
@@ -142,6 +190,21 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		var actorID *string
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
+		}
+		// PATCH is a partial update: omitted email/role keep their current
+		// values. Without this an update that only touches limits would fail
+		// "email is required", and an omitted role would silently reset to
+		// "user" inside the store default. Fetching first also turns an
+		// unknown id into a 404 instead of a silent no-op success.
+		existing, err := cfg.Store.GetUserByID(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "user not found")
+		}
+		if strings.TrimSpace(req.Email) == "" {
+			req.Email = existing.Email
+		}
+		if strings.TrimSpace(req.Role) == "" {
+			req.Role = existing.Role
 		}
 		user, err := cfg.Store.UpdateUser(ctx, c.Params("id"), store.UpdateUserRequest{
 			Email:           req.Email,
@@ -160,7 +223,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(user)
+		return c.JSON(ToPublicUser(user))
 	})
 
 	protected.Delete("/users/:id", adminIPAccess, mutationLimiter, requireRole("admin"), requireAdminScope("users.delete"), func(c *fiber.Ctx) error {
@@ -179,7 +242,17 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Get("/servers", requireAdminScope("servers.read"), func(c *fiber.Ctx) error {
+	protected.Get("/servers", func(c *fiber.Ctx) error {
+		// No servers.read gate here: non-admins list only their own servers
+		// via ListServersForUser. A global scope check would 403 every
+		// non-admin even though the store already filters by owner/subuser.
+		// Scoped credentials (API keys/OAuth) still need servers.read.
+		if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+			scopes, _ := c.Locals("apiScopes").([]string)
+			if !store.HasAdminScope(scopes, "servers.read") {
+				return fiber.NewError(fiber.StatusForbidden, "missing api scope: servers.read")
+			}
+		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -209,7 +282,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		defer cancel()
 		servers, total, err := cfg.Store.ListServersForUser(ctx, claims.Sub, claims.Role, page, perPage, search)
 		if err != nil {
-			return err
+			return fiber.NewError(fiber.StatusInternalServerError, "failed to list servers")
 		}
 
 		totalPages := (total + perPage - 1) / perPage
@@ -218,7 +291,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 
 		return c.JSON(fiber.Map{
-			"data": servers,
+			"data": store.ServersToDTO(servers),
 			"meta": fiber.Map{
 				"pagination": fiber.Map{
 					"current":       page,
@@ -245,7 +318,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if !ok {
 			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
 		}
-		if claims.Role == "admin" || claims.Sub == server.OwnerID {
+		if claims.Role == RoleAdmin || claims.Sub == server.OwnerID {
 			server.Permissions = []string{"*"}
 		} else {
 			subuser, err := cfg.Store.GetServerSubuser(ctx, server.ID, claims.Sub)
@@ -254,10 +327,17 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 			server.Permissions = subuser.Permissions
 		}
-		return c.JSON(server)
+		// Safe DTO: never serialize transferRunToken or other secrets.
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id", mutationLimiter, func(c *fiber.Ctx) error {
+		// Upfront access gate: the per-field checks below must not run on a
+		// server the caller cannot access at all. This also binds OAuth
+		// server-scoped tokens and scoped API keys before any mutation logic.
+		if err := checkServerPermission(c, cfg, ""); err != nil {
+			return err
+		}
 		var req UpdateServerRequest
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -291,8 +371,19 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 		}
 		claims, ok := c.Locals("user").(tokenClaims)
-		if adminChanged && (!ok || claims.Role != "admin") {
-			return fiber.NewError(fiber.StatusForbidden, "admin role is required to update owner or build limits")
+		if adminChanged {
+			if !ok || claims.Role != "admin" {
+				return fiber.NewError(fiber.StatusForbidden, "admin role is required to update owner or build limits")
+			}
+			// Admin fields also require the servers.write admin scope so a
+			// scoped admin key (e.g. servers.read only) cannot escalate via
+			// build limits or ownership transfer.
+			if scoped, _ := c.Locals("scopedAuth").(bool); scoped {
+				scopes, _ := c.Locals("apiScopes").([]string)
+				if !store.HasAdminScope(scopes, "servers.write") {
+					return fiber.NewError(fiber.StatusForbidden, "missing api scope: servers.write")
+				}
+			}
 		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
@@ -322,10 +413,10 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			}
 			server, err = cfg.Store.GetServer(ctx, server.ID)
 			if err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	// Dedicated description endpoint.
@@ -347,7 +438,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	// Server reload: re-reads the server definition from disk on the daemon
@@ -452,14 +543,43 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				if store.IsUserLimitError(err) {
 					return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 				}
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
 		var actorEmail string
 		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorEmail = claims.Email
-			actorID = &claims.Sub
+		var claims tokenClaims
+		if uc, ok := c.Locals("user").(tokenClaims); ok {
+			claims = uc
+			actorEmail = uc.Email
+			actorID = &uc.Sub
+		}
+		// GH-18/SE-01: prevent privilege escalation via subuser permission grants.
+		// Only the server owner or an admin may grant the wildcard "*"; any other
+		// actor may only grant permissions they themselves hold.
+		serverForGrant, serverErr := cfg.Store.GetServer(ctx, c.Params("id"))
+		isPriv := claims.Role == RoleAdmin || (serverErr == nil && claims.Sub == serverForGrant.OwnerID)
+		for _, p := range req.Permissions {
+			if strings.TrimSpace(p) == "*" && !isPriv {
+				return fiber.NewError(fiber.StatusForbidden, "forbidden: only server owner or admin can grant wildcard permission")
+			}
+		}
+		if !isPriv {
+			actorSet := map[string]bool{}
+			if actorSub, subErr := cfg.Store.GetServerSubuser(ctx, c.Params("id"), claims.Sub); subErr == nil {
+				for _, ap := range actorSub.Permissions {
+					actorSet[strings.TrimSpace(ap)] = true
+				}
+			}
+			for _, p := range req.Permissions {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				if !actorSet[p] {
+					return fiber.NewError(fiber.StatusForbidden, "forbidden: cannot grant permission not held by actor: "+p)
+				}
+			}
 		}
 		subuser, err := cfg.Store.UpsertServerSubuser(ctx, c.Params("id"), store.UpsertServerSubuserRequest{
 			Email:       req.Email,
@@ -491,8 +611,37 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusNotFound, "subuser not found")
 		}
 		var actorID *string
-		if claims, ok := c.Locals("user").(tokenClaims); ok {
-			actorID = &claims.Sub
+		var claims tokenClaims
+		if u, ok := c.Locals("user").(tokenClaims); ok {
+			claims = u
+			actorID = &u.Sub
+		}
+		// GH-18/SE-01: prevent privilege escalation via subuser permission grants.
+		// Only the server owner or an admin may grant the wildcard "*"; any other
+		// actor may only grant permissions they themselves hold.
+		serverForGrant, serverErr := cfg.Store.GetServer(ctx, c.Params("id"))
+		isPriv := claims.Role == RoleAdmin || (serverErr == nil && claims.Sub == serverForGrant.OwnerID)
+		for _, p := range req.Permissions {
+			if strings.TrimSpace(p) == "*" && !isPriv {
+				return fiber.NewError(fiber.StatusForbidden, "forbidden: only server owner or admin can grant wildcard permission")
+			}
+		}
+		if !isPriv {
+			actorSet := map[string]bool{}
+			if actorSub, subErr := cfg.Store.GetServerSubuser(ctx, c.Params("id"), claims.Sub); subErr == nil {
+				for _, ap := range actorSub.Permissions {
+					actorSet[strings.TrimSpace(ap)] = true
+				}
+			}
+			for _, p := range req.Permissions {
+				p = strings.TrimSpace(p)
+				if p == "" {
+					continue
+				}
+				if !actorSet[p] {
+					return fiber.NewError(fiber.StatusForbidden, "forbidden: cannot grant permission not held by actor: "+p)
+				}
+			}
 		}
 		subuser, err := cfg.Store.UpsertServerSubuser(ctx, c.Params("id"), store.UpsertServerSubuserRequest{
 			Email:       existing.Email,
@@ -550,7 +699,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				if store.IsUserLimitError(err) {
 					return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 				}
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
 		var actorID *string
@@ -595,7 +744,32 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/servers/:id/transfer", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), legacyServerTransferUnavailable)
+	protected.Post("/servers/:id/transfer", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.MigrationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
+		}
+		var req TransferServerRequest
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if req.TargetNodeID == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "targetNodeId is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		m, err := cfg.MigrationService.CreateMigration(ctx, migration.CreateMigrationRequest{
+			ServerID:     c.Params("id"),
+			TargetNodeID: req.TargetNodeID,
+		})
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		executed, err := cfg.MigrationService.ExecuteMigration(ctx, m.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		return c.Status(fiber.StatusAccepted).JSON(executed)
+	})
 
 	protected.Get("/servers/:id/transfer", requireServerPermission(cfg, store.PermSettingsRename), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
@@ -615,7 +789,36 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		})
 	})
 
-	protected.Post("/servers/:id/transfer/cancel", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), legacyServerTransferUnavailable)
+	protected.Post("/servers/:id/transfer/cancel", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.MigrationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "migration service is not available")
+		}
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		migrations, err := cfg.MigrationService.ListMigrations(ctx)
+		if err != nil {
+			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		}
+		var active *store.Migration
+		for _, m := range migrations {
+			if m.ServerID == c.Params("id") && m.Status != string(store.MigrationStatusCompleted) && m.Status != string(store.MigrationStatusFailed) && m.Status != string(store.MigrationStatusCancelled) {
+				cp := m
+				active = &cp
+				break
+			}
+		}
+		if active == nil {
+			return fiber.NewError(fiber.StatusNotFound, "no active transfer found for this server")
+		}
+		cancelled, err := cfg.MigrationService.CancelMigration(ctx, active.ID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		return c.JSON(cancelled)
+	})
 
 	protected.Post("/servers", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
 		var req CreateServerRequest
@@ -628,6 +831,13 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if req.TemplateID == "" || (req.RegionID == "" && req.Region == "" && req.NodeID == "" && req.RequiredNode == "") {
 			return fiber.NewError(fiber.StatusBadRequest, "templateId, and regionId or nodeId are required")
 		}
+		// Reject an unknown engine before placement runs. Left to the scheduler it
+		// comes back as "no nodes satisfy placement constraints" — a capacity story
+		// about a request that was simply malformed, which sends the operator to
+		// inspect nodes instead of the typo in their payload.
+		if err := gpruntime.ValidateProvider(req.RuntimeProvider); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
 		if req.OwnerID == "" {
 			if claims, ok := c.Locals("user").(tokenClaims); ok {
 				req.OwnerID = claims.Sub
@@ -636,7 +846,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if cfg.Store == nil || clusterManager == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
-		ctx, cancel := requestContext()
+		ctx, cancel := longRequestContext()
 		defer cancel()
 		defaultMemoryMB := 2048
 		if req.MemoryMB == nil {
@@ -664,7 +874,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if store.IsUserLimitError(err) {
 				return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		server, _, err := clusterManager.CreateServer(ctx, store.CreateServerRequest{
 			Name:                    req.Name,
@@ -687,6 +897,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			DockerImage:             req.DockerImage,
 			StartupCommand:          req.StartupCommand,
 			StartupVariables:        req.StartupVariables,
+			RuntimeProvider:         req.RuntimeProvider,
 		}, domain.PlacementRequest{
 			RegionID:      req.RegionID,
 			Region:        req.Region,
@@ -703,7 +914,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		if cfg.Store != nil {
-			cfg.Store.DispatchWebhookEvent("server:created", map[string]any{
+			_ = cfg.Store.DispatchWebhookEvent(c.Context(), "server:created", map[string]any{
 				"subject_type": "server",
 				"subject_id":   server.ID,
 				"name":         server.Name,
@@ -711,7 +922,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				"node_id":      server.Node,
 			})
 		}
-		return c.Status(fiber.StatusCreated).JSON(server)
+		return c.Status(fiber.StatusCreated).JSON(server.ToDTO())
 	})
 
 	protected.Post("/servers/:id/power", mutationLimiter, func(c *fiber.Ctx) error {
@@ -734,6 +945,25 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if err := checkServerPermission(c, cfg, requiredPermission); err != nil {
 				return err
 			}
+			idempotencyKey := strings.TrimSpace(c.Get("Idempotency-Key"))
+			if idempotencyKey != "" {
+				idempotencyKey = "power:" + c.Params("id") + ":" + req.Signal + ":" + idempotencyKey
+			}
+			ctx, cancel := requestContext()
+			defer cancel()
+			if cfg.OperationService != nil {
+				op, err := cfg.OperationService.DispatchPower(ctx, c.Params("id"), req.Signal, idempotencyKey)
+				if err != nil {
+					return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
+				}
+				return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+					"serverId":    c.Params("id"),
+					"signal":      req.Signal,
+					"accepted":    true,
+					"mode":        "durable",
+					"operationId": op.ID,
+				})
+			}
 			if cfg.QueueService == nil {
 				return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
 			}
@@ -746,12 +976,6 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			case "kill":
 				jobType = queue.JobServerKill
 			}
-			idempotencyKey := strings.TrimSpace(c.Get("Idempotency-Key"))
-			if idempotencyKey != "" {
-				idempotencyKey = "power:" + c.Params("id") + ":" + req.Signal + ":" + idempotencyKey
-			}
-			ctx, cancel := requestContext()
-			defer cancel()
 			job, err := cfg.QueueService.DispatchIdempotent(ctx, idempotencyKey, jobType, c.Params("id"), "", map[string]any{"signal": req.Signal}, 100)
 			if err != nil {
 				return fiber.NewError(fiber.StatusServiceUnavailable, err.Error())
@@ -769,17 +993,61 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	})
 
 	protected.Get("/operations/:id", func(c *fiber.Ctx) error {
+		ctx, cancel := requestContext()
+		defer cancel()
+		// Deny by default: an operation is only returned after a positive
+		// authorization check for the caller. Previously the ownership check was
+		// nested inside `resourceType == "server"` conditionals, so operations on
+		// any other resource type (or with a blank resource id) leaked to every
+		// authenticated caller.
+		claims, ok := c.Locals("user").(tokenClaims)
+		if !ok {
+			return fiber.NewError(fiber.StatusUnauthorized, "missing session")
+		}
+		authorize := func(resourceType, resourceID string) error {
+			if claims.Role == "admin" {
+				return nil
+			}
+			if resourceType != "server" || resourceID == "" || cfg.Store == nil {
+				// No server to positively authorize against — withhold it.
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			checkCtx, checkCancel := requestContext()
+			defer checkCancel()
+			allowed, checkErr := cfg.Store.UserCanAccessServer(checkCtx, resourceID, claims.Sub, claims.Role, "")
+			if checkErr != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, "failed to check access: "+checkErr.Error())
+			}
+			if !allowed {
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			return nil
+		}
+		if cfg.OperationService != nil {
+			op, err := cfg.OperationService.Get(ctx, c.Params("id"))
+			if err != nil {
+				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			}
+			if op == nil {
+				return fiber.NewError(fiber.StatusNotFound, "operation not found")
+			}
+			if err := authorize(op.ResourceType, op.ResourceID); err != nil {
+				return err
+			}
+			return c.JSON(op)
+		}
 		if cfg.QueueService == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "durable operation service is required")
 		}
-		ctx, cancel := requestContext()
-		defer cancel()
 		job, err := cfg.QueueService.Get(ctx, c.Params("id"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		if job == nil {
 			return fiber.NewError(fiber.StatusNotFound, "operation not found")
+		}
+		if err := authorize("server", job.ServerID); err != nil {
+			return err
 		}
 		return c.JSON(job)
 	})
@@ -798,7 +1066,9 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		if cfg.Store != nil {
-			cfg.Store.DispatchWebhookEvent("server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")})
+			if err := cfg.Store.DispatchWebhookEvent(c.Context(), "server:installed", map[string]any{"subject_type": "server", "subject_id": c.Params("id")}); err != nil {
+				slog.Error("failed to dispatch server:installed webhook event", "server", c.Params("id"), "error", err.Error())
+			}
 		}
 		return c.Status(fiber.StatusAccepted).JSON(response)
 	})
@@ -874,7 +1144,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				if store.IsUserLimitError(err) {
 					return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 				}
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
 		var actorID *string
@@ -1072,14 +1342,16 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		var body struct {
 			Action string `json:"action"`
 		}
-		_ = c.BodyParser(&body)
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 		switch body.Action {
 		case "suspend", "unsuspend":
 		default:
 			return fiber.NewError(fiber.StatusBadRequest, "action must be suspend or unsuspend")
 		}
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
@@ -1088,39 +1360,48 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			actorID = &claims.Sub
 		}
 		suspended := body.Action == "suspend"
-		if suspended && cfg.Daemon != nil {
-			// Best-effort: stop server processes when suspending.
-			if target, err := cfg.Store.ServerControlTarget(ctx, c.Params("id")); err == nil {
-				_, _ = cfg.Daemon.SendPower(ctx, target.NodeURL, target.NodeToken, target.ServerID, "stop")
-				_ = cfg.Store.SetServerPowerState(ctx, target.ServerID, "stop")
-			}
+		// Suspension is a real operation (flag + stop), not a column update.
+		// The manager rolls the flag back itself when the stop fails.
+		var err error
+		if suspended {
+			err = clusterManager.SuspendServer(ctx, c.Params("id"), actorID)
+		} else {
+			err = clusterManager.UnsuspendServer(ctx, c.Params("id"), actorID)
 		}
-		if err := cfg.Store.SetServerSuspended(ctx, c.Params("id"), suspended, actorID); err != nil {
-			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		if err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true, "suspended": suspended})
 	})
 
-	protected.Post("/servers/:id/suspend", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/servers/:id/suspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.SetServerSuspension(ctx, c.Params("id"), true); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		if err := clusterManager.SuspendServer(ctx, c.Params("id"), actorID); err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
 
-	protected.Post("/servers/:id/unsuspend", requireRole("admin"), func(c *fiber.Ctx) error {
-		if cfg.Store == nil {
-			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+	protected.Post("/servers/:id/unsuspend", requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || clusterManager == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and runtime lifecycle service are required")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		if err := cfg.Store.SetServerSuspension(ctx, c.Params("id"), false); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		if err := clusterManager.UnsuspendServer(ctx, c.Params("id"), actorID); err != nil {
+			return mapDaemonError(err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -1161,7 +1442,29 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		return c.JSON(stats)
+		// The lifecycle fields the node reported are passed through so a caller
+		// can tell a running workload at rest from a stopped one. Anything the
+		// node did not report is omitted, never defaulted: an absent status is
+		// unknown, and an absent uptime is not zero uptime.
+		payload := fiber.Map{
+			"cpuPercent":     stats.CPUPercent,
+			"memoryBytes":    stats.MemoryBytes,
+			"memoryLimit":    stats.MemoryLimit,
+			"networkRxBytes": stats.NetworkRxBytes,
+			"networkTxBytes": stats.NetworkTxBytes,
+			"exists":         stats.Exists,
+			"running":        stats.Running,
+		}
+		if stats.Status != "" {
+			payload["status"] = stats.Status
+		}
+		if !stats.StartedAt.IsZero() {
+			payload["startedAt"] = stats.StartedAt.UTC().Format(time.RFC3339Nano)
+		}
+		if uptime, ok := stats.UptimeMS(); ok {
+			payload["uptimeMs"] = uptime
+		}
+		return c.JSON(payload)
 	})
 
 	protected.Get("/servers/:id/logs", requireServerPermission(cfg, store.PermWebsocketConnect), func(c *fiber.Ctx) error {
@@ -1275,7 +1578,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/startup/image", requireServerPermission(cfg, store.PermStartupDockerImage), func(c *fiber.Ctx) error {
@@ -1301,7 +1604,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Get("/servers/:id/databases", requireServerPermission(cfg, store.PermDatabaseRead), func(c *fiber.Ctx) error {
@@ -1346,7 +1649,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				if store.IsUserLimitError(err) {
 					return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 				}
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
 		var actorID *string
@@ -1584,7 +1887,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		total, err := cfg.Store.CountBackups(ctx, c.Params("id"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{
 			"data": backups,
@@ -1598,6 +1901,15 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	})
 
 	protected.Get("/servers/:id/backups/:backupName", requireServerPermission(cfg, store.PermBackupRead), func(c *fiber.Ctx) error {
+		// Reserved sub-paths registered by other registrars (policies,
+		// download, verify, storage) share this prefix. Fiber matches routes
+		// in registration order, so without this guard "policies" would be
+		// captured as a backup name and reported 404 here instead of reaching
+		// its real handler.
+		switch c.Params("backupName") {
+		case "policies", "download", "verify", "storage":
+			return c.Next()
+		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
@@ -1626,7 +1938,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 				if store.IsUserLimitError(err) {
 					return fiber.NewError(fiber.StatusUnprocessableEntity, err.Error())
 				}
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 		}
 		// Enforce backup rate limit per server
@@ -1643,16 +1955,18 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if limit > 0 {
 			count, err := cfg.Store.CountCompletedBackups(ctx, c.Params("id"))
 			if err != nil {
-				return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+				return respondInternalError(c, err)
 			}
 			if count >= limit {
 				return fiber.NewError(fiber.StatusConflict, "backup limit reached")
 			}
 		}
 		var req struct {
-			IgnoredFiles []string `json:"ignored_files"`
+			IgnoredFiles []string `json:"ignored"`
 		}
-		_ = c.BodyParser(&req)
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
 
 		target, err := cfg.Store.ServerControlTarget(ctx, c.Params("id"))
 		if err != nil {
@@ -1673,43 +1987,39 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusInternalServerError, storeErr.Error())
 		}
 
-		// Initiate the backup on the daemon. The daemon will call back via
-		// /api/remote/backups/:backup when the operation completes.
-		backupCtx, backupCancel := context.WithTimeout(context.Background(), 15*time.Minute)
-		defer backupCancel()
-		backup, daemonErr := cfg.Daemon.CreateBackup(backupCtx, target.NodeURL, target.NodeToken, target.ServerID, req.IgnoredFiles)
-		if daemonErr != nil {
-			// Mark the pending record as failed so it does not hang indefinitely.
-			now := time.Now().UTC()
-			_, _ = cfg.Store.UpsertBackup(ctx, target.ServerID, store.UpsertBackupRequest{
-				UUID:        stored.UUID,
-				Name:        stored.Name,
-				Status:      "failed",
-				CompletedAt: &now,
-			}, actorID)
-			return fiber.NewError(fiber.StatusBadGateway, daemonErr.Error())
-		}
-		completedAt := time.Now().UTC()
-		if backup.Completed != "" {
-			if parsed, parseErr := time.Parse(time.RFC3339, backup.Completed); parseErr == nil {
-				completedAt = parsed
+		// Backups can legitimately run for many minutes. Return the durable
+		// pending record immediately and reconcile completion asynchronously;
+		// Beacon's signed callback remains the second reconciliation path.
+		ignoredFiles := append([]string(nil), req.IgnoredFiles...)
+		go func() {
+			backupCtx, backupCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+			defer backupCancel()
+			backup, daemonErr := cfg.Daemon.CreateBackup(backupCtx, target.NodeURL, target.NodeToken, target.ServerID, ignoredFiles)
+			persistCtx, persistCancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer persistCancel()
+			if daemonErr != nil {
+				now := time.Now().UTC()
+				if _, upsertErr := cfg.Store.UpsertBackup(persistCtx, target.ServerID, store.UpsertBackupRequest{
+					UUID: stored.UUID, Name: stored.Name, Status: "failed", CompletedAt: &now,
+				}, actorID); upsertErr != nil {
+					slog.Error("failed to mark backup as failed", "server", target.ServerID, "error", upsertErr)
+				}
+				return
 			}
-		}
-		// Update the pending record with the daemon result.
-		updated, updateErr := cfg.Store.UpsertBackup(ctx, target.ServerID, store.UpsertBackupRequest{
-			UUID:        backup.UUID,
-			Name:        backup.Name,
-			Checksum:    backup.Checksum,
-			Size:        backup.Size,
-			Status:      "completed",
-			CompletedAt: &completedAt,
-		}, actorID)
-		if updateErr != nil {
-			// The backup was created on the daemon but we failed to persist.
-			// The daemon callback will reconcile this on retry.
-			return c.Status(fiber.StatusCreated).JSON(stored)
-		}
-		return c.Status(fiber.StatusCreated).JSON(updated)
+			completedAt := time.Now().UTC()
+			if backup.Completed != "" {
+				if parsed, parseErr := time.Parse(time.RFC3339, backup.Completed); parseErr == nil {
+					completedAt = parsed
+				}
+			}
+			if _, updateErr := cfg.Store.UpsertBackup(persistCtx, target.ServerID, store.UpsertBackupRequest{
+				UUID: backup.UUID, Name: backup.Name, Checksum: backup.Checksum, Size: backup.Size,
+				Status: "completed", CompletedAt: &completedAt,
+			}, actorID); updateErr != nil {
+				slog.Error("failed to persist completed backup", "server", target.ServerID, "error", updateErr)
+			}
+		}()
+		return c.Status(fiber.StatusAccepted).JSON(stored)
 	})
 
 	protected.Get("/servers/:id/backups/download", requireServerPermission(cfg, store.PermBackupDownload), func(c *fiber.Ctx) error {
@@ -1733,7 +2043,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		defer body.Close()
 		c.Set("Content-Type", "application/zip")
-		c.Set("Content-Disposition", `attachment; filename="`+c.Query("name")+`"`)
+		c.Set("Content-Disposition", `attachment; filename="`+sanitizeFilename(c.Query("name"))+`"`)
 		return c.SendStream(body)
 	})
 
@@ -1758,20 +2068,171 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		if _, err := cfg.Store.GetBackupByName(ctx, target.ServerID, body.Name); err != nil {
+		backup, err := resolveBackupName(ctx, cfg.Store, target.ServerID, body.Name)
+		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "backup not found")
 		}
-		_ = cfg.Store.MarkBackupStatus(ctx, target.ServerID, body.Name, "restoring", actorID)
+		if backup.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup status is %s, cannot restore", backup.Status)
+		}
+		_ = cfg.Store.MarkBackupStatus(ctx, target.ServerID, backup.Name, "restoring", actorID)
 		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 15*time.Minute)
 		defer restoreCancel()
-		if err := cfg.Daemon.RestoreBackup(restoreCtx, target.NodeURL, target.NodeToken, target.ServerID, body.Name, body.Truncate); err != nil {
-			_ = cfg.Store.MarkBackupStatus(ctx, target.ServerID, body.Name, "restore_failed", actorID)
+		if err := cfg.Daemon.RestoreBackup(restoreCtx, target.NodeURL, target.NodeToken, target.ServerID, backup.Name, body.Truncate); err != nil {
+			_ = cfg.Store.MarkBackupStatus(ctx, target.ServerID, backup.Name, "restore_failed", actorID)
 			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
-		if err := cfg.Store.MarkBackupStatus(ctx, target.ServerID, body.Name, "restored", actorID); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		if err := cfg.Store.MarkBackupStatus(ctx, target.ServerID, backup.Name, "restored", actorID); err != nil {
+			return respondInternalError(c, err)
 		}
-		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true, "name": body.Name, "status": "restored"})
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true, "name": backup.Name, "status": "restored"})
+	})
+
+	protected.Get("/servers/:id/backups/verify", requireServerPermission(cfg, store.PermBackupRead), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.Daemon == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and daemon are required")
+		}
+		name := c.Query("name")
+		if name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		target, err := cfg.Store.ServerControlTarget(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		}
+		b, err := cfg.Store.GetBackupByName(ctx, target.ServerID, name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup is not in completed state")
+		}
+		verifyCtx, verifyCancel := context.WithTimeout(context.Background(), 5*time.Minute)
+		defer verifyCancel()
+		backups, err := cfg.Daemon.ListBackups(verifyCtx, target.NodeURL, target.NodeToken, target.ServerID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, fmt.Sprintf("failed to list backups on daemon: %v", err))
+		}
+		var found *daemon.BackupEntry
+		for i := range backups {
+			if backups[i].Name == name {
+				found = &backups[i]
+				break
+			}
+		}
+		if found == nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found on daemon")
+		}
+		verified := found.Status == "completed" && found.Size > 0 && found.Checksum != ""
+		checksumMatch := false
+		if b.Checksum != "" && found.Checksum != "" {
+			checksumMatch = strings.EqualFold(b.Checksum, found.Checksum)
+			verified = verified && checksumMatch
+		}
+		return c.JSON(fiber.Map{
+			"ok":             true,
+			"name":           name,
+			"verified":       verified,
+			"checksumMatch":  checksumMatch,
+			"dbChecksum":     b.Checksum,
+			"daemonChecksum": found.Checksum,
+			"daemonSize":     found.Size,
+			"dbSize":         b.Size,
+			"daemonStatus":   found.Status,
+		})
+	})
+
+	protected.Get("/servers/:id/backups/storage/download", requireServerPermission(cfg, store.PermBackupDownload), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.BackupSvc == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres and backup service are required")
+		}
+		name := c.Query("name")
+		if name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		b, err := cfg.Store.GetBackupByName(ctx, c.Params("id"), name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup is not in completed state")
+		}
+		downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer downloadCancel()
+		storagePath := "backups/" + c.Params("id") + "/" + name
+		data, err := cfg.BackupSvc.DownloadFromStorage(downloadCtx, "", storagePath)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		c.Set("Content-Type", "application/octet-stream")
+		c.Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s"`, sanitizeFilename(name)))
+		c.Set("Content-Length", strconv.Itoa(len(data)))
+		return c.Send(data)
+	})
+
+	protected.Post("/servers/:id/backups/storage/restore", requireServerPermission(cfg, store.PermBackupRestore), func(c *fiber.Ctx) error {
+		if cfg.Store == nil || cfg.BackupSvc == nil || cfg.Daemon == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres, backup service, and daemon are required")
+		}
+		var body struct {
+			Name     string `json:"name"`
+			Truncate bool   `json:"truncate"`
+		}
+		if err := c.BodyParser(&body); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if body.Name == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "backup name is required")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		serverID := c.Params("id")
+		b, err := cfg.Store.GetBackupByName(ctx, serverID, body.Name)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "backup not found")
+		}
+		if b.Status != "completed" {
+			return fiber.NewError(fiber.StatusPreconditionFailed, "backup status is %s, cannot restore", b.Status)
+		}
+		target, err := cfg.Store.ServerControlTarget(ctx, serverID)
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "server not found")
+		}
+		var actorID *string
+		if claims, ok := c.Locals("user").(tokenClaims); ok {
+			actorID = &claims.Sub
+		}
+		downloadCtx, downloadCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer downloadCancel()
+		storagePath := "backups/" + serverID + "/" + b.Name
+		data, err := cfg.BackupSvc.DownloadFromStorage(downloadCtx, "", storagePath)
+		if err != nil {
+			return fiber.NewError(fiber.StatusBadGateway, fmt.Sprintf("download from storage: %v", err))
+		}
+		if err := cfg.BackupSvc.VerifyChecksum(data, b.Checksum); err != nil {
+			return fiber.NewError(fiber.StatusPreconditionFailed, fmt.Sprintf("checksum verification failed: %v", err))
+		}
+		_ = cfg.Store.MarkBackupStatus(ctx, serverID, b.Name, "restoring", actorID)
+		restoreCtx, restoreCancel := context.WithTimeout(context.Background(), 15*time.Minute)
+		defer restoreCancel()
+		if err := cfg.Daemon.RestoreBackup(restoreCtx, target.NodeURL, target.NodeToken, target.ServerID, b.Name, body.Truncate); err != nil {
+			_ = cfg.Store.MarkBackupStatus(ctx, serverID, b.Name, "restore_failed", actorID)
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		}
+		if err := cfg.Store.MarkBackupStatus(ctx, serverID, b.Name, "restored", actorID); err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{
+			"ok":       true,
+			"name":     b.Name,
+			"status":   "restored",
+			"verified": true,
+			"size":     len(data),
+		})
 	})
 
 	protected.Delete("/servers/:id/backups", requireServerPermission(cfg, store.PermBackupDelete), func(c *fiber.Ctx) error {
@@ -1792,19 +2253,30 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		if _, err := cfg.Store.GetBackupByName(ctx, target.ServerID, name); err != nil {
+		backup, err := resolveBackupName(ctx, cfg.Store, target.ServerID, name)
+		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "backup not found")
 		}
-		if err := cfg.Daemon.DeleteBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, name); err != nil {
-			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		// Only completed backups have an archive on the daemon; pending or
+		// failed records exist solely in the database and are removed below.
+		if backup.Status == "completed" {
+			if err := cfg.Daemon.DeleteBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, backup.Name); err != nil {
+				return fiber.NewError(fiber.StatusBadGateway, err.Error())
+			}
 		}
-		if err := cfg.Store.DeleteBackup(ctx, target.ServerID, name, actorID); err != nil {
+		if err := cfg.Store.DeleteBackup(ctx, target.ServerID, backup.Name, actorID); err != nil {
 			if err.Error() == "backup is locked and cannot be deleted" {
 				return fiber.NewError(fiber.StatusForbidden, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
-		return c.JSON(fiber.Map{"ok": true, "name": name})
+		// The client identifier may reference a legacy row that stores the
+		// same backup under the other suffix form; drop it so no ghost row
+		// lingers after the archive is gone.
+		if name != backup.Name {
+			_ = cfg.Store.DeleteBackup(ctx, target.ServerID, name, actorID)
+		}
+		return c.JSON(fiber.Map{"ok": true, "name": backup.Name})
 	})
 
 	// Backup lock/unlock endpoints
@@ -1827,7 +2299,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			actorID = &claims.Sub
 		}
 		if err := cfg.Store.LockBackup(ctx, target.ServerID, name, actorID); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true, "name": name, "locked": true})
 	})
@@ -1851,7 +2323,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			actorID = &claims.Sub
 		}
 		if err := cfg.Store.UnlockBackup(ctx, target.ServerID, name, actorID); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true, "name": name, "locked": false})
 	})
@@ -1891,7 +2363,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			if err.Error() == "a backup with the new name already exists" {
 				return fiber.NewError(fiber.StatusConflict, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true, "name": req.Name, "previousName": name})
 	})
@@ -1924,7 +2396,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		// Perform cleanup
 		deleted, err := cfg.Store.CleanupOldBackupsForServer(ctx, target.ServerID, settings.BackupRetentionDays, backupLimit)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 
 		return c.JSON(fiber.Map{"ok": true, "deleted": deleted})
@@ -1945,7 +2417,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 
 		invitations, err := cfg.Store.ListSubuserInvitations(ctx, target.ServerID)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 
 		return c.JSON(invitations)
@@ -1976,7 +2448,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		// Create invitation with 7-day expiration
 		invitation, err := cfg.Store.CreateSubuserInvitation(ctx, target.ServerID, req, actorID, 7*24*time.Hour)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
 
 		return c.Status(fiber.StatusCreated).JSON(invitation)
@@ -2582,7 +3054,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		targetDirectory, fileName := "", ""
 		if destination != "" {
 			cleaned := path.Clean(destination)
-			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "\\") {
+			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "..") || strings.Contains(cleaned, "\\") {
 				return fiber.NewError(fiber.StatusBadRequest, "invalid destination path")
 			}
 			targetDirectory = path.Dir(cleaned)
@@ -2636,28 +3108,50 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
-		if _, err := cfg.Store.GetBackupByName(ctx, target.ServerID, name); err != nil {
+		backup, err := resolveBackupName(ctx, cfg.Store, target.ServerID, name)
+		if err != nil {
 			return fiber.NewError(fiber.StatusNotFound, "backup not found")
 		}
-		if err := cfg.Daemon.DeleteBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, name); err != nil {
-			return fiber.NewError(fiber.StatusBadGateway, err.Error())
+		// Only completed backups have an archive on the daemon; pending or
+		// failed records exist solely in the database and are removed below.
+		if backup.Status == "completed" {
+			if err := cfg.Daemon.DeleteBackup(ctx, target.NodeURL, target.NodeToken, target.ServerID, backup.Name); err != nil {
+				return fiber.NewError(fiber.StatusBadGateway, err.Error())
+			}
 		}
-		if err := cfg.Store.DeleteBackup(ctx, target.ServerID, name, actorID); err != nil {
+		if err := cfg.Store.DeleteBackup(ctx, target.ServerID, backup.Name, actorID); err != nil {
 			if err.Error() == "backup is locked and cannot be deleted" {
 				return fiber.NewError(fiber.StatusForbidden, err.Error())
 			}
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondInternalError(c, err)
 		}
-		return c.JSON(fiber.Map{"ok": true, "name": name})
+		// The client identifier may reference a legacy row that stores the
+		// same backup under the other suffix form; drop it so no ghost row
+		// lingers after the archive is gone.
+		if name != backup.Name {
+			_ = cfg.Store.DeleteBackup(ctx, target.ServerID, name, actorID)
+		}
+		return c.JSON(fiber.Map{"ok": true, "name": backup.Name})
 	})
 
 	protected.Get("/admin/audit", requireRole("admin"), requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		limit := c.QueryInt("limit", 50)
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+		offset := c.QueryInt("offset", 0)
+		if offset < 0 {
+			offset = 0
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		events, err := cfg.Store.ListAudit(ctx)
+		events, err := cfg.Store.ListAudit(ctx, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -2670,24 +3164,46 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		}
 		query := strings.TrimSpace(c.Query("q"))
 		if query == "" {
-			return c.JSON([]store.User{})
+			return c.JSON([]PublicUser{})
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		users, _, err := cfg.Store.SearchUsers(ctx, query, 1, 25)
-		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+		page := c.QueryInt("page", 1)
+		if page < 1 {
+			page = 1
 		}
-		return c.JSON(users)
+		perPage := c.QueryInt("perPage", 25)
+		if perPage <= 0 {
+			perPage = 25
+		}
+		if perPage > 100 {
+			perPage = 100
+		}
+		users, _, err := cfg.Store.SearchUsers(ctx, query, page, perPage)
+		if err != nil {
+			return respondInternalError(c, err)
+		}
+		return c.JSON(ToPublicUsers(users))
 	})
 
 	protected.Get("/audit", requireRole("admin"), requireAdminScope("audit.read"), func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
+		limit := c.QueryInt("limit", 50)
+		if limit <= 0 {
+			limit = 50
+		}
+		if limit > 200 {
+			limit = 200
+		}
+		offset := c.QueryInt("offset", 0)
+		if offset < 0 {
+			offset = 0
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
-		events, err := cfg.Store.ListAudit(ctx)
+		events, err := cfg.Store.ListAudit(ctx, limit, offset)
 		if err != nil {
 			return err
 		}
@@ -2718,7 +3234,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		targetDirectory, fileName := "", ""
 		if destination != "" {
 			cleaned := path.Clean(destination)
-			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "\\") {
+			if cleaned == "." || cleaned == "/" || strings.HasPrefix(cleaned, "/") || strings.HasPrefix(cleaned, "../") || strings.Contains(cleaned, "..") || strings.Contains(cleaned, "\\") {
 				return fiber.NewError(fiber.StatusBadRequest, "invalid destination path")
 			}
 			targetDirectory = path.Dir(cleaned)
@@ -2797,7 +3313,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/build", mutationLimiter, requireRole("admin"), requireAdminScope("servers.write"), func(c *fiber.Ctx) error {
@@ -2833,7 +3349,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Patch("/servers/:id/startup", mutationLimiter, requireServerPermission(cfg, store.PermStartupUpdate), func(c *fiber.Ctx) error {
@@ -2862,7 +3378,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if clusterManager != nil && (req.DockerImage != nil || req.StartupCommand != nil) {
 			_ = clusterManager.SyncServerConfiguration(ctx, c.Params("id"))
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Post("/servers/:id/settings/rename", mutationLimiter, requireServerPermission(cfg, store.PermSettingsRename), func(c *fiber.Ctx) error {
@@ -2890,7 +3406,7 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, err.Error())
 		}
-		return c.JSON(server)
+		return c.JSON(server.ToDTO())
 	})
 
 	protected.Get("/servers/:id/flags", requireServerAccess(cfg), func(c *fiber.Ctx) error {
@@ -2911,8 +3427,8 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}
 		var req struct {
-			AutoStart   *bool `json:"auto_start"`
-			AutoRestart *bool `json:"auto_restart"`
+			AutoStart   *bool `json:"autoStart"`
+			AutoRestart *bool `json:"autoRestart"`
 		}
 		if err := c.BodyParser(&req); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
@@ -2935,7 +3451,51 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		return c.JSON(current)
 	})
 
-	protected.Post("/servers/:id/operations/run", mutationLimiter, requireServerPermission(cfg, store.PermSettingsReinstall), func(c *fiber.Ctx) error {
-		return fiber.NewError(fiber.StatusNotImplemented, "operation pipelines are disabled until durable execution, per-step authorization, and failure reporting are implemented")
+	protected.Post("/servers/:id/operations/run", mutationLimiter, func(c *fiber.Ctx) error {
+		if cfg.OperationService == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "operation service is not available")
+		}
+		var req struct {
+			Operations []struct {
+				Action string         `json:"action"`
+				Args   map[string]any `json:"args"`
+			} `json:"operations"`
+		}
+		if err := c.BodyParser(&req); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
+		}
+		if len(req.Operations) == 0 || len(req.Operations) > 20 {
+			return fiber.NewError(fiber.StatusUnprocessableEntity, "operations must contain between 1 and 20 steps")
+		}
+		ctx, cancel := requestContext()
+		defer cancel()
+		idempotencyPrefix := strings.TrimSpace(c.Get("Idempotency-Key"))
+		operations := make([]any, 0, len(req.Operations))
+		for index, step := range req.Operations {
+			action := strings.ToLower(strings.TrimSpace(step.Action))
+			requiredPermission := store.PermControlStart
+			switch action {
+			case "stop", "kill":
+				requiredPermission = store.PermControlStop
+			case "restart":
+				requiredPermission = store.PermControlRestart
+			case "start":
+			default:
+				return fiber.NewError(fiber.StatusUnprocessableEntity, "unsupported operation action: "+action)
+			}
+			if err := checkServerPermission(c, cfg, requiredPermission); err != nil {
+				return err
+			}
+			key := ""
+			if idempotencyPrefix != "" {
+				key = fmt.Sprintf("%s:%d:%s", idempotencyPrefix, index, action)
+			}
+			op, err := cfg.OperationService.DispatchPower(ctx, c.Params("id"), action, key)
+			if err != nil {
+				return respondInternalError(c, err)
+			}
+			operations = append(operations, op)
+		}
+		return c.Status(fiber.StatusAccepted).JSON(fiber.Map{"ok": true, "operations": operations})
 	})
 }

@@ -3,14 +3,77 @@ package main
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
+
+	"gamepanel/beacon/internal/runtime"
+	daemonhttp "gamepanel/beacon/internal/server"
 )
 
 type testPinger struct {
 	called bool
 	err    error
 }
+
+type recoveryRuntime struct {
+	starts   atomic.Int32
+	restarts atomic.Int32
+}
+
+func (*recoveryRuntime) Close() error { return nil }
+
+type recoveryConsole struct{}
+
+func (*recoveryConsole) Read([]byte) (int, error)    { return 0, io.EOF }
+func (*recoveryConsole) Write(p []byte) (int, error) { return len(p), nil }
+func (*recoveryConsole) Close() error                { return nil }
+
+func (*recoveryRuntime) Create(context.Context, runtime.CreateRequest) error { return nil }
+func (*recoveryRuntime) Install(context.Context, runtime.InstallRequest) (runtime.InstallResult, error) {
+	return runtime.InstallResult{}, nil
+}
+func (*recoveryRuntime) Inspect(context.Context, string) (runtime.ContainerState, error) {
+	return runtime.ContainerState{Exists: true, Running: true}, nil
+}
+func (*recoveryRuntime) List(context.Context) ([]runtime.ContainerState, error) { return nil, nil }
+func (r *recoveryRuntime) Start(context.Context, string) error {
+	r.starts.Add(1)
+	return nil
+}
+func (*recoveryRuntime) SendCommand(context.Context, string, string) error { return nil }
+func (*recoveryRuntime) Stop(context.Context, string) error                { return nil }
+func (*recoveryRuntime) WaitForStop(context.Context, string, time.Duration, bool) error {
+	return nil
+}
+func (*recoveryRuntime) Kill(context.Context, string) error           { return nil }
+func (*recoveryRuntime) Signal(context.Context, string, string) error { return nil }
+func (r *recoveryRuntime) Restart(context.Context, string) error {
+	r.restarts.Add(1)
+	return nil
+}
+func (*recoveryRuntime) Stats(context.Context, string) (runtime.Stats, error) {
+	return runtime.Stats{}, nil
+}
+func (*recoveryRuntime) Logs(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) LogsStream(context.Context, string, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) StatsStream(context.Context, string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("")), nil
+}
+func (*recoveryRuntime) AttachConsole(context.Context, string) (runtime.ConsoleSession, error) {
+	return &recoveryConsole{}, nil
+}
+func (*recoveryRuntime) Delete(context.Context, string) error { return nil }
 
 func (p *testPinger) Ping(context.Context) error {
 	p.called = true
@@ -77,6 +140,35 @@ func TestPanelServerStateExtractsReconstructionFlags(t *testing.T) {
 	}
 }
 
+func TestRecoverServersFromDiskRestoresPowerOperations(t *testing.T) {
+	const serverID = "123e4567-e89b-12d3-a456-426614174099"
+	dataDir := t.TempDir()
+	configDir := filepath.Join(dataDir, serverID, ".config")
+	if err := os.MkdirAll(configDir, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "server.json"), []byte(`{"settings":{"build":{"disk_space":64}},"installed":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	rt := &recoveryRuntime{}
+	server, handler := daemonhttp.NewServer(rt, dataDir)
+	defer server.Shutdown()
+
+	if err := recoverServersFromDisk(context.Background(), dataDir, server); err != nil {
+		t.Fatalf("recover servers: %v", err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/servers/"+serverID+"/power", strings.NewReader(`{"signal":"restart"}`))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected recovered server power operation to succeed, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rt.starts.Load() != 1 {
+		t.Fatalf("expected recovered restart operation to start the container once, got %d", rt.starts.Load())
+	}
+}
+
 func TestDockerHeartbeatStatusRejectsMissingRuntime(t *testing.T) {
 	status, detail := runtimeHeartbeatStatus(nil, "docker")
 	if status != "error" || detail != "docker runtime unavailable" {
@@ -101,5 +193,60 @@ func TestBuildBackupAdapterRejectsUnknownAdapter(t *testing.T) {
 	adapter, err := buildBackupAdapter(t.TempDir())
 	if err == nil || adapter != nil {
 		t.Fatalf("unknown adapter must fail closed: adapter=%T err=%v", adapter, err)
+	}
+}
+
+func TestSFTPHostKeyPassphraseExplicitEnvWins(t *testing.T) {
+	passphrase, err := sftpHostKeyPassphrase(t.TempDir(), "0123456789abcdef0123456789abcdef")
+	if err != nil {
+		t.Fatalf("explicit passphrase rejected: %v", err)
+	}
+	if passphrase != "0123456789abcdef0123456789abcdef" {
+		t.Fatalf("explicit passphrase not preserved: %q", passphrase)
+	}
+}
+
+func TestSFTPHostKeyPassphraseRejectsShortEnv(t *testing.T) {
+	if _, err := sftpHostKeyPassphrase(t.TempDir(), "short"); err == nil {
+		t.Fatal("short explicit passphrase must be rejected")
+	}
+}
+
+func TestSFTPHostKeyPassphraseGeneratedAndStable(t *testing.T) {
+	dataDir := t.TempDir()
+	first, err := sftpHostKeyPassphrase(dataDir, "")
+	if err != nil {
+		t.Fatalf("first-run generation failed: %v", err)
+	}
+	if len(first) < 16 {
+		t.Fatalf("generated passphrase too short: %q", first)
+	}
+	second, err := sftpHostKeyPassphrase(dataDir, "")
+	if err != nil {
+		t.Fatalf("subsequent load failed: %v", err)
+	}
+	if first != second {
+		t.Fatal("passphrase must be stable across daemon restarts")
+	}
+	info, err := os.Stat(filepath.Join(dataDir, ".sftp", "host-key-passphrase"))
+	if err != nil {
+		t.Fatalf("secret file missing: %v", err)
+	}
+	if info.Mode().Perm() != 0o600 {
+		t.Fatalf("secret file permissions must be 0600, got %o", info.Mode().Perm())
+	}
+}
+
+func TestSFTPHostKeyPassphraseRejectsCorruptStoredSecret(t *testing.T) {
+	dataDir := t.TempDir()
+	secretPath := filepath.Join(dataDir, ".sftp", "host-key-passphrase")
+	if err := os.MkdirAll(filepath.Dir(secretPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(secretPath, []byte("tiny\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sftpHostKeyPassphrase(dataDir, ""); err == nil {
+		t.Fatal("corrupt stored secret must be rejected")
 	}
 }

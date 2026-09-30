@@ -5,7 +5,9 @@ import (
 	"path/filepath"
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 func TestNewKubernetesRuntimeFailsInCluster(t *testing.T) {
@@ -86,8 +88,9 @@ func TestBuildResourceLimits(t *testing.T) {
 
 	req2 := CreateRequest{CPUShares: 512}
 	limits2 := buildResourceLimits(req2)
-	if limits2.Cpu().Cmp(resource.MustParse("512m")) != 0 {
-		t.Fatalf("CPU limit from shares = %v, want 512m", limits2.Cpu())
+	// CPUShares are a relative weight (1024 == 1 CPU), not millicores.
+	if limits2.Cpu().Cmp(resource.MustParse("500m")) != 0 {
+		t.Fatalf("CPU limit from shares = %v, want 500m", limits2.Cpu())
 	}
 }
 
@@ -111,11 +114,15 @@ func TestIsNotFound(t *testing.T) {
 	if isNotFound(nil) {
 		t.Fatal("nil should not be not-found")
 	}
-	if !isNotFound(errors.New("not found")) {
-		t.Fatal("'not found' message should match")
+	// isNotFound is deliberately typed (apierrors.IsNotFound): a substring
+	// match on arbitrary error text would treat "operation not found in
+	// cache"-style transport errors as a missing pod and take idempotent
+	// success paths. Only a real API NotFound qualifies.
+	if !isNotFound(apierrors.NewNotFound(schema.GroupResource{Group: "", Resource: "pods"}, "forge-s1")) {
+		t.Fatal("typed NotFound should match")
 	}
-	if !isNotFound(errors.New(`"not found"`)) {
-		t.Fatal("quoted 'not found' message should match")
+	if isNotFound(errors.New(`"not found"`)) {
+		t.Fatal("plain-text 'not found' must not match a typed check")
 	}
 	if isNotFound(errors.New("other error")) {
 		t.Fatal("other errors should not match")
@@ -168,7 +175,10 @@ func TestKubernetesValidateCreate(t *testing.T) {
 		{"negative memory", CreateRequest{ServerID: "s1", Image: "nginx", MemoryMB: -1}, true},
 		{"negative swap", CreateRequest{ServerID: "s1", Image: "nginx", SwapMB: -1}, true},
 		{"swap without memory", CreateRequest{ServerID: "s1", Image: "nginx", SwapMB: 512}, true},
-		{"swap with memory", CreateRequest{ServerID: "s1", Image: "nginx", MemoryMB: 1024, SwapMB: 512}, false},
+		// Swap is never honoured by the pod spec (buildResourceLimits maps
+		// CPU/memory only), so any swap request is rejected rather than
+		// silently dropped behind a constrained request.
+		{"swap with memory", CreateRequest{ServerID: "s1", Image: "nginx", MemoryMB: 1024, SwapMB: 512}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

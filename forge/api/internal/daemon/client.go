@@ -6,23 +6,35 @@ import (
 	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"math/big"
+	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
 
 const (
-	maxRetries        = 3
-	baseBackoff       = 500 * time.Millisecond
-	maxBackoff        = 30 * time.Second
-	retryableStatuses = "429,502,503,504"
+	maxRetries     = 3
+	baseBackoff    = 500 * time.Millisecond
+	maxBackoff     = 30 * time.Second
+	defaultTimeout = 30 * time.Second
+	// longTransferTimeout preserves the previous client-wide budget for
+	// streaming transfers (backups, archives, file uploads/downloads), whose
+	// bodies legitimately take longer than an RPC. Callers opt in per
+	// operation via WithTimeout; everything else gets defaultTimeout.
+	longTransferTimeout = 15 * time.Minute
+	// createServerTimeout bounds container creation, which pulls images
+	// server-side and outlives an RPC budget. A caller context deadline
+	// still wins when it is earlier.
+	createServerTimeout = 5 * time.Minute
 )
 
 var ErrMissingNodeToken = errors.New("daemon node token is required")
@@ -61,23 +73,147 @@ func jitter(d time.Duration) time.Duration {
 }
 
 type Client struct {
-	httpClient               *http.Client
-	developmentFallbackToken string
+	// Panel-to-Beacon commands are HTTP only: every method on this client
+	// issues a signed HTTP request to the node. WebSockets carry streams
+	// alone (console/stats/logs/install output, see WebSocketURL and the
+	// realtime proxy) and never commands.
+	httpClient       *http.Client
+	defaultBaseURL   string
+	defaultNodeToken string
+	loopback         bool
 }
 
-func newRetryRoundTripper(base http.RoundTripper) http.RoundTripper {
-	return &retryRoundTripper{base: base}
+func (c *Client) SetDefaultNode(baseURL, nodeToken string) {
+	c.defaultBaseURL = strings.TrimRight(baseURL, "/")
+	c.defaultNodeToken = nodeToken
+}
+
+// WithTimeout returns a copy of the client whose HTTP budget is d. The
+// default client budget (defaultTimeout) suits RPCs; streaming transfers and
+// other long operations opt into a larger (or zero, deadline-free) budget
+// per call without widening every other operation's.
+func (c *Client) WithTimeout(d time.Duration) *Client {
+	if c == nil {
+		return nil
+	}
+	clone := *c
+	if c.httpClient != nil {
+		hc := *c.httpClient
+		hc.Timeout = d
+		clone.httpClient = &hc
+	}
+	return &clone
+}
+
+func (c *Client) Get(ctx context.Context, endpoint string, dest interface{}) error {
+	url := c.defaultBaseURL + endpoint
+	req, err := c.newRequest(ctx, c.defaultNodeToken, http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("GET "+endpoint, res)
+	}
+	return json.NewDecoder(res.Body).Decode(dest)
+}
+
+func (c *Client) Post(ctx context.Context, endpoint string, body, dest interface{}) error {
+	var bodyBytes []byte
+	if body != nil {
+		var err error
+		bodyBytes, err = json.Marshal(body)
+		if err != nil {
+			return err
+		}
+	}
+	url := c.defaultBaseURL + endpoint
+	req, err := c.newRequest(ctx, c.defaultNodeToken, http.MethodPost, url, bodyBytes)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	if len(bodyBytes) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("POST "+endpoint, res)
+	}
+	if dest != nil {
+		return json.NewDecoder(res.Body).Decode(dest)
+	}
+	return nil
+}
+
+func newRetryRoundTripper(base http.RoundTripper, resign func(*http.Request, []byte) error) http.RoundTripper {
+	return &retryRoundTripper{base: base, resign: resign}
 }
 
 type retryRoundTripper struct {
-	base http.RoundTripper
+	base   http.RoundTripper
+	resign func(*http.Request, []byte) error
+}
+
+// beaconDedupedCommandRoute reports whether the daemon records the command id
+// carried by this request, so that replaying it is deduped rather than
+// re-executed. Beacon dedupes exactly one route today: POST /servers/{id}/power
+// reads X-Forge-Command-ID (falling back to Idempotency-Key) and enqueues the
+// command by that id. Every other mutating route ignores the header, so a
+// replay there is a second execution of a create, a delete or a file write
+// whose first attempt may well have landed.
+func beaconDedupedCommandRoute(path string) bool {
+	return strings.HasPrefix(path, "/servers/") && strings.HasSuffix(path, "/power")
+}
+
+// idempotentRequest reports whether replaying the request is safe. Reads
+// always are; a mutating request is replayed only when it carries a command id
+// on the one route the daemon dedupes on. Replaying any other POST/PUT/DELETE
+// after a transport blip would execute the command twice — create, restore,
+// push and file-write operations must never be retried blind, with or without
+// an idempotency header, because the daemon does not consult one.
+func idempotentRequest(req *http.Request) bool {
+	switch req.Method {
+	case http.MethodGet, http.MethodHead:
+		return true
+	}
+	if !beaconDedupedCommandRoute(req.URL.Path) {
+		return false
+	}
+	return req.Header.Get("Idempotency-Key") != "" || req.Header.Get("X-Forge-Command-ID") != ""
+}
+
+// readErrorDetails consumes the bounded error body of a response that is about
+// to be discarded, so the daemon's own explanation survives in the retry
+// exhaustion error instead of being thrown away with the body.
+func readErrorDetails(body io.ReadCloser) string {
+	if body == nil {
+		return ""
+	}
+	raw, err := io.ReadAll(io.LimitReader(body, 4*1024))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(raw))
 }
 
 func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) {
 	var (
-		resp      *http.Response
-		err       error
-		bodyBytes []byte
+		resp        *http.Response
+		err         error
+		bodyBytes   []byte
+		lastStatus  int
+		lastDetails string
+		sawStatus   bool
 	)
 	if req.Body != nil {
 		bodyBytes, err = io.ReadAll(req.Body)
@@ -86,7 +222,11 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 		}
 		req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 	}
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	attempts := 1
+	if idempotentRequest(req) {
+		attempts = maxRetries + 1
+	}
+	for attempt := 0; attempt < attempts; attempt++ {
 		if attempt > 0 {
 			backoff := jitter(baseBackoff * (1 << (attempt - 1)))
 			if backoff > maxBackoff {
@@ -101,41 +241,125 @@ func (r *retryRoundTripper) RoundTrip(req *http.Request) (*http.Response, error)
 			if bodyBytes != nil {
 				req.Body = io.NopCloser(bytes.NewReader(bodyBytes))
 			}
+			// A signed request that reached the daemon has already had its
+			// nonce consumed, so replaying the same signature would be
+			// rejected. Re-sign with a fresh timestamp and nonce instead.
+			if r.resign != nil {
+				if err := r.resign(req, bodyBytes); err != nil {
+					return nil, err
+				}
+			}
 		}
 		resp, err = r.base.RoundTrip(req)
 		if err != nil {
+			if req.Context().Err() != nil {
+				return nil, req.Context().Err()
+			}
 			continue
 		}
 		if !isRetryableStatus(resp.StatusCode) {
 			return resp, nil
 		}
+		if attempts == 1 {
+			// A mutating request without an idempotency key must not be
+			// replayed, but its answer is still an answer: return it open so
+			// the caller maps the status to a typed ResponseError instead of
+			// a retry-budget error that hides what the daemon said.
+			return resp, nil
+		}
+		// Keep what the daemon answered: the retry budget is about to run out
+		// and the last real response is the only evidence of why.
+		lastStatus = resp.StatusCode
+		lastDetails = readErrorDetails(resp.Body)
+		sawStatus = true
 		resp.Body.Close()
 	}
-	if err != nil {
+	if !sawStatus {
+		// Every attempt failed in transport: the transport error is the whole
+		// story, and callers classify on it.
+		if err == nil {
+			err = fmt.Errorf("request failed after %d attempt(s)", attempts)
+		}
 		return nil, err
 	}
-	lastStatus := resp.StatusCode
-	resp.Body.Close()
-	return nil, fmt.Errorf("request failed after %d retries, last status: %d", maxRetries+1, lastStatus)
-}
-
-func NewClient() *Client {
-	return &Client{httpClient: &http.Client{
-		Timeout:   15 * time.Minute,
-		Transport: newRetryRoundTripper(http.DefaultTransport),
-	}}
-}
-
-// NewClientWithDevelopmentFallback preserves local Phase 0 operation for
-// targets created without a stored credential. Production must use NewClient.
-func NewClientWithDevelopmentFallback(nodeToken string) *Client {
-	return &Client{
-		httpClient: &http.Client{
-			Timeout:   15 * time.Minute,
-			Transport: newRetryRoundTripper(http.DefaultTransport),
-		},
-		developmentFallbackToken: strings.TrimSpace(nodeToken),
+	// Exhausted the budget on retryable statuses. Return the typed daemon error
+	// with the last status and the daemon's own body: a plain "failed after N
+	// attempts" string throws away both the status callers map to HTTP codes
+	// and the reason the node gave (docker compose output, quota text).
+	operation := strings.ToLower(req.Method) + " " + req.URL.RequestURI()
+	if err != nil {
+		if lastDetails == "" {
+			lastDetails = err.Error()
+		} else {
+			lastDetails += "; " + err.Error()
+		}
 	}
+	return nil, &ResponseError{
+		Operation:  operation,
+		StatusCode: lastStatus,
+		Details:    fmt.Sprintf("request failed after %d attempt(s): %s", attempts, lastDetails),
+	}
+}
+
+func NewClient(baseURL, nodeToken string) (*Client, error) {
+	nodeToken = strings.TrimSpace(nodeToken)
+	baseURL = strings.TrimSpace(baseURL)
+	if baseURL == "" && nodeToken == "" {
+		client := &Client{}
+		client.httpClient = &http.Client{
+			Timeout:   defaultTimeout,
+			Transport: newRetryRoundTripper(http.DefaultTransport, client.resignRequest),
+		}
+		return client, nil
+	}
+	if nodeToken == "" {
+		return nil, ErrMissingNodeToken
+	}
+	lb := isLoopback(baseURL)
+	if !lb {
+		u, err := url.Parse(baseURL)
+		if err != nil {
+			return nil, fmt.Errorf("invalid base URL: %w", err)
+		}
+		u.Scheme = "https"
+		baseURL = u.String()
+	}
+	var transport *http.Transport
+	if lb {
+		transport = http.DefaultTransport.(*http.Transport).Clone()
+	} else {
+		transport = daemonTransport()
+	}
+	client := &Client{
+		defaultBaseURL:   strings.TrimRight(baseURL, "/"),
+		defaultNodeToken: nodeToken,
+		loopback:         lb,
+	}
+	client.httpClient = &http.Client{
+		Timeout:   defaultTimeout,
+		Transport: newRetryRoundTripper(transport, client.resignRequest),
+	}
+	return client, nil
+}
+
+func isLoopback(rawURL string) bool {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return false
+	}
+	host := strings.TrimSuffix(strings.ToLower(parsed.Hostname()), ".")
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
+}
+
+func daemonTransport() *http.Transport {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.ForceAttemptHTTP2 = true
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	return transport
 }
 
 type PowerResponse struct {
@@ -209,12 +433,24 @@ type ServerConfiguration struct {
 	Config      map[string]any    `json:"config"`
 	Mounts      []Mount           `json:"mounts"`
 	Provider    string            `json:"provider,omitempty"`
+	UID         int               `json:"uid"`
+	GID         int               `json:"gid"`
 }
 
 type Mount struct {
 	Source   string `json:"source"`
 	Target   string `json:"target"`
 	ReadOnly bool   `json:"read_only"`
+}
+
+type MountCleanupRequest struct {
+	Source string `json:"source"`
+}
+
+type MountCleanupResponse struct {
+	OK      bool   `json:"ok"`
+	Removed bool   `json:"removed"`
+	Reason  string `json:"reason,omitempty"`
 }
 
 type InstallRequest struct {
@@ -233,12 +469,48 @@ type InstallResponse struct {
 	Logs     string `json:"logs,omitempty"`
 }
 
+// StatsResponse is Beacon's telemetry answer for a workload. Beacon reports the
+// workload's lifecycle alongside the metrics, because metrics alone cannot say
+// whether a zero reading means idle, stopped or missing. Those fields are
+// carried through verbatim; a beacon that does not send them leaves Status
+// empty, which callers must read as unknown rather than as stopped.
 type StatsResponse struct {
-	CPUPercent     float64 `json:"cpuPercent"`
-	MemoryBytes    uint64  `json:"memoryBytes"`
-	MemoryLimit    uint64  `json:"memoryLimit"`
-	NetworkRxBytes uint64  `json:"networkRxBytes"`
-	NetworkTxBytes uint64  `json:"networkTxBytes"`
+	CPUPercent     float64   `json:"cpuPercent"`
+	MemoryBytes    uint64    `json:"memoryBytes"`
+	MemoryLimit    uint64    `json:"memoryLimit"`
+	NetworkRxBytes uint64    `json:"networkRxBytes"`
+	NetworkTxBytes uint64    `json:"networkTxBytes"`
+	Exists         bool      `json:"exists"`
+	Running        bool      `json:"running"`
+	Status         string    `json:"status,omitempty"`
+	StartedAt      time.Time `json:"startedAt,omitempty"`
+}
+
+// UptimeMS returns how long the workload has been running, and false when that
+// is not knowable — the workload is not running, or the node did not report a
+// start time. A zero uptime is a measurement and must not stand in for one.
+func (s StatsResponse) UptimeMS() (int64, bool) {
+	if !s.Running || s.StartedAt.IsZero() {
+		return 0, false
+	}
+	uptime := time.Since(s.StartedAt).Milliseconds()
+	if uptime < 0 {
+		return 0, false
+	}
+	return uptime, true
+}
+
+// ContainerStateResponse is Beacon's explicit lifecycle answer for a workload.
+// It exists because stats cannot carry state: a stopped container has no
+// stats to stream, so inferring "running" from a successful stats call can
+// never distinguish missing from stopped. Absent (older) beacons return
+// ErrContainerStateUnsupported rather than a guessed zero value.
+type ContainerStateResponse struct {
+	ServerID  string    `json:"serverId"`
+	Exists    bool      `json:"exists"`
+	Running   bool      `json:"running"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"startedAt"`
 }
 
 type FileDownload struct {
@@ -297,6 +569,7 @@ type TransferPushRequest struct {
 }
 
 type BackupEntry struct {
+	BackupID  string `json:"backupId"`
 	UUID      string `json:"uuid"`
 	Name      string `json:"name"`
 	Checksum  string `json:"checksum"`
@@ -335,7 +608,11 @@ func (c *Client) PushTransferSource(ctx context.Context, baseURL, migrationID, c
 	if err != nil {
 		return TransferMetadata{}, err
 	}
-	return c.transferJSON(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/transfers/"+migrationID+"/source/push", credential, body)
+	// The push copies the archive node-to-node server-side and outlives an RPC
+	// budget, so it gets the streaming timeout. Its idempotency key travels as
+	// a header for the daemon's own bookkeeping; the retry transport still never
+	// replays it, because only the power route dedupes command ids.
+	return c.transferJSONWithTimeout(ctx, http.MethodPost, strings.TrimRight(baseURL, "/")+"/api/v1/transfers/"+migrationID+"/source/push", credential, body, longTransferTimeout, push.IdempotencyKey)
 }
 
 func (c *Client) RestoreTransferDestination(ctx context.Context, baseURL, migrationID, credential string) (TransferMetadata, error) {
@@ -358,8 +635,23 @@ func (c *Client) CancelTransfer(ctx context.Context, baseURL, migrationID, crede
 }
 
 func (c *Client) transferJSON(ctx context.Context, method, endpoint, credential string, body []byte) (TransferMetadata, error) {
+	return c.transferJSONWithTimeout(ctx, method, endpoint, credential, body, 0, "")
+}
+
+// transferJSONWithTimeout is transferJSON with an explicit HTTP budget and an
+// optional idempotency key. A zero timeout keeps the client's default RPC
+// budget; a non-empty key travels as Idempotency-Key for the daemon's
+// bookkeeping. It does not license a replay: the retry transport only replays
+// reads and the power route (see idempotentRequest).
+func (c *Client) transferJSONWithTimeout(ctx context.Context, method, endpoint, credential string, body []byte, timeout time.Duration, idempotencyKey string) (TransferMetadata, error) {
 	request, err := http.NewRequestWithContext(ctx, method, endpoint, bytes.NewReader(body))
 	if err != nil {
+		return TransferMetadata{}, err
+	}
+	// A transfer credential is a bearer secret: the same HTTPS-only rules that
+	// guard signed node requests apply here, or the scoped credential would go
+	// out in cleartext on a path newRequest never validates.
+	if err := c.validateNodeURL(request.URL); err != nil {
 		return TransferMetadata{}, err
 	}
 	request.Header.Set("Authorization", "Bearer "+credential)
@@ -367,7 +659,14 @@ func (c *Client) transferJSON(ctx context.Context, method, endpoint, credential 
 	if len(body) > 0 {
 		request.Header.Set("Content-Type", "application/json")
 	}
-	response, err := c.httpClient.Do(request)
+	if strings.TrimSpace(idempotencyKey) != "" {
+		request.Header.Set("Idempotency-Key", strings.TrimSpace(idempotencyKey))
+	}
+	client := c.httpClient
+	if timeout > 0 {
+		client = c.WithTimeout(timeout).httpClient
+	}
+	response, err := client.Do(request)
 	if err != nil {
 		return TransferMetadata{}, err
 	}
@@ -389,16 +688,15 @@ type ResponseError struct {
 }
 
 func (e *ResponseError) Error() string {
-	message := fmt.Sprintf("daemon %s failed with status %d", e.Operation, e.StatusCode)
-	if e.Details != "" {
-		message += ": " + e.Details
-	}
-	return message
+	// Details may contain workload paths or daemon internals. Keep them on the
+	// typed error for trusted logging, but never include them in user-facing
+	// err.Error() strings returned by API handlers.
+	return fmt.Sprintf("daemon %s failed with status %d", e.Operation, e.StatusCode)
 }
 
 func daemonResponseError(operation string, response *http.Response) error {
 	details := ""
-	if body, err := io.ReadAll(io.LimitReader(response.Body, 16*1024)); err == nil {
+	if body, err := io.ReadAll(io.LimitReader(response.Body, 4*1024)); err == nil {
 		details = strings.TrimSpace(string(body))
 	}
 	return &ResponseError{Operation: operation, StatusCode: response.StatusCode, Details: details}
@@ -420,13 +718,7 @@ func (c *Client) SyncServerConfiguration(ctx context.Context, baseURL, nodeToken
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon config sync failed with status %d", res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			if text := strings.TrimSpace(string(details)); text != "" {
-				message += ": " + text
-			}
-		}
-		return errors.New(message)
+		return daemonResponseError("config sync", res)
 	}
 	return nil
 }
@@ -455,13 +747,7 @@ func (c *Client) runInstaller(ctx context.Context, baseURL, nodeToken, serverID,
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon %s failed with status %d", action, res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			if text := strings.TrimSpace(string(details)); text != "" {
-				message += ": " + text
-			}
-		}
-		return InstallResponse{}, errors.New(message)
+		return InstallResponse{}, daemonResponseError(action, res)
 	}
 	var payload InstallResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -481,22 +767,26 @@ func (c *Client) CreateServer(ctx context.Context, baseURL, nodeToken string, re
 	if err != nil {
 		return CreateResponse{}, err
 	}
+	// The caller's command ID rides along for tracing and for the daemon's own
+	// operation bookkeeping, but it does NOT license a transport retry here:
+	// Beacon dedupes command ids only on the power route, so POST /servers is
+	// never replayed (see idempotentRequest). Replaying a create whose response
+	// was lost would provision the container a second time.
+	if commandID := commandIDFromContext(ctx); commandID != "" {
+		req.Header.Set("X-Forge-Command-ID", commandID)
+		req.Header.Set("Idempotency-Key", commandID)
+	}
 
-	res, err := c.httpClient.Do(req)
+	// Creation includes image pull server-side and outlives an RPC budget.
+	// A caller context deadline still wins when it is earlier.
+	res, err := c.WithTimeout(createServerTimeout).httpClient.Do(req)
 	if err != nil {
 		return CreateResponse{}, err
 	}
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		message := fmt.Sprintf("daemon create request failed with status %d", res.StatusCode)
-		if details, readErr := io.ReadAll(io.LimitReader(res.Body, 4096)); readErr == nil {
-			text := strings.TrimSpace(string(details))
-			if text != "" {
-				message += ": " + text
-			}
-		}
-		return CreateResponse{}, errors.New(message)
+		return CreateResponse{}, daemonResponseError("create request", res)
 	}
 
 	var payload CreateResponse
@@ -521,7 +811,7 @@ func (c *Client) Logs(ctx context.Context, baseURL, nodeToken, serverID string) 
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon logs request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("logs request", res)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 256*1024))
 	if err != nil {
@@ -531,24 +821,41 @@ func (c *Client) Logs(ctx context.Context, baseURL, nodeToken, serverID string) 
 }
 
 func (c *Client) SendCommand(ctx context.Context, baseURL, nodeToken, serverID, command string) error {
+	_, err := c.sendCommandWithBody(ctx, baseURL, nodeToken, serverID, command)
+	return err
+}
+
+func (c *Client) SendCommandWithOutput(ctx context.Context, baseURL, nodeToken, serverID, command string) (string, error) {
+	return c.sendCommandWithBody(ctx, baseURL, nodeToken, serverID, command)
+}
+
+func (c *Client) sendCommandWithBody(ctx context.Context, baseURL, nodeToken, serverID, command string) (string, error) {
+	command = strings.TrimSpace(command)
+	if command == "" || len(command) > 4096 || strings.ContainsAny(command, "\x00\r\n") {
+		return "", errors.New("command must be a single non-empty line of at most 4096 bytes")
+	}
 	body, err := json.Marshal(map[string]string{"command": command})
 	if err != nil {
-		return err
+		return "", err
 	}
 	url := strings.TrimRight(baseURL, "/") + "/servers/" + serverID + "/command"
 	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
 	if err != nil {
-		return err
+		return "", err
 	}
 	res, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return "", err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon command request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("command request", res)
 	}
-	return nil
+	respBody, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(respBody), nil
 }
 
 func (c *Client) SendPower(ctx context.Context, baseURL, nodeToken, serverID, signal string) (PowerResponse, error) {
@@ -572,7 +879,7 @@ func (c *Client) SendPower(ctx context.Context, baseURL, nodeToken, serverID, si
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return PowerResponse{}, fmt.Errorf("daemon power request failed with status %d", res.StatusCode)
+		return PowerResponse{}, daemonResponseError("power request", res)
 	}
 
 	var payload PowerResponse
@@ -596,7 +903,7 @@ func (c *Client) DeleteServer(ctx context.Context, baseURL, nodeToken, serverID 
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return PowerResponse{}, fmt.Errorf("daemon delete request failed with status %d", res.StatusCode)
+		return PowerResponse{}, daemonResponseError("delete request", res)
 	}
 
 	var payload PowerResponse
@@ -620,11 +927,45 @@ func (c *Client) Stats(ctx context.Context, baseURL, nodeToken, serverID string)
 	defer res.Body.Close()
 
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return StatsResponse{}, fmt.Errorf("daemon stats request failed with status %d", res.StatusCode)
+		return StatsResponse{}, daemonResponseError("stats request", res)
 	}
 	var payload StatsResponse
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
 		return StatsResponse{}, err
+	}
+	return payload, nil
+}
+
+// ErrContainerStateUnsupported means the Beacon predates the /state endpoint.
+// Callers must treat that as unknown, never as stopped or missing.
+var ErrContainerStateUnsupported = errors.New("beacon does not expose container state")
+
+// ContainerState asks the node for the lifecycle state of a server's
+// container. A 404 on this route is ambiguous — an old beacon without the
+// endpoint answers 404 just like a missing container would — so it maps to
+// ErrContainerStateUnsupported instead of a fabricated "does not exist".
+func (c *Client) ContainerState(ctx context.Context, baseURL, nodeToken, serverID string) (ContainerStateResponse, error) {
+	url := strings.TrimRight(baseURL, "/") + "/servers/" + serverID + "/state"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, url, nil)
+	if err != nil {
+		return ContainerStateResponse{}, err
+	}
+
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return ContainerStateResponse{}, err
+	}
+	defer res.Body.Close()
+
+	switch {
+	case res.StatusCode == http.StatusNotFound:
+		return ContainerStateResponse{}, ErrContainerStateUnsupported
+	case res.StatusCode < 200 || res.StatusCode >= 300:
+		return ContainerStateResponse{}, daemonResponseError("container state request", res)
+	}
+	var payload ContainerStateResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return ContainerStateResponse{}, err
 	}
 	return payload, nil
 }
@@ -656,7 +997,7 @@ func (c *Client) CreateBackup(ctx context.Context, baseURL, nodeToken, serverID 
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return BackupEntry{}, fmt.Errorf("daemon backup create request failed with status %d", res.StatusCode)
+		return BackupEntry{}, daemonResponseError("backup create request", res)
 	}
 	var payload BackupEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -677,7 +1018,7 @@ func (c *Client) ListBackups(ctx context.Context, baseURL, nodeToken, serverID s
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon backup list request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("backup list request", res)
 	}
 	var payload []BackupEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -693,13 +1034,13 @@ func (c *Client) DownloadBackup(ctx context.Context, baseURL, nodeToken, serverI
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/zip")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		_ = res.Body.Close()
-		return nil, fmt.Errorf("daemon backup download request failed with status %d", res.StatusCode)
+		defer res.Body.Close()
+		return nil, daemonResponseError("backup download request", res)
 	}
 	return res.Body, nil
 }
@@ -720,7 +1061,7 @@ func (c *Client) RestoreBackup(ctx context.Context, baseURL, nodeToken, serverID
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon backup restore request failed with status %d", res.StatusCode)
+		return daemonResponseError("backup restore request", res)
 	}
 	return nil
 }
@@ -737,7 +1078,7 @@ func (c *Client) DeleteBackup(ctx context.Context, baseURL, nodeToken, serverID,
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon backup delete request failed with status %d", res.StatusCode)
+		return daemonResponseError("backup delete request", res)
 	}
 	return nil
 }
@@ -749,13 +1090,13 @@ func (c *Client) ArchiveFiles(ctx context.Context, baseURL, nodeToken, serverID,
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/gzip")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		_ = res.Body.Close()
-		return nil, fmt.Errorf("daemon archive request failed with status %d", res.StatusCode)
+		defer res.Body.Close()
+		return nil, daemonResponseError("archive request", res)
 	}
 	return res.Body, nil
 }
@@ -776,7 +1117,7 @@ func (c *Client) DecompressFile(ctx context.Context, baseURL, nodeToken, serverI
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon decompress request failed with status %d", res.StatusCode)
+		return daemonResponseError("decompress request", res)
 	}
 	return nil
 }
@@ -793,7 +1134,7 @@ func (c *Client) ListFiles(ctx context.Context, baseURL, nodeToken, serverID, pa
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return nil, fmt.Errorf("daemon file list request failed with status %d", res.StatusCode)
+		return nil, daemonResponseError("file list request", res)
 	}
 	var payload []FileEntry
 	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
@@ -809,7 +1150,7 @@ func (c *Client) DownloadFile(ctx context.Context, baseURL, nodeToken, serverID,
 		return FileDownload{}, err
 	}
 	req.Header.Set("Accept", "application/octet-stream")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return FileDownload{}, err
 	}
@@ -833,7 +1174,7 @@ func (c *Client) ReadFile(ctx context.Context, baseURL, nodeToken, serverID, pat
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return "", fmt.Errorf("daemon file read request failed with status %d", res.StatusCode)
+		return "", daemonResponseError("file read request", res)
 	}
 	body, err := io.ReadAll(io.LimitReader(res.Body, 1024*1024))
 	if err != nil {
@@ -843,6 +1184,24 @@ func (c *Client) ReadFile(ctx context.Context, baseURL, nodeToken, serverID, pat
 }
 
 func (c *Client) PullRemoteFile(ctx context.Context, baseURL, nodeToken, serverID, sourceURL, target, fileName string) error {
+	parsedSource, err := url.Parse(sourceURL)
+	if err != nil || parsedSource.Scheme != "https" || parsedSource.Hostname() == "" || parsedSource.User != nil {
+		return errors.New("remote file URL must be an absolute HTTPS URL without credentials")
+	}
+	sourceHost := strings.TrimSuffix(strings.ToLower(parsedSource.Hostname()), ".")
+	if sourceHost == "localhost" {
+		return errors.New("remote file URL must not target localhost")
+	}
+	if ip := net.ParseIP(sourceHost); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast()) {
+		return errors.New("remote file URL must not target a private network")
+	}
+	if strings.ContainsAny(target+fileName, "\x00\\") || filepath.IsAbs(target) || filepath.Base(fileName) != fileName || fileName == "." || fileName == ".." {
+		return errors.New("invalid remote file destination")
+	}
+	cleanTarget := filepath.Clean(target)
+	if cleanTarget == ".." || strings.HasPrefix(cleanTarget, ".."+string(filepath.Separator)) {
+		return errors.New("remote file target escapes the server root")
+	}
 	body, err := json.Marshal(map[string]string{"url": sourceURL, "target": target, "fileName": fileName})
 	if err != nil {
 		return err
@@ -877,7 +1236,7 @@ func (c *Client) WriteFile(ctx context.Context, baseURL, nodeToken, serverID, pa
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file write request failed with status %d", res.StatusCode)
+		return daemonResponseError("file write request", res)
 	}
 	return nil
 }
@@ -894,13 +1253,13 @@ func (c *Client) UploadFileChunk(ctx context.Context, baseURL, nodeToken, server
 		return err
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	res, err := c.httpClient.Do(req)
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
 	if err != nil {
 		return err
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file upload request failed with status %d", res.StatusCode)
+		return daemonResponseError("file upload request", res)
 	}
 	return nil
 }
@@ -959,7 +1318,7 @@ func (c *Client) DeleteFile(ctx context.Context, baseURL, nodeToken, serverID, p
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon file delete request failed with status %d", res.StatusCode)
+		return daemonResponseError("file delete request", res)
 	}
 	return nil
 }
@@ -976,7 +1335,7 @@ func (c *Client) MakeDir(ctx context.Context, baseURL, nodeToken, serverID, path
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon mkdir request failed with status %d", res.StatusCode)
+		return daemonResponseError("mkdir request", res)
 	}
 	return nil
 }
@@ -997,13 +1356,22 @@ func (c *Client) RenameFile(ctx context.Context, baseURL, nodeToken, serverID, f
 	}
 	defer res.Body.Close()
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
-		return fmt.Errorf("daemon rename request failed with status %d", res.StatusCode)
+		return daemonResponseError("rename request", res)
 	}
 	return nil
 }
 
 func (c *Client) WebSocketURL(baseURL, serverID, stream string) (string, string) {
+	// Stream URLs only. Commands are never sent over these sockets: the panel
+	// issues every Beacon command over HTTP (see the methods above), and the
+	// realtime proxy discards client frames on output-only streams rather
+	// than forwarding them upstream as commands.
+	// Beacon canonical for install is /servers/{id}/install/ws; panel normalizes
+	// to /ws/install but both are proxied via realtimeProxy(stream=install).
 	path := "/servers/" + serverID + "/ws/" + stream
+	if stream == "install" {
+		path = "/servers/" + serverID + "/install/ws"
+	}
 	endpoint := strings.TrimRight(baseURL, "/") + path
 	endpoint = strings.TrimPrefix(endpoint, "http://")
 	if endpoint != strings.TrimRight(baseURL, "/")+path {
@@ -1013,16 +1381,248 @@ func (c *Client) WebSocketURL(baseURL, serverID, stream string) (string, string)
 	return "wss://" + endpoint, path
 }
 
+// requestSigningKey carries the credential used to sign a request so that
+// retries can re-sign with a fresh nonce instead of replaying a consumed one.
+type requestSigningKey struct{}
+
+type requestSigning struct {
+	nodeToken string
+	signBody  bool
+}
+
 func (c *Client) SignedHeaders(nodeToken, method, requestURI string, body []byte) (http.Header, error) {
 	nodeToken, err := c.resolveNodeToken(nodeToken)
 	if err != nil {
 		return nil, err
 	}
-	timestamp := time.Now().UTC().Format(time.RFC3339)
+	timestamp, nonce, err := newSignatureParts()
+	if err != nil {
+		return nil, err
+	}
+	return signedHeaders(nodeToken, method, requestURI, timestamp, nonce, body), nil
+}
+
+// resignRequest replaces the HMAC headers on a request that is being retried.
+// The previous nonce was already consumed (or lost), so a fresh timestamp and
+// nonce are required for the retry to authenticate.
+func (c *Client) resignRequest(req *http.Request, body []byte) error {
+	signing, ok := req.Context().Value(requestSigningKey{}).(requestSigning)
+	if !ok {
+		return nil
+	}
+	timestamp, nonce, err := newSignatureParts()
+	if err != nil {
+		return err
+	}
+	if !signing.signBody {
+		body = nil
+	}
+	headers := signedHeaders(signing.nodeToken, req.Method, req.URL.RequestURI(), timestamp, nonce, body)
+	for key, values := range headers {
+		req.Header[key] = values
+	}
+	return nil
+}
+
+func newSignatureParts() (string, string, error) {
+	nonceBytes := make([]byte, 16)
+	if _, err := rand.Read(nonceBytes); err != nil {
+		return "", "", fmt.Errorf("generate request nonce: %w", err)
+	}
+	return time.Now().UTC().Format(time.RFC3339), hex.EncodeToString(nonceBytes), nil
+}
+
+func signedHeaders(nodeToken, method, requestURI, timestamp, nonce string, body []byte) http.Header {
 	headers := http.Header{}
 	headers.Set("X-Panel-Timestamp", timestamp)
-	headers.Set("X-Panel-Signature", sign(nodeToken, method, requestURI, timestamp, body))
-	return headers, nil
+	headers.Set("X-Panel-Nonce", nonce)
+	headers.Set("X-Panel-Signature", sign(nodeToken, method, requestURI, timestamp, body, nonce))
+	return headers
+}
+
+// HTTPClient returns the underlying HTTP client for direct request forwarding.
+func (c *Client) HTTPClient() *http.Client {
+	return c.httpClient
+}
+
+func (c *Client) HostFilesList(ctx context.Context, baseURL, nodeToken, path string) (json.RawMessage, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/files/list?path=" + url.QueryEscape(path)
+	return c.hostGetJSON(ctx, nodeToken, endpoint)
+}
+
+func (c *Client) HostFilesRead(ctx context.Context, baseURL, nodeToken, path string) (string, error) {
+	body, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return "", err
+	}
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/files/read"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, endpoint, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain")
+	req.Header.Set("Content-Type", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", daemonResponseError("host file read", res)
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, 10*1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (c *Client) HostFilesWrite(ctx context.Context, baseURL, nodeToken, path, content string) error {
+	payload, err := json.Marshal(map[string]string{"path": path, "content": content})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/write", payload)
+}
+
+func (c *Client) HostFilesMkdir(ctx context.Context, baseURL, nodeToken, path string) error {
+	payload, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/mkdir", payload)
+}
+
+func (c *Client) HostFilesRemove(ctx context.Context, baseURL, nodeToken, path string) error {
+	payload, err := json.Marshal(map[string]string{"path": path})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/remove", payload)
+}
+
+func (c *Client) HostFilesRename(ctx context.Context, baseURL, nodeToken, oldPath, newPath string) error {
+	payload, err := json.Marshal(map[string]string{"source": oldPath, "target": newPath})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/rename", payload)
+}
+
+func (c *Client) HostFilesCopy(ctx context.Context, baseURL, nodeToken, sourcePath, destPath string) error {
+	payload, err := json.Marshal(map[string]string{"source": sourcePath, "target": destPath})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/copy", payload)
+}
+
+func (c *Client) HostFilesChmod(ctx context.Context, baseURL, nodeToken, path, mode string) error {
+	payload, err := json.Marshal(map[string]string{"path": path, "mode": mode})
+	if err != nil {
+		return err
+	}
+	return c.hostPost(ctx, nodeToken, strings.TrimRight(baseURL, "/")+"/v1/files/chmod", payload)
+}
+
+func (c *Client) HostFilesUpload(ctx context.Context, baseURL, nodeToken, path string, body io.Reader, contentType string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(baseURL, "/")+"/v1/files/upload?path="+url.QueryEscape(path), body)
+	if err != nil {
+		return err
+	}
+	if err := c.validateNodeURL(req.URL); err != nil {
+		return err
+	}
+	nodeToken, err = c.resolveNodeToken(nodeToken)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	req = req.WithContext(context.WithValue(req.Context(), requestSigningKey{}, requestSigning{nodeToken: nodeToken, signBody: false}))
+	headers, err := c.SignedHeaders(nodeToken, req.Method, req.URL.RequestURI(), nil)
+	if err != nil {
+		return err
+	}
+	copyHeaders(req.Header, headers)
+	resp, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return daemonResponseError("host file upload", resp)
+	}
+	return nil
+}
+
+func (c *Client) HostFilesDownload(ctx context.Context, baseURL, nodeToken, path string) (io.ReadCloser, error) {
+	endpoint := strings.TrimRight(baseURL, "/") + "/v1/files/download?path=" + url.QueryEscape(path)
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	res, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		defer res.Body.Close()
+		return nil, daemonResponseError("host file download", res)
+	}
+	return res.Body, nil
+}
+
+func (c *Client) HostTerminalWSURL(baseURL string) (string, string) {
+	path := "/v1/terminal/ws"
+	endpoint := strings.TrimRight(baseURL, "/") + path
+	endpoint = strings.TrimPrefix(endpoint, "http://")
+	if endpoint != strings.TrimRight(baseURL, "/")+path {
+		return "ws://" + endpoint, path
+	}
+	endpoint = strings.TrimPrefix(strings.TrimRight(baseURL, "/")+path, "https://")
+	return "wss://" + endpoint, path
+}
+
+func (c *Client) hostGetJSON(ctx context.Context, nodeToken, url string) (json.RawMessage, error) {
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, daemonResponseError("host request", res)
+	}
+	var payload json.RawMessage
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (c *Client) hostPost(ctx context.Context, nodeToken, url string, payload []byte) error {
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, payload)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", "application/json")
+	if len(payload) > 0 {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("host request", res)
+	}
+	return nil
 }
 
 func (c *Client) newRequest(ctx context.Context, nodeToken, method, url string, body []byte) (*http.Request, error) {
@@ -1034,10 +1634,18 @@ func (c *Client) newRequest(ctx context.Context, nodeToken, method, url string, 
 	if err != nil {
 		return nil, err
 	}
+	if err := c.validateNodeURL(req.URL); err != nil {
+		return nil, err
+	}
+	nodeToken, err = c.resolveNodeToken(nodeToken)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Accept", "application/json")
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	req = req.WithContext(context.WithValue(req.Context(), requestSigningKey{}, requestSigning{nodeToken: nodeToken, signBody: true}))
 	headers, err := c.SignedHeaders(nodeToken, method, req.URL.RequestURI(), body)
 	if err != nil {
 		return nil, err
@@ -1051,7 +1659,15 @@ func (c *Client) newStreamRequest(ctx context.Context, nodeToken, method, url st
 	if err != nil {
 		return nil, err
 	}
+	if err := c.validateNodeURL(req.URL); err != nil {
+		return nil, err
+	}
+	nodeToken, err = c.resolveNodeToken(nodeToken)
+	if err != nil {
+		return nil, err
+	}
 	req.Header.Set("Accept", "application/json")
+	req = req.WithContext(context.WithValue(req.Context(), requestSigningKey{}, requestSigning{nodeToken: nodeToken, signBody: false}))
 	headers, err := c.SignedHeaders(nodeToken, method, req.URL.RequestURI(), nil)
 	if err != nil {
 		return nil, err
@@ -1060,14 +1676,52 @@ func (c *Client) newStreamRequest(ctx context.Context, nodeToken, method, url st
 	return req, nil
 }
 
+func (c *Client) validateNodeURL(parsed *url.URL) error {
+	if parsed == nil || parsed.Hostname() == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") {
+		return errors.New("invalid Beacon node URL")
+	}
+	if parsed.User != nil {
+		return errors.New("Beacon node URL must not contain credentials")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	if c != nil && c.loopback {
+		return nil
+	}
+	return errors.New("Beacon node URL must use HTTPS")
+}
+
 func (c *Client) resolveNodeToken(nodeToken string) (string, error) {
 	if nodeToken = strings.TrimSpace(nodeToken); nodeToken != "" {
 		return nodeToken, nil
 	}
-	if c != nil && c.developmentFallbackToken != "" {
-		return c.developmentFallbackToken, nil
-	}
 	return "", ErrMissingNodeToken
+}
+
+func (c *Client) CleanupMount(ctx context.Context, baseURL, nodeToken, mountSource string) (MountCleanupResponse, error) {
+	body, err := json.Marshal(MountCleanupRequest{Source: mountSource})
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/mounts/cleanup"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return MountCleanupResponse{}, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return MountCleanupResponse{}, daemonResponseError("mount cleanup", res)
+	}
+	var payload MountCleanupResponse
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return MountCleanupResponse{}, err
+	}
+	return payload, nil
 }
 
 func copyHeaders(destination, source http.Header) {
@@ -1078,13 +1732,495 @@ func copyHeaders(destination, source http.Header) {
 	}
 }
 
-func sign(token, method, requestURI, timestamp string, body []byte) string {
+func (c *Client) AdminContainerList(ctx context.Context, baseURL, nodeToken string, all bool) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers"
+	if all {
+		url += "?all=true"
+	}
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminContainerInspect(ctx context.Context, baseURL, nodeToken, containerID string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminContainerLogs(ctx context.Context, baseURL, nodeToken, containerID, tail string) (string, error) {
+	path := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/logs"
+	if tail != "" {
+		path += "?tail=" + tail
+	}
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, path, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", daemonResponseError("container logs request", res)
+	}
+	body, err := io.ReadAll(io.LimitReader(res.Body, 512*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(body), nil
+}
+
+func (c *Client) AdminContainerStart(ctx context.Context, baseURL, nodeToken, containerID string) error {
+	return c.adminContainerAction(ctx, baseURL, nodeToken, containerID, "start")
+}
+
+func (c *Client) AdminContainerStop(ctx context.Context, baseURL, nodeToken, containerID string) error {
+	return c.adminContainerAction(ctx, baseURL, nodeToken, containerID, "stop")
+}
+
+func (c *Client) AdminContainerRestart(ctx context.Context, baseURL, nodeToken, containerID string) error {
+	return c.adminContainerAction(ctx, baseURL, nodeToken, containerID, "restart")
+}
+
+func (c *Client) adminContainerAction(ctx context.Context, baseURL, nodeToken, containerID, action string) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/" + action
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("container "+action, res)
+	}
+	return nil
+}
+
+func (c *Client) AdminContainerDelete(ctx context.Context, baseURL, nodeToken, containerID string, force, removeVolumes bool) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "?force=" + fmt.Sprintf("%t", force) + "&v=" + fmt.Sprintf("%t", removeVolumes)
+	req, err := c.newRequest(ctx, nodeToken, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("container delete", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminImageList(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminImagePull(ctx context.Context, baseURL, nodeToken, image, registryAuth string) error {
+	body, err := json.Marshal(map[string]string{"image": image, "registryAuth": registryAuth})
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/pull"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("image pull", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminImageDelete(ctx context.Context, baseURL, nodeToken, imageID string, force bool) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/" + imageID + "?force=" + fmt.Sprintf("%t", force)
+	req, err := c.newRequest(ctx, nodeToken, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("image delete", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminImagePrune(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/prune"
+	return c.adminPostJSON(ctx, nodeToken, url, nil)
+}
+
+func (c *Client) AdminNetworkList(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/networks"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminNetworkInspect(ctx context.Context, baseURL, nodeToken, networkID string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/networks/" + networkID
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminVolumeList(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminVolumeInspect(ctx context.Context, baseURL, nodeToken, volumeID string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes/" + volumeID
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminVolumeUsage(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes/usage"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminContainerPause(ctx context.Context, baseURL, nodeToken, containerID string) error {
+	return c.adminContainerAction(ctx, baseURL, nodeToken, containerID, "pause")
+}
+
+func (c *Client) AdminContainerUnpause(ctx context.Context, baseURL, nodeToken, containerID string) error {
+	return c.adminContainerAction(ctx, baseURL, nodeToken, containerID, "unpause")
+}
+
+func (c *Client) AdminContainerCreate(ctx context.Context, baseURL, nodeToken string, req map[string]any) (json.RawMessage, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers"
+	return c.adminPostJSON(ctx, nodeToken, url, body)
+}
+
+func (c *Client) AdminContainerStats(ctx context.Context, baseURL, nodeToken, containerID string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/stats"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// --- Docker Image Build/Push/Tag/Search ---
+
+func (c *Client) AdminImageBuild(ctx context.Context, baseURL, nodeToken, dockerfile, tag string) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]string{"dockerfile": dockerfile, "tag": tag})
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/build"
+	return c.adminPostJSON(ctx, nodeToken, url, body)
+}
+
+func (c *Client) AdminImagePush(ctx context.Context, baseURL, nodeToken, imageRef string, auth *RegistryAuth) error {
+	payload := map[string]any{"imageRef": imageRef}
+	if auth != nil {
+		payload["registryAuth"] = auth
+	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/image/push"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("image push", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminImageTag(ctx context.Context, baseURL, nodeToken, imageID, repo, tag string) error {
+	body, err := json.Marshal(map[string]string{"repo": repo, "tag": tag})
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/" + imageID + "/tag"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("image tag", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminImageSearch(ctx context.Context, baseURL, nodeToken, term string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/images/search?term=" + url.QueryEscape(term)
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// --- Container File Operations ---
+
+func (c *Client) AdminContainerFilesList(ctx context.Context, baseURL, nodeToken, containerID, filePath string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/files?path=" + url.QueryEscape(filePath)
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) AdminContainerFilesRead(ctx context.Context, baseURL, nodeToken, containerID, filePath string) (string, error) {
+	body, err := json.Marshal(map[string]string{"path": filePath})
+	if err != nil {
+		return "", err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/files/read"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "text/plain")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return "", daemonResponseError("container file read", res)
+	}
+	data, err := io.ReadAll(io.LimitReader(res.Body, 10*1024*1024))
+	if err != nil {
+		return "", err
+	}
+	return string(data), nil
+}
+
+func (c *Client) AdminContainerFilesUpload(ctx context.Context, baseURL, nodeToken, containerID, destPath string, body io.Reader, contentType string) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		strings.TrimRight(baseURL, "/")+"/api/admin/containers/"+containerID+"/files/upload?path="+url.QueryEscape(destPath), body)
+	if err != nil {
+		return err
+	}
+	if err := c.validateNodeURL(req.URL); err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", contentType)
+	headers, err := c.SignedHeaders(nodeToken, req.Method, req.URL.RequestURI(), nil)
+	if err != nil {
+		return err
+	}
+	copyHeaders(req.Header, headers)
+	resp, err := c.WithTimeout(longTransferTimeout).httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return daemonResponseError("container file upload", resp)
+	}
+	return nil
+}
+
+func (c *Client) AdminContainerFilesDelete(ctx context.Context, baseURL, nodeToken, containerID, filePath string) error {
+	body, err := json.Marshal(map[string]string{"path": filePath})
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/files/delete"
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("container file delete", res)
+	}
+	return nil
+}
+
+// --- Admin Network ---
+
+func (c *Client) AdminNetworkCreate(ctx context.Context, baseURL, nodeToken string, req map[string]any) (json.RawMessage, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/networks"
+	return c.adminPostJSON(ctx, nodeToken, url, body)
+}
+
+func (c *Client) AdminNetworkDelete(ctx context.Context, baseURL, nodeToken, networkID string) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/networks/" + networkID
+	req, err := c.newRequest(ctx, nodeToken, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("network delete", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminVolumeCreate(ctx context.Context, baseURL, nodeToken string, req map[string]any) (json.RawMessage, error) {
+	body, err := json.Marshal(req)
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes"
+	return c.adminPostJSON(ctx, nodeToken, url, body)
+}
+
+func (c *Client) AdminVolumeDelete(ctx context.Context, baseURL, nodeToken, volumeName string) error {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes/" + volumeName
+	req, err := c.newRequest(ctx, nodeToken, http.MethodDelete, url, nil)
+	if err != nil {
+		return err
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return daemonResponseError("volume delete", res)
+	}
+	return nil
+}
+
+func (c *Client) AdminVolumePrune(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/volumes/prune"
+	return c.adminPostJSON(ctx, nodeToken, url, nil)
+}
+
+func (c *Client) AdminContainerExec(ctx context.Context, baseURL, nodeToken, containerID string, cmd []string, tty bool) (json.RawMessage, error) {
+	body, err := json.Marshal(map[string]any{
+		"cmd": cmd, "attachStdout": true, "attachStderr": true, "tty": tty,
+	})
+	if err != nil {
+		return nil, err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/exec"
+	return c.adminPostJSON(ctx, nodeToken, url, body)
+}
+
+func (c *Client) AdminContainerTop(ctx context.Context, baseURL, nodeToken, containerID string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/api/admin/containers/" + containerID + "/top"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+func (c *Client) adminGetJSON(ctx context.Context, nodeToken, url string) (json.RawMessage, error) {
+	req, err := c.newRequest(ctx, nodeToken, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, daemonResponseError("admin request", res)
+	}
+	var payload json.RawMessage
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+func (c *Client) adminPostJSON(ctx context.Context, nodeToken, url string, body []byte) (json.RawMessage, error) {
+	req, err := c.newRequest(ctx, nodeToken, http.MethodPost, url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Accept", "application/json")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer res.Body.Close()
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return nil, daemonResponseError("admin request", res)
+	}
+	var payload json.RawMessage
+	if err := json.NewDecoder(res.Body).Decode(&payload); err != nil {
+		return nil, err
+	}
+	return payload, nil
+}
+
+// --- Kubernetes proxy ---
+
+// KubernetesPods fetches the pod list from a Kubernetes-backed Beacon node.
+func (c *Client) KubernetesPods(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/pods"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesDeployments fetches the deployment list from a Kubernetes-backed node.
+func (c *Client) KubernetesDeployments(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesServices fetches the service list from a Kubernetes-backed node.
+func (c *Client) KubernetesServices(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/services"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesEvents fetchs the recent-events list from a Kubernetes-backed node.
+func (c *Client) KubernetesEvents(ctx context.Context, baseURL, nodeToken string) (json.RawMessage, error) {
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/events"
+	return c.adminGetJSON(ctx, nodeToken, url)
+}
+
+// KubernetesScale scales a named deployment on a Kubernetes-backed node.
+func (c *Client) KubernetesScale(ctx context.Context, baseURL, nodeToken, name string, replicas int32) error {
+	body, err := json.Marshal(map[string]int32{"replicas": replicas})
+	if err != nil {
+		return err
+	}
+	url := strings.TrimRight(baseURL, "/") + "/v1/kubernetes/deployments/" + name + "/scale"
+	_, err = c.adminPostJSON(ctx, nodeToken, url, body)
+	return err
+}
+
+func sign(token, method, requestURI, timestamp string, body []byte, nonce ...string) string {
 	mac := hmac.New(sha256.New, []byte(token))
 	_, _ = mac.Write([]byte(method))
 	_, _ = mac.Write([]byte("\n"))
 	_, _ = mac.Write([]byte(requestURI))
 	_, _ = mac.Write([]byte("\n"))
 	_, _ = mac.Write([]byte(timestamp))
+	_, _ = mac.Write([]byte("\n"))
+	if len(nonce) > 0 {
+		_, _ = mac.Write([]byte(nonce[0]))
+	}
 	_, _ = mac.Write([]byte("\n"))
 	_, _ = mac.Write(body)
 	return hex.EncodeToString(mac.Sum(nil))

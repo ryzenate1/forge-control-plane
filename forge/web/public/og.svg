@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" role="img" aria-label="Forge Control Plane">
+  <rect width="1200" height="630" fill="#0a0e16"/>
+  <rect x="60" y="60" width="1200" height="630" rx="0" fill="none"/>
+  <rect x="520" y="240" width="160" height="160" rx="36" fill="#171f2d" stroke="#dc2626" stroke-width="8"/>
+  <text x="600" y="372" text-anchor="middle" font-family="Georgia, 'Times New Roman', serif" font-size="120" font-weight="700" fill="#dc2626">F</text>
+  <text x="600" y="470" text-anchor="middle" font-family="Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="44" font-weight="700" fill="#f1f5f9" letter-spacing="2">FORGE</text>
+  <text x="600" y="512" text-anchor="middle" font-family="Manrope, 'Helvetica Neue', Arial, sans-serif" font-size="20" font-weight="500" fill="#94a3b8" letter-spacing="4">CONTROL PLANE</text>
+</svg>

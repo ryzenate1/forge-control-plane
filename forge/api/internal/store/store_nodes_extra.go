@@ -35,8 +35,8 @@ func (s *Store) SetNodeCloudEndpoint(ctx context.Context, nodeID, host string, p
 	if port < 1 || port > 65535 {
 		return errors.New("invalid Beacon port")
 	}
-	baseURL := fmt.Sprintf("http://%s", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
-	tag, err := s.db.Exec(ctx, `UPDATE nodes SET base_url=$2, fqdn=$3, scheme='http', daemon_listen=$4, updated_at=now() WHERE id=$1`, nodeID, baseURL, host, port)
+	baseURL := fmt.Sprintf("https://%s", net.JoinHostPort(host, fmt.Sprintf("%d", port)))
+	tag, err := s.db.Exec(ctx, `UPDATE nodes SET base_url=$2, fqdn=$3, scheme='https', daemon_listen=$4, updated_at=now() WHERE id=$1`, nodeID, baseURL, host, port)
 	if err != nil {
 		return err
 	}

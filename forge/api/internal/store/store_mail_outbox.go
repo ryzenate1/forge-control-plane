@@ -50,8 +50,8 @@ func (s *Store) EnqueuePasswordReset(ctx context.Context, email, tokenHash strin
 	}
 	if _, err := tx.Exec(ctx, `
 		INSERT INTO password_reset_tokens (id, user_id, token_hash, expires_at, requested_ip)
-		VALUES ($1, $2, $3, now() + $4::interval, $5)
-	`, uuid.NewString(), userID, tokenHash, ttl.String(), ip); err != nil {
+		VALUES ($1, $2, $3, now() + make_interval(secs => $4), $5)
+	`, uuid.NewString(), userID, tokenHash, ttl.Seconds(), ip); err != nil {
 		return false, err
 	}
 	text := "A password reset was requested for your account.\n\nReset your password: " + resetURL + "\n\nThis link expires in 30 minutes. If you did not request this, ignore this email."
@@ -73,12 +73,15 @@ func (s *Store) ClaimMail(ctx context.Context, workerID string, staleAfter time.
 		staleAfter = time.Minute
 	}
 	var item MailOutboxItem
+	// make_interval(secs => $2) carries the duration as seconds: Go's
+	// Duration.String ("1m0s") is not a Postgres interval literal and
+	// $2::interval would reject it.
 	err := s.db.QueryRow(ctx, `
 		WITH candidate AS (
 			SELECT id FROM mail_outbox
 			WHERE sent_at IS NULL
 			  AND next_attempt_at <= now()
-			  AND (locked_at IS NULL OR locked_at < now() - $2::interval)
+			  AND (locked_at IS NULL OR locked_at < now() - make_interval(secs => $2))
 			ORDER BY next_attempt_at, created_at
 			FOR UPDATE SKIP LOCKED LIMIT 1
 		)
@@ -86,7 +89,7 @@ func (s *Store) ClaimMail(ctx context.Context, workerID string, staleAfter time.
 		SET locked_at = now(), locked_by = $1, attempts = attempts + 1
 		FROM candidate c WHERE m.id = c.id
 		RETURNING m.id::text, m.recipient, m.subject, m.text_body, m.html_body, m.attempts
-	`, workerID, staleAfter.String()).Scan(&item.ID, &item.Recipient, &item.Subject, &item.TextBody, &item.HTMLBody, &item.Attempts)
+	`, workerID, staleAfter.Seconds()).Scan(&item.ID, &item.Recipient, &item.Subject, &item.TextBody, &item.HTMLBody, &item.Attempts)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, nil
 	}
@@ -104,8 +107,8 @@ func (s *Store) CompleteMail(ctx context.Context, id, workerID string) error {
 func (s *Store) RetryMail(ctx context.Context, id, workerID, lastError string, delay time.Duration) error {
 	_, err := s.db.Exec(ctx, `
 		UPDATE mail_outbox
-		SET last_error = left($3, 4000), next_attempt_at = now() + $4::interval, locked_at = NULL, locked_by = NULL
+		SET last_error = left($3, 4000), next_attempt_at = now() + make_interval(secs => $4), locked_at = NULL, locked_by = NULL
 		WHERE id = $1 AND locked_by = $2
-	`, id, workerID, lastError, delay.String())
+	`, id, workerID, lastError, delay.Seconds())
 	return err
 }

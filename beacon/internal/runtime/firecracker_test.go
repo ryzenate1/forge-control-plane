@@ -19,20 +19,17 @@ func TestNewFirecrackerRuntimeDefaults(t *testing.T) {
 	if r.config.FirecrackerBin != "firecracker" {
 		t.Fatalf("default FirecrackerBin = %q, want %q", r.config.FirecrackerBin, "firecracker")
 	}
-	if r.config.KernelImage != "/var/lib/forge/kernel/hello-vmlinux.bin" {
+	if r.config.KernelImage != "/var/lib/gamepanel/firecracker/kernel.bin" {
 		t.Fatalf("default KernelImage = %q", r.config.KernelImage)
 	}
-	if r.config.RootfsImage != "/var/lib/forge/rootfs/rootfs.ext4" {
+	if r.config.RootfsImage != "/var/lib/gamepanel/firecracker/rootfs.ext4" {
 		t.Fatalf("default RootfsImage = %q", r.config.RootfsImage)
+	}
+	if r.config.JailerPath != "jailer" {
+		t.Fatalf("default JailerPath = %q, want %q", r.config.JailerPath, "jailer")
 	}
 	if r.config.SocketPath != socketDir {
 		t.Fatalf("SocketPath = %q, want %q", r.config.SocketPath, socketDir)
-	}
-	if r.fcClient == nil {
-		t.Fatal("http client not initialized")
-	}
-	if r.fcClient.Timeout == 0 {
-		t.Fatal("http client timeout not set")
 	}
 }
 
@@ -91,7 +88,7 @@ func TestFirecrackerSendCommandNoInstance(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected SendCommand to return an error")
 	}
-	if err.Error() != "instance server-id not found" {
+	if err.Error() != "send command not supported for firecracker runtime" {
 		t.Fatalf("unexpected error message: %v", err)
 	}
 }

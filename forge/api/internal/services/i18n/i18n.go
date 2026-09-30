@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 )
 
@@ -41,7 +42,7 @@ func (s *TranslationService) loadAll() error {
 		return err
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".json") {
 			continue
 		}
 		locale := entry.Name()[:len(entry.Name())-5]

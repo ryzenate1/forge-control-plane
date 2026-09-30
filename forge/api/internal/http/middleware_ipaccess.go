@@ -1,6 +1,7 @@
 package http
 
 import (
+	"log/slog"
 	"net"
 	"os"
 	"strings"
@@ -25,11 +26,13 @@ func IPAccessControl(cfg IPAccessConfig) fiber.Handler {
 
 		// Check deny list first (if denied, reject immediately)
 		if len(cfg.DeniedIPs) > 0 && isIPInList(clientIP, cfg.DeniedIPs) {
+			slog.Warn("IP access denied", "ip", clientIP, "reason", "in deny list")
 			return fiber.NewError(fiber.StatusForbidden, "access denied from this IP")
 		}
 
 		// Check allow list (if defined, only allow matching IPs)
 		if len(cfg.AllowedIPs) > 0 && !isIPInList(clientIP, cfg.AllowedIPs) {
+			slog.Warn("IP access denied", "ip", clientIP, "reason", "not in allow list")
 			return fiber.NewError(fiber.StatusForbidden, "access denied from this IP")
 		}
 
@@ -40,24 +43,16 @@ func IPAccessControl(cfg IPAccessConfig) fiber.Handler {
 // getClientIP gets the client IP address, optionally trusting proxy headers
 func getClientIP(c *fiber.Ctx, trustProxy bool) string {
 	if trustProxy {
-		// Check X-Forwarded-For header (may contain multiple IPs)
-		xff := c.Get("X-Forwarded-For")
-		if xff != "" {
-			// Get the first IP in the chain (original client)
-			ips := strings.Split(xff, ",")
-			if len(ips) > 0 {
-				return strings.TrimSpace(ips[0])
-			}
-		}
-
-		// Check X-Real-IP header
-		xri := c.Get("X-Real-IP")
-		if xri != "" {
-			return xri
-		}
+		return ExtractClientIP(c)
 	}
 
-	// Fall back to direct connection IP
+	// Not trusting proxy headers means the socket peer and nothing else. c.IP()
+	// is not that: once a proxy header is configured at the framework level it
+	// returns an address parsed out of the request, so an allowlist keyed on
+	// "the direct connection" would start believing a header the caller wrote.
+	if peer := socketPeerIP(c); peer != nil {
+		return peer.String()
+	}
 	return c.IP()
 }
 

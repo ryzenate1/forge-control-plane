@@ -3,6 +3,8 @@ package installer
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"time"
 
 	"github.com/google/uuid"
@@ -55,12 +57,106 @@ type Store interface {
 	UpdateStep(ctx context.Context, stepID string, status InstallStatus, err string) error
 }
 
+// WorkflowExecutor runs a workflow's steps against a node. No implementation
+// exists yet; the canonical install path is beacon's POST /servers/:id/install
+// driven by clustermanager. Until one is wired, ExecuteWorkflow refuses rather
+// than leaving a workflow claiming to run.
+type WorkflowExecutor interface {
+	ExecuteWorkflow(ctx context.Context, wf *Workflow) error
+}
+
+// ErrNoWorkflowExecutor reports that nothing can carry out a workflow's steps.
+var ErrNoWorkflowExecutor = errors.New("installer workflow execution is not implemented; the canonical install path is beacon POST /servers/:id/install")
+
 type Service struct {
-	store Store
+	store    Store
+	executor WorkflowExecutor
 }
 
 func New(store Store) *Service {
 	return &Service{store: store}
+}
+
+// SetExecutor attaches the component that actually runs workflow steps.
+func (s *Service) SetExecutor(exec WorkflowExecutor) {
+	if s == nil {
+		return
+	}
+	s.executor = exec
+}
+
+// CanExecute reports whether both the operator has opted in and something
+// exists to carry the work out. Both must be true; an opted-in flag with no
+// executor is what previously produced workflows stuck at "running".
+func (s *Service) CanExecute() bool {
+	return IsEnabled() && s != nil && s.executor != nil
+}
+
+func IsEnabled() bool {
+	return os.Getenv("INSTALLER_WORKFLOW_ENABLED") == "1"
+}
+
+func (s *Service) ListWorkflows(ctx context.Context, serverID string) ([]Workflow, error) {
+	return s.store.ListWorkflows(ctx, serverID)
+}
+
+func (s *Service) GetWorkflow(ctx context.Context, id string) (*Workflow, error) {
+	return s.store.GetWorkflow(ctx, id)
+}
+
+func (s *Service) ListRecentWorkflows(ctx context.Context, limit int) ([]Workflow, error) {
+	if pg, ok := s.store.(*PostgresStore); ok {
+		return pg.ListRecentWorkflows(ctx, limit)
+	}
+	return nil, nil
+}
+
+func (s *Service) CreateReinstallWorkflow(ctx context.Context, serverID string) (*Workflow, error) {
+	wf := &Workflow{
+		ID:        uuid.NewString(),
+		ServerID:  serverID,
+		Type:      WorkflowReinstall,
+		Status:    InstallPending,
+		Steps:     defaultInstallSteps(),
+		CreatedAt: time.Now().UTC(),
+	}
+	return wf, s.store.CreateWorkflow(ctx, wf)
+}
+
+// ExecuteWorkflow runs a workflow's steps. It reported a workflow as running
+// and then did nothing, so an operator who enabled INSTALLER_WORKFLOW_ENABLED
+// saw installs that never progressed and never failed. It now refuses when
+// there is no executor, and marks every step failed so the workflow reaches a
+// terminal state instead of sitting at "running" forever.
+//
+// The previous implementation also passed a workflow ID to UpdateStep, which
+// looks rows up by step ID, so even the status write did not land.
+func (s *Service) ExecuteWorkflow(ctx context.Context, workflowID string) error {
+	wf, err := s.store.GetWorkflow(ctx, workflowID)
+	if err != nil {
+		return err
+	}
+	if s.executor == nil {
+		s.failWorkflow(ctx, wf, ErrNoWorkflowExecutor.Error())
+		return ErrNoWorkflowExecutor
+	}
+	if err := s.executor.ExecuteWorkflow(ctx, wf); err != nil {
+		s.failWorkflow(ctx, wf, err.Error())
+		return err
+	}
+	return nil
+}
+
+func (s *Service) failWorkflow(ctx context.Context, wf *Workflow, reason string) {
+	if wf == nil {
+		return
+	}
+	for _, step := range wf.Steps {
+		if step.Status == InstallCompleted || step.Status == InstallFailed {
+			continue
+		}
+		_ = s.store.UpdateStep(ctx, step.ID, InstallFailed, reason)
+	}
 }
 
 func (s *Service) CreateInstallWorkflow(ctx context.Context, serverID string) (*Workflow, error) {

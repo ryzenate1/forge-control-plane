@@ -1,10 +1,23 @@
 package pprof
 
 import (
+	"crypto/subtle"
 	"net/http"
 	"net/http/pprof"
 	"os"
 )
+
+func RequireBearer(next http.Handler, token string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		provided := r.Header.Get("Authorization")
+		expected := "Bearer " + token
+		if token == "" || subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+			http.Error(w, "authentication required", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
 
 func RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/debug/pprof/", pprof.Index)

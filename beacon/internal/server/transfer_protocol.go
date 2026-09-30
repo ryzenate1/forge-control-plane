@@ -1,13 +1,14 @@
 package server
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -86,7 +87,7 @@ func (s *Server) pushTransferSource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "destinationUrl and destinationCredential are required", http.StatusBadRequest)
 		return
 	}
-	if !strings.HasPrefix(body.DestinationURL, "https://") && !strings.HasPrefix(body.DestinationURL, "http://") {
+	if err := validateTransferDestination(body.DestinationURL); err != nil {
 		http.Error(w, "invalid destinationUrl", http.StatusBadRequest)
 		return
 	}
@@ -100,7 +101,12 @@ func (s *Server) pushTransferSource(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) pushArchive(ctx context.Context, migrationID, sourceCredential string, request sourcePushRequest) (transfer.Metadata, error) {
 	endpoint := strings.TrimRight(request.DestinationURL, "/") + "/api/v1/transfers/" + migrationID + "/destination/archive"
-	client := &http.Client{Timeout: 0}
+	client := &http.Client{
+		Timeout: 30 * time.Minute,
+		CheckRedirect: func(*http.Request, []*http.Request) error {
+			return http.ErrUseLastResponse
+		},
+	}
 	for attempts := 0; attempts < 4; attempts++ {
 		head, err := http.NewRequestWithContext(ctx, http.MethodHead, endpoint, nil)
 		if err != nil {
@@ -163,6 +169,30 @@ func (s *Server) pushArchive(ctx context.Context, migrationID, sourceCredential 
 		return destination, nil
 	}
 	return transfer.Metadata{}, errors.New("destination offset remained inconsistent after retries")
+}
+
+func validateTransferDestination(raw string) error {
+	parsed, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("invalid transfer destination URL")
+	}
+	// The source daemon pushes the archive (carrying the destination credential)
+	// straight to this URL, so a literal link-local / multicast / unspecified
+	// address would let a caller pivot the daemon into cloud metadata endpoints
+	// or other same-host services. Routable and private node addresses remain
+	// allowed for legitimate migrations.
+	if ip := net.ParseIP(parsed.Hostname()); ip != nil &&
+		(ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()) {
+		return errors.New("transfer destination must not point at a link-local, multicast, or unspecified address")
+	}
+	if parsed.Scheme == "https" {
+		return nil
+	}
+	ip := net.ParseIP(parsed.Hostname())
+	if parsed.Scheme == "http" && (strings.EqualFold(parsed.Hostname(), "localhost") || ip != nil && ip.IsLoopback()) {
+		return nil
+	}
+	return errors.New("transfer destination must use HTTPS except on loopback")
 }
 
 func (s *Server) sourceTransferStatus(w http.ResponseWriter, r *http.Request) {
@@ -308,12 +338,8 @@ func writeTransferError(w http.ResponseWriter, err error) {
 
 func responseMessage(response *http.Response) string {
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, 16*1024))
-	message := strings.TrimSpace(string(bytes.TrimSpace(body)))
-	if message == "" {
-		message = response.Status
-	}
-	return message
+	_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 4096))
+	return response.Status
 }
 
 var _ = time.Second

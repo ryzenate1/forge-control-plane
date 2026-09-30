@@ -8,7 +8,7 @@ export function cn(...inputs: ClassValue[]) {
 export function formatBytes(value: number, decimals = 1) {
   if (!Number.isFinite(value) || value < 0) return "Unavailable";
   if (value === 0) return "0 B";
-  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB"];
   const unit = Math.min(Math.floor(Math.log(Math.abs(value)) / Math.log(1024)), units.length - 1);
   const amount = value / 1024 ** unit;
   return `${amount.toFixed(unit === 0 ? 0 : decimals)} ${units[unit]}`;

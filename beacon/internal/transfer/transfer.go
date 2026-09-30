@@ -4,11 +4,16 @@ import (
 	"archive/tar"
 	"compress/gzip"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -38,7 +43,7 @@ type Transfer struct {
 	TargetNode   string    `json:"targetNode"`
 	Status       Status    `json:"status"`
 	Progress     int       `json:"progress"`
-	ArchivePath  string    `json:"archivePath,omitempty"`
+	ArchivePath  string    `json:"-"`
 	ArchiveSize  int64     `json:"archiveSize,omitempty"`
 	Checksum     string    `json:"checksum,omitempty"`
 	StartedAt    time.Time `json:"startedAt"`
@@ -53,24 +58,86 @@ type Transfer struct {
 // Manager manages transfer operations
 type Manager struct {
 	transfers sync.Map
+	ctx       context.Context
+	cancel    context.CancelFunc
+	sem       chan struct{}
+	tempRoot  string
+	initErr   error
+	client    *http.Client
+	wg        sync.WaitGroup
 }
 
 // NewManager creates a new transfer manager
 func NewManager() *Manager {
-	return &Manager{}
+	ctx, cancel := context.WithCancel(context.Background())
+	tempRoot, err := os.MkdirTemp("", "gamepanel-transfers-")
+	if err == nil {
+		err = os.Chmod(tempRoot, 0o700)
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12}
+	transport.ResponseHeaderTimeout = 30 * time.Second
+	transport.ExpectContinueTimeout = 5 * time.Second
+	return &Manager{
+		ctx:      ctx,
+		cancel:   cancel,
+		sem:      make(chan struct{}, 4),
+		tempRoot: tempRoot,
+		initErr:  err,
+		client: &http.Client{
+			Transport: transport,
+			CheckRedirect: func(req *http.Request, via []*http.Request) error {
+				return validateTargetURL(req.URL)
+			},
+		},
+	}
 }
 
 // Start begins a new transfer operation
 func (m *Manager) Start(_ context.Context, serverID, sourceNode, targetNode, serverRoot, targetURL, token string, resumeOffset int64) (*Transfer, error) {
+	if m.initErr != nil {
+		return nil, fmt.Errorf("initialize private transfer directory: %w", m.initErr)
+	}
+	if err := m.ctx.Err(); err != nil {
+		return nil, errors.New("transfer manager is closed")
+	}
+	if token == "" {
+		return nil, errors.New("transfer token is required")
+	}
 	if resumeOffset < 0 {
 		return nil, fmt.Errorf("resume offset cannot be negative")
 	}
 	if resumeOffset != 0 {
-		return nil, fmt.Errorf("transfer resume is not supported by the destination")
+		return nil, fmt.Errorf("legacy transfer resume offset requires zero; resumable migrations use protocol v1")
 	}
-	transferID := fmt.Sprintf("transfer-%s-%d", serverID, time.Now().Unix())
+	parsedTarget, err := url.Parse(targetURL)
+	if err != nil {
+		return nil, fmt.Errorf("parse target URL: %w", err)
+	}
+	if err := validateTargetURL(parsedTarget); err != nil {
+		return nil, err
+	}
+	canonicalRoot, err := filepath.EvalSymlinks(serverRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve server root: %w", err)
+	}
+	info, err := os.Stat(canonicalRoot)
+	if err != nil || !info.IsDir() {
+		return nil, errors.New("server root must be an existing directory")
+	}
+	select {
+	case m.sem <- struct{}{}:
+	default:
+		return nil, errors.New("transfer concurrency limit reached")
+	}
+	randomID := make([]byte, 16)
+	if _, err := rand.Read(randomID); err != nil {
+		<-m.sem
+		return nil, fmt.Errorf("generate transfer ID: %w", err)
+	}
+	transferID := "transfer-" + hex.EncodeToString(randomID)
 
-	transferCtx, cancel := context.WithCancel(context.Background())
+	transferCtx, cancel := context.WithCancel(m.ctx)
 
 	transfer := &Transfer{
 		ID:           transferID,
@@ -86,9 +153,28 @@ func (m *Manager) Start(_ context.Context, serverID, sourceNode, targetNode, ser
 	m.transfers.Store(transferID, transfer)
 
 	// Run transfer in background
-	go m.executeTransfer(transferCtx, transfer, serverRoot, targetURL, token)
+	m.wg.Add(1)
+	go func() {
+		defer m.wg.Done()
+		defer func() { <-m.sem }()
+		m.executeTransfer(transferCtx, transfer, canonicalRoot, parsedTarget.String(), token)
+	}()
 
 	return transfer, nil
+}
+
+// Close cancels all active transfers, waits for workers to exit, and removes
+// the private temporary directory.
+func (m *Manager) Close() error {
+	if m == nil {
+		return nil
+	}
+	m.cancel()
+	m.wg.Wait()
+	if m.tempRoot == "" {
+		return nil
+	}
+	return os.RemoveAll(m.tempRoot)
 }
 
 // Get returns a transfer by ID
@@ -97,14 +183,20 @@ func (m *Manager) Get(transferID string) (*Transfer, bool) {
 	if !ok {
 		return nil, false
 	}
-	return value.(*Transfer), true
+	t, ok := value.(*Transfer)
+	if !ok {
+		return nil, false
+	}
+	return t, true
 }
 
 // List returns all active transfers
 func (m *Manager) List() []*Transfer {
 	var transfers []*Transfer
 	m.transfers.Range(func(key, value interface{}) bool {
-		transfers = append(transfers, value.(*Transfer))
+		if t, ok := value.(*Transfer); ok {
+			transfers = append(transfers, t)
+		}
 		return true
 	})
 	return transfers
@@ -178,11 +270,15 @@ func (m *Manager) executeTransfer(ctx context.Context, transfer *Transfer, serve
 // createArchive creates a tar.gz archive of the server directory matching
 // the format the destination daemon expects (extractTarGzArchive).
 func (m *Manager) createArchive(ctx context.Context, serverRoot string, transfer *Transfer) (string, error) {
-	archivePath := filepath.Join(os.TempDir(), fmt.Sprintf("transfer-%s.tar.gz", transfer.ID))
-
-	file, err := os.Create(archivePath)
+	file, err := os.CreateTemp(m.tempRoot, "archive-*.tar.gz")
 	if err != nil {
 		return "", fmt.Errorf("failed to create archive file: %w", err)
+	}
+	archivePath := file.Name()
+	if err := file.Chmod(0o600); err != nil {
+		_ = file.Close()
+		_ = os.Remove(archivePath)
+		return "", fmt.Errorf("secure archive permissions: %w", err)
 	}
 	defer file.Close()
 
@@ -192,7 +288,11 @@ func (m *Manager) createArchive(ctx context.Context, serverRoot string, transfer
 	defer tw.Close()
 
 	// Load ignore patterns (matches .pteroignore if present)
-	denylist, _ := ignore.LoadServerIgnore(serverRoot)
+	denylist, err := ignore.LoadServerIgnore(serverRoot)
+	if err != nil {
+		_ = os.Remove(archivePath)
+		return "", fmt.Errorf("load server ignore rules: %w", err)
+	}
 
 	var totalFiles int64
 	var processedFiles int64
@@ -268,11 +368,12 @@ func (m *Manager) createArchive(ctx context.Context, serverRoot string, transfer
 		if err != nil {
 			return fmt.Errorf("failed to open file %s: %w", path, err)
 		}
-		defer source.Close()
 
 		if _, err := io.Copy(tw, source); err != nil {
+			source.Close()
 			return fmt.Errorf("failed to copy file %s to archive: %w", path, err)
 		}
+		source.Close()
 
 		processedFiles++
 		progress := int(float64(processedFiles) / float64(max(totalFiles, 1)) * 50)
@@ -294,6 +395,10 @@ func (m *Manager) createArchive(ctx context.Context, serverRoot string, transfer
 	if err := gz.Close(); err != nil {
 		os.Remove(archivePath)
 		return "", fmt.Errorf("failed to close gzip writer: %w", err)
+	}
+	if err := file.Sync(); err != nil {
+		os.Remove(archivePath)
+		return "", fmt.Errorf("failed to sync archive: %w", err)
 	}
 
 	info, err := os.Stat(archivePath)
@@ -371,13 +476,8 @@ func (m *Manager) streamToTarget(ctx context.Context, archivePath, targetURL, to
 	// Set content length
 	req.ContentLength = info.Size() - offset
 
-	// Create client with timeout
-	client := &http.Client{
-		Timeout: 30 * time.Minute,
-	}
-
 	// Send request
-	resp, err := client.Do(req)
+	resp, err := m.client.Do(req)
 	if err != nil {
 		return fmt.Errorf("failed to send upload request: %w", err)
 	}
@@ -395,6 +495,32 @@ func (m *Manager) streamToTarget(ctx context.Context, archivePath, targetURL, to
 	transfer.mu.Unlock()
 
 	return nil
+}
+
+func validateTargetURL(target *url.URL) error {
+	if target == nil || target.Hostname() == "" {
+		return errors.New("target URL must include a host")
+	}
+	if target.User != nil {
+		return errors.New("target URL must not include credentials")
+	}
+	// Reject literal addresses that turn the daemon into an SSRF pivot or leak
+	// the node credential to a link-local metadata endpoint (169.254.169.254
+	// for AWS/GCP/Azure IMDS, fe80:: for IPv6 link-local, :: for unspecified).
+	// A trusted destination is always a routable host; private/VPC node
+	// addresses stay allowed so same-network migrations keep working.
+	if ip := net.ParseIP(target.Hostname()); ip != nil &&
+		(ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()) {
+		return errors.New("target URL must not point at a link-local, multicast, or unspecified address")
+	}
+	if target.Scheme == "https" {
+		return nil
+	}
+	ip := net.ParseIP(target.Hostname())
+	if target.Scheme == "http" && (strings.EqualFold(target.Hostname(), "localhost") || ip != nil && ip.IsLoopback()) {
+		return nil
+	}
+	return errors.New("target URL must use HTTPS (HTTP is allowed only for loopback)")
 }
 
 // failTransfer marks a transfer as failed

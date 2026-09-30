@@ -2,6 +2,8 @@ package downloadfile
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -16,7 +18,8 @@ func TestDownloadFile(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	op := &DownloadFile{URL: srv.URL, Dest: "downloaded.txt"}
+	sum := sha256.Sum256([]byte("hello world"))
+	op := &DownloadFile{URL: srv.URL, Dest: "downloaded.txt", ExpectedSHA256: hex.EncodeToString(sum[:]), client: srv.Client()}
 	if err := op.Execute(context.Background(), dir); err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +40,8 @@ func TestDownloadFileEmptyResponse(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	op := &DownloadFile{URL: srv.URL, Dest: "empty.txt"}
+	sum := sha256.Sum256(nil)
+	op := &DownloadFile{URL: srv.URL, Dest: "empty.txt", ExpectedSHA256: hex.EncodeToString(sum[:]), client: srv.Client()}
 	if err := op.Execute(context.Background(), dir); err == nil {
 		t.Fatal("expected error for empty download")
 	}
@@ -50,14 +54,14 @@ func TestDownloadFileNotFound(t *testing.T) {
 	defer srv.Close()
 
 	dir := t.TempDir()
-	op := &DownloadFile{URL: srv.URL, Dest: "missing.txt"}
+	op := &DownloadFile{URL: srv.URL, Dest: "missing.txt", ExpectedSHA256: string(make([]byte, 64)), client: srv.Client()}
 	if err := op.Execute(context.Background(), dir); err == nil {
 		t.Fatal("expected error for 404")
 	}
 }
 
 func TestDownloadFileFactory(t *testing.T) {
-	raw := []byte(`{"url": "https://example.com/file", "dest": "out.jar"}`)
+	raw := []byte(`{"url": "https://example.com/file", "dest": "out.jar", "expectedSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"}`)
 	op, err := factory(raw)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

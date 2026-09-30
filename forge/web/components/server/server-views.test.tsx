@@ -1,6 +1,7 @@
 import { screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReactElement } from "react";
 import { ActivityView } from "./activity-view";
 import { DatabasesView } from "./databases-view";
 import { FilesView } from "./files-view";
@@ -8,10 +9,20 @@ import { ServerSettingsView } from "./settings-view";
 import { StartupView } from "./startup-view";
 import { jsonResponse, mockFetch, requestJSON } from "@/test/fetch-mock";
 import { renderWithQuery } from "@/test/render";
+import type { ApiServer } from "@/lib/api";
+import { ServerProvider } from "./server-context";
 
 vi.mock("next/dynamic", () => ({ default: () => function Editor() { return <textarea aria-label="File content" />; } }));
 
-const server = { id: "s1", name: "Game", owner: "owner@example.com", template: "egg", node: "Node A", status: "offline", databaseLimit: 2, backupLimit: 2, allocationLimit: 2 };
+const server: ApiServer = { id: "s1", name: "Game", owner: "owner@example.com", template: "egg", node: "Node A", status: "offline", databaseLimit: 2, backupLimit: 2, allocationLimit: 2, generation: 0 };
+
+function renderServer(ui: ReactElement) {
+  return renderWithQuery(
+    <ServerProvider value={{ server, access: { user: null, permissions: ["*"], isOwner: true, isAdmin: false }, refreshServer: async () => {} }}>
+      {ui}
+    </ServerProvider>
+  );
+}
 
 beforeEach(() => {
   Object.defineProperty(navigator, "clipboard", { configurable: true, value: { writeText: vi.fn().mockResolvedValue(undefined) } });
@@ -24,7 +35,7 @@ describe("server database secrets", () => {
       jsonResponse({ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12, provisioningState: "ready", password: "one-time-secret" }),
       jsonResponse([{ id: "db1", database: "world", username: "u1", remote: "%", engine: "mysql", host: "db.local", port: 3306, maxConnections: 12, provisioningState: "ready" }]),
     );
-    renderWithQuery(<DatabasesView server={server} />);
+    renderServer(<DatabasesView server={server} />);
     await screen.findByText("No databases have been created.");
     await userEvent.type(screen.getByLabelText("Database name"), "world");
     await userEvent.type(screen.getByLabelText("Max connections"), "12");
@@ -43,7 +54,7 @@ describe("startup validation", () => {
       jsonResponse({}),
       jsonResponse({ startup_command: "java -Xmx2G -jar server.jar", raw_startup_command: "java {{MEMORY}}", docker_images: { Java: "java:21" }, variables: [{ name: "Port", description: "Game port", env_variable: "SERVER_PORT", default_value: "25565", server_value: "25566", is_editable: true, rules: "required|integer|min:1024|max:65535" }] }),
     );
-    renderWithQuery(<StartupView server={server} />);
+    renderServer(<StartupView server={server} />);
     const input = await screen.findByLabelText("Port");
     await userEvent.clear(input);
     await userEvent.type(input, "80");
@@ -59,7 +70,7 @@ describe("startup validation", () => {
 describe("safe server settings", () => {
   it("updates only the server name and description", async () => {
     const mocked = mockFetch(jsonResponse({ ...server, name: "Renamed", description: "Updated" }));
-    renderWithQuery(<ServerSettingsView node={{ id: "n1", name: "Node A", region: "eu", status: "online", fqdn: "node.example.com", daemonSftp: 2022 }} server={server} />);
+    renderServer(<ServerSettingsView node={{ id: "n1", name: "Node A", region: "eu", status: "online", fqdn: "node.example.com", daemonSftp: 2022, lastHeartbeatAt: "2026-01-01T00:00:00Z" }} server={server} />);
     const name = screen.getByLabelText("Server name");
     await userEvent.clear(name);
     await userEvent.type(name, "Renamed");
@@ -72,16 +83,17 @@ describe("safe server settings", () => {
 
 describe("file mass actions", () => {
   it("deletes selected items through one bounded batch endpoint", async () => {
-    vi.spyOn(window, "confirm").mockReturnValue(true);
     const mocked = mockFetch(
       jsonResponse([{ name: "a.txt", path: "a.txt", directory: false, size: 1, modTime: "now" }, { name: "b.txt", path: "b.txt", directory: false, size: 1, modTime: "now" }]),
       jsonResponse({ ok: true, deleted: 2 }),
       jsonResponse([]),
     );
-    renderWithQuery(<FilesView server={server} />);
+    renderServer(<FilesView server={server} />);
     await userEvent.click(await screen.findByLabelText("Select a.txt"));
     await userEvent.click(screen.getByLabelText("Select b.txt"));
     await userEvent.click(screen.getByRole("button", { name: "Delete" }));
+    const confirmButtons = await screen.findAllByRole("button", { name: "Delete" });
+    await userEvent.click(confirmButtons[confirmButtons.length - 1]);
     await waitFor(() => expect(mocked.calls.some((call) => call.url.includes("/files/delete-batch"))).toBe(true));
     expect(requestJSON(mocked.calls[1])).toEqual({ paths: ["a.txt", "b.txt"] });
   });

@@ -18,19 +18,19 @@ func NewStore(db *pgxpool.Pool) *Store {
 
 func (s *Store) CreateToken(ctx context.Context, token *RecoveryToken) error {
 	_, err := s.db.Exec(ctx, `
-		INSERT INTO recovery_tokens (id, user_id, type, token_hash, expires_at, created_at, metadata, ip, user_agent)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
-	`, token.ID, token.UserID, string(token.Type), token.TokenHash, token.ExpiresAt, token.CreatedAt, token.Metadata, token.IP, token.UserAgent)
+		INSERT INTO recovery_tokens (id, user_id, type, token_hash, token_lookup, expires_at, created_at, metadata, ip, user_agent)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+	`, token.ID, token.UserID, string(token.Type), token.TokenHash, token.TokenLookup, token.ExpiresAt, token.CreatedAt, token.Metadata, token.IP, token.UserAgent)
 	return err
 }
 
-func (s *Store) GetTokenByHash(ctx context.Context, hash string) (*RecoveryToken, error) {
+func (s *Store) GetTokenByLookup(ctx context.Context, lookup string) (*RecoveryToken, error) {
 	var t RecoveryToken
 	err := s.db.QueryRow(ctx, `
-		SELECT id::text, user_id::text, type, token_hash, expires_at, used_at, created_at, COALESCE(metadata, '{}'), COALESCE(ip::text, ''), COALESCE(user_agent, '')
+		SELECT id::text, user_id::text, type, token_hash, token_lookup, expires_at, used_at, created_at, COALESCE(metadata, '{}'), COALESCE(ip::text, ''), COALESCE(user_agent, '')
 		FROM recovery_tokens
-		WHERE token_hash = $1
-	`, hash).Scan(&t.ID, &t.UserID, &t.Type, &t.TokenHash, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt, &t.Metadata, &t.IP, &t.UserAgent)
+		WHERE token_lookup = $1
+	`, lookup).Scan(&t.ID, &t.UserID, &t.Type, &t.TokenHash, &t.TokenLookup, &t.ExpiresAt, &t.UsedAt, &t.CreatedAt, &t.Metadata, &t.IP, &t.UserAgent)
 	if err != nil {
 		if err == pgx.ErrNoRows {
 			return nil, nil

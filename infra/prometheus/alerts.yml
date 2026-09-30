@@ -19,27 +19,90 @@ groups:
           summary: "Beacon daemon is down"
           description: "Prometheus cannot scrape the beacon daemon."
 
-      - alert: GamePanelHighMemory
-        expr: game_panel_api_memory_alloc_bytes > 1073741824
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Forge API using > 1 GB heap"
-
-      - alert: GamePanelHighGoroutines
-        expr: game_panel_api_goroutines > 10000
-        for: 10m
-        labels:
-          severity: warning
-        annotations:
-          summary: "Forge API goroutine count high"
-
-      - alert: GamePanelDaemonRuntimeDisabled
-        expr: game_panel_daemon_runtime_enabled == 0
-        for: 5m
+      - alert: PrometheusSelfScrapeFailed
+        expr: up{job="prometheus"} == 0
+        for: 2m
         labels:
           severity: critical
         annotations:
-          summary: "Beacon container runtime is disabled"
-          description: "Beacon is responding, but its Docker runtime is unavailable; server lifecycle operations will fail."
+          summary: "Prometheus self-scrape failed"
+          description: "Prometheus is unable to scrape its own metrics endpoint."
+
+      - alert: ForgeApiReconciliationFailures
+        expr: increase(game_panel_api_reconciliation_failures_total[5m]) > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Forge API reconciliation failures"
+          description: "The Forge API reconciler is failing reconciliation runs (game_panel_api_reconciliation_failures_total is increasing)."
+
+      - alert: PostgresDown
+        expr: up{job="postgres-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "postgres-exporter has been unreachable for 2m. Check the postgres service and storage."
+
+      - alert: RedisDown
+        expr: up{job="redis-exporter"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Redis is down"
+          description: "redis-exporter has been unreachable for 2m. Caching/sessions are degraded."
+
+      - alert: PostgresBackupStale
+        # postgres-backup pushes backup_last_success_seconds to the
+        # pushgateway sidecar (PUSHGATEWAY_URL=http://pushgateway:9091, see
+        # compose.yml + prometheus.yml `pushgateway` job) after each
+        # successful dump (see postgres-backup.sh).
+        # Fires when no successful backup has been recorded for 36h.
+        # absent() guards the first-boot window before the initial push.
+        expr: (time() - backup_last_success_seconds) > 129600
+        for: 30m
+        labels:
+          severity: warning
+        annotations:
+          summary: "PostgreSQL backups are stale"
+          description: "No successful backup in 36h. See docs/restore-runbook.md."
+
+      - alert: PostgresBackupNeverReported
+        # Covers the never-backed-up case: the Stale rule above is empty
+        # (never fires) until the first successful push creates the series.
+        expr: absent(backup_last_success_seconds) == 1
+        for: 36h
+        labels:
+          severity: warning
+        annotations:
+          summary: "No PostgreSQL backup has ever succeeded"
+          description: "backup_last_success_seconds absent for 36h. Check postgres-backup logs and S3 offload."
+
+      # NOTE: no TlsCertExpiringSoon alert: the Caddy admin API is
+      # loopback-only by design (unauthenticated config API) and is not
+      # scrapable from Prometheus, so caddy_tls_certificate_expiration_seconds
+      # is never present. Monitor certificate expiry at the edge (ACME mail /
+      # external blackbox) instead of adding a rule that can never fire.
+
+      - alert: ApiHigh5xxRate
+        expr: sum(rate(http_requests_total{job="api", status=~"5.."}[5m])) / sum(rate(http_requests_total{job="api"}[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "API 5xx rate is high"
+          description: "More than 5% of API responses are 5xx over the last 5m."
+
+      - alert: DiskSpaceLow
+        # Served by the node-exporter sidecar (prometheus.yml `node-exporter`
+        # job, compose.yml `node-exporter` service).
+        expr: (node_filesystem_avail_bytes{mountpoint="/"} / node_filesystem_size_bytes{mountpoint="/"}) < 0.15
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Disk space low"
+          description: "Root filesystem has <15% free. Backups and images will fail next."

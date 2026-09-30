@@ -3,6 +3,8 @@ package eventstore
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -261,11 +263,94 @@ func TestOutboxPublisherReturnsStoreError(t *testing.T) {
 		nil,
 	)
 
+	var count int
+	_ = db.QueryRow("SELECT COUNT(*) FROM events").Scan(&count)
+	assert.Equal(t, 0, count)
+
 	_, err := db.ExecContext(context.Background(), `DROP TABLE events`)
 	require.NoError(t, err)
 
 	err = op.Publish(context.Background(), envelope)
 	require.Error(t, err)
+	assert.Contains(t, err.Error(), "eventstore")
+}
+
+type mockRegistry struct {
+	publish func(ctx context.Context, envelope events.Envelope) error
+}
+
+func (m *mockRegistry) Publish(ctx context.Context, envelope events.Envelope) error {
+	if m.publish != nil {
+		return m.publish(ctx, envelope)
+	}
+	return nil
+}
+
+func TestOutboxPublisherPersistsOnRegistryFailure(t *testing.T) {
+	db := setupTestDB(t)
+	store := newTestStore(db)
+	registryErr := errors.New("subscriber unavailable")
+	registry := &mockRegistry{
+		publish: func(ctx context.Context, envelope events.Envelope) error {
+			return registryErr
+		},
+	}
+
+	op := &OutboxPublisher{store: store, registry: registry}
+
+	envelope := events.NewEnvelope(
+		events.EventServerCreated,
+		"test-source",
+		"server",
+		uuid.NewString(),
+		map[string]any{"name": "test-server"},
+	)
+
+	pubErr := op.Publish(context.Background(), envelope)
+	require.Error(t, pubErr)
+	assert.Contains(t, pubErr.Error(), "persisted to DB")
+	assert.Contains(t, pubErr.Error(), "subscriber unavailable")
+	assert.Contains(t, pubErr.Error(), envelope.ID)
+
+	var stored StoredEvent
+	row := db.QueryRow("SELECT id, type, source, resource_type, resource_id, correlation_id, payload, created_at, dispatched FROM events WHERE id = $1", envelope.ID)
+	scanErr := row.Scan(&stored.ID, &stored.Type, &stored.Source, &stored.ResourceType, &stored.ResourceID,
+		&stored.CorrelationID, &stored.Payload, &stored.CreatedAt, &stored.Dispatched)
+	require.NoError(t, scanErr)
+	assert.Equal(t, envelope.ID, stored.ID)
+	assert.False(t, stored.Dispatched)
+
+	assert.ErrorIs(t, pubErr, registryErr)
+}
+
+func TestOutboxPublisherStoreErrorPreventsRegistryCall(t *testing.T) {
+	db := setupTestDB(t)
+	store := newTestStore(db)
+
+	called := false
+	registry := &mockRegistry{
+		publish: func(ctx context.Context, envelope events.Envelope) error {
+			called = true
+			return fmt.Errorf("should not be called")
+		},
+	}
+
+	op := &OutboxPublisher{store: store, registry: registry}
+
+	envelope := events.NewEnvelope(
+		events.EventServerCreated,
+		"test",
+		"server",
+		uuid.NewString(),
+		nil,
+	)
+
+	_, err := db.ExecContext(context.Background(), `DROP TABLE events`)
+	require.NoError(t, err)
+
+	err = op.Publish(context.Background(), envelope)
+	require.Error(t, err)
+	assert.False(t, called, "registry.Publish should not be called when DB insert fails")
 }
 
 func TestRelayPollsAndDispatches(t *testing.T) {

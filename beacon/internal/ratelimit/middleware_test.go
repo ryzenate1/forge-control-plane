@@ -64,7 +64,7 @@ func TestLimiterCleanup(t *testing.T) {
 	}
 	l.mu.RUnlock()
 
-	l.visitors["1.2.3.4"].lastSeen = time.Now().Add(-1 * time.Hour)
+	l.visitors["1.2.3.4"].lastSeen.Store(time.Now().Add(-1 * time.Hour).UnixNano())
 	l.cleanup()
 
 	l.mu.RLock()
@@ -87,7 +87,7 @@ func TestLimiterStartCleanup(t *testing.T) {
 
 	l.Allow("5.5.5.5")
 	l.mu.Lock()
-	l.visitors["5.5.5.5"].lastSeen = time.Now().Add(-1 * time.Hour)
+	l.visitors["5.5.5.5"].lastSeen.Store(time.Now().Add(-1 * time.Hour).UnixNano())
 	l.mu.Unlock()
 
 	time.Sleep(60 * time.Millisecond)
@@ -140,7 +140,7 @@ func TestMiddlewareBlocksExcess(t *testing.T) {
 }
 
 func TestMiddlewareXForwardedFor(t *testing.T) {
-	l := NewLimiter(Config{RequestsPerMinute: 60, BurstSize: 1})
+	l := NewLimiter(Config{RequestsPerMinute: 60, BurstSize: 1, TrustedProxyCIDRs: []string{"1.2.3.4/32", "5.6.7.8/32", "10.0.0.2/32"}})
 	handler := Middleware(l)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -164,7 +164,7 @@ func TestMiddlewareXForwardedFor(t *testing.T) {
 	}
 }
 
-func TestExtractIP(t *testing.T) {
+func TestExtractIPIgnoresUntrustedForwardingHeaders(t *testing.T) {
 	tests := []struct {
 		name   string
 		setup  func(r *http.Request)
@@ -175,21 +175,21 @@ func TestExtractIP(t *testing.T) {
 			setup: func(r *http.Request) {
 				r.Header.Set("X-Forwarded-For", "10.0.0.1")
 			},
-			expect: "10.0.0.1",
+			expect: "",
 		},
 		{
 			name: "X-Forwarded-For multiple",
 			setup: func(r *http.Request) {
 				r.Header.Set("X-Forwarded-For", "10.0.0.1, 10.0.0.2")
 			},
-			expect: "10.0.0.1",
+			expect: "",
 		},
 		{
 			name: "X-Real-IP",
 			setup: func(r *http.Request) {
 				r.Header.Set("X-Real-IP", "192.168.1.1")
 			},
-			expect: "192.168.1.1",
+			expect: "",
 		},
 		{
 			name: "RemoteAddr",

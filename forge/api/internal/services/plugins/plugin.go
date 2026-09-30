@@ -3,14 +3,30 @@ package plugins
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+var pluginNamePattern = regexp.MustCompile(`\A[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}\z`)
+
+// ErrPluginNotFound is returned when a plugin id does not resolve to a stored
+// plugin. Callers match on it instead of guessing from a generic store error.
+var ErrPluginNotFound = errors.New("plugin not found")
+
+// pluginHookTimeout bounds a single hook invocation so one wedged plugin cannot
+// hold up the whole hook chain.
+const pluginHookTimeout = 10 * time.Second
+
+// maxManifestBytes caps the manifest accepted from an install request.
+const maxManifestBytes = 1024 * 1024
 
 type PluginState string
 
@@ -91,23 +107,96 @@ func (s *Service) Get(ctx context.Context, id string) (*Plugin, error) {
 	return s.store.GetPlugin(ctx, id)
 }
 
+// mustGet resolves a plugin and fails loudly when it is absent. Repositories
+// disagree on whether "not found" is an error or a nil result, so both shapes
+// are normalised here rather than being allowed to read as a success.
+func (s *Service) mustGet(ctx context.Context, id string) (*Plugin, error) {
+	if strings.TrimSpace(id) == "" {
+		return nil, ErrPluginNotFound
+	}
+	plugin, err := s.store.GetPlugin(ctx, id)
+	if errors.Is(err, ErrPluginNotFound) {
+		return nil, ErrPluginNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("look up plugin: %w", err)
+	}
+	if plugin == nil {
+		return nil, ErrPluginNotFound
+	}
+	return plugin, nil
+}
+
+// findByName reports whether a name is already taken. A store failure is an
+// error, never "free to use".
+func (s *Service) findByName(ctx context.Context, name string) (*Plugin, error) {
+	existing, err := s.store.FindPluginByName(ctx, name)
+	if errors.Is(err, ErrPluginNotFound) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("check existing plugin %q: %w", name, err)
+	}
+	return existing, nil
+}
+
 func (s *Service) Install(ctx context.Context, name, source, manifestJSON string) (*Plugin, error) {
+	if !pluginNamePattern.MatchString(name) {
+		return nil, fmt.Errorf("plugin name may only contain letters, numbers, dot, underscore, and hyphen")
+	}
+	if len(manifestJSON) > maxManifestBytes {
+		return nil, fmt.Errorf("plugin manifest exceeds 1 MiB")
+	}
 	var manifest PluginManifest
 	if err := json.Unmarshal([]byte(manifestJSON), &manifest); err != nil {
 		return nil, fmt.Errorf("invalid manifest: %w", err)
 	}
+	if manifest.Name != "" && manifest.Name != name {
+		return nil, fmt.Errorf("manifest name %q does not match plugin name %q", manifest.Name, name)
+	}
+	// A manifest that declares no version cannot participate in dependency or
+	// min/max range resolution, so reject it at the boundary.
+	if strings.TrimSpace(manifest.Version) == "" {
+		return nil, fmt.Errorf("manifest must declare a version")
+	}
+	if manifest.Settings != nil && !json.Valid(manifest.Settings) {
+		return nil, fmt.Errorf("manifest settings must be valid JSON")
+	}
+	if manifest.Entrypoint != "" {
+		cleanEntrypoint := filepath.Clean(manifest.Entrypoint)
+		if filepath.IsAbs(cleanEntrypoint) || cleanEntrypoint == ".." || strings.HasPrefix(cleanEntrypoint, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("plugin entrypoint must remain inside the plugin directory")
+		}
+	}
+	// Hook targets are resolved against the plugin directory later; keep them
+	// relative so a manifest cannot name an arbitrary host path.
+	for hook, target := range manifest.Hooks {
+		clean := filepath.Clean(target)
+		if target == "" || filepath.IsAbs(clean) || clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			return nil, fmt.Errorf("hook %q must reference a path inside the plugin directory", hook)
+		}
+	}
 
-	existing, err := s.store.FindPluginByName(ctx, name)
-	if err == nil && existing != nil {
+	existing, err := s.findByName(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	if existing != nil {
 		return nil, fmt.Errorf("plugin %q is already installed", name)
 	}
 
 	if s.pluginsDir != "" {
-		pluginDir := filepath.Join(s.pluginsDir, name)
+		pluginDir, err := safePluginPath(s.pluginsDir, name)
+		if err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(pluginDir, 0755); err != nil {
 			return nil, fmt.Errorf("create plugin directory: %w", err)
 		}
-		manifestData, _ := json.MarshalIndent(manifest, "", "  ")
+		manifestData, err := json.MarshalIndent(manifest, "", "  ")
+		if err != nil {
+			return nil, fmt.Errorf("encode manifest: %w", err)
+		}
 		if err := os.WriteFile(filepath.Join(pluginDir, "manifest.json"), manifestData, 0644); err != nil {
 			return nil, fmt.Errorf("write manifest: %w", err)
 		}
@@ -132,28 +221,53 @@ func (s *Service) Install(ctx context.Context, name, source, manifestJSON string
 }
 
 func (s *Service) Uninstall(ctx context.Context, id string) error {
-	plugin, err := s.store.GetPlugin(ctx, id)
+	plugin, err := s.mustGet(ctx, id)
 	if err != nil {
 		return err
 	}
 
-	if s.pluginsDir != "" {
-		pluginDir := filepath.Join(s.pluginsDir, plugin.Name)
-		os.RemoveAll(pluginDir)
+	// Remove the row first: if the directory removal fails the plugin is still
+	// installed and visible, rather than a ghost record pointing at nothing.
+	if err := s.store.DeletePlugin(ctx, id); err != nil {
+		return fmt.Errorf("delete plugin record: %w", err)
 	}
 
-	return s.store.DeletePlugin(ctx, id)
+	if s.pluginsDir != "" {
+		pluginDir, err := safePluginPath(s.pluginsDir, plugin.Name)
+		if err != nil {
+			return err
+		}
+		if err := os.RemoveAll(pluginDir); err != nil {
+			return fmt.Errorf("remove plugin directory: %w", err)
+		}
+	}
+
+	return nil
 }
 
 func (s *Service) Enable(ctx context.Context, id string) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
 	return s.store.UpdatePluginState(ctx, id, PluginStateEnabled, "")
 }
 
 func (s *Service) Disable(ctx context.Context, id string) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
 	return s.store.UpdatePluginState(ctx, id, PluginStateDisabled, "")
 }
 
 func (s *Service) UpdateSettings(ctx context.Context, id string, settings json.RawMessage) error {
+	if _, err := s.mustGet(ctx, id); err != nil {
+		return err
+	}
+	// Reject anything that is not valid JSON rather than coercing it into a
+	// jsonb column and reporting success.
+	if len(settings) == 0 || !json.Valid(settings) {
+		return fmt.Errorf("plugin settings must be valid JSON")
+	}
 	return s.store.UpdatePluginSettings(ctx, id, settings)
 }
 
@@ -169,30 +283,56 @@ func (s *Service) RegisterHook(pluginID, hook string, handler HookHandler) {
 	})
 }
 
+// ExecuteHook runs every handler registered for a hook. Skipped and failed
+// handlers are reported: a chain where nothing ran is not a success. The
+// returned slice always holds one result per handler that produced output, so
+// callers can pair the error with the partial work.
 func (s *Service) ExecuteHook(ctx context.Context, hook string, args map[string]any) ([]map[string]any, error) {
 	s.mu.RLock()
-	handlers := s.hooks[hook]
+	handlers := make([]struct {
+		pluginID string
+		handler  HookHandler
+	}, len(s.hooks[hook]))
+	copy(handlers, s.hooks[hook])
 	s.mu.RUnlock()
 
+	if len(handlers) == 0 {
+		return nil, fmt.Errorf("no plugin hook handler is registered for %q", hook)
+	}
+
 	results := make([]map[string]any, 0, len(handlers))
+	var failures []string
 	for _, h := range handlers {
-		plugin, err := s.store.GetPlugin(ctx, h.pluginID)
-		if err != nil || plugin.State != PluginStateEnabled {
+		plugin, err := s.mustGet(ctx, h.pluginID)
+		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", h.pluginID, err))
+			continue
+		}
+		if plugin.State != PluginStateEnabled {
+			failures = append(failures, fmt.Sprintf("%s: plugin is %s, hook did not run", plugin.Name, plugin.State))
 			continue
 		}
 
-		result, err := h.handler(ctx, plugin, args)
+		hookCtx, cancel := context.WithTimeout(ctx, pluginHookTimeout)
+		result, err := h.handler(hookCtx, plugin, args)
+		cancel()
 		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: %v", plugin.Name, err))
 			continue
 		}
 		results = append(results, result)
+	}
+
+	if len(failures) > 0 {
+		return results, fmt.Errorf("plugin hook %q did not complete for %d handler(s): %s",
+			hook, len(failures), strings.Join(failures, "; "))
 	}
 	return results, nil
 }
 
 func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 	if s.pluginsDir == "" {
-		return nil, nil
+		return nil, fmt.Errorf("plugin discovery is not configured: no plugins directory is set")
 	}
 
 	entries, err := os.ReadDir(s.pluginsDir)
@@ -201,24 +341,48 @@ func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 	}
 
 	var discovered []Plugin
+	var failures []string
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
 		}
+		if !pluginNamePattern.MatchString(entry.Name()) {
+			failures = append(failures, fmt.Sprintf("%s: directory name is not a valid plugin name", entry.Name()))
+			continue
+		}
 
-		manifestPath := filepath.Join(s.pluginsDir, entry.Name(), "manifest.json")
+		pluginDir, err := safePluginPath(s.pluginsDir, entry.Name())
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		manifestPath := filepath.Join(pluginDir, "manifest.json")
 		data, err := os.ReadFile(manifestPath)
 		if err != nil {
+			failures = append(failures, fmt.Sprintf("%s: read manifest: %v", entry.Name(), err))
+			continue
+		}
+		if len(data) > maxManifestBytes {
+			failures = append(failures, fmt.Sprintf("%s: manifest exceeds 1 MiB", entry.Name()))
 			continue
 		}
 
 		var manifest PluginManifest
 		if err := json.Unmarshal(data, &manifest); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: invalid manifest: %v", entry.Name(), err))
+			continue
+		}
+		if manifest.Name != "" && manifest.Name != entry.Name() {
+			failures = append(failures, fmt.Sprintf("%s: manifest name %q does not match directory", entry.Name(), manifest.Name))
 			continue
 		}
 
-		existing, err := s.store.FindPluginByName(ctx, entry.Name())
-		if err == nil && existing != nil {
+		existing, err := s.findByName(ctx, entry.Name())
+		if err != nil {
+			failures = append(failures, err.Error())
+			continue
+		}
+		if existing != nil {
 			discovered = append(discovered, *existing)
 			continue
 		}
@@ -231,13 +395,34 @@ func (s *Service) Discover(ctx context.Context) ([]Plugin, error) {
 			State:       PluginStateInstalled,
 			InstalledAt: time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
+			Settings:    manifest.Settings,
 		}
 
 		if err := s.store.CreatePlugin(ctx, &plugin); err != nil {
+			failures = append(failures, fmt.Sprintf("%s: record plugin: %v", entry.Name(), err))
 			continue
 		}
 		discovered = append(discovered, plugin)
 	}
 
+	if len(failures) > 0 {
+		return discovered, fmt.Errorf("plugin discovery was incomplete: %s", strings.Join(failures, "; "))
+	}
 	return discovered, nil
+}
+
+func safePluginPath(root, name string) (string, error) {
+	if !pluginNamePattern.MatchString(name) {
+		return "", fmt.Errorf("invalid plugin name")
+	}
+	absoluteRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve plugin root: %w", err)
+	}
+	candidate := filepath.Join(absoluteRoot, name)
+	relative, err := filepath.Rel(absoluteRoot, candidate)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("plugin path escapes plugin root")
+	}
+	return candidate, nil
 }

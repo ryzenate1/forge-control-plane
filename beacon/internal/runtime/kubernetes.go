@@ -6,15 +6,17 @@
 package runtime
 
 import (
-	"bufio"
-	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
+	pathpkg "path"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -22,9 +24,12 @@ import (
 	"time"
 
 	"k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/util/intstr"
+	kvalidation "k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -40,6 +45,8 @@ type KubernetesRuntime struct {
 	mu        sync.Mutex
 	pods      map[string]*v1.Pod
 }
+
+func (r *KubernetesRuntime) Close() error { return nil }
 
 func NewKubernetesRuntime(cfg KubernetesConfig) (*KubernetesRuntime, error) {
 	namespace := cfg.Namespace
@@ -94,10 +101,28 @@ func (r *KubernetesRuntime) Create(ctx context.Context, req CreateRequest) error
 	if err := r.validateCreate(req); err != nil {
 		return err
 	}
+	var err error
+	req, err = canonicalizeKubernetesMounts(req)
+	if err != nil {
+		return err
+	}
+	hash, err := createRequestHash(req)
+	if err != nil {
+		return err
+	}
 	name := kubePodName(req.ServerID)
 	existing, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, name, metav1.GetOptions{})
 	if err == nil && existing != nil {
+		// Idempotent by hash: an identical Running/Pending pod is a no-op.
+		// A hash mismatch means the desired config drifted, so the stale
+		// pod is replaced below instead of being silently kept.
 		if existing.Status.Phase == v1.PodRunning || existing.Status.Phase == v1.PodPending {
+			if existing.Labels != nil && existing.Labels[configHashLabel] == hash {
+				return nil
+			}
+		} else if existing.Labels != nil && existing.Labels[configHashLabel] == hash {
+			// Terminal pod with identical config: leave replacement to
+			// Start, which recreates Succeeded/Failed pods.
 			return nil
 		}
 		if err := r.client.CoreV1().Pods(r.namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)}); err != nil {
@@ -108,6 +133,10 @@ func (r *KubernetesRuntime) Create(ctx context.Context, req CreateRequest) error
 		return err
 	}
 	pod := r.buildPod(req)
+	if pod.Labels == nil {
+		pod.Labels = map[string]string{}
+	}
+	pod.Labels[configHashLabel] = hash
 	_, err = r.client.CoreV1().Pods(r.namespace).Create(ctx, pod, metav1.CreateOptions{})
 	return err
 }
@@ -116,12 +145,27 @@ func (r *KubernetesRuntime) Install(ctx context.Context, req InstallRequest) (In
 	if r.namespace == "" {
 		return InstallResult{}, errors.New("namespace is required")
 	}
+	// Installer images must be digest-pinned like every other runtime, and
+	// the host path must pass the same allowlist as workload mounts: an
+	// installer with an unpinned image or an arbitrary HostPath would run
+	// untrusted content with node-filesystem access.
 	if req.Image == "" {
-		req.Image = "alpine:3.21"
+		req.Image = "docker.io/library/alpine:3.21@sha256:21a3deaa0d32a8057914f36584b5288d2e5da9845c690f493846b7b90a70dbcd"
+	}
+	if !pinnedImagePattern.MatchString(req.Image) {
+		return InstallResult{}, fmt.Errorf("remote image %q is not digest-pinned; use name@sha256:<64 hex characters>", req.Image)
 	}
 	if req.Entrypoint == "" {
 		req.Entrypoint = "sh"
 	}
+	rootDir, err := validateRootDir(req.RootDir)
+	if err != nil {
+		return InstallResult{}, err
+	}
+	if err := k8sHostPathAllowed(rootDir); err != nil {
+		return InstallResult{}, fmt.Errorf("root dir: %w", err)
+	}
+	req.RootDir = rootDir
 	jobName := kubePodName(req.ServerID) + "-installer"
 	_ = r.client.CoreV1().Pods(r.namespace).Delete(ctx, jobName, metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)})
 	pod := &v1.Pod{
@@ -129,9 +173,9 @@ func (r *KubernetesRuntime) Install(ctx context.Context, req InstallRequest) (In
 			Name:      jobName,
 			Namespace: r.namespace,
 			Labels: map[string]string{
-				"forge.server_id": req.ServerID,
-				"forge.managed":   "true",
-				"forge.job":       "install",
+				"modern-game-panel.server_id": req.ServerID,
+				"modern-game-panel.managed":   "true",
+				"modern-game-panel.job":       "install",
 			},
 		},
 		Spec: v1.PodSpec{
@@ -159,7 +203,10 @@ func (r *KubernetesRuntime) Install(ctx context.Context, req InstallRequest) (In
 				{
 					Name: "server-data",
 					VolumeSource: v1.VolumeSource{
-						HostPath: &v1.HostPathVolumeSource{Path: req.RootDir},
+						HostPath: &v1.HostPathVolumeSource{Path: req.RootDir, Type: func() *v1.HostPathType {
+							value := v1.HostPathDirectory
+							return &value
+						}()},
 					},
 				},
 			},
@@ -217,29 +264,42 @@ func (r *KubernetesRuntime) Inspect(ctx context.Context, serverID string) (Conta
 		Running:  pod.Status.Phase == v1.PodRunning,
 		Status:   string(pod.Status.Phase),
 	}
+	if pod.Status.StartTime != nil {
+		state.StartedAt = pod.Status.StartTime.Time
+	}
 	return state, nil
 }
 
 func (r *KubernetesRuntime) List(ctx context.Context) ([]ContainerState, error) {
 	pods, err := r.client.CoreV1().Pods(r.namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: "forge.managed=true",
+		LabelSelector: "modern-game-panel.managed=true",
 	})
 	if err != nil {
 		return nil, err
 	}
 	states := make([]ContainerState, 0, len(pods.Items))
 	for _, pod := range pods.Items {
-		serverID := pod.Labels["forge.server_id"]
+		// Installer pods share the managed label but are not workloads:
+		// listing them as servers would surface phantom entries (and
+		// collide by server_id with the real workload pod).
+		if pod.Labels["modern-game-panel.job"] == "install" {
+			continue
+		}
+		serverID := pod.Labels["modern-game-panel.server_id"]
 		if serverID == "" {
 			continue
 		}
-		states = append(states, ContainerState{
+		state := ContainerState{
 			ServerID: serverID,
 			ID:       string(pod.UID),
 			Exists:   true,
 			Running:  pod.Status.Phase == v1.PodRunning,
 			Status:   string(pod.Status.Phase),
-		})
+		}
+		if pod.Status.StartTime != nil {
+			state.StartedAt = pod.Status.StartTime.Time
+		}
+		states = append(states, state)
 	}
 	return states, nil
 }
@@ -263,6 +323,12 @@ func (r *KubernetesRuntime) Start(ctx context.Context, serverID string) error {
 		}
 		return r.waitForPodRunning(ctx, created.Name)
 	}
+	// A Pending pod has been accepted but is not serving yet. Returning nil
+	// here would report a workload that cannot serve traffic as started, so
+	// wait for Running (or a terminal phase) instead.
+	if pod.Status.Phase == v1.PodPending {
+		return r.waitForPodRunning(ctx, name)
+	}
 	return nil
 }
 
@@ -283,8 +349,6 @@ func (r *KubernetesRuntime) Signal(ctx context.Context, serverID, signal string)
 	name := kubePodName(serverID)
 	containerName := "server"
 	cmd := []string{"kill", "-" + strconv.Itoa(sigNum), "1"}
-	req := r.client.CoreV1().Pods(r.namespace).GetLogs(name, &v1.PodLogOptions{Container: containerName})
-	_ = req
 	exec := r.client.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(name).
@@ -313,24 +377,38 @@ func (r *KubernetesRuntime) Signal(ctx context.Context, serverID, signal string)
 
 func (r *KubernetesRuntime) Restart(ctx context.Context, serverID string) error {
 	name := kubePodName(serverID)
+	pod, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
 	if err := r.client.CoreV1().Pods(r.namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(30)}); err != nil {
 		return err
 	}
-	for i := 0; i < 60; i++ {
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+	timeout := time.NewTimer(30 * time.Second)
+	defer timeout.Stop()
+	for {
 		_, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, name, metav1.GetOptions{})
 		if err != nil && isNotFound(err) {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		if err != nil {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-timeout.C:
+			return fmt.Errorf("timed out waiting for pod %s deletion", name)
+		case <-ticker.C:
+		}
 	}
-	existing, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, name, metav1.GetOptions{})
-	if err != nil && !isNotFound(err) {
-		return err
+	created, err := r.recreatePod(ctx, pod)
+	if err != nil {
+		return fmt.Errorf("recreate pod %s: %w", name, err)
 	}
-	if existing != nil {
-		return r.waitForPodRunning(ctx, name)
-	}
-	return fmt.Errorf("pod %s was deleted but not recreated", name)
+	return r.waitForPodRunning(ctx, created.Name)
 }
 
 func (r *KubernetesRuntime) WaitForStop(ctx context.Context, serverID string, duration time.Duration, terminate bool) error {
@@ -362,8 +440,31 @@ func (r *KubernetesRuntime) WaitForStop(ctx context.Context, serverID string, du
 	if !terminate {
 		return context.DeadlineExceeded
 	}
-	_ = r.client.CoreV1().Pods(r.namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(10)})
-	return nil
+	if err := r.client.CoreV1().Pods(r.namespace).Delete(ctx, name, metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)}); err != nil && !isNotFound(err) {
+		return err
+	}
+	confirmCtx, confirmCancel := context.WithTimeout(ctx, 30*time.Second)
+	defer confirmCancel()
+	confirm, err := r.client.CoreV1().Pods(r.namespace).Watch(confirmCtx, metav1.ListOptions{
+		FieldSelector: fields.Set{"metadata.name": name}.String(),
+	})
+	if err != nil {
+		return err
+	}
+	defer confirm.Stop()
+	for {
+		select {
+		case event, ok := <-confirm.ResultChan():
+			if !ok {
+				return errors.New("pod deletion watch closed before confirmation")
+			}
+			if event.Type == watch.Deleted {
+				return nil
+			}
+		case <-confirmCtx.Done():
+			return fmt.Errorf("forced pod deletion was not confirmed: %w", confirmCtx.Err())
+		}
+	}
 }
 
 func (r *KubernetesRuntime) Stats(ctx context.Context, serverID string) (Stats, error) {
@@ -372,7 +473,10 @@ func (r *KubernetesRuntime) Stats(ctx context.Context, serverID string) (Stats, 
 	if err != nil {
 		return Stats{}, err
 	}
-	var cpuUsage, memUsage, memLimit uint64
+	if pod.Status.Phase != v1.PodRunning {
+		return Stats{}, fmt.Errorf("pod %q is %q: no metrics to report", name, pod.Status.Phase)
+	}
+	var memLimit uint64
 	for _, container := range pod.Status.ContainerStatuses {
 		if container.State.Running == nil {
 			continue
@@ -385,115 +489,37 @@ func (r *KubernetesRuntime) Stats(ctx context.Context, serverID string) (Stats, 
 			memLimit += uint64(q.Value())
 		}
 	}
-	config, err := r.restConfig()
-	if err != nil {
-		return Stats{}, err
+	// Usage requires metrics.k8s.io. Do not exec tools inside an untrusted game
+	// container or misreport node-wide /proc values as pod utilization.
+	// Unknown is not zero: usage is unavailable without a metrics backend,
+	// so report the failure instead of a healthy-looking zero reading. The
+	// limit is still returned alongside the error for callers that can use
+	// placement data without live usage.
+	if memLimit == 0 {
+		return Stats{}, errors.New("kubernetes metrics are unavailable: no memory limit observed and no usage backend configured")
 	}
-	exec := r.client.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(name).
-		Namespace(r.namespace).
-		SubResource("exec").
-		Param("container", "server").
-		Param("stdin", "false").
-		Param("stdout", "true").
-		Param("stderr", "false").
-		Param("tty", "false")
-	exec.VersionedParams(&v1.PodExecOptions{
-		Command: []string{"cat", "/proc/stat"},
-		Stdin:   false,
-		Stdout:  true,
-		Stderr:  true,
-	}, scheme.ParameterCodec)
-	executor, err := remotecommand.NewSPDYExecutor(config, "POST", exec.URL())
-	if err != nil {
-		return Stats{}, err
-	}
-	var cpuBuf bytes.Buffer
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &cpuBuf,
-		Stderr: io.Discard,
-	})
-	if err != nil {
-		return Stats{}, err
-	}
-	scanner := bufio.NewScanner(&cpuBuf)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "cpu ") {
-			fields := strings.Fields(line)
-			if len(fields) >= 8 {
-				var total uint64
-				for _, f := range fields[1:] {
-					v, _ := strconv.ParseUint(f, 10, 64)
-					total += v
-				}
-				cpuUsage = total
-			}
-			break
-		}
-	}
-	exec = r.client.CoreV1().RESTClient().Post().
-		Resource("pods").
-		Name(name).
-		Namespace(r.namespace).
-		SubResource("exec").
-		Param("container", "server").
-		Param("stdin", "false").
-		Param("stdout", "true").
-		Param("stderr", "false").
-		Param("tty", "false")
-	exec.VersionedParams(&v1.PodExecOptions{
-		Command: []string{"cat", "/proc/meminfo"},
-		Stdin:   false,
-		Stdout:  true,
-		Stderr:  true,
-	}, scheme.ParameterCodec)
-	var memBuf bytes.Buffer
-	executor, err = remotecommand.NewSPDYExecutor(config, "POST", exec.URL())
-	if err != nil {
-		return Stats{}, err
-	}
-	err = executor.StreamWithContext(ctx, remotecommand.StreamOptions{
-		Stdout: &memBuf,
-		Stderr: io.Discard,
-	})
-	if err != nil {
-		return Stats{}, err
-	}
-	scanner = bufio.NewScanner(&memBuf)
-	for scanner.Scan() {
-		line := scanner.Text()
-		if strings.HasPrefix(line, "MemTotal:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				v, _ := strconv.ParseUint(fields[1], 10, 64)
-				if memLimit == 0 {
-					memLimit = v * 1024
-				}
-			}
-		}
-		if strings.HasPrefix(line, "MemAvailable:") {
-			fields := strings.Fields(line)
-			if len(fields) >= 2 {
-				v, _ := strconv.ParseUint(fields[1], 10, 64)
-				memUsage = memLimit - v*1024
-			}
-		}
-	}
-	cpuPercent := float64(0)
-	if cpuUsage > 0 {
-		cpuPercent = float64(cpuUsage) / 100.0
-	}
-	return Stats{
-		CPUPercent:  cpuPercent,
-		MemoryBytes: memUsage,
-		MemoryLimit: memLimit,
-	}, nil
+	return Stats{MemoryLimit: memLimit}, fmt.Errorf("kubernetes pod usage metrics are unavailable (memory limit %d bytes, no metrics.k8s.io backend); not reporting zero usage as healthy", memLimit)
 }
 
 func (r *KubernetesRuntime) Logs(ctx context.Context, serverID string) (io.ReadCloser, error) {
 	name := kubePodName(serverID)
+	// A pod that has never started has no output. The kubelet answers
+	// GetLogs on a Pending pod with an empty stream and nil error, which
+	// reads as "healthy but quiet"; refuse it instead.
+	if pod, err := r.client.CoreV1().Pods(r.namespace).Get(ctx, name, metav1.GetOptions{}); err == nil && pod != nil {
+		if pod.Status.Phase == v1.PodPending && pod.Status.StartTime == nil {
+			everRan := false
+			for _, cs := range pod.Status.ContainerStatuses {
+				if cs.State.Terminated != nil || cs.State.Running != nil {
+					everRan = true
+					break
+				}
+			}
+			if !everRan {
+				return nil, fmt.Errorf("pod %q is pending and has never started: no logs to report", name)
+			}
+		}
+	}
 	logOpts := &v1.PodLogOptions{
 		Container: "server",
 		Follow:    false,
@@ -508,10 +534,15 @@ func (r *KubernetesRuntime) Logs(ctx context.Context, serverID string) (io.ReadC
 
 func (r *KubernetesRuntime) LogsStream(ctx context.Context, serverID string, tail string) (io.ReadCloser, error) {
 	name := kubePodName(serverID)
-	tailLines := int64(50)
-	if tail != "" {
-		if n, err := strconv.ParseInt(tail, 10, 64); err == nil && n > 0 {
+	// Align with Docker LogsStream: empty or "all" means the last 10000
+	// lines, not 50. A 50-line default would silently truncate install
+	// output that Docker callers can still see.
+	tailLines := int64(10000)
+	if strings.TrimSpace(tail) != "" && tail != "all" {
+		if n, err := strconv.ParseInt(strings.TrimSpace(tail), 10, 64); err == nil && n >= 0 {
 			tailLines = n
+		} else {
+			return nil, errors.New("tail must be a non-negative integer or all")
 		}
 	}
 	logOpts := &v1.PodLogOptions{
@@ -540,6 +571,9 @@ func (r *KubernetesRuntime) StatsStream(ctx context.Context, serverID string) (i
 			case <-ticker.C:
 				stats, err := r.Stats(ctx, serverID)
 				if err != nil {
+					// Propagate instead of a silent EOF: the reader must see
+					// the failure, not an idle stream that looks healthy.
+					_ = pw.CloseWithError(err)
 					return
 				}
 				data, _ := json.Marshal(stats)
@@ -603,6 +637,13 @@ func (r *KubernetesRuntime) AttachConsole(ctx context.Context, serverID string) 
 }
 
 func (r *KubernetesRuntime) SendCommand(ctx context.Context, serverID, command string) error {
+	const maxKubernetesCommandBytes = 4 * 1024
+	if len(command) > maxKubernetesCommandBytes {
+		return fmt.Errorf("command exceeds %d byte limit", maxKubernetesCommandBytes)
+	}
+	if strings.ContainsRune(command, '\x00') {
+		return errors.New("command contains invalid characters")
+	}
 	name := kubePodName(serverID)
 	config, err := r.restConfig()
 	if err != nil {
@@ -636,19 +677,25 @@ func (r *KubernetesRuntime) SendCommand(ctx context.Context, serverID, command s
 
 func (r *KubernetesRuntime) Delete(ctx context.Context, serverID string) error {
 	_ = r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID)+"-installer", metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)})
-	return r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID), metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)})
+	if err := r.client.CoreV1().Pods(r.namespace).Delete(ctx, kubePodName(serverID), metav1.DeleteOptions{GracePeriodSeconds: ptrInt64(0)}); err != nil {
+		if isNotFound(err) {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (r *KubernetesRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEvent, <-chan error) {
-	out := make(chan ContainerEvent)
+	out := make(chan ContainerEvent, 128)
 	errs := make(chan error, 1)
 	go func() {
 		defer close(out)
 		defer close(errs)
-		backoff := 100 * time.Millisecond
+		backoff := time.Second
 		for ctx.Err() == nil {
 			watcher, err := r.client.CoreV1().Pods(r.namespace).Watch(ctx, metav1.ListOptions{
-				LabelSelector: "forge.managed=true",
+				LabelSelector: "modern-game-panel.managed=true",
 			})
 			if err != nil {
 				select {
@@ -670,13 +717,13 @@ func (r *KubernetesRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEv
 				}
 				continue
 			}
-			backoff = 100 * time.Millisecond
+			backoff = time.Second
 			for event := range watcher.ResultChan() {
 				pod, ok := event.Object.(*v1.Pod)
 				if !ok {
 					continue
 				}
-				serverID := pod.Labels["forge.server_id"]
+				serverID := pod.Labels["modern-game-panel.server_id"]
 				if serverID == "" {
 					continue
 				}
@@ -700,6 +747,11 @@ func (r *KubernetesRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEv
 				case <-ctx.Done():
 					watcher.Stop()
 					return
+				default:
+					select {
+					case errs <- errors.New("Kubernetes event dropped because the consumer is not keeping up"):
+					default:
+					}
 				}
 			}
 		}
@@ -710,8 +762,8 @@ func (r *KubernetesRuntime) WatchEvents(ctx context.Context) (<-chan ContainerEv
 func (r *KubernetesRuntime) buildPod(req CreateRequest) *v1.Pod {
 	name := kubePodName(req.ServerID)
 	labels := map[string]string{
-		"forge.server_id": req.ServerID,
-		"forge.managed":   "true",
+		"modern-game-panel.server_id": req.ServerID,
+		"modern-game-panel.managed":   "true",
 	}
 	container := v1.Container{
 		Name:    "server",
@@ -732,13 +784,27 @@ func (r *KubernetesRuntime) buildPod(req CreateRequest) *v1.Pod {
 			},
 		},
 	}
+	// UID/GID are part of the workload contract, not advisory metadata: a
+	// pod that ignores them runs as root instead of the requested user.
+	if req.UID != 0 || req.GID != 0 {
+		uid := int64(req.UID)
+		gid := int64(req.GID)
+		if req.UID != 0 {
+			container.SecurityContext.RunAsUser = &uid
+			container.SecurityContext.RunAsNonRoot = ptrBool(true)
+		}
+		if req.GID != 0 {
+			container.SecurityContext.RunAsGroup = &gid
+		}
+	}
 	volumes := []v1.Volume{}
 	mounts := []v1.VolumeMount{}
 	if req.RootDir != "" {
+		hostPathType := v1.HostPathDirectory
 		volumes = append(volumes, v1.Volume{
 			Name: "server-data",
 			VolumeSource: v1.VolumeSource{
-				HostPath: &v1.HostPathVolumeSource{Path: req.RootDir},
+				HostPath: &v1.HostPathVolumeSource{Path: req.RootDir, Type: &hostPathType},
 			},
 		})
 		mounts = append(mounts, v1.VolumeMount{
@@ -751,10 +817,11 @@ func (r *KubernetesRuntime) buildPod(req CreateRequest) *v1.Pod {
 			continue
 		}
 		volName := fmt.Sprintf("mount-%d", i)
+		hostPathType := v1.HostPathDirectory
 		volumes = append(volumes, v1.Volume{
 			Name: volName,
 			VolumeSource: v1.VolumeSource{
-				HostPath: &v1.HostPathVolumeSource{Path: m.Source},
+				HostPath: &v1.HostPathVolumeSource{Path: m.Source, Type: &hostPathType},
 			},
 		})
 		mounts = append(mounts, v1.VolumeMount{
@@ -764,6 +831,19 @@ func (r *KubernetesRuntime) buildPod(req CreateRequest) *v1.Pod {
 		})
 	}
 	container.VolumeMounts = mounts
+	if len(container.Ports) > 0 {
+		probe := &v1.Probe{
+			ProbeHandler: v1.ProbeHandler{TCPSocket: &v1.TCPSocketAction{
+				Port: intstr.FromInt32(container.Ports[0].ContainerPort),
+			}},
+			InitialDelaySeconds: 15,
+			PeriodSeconds:       10,
+			TimeoutSeconds:      3,
+			FailureThreshold:    6,
+		}
+		container.ReadinessProbe = probe.DeepCopy()
+		container.LivenessProbe = probe
+	}
 	pod := &v1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -771,16 +851,16 @@ func (r *KubernetesRuntime) buildPod(req CreateRequest) *v1.Pod {
 			Labels:    labels,
 		},
 		Spec: v1.PodSpec{
-			Containers:                []v1.Container{container},
-			Volumes:                   volumes,
-			RestartPolicy:             v1.RestartPolicyAlways,
+			Containers:                   []v1.Container{container},
+			Volumes:                      volumes,
+			RestartPolicy:                v1.RestartPolicyNever,
 			AutomountServiceAccountToken: ptrBool(false),
-			DNSPolicy:                 v1.DNSDefault,
+			DNSPolicy:                    v1.DNSDefault,
 		},
 	}
 	if req.RegistryAuth != nil {
 		pod.Spec.ImagePullSecrets = []v1.LocalObjectReference{
-			{Name: r.ensurePullSecret(context.Background(), req.RegistryAuth)},
+			{Name: imagePullSecretName(req.ServerID)},
 		}
 	}
 	if req.DNS != nil {
@@ -793,11 +873,8 @@ func (r *KubernetesRuntime) ensureImagePull(ctx context.Context, req CreateReque
 	if req.RegistryAuth == nil {
 		return nil
 	}
-	secretName := "forge-pull-" + req.ServerID
+	secretName := imagePullSecretName(req.ServerID)
 	existing, err := r.client.CoreV1().Secrets(r.namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err == nil && existing != nil {
-		return nil
-	}
 	data := map[string][]byte{}
 	auth := map[string]any{
 		"auths": map[string]any{
@@ -820,39 +897,21 @@ func (r *KubernetesRuntime) ensureImagePull(ctx context.Context, req CreateReque
 		Type: v1.SecretTypeDockerConfigJson,
 		Data: data,
 	}
+	if err == nil && existing != nil {
+		secret.ResourceVersion = existing.ResourceVersion
+		_, err = r.client.CoreV1().Secrets(r.namespace).Update(ctx, secret, metav1.UpdateOptions{})
+		return err
+	}
+	if err != nil && !isNotFound(err) {
+		return err
+	}
 	_, err = r.client.CoreV1().Secrets(r.namespace).Create(ctx, secret, metav1.CreateOptions{})
 	return err
 }
 
-func (r *KubernetesRuntime) ensurePullSecret(ctx context.Context, auth *RegistryAuth) string {
-	secretName := "forge-pull-" + strings.ReplaceAll(auth.ServerAddress, ":", "-")
-	existing, err := r.client.CoreV1().Secrets(r.namespace).Get(ctx, secretName, metav1.GetOptions{})
-	if err == nil && existing != nil {
-		return secretName
-	}
-	dockerConfig := map[string]any{
-		"auths": map[string]any{
-			auth.ServerAddress: map[string]string{
-				"username": auth.Username,
-				"password": auth.Password,
-				"auth":     encodeBase64(auth.Username + ":" + auth.Password),
-			},
-		},
-	}
-	cfgBytes, _ := json.Marshal(dockerConfig)
-	secret := &v1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: r.namespace,
-		},
-		Type: v1.SecretTypeDockerConfigJson,
-		Data: map[string][]byte{v1.DockerConfigJsonKey: cfgBytes},
-	}
-	created, err := r.client.CoreV1().Secrets(r.namespace).Create(ctx, secret, metav1.CreateOptions{})
-	if err != nil {
-		return secretName
-	}
-	return created.Name
+func imagePullSecretName(serverID string) string {
+	sum := sha256.Sum256([]byte(serverID))
+	return "gamepanel-pull-" + hex.EncodeToString(sum[:8])
 }
 
 func (r *KubernetesRuntime) recreatePod(ctx context.Context, orig *v1.Pod) (*v1.Pod, error) {
@@ -916,13 +975,141 @@ func (r *KubernetesRuntime) validateCreate(req CreateRequest) error {
 	if strings.TrimSpace(req.ServerID) == "" || strings.TrimSpace(req.Image) == "" {
 		return errors.New("server ID and image are required")
 	}
+	if !validContainerID(req.ServerID) {
+		return errors.New("server ID contains invalid characters or is too long")
+	}
+	// Pod names are derived as "forge-<serverID>" and must be DNS1123
+	// subdomains. Docker-style IDs (uppercase, underscores) would be
+	// accepted above but rejected by the API server at create time, so
+	// refuse them here with a clear error instead of a late API failure.
+	if errs := kvalidation.IsDNS1123Subdomain(kubePodName(req.ServerID)); len(errs) != 0 {
+		return fmt.Errorf("server ID %q is not a valid DNS1123 subdomain for a pod name: %s", req.ServerID, strings.Join(errs, "; "))
+	}
+	// The pod spec only enforces CPU and memory. Every other Docker limit
+	// below is silently dropped by buildResourceLimits, so accepting it
+	// would run an unconstrained workload behind a constrained request.
+	// Reject what cannot be honoured instead of misreporting it.
+	if req.SwapMB != 0 {
+		return errors.New("kubernetes runtime does not enforce swap limits; omit swapMb")
+	}
+	if req.IOWeight != 0 {
+		return errors.New("kubernetes runtime does not enforce IO weight; omit ioWeight")
+	}
+	if req.PIDLimit > 0 {
+		return errors.New("kubernetes runtime does not enforce PID limits; omit pidLimit")
+	}
+	if req.OOMKillDisabled {
+		return errors.New("kubernetes runtime cannot disable OOM kill; omit oomKillDisabled")
+	}
+	if strings.TrimSpace(req.CPUSet) != "" {
+		return errors.New("kubernetes runtime does not support CPU pinning; omit cpuSet")
+	}
+	if strings.TrimSpace(req.NetworkName) != "" || strings.TrimSpace(req.NetworkSubnet) != "" || strings.TrimSpace(req.NetworkGateway) != "" || strings.TrimSpace(req.NetworkIP) != "" {
+		return errors.New("kubernetes runtime does not manage Docker networks; omit networkName/subnet/gateway/ip")
+	}
 	if req.MemoryMB < 0 || req.SwapMB < 0 {
 		return errors.New("memory and swap must not be negative")
+	}
+	if req.MemoryOverhead < 0 || req.MemoryOverhead > 100 {
+		return errors.New("memory overhead must be between 0 and 100 percent")
 	}
 	if req.SwapMB > 0 && req.MemoryMB == 0 {
 		return errors.New("swap requires a positive memory limit")
 	}
-	return nil
+	if req.CPUShares < 0 || req.CPUPercent < 0 || req.CPUPercent > 100000 {
+		return errors.New("CPU limits are outside the supported range")
+	}
+	if req.IOWeight != 0 && (req.IOWeight < 10 || req.IOWeight > 1000) {
+		return errors.New("IO weight must be 0 or between 10 and 1000")
+	}
+	if req.PIDLimit < -1 {
+		return errors.New("PID limit must be -1, 0, or positive")
+	}
+	for _, entry := range req.Env {
+		parts := strings.SplitN(entry, "=", 2)
+		if len(parts) != 2 || len(kvalidation.IsEnvVarName(parts[0])) != 0 {
+			return fmt.Errorf("invalid environment entry %q", entry)
+		}
+	}
+	for _, dns := range req.DNS {
+		if net.ParseIP(dns) == nil {
+			return fmt.Errorf("invalid DNS server %q", dns)
+		}
+	}
+	_, _, err := dockerPorts(req.Ports)
+	return err
+}
+
+// k8sProtectedHostPrefixes are host locations a workload pod must never
+// mount, even when an allowlist is configured. HostPath volumes expose the
+// node filesystem directly, so custom mounts are confined to explicitly
+// allowed roots and can never reach system or Beacon data directories.
+var k8sProtectedHostPrefixes = []string{
+	"/", "/etc", "/proc", "/sys", "/dev", "/boot",
+	"/usr", "/bin", "/sbin", "/lib", "/lib64",
+	"/root", "/var/run", "/run", "/var/lib/kubelet",
+}
+
+func k8sHostPathAllowed(source string) error {
+	for _, prefix := range k8sProtectedHostPrefixes {
+		if source == prefix || strings.HasPrefix(source, strings.TrimSuffix(prefix, "/")+"/") {
+			return fmt.Errorf("host path %q is in a protected system location", source)
+		}
+	}
+	if extra := strings.TrimSpace(os.Getenv("DAEMON_K8S_ALLOWED_HOSTPATHS")); extra != "" {
+		for _, root := range strings.Split(extra, ",") {
+			root = strings.TrimSpace(root)
+			if root == "" {
+				continue
+			}
+			if source == root || strings.HasPrefix(source, strings.TrimSuffix(root, "/")+"/") {
+				return nil
+			}
+		}
+		return fmt.Errorf("host path %q is outside DAEMON_K8S_ALLOWED_HOSTPATHS", source)
+	}
+	// Without an explicit allowlist, only the Beacon data directory subtree is
+	// eligible: workloads mount server data, not arbitrary host paths.
+	dataDir := strings.TrimSpace(os.Getenv("DAEMON_DATA_DIR"))
+	if dataDir == "" {
+		return fmt.Errorf("host path %q requires DAEMON_K8S_ALLOWED_HOSTPATHS to be configured", source)
+	}
+	if resolved, err := filepath.EvalSymlinks(filepath.Clean(dataDir)); err == nil {
+		dataDir = resolved
+	}
+	if source == dataDir || strings.HasPrefix(source, strings.TrimSuffix(dataDir, "/")+"/") {
+		return nil
+	}
+	return fmt.Errorf("host path %q is outside the Beacon data directory; set DAEMON_K8S_ALLOWED_HOSTPATHS to grant explicit roots", source)
+}
+
+func canonicalizeKubernetesMounts(req CreateRequest) (CreateRequest, error) {
+	if req.RootDir != "" {
+		root, err := validateRootDir(req.RootDir)
+		if err != nil {
+			return req, err
+		}
+		if err := k8sHostPathAllowed(root); err != nil {
+			return req, fmt.Errorf("root dir: %w", err)
+		}
+		req.RootDir = root
+	}
+	for index := range req.Mounts {
+		source, err := validateRootDir(req.Mounts[index].Source)
+		if err != nil {
+			return req, fmt.Errorf("validate mount %d: %w", index, err)
+		}
+		if err := k8sHostPathAllowed(source); err != nil {
+			return req, fmt.Errorf("mount %d: %w", index, err)
+		}
+		target := pathpkg.Clean(req.Mounts[index].Target)
+		if !pathpkg.IsAbs(target) || target == "/" || target == serverContainerRoot {
+			return req, fmt.Errorf("mount %d target must be an absolute path below / and may not replace %s", index, serverContainerRoot)
+		}
+		req.Mounts[index].Source = source
+		req.Mounts[index].Target = target
+	}
+	return req, nil
 }
 
 func kubePodName(serverID string) string {
@@ -965,7 +1152,14 @@ func buildResourceLimits(req CreateRequest) v1.ResourceList {
 	if req.CPUPercent > 0 {
 		limits[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUPercent*10))
 	} else if req.CPUShares > 0 {
-		limits[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUShares))
+		// CPUShares are a relative weight (1024 == 1 CPU), not millicores.
+		// Reporting shares directly as millicores under-limits small values
+		// and over-limits large ones; convert through the 1024==1000m ratio.
+		millicores := req.CPUShares * 1000 / 1024
+		if millicores < 1 {
+			millicores = 1
+		}
+		limits[v1.ResourceCPU] = *resource.NewMilliQuantity(millicores, resource.DecimalSI)
 	}
 	if req.MemoryMB > 0 {
 		limits[v1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", req.MemoryMB))
@@ -978,7 +1172,11 @@ func buildResourceRequests(req CreateRequest) v1.ResourceList {
 	if req.CPUPercent > 0 {
 		requests[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUPercent*10))
 	} else if req.CPUShares > 0 {
-		requests[v1.ResourceCPU] = resource.MustParse(fmt.Sprintf("%dm", req.CPUShares))
+		millicores := req.CPUShares * 1000 / 1024
+		if millicores < 1 {
+			millicores = 1
+		}
+		requests[v1.ResourceCPU] = *resource.NewMilliQuantity(millicores, resource.DecimalSI)
 	}
 	if req.MemoryMB > 0 {
 		requests[v1.ResourceMemory] = resource.MustParse(fmt.Sprintf("%dMi", req.MemoryMB))
@@ -987,7 +1185,7 @@ func buildResourceRequests(req CreateRequest) v1.ResourceList {
 }
 
 func isNotFound(err error) bool {
-	return err != nil && strings.Contains(err.Error(), "not found")
+	return apierrors.IsNotFound(err)
 }
 
 func encodeBase64(s string) string {
@@ -1015,10 +1213,10 @@ func signalToNumber(signal string) (int, bool) {
 }
 
 type kubeConsoleSession struct {
-	pw       *io.PipeWriter
-	pr       *io.PipeReader
-	executor remotecommand.Executor
-	closed   chan struct{}
+	pw        *io.PipeWriter
+	pr        *io.PipeReader
+	executor  remotecommand.Executor
+	closed    chan struct{}
 	closeOnce sync.Once
 }
 

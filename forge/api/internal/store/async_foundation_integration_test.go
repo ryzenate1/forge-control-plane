@@ -83,7 +83,10 @@ func TestScheduleClaimLeaseAndOnlyWhenOnline(t *testing.T) {
 	s, ctx := asyncTestStore(t)
 	onlineID, offlineID := uuid.NewString(), uuid.NewString()
 	dueID, offlineScheduleID := uuid.NewString(), uuid.NewString()
-	_, err := s.db.Exec(ctx, `INSERT INTO servers(id,status) VALUES($1,'running'),($2,'offline'); INSERT INTO server_schedules(id,server_id,name,cron_minute,cron_hour,cron_day_of_month,cron_month,cron_day_of_week,only_when_online,enabled,next_run_at) VALUES($3,$1,'due','*','*','*','*','*',true,true,now()-interval '1 minute'),($4,$2,'offline','*','*','*','*','*',true,true,now()-interval '1 minute')`, onlineID, offlineID, dueID, offlineScheduleID)
+	if _, err := s.db.Exec(ctx, `INSERT INTO servers(id,status) VALUES($1,'running'),($2,'offline')`, onlineID, offlineID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.db.Exec(ctx, `INSERT INTO server_schedules(id,server_id,name,cron_minute,cron_hour,cron_day_of_month,cron_month,cron_day_of_week,only_when_online,enabled,next_run_at) VALUES($1,$2,'due','*','*','*','*','*',true,true,now()-interval '1 minute'),($3,$4,'offline','*','*','*','*','*',true,true,now()-interval '1 minute')`, dueID, onlineID, offlineScheduleID, offlineID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -15,6 +15,16 @@ func (s *Store) HardDeleteServer(ctx context.Context, serverID string) error {
 
 // RecordOrphanAndHardDeleteServer records daemon cleanup work before removing
 // panel state. The remediation row intentionally has no foreign key to servers.
+// ServerOwnerID returns the owning user of a server, used to route
+// server-scoped notifications to a single recipient.
+func (s *Store) ServerOwnerID(ctx context.Context, serverID string) (string, error) {
+	var ownerID string
+	if err := s.db.QueryRow(ctx, `SELECT owner_id::text FROM servers WHERE id = $1`, serverID).Scan(&ownerID); err != nil {
+		return "", err
+	}
+	return ownerID, nil
+}
+
 func (s *Store) RecordOrphanAndHardDeleteServer(ctx context.Context, serverID, nodeURL, daemonError string) error {
 	if daemonError == "" {
 		return errors.New("daemon error is required for orphan remediation")
