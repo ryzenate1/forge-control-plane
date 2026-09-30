@@ -660,7 +660,7 @@ export function PermissionDeniedState({ message }: { message?: string }) {
   );
 }
 
-export function StatsRow({ items }: { items: Array<{ label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone }> }) {
+export function StatsRow({ items }: { items: Array<{ label: string; value: string | number | null | undefined; icon?: LucideIcon; tone?: AdminTone }> }) {
   if (!items || items.length === 0) return null;
   return (
     <ForgeGrid className="mb-5" cols={4}>
@@ -676,7 +676,7 @@ export function StatsRow({ items }: { items: Array<{ label: string; value: strin
  * renders as `—` in the unknown tone rather than as `0`.
  */
 export function AdminStatCard({ label, value, icon: Icon, tone = "neutral", className }: {
-  label: string; value: string | number; icon?: LucideIcon; tone?: AdminTone; className?: string;
+  label: string; value: string | number | null | undefined; icon?: LucideIcon; tone?: AdminTone; className?: string;
 }) {
   return (
     <ForgeMetric

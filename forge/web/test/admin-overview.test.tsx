@@ -460,7 +460,7 @@ describe("AdminMonitoring — time-series and telemetry", () => {
 
     // Should render monitoring heading and window controls
     expect(await screen.findByRole("heading", { name: "Monitoring", level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/Allocation trends across your nodes and workloads/i)).toBeInTheDocument();
+    expect(screen.getByText("Platform, node and workload health dashboards.")).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Last 1 hour" })).toBeInTheDocument();
     expect(screen.getByRole("option", { name: "Last 6 hours" })).toBeInTheDocument();
     // Section titles say what the data is: these series are allocated shares of

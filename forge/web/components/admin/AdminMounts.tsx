@@ -7,7 +7,6 @@ import { useSearchParams } from "next/navigation";
 import { useRouter } from "next/navigation";
 import { useMutation } from "@tanstack/react-query";
 import { AlertCircle, CheckCircle2, EggOff, HardDrive, Link2Off, Plus, Save, Trash2, Server, Search } from "lucide-react";
-import { StoragePlattersIcon } from "@/components/ui/forge-icons";
 import {
   attachEggsToMount, attachNodesToMount, createMount, deleteMount, detachEggFromMount, detachNodeFromMount,
   fetchEggs, fetchMounts, fetchNests, fetchMountServers, assignServerToMount, unassignServerFromMount,
@@ -17,7 +16,7 @@ import { REFRESH, sourceState } from "@/lib/admin/telemetry";
 import { FreshnessBadge, NotReported } from "@/components/admin/telemetry-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-import { AdminBackButton, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminTabs, Pill, AdminLoadingState, AdminErrorState, AdminPageLayout, cn } from "./admin-ui";
+import { Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd, AdminTabs, Pill, AdminLoadingState, AdminErrorState, AdminPageLayout, cn } from "./admin-ui";
 import { toneStyles } from "@/components/ui/forge/status";
 
 type FieldErrors = {
@@ -504,6 +503,17 @@ export function AdminMounts() {
                 <span>Mount updated successfully.</span>
               </div>
             ) : null}
+            {saveFailures.length > 0 ? (
+              <div className="mx-6 mb-4 flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
+                <AlertCircle size={14} className="mt-0.5 shrink-0" />
+                <div>
+                  <p className="font-semibold">Some link operations were not applied:</p>
+                  <ul className="mt-1 list-disc pl-4">
+                    {saveFailures.map((failure) => <li key={failure}>{failure}</li>)}
+                  </ul>
+                </div>
+              </div>
+            ) : null}
             <div className="flex justify-between border-t border-line px-6 py-4">
               <Btn tone="danger" size="sm" onClick={() => { void (async () => { if (await confirm({ title: `Delete mount ${selected.name}?`, description: "The mount definition will be removed from the panel. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(selected.id); })(); }} disabled={deleteMut.isPending}>
                 <Trash2 size={12} /> Delete
@@ -695,9 +705,9 @@ export function AdminMounts() {
                   <AdminTd className="font-medium text-text">{mount.name}</AdminTd>
                   <AdminTd className="font-mono text-xs text-text-subtle">{mount.source}</AdminTd>
                   <AdminTd className="font-mono text-xs text-text-subtle">{mount.target}</AdminTd>
-                  <AdminTd className="text-center text-text-subtle">{Array.isArray(mount.templateIds) ? mount.templateIds.length : 0}</AdminTd>
-                  <AdminTd className="text-center text-text-subtle">{Array.isArray(mount.nodeIds) ? mount.nodeIds.length : 0}</AdminTd>
-                  <AdminTd className="text-center text-text-subtle">{Array.isArray(mount.serverIds) ? mount.serverIds.length : 0}</AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.templateIds} /></AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.nodeIds} /></AdminTd>
+                  <AdminTd className="text-center text-text-subtle"><CountCell value={mount.serverIds} /></AdminTd>
                 </AdminTr>
               )) : null}
             </AdminTBody>

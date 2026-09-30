@@ -13,7 +13,6 @@ import {
   type SFTPGlobalConfig,
   type SFTPNodeConfig,
 } from "@/lib/api/sftp";
-import {  } from "@/lib/api";
 import { useToast } from "@/components/ui/toast";
 import { OfflineBanner } from "@/components/shared/states-offline";
 import {
@@ -27,9 +26,29 @@ import {
   AdminErrorState,
   EmptyState,
   Input,
+  Textarea,
+  AdminSelect,
   Modal,
   ModalFooter,
 } from "./admin-ui";
+
+/** A numeric field left blank or mistyped must fail the save loudly — the old
+ * `Number(v) || 0` silently stored port 0 for "abc". */
+function assertPort(value: number, label: string): void {
+  if (!Number.isInteger(value) || value < 1 || value > 65535) throw new Error(`${label} must be a whole port from 1 to 65535 (got ${value}).`);
+}
+
+function assertNonNegativeInt(value: number, label: string): void {
+  if (!Number.isInteger(value) || value < 0) throw new Error(`${label} must be a whole number of 0 or more (got ${value}).`);
+}
+
+const SFTP_LOG_LEVELS = [
+  { value: "error", label: "error" },
+  { value: "warn", label: "warn" },
+  { value: "info", label: "info" },
+  { value: "debug", label: "debug" },
+  { value: "trace", label: "trace" },
+];
 
 export function AdminSftp() {
   const { toast } = useToast();
@@ -49,6 +68,10 @@ export function AdminSftp() {
   const saveGlobalMut = useMutation({
     mutationFn: async () => {
       if (!globalForm) throw new Error("No form data");
+      assertPort(globalForm.defaultPort, "Default port");
+      assertNonNegativeInt(globalForm.defaultMaxConnections, "Max connections");
+      assertNonNegativeInt(globalForm.defaultIdleTimeout, "Idle timeout");
+      assertNonNegativeInt(globalForm.defaultRateLimit, "Rate limit");
       const result = await updateSFTPGlobalConfig(globalForm);
       if (!result.ok) throw new Error("The server reported the global SFTP settings update did not complete.");
       return result;
@@ -112,16 +135,7 @@ export function AdminSftp() {
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Log level</span>
-                <select className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm" value={globalForm.logLevel} onChange={(e) => setGlobalForm({ ...globalForm, logLevel: e.target.value })}>
-                  <option value="error">error</option>
-                  <option value="warn">warn</option>
-                  <option value="info">info</option>
-                  <option value="debug">debug</option>
-                  <option value="trace">trace</option>
-                </select>
-              </label>
+              <AdminSelect label="Log level" value={globalForm.logLevel} onChange={(v) => setGlobalForm({ ...globalForm, logLevel: v })} options={SFTP_LOG_LEVELS} />
               <div className="rounded-lg border border-[var(--line)] bg-[var(--canvas)] p-3">
                 <div className="text-[11px] uppercase tracking-widest text-[var(--text-subtle)]">Crypto</div>
                 <div className="mt-1 text-xs leading-5 text-[var(--text-subtle)]">
@@ -133,22 +147,10 @@ export function AdminSftp() {
             </div>
 
             <div className="grid gap-3">
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Allowed ciphers (comma-separated, blank = default)</span>
-                <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(globalForm.allowedCiphers ?? []).join(", ")} onChange={(e) => setGlobalForm({ ...globalForm, allowedCiphers: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="aes128-ctr, aes256-gcm@openssh.com" />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Allowed MACs</span>
-                <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(globalForm.allowedMACs ?? []).join(", ")} onChange={(e) => setGlobalForm({ ...globalForm, allowedMACs: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="hmac-sha2-256, hmac-sha2-512" />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Allowed KEX</span>
-                <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(globalForm.allowedKexAlgos ?? []).join(", ")} onChange={(e) => setGlobalForm({ ...globalForm, allowedKexAlgos: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="curve25519-sha256, diffie-hellman-group16-sha512" />
-              </label>
-              <label className="block text-sm">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Host key algorithms</span>
-                <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(globalForm.hostKeyAlgorithms ?? []).join(", ")} onChange={(e) => setGlobalForm({ ...globalForm, hostKeyAlgorithms: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="ssh-ed25519, rsa-sha2-256" />
-              </label>
+              <Input label="Allowed ciphers (comma-separated, blank = default)" value={(globalForm.allowedCiphers ?? []).join(", ")} onChange={(v) => setGlobalForm({ ...globalForm, allowedCiphers: v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="aes128-ctr, aes256-gcm@openssh.com" mono />
+              <Input label="Allowed MACs" value={(globalForm.allowedMACs ?? []).join(", ")} onChange={(v) => setGlobalForm({ ...globalForm, allowedMACs: v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="hmac-sha2-256, hmac-sha2-512" mono />
+              <Input label="Allowed KEX" value={(globalForm.allowedKexAlgos ?? []).join(", ")} onChange={(v) => setGlobalForm({ ...globalForm, allowedKexAlgos: v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="curve25519-sha256, diffie-hellman-group16-sha512" mono />
+              <Input label="Host key algorithms" value={(globalForm.hostKeyAlgorithms ?? []).join(", ")} onChange={(v) => setGlobalForm({ ...globalForm, hostKeyAlgorithms: v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="ssh-ed25519, rsa-sha2-256" mono />
             </div>
 
             {saveGlobalMut.isError && <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">{(saveGlobalMut.error as Error).message}</div>}
@@ -159,12 +161,12 @@ export function AdminSftp() {
 
       {/* Per-node */}
       <Card className="border border-[var(--line)] bg-[var(--surface)]">
-        <CardHeader title="Per-node configs — GET /admin/sftp/nodes" icon={FolderLock} action={<span className="text-xs text-[var(--text-subtle)]">{nodesQ.data?.length ?? 0} nodes</span>} />
+        <CardHeader title="Per-node configs — GET /admin/sftp/nodes" icon={FolderLock} action={nodesQ.data ? <span className="text-xs text-[var(--text-subtle)]">{nodesQ.data.length} nodes</span> : null} />
         {nodesQ.isLoading ? (
           <AdminLoadingState label="Loading node configs…" />
         ) : nodesQ.isError ? (
           <div className="p-4"><AdminErrorState message={(nodesQ.error as Error).message} retry={() => void nodesQ.refetch()} /></div>
-        ) : (nodesQ.data?.length ?? 0) === 0 ? (
+        ) : (nodesQ.data ?? []).length === 0 ? (
           <EmptyState icon={Server} title="No per-node SFTP configs" message="No overrides yet. Each node falls back to the global defaults; configure per-node to override." />
         ) : (
           <div className="overflow-x-auto">
@@ -273,6 +275,11 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
   const saveMut = useMutation({
     mutationFn: async () => {
       if (!form) throw new Error("No form");
+      assertPort(form.listenPort, "Listen port");
+      assertNonNegativeInt(form.maxConnections, "Max connections");
+      assertNonNegativeInt(form.maxAuthAttempts, "Max auth attempts");
+      assertNonNegativeInt(form.idleTimeout, "Idle timeout");
+      assertNonNegativeInt(form.rateLimit, "Rate limit");
       const result = await updateSFTPNodeConfig(nodeId, form);
       if (!result.ok) throw new Error("The server reported the node SFTP config update did not complete.");
       return result;
@@ -310,25 +317,11 @@ function SftpNodeEditor({ nodeId, nodeName, onClose }: { nodeId: string; nodeNam
             <span>Read-only</span>
           </label>
 
-          <label className="block text-sm">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Log level</span>
-            <select className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm" value={form.logLevel} onChange={(e) => setForm({ ...form, logLevel: e.target.value })}>
-              <option value="error">error</option>
-              <option value="warn">warn</option>
-              <option value="info">info</option>
-              <option value="debug">debug</option>
-            </select>
-          </label>
+          <AdminSelect label="Log level" value={form.logLevel} onChange={(v) => setForm({ ...form, logLevel: v })} options={SFTP_LOG_LEVELS} />
 
-          <label className="block text-sm">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Allowed IPs (comma-separated, blank = all)</span>
-            <input className="h-10 w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] px-3 text-sm font-mono" value={(form.allowedIps ?? []).join(", ")} onChange={(e) => setForm({ ...form, allowedIps: e.target.value ? e.target.value.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="10.0.0.0/8, 192.168.1.10" />
-          </label>
+          <Input label="Allowed IPs (comma-separated, blank = all)" value={(form.allowedIps ?? []).join(", ")} onChange={(v) => setForm({ ...form, allowedIps: v ? v.split(",").map((s) => s.trim()).filter(Boolean) : [] })} placeholder="10.0.0.0/8, 192.168.1.10" mono />
 
-          <label className="block text-sm">
-            <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Banner</span>
-            <textarea className="min-h-[60px] w-full rounded-lg border border-[var(--line-strong)] bg-[var(--surface-raised)] p-3 text-sm" value={form.banner ?? ""} onChange={(e) => setForm({ ...form, banner: e.target.value })} placeholder="Welcome to Forge SFTP" rows={2} />
-          </label>
+          <Textarea label="Banner" value={form.banner ?? ""} onChange={(v) => setForm({ ...form, banner: v })} placeholder="Welcome to Forge SFTP" rows={2} />
 
           {saveMut.isError && <div className="rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">{(saveMut.error as Error).message}</div>}
 
