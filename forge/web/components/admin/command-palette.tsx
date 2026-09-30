@@ -2,17 +2,15 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Command } from "cmdk";
 import {
-  Search,
   Terminal,
   HeartPulse,
   SlidersHorizontal,
   Ticket,
   Layers,
-  Sparkles,
 } from "lucide-react";
-import { adminPageRegistry } from "./admin-registry";
+import { ForgeCommandPalette, type ForgeCommandItem } from "@/components/ui/forge";
+import { adminEntryMatches, adminNavEntries, adminPageRegistry } from "./admin-registry";
 import { useT } from "@/components/TranslationProvider";
 
 interface CommandPaletteProps {
@@ -43,6 +41,8 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
   //
   // The footer has always advertised "ESC to close" while nothing listened for
   // it, so the only way out of the palette was a mouse click on the backdrop.
+  // (The palette overlay itself also closes on Escape; both paths converge on
+  // setOpen(false), which is idempotent.)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
@@ -65,176 +65,111 @@ export function CommandPalette({ open: controlledOpen, onOpenChange }: CommandPa
     router.push(href);
   };
 
-  if (!isOpen) return null;
+  // Operational shortcuts first, then one group per admin registry section —
+  // the same order the cmdk palette used, so muscle memory survives the move
+  // onto the hand-rolled ForgeCommandPalette (the single command surface;
+  // there is no second primitive set).
+  //
+  // Items are built from adminNavEntries() — the same flat list the sidebar
+  // filter uses — and ForgeCommandPalette's substring filter over
+  // label/description/keywords/group is intentionally aligned with
+  // adminEntryMatches (label, description, href, keywords). Group titles come
+  // from the registry so hidden entries still resolve under their visible
+  // parent. See searchAdminEntries below for the canonical matcher.
+  const groupTitleByHref = new Map(
+    adminPageRegistry.flatMap((group) => group.items.map((item) => [item.href, group.title] as const)),
+  );
+  const entries = adminNavEntries();
+  const items: ForgeCommandItem[] = [
+    {
+      id: "action-workloads",
+      label: "Manage Workloads & Servers",
+      description: "/admin/servers",
+      group: "OPERATIONAL ACTIONS",
+      icon: <Layers className="h-3.5 w-3.5 shrink-0" />,
+      keywords: "action create workload new game server",
+      onSelect: () => handleSelect("/admin/servers"),
+    },
+    {
+      id: "action-monitoring",
+      label: "Inspect Fleet Telemetry & Monitoring",
+      description: "/admin/monitoring",
+      group: "OPERATIONAL ACTIONS",
+      icon: <HeartPulse className="h-3.5 w-3.5 shrink-0" />,
+      keywords: "action fleet health diagnostics anomalies",
+      onSelect: () => handleSelect("/admin/monitoring"),
+    },
+    {
+      id: "action-onboarding",
+      label: "Issue Host Onboarding Token",
+      description: "/admin/onboarding-tokens",
+      group: "OPERATIONAL ACTIONS",
+      icon: <Ticket className="h-3.5 w-3.5 shrink-0" />,
+      keywords: "action onboarding token new host beacon register",
+      onSelect: () => handleSelect("/admin/onboarding-tokens"),
+    },
+    {
+      id: "action-operations",
+      label: "Review Async Operations Queue",
+      description: "/admin/operations",
+      group: "OPERATIONAL ACTIONS",
+      icon: <SlidersHorizontal className="h-3.5 w-3.5 shrink-0" />,
+      keywords: "action live operations queue running tasks reconciliation",
+      onSelect: () => handleSelect("/admin/operations"),
+    },
+    {
+      id: "action-terminal",
+      label: "Open Remote Host Terminal",
+      description: "/admin/terminal",
+      group: "OPERATIONAL ACTIONS",
+      icon: <Terminal className="h-3.5 w-3.5 shrink-0" />,
+      keywords: "action host terminal remote shell console ssh",
+      onSelect: () => handleSelect("/admin/terminal"),
+    },
+    ...entries.map((item) => {
+        const Icon = item.icon;
+        const label = t(item.labelKey) !== item.labelKey ? t(item.labelKey) : item.label;
+        // Keywords are the whole point of the registry's synonym list:
+        // without them "docker" cannot find Containers and "postgres"
+        // cannot find Databases, which is how people actually search.
+        // The href is searchable too, as it was in the cmdk value string,
+        // mirroring adminEntryMatches (label, description, href, keywords).
+        const keywords = [...(item.keywords ?? []), item.href].join(" ");
+        return {
+          id: item.href,
+          label,
+          // The cmdk palette showed a "meta" badge for metadata-only pages;
+          // this surface has no badge slot, so the capability rides along in
+          // the description line instead of being dropped.
+          description:
+            item.capability === "metadata-only"
+              ? `${item.description} · meta · ${item.href}`
+              : `${item.description} · ${item.href}`,
+          group: (groupTitleByHref.get(item.href) ?? "").toUpperCase(),
+          icon: <Icon className="h-3.5 w-3.5 shrink-0" />,
+          keywords,
+          onSelect: () => handleSelect(item.href),
+        } satisfies ForgeCommandItem;
+      }),
+  ];
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-[12vh] bg-black/60 backdrop-blur-sm p-4 animate-in fade-in-0 duration-150"
-      onClick={() => setOpen(false)}
-      role="dialog"
-      aria-modal="true"
-      aria-label="Forge Command Palette"
-    >
-      <div
-        className="w-full max-w-2xl overflow-hidden rounded-xl border border-[var(--line)] bg-[var(--surface)] shadow-2xl animate-in zoom-in-95 duration-150"
-        onClick={(e) => e.stopPropagation()}
-      >
-        <Command
-          className="flex flex-col w-full text-[var(--text)]"
-          loop
-          filter={(value, search) => {
-            const cleanVal = value.toLowerCase();
-            const cleanSearch = search.toLowerCase().trim();
-            if (cleanVal.includes(cleanSearch)) return 1;
-            return 0;
-          }}
-        >
-          {/* Header & Search Input */}
-          <div className="flex items-center gap-3 border-b border-[var(--line)] px-4 py-3 bg-[color-mix(in_srgb,var(--surface-input)_50%,transparent)]">
-            <Search className="h-4 w-4 shrink-0 text-[var(--text-subtle)]" />
-            <Command.Input
-              autoFocus
-              placeholder="Search commands, workloads, nodes, operations… (or type to jump)"
-              className="flex-1 bg-transparent text-sm text-[var(--text)] outline-none placeholder:text-[var(--text-muted)]"
-            />
-            <div className="flex items-center gap-1.5 font-mono text-[10px] text-[var(--text-muted)]">
-              <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1.5 py-0.5">ESC</kbd>
-              <span>to close</span>
-            </div>
-          </div>
-
-          {/* Results List */}
-          <Command.List className="max-h-[380px] overflow-y-auto p-2 scroll-py-2 focus:outline-none">
-            <Command.Empty className="py-8 text-center text-sm text-[var(--text-subtle)]">
-              No matching pages or operations found.
-            </Command.Empty>
-
-            {/* Quick Operational Actions */}
-            <Command.Group heading="OPERATIONAL ACTIONS" className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]">
-              <Command.Item
-                value="action create workload new game server"
-                onSelect={() => handleSelect("/admin/servers")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Layers className="h-3.5 w-3.5 text-[var(--brand)]" />
-                  <span>Manage Workloads & Servers</span>
-                </div>
-                <span className="font-mono text-[10px] text-[var(--text-muted)]">/admin/servers</span>
-              </Command.Item>
-
-              <Command.Item
-                value="action fleet health diagnostics anomalies"
-                onSelect={() => handleSelect("/admin/monitoring")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <HeartPulse className="h-3.5 w-3.5 text-emerald-400" />
-                  <span>Inspect Fleet Telemetry & Monitoring</span>
-                </div>
-                <span className="font-mono text-[10px] text-[var(--text-muted)]">/admin/monitoring</span>
-              </Command.Item>
-
-              <Command.Item
-                value="action onboarding token new host beacon register"
-                onSelect={() => handleSelect("/admin/onboarding-tokens")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Ticket className="h-3.5 w-3.5 text-amber-400" />
-                  <span>Issue Host Onboarding Token</span>
-                </div>
-                <span className="font-mono text-[10px] text-[var(--text-muted)]">/admin/onboarding-tokens</span>
-              </Command.Item>
-
-              <Command.Item
-                value="action live operations queue running tasks reconciliation"
-                onSelect={() => handleSelect("/admin/operations")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <SlidersHorizontal className="h-3.5 w-3.5 text-cyan-400" />
-                  <span>Review Async Operations Queue</span>
-                </div>
-                <span className="font-mono text-[10px] text-[var(--text-muted)]">/admin/operations</span>
-              </Command.Item>
-
-              <Command.Item
-                value="action host terminal remote shell console ssh"
-                onSelect={() => handleSelect("/admin/terminal")}
-                className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-              >
-                <div className="flex items-center gap-2.5">
-                  <Terminal className="h-3.5 w-3.5 text-indigo-400" />
-                  <span>Open Remote Host Terminal</span>
-                </div>
-                <span className="font-mono text-[10px] text-[var(--text-muted)]">/admin/terminal</span>
-              </Command.Item>
-            </Command.Group>
-
-            {/* Navigation Groups */}
-            {adminPageRegistry.map((group) => (
-              <Command.Group
-                key={group.title}
-                heading={group.title.toUpperCase()}
-                className="px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-[var(--text-muted)]"
-              >
-                {group.items.map((item) => {
-                  const Icon = item.icon;
-                  const label = t(item.labelKey) !== item.labelKey ? t(item.labelKey) : item.label;
-                  // Keywords are the whole point of the registry's synonym list:
-                  // without them "docker" cannot find Containers and "postgres"
-                  // cannot find Databases, which is how people actually search.
-                  const keywords = item.keywords?.join(" ") ?? "";
-                  return (
-                    <Command.Item
-                      key={item.href}
-                      value={`${group.title} ${label} ${item.description} ${item.href} ${keywords}`}
-                      onSelect={() => handleSelect(item.href)}
-                      className="flex cursor-pointer items-center justify-between rounded-lg px-3 py-2 text-xs font-medium text-[var(--text-subtle)] transition-colors data-[selected=true]:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)] data-[selected=true]:text-[var(--brand)]"
-                    >
-                      <div className="flex items-center gap-2.5 truncate">
-                        <Icon className="h-3.5 w-3.5 shrink-0" />
-                        <span className="truncate">{label}</span>
-                        <span className="hidden sm:inline truncate text-[11px] text-[var(--text-muted)]">
-                          — {item.description}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-2 shrink-0">
-                        {item.capability === "metadata-only" && (
-                          <span className="rounded border border-[var(--line)] bg-[var(--surface-input)] px-1.5 py-0.5 text-[9px] font-mono text-[var(--text-muted)]">
-                            meta
-                          </span>
-                        )}
-                        <span className="font-mono text-[10px] text-[var(--text-muted)]">{item.href}</span>
-                      </div>
-                    </Command.Item>
-                  );
-                })}
-              </Command.Group>
-            ))}
-          </Command.List>
-
-          {/* Footer Navigation Bar */}
-          <div className="flex items-center justify-between border-t border-[var(--line)] px-4 py-2 bg-[color-mix(in_srgb,var(--surface-input)_30%,transparent)] font-mono text-[11px] text-[var(--text-muted)]">
-            <div className="flex items-center gap-3">
-              <span className="flex items-center gap-1">
-                <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1">↑</kbd>
-                <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1">↓</kbd>
-                <span className="font-sans text-[10px]">Navigate</span>
-              </span>
-              <span className="flex items-center gap-1">
-                <kbd className="rounded border border-[var(--line)] bg-[var(--surface-raised)] px-1">↵</kbd>
-                <span className="font-sans text-[10px]">Select</span>
-              </span>
-            </div>
-            <div className="flex items-center gap-1.5">
-              <Sparkles className="h-3 w-3 text-[var(--brand)]" />
-              <span className="font-sans text-[10px]">Forge Control Plane</span>
-            </div>
-          </div>
-        </Command>
-      </div>
-    </div>
+    <ForgeCommandPalette
+      open={isOpen}
+      onClose={() => setOpen(false)}
+      items={items}
+      placeholder="Search commands, workloads, nodes, operations… (or type to jump)"
+      emptyLabel="No matching pages or operations found."
+    />
   );
+}
+
+/**
+ * Canonical admin search used by sidebar filter parity checks and tests.
+ * The palette itself filters via ForgeCommandPalette's substring match over
+ * label/description/keywords/group (see above); this helper exposes the same
+ * registry matcher directly so callers can verify parity without rendering.
+ */
+export function searchAdminEntries(query: string) {
+  return adminNavEntries().filter((entry) => adminEntryMatches(entry, query));
 }

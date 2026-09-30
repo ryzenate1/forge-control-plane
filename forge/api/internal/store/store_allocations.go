@@ -46,7 +46,7 @@ func (s *Store) GetAllocation(ctx context.Context, id string) (Allocation, error
 	var allocation Allocation
 	var server, alias sql.NullString
 	err := s.db.QueryRow(ctx, `
-		SELECT a.id::text, n.name, s.name, a.ip::text, a.port, a.container_port,
+		SELECT a.id::text, n.name, s.name, host(a.ip), a.port, a.container_port,
 		       a.protocol, a.alias, COALESCE(a.notes, '')
 		FROM allocations a
 		JOIN nodes n ON n.id=a.node_id
@@ -92,7 +92,7 @@ func (s *Store) ListAllocationsPaginated(ctx context.Context, offset, limit int)
 		limit = 1000
 	}
 	rows, err := s.db.Query(ctx, `
-		SELECT a.id::text, n.name, s.name, a.ip::text, a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
+		SELECT a.id::text, n.name, s.name, host(a.ip), a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
 		FROM allocations a
 		JOIN nodes n ON n.id = a.node_id
 		LEFT JOIN servers s ON s.id = a.server_id

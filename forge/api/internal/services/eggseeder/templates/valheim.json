@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
   },
-  "startup": "./valheim_server.x86_64 -name \"{{SERVER_NAME}}\" -port {{SERVER_PORT}} -world \"{{WORLD_NAME}}\" -password {{SERVER_PASSWORD}} -savedir \"{{VALHEIM_SAVEDIR}}\" -public {{PUBLIC}} -crossplay",
+  "startup": "./valheim_server.x86_64 -name \"{{SERVER_NAME}}\" -port {{SERVER_PORT}} -world \"{{WORLD_NAME}}\" -password \"{{SERVER_PASSWORD}}\" -savedir \"{{VALHEIM_SAVEDIR}}\" -public {{PUBLIC}} -crossplay",
   "config": {
     "files": {},
     "startup": {
@@ -62,8 +62,8 @@
     {
       "name": "Server Password",
       "env_variable": "SERVER_PASSWORD",
-      "description": "Password required to join the server. Minimum 5 characters.",
-      "default_value": "gamepanel",
+      "description": "Password required to join the server. Minimum 5 characters. Left empty, the server generates a random password at deploy time.",
+      "default_value": "",
       "user_viewable": false,
       "user_editable": true,
       "rules": "required|string|min:5|max:32"

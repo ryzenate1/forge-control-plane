@@ -104,17 +104,23 @@ func (m *Manager) Start(_ context.Context, serverID, sourceNode, targetNode, ser
 	if token == "" {
 		return nil, errors.New("transfer token is required")
 	}
+	if strings.Contains(token, "\x00") || strings.Contains(targetURL, "\x00") || strings.Contains(serverID, "\x00") {
+		return nil, errors.New("transfer request contains an invalid value")
+	}
+	if strings.TrimSpace(serverID) == "" || strings.ContainsAny(serverID, "/\\") || strings.Contains(serverID, "..") {
+		return nil, errors.New("invalid server ID")
+	}
 	if resumeOffset < 0 {
 		return nil, fmt.Errorf("resume offset cannot be negative")
 	}
 	if resumeOffset != 0 {
 		return nil, fmt.Errorf("legacy transfer resume offset requires zero; resumable migrations use protocol v1")
 	}
-	parsedTarget, err := url.Parse(targetURL)
+	// Parse and validate once; only the canonical validated form is ever used
+	// to build the outgoing request (SSRF: unvalidated input must never reach
+	// http.NewRequest).
+	parsedTarget, err := validatedTargetURL(targetURL)
 	if err != nil {
-		return nil, fmt.Errorf("parse target URL: %w", err)
-	}
-	if err := validateTargetURL(parsedTarget); err != nil {
 		return nil, err
 	}
 	canonicalRoot, err := filepath.EvalSymlinks(serverRoot)
@@ -439,6 +445,14 @@ func (m *Manager) calculateChecksum(archivePath string) (string, error) {
 
 // streamToTarget uploads the archive to the target node with resume capability
 func (m *Manager) streamToTarget(ctx context.Context, archivePath, targetURL, token string, transfer *Transfer) error {
+	// Re-validate at the sink: the background goroutine must not trust the
+	// string it was started with. Only a freshly validated canonical URL
+	// reaches http.NewRequest (SSRF).
+	validated, err := validatedTargetURL(targetURL)
+	if err != nil {
+		return err
+	}
+	safeURL := validated.String()
 	file, err := os.Open(archivePath)
 	if err != nil {
 		return fmt.Errorf("failed to open archive for upload: %w", err)
@@ -459,8 +473,8 @@ func (m *Manager) streamToTarget(ctx context.Context, archivePath, targetURL, to
 		return fmt.Errorf("failed to seek archive to resume offset %d: %w", offset, err)
 	}
 
-	// Create HTTP request
-	req, err := http.NewRequestWithContext(ctx, "POST", targetURL, file)
+	// Create HTTP request from the validated canonical URL only.
+	req, err := http.NewRequestWithContext(ctx, "POST", safeURL, file)
 	if err != nil {
 		return fmt.Errorf("failed to create HTTP request: %w", err)
 	}
@@ -498,20 +512,30 @@ func (m *Manager) streamToTarget(ctx context.Context, archivePath, targetURL, to
 }
 
 func validateTargetURL(target *url.URL) error {
-	if target == nil || target.Hostname() == "" {
+	if target == nil || strings.Contains(target.String(), "\x00") {
+		return errors.New("target URL must include a host")
+	}
+	if target.Hostname() == "" {
 		return errors.New("target URL must include a host")
 	}
 	if target.User != nil {
 		return errors.New("target URL must not include credentials")
+	}
+	if target.RawQuery != "" || target.Fragment != "" {
+		return errors.New("target URL must not include query or fragment")
+	}
+	if strings.Contains(target.Host, "\\") || strings.Contains(target.Host, " ") {
+		return errors.New("target URL contains an invalid host")
 	}
 	// Reject literal addresses that turn the daemon into an SSRF pivot or leak
 	// the node credential to a link-local metadata endpoint (169.254.169.254
 	// for AWS/GCP/Azure IMDS, fe80:: for IPv6 link-local, :: for unspecified).
 	// A trusted destination is always a routable host; private/VPC node
 	// addresses stay allowed so same-network migrations keep working.
-	if ip := net.ParseIP(target.Hostname()); ip != nil &&
-		(ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified()) {
-		return errors.New("target URL must not point at a link-local, multicast, or unspecified address")
+	if ip := net.ParseIP(target.Hostname()); ip != nil {
+		if ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsMulticast() || ip.IsUnspecified() {
+			return errors.New("target URL must not point at a link-local, multicast, or unspecified address")
+		}
 	}
 	if target.Scheme == "https" {
 		return nil
@@ -521,6 +545,31 @@ func validateTargetURL(target *url.URL) error {
 		return nil
 	}
 	return errors.New("target URL must use HTTPS (HTTP is allowed only for loopback)")
+}
+
+// validatedTargetURL parses raw, applies validateTargetURL, and returns the
+// canonical form. Callers must use the returned value — never the raw input —
+// when building the outgoing request so a validated host/scheme cannot be
+// swapped back for the unvalidated string (SSRF).
+func validatedTargetURL(raw string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.Contains(trimmed, "\x00") {
+		return nil, errors.New("target URL is required")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, fmt.Errorf("parse target URL: %w", err)
+	}
+	if err := validateTargetURL(parsed); err != nil {
+		return nil, err
+	}
+	// Re-serialize from the validated components so embedded credentials,
+	// query, or fragment smuggled past Parse cannot reach the request line.
+	canonical := &url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path}
+	if parsed.Path == "" {
+		canonical.Path = "/"
+	}
+	return canonical, nil
 }
 
 // failTransfer marks a transfer as failed

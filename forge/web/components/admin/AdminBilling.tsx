@@ -477,6 +477,9 @@ function BillingSettingsCard() {
   });
 
   const state = sourceState(q);
+  // Hoisted before the branches below: once `!q.data` is tested, the query
+  // object narrows to `never`, so the retry callback must be captured here.
+  const retryBillingRead = () => void q.refetch();
 
   return (
     <Card>
@@ -488,12 +491,12 @@ function BillingSettingsCard() {
       {q.isPending ? <AdminLoadingState label="Loading billing settings…" /> : null}
       {q.isError ? (
         <div className="p-4">
-          <AdminErrorState message={`${errorMessage(q.error, "Billing settings could not be read.")} Saving is disabled rather than writing over a configuration that could not be read.`} retry={() => void q.refetch()} />
+          <AdminErrorState message={`${errorMessage(q.error, "Billing settings could not be read.")} Saving is disabled rather than writing over a configuration that could not be read.`} retry={retryBillingRead} />
         </div>
       ) : null}
       {!q.isPending && !q.isError && !q.data ? (
         <div className="p-4">
-          <AdminErrorState message="The billing settings request returned no document, so nothing below is known about the current configuration." retry={() => void q.refetch()} />
+          <AdminErrorState message="The billing settings request returned no document, so nothing below is known about the current configuration." retry={retryBillingRead} />
         </div>
       ) : null}
       {q.data ? (

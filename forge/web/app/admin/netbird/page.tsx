@@ -296,46 +296,7 @@ export default function AdminNetBirdPage() {
 
   return (
     <AdminPageLayout>
-      <SectionHeader
-        title="NetBird VPN"
-        sub="WireGuard mesh VPN control plane: peers, networks, routes, ACLs, DNS and setup keys."
-        info={{
-          title: "Mesh VPN",
-          triggerLabel: "About NetBird VPN",
-          eyebrow: "Architecture & Semantics",
-          description: "Enroll mesh peers and control reachability with networks, routes, groups and access policies.",
-          sections: [
-            {
-              title: "Enrollment flow",
-              icon: KeyRound,
-              content:
-                "Setup keys enroll new clients onto the mesh — the secret shows once, so copy it immediately. Peers that require approval stay pending until an operator approves or denies them.",
-            },
-            {
-              title: "Reachability layers",
-              icon: Shield,
-              content:
-                "Networks group routing peers, routes publish subnets, groups scope identity, and ACLs decide which groups may reach each other. DNS settings control which groups skip managed resolution.",
-            },
-          ],
-        }}
-        action={
-          <Btn
-            size="sm"
-            tone="primary"
-            onClick={() => {
-              if (tab === "networks") setShowCreateNetwork(true);
-              else if (tab === "groups") setShowCreateGroup(true);
-              else if (tab === "routes") setShowCreateRoute(true);
-              else if (tab === "acls") setShowCreateACL(true);
-              else setTab("setup-keys");
-            }}
-          >
-            <Plus size={14} />
-            {tab === "networks" ? "Create network" : tab === "groups" ? "Create group" : tab === "routes" ? "Create route" : tab === "acls" ? "Create ACL" : "New setup key"}
-          </Btn>
-        }
-      />
+      <SectionHeader title="NetBird VPN" sub="WireGuard mesh VPN control plane." />
 
       <AdminTabs tabs={tabs} active={tab} onChange={(id) => setTab(id as Tab)} />
 
@@ -346,7 +307,7 @@ export default function AdminNetBirdPage() {
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-widest text-slate-500">
+                  <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
                     <th className="px-4 py-3">Name</th>
                     <th className="px-4 py-3">IP</th>
                     <th className="px-4 py-3">OS</th>
@@ -355,13 +316,13 @@ export default function AdminNetBirdPage() {
                     <th className="px-4 py-3"></th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="divide-y divide-line">
                   {peers.map((peer) => (
-                    <tr key={peer.id} className="hover:bg-white/[0.02]">
-                      <td className="px-4 py-3 font-medium text-slate-200">{peer.name || peer.id}</td>
-                      <td className="px-4 py-3 font-mono text-xs text-slate-400">{peer.ip}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{peer.os || "—"}</td>
-                      <td className="px-4 py-3 text-xs text-slate-400">{peer.last_seen ? new Date(peer.last_seen).toLocaleString() : "—"}</td>
+                    <tr key={peer.id} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-medium text-text">{peer.name || peer.id}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-text-subtle">{peer.ip}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{peer.os || "—"}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{peer.last_seen ? new Date(peer.last_seen).toLocaleString() : "—"}</td>
                       <td className="px-4 py-3">
                         {isPendingPeer(peer) ? (
                           <Pill tone="yellow">Pending approval</Pill>
@@ -404,12 +365,12 @@ export default function AdminNetBirdPage() {
             action={<Btn size="sm" onClick={() => setShowCreateNetwork(true)}><Plus size={12} /> Create network</Btn>}
           />
           {renderQuery(networksQuery, "Loading networks…", "Failed to load NetBird networks.", (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-line">
               {networks.map((network) => (
                 <div key={network.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
-                    <p className="text-sm font-medium text-slate-200">{network.name}</p>
-                    <p className="text-xs text-slate-500">{network.description || network.id}</p>
+                    <p className="text-sm font-medium text-text">{network.name}</p>
+                    <p className="text-xs text-text-muted">{network.description || network.id}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Pill tone="neutral">{network.routing_peers_count ?? 0} routing peers</Pill>
@@ -433,12 +394,12 @@ export default function AdminNetBirdPage() {
             action={<Btn size="sm" onClick={() => setShowCreateGroup(true)}><Plus size={12} /> Create group</Btn>}
           />
           {renderQuery(groupsQuery, "Loading groups…", "Failed to load NetBird groups.", (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-line">
               {groups.map((group) => (
                 <div key={group.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div className="flex items-center gap-2">
-                    <Tags size={14} className="text-slate-500" />
-                    <p className="text-sm font-medium text-slate-200">{group.name}</p>
+                    <Tags size={14} className="text-text-muted" />
+                    <p className="text-sm font-medium text-text">{group.name}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Pill tone="neutral">{group.peers_count ?? group.peers?.length ?? 0} peers</Pill>
@@ -462,12 +423,12 @@ export default function AdminNetBirdPage() {
             action={<Btn size="sm" onClick={() => setShowCreateRoute(true)}><Plus size={12} /> Create route</Btn>}
           />
           {renderQuery(routesQuery, "Loading routes…", "Failed to load NetBird routes.", (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-line">
               {routes.map((route) => (
                 <div key={route.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
-                    <p className="text-sm font-medium text-slate-200">{route.network || (route.domains ?? []).join(", ") || route.description || route.id}</p>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-sm font-medium text-text">{route.network || (route.domains ?? []).join(", ") || route.description || route.id}</p>
+                    <p className="text-xs text-text-muted">
                       {route.description ? `${route.description} — ` : ""}{route.peer ? `via peer ${route.peer}` : `metric ${route.metric ?? 0}`}
                     </p>
                   </div>
@@ -493,12 +454,12 @@ export default function AdminNetBirdPage() {
             action={<Btn size="sm" onClick={() => setShowCreateACL(true)}><Plus size={12} /> Create ACL</Btn>}
           />
           {renderQuery(aclsQuery, "Loading policies…", "Failed to load NetBird ACLs.", (
-            <div className="divide-y divide-white/[0.04]">
+            <div className="divide-y divide-line">
               {acls.map((acl) => (
                 <div key={acl.id} className="flex items-center justify-between gap-3 px-4 py-3">
                   <div>
-                    <p className="text-sm font-medium text-slate-200">{acl.name || acl.id}</p>
-                    <p className="text-xs text-slate-500">{acl.description || `${acl.rules?.length ?? 0} rule(s)`}</p>
+                    <p className="text-sm font-medium text-text">{acl.name || acl.id}</p>
+                    <p className="text-xs text-text-muted">{acl.description || `${acl.rules?.length ?? 0} rule(s)`}</p>
                   </div>
                   <div className="flex items-center gap-2">
                     <Pill tone={acl.enabled ? "green" : "neutral"}>{acl.enabled ? "Enabled" : "Disabled"}</Pill>
@@ -529,7 +490,7 @@ export default function AdminNetBirdPage() {
                 rows={3}
                 placeholder="group-id-1, group-id-2"
               />
-              <p className="text-xs text-slate-500">
+              <p className="text-xs text-text-muted">
                 Available groups: {groups.length ? groups.map((g) => `${g.name} (${g.id})`).join(", ") : "none — create a group first."}
               </p>
               <Btn onClick={() => saveDnsMutation.mutate()} disabled={saveDnsMutation.isPending}>
@@ -545,7 +506,7 @@ export default function AdminNetBirdPage() {
         <Card>
           <CardHeader title="Setup keys" icon={KeyRound} />
           <div className="space-y-5 p-1">
-            <p className="text-xs text-slate-500">
+            <p className="text-xs text-text-muted">
               Setup keys enroll new clients onto the mesh. The secret is only shown once — create a key below and copy it immediately.
             </p>
             <div className="grid gap-4 sm:grid-cols-2">
@@ -559,12 +520,12 @@ export default function AdminNetBirdPage() {
               />
               <Input label="Expires in (days)" type="number" value={setupKeyForm.expiresInDays} onChange={(v) => setSetupKeyForm({ ...setupKeyForm, expiresInDays: v })} />
             </div>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
+            <label className="flex items-center gap-2 text-sm font-medium text-text">
               <input
                 type="checkbox"
                 checked={setupKeyForm.ephemeral}
                 onChange={(e) => setSetupKeyForm({ ...setupKeyForm, ephemeral: e.target.checked })}
-                className="rounded border-white/10 bg-[var(--surface-input)]"
+                className="rounded border-line bg-[var(--surface-input)]"
               />
               Ephemeral peers
             </label>
@@ -573,10 +534,10 @@ export default function AdminNetBirdPage() {
             </Btn>
 
             {createdKey?.key ? (
-              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-950/20 p-4">
+              <div className="flex flex-wrap items-center gap-3 rounded-xl border border-ok-line bg-ok-subtle p-4">
                 <div className="min-w-0 flex-1">
-                  <p className="text-xs font-semibold uppercase tracking-wider text-emerald-300">{createdKey.name}</p>
-                  <p className="truncate font-mono text-sm text-emerald-100" title={createdKey.key}>{createdKey.key}</p>
+                  <p className="text-xs font-semibold uppercase tracking-wider text-ok">{createdKey.name}</p>
+                  <p className="truncate font-mono text-sm text-ok" title={createdKey.key}>{createdKey.key}</p>
                 </div>
                 <Btn size="sm" tone="ghost" onClick={() => void copyKey()}>
                   <Copy size={12} /> Copy
@@ -623,12 +584,12 @@ export default function AdminNetBirdPage() {
             <Input label="Network (CIDR)" value={routeForm.network} onChange={(v) => setRouteForm({ ...routeForm, network: v })} placeholder="192.168.10.0/24" mono />
             <AdminSelect label="Routing peer" value={routeForm.peer} onChange={(v) => setRouteForm({ ...routeForm, peer: v })} options={peerOptions} placeholder="Select a peer…" />
             <Input label="Metric" type="number" value={routeForm.metric} onChange={(v) => setRouteForm({ ...routeForm, metric: v })} />
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <input type="checkbox" checked={routeForm.masquerade} onChange={(e) => setRouteForm({ ...routeForm, masquerade: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
+            <label className="flex items-center gap-2 text-sm font-medium text-text">
+              <input type="checkbox" checked={routeForm.masquerade} onChange={(e) => setRouteForm({ ...routeForm, masquerade: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
               Masquerade
             </label>
-            <label className="flex items-center gap-2 text-sm font-medium text-slate-300">
-              <input type="checkbox" checked={routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} className="rounded border-white/10 bg-[var(--surface-input)]" />
+            <label className="flex items-center gap-2 text-sm font-medium text-text">
+              <input type="checkbox" checked={routeForm.enabled} onChange={(e) => setRouteForm({ ...routeForm, enabled: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
               Enabled
             </label>
           </div>

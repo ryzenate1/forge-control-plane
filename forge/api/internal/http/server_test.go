@@ -31,22 +31,26 @@ func TestHealth(t *testing.T) {
 	}
 	defer res.Body.Close()
 
-	if res.StatusCode != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", res.StatusCode)
+	// With no HealthService configured nothing has been measured, so the
+	// endpoint reports unknown instead of an empty OK report: unknown is
+	// not zero, and an unmeasured OK would claim health that was never
+	// checked. Liveness stays on /health/live; readiness on /health/ready.
+	if res.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("expected status 503, got %d", res.StatusCode)
 	}
 
 	var report health.HealthReport
 	if err := json.NewDecoder(res.Body).Decode(&report); err != nil {
 		t.Fatal(err)
 	}
-	if report.Status != health.StatusOK || !report.OK || report.Service != "api" {
-		t.Fatalf("unexpected fallback health report: %+v", report)
+	if report.Status != health.StatusUnknown || report.OK || report.Service != "api" {
+		t.Fatalf("unexpected unconfigured health report: %+v", report)
 	}
 	if report.Checks == nil || len(report.Checks) != 0 {
 		t.Fatalf("expected an empty checks array, got %+v", report.Checks)
 	}
 	if report.CheckedAt.IsZero() {
-		t.Fatal("expected fallback report timestamp")
+		t.Fatal("expected report timestamp")
 	}
 }
 

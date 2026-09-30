@@ -2,6 +2,9 @@ package store
 
 import (
 	"context"
+	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,6 +34,31 @@ type BackupPolicy struct {
 }
 
 const backupPolicyColumns = `id::text, server_id::text, COALESCE(app_id, ''), COALESCE(service_id, ''), COALESCE(database_id, ''), COALESCE(database_type, ''), volume_backup, interval, max_backups, retention_days, storage, compress, encrypted, encryption_algorithm, encryption_key, enabled, is_locked, next_run_at, created_at, updated_at, COALESCE(encryption_key_encrypted, '')`
+
+// backupPolicyIntervalPattern mirrors the backup_policies_interval_check
+// constraint (migrations/125_backup_policies.sql): "<N> <unit>", "@daily |
+// @weekly | @monthly | @yearly", or a cron expression.
+var backupPolicyIntervalPattern = regexp.MustCompile(`^(\d+\s+(minute|hour|day|week|month)s?|@(daily|weekly|monthly|yearly)|(\d+|\*)(/\d+)?(\s+\d+|\s+\*){4,5})$`)
+
+// ValidateBackupPolicyInterval rejects interval strings the database CHECK
+// constraint would refuse, so callers can answer 400 instead of 500.
+func ValidateBackupPolicyInterval(interval string) error {
+	if !backupPolicyIntervalPattern.MatchString(strings.TrimSpace(interval)) {
+		return errors.New(`invalid interval: use "<N> <minutes|hours|days|weeks|months>", "@daily|@weekly|@monthly|@yearly", or a cron expression`)
+	}
+	return nil
+}
+
+// ValidateBackupPolicyStorage rejects storage backends the database CHECK
+// constraint would refuse, so callers can answer 400 instead of 500.
+func ValidateBackupPolicyStorage(storage string) error {
+	switch strings.TrimSpace(storage) {
+	case "s3", "local", "sftp", "gcs", "azure":
+		return nil
+	default:
+		return errors.New("invalid storage: must be one of s3, local, sftp, gcs, azure")
+	}
+}
 
 func (s *Store) CreateBackupPolicy(ctx context.Context, p *BackupPolicy) error {
 	if p.ID == "" {

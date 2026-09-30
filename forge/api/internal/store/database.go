@@ -105,10 +105,13 @@ func (c DBConfig) DSN() string {
 				tlsParam = "preferred"
 			}
 		}
-		// FormatDSN escapes the credentials and database name, which the
-		// hand-built format string it replaces could not: go-sql-driver's
-		// parser splits on the last '/' and the last '@', so a password
-		// containing '/' yielded a DSN that parsed into the wrong fields.
+		// FormatDSN writes the userinfo RAW (go-sql-driver/mysql v1.10.0
+		// neither escapes it here nor decodes it in ParseDSN), so the
+		// password must stay unencoded: percent-encoding it would make the
+		// literal escapes part of the password and break authentication.
+		// The driver's parser splits on the last '/' and the last '@', so
+		// ordinary special characters (@ : / ? # %) in the password still
+		// resolve to the right fields (pinned by TestMySQLDSN round-trip).
 		// NewConfig (not a bare &mysql.Config{}) is required for its defaults,
 		// notably AllowNativePasswords.
 		myCfg := mysql.NewConfig()

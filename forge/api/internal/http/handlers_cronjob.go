@@ -28,12 +28,22 @@ func validateCronSchedule(schedule string) error {
 // registerCronJobRoutes is layered as handler -> cronjob.Service -> store.
 // Persistence and schedule sync both live in the service (CreateJob/UpdateJob/
 // DeleteJob/ToggleJob); the handlers validate input and translate errors only.
+//
+// Routes are always mounted: an unconfigured backend answers 503, it never
+// 404s. The composition root builds the service exactly when the store exists
+// (and NewServer additionally skips mounting without one), so a nil store
+// here means "cannot do the job", never "pretend it worked".
 func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *cronjobsvc.Service, mutationLimiter fiber.Handler) {
-	if cronJobService == nil {
-		return
+	requireCronStore := func(c *fiber.Ctx) error {
+		if cfg.Store == nil {
+			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		return nil
 	}
-	_ = cfg
 	protected.Get("/cron-jobs", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		jobs, err := cronJobService.ListJobs(ctx)
@@ -53,6 +63,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Post("/cron-jobs", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		var req struct {
 			Name            string `json:"name" validate:"required"`
 			Description     string `json:"description"`
@@ -106,6 +119,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Get("/cron-jobs/:id", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		job, err := cronJobService.GetJob(ctx, c.Params("id"))
@@ -116,6 +132,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Put("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		var req struct {
 			Name            *string `json:"name"`
 			Description     *string `json:"description"`
@@ -162,6 +181,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Delete("/cron-jobs/:id", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := cronJobService.DeleteJob(ctx, c.Params("id")); err != nil {
@@ -171,6 +193,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Post("/cron-jobs/:id/execute", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		execution, err := cronJobService.TriggerNow(ctx, c.Params("id"))
@@ -181,6 +206,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Post("/cron-jobs/:id/toggle", mutationLimiter, requireRole("admin"), requireAdminScope("scheduler.write"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		job, err := cronJobService.ToggleJob(ctx, c.Params("id"))
@@ -191,6 +219,9 @@ func registerCronJobRoutes(protected fiber.Router, cfg Config, cronJobService *c
 	})
 
 	protected.Get("/cron-jobs/:id/executions", requireRole("admin"), requireAdminScope("scheduler.read"), func(c *fiber.Ctx) error {
+		if err := requireCronStore(c); err != nil {
+			return err
+		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		limit := 50

@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
   },
-  "startup": "./TerrariaServer.bin.x86_64 -port {{SERVER_PORT}} -maxplayers {{MAX_PLAYERS}} -world {{WORLD_NAME}}.wld -autocreate {{WORLD_SIZE}} -automigrate true -difficulty {{DIFFICULTY}} -worldname {{WORLD_NAME}} -motd \"{{MOTD}}\" -pass {{SERVER_PASSWORD}} -noupnp",
+  "startup": "./TerrariaServer.bin.x86_64 -port {{SERVER_PORT}} -maxplayers {{MAX_PLAYERS}} -world \"{{WORLD_NAME}}.wld\" -autocreate {{WORLD_SIZE}} -automigrate true -difficulty {{DIFFICULTY}} -worldname \"{{WORLD_NAME}}\" -motd \"{{MOTD}}\" -pass \"{{SERVER_PASSWORD}}\" -noupnp",
   "config": {
     "files": {},
     "startup": {

@@ -33,7 +33,7 @@ func (s *Store) InsertActivity(ctx context.Context, event *ActivityEvent) error 
 }
 
 func (s *Store) QueryActivities(ctx context.Context, filter ActivityFilter) ([]ActivityEvent, error) {
-	query := `SELECT id, event, COALESCE(description, ''), actor_id, actor_email, actor_type, ip, user_agent, subject_type, subject_id, subject_name, properties, level, source, timestamp, expires_at FROM activity_events`
+	query := `SELECT id, event, COALESCE(description, ''), actor_id, actor_email, actor_type, ip::text, user_agent, subject_type, subject_id, subject_name, properties, level, source, timestamp, expires_at FROM activity_events`
 	conds := []string{}
 	args := []any{}
 	argN := 1

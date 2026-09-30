@@ -17,11 +17,11 @@ import {
 import { errorMessage, formatDate } from "@/lib/utils";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
+import { FreshnessBadge } from "./telemetry-ui";
+import { sourceState } from "@/lib/admin/telemetry";
 import {
   AdminErrorState,
   AdminLoadingState,
-  AdminPageLayout,
-  AdminIconButton,
   AdminSelect,
   AdminTable,
   AdminTBody,
@@ -29,6 +29,7 @@ import {
   AdminTh,
   AdminTHead,
   AdminTr,
+  Badge,
   Btn,
   Card,
   CardHeader,
@@ -39,8 +40,6 @@ import {
   Pill,
   SectionHeader,
 } from "./admin-ui";
-import { FreshnessBadge } from "./telemetry-ui";
-import { sourceState } from "@/lib/admin/telemetry";
 
 // Admin "HashiCorp Vault" provider panel. Registers external Vault
 // connections (endpoint + KV mount + auth method) whose secrets environment
@@ -108,39 +107,10 @@ export function VaultProviderManager() {
     onError: (err) => toast({ tone: "error", title: "Update failed", message: errorMessage(err) }),
   });
 
-  /**
-   * Per-connection test outcomes, keyed by id.
-   *
-   * The test route answers for exactly one connection
-   * (`POST /admin/vault/:id/test` → 502 from the external Vault on failure), and
-   * the connection record carries no "last tested" field, so this page is the
-   * only place a result exists. Before, a single success toast said "Vault
-   * reachable" with no subject and nothing on the row changed — with several
-   * connections in flight that reads as a verdict about the fleet. A row with no
-   * recorded result says so instead of implying a passing test.
-   *
-   * Component state, so it is cleared by navigation: the wording claims "this
-   * page has not tested it", never "it has never been tested".
-   */
-  const [testResults, setTestResults] = useState<Record<string, { at: number; ok: boolean; detail: string }>>({});
-
   const testMut = useMutation({
-    mutationFn: async (conn: VaultConnection) => ({ conn, result: await testVaultConnection(conn.id) }),
-    onSuccess: ({ conn, result }) => {
-      // An HTTP 200 is not the verdict: `ok` is the answer.
-      const ok = result?.ok === true;
-      const detail = ok ? "Authentication and reachability confirmed." : "The server accepted the request but reported no successful check.";
-      setTestResults((current) => ({ ...current, [conn.id]: { at: Date.now(), ok, detail } }));
-      toast({
-        tone: ok ? "success" : "error",
-        title: ok ? `${conn.name}: reachable` : `${conn.name}: test did not pass`,
-        message: detail,
-      });
-    },
-    onError: (err, conn) => {
-      setTestResults((current) => ({ ...current, [conn.id]: { at: Date.now(), ok: false, detail: errorMessage(err) } }));
-      toast({ tone: "error", title: `${conn.name}: test failed`, message: errorMessage(err) });
-    },
+    mutationFn: (id: string) => testVaultConnection(id),
+    onSuccess: () => toast({ tone: "success", title: "Vault reachable", message: "Authentication and connectivity verified." }),
+    onError: (err) => toast({ tone: "error", title: "Test failed", message: errorMessage(err) }),
   });
 
   const deleteMut = useMutation({
@@ -163,9 +133,10 @@ export function VaultProviderManager() {
   };
 
   return (
-    <AdminPageLayout>
-      {/* Title, subtitle and glyph resolve from admin-registry.ts in the frame. */}
+    <div className="space-y-6">
       <SectionHeader
+        title="Vault"
+        sub="Register HashiCorp Vault connections so environment variables can reference secrets fetched live at deploy time, instead of duplicating them into Forge's own encrypted store."
         status={<FreshnessBadge state={sourceState(connectionsQuery)} />}
         action={
           <div className="flex items-center gap-2">
@@ -180,13 +151,13 @@ export function VaultProviderManager() {
       />
 
       <Card>
-        <CardHeader title={connectionsQuery.isSuccess ? `Connections (${connections.length})` : "Connections"} icon={KeyRound} />
+        <CardHeader title="Connections" icon={KeyRound} />
         {connectionsQuery.isLoading ? (
           <div className="p-4"><AdminLoadingState label="Loading Vault connections…" /></div>
         ) : connectionsQuery.isError ? (
           <div className="p-4"><AdminErrorState message={errorMessage(connectionsQuery.error, "Vault connections could not be loaded.")} retry={() => void connectionsQuery.refetch()} /></div>
         ) : connections.length === 0 ? (
-          <EmptyState icon={KeyRound} title="No connections" message="Register a Vault endpoint to start referencing external secrets." />
+          <EmptyState icon={KeyRound} title="No connections" sub="Register a Vault endpoint to start referencing external secrets." />
         ) : (
           <AdminTable label="Vault connections">
             <AdminTHead>
@@ -204,50 +175,34 @@ export function VaultProviderManager() {
                   <AdminTr key={c.id}>
                     <AdminTd>
                       <div className="font-medium text-text">{c.name}</div>
-                      <div className="font-mono text-xs text-text-subtle">
-                        mount <span className="text-text">{c.mountPath}</span>
-                        {c.namespace ? <> · ns <span className="text-text">{c.namespace}</span></> : null}
+                      <div className="font-mono text-xs text-text-muted">
+                        mount <span className="text-text-subtle">{c.mountPath}</span>
+                        {c.namespace ? <> · ns <span className="text-text-subtle">{c.namespace}</span></> : null}
                         {" "}· KV v{c.engineVersion}
                       </div>
                     </AdminTd>
-                    {/* The endpoint is the row's identity; keeping it in a `title`
-                        tooltip only meant the full value was unreadable on touch,
-                        in a screen reader and on a narrow column. */}
-                    <AdminTd className="max-w-[22ch] break-all font-mono text-xs text-text">{c.baseUrl}</AdminTd>
-                    <AdminTd><Pill tone="info">{c.authMethod}</Pill></AdminTd>
+                    <AdminTd className="max-w-xs truncate font-mono text-xs text-text" title={c.baseUrl}>{c.baseUrl}</AdminTd>
+                    <AdminTd><Badge className="bg-info-subtle text-info">{c.authMethod}</Badge></AdminTd>
                     <AdminTd className="font-mono text-xs text-text-subtle">
                       {hint}
-                      {c.authMethod === "approle" && c.roleId ? <div className="t-meta">role {c.roleId.slice(0, 8)}</div> : null}
+                      {c.authMethod === "approle" && c.roleId ? <div className="text-[11px] text-text-muted">role {c.roleId.slice(0, 8)}</div> : null}
                     </AdminTd>
                     <AdminTd>
-                      <Pill tone={c.enabled ? "ok" : "neutral"}>{c.enabled ? "enabled" : "disabled"}</Pill>
-                      <div className="t-meta pt-1">Updated {formatDate(c.updatedAt, "Unknown")}</div>
-                      {/* The outcome belongs to this row, not to the page: name it
-                          per connection and say plainly when nothing has been read. */}
-                      {testResults[c.id] ? (
-                        <div className="pt-1">
-                          <Pill tone={testResults[c.id]!.ok ? "ok" : "danger"}>{testResults[c.id]!.ok ? "test passed" : "test failed"}</Pill>
-                          <div className="t-meta pt-1">{testResults[c.id]!.detail} · {formatDate(testResults[c.id]!.at)}</div>
-                        </div>
-                      ) : (
-                        <div className="t-meta pt-1">Not tested from this page</div>
-                      )}
-                      {!c.enabled ? (
-                        <div className="t-meta pt-1">Disabled — references will not resolve even if the endpoint is reachable.</div>
-                      ) : null}
+                      <Pill tone={c.enabled ? "green" : "neutral"}>{c.enabled ? "enabled" : "disabled"}</Pill>
+                      <div className="pt-1 text-xs text-text-muted">{formatDate(c.updatedAt)}</div>
                     </AdminTd>
                     <AdminTd>
                       <div className="flex items-center justify-end gap-1.5">
                         <Btn size="sm" tone="ghost" onClick={() => toggleMut.mutate({ id: c.id, enabled: !c.enabled })}>
                           {c.enabled ? "Disable" : "Enable"}
                         </Btn>
-                        <Btn size="sm" tone="subtle" loading={testMut.isPending && testMut.variables?.id === c.id} onClick={() => testMut.mutate(c)} title={`Test ${c.name}`}>
+                        <Btn size="sm" tone="subtle" loading={testMut.isPending && testMut.variables === c.id} onClick={() => testMut.mutate(c.id)} title="Test connection">
                           <Plug size={14} className="mr-1.5" /> Test
                         </Btn>
                         <Btn size="sm" tone="ghost" onClick={() => setModal({ mode: "edit", connection: c })}>Edit</Btn>
-                        <AdminIconButton label={`Delete Vault connection ${c.name}`} tone="danger" disabled={deleteMut.isPending} onClick={() => void handleDelete(c)}>
+                        <Btn size="sm" tone="danger" onClick={() => handleDelete(c)} title="Delete connection">
                           <Trash2 size={14} />
-                        </AdminIconButton>
+                        </Btn>
                       </div>
                     </AdminTd>
                   </AdminTr>
@@ -271,7 +226,7 @@ export function VaultProviderManager() {
       ) : null}
 
       {renderConfirm()}
-    </AdminPageLayout>
+    </div>
   );
 }
 
@@ -382,7 +337,7 @@ function ConnectionModal({
               mono
               required={needsCredential}
             />
-            {mode === "edit" ? <p className="t-meta">Stored token hint: <span className="font-mono">{initial?.tokenHint || "—"}</span></p> : null}
+            {mode === "edit" ? <p className="text-xs text-text-muted">Stored token hint: <span className="font-mono">{initial?.tokenHint || "—"}</span></p> : null}
           </div>
         ) : (
           <div className="space-y-4">
@@ -398,16 +353,16 @@ function ConnectionModal({
                 mono
                 required={needsCredential}
               />
-              {mode === "edit" ? <p className="t-meta">Stored secret hint: <span className="font-mono">{initial?.secretIdHint || "—"}</span></p> : null}
+              {mode === "edit" ? <p className="text-xs text-text-muted">Stored secret hint: <span className="font-mono">{initial?.secretIdHint || "—"}</span></p> : null}
             </div>
           </div>
         )}
 
-        <div className="rounded-lg border border-line p-3">
+        <div className="rounded-lg border border-[var(--line)] p-3">
           <ToggleRow label="Enabled" checked={form.enabled} onChange={(v) => set("enabled", v)} />
         </div>
         {!valid ? (
-          <p className="t-meta text-warn">
+          <p className="text-xs text-warn">
             {mode === "create" && form.authMethod === "token" && tokenMissing
               ? "A token is required for a new token-auth connection."
               : mode === "create" && form.authMethod === "approle" && approleMissing

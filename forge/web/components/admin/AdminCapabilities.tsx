@@ -428,7 +428,7 @@ function DriftPanel({ selectedNodeId, onSelectNode, caps, nodeName }: { selected
         ) : null}
         <div className="border-t border-line p-4">
           <p className="text-xs leading-5 text-text-subtle">
-            Drift compares the two newest snapshots for this node. With a single snapshot everything reports as added — the honest no-baseline signal. No fleet-wide delta exists: the control plane answers per node, so "did anything change?" needs one node at a time.
+            Drift compares the two newest snapshots for this node. With a single snapshot everything reports as added — the honest no-baseline signal. No fleet-wide delta exists: the control plane answers per node, so &ldquo;did anything change?&rdquo; needs one node at a time.
           </p>
         </div>
       </Card>

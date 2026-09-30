@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 func TestSortMigrationFiles_NumericThenSuffix(t *testing.T) {
@@ -430,11 +432,24 @@ func TestMySQLDSN_EncodesSpecialChars(t *testing.T) {
 		Database: "forge",
 	}
 	dsn := cfg.DSN()
-	if strings.Contains(dsn, "p@ss:w?rd/with#special%chars") {
-		t.Errorf("raw password must not appear in DSN, got: %s", dsn)
+	// go-sql-driver/mysql FormatDSN writes userinfo raw and its ParseDSN does
+	// not percent-decode it, so encoding the password here would corrupt
+	// authentication (the literal %40 would become the password). What must
+	// hold instead is a lossless round-trip through the driver's own parser:
+	// special characters must not corrupt the field split (last '/' and last
+	// '@'), which is the actual operational hazard for such passwords.
+	parsed, err := mysql.ParseDSN(dsn)
+	if err != nil {
+		t.Fatalf("DSN with special-char password must parse, got %v: %s", err, cfg.RedactedDSN())
+	}
+	if parsed.User != "forge" || parsed.Passwd != "p@ss:w?rd/with#special%chars" {
+		t.Errorf("credentials must round-trip intact, got user=%q passwd=%q", parsed.User, parsed.Passwd)
+	}
+	if parsed.DBName != "forge" {
+		t.Errorf("dbname must survive encoding, got %q", parsed.DBName)
 	}
 	if !strings.Contains(dsn, "/forge?") {
-		t.Errorf("dbname and params must survive encoding, got: %s", dsn)
+		t.Errorf("dbname and params must survive encoding, got: %s", cfg.RedactedDSN())
 	}
 	if red := cfg.RedactedDSN(); strings.Contains(red, "p@ss") || strings.Contains(red, "%40") {
 		t.Errorf("redacted DSN must not leak password material, got: %s", red)

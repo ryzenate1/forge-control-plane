@@ -324,6 +324,70 @@ func (s *Store) CreateNode(ctx context.Context, req CreateNodeRequest, actorID *
 	return node, tokenID + "." + token, nil
 }
 
+// NodeLifecyclePatch flips only cluster-membership lifecycle columns
+// (draining, maintenance_mode, desired_state, status, maintenance_message).
+// Pointer fields distinguish "leave untouched" (nil) from an explicit value,
+// so internal state machines (join/leave/drain/maintenance) never have to
+// round-trip the full node row through UpdateNode — which requires the
+// complete endpoint identity and would clobber unrelated columns with zero
+// values when given a partial request.
+type NodeLifecyclePatch struct {
+	Draining           *bool
+	Maintenance        *bool
+	DesiredState       *NodeDesiredState
+	Status             *string
+	MaintenanceMessage *string
+}
+
+// PatchNodeLifecycle applies a NodeLifecyclePatch to a single node. Only the
+// whitelisted lifecycle columns are written; every other column keeps its
+// stored value. An empty patch is rejected, and a patch targeting a missing
+// node reports "node not found" rather than success.
+func (s *Store) PatchNodeLifecycle(ctx context.Context, nodeID string, patch NodeLifecyclePatch, actorID *string) (Node, error) {
+	if strings.TrimSpace(nodeID) == "" {
+		return Node{}, errors.New("node id is required")
+	}
+	sets := []string{}
+	args := []any{}
+	add := func(column string, value any) {
+		sets = append(sets, fmt.Sprintf("%s = $%d", column, len(args)+1))
+		args = append(args, value)
+	}
+	if patch.Draining != nil {
+		add("draining", *patch.Draining)
+	}
+	if patch.Maintenance != nil {
+		add("maintenance_mode", *patch.Maintenance)
+	}
+	if patch.DesiredState != nil {
+		switch *patch.DesiredState {
+		case NodeDesiredStateActive, NodeDesiredStateMaintenance, NodeDesiredStateDraining:
+			add("desired_state", string(*patch.DesiredState))
+		default:
+			return Node{}, fmt.Errorf("invalid desired state %q", string(*patch.DesiredState))
+		}
+	}
+	if patch.Status != nil {
+		add("status", strings.TrimSpace(*patch.Status))
+	}
+	if patch.MaintenanceMessage != nil {
+		add("maintenance_message", *patch.MaintenanceMessage)
+	}
+	if len(sets) == 0 {
+		return Node{}, errors.New("no lifecycle fields to update")
+	}
+	args = append(args, nodeID)
+	tag, err := s.db.Exec(ctx, fmt.Sprintf("UPDATE nodes SET %s WHERE id = $%d", strings.Join(sets, ", "), len(args)), args...)
+	if err != nil {
+		return Node{}, err
+	}
+	if tag.RowsAffected() == 0 {
+		return Node{}, errors.New("node not found")
+	}
+	_ = s.AppendAudit(ctx, actorID, "node lifecycle updated", "node", &nodeID, `{"lifecycle":true}`)
+	return s.GetNode(ctx, nodeID)
+}
+
 func (s *Store) UpdateNode(ctx context.Context, nodeID string, req UpdateNodeRequest, actorID *string) (Node, error) {
 	req = normalizeNodeUpdate(req)
 	if strings.TrimSpace(req.Name) == "" || strings.TrimSpace(req.Region) == "" || strings.TrimSpace(req.BaseURL) == "" {
@@ -1370,7 +1434,7 @@ func (s *Store) ListServersForNode(ctx context.Context, nodeID string) ([]Server
 
 func (s *Store) ListAllocationsForNode(ctx context.Context, nodeID string) ([]Allocation, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT a.id::text, n.name, s.name, a.ip::text, a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
+		SELECT a.id::text, n.name, s.name, host(a.ip), a.port, a.container_port, a.protocol, a.alias, COALESCE(a.notes, '')
 		FROM allocations a
 		JOIN nodes n ON n.id = a.node_id
 		LEFT JOIN servers s ON s.id = a.server_id

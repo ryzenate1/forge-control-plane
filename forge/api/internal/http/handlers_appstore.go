@@ -50,6 +50,9 @@ func registerAppStoreRoutes(protected fiber.Router, cfg Config, svc *appstore.Se
 		if err := c.BodyParser(&req); err != nil {
 			return c.Status(400).JSON(fiber.Map{"error": "invalid request: " + err.Error()})
 		}
+		if strings.TrimSpace(req.NodeID) == "" || strings.TrimSpace(req.Name) == "" {
+			return c.Status(400).JSON(fiber.Map{"error": "name and nodeId are required"})
+		}
 		if req.AppKey == "" {
 			return c.Status(400).JSON(fiber.Map{"error": "appKey is required"})
 		}

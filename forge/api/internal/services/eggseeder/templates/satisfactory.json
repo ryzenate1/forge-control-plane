@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD Debian": "ghcr.io/parkervcp/steamcmd:debian"
   },
-  "startup": "./FactoryServer.sh -Port={{SERVER_PORT}} -ServerPassword={{SATISFACTORY_PASSWORD}} -SessionName=\"{{SERVER_NAME}}\" -MaxPlayers={{SATISFACTORY_MAX_PLAYERS}} -AutoSaveInterval={{SATISFACTORY_AUTO_SAVE_INTERVAL}} -DisableSeasonalEvents={{SATISFACTORY_DISABLE_SEASONAL}}",
+  "startup": "./FactoryServer.sh -Port={{SERVER_PORT}} -ServerPassword=\"{{SATISFACTORY_PASSWORD}}\" -SessionName=\"{{SERVER_NAME}}\" -MaxPlayers={{SATISFACTORY_MAX_PLAYERS}} -AutoSaveInterval={{SATISFACTORY_AUTO_SAVE_INTERVAL}} -DisableSeasonalEvents=\"{{SATISFACTORY_DISABLE_SEASONAL}}\"",
   "config": {
     "files": {},
     "startup": {

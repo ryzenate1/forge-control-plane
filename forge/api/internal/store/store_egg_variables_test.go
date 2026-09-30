@@ -125,7 +125,12 @@ func TestSeedGameTemplates_CountAndValidation(t *testing.T) {
 		}
 		for _, v := range tpl.Env {
 			if err := validateVariableValue(v.DefaultValue, v.Rules); err != nil {
-				t.Fatalf("template %q variable %q default %q rules %q failed validation: %v", tpl.Name, v.EnvVariable, v.DefaultValue, v.Rules, err)
+				// Same exemption as the seed path: empty secret variables
+				// ship no shared default; the value is supplied at server
+				// creation (see secretSeedVar).
+				if v.DefaultValue != "" || !secretSeedVar(v.EnvVariable) {
+					t.Fatalf("template %q variable %q default %q rules %q failed validation: %v", tpl.Name, v.EnvVariable, v.DefaultValue, v.Rules, err)
+				}
 			}
 		}
 	}

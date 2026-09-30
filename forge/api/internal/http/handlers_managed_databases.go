@@ -7,6 +7,7 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 type CreateManagedDatabaseRequest struct {
@@ -27,7 +28,6 @@ type UpdateManagedDatabaseRequest struct {
 
 func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationLimiter fiber.Handler) {
 	dbBackupSvc := cfg.DBBackupService
-
 	// engines static route MUST be registered before :id param route
 	protected.Get("/managed-databases/engines", requireRole("admin"), func(c *fiber.Ctx) error {
 		engines := store.SupportedDBEngines
@@ -79,6 +79,14 @@ func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationL
 		}
 		if req.MemoryMB == 0 {
 			req.MemoryMB = 256
+		}
+		if err := store.ValidateDBEngine(req.Engine, req.Version); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if req.ServerID != "" {
+			if _, err := uuid.Parse(req.ServerID); err != nil {
+				return fiber.NewError(fiber.StatusBadRequest, "serverId must be a valid UUID")
+			}
 		}
 		storeReq := store.CreateManagedDatabaseRequest{
 			ServerID:  req.ServerID,
@@ -177,7 +185,7 @@ func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		backup, err := dbBackupSvc.Backup(ctx, c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondManagedDBServiceError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(backup)
 	})
@@ -199,7 +207,7 @@ func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		restore, err := dbBackupSvc.Restore(ctx, c.Params("id"), req.BackupID)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondManagedDBServiceError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(restore)
 	})
@@ -212,7 +220,7 @@ func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		db, err := dbBackupSvc.RotatePassword(ctx, c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondManagedDBServiceError(c, err)
 		}
 		return c.JSON(db)
 	})
@@ -242,4 +250,31 @@ func registerManagedDatabaseRoutes(protected fiber.Router, cfg Config, mutationL
 		}
 		return c.JSON(restores)
 	})
+}
+
+// respondManagedDBServiceError maps dbbackup service failures onto the status
+// that describes them. Precondition failures (DB not running/provisioned,
+// backup not completed) are the caller's fault, not a server crash, so they
+// go out as 409; unimplemented operations go out as 501; everything else
+// keeps the previous 500 behaviour.
+func respondManagedDBServiceError(c *fiber.Ctx, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "not found"), strings.Contains(lower, "no rows"):
+		return fiber.NewError(fiber.StatusNotFound, msg)
+	case strings.Contains(lower, "not running"),
+		strings.Contains(lower, "not provisioned"),
+		strings.Contains(lower, "not yet provisioned"),
+		strings.Contains(lower, "not in completed state"):
+		return fiber.NewError(fiber.StatusConflict, msg)
+	case strings.Contains(lower, "not yet implemented"), strings.Contains(lower, "not implemented"):
+		return fiber.NewError(fiber.StatusNotImplemented, msg)
+	case strings.Contains(lower, "invalid"), strings.Contains(lower, "required"):
+		return fiber.NewError(fiber.StatusBadRequest, msg)
+	}
+	return respondInternalError(c, err)
 }

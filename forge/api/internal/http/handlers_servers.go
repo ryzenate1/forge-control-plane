@@ -191,6 +191,21 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 		if claims, ok := c.Locals("user").(tokenClaims); ok {
 			actorID = &claims.Sub
 		}
+		// PATCH is a partial update: omitted email/role keep their current
+		// values. Without this an update that only touches limits would fail
+		// "email is required", and an omitted role would silently reset to
+		// "user" inside the store default. Fetching first also turns an
+		// unknown id into a 404 instead of a silent no-op success.
+		existing, err := cfg.Store.GetUserByID(ctx, c.Params("id"))
+		if err != nil {
+			return fiber.NewError(fiber.StatusNotFound, "user not found")
+		}
+		if strings.TrimSpace(req.Email) == "" {
+			req.Email = existing.Email
+		}
+		if strings.TrimSpace(req.Role) == "" {
+			req.Role = existing.Role
+		}
 		user, err := cfg.Store.UpdateUser(ctx, c.Params("id"), store.UpdateUserRequest{
 			Email:           req.Email,
 			Password:        req.Password,
@@ -1886,6 +1901,15 @@ func registerServerRoutes(protected fiber.Router, cfg Config, runner *scheduleRu
 	})
 
 	protected.Get("/servers/:id/backups/:backupName", requireServerPermission(cfg, store.PermBackupRead), func(c *fiber.Ctx) error {
+		// Reserved sub-paths registered by other registrars (policies,
+		// download, verify, storage) share this prefix. Fiber matches routes
+		// in registration order, so without this guard "policies" would be
+		// captured as a backup name and reported 404 here instead of reaching
+		// its real handler.
+		switch c.Params("backupName") {
+		case "policies", "download", "verify", "storage":
+			return c.Next()
+		}
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
 		}

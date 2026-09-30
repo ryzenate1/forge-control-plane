@@ -25,7 +25,9 @@ import (
 	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/distribution/reference"
 
 	"gamepanel/beacon/internal/remote"
 )
@@ -256,10 +258,14 @@ func (s *Server) adminContainerAction(w http.ResponseWriter, r *http.Request, ac
 	case "start":
 		err = docker.ContainerStart(r.Context(), id, container.StartOptions{})
 	case "stop":
-		timeout := 30
+		// The panel's daemon client budgets 30s per admin call: a 30s stop
+		// grace would consume the whole budget for a SIGTERM-ignoring
+		// container and surface a 502 for an operation that then succeeds.
+		// 10s matches the managed database path and leaves headroom.
+		timeout := 10
 		err = docker.ContainerStop(r.Context(), id, container.StopOptions{Timeout: &timeout})
 	case "restart":
-		timeout := 30
+		timeout := 10
 		err = docker.ContainerRestart(r.Context(), id, container.StopOptions{Timeout: &timeout})
 	}
 	if err != nil {
@@ -267,7 +273,11 @@ func (s *Server) adminContainerAction(w http.ResponseWriter, r *http.Request, ac
 			writeError(w, http.StatusNotFound, "container not found")
 			return
 		}
-		writeError(w, http.StatusConflict, err.Error())
+		if errdefs.IsConflict(err) {
+			writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		writeError(w, http.StatusBadGateway, "container "+action+" failed: "+err.Error())
 		return
 	}
 
@@ -1805,4 +1815,176 @@ func (s *Server) handleContainerFilesDelete(w http.ResponseWriter, r *http.Reque
 	})
 
 	writeJSON(w, http.StatusOK, map[string]any{"status": "deleted"})
+}
+
+// handleContainerCreate provisions a raw (unmanaged) workload container from
+// the panel's POST /api/v1/docker/containers endpoint. The daemon client calls
+// POST /api/admin/containers, which had no handler registered: every create
+// request fell through to the mux's 405 and surfaced on the panel as a 502.
+// Created containers carry no modern-game-panel.server_id label, so the
+// managed-container guards treat them as unmanaged and non-infra admins may
+// operate them like any other unmanaged container.
+func (s *Server) handleContainerCreate(w http.ResponseWriter, r *http.Request) {
+	userInfo, err := s.getAdminUserInfo(r)
+	if err != nil {
+		writeError(w, http.StatusUnauthorized, err.Error())
+		return
+	}
+	if !userInfo.IsAdmin {
+		writeError(w, http.StatusForbidden, "admin access required")
+		return
+	}
+
+	var body struct {
+		Name    string   `json:"name"`
+		Image   string   `json:"image"`
+		Command []string `json:"command"`
+		Env     []string `json:"env"`
+	}
+	if err := decodeJSONBody(w, r, 1<<20, &body); err != nil {
+		return
+	}
+	imageName := strings.TrimSpace(body.Image)
+	if imageName == "" || len(imageName) > 512 {
+		writeError(w, http.StatusBadRequest, "image is required")
+		return
+	}
+	if _, err := reference.ParseNormalizedNamed(imageName); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid image reference")
+		return
+	}
+	name := strings.TrimSpace(body.Name)
+	if name != "" && !validAdminContainerName(name) {
+		writeError(w, http.StatusBadRequest, "invalid container name")
+		return
+	}
+	if len(body.Command) > 32 {
+		writeError(w, http.StatusBadRequest, "command has too many arguments")
+		return
+	}
+	for _, arg := range body.Command {
+		if len(arg) > 4096 {
+			writeError(w, http.StatusBadRequest, "command argument too long")
+			return
+		}
+	}
+	if len(body.Env) > 128 {
+		writeError(w, http.StatusBadRequest, "too many environment variables")
+		return
+	}
+	for _, entry := range body.Env {
+		// A bare NAME would resolve from the daemon host's own environment,
+		// leaking host values into the container. Require explicit KEY=value.
+		if len(entry) > 8192 || !strings.Contains(entry, "=") || strings.HasPrefix(entry, "=") {
+			writeError(w, http.StatusBadRequest, "environment variables must be KEY=value pairs")
+			return
+		}
+	}
+
+	docker, err := s.adminDockerClient()
+	if err != nil {
+		// The engine being unreachable is a retryable dependency failure, not
+		// a handler bug: 503 keeps it distinguishable from a 500.
+		writeError(w, http.StatusServiceUnavailable, "container runtime unavailable: "+err.Error())
+		return
+	}
+	ctx := r.Context()
+
+	if _, _, err := docker.ImageInspectWithRaw(ctx, imageName); err != nil {
+		pull, perr := docker.ImagePull(ctx, imageName, image.PullOptions{})
+		if perr != nil {
+			writeError(w, http.StatusBadGateway, "pull image "+imageName+": "+perr.Error())
+			return
+		}
+		_, _ = io.Copy(io.Discard, pull)
+		_ = pull.Close()
+	}
+
+	networkName := getDefaultNetwork()
+	if networks, nerr := docker.NetworkList(ctx, network.ListOptions{Filters: filters.NewArgs(filters.Arg("name", "^"+networkName+"$"))}); nerr != nil {
+		writeError(w, http.StatusBadGateway, "list networks: "+nerr.Error())
+		return
+	} else if len(networks) == 0 {
+		if _, nerr := docker.NetworkCreate(ctx, networkName, network.CreateOptions{
+			Driver: "bridge",
+			Labels: map[string]string{"modern-game-panel.managed": "true"},
+		}); nerr != nil {
+			writeError(w, http.StatusBadGateway, "create network: "+nerr.Error())
+			return
+		}
+	}
+
+	created, err := docker.ContainerCreate(ctx,
+		&container.Config{
+			Image: imageName,
+			Cmd:   body.Command,
+			Env:   body.Env,
+			Labels: map[string]string{
+				"modern-game-panel.admin_created": "true",
+			},
+		},
+		&container.HostConfig{
+			NetworkMode: container.NetworkMode(networkName),
+			RestartPolicy: container.RestartPolicy{
+				Name: "unless-stopped",
+			},
+			LogConfig: container.LogConfig{
+				Type: "json-file",
+				Config: map[string]string{
+					"max-size": "10m",
+					"max-file": "3",
+				},
+			},
+		},
+		&network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				networkName: {},
+			},
+		},
+		nil,
+		name,
+	)
+	if err != nil {
+		if strings.Contains(err.Error(), "already in use") {
+			writeError(w, http.StatusConflict, "container name is already in use")
+			return
+		}
+		writeError(w, http.StatusBadGateway, "create container: "+err.Error())
+		return
+	}
+
+	if err := docker.ContainerStart(ctx, created.ID, container.StartOptions{}); err != nil {
+		_ = docker.ContainerRemove(ctx, created.ID, container.RemoveOptions{Force: true})
+		writeError(w, http.StatusBadGateway, "start container: "+err.Error())
+		return
+	}
+
+	s.logAdminAction(ctx, userInfo.UserID, "container:create", "container", &created.ID, map[string]interface{}{
+		"name":  name,
+		"image": imageName,
+	})
+
+	writeJSON(w, http.StatusCreated, map[string]any{"id": created.ID, "name": name, "image": imageName})
+}
+
+// validAdminContainerName enforces the Docker container naming rules so a raw
+// name can never smuggle path or flag syntax into the engine call.
+func validAdminContainerName(name string) bool {
+	if len(name) == 0 || len(name) > 128 {
+		return false
+	}
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' {
+			continue
+		}
+		if c == '_' || c == '.' || c == '-' {
+			continue
+		}
+		return false
+	}
+	if name[0] == '.' || name[0] == '-' {
+		return false
+	}
+	return true
 }

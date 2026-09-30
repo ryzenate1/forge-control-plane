@@ -15,6 +15,9 @@ type mockMembershipStore struct {
 	updateNodeCalled         bool
 	updateNodeReq            store.UpdateNodeRequest
 	updateNodeErr            error
+	lifecyclePatchCalled     bool
+	lifecyclePatchReq        store.NodeLifecyclePatch
+	lifecyclePatchErr        error
 	listServersForNodeResult []store.Server
 	listServersForNodeErr    error
 	createPlanCalled         bool
@@ -29,6 +32,12 @@ func (m *mockMembershipStore) UpdateNode(_ context.Context, _ string, req store.
 	m.updateNodeCalled = true
 	m.updateNodeReq = req
 	return store.Node{}, m.updateNodeErr
+}
+
+func (m *mockMembershipStore) PatchNodeLifecycle(_ context.Context, _ string, patch store.NodeLifecyclePatch, _ *string) (store.Node, error) {
+	m.lifecyclePatchCalled = true
+	m.lifecyclePatchReq = patch
+	return store.Node{}, m.lifecyclePatchErr
 }
 
 func (m *mockMembershipStore) ListServersForNode(_ context.Context, _ string) ([]store.Server, error) {
@@ -50,13 +59,19 @@ func TestJoin(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateOffline)},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.Join(context.Background(), "node-1")
 		if err != nil {
 			t.Fatalf("Join returned error: %v", err)
 		}
-		if mock.updateNodeReq.DesiredState != store.NodeDesiredStateActive {
-			t.Fatalf("expected desired state active, got %v", mock.updateNodeReq.DesiredState)
+		if !mock.lifecyclePatchCalled {
+			t.Fatal("expected lifecycle patch on join")
+		}
+		if mock.lifecyclePatchReq.DesiredState == nil || *mock.lifecyclePatchReq.DesiredState != store.NodeDesiredStateActive {
+			t.Fatalf("expected desired state active, got %v", mock.lifecyclePatchReq.DesiredState)
+		}
+		if mock.lifecyclePatchReq.Status == nil || *mock.lifecyclePatchReq.Status != "online" {
+			t.Fatalf("expected status online, got %v", mock.lifecyclePatchReq.Status)
 		}
 	})
 
@@ -64,7 +79,7 @@ func TestJoin(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy), DesiredState: "active"},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.Join(context.Background(), "node-1")
 		if err == nil {
 			t.Fatal("expected error for already active node")
@@ -86,7 +101,7 @@ func TestLeave(t *testing.T) {
 			getNodeResult:            store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 			listServersForNodeResult: []store.Server{{ID: "srv-1"}},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.Leave(context.Background(), "node-1")
 		if err == nil {
 			t.Fatal("expected error for node with active workloads")
@@ -98,7 +113,7 @@ func TestLeave(t *testing.T) {
 			getNodeResult:            store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 			listServersForNodeResult: nil,
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.Leave(context.Background(), "node-1")
 		if err != nil {
 			t.Fatalf("Leave returned error: %v", err)
@@ -111,7 +126,7 @@ func TestDrain(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		mockEvacuator := &mockMembershipStore{}
 		svc.SetEvacuationPlanner(mockEvacuator)
 
@@ -125,7 +140,7 @@ func TestDrain(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.StartDrain(context.Background(), "node-1")
 		if err == nil {
 			t.Fatal("expected error without evacuator")
@@ -138,12 +153,12 @@ func TestMaintenance(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", HeartbeatState: string(store.NodeHeartbeatStateHealthy)},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.EnableMaintenance(context.Background(), "node-1", "scheduled upgrade")
 		if err != nil {
 			t.Fatalf("EnableMaintenance returned error: %v", err)
 		}
-		if !mock.updateNodeReq.Maintenance {
+		if mock.lifecyclePatchReq.Maintenance == nil || !*mock.lifecyclePatchReq.Maintenance {
 			t.Fatal("expected maintenance=true")
 		}
 	})
@@ -152,7 +167,7 @@ func TestMaintenance(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1"},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.DisableMaintenance(context.Background(), "node-1")
 		if err != nil {
 			t.Fatalf("DisableMaintenance returned error: %v", err)
@@ -163,7 +178,7 @@ func TestMaintenance(t *testing.T) {
 		mock := &mockMembershipStore{
 			getNodeResult: store.Node{ID: "node-1", Draining: true},
 		}
-		svc := &Service{store: mock, draining: make(map[string]chan struct{})}
+		svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
 		err := svc.EnableMaintenance(context.Background(), "node-1", "")
 		if err == nil {
 			t.Fatal("expected error when node is draining")
@@ -176,5 +191,39 @@ func TestMetrics(t *testing.T) {
 	m := svc.Metrics()
 	if m.NodesJoinedTotal != 0 {
 		t.Fatal("expected zero metrics")
+	}
+}
+
+func TestDrainTrackerCloseIsIdempotent(t *testing.T) {
+	tracker := &drainTracker{ch: make(chan struct{})}
+	tracker.close()
+	// Second and third closes — the CancelDrain vs completeDrain vs
+	// goroutine-cleanup race — must not panic.
+	tracker.close()
+	tracker.close()
+	select {
+	case <-tracker.ch:
+	default:
+		t.Fatal("expected closed channel")
+	}
+	var nilTracker *drainTracker
+	nilTracker.close()
+}
+
+func TestCancelDrainAfterCompletion(t *testing.T) {
+	mock := &mockMembershipStore{
+		getNodeResult: store.Node{ID: "node-1"},
+	}
+	svc := &Service{store: mock, draining: make(map[string]*drainTracker)}
+	// Simulate a drain whose evacuation already finished: the tracker is
+	// closed (as completeDrain does) but a stale entry is still present.
+	tracker := &drainTracker{ch: make(chan struct{})}
+	tracker.close()
+	svc.draining["node-1"] = tracker
+	if err := svc.CancelDrain(context.Background(), "node-1"); err != nil {
+		t.Fatalf("CancelDrain returned error: %v", err)
+	}
+	if !mock.lifecyclePatchCalled {
+		t.Fatal("expected lifecycle patch on cancel")
 	}
 }

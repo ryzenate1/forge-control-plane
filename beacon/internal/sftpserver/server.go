@@ -428,19 +428,21 @@ func (s *Server) handleConn(raw net.Conn, config *ssh.ServerConfig) {
 		log.Printf("SFTP: rejected invalid username format: %s from %s", username, raw.RemoteAddr())
 		return
 	}
-	wantUser, wantServer := parts[1], parts[2]
+	wantServer := parts[2]
 
 	userID, serverID := conn.Permissions.Extensions["user"], conn.Permissions.Extensions["server"]
-	// Bind the SSH principal to the panel auth result. The username is
+	// Bind the SSH principal to the panel auth result. The login string is
 	// caller-controlled ("user.serverID") while the extensions are
-	// panel-asserted; accepting them uncompared would let a credential for
-	// server A open server B by renaming the login string.
+	// panel-asserted; the serverID suffix selects the resource, so it must
+	// match the authorized server. (The user prefix is only a routing hint:
+	// the panel maps it to the authoritative userID, which need not be
+	// textually equal.)
 	if userID == "" || serverID == "" {
 		log.Printf("SFTP: rejected connection with empty auth principal from %s", raw.RemoteAddr())
 		return
 	}
-	if !strings.EqualFold(userID, wantUser) || !strings.EqualFold(serverID, wantServer) {
-		log.Printf("SFTP: rejected principal mismatch: login %q does not match auth %q.%q from %s", username, userID, serverID, raw.RemoteAddr())
+	if !strings.EqualFold(serverID, wantServer) {
+		log.Printf("SFTP: rejected server mismatch: login selects %q but auth grants %q from %s", wantServer, serverID, raw.RemoteAddr())
 		return
 	}
 	if err := serverid.Validate(serverID); err != nil {

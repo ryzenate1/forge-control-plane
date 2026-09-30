@@ -2,6 +2,7 @@ import type { ReactElement, ReactNode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render } from "@testing-library/react";
 import { vi } from "vitest";
+import { ToastProvider } from "@/components/ui/toast";
 
 export function createTestQueryClient() {
   return new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 }, mutations: { retry: false } } });
@@ -20,7 +21,11 @@ export function createTestQueryClient() {
  */
 export function renderWithQuery(ui: ReactElement, client = createTestQueryClient()) {
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        <ToastProvider>{children}</ToastProvider>
+      </QueryClientProvider>
+    );
   }
   return { ...render(ui, { wrapper: Wrapper }), client };
 }
@@ -62,7 +67,11 @@ export type ProvidersOptions = {
 export function renderWithProviders(ui: ReactElement, options: ProvidersOptions = {}) {
   const client = options.client ?? createTestQueryClient();
   function Wrapper({ children }: { children: ReactNode }) {
-    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+    return (
+      <QueryClientProvider client={client}>
+        <ToastProvider>{children}</ToastProvider>
+      </QueryClientProvider>
+    );
   }
   return { ...render(ui, { wrapper: Wrapper }), client };
 }

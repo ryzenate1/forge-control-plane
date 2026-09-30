@@ -66,6 +66,12 @@ func registerBuildRoutes(protected fiber.Router, cfg Config, buildSvc *build.Ser
 
 	builds.Get("/", func(c *fiber.Ctx) error {
 		sourceID := c.Query("sourceId")
+		// Builds are scoped to their source: an empty sourceId reaches the
+		// store as WHERE source_id = '' and fails as a uuid syntax error.
+		// Reject it as a client error instead of a 500 with SQL text.
+		if sourceID == "" {
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "sourceId is required"})
+		}
 		records, err := buildSvc.ListBuilds(c.Context(), sourceID)
 		if err != nil {
 			return respondInternalError(c, err)

@@ -89,7 +89,7 @@ func resolveSingleNodeTarget(cfg Config, nodeID string) (*nodeAdminRequest, erro
 	defer cancel()
 	node, err := cfg.Store.GetNode(ctx, nodeID)
 	if err != nil {
-		return nil, err
+		return nil, fiber.NewError(fiber.StatusNotFound, "node not found")
 	}
 	if node.BaseURL == "" {
 		return nil, fiber.NewError(fiber.StatusBadRequest, "node has no base URL")

@@ -93,6 +93,12 @@ func registerBackupRoutes(protected fiber.Router, cfg Config, svc *backup.Servic
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		if err := store.ValidateBackupPolicyInterval(body.Interval); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
+		if err := store.ValidateBackupPolicyStorage(body.Storage); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, err.Error())
+		}
 		policy := &store.BackupPolicy{
 			ServerID:            c.Params("id"),
 			Interval:            body.Interval,

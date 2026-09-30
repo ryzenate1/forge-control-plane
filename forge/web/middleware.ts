@@ -50,13 +50,14 @@ async function hasValidSession(request: NextRequest): Promise<boolean | null> {
     });
     // 401/403 is a definite "no session". A 5xx or any other unexpected
     // status means the API could not answer authoritatively — report unknown
-    // (null) rather than false so the caller does not bounce a valid session
-    // to login just because the backend is down.
+    // (null) rather than false so the caller can fail closed on protected
+    // paths instead of rendering them as if a session existed.
     if (response.status === 401 || response.status === 403) return false;
     if (response.ok) return true;
     return null;
   } catch {
     // Network error / timeout / API down: unknown, not invalid.
+    // Callers fail closed (redirect to login) on unknown for protected paths.
     return null;
   }
 }
@@ -95,7 +96,7 @@ export async function middleware(request: NextRequest) {
     return withCsp(NextResponse.redirect(loginUrl), nonce);
   }
   const validity = await hasValidSession(request);
-  if (validity === false) {
+  if (validity !== true) {
     const loginUrl = request.nextUrl.clone();
     loginUrl.pathname = "/";
     const nextPath = search ? `${pathname}${search}` : pathname;
@@ -103,10 +104,10 @@ export async function middleware(request: NextRequest) {
     const nonce = crypto.randomUUID().replace(/-/g, "");
     return withCsp(NextResponse.redirect(loginUrl), nonce);
   }
-  // validity === null means the API could not be reached authoritatively
-  // (down, 5xx, timeout). Fail open: let the request through and let the
-  // client-side SessionLoader verify once the API answers, instead of
-  // bouncing a potentially-valid session to login on every API blip.
+  // Reachable only with a verified session. Unknown (API down, 5xx, timeout)
+  // fails closed to login — never render protected UI on an unverified
+  // session. /setup above remains fail-open by design so first-run bootstrap
+  // cannot be bricked by an unreachable API.
   const nonce = crypto.randomUUID().replace(/-/g, "");
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-csp-nonce", nonce);

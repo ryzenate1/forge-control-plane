@@ -3,12 +3,9 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
-import { Award, Plus, Trash2, RotateCw, Upload } from "lucide-react";
+import { Shield, Plus, Trash2, RotateCw, AlertTriangle, CheckCircle, XCircle } from "lucide-react";
 import { fetchJSON, postJSON, deleteJSON } from "@/lib/api";
-import { AdminPageLayout, AdminSelect, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
-import { FreshnessBadge } from "@/components/admin/telemetry-ui";
-import { sourceState } from "@/lib/admin/telemetry";
-import { formatDate } from "@/lib/utils";
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 
 type Certificate = {
@@ -25,36 +22,13 @@ type Certificate = {
   updatedAt: string;
 };
 
-/** A certificate imported through `POST /certificates` before the PEM was parsed
- *  was stored with a zero `expires_at`, which the backend reads as "expired long
- *  ago". A zero time is not a date, so it renders as unknown instead. */
-function expiryDate(value?: string): Date | null {
-  if (!value) return null;
-  const d = new Date(value);
-  if (Number.isNaN(d.valueOf()) || d.getUTCFullYear() < 2) return null;
-  return d;
-}
-
-function remainingDays(expires: Date | null): number | null {
-  if (!expires) return null;
-  return (expires.getTime() - Date.now()) / (1000 * 86400);
-}
-
-function ExpiryPill({ expires }: { expires: Date | null }) {
-  const days = remainingDays(expires);
-  if (days === null) return <Pill tone="unknown">Expiry not reported</Pill>;
-  if (days < 0) return <Pill tone="red">Expired {Math.abs(Math.round(days))}d ago</Pill>;
-  if (days < 30) return <Pill tone="yellow">Expires in {Math.round(days)}d</Pill>;
-  return <Pill tone="green">Valid · {Math.round(days)}d left</Pill>;
-}
-
 export default function AdminCertificatesPage() {
   const queryClient = useQueryClient();
   const { toast } = useToast();
   const [confirm, renderConfirm] = useConfirm();
   const [search, setSearch] = useState("");
   const [showUploadModal, setShowUploadModal] = useState(false);
-  const [uploadForm, setUploadForm] = useState({ domainId: "", certificate: "", privateKey: "", issuer: "custom" });
+  const [uploadForm, setUploadForm] = useState({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
   const [showIssueModal, setShowIssueModal] = useState(false);
   const [issueForm, setIssueForm] = useState({ domains: "", email: "", challengeType: "http-01" as "http-01" | "dns-01", dnsProvider: "" });
 
@@ -63,37 +37,18 @@ export default function AdminCertificatesPage() {
     queryFn: () => fetchJSON<{ data: Certificate[] }>("/certificates"),
   });
 
-  const certificates = useMemo(() => {
-    const list = certsQuery.data?.data;
-    return Array.isArray(list) ? list : [];
-  }, [certsQuery.data]);
+  const certificates = useMemo(() => certsQuery.data?.data ?? [], [certsQuery.data]);
 
   const filtered = certificates.filter((c) =>
-    !search || (c.domains ?? []).some((d) => d.toLowerCase().includes(search.toLowerCase())) || (c.provider ?? "").toLowerCase().includes(search.toLowerCase())
+    !search || c.domains.some((d) => d.toLowerCase().includes(search.toLowerCase())) || c.provider.toLowerCase().includes(search.toLowerCase())
   );
 
-  // `POST /certificates` (handlers_proxy_domains.go:309) takes domainId,
-  // certificate, privateKey and issuer, so all four are posted — the five-field
-  // form used to post only the two PEMs, silently discarding the domain binding
-  // and the issuer. `autoRenew` is deliberately NOT offered: the handler
-  // (handlers_proxy_domains.go:366) ignores it because an imported certificate
-  // has no ACME order behind it, and answers with a `warning` instead.
   const uploadMutation = useMutation({
-    mutationFn: () => postJSON<{ warning?: string }>("/certificates", {
-      domainId: uploadForm.domainId.trim(),
-      certificate: uploadForm.certificate.trim(),
-      privateKey: uploadForm.privateKey.trim(),
-      issuer: uploadForm.issuer.trim(),
-    }),
-    onSuccess: (res) => {
+    mutationFn: () => postJSON("/certificates/upload", { certificate: uploadForm.certificate, privateKey: uploadForm.privateKey }),
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
       setShowUploadModal(false);
-      setUploadForm({ domainId: "", certificate: "", privateKey: "", issuer: "custom" });
-      toast({
-        tone: res?.warning ? "warning" : "success",
-        title: res?.warning ? "Certificate imported, not auto-renewed" : "Certificate imported",
-        message: res?.warning || "Bound to the domain you selected. The gateway picks it up on its next reload.",
-      });
+      setUploadForm({ domainId: "", certificate: "", privateKey: "", issuer: "custom", autoRenew: false });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to upload certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
@@ -106,10 +61,7 @@ export default function AdminCertificatesPage() {
 
   const renewMutation = useMutation({
     mutationFn: (id: string) => postJSON(`/certificates/${id}/renew`, {}),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
-      toast({ tone: "success", title: "Renewal requested" });
-    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] }),
     onError: (err) => toast({ tone: "error", title: "Failed to renew certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
@@ -128,181 +80,179 @@ export default function AdminCertificatesPage() {
       queryClient.invalidateQueries({ queryKey: ["admin", "certificates"] });
       setShowIssueModal(false);
       setIssueForm({ domains: "", email: "", challengeType: "http-01", dnsProvider: "" });
-      toast({ tone: "success", title: "Certificate issued" });
     },
     onError: (err) => toast({ tone: "error", title: "Failed to issue certificate", message: err instanceof Error ? err.message : "An error occurred" }),
   });
 
-  const uploadError =
-    !uploadForm.domainId.trim() ? "A domain to bind the certificate to is required."
-      : !uploadForm.certificate.trim() || !uploadForm.privateKey.trim() ? "Both the certificate and the private key PEMs are required."
-        : "";
+  const isExpiring = (expiresAt: string) => {
+    const days = (new Date(expiresAt).getTime() - Date.now()) / (1000 * 86400);
+    return days < 30;
+  };
 
-  const issueDomains = issueForm.domains.split(/[,\n]/).map((d) => d.trim()).filter(Boolean);
+  const isExpired = (expiresAt: string) => new Date(expiresAt) < new Date();
 
   return (
     <AdminPageLayout>
       <SectionHeader
-        status={<FreshnessBadge state={sourceState(certsQuery)} />}
+        title="Certificates"
+        sub="Public TLS certificates and automated issuance."
         action={
           <div className="flex gap-2">
             <Btn size="sm" tone="primary" onClick={() => setShowIssueModal(true)}>
               <Plus size={12} /> Request Certificate
             </Btn>
             <Btn size="sm" tone="ghost" onClick={() => setShowUploadModal(true)}>
-              <Upload size={12} /> Upload Certificate
+              <Plus size={12} /> Upload Certificate
             </Btn>
           </div>
         }
       />
 
       <Card>
-        <CardHeader title="Certificates" icon={Award} />
+        <CardHeader title="Certificates" icon={Shield} />
         <div className="flex items-center gap-3 p-4">
-          <Input label="Search" onChange={setSearch} placeholder="Search by domain or provider…" value={search} />
+          <Input placeholder="Search certificates..." value={search} onChange={setSearch} />
         </div>
 
-        {certsQuery.isPending ? (
-          <div className="p-4"><AdminLoadingState label="Loading certificates…" /></div>
+        {certsQuery.isLoading ? (
+          <AdminLoadingState label="Loading certificates…" />
         ) : certsQuery.isError ? (
-          <div className="p-4"><AdminErrorState message={certsQuery.error instanceof Error ? certsQuery.error.message : "Failed to load certificates"} retry={() => void certsQuery.refetch()} /></div>
+          <div className="p-4">
+            <AdminErrorState
+              message={certsQuery.error instanceof Error ? certsQuery.error.message : "Failed to load certificates"}
+              retry={() => void certsQuery.refetch()}
+            />
+          </div>
         ) : filtered.length === 0 ? (
-          <EmptyState
-            icon={Award}
-            message={search
-              ? `No certificate covers a domain or provider containing “${search}”.`
-              : certificates.length === 0
-                ? "No certificates are stored. Request one from the CA, or import one you already hold."
-                : `${certificates.length} certificate(s) were returned but none could be listed — the response was unusable.`}
-            title={search ? "No certificates match the search" : "No certificates"}
-          />
+          <EmptyState icon={Shield} message="No certificates configured. Upload a certificate or use the ACME service to provision one." />
         ) : (
-          <AdminTable label="Certificates">
-            <AdminTHead><AdminTh>Domains</AdminTh><AdminTh>Provider</AdminTh><AdminTh>Issuer</AdminTh><AdminTh>Expiry</AdminTh><AdminTh>Auto-Renew</AdminTh><AdminTh></AdminTh></AdminTHead>
-            <AdminTBody>
-              {filtered.map((cert) => {
-                const expires = expiryDate(cert.expiresAt);
-                const sanList = Array.isArray(cert.domains) ? cert.domains : [];
-                const renewing = renewMutation.isPending && renewMutation.variables === cert.id;
-                const removing = deleteMutation.isPending && deleteMutation.variables === cert.id;
-                return (
-                  <AdminTr key={cert.id}>
-                    <AdminTd className="max-w-xs">
-                      <span className="break-all font-mono text-xs font-medium text-text" title={sanList.join(", ")}>
-                        {sanList.length > 0 ? sanList.join(", ") : "No domains recorded"}
-                      </span>
-                    </AdminTd>
-                    <AdminTd><Pill tone={cert.provider === "letsencrypt" ? "blue" : "neutral"}>{cert.provider || "Unknown provider"}</Pill></AdminTd>
-                    <AdminTd className="text-xs text-text-subtle">{cert.issuer || "Not reported"}</AdminTd>
-                    <AdminTd>
-                      <div className="flex flex-col gap-1">
-                        <ExpiryPill expires={expires} />
-                        <span className="text-xs text-text-subtle">{expires ? formatDate(cert.expiresAt, "Date unknown") : "Expiry not reported"}</span>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
+                  <th className="px-4 py-3">Domains</th>
+                  <th className="px-4 py-3">Provider</th>
+                  <th className="px-4 py-3">Expiry</th>
+                  <th className="px-4 py-3">Auto-Renew</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {Array.isArray(filtered) && filtered.map((cert) => (
+                  <tr key={cert.id} className="hover:bg-overlay-subtle">
+                    <td className="px-4 py-3">
+                      <div className="flex flex-col gap-0.5">
+                        {Array.isArray(cert.domains) && cert.domains.map((d, i) => (
+                          <span key={i} className="font-mono text-xs font-medium text-text">{d}</span>
+                        ))}
                       </div>
-                    </AdminTd>
-                    <AdminTd>
-                      <div className="flex items-center gap-1.5">
-                        <Pill tone={cert.autoRenew ? "green" : "neutral"}>{cert.autoRenew ? "Automatic" : "Manual only"}</Pill>
-                        <Btn
-                          ariaLabel={`Renew certificate for ${sanList[0] ?? cert.id}`}
-                          disabled={renewing || (renewMutation.isPending && !renewing)}
-                          loading={renewing}
-                          onClick={() => renewMutation.mutate(cert.id)}
-                          size="sm"
-                          tone="ghost"
-                        >
-                          <RotateCw size={12} /> Renew
+                    </td>
+                    <td className="px-4 py-3">
+                      <Pill tone={cert.provider === "letsencrypt" ? "blue" : "neutral"}>
+                        {cert.provider}
+                      </Pill>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-text-subtle">
+                      {cert.expiresAt ? new Date(cert.expiresAt).toLocaleDateString() : "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Pill tone={cert.autoRenew ? "green" : "neutral"}>
+                        {cert.autoRenew ? "Enabled" : "Disabled"}
+                      </Pill>
+                    </td>
+                    <td className="px-4 py-3">
+                      {isExpired(cert.expiresAt) ? (
+                        <div className="flex items-center gap-1.5"><XCircle size={14} className="text-danger" /><Pill tone="red">Expired</Pill></div>
+                      ) : isExpiring(cert.expiresAt) ? (
+                        <div className="flex items-center gap-1.5"><AlertTriangle size={14} className="text-warn" /><Pill tone="yellow">Expiring</Pill></div>
+                      ) : (
+                        <div className="flex items-center gap-1.5"><CheckCircle size={14} className="text-ok" /><Pill tone="green">Valid</Pill></div>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        {cert.autoRenew && (
+                          <Btn size="sm" tone="ghost" onClick={() => renewMutation.mutate(cert.id)} disabled={renewMutation.isPending}>
+                            <RotateCw size={12} /> Renew
+                          </Btn>
+                        )}
+                        <Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete certificate for ${cert.domains[0] ?? cert.id.slice(0, 8)}?`, description: "HTTPS traffic will stop being served with this certificate. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(cert.id); })(); }}>
+                          <Trash2 size={12} />
                         </Btn>
                       </div>
-                    </AdminTd>
-                    <AdminTd>
-                      <Btn
-                        ariaLabel={`Delete certificate for ${sanList[0] ?? cert.id}`}
-                        disabled={removing || (deleteMutation.isPending && !removing)}
-                        loading={removing}
-                        onClick={() => { void (async () => { if (await confirm({ title: `Revoke and delete the certificate for ${sanList[0] ?? cert.id}?`, description: "The pair is revoked at the CA and removed. HTTPS for " + (sanList.length > 1 ? `${sanList.length} hostnames` : (sanList[0] ?? "this hostname")) + " stops being served until another certificate covers them. This cannot be undone.", danger: true, confirmLabel: "Delete" })) deleteMutation.mutate(cert.id); })(); }}
-                        size="sm"
-                        tone="danger"
-                      >
-                        <Trash2 size={12} />
-                      </Btn>
-                    </AdminTd>
-                  </AdminTr>
-                );
-              })}
-            </AdminTBody>
-          </AdminTable>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
       {showIssueModal && (
-        <Modal onClose={() => setShowIssueModal(false)} title="Request a certificate">
+        <Modal title="Request Certificate (Let's Encrypt)" onClose={() => setShowIssueModal(false)}>
           <div className="space-y-4">
-            <Input label="Domains" mono onChange={(v) => setIssueForm({ ...issueForm, domains: v })} placeholder="example.com, *.example.com" value={issueForm.domains} />
-            <Input label="Contact Email" onChange={(v) => setIssueForm({ ...issueForm, email: v })} placeholder="admin@example.com" type="email" value={issueForm.email} />
-            <AdminSelect
-              label="Challenge Type"
-              onChange={(v) => setIssueForm({ ...issueForm, challengeType: v as "http-01" | "dns-01" })}
-              options={[{ value: "http-01", label: "HTTP-01 (single domains)" }, { value: "dns-01", label: "DNS-01 (supports wildcards)" }]}
-              value={issueForm.challengeType}
-            />
+            <Input label="Domains" value={issueForm.domains} onChange={(v) => setIssueForm({ ...issueForm, domains: v })} placeholder="example.com, *.example.com" />
+            <Input label="Contact Email" value={issueForm.email} onChange={(v) => setIssueForm({ ...issueForm, email: v })} placeholder="admin@example.com" />
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Challenge Type</label>
+              <select
+                className="w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-sm text-text outline-none"
+                value={issueForm.challengeType}
+                onChange={(e) => setIssueForm({ ...issueForm, challengeType: e.target.value as "http-01" | "dns-01" })}
+              >
+                <option value="http-01">HTTP-01 (single domains)</option>
+                <option value="dns-01">DNS-01 (supports wildcards)</option>
+              </select>
+            </div>
             {issueForm.challengeType === "dns-01" && (
-              <Input label="DNS Provider" onChange={(v) => setIssueForm({ ...issueForm, dnsProvider: v })} placeholder="cloudflare / route53 / gandi" value={issueForm.dnsProvider} />
+              <Input label="DNS Provider" value={issueForm.dnsProvider} onChange={(v) => setIssueForm({ ...issueForm, dnsProvider: v })} placeholder="cloudflare / route53 / gandi" />
             )}
-            <p className="ui-hint">
-              HTTP-01 requires each domain to already resolve to this panel; use DNS-01 for wildcards.
-              Issued certificates renew automatically.
-            </p>
+            <p className="text-xs text-text-subtle">Issued via ACME. HTTP-01 requires the domain to already resolve to this panel; use DNS-01 for wildcards.</p>
           </div>
           <ModalFooter
-            confirmLabel={issueMutation.isPending ? "Requesting…" : "Request"}
-            disabled={issueMutation.isPending || issueDomains.length === 0 || !!issueMutation.error}
             onCancel={() => setShowIssueModal(false)}
             onConfirm={() => issueMutation.mutate()}
+            confirmLabel={issueMutation.isPending ? "Requesting..." : "Request"}
+            disabled={issueMutation.isPending || !issueForm.domains.trim()}
           />
         </Modal>
       )}
 
       {showUploadModal && (
-        <Modal description="Import a certificate you already hold and bind it to one of your domains." onClose={() => setShowUploadModal(false)} title="Upload a certificate">
+        <Modal title="Upload Custom Certificate" onClose={() => setShowUploadModal(false)}>
           <div className="space-y-4">
-            <Input label="Domain ID" mono onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Proxy domain UUID" value={uploadForm.domainId} />
-            <label className="block">
-              <span className="ui-label">Certificate (PEM)</span>
+            <Input label="Domain ID" value={uploadForm.domainId} onChange={(v) => setUploadForm({ ...uploadForm, domainId: v })} placeholder="Domain UUID" />
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Certificate (PEM)</label>
               <textarea
-                autoComplete="off"
-                className="ui-input mt-1.5 h-24 w-full font-mono text-xs"
+                className="h-24 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                value={uploadForm.certificate}
                 onChange={(e) => setUploadForm({ ...uploadForm, certificate: e.target.value })}
                 placeholder="-----BEGIN CERTIFICATE-----"
-                spellCheck={false}
-                value={uploadForm.certificate}
               />
-            </label>
-            <label className="block">
-              <span className="ui-label">Private Key (PEM)</span>
+            </div>
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Private Key (PEM)</label>
               <textarea
-                autoComplete="off"
-                className="ui-input mt-1.5 h-24 w-full font-mono text-xs"
+                className="h-24 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 py-2 text-xs font-mono text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                value={uploadForm.privateKey}
                 onChange={(e) => setUploadForm({ ...uploadForm, privateKey: e.target.value })}
                 placeholder="-----BEGIN PRIVATE KEY-----"
-                spellCheck={false}
-                value={uploadForm.privateKey}
               />
+            </div>
+            <Input label="Issuer" value={uploadForm.issuer} onChange={(v) => setUploadForm({ ...uploadForm, issuer: v })} placeholder="custom" />
+            <label className="flex items-center gap-2 text-sm font-medium text-text">
+              <input type="checkbox" checked={uploadForm.autoRenew} onChange={(e) => setUploadForm({ ...uploadForm, autoRenew: e.target.checked })} className="rounded border-line bg-[var(--surface-input)]" />
+              Auto-renew (Caddy managed)
             </label>
-            <Input label="Issuer" onChange={(v) => setUploadForm({ ...uploadForm, issuer: v })} placeholder="Recorded on the certificate row" value={uploadForm.issuer} />
-            <p className="ui-hint">
-              An imported certificate is never renewed automatically — the panel has no ACME order behind
-              it, so there is nothing to reissue. When it expires, upload a replacement or request one
-              from the CA instead.
-            </p>
-            {uploadError && uploadForm.certificate ? <p className="text-xs text-danger">{uploadError}</p> : null}
           </div>
           <ModalFooter
-            confirmLabel={uploadMutation.isPending ? "Uploading…" : "Upload"}
-            destructive={false}
-            disabled={uploadMutation.isPending || !!uploadError}
             onCancel={() => setShowUploadModal(false)}
             onConfirm={() => uploadMutation.mutate()}
+            confirmLabel={uploadMutation.isPending ? "Uploading..." : "Upload"}
+            disabled={uploadMutation.isPending || !uploadForm.domainId || !uploadForm.certificate}
           />
         </Modal>
       )}

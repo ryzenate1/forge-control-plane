@@ -271,6 +271,8 @@ export function AdminActivityLog() {
           the registry trail, and the hand-written "Command / Activity" this file
           used to draw named a group that does not exist in the registry. */}
       <SectionHeader
+        title="Activity"
+        sub="Human-readable audit and activity history."
         status={<FreshnessBadge state={sourceState(activityQuery, 15_000)} />}
         info={{
           title: "Audit trail",
@@ -393,7 +395,7 @@ export function AdminActivityLog() {
               onClick={() => updateFilter(() => setLevel(l.value))}
               className={cn(
                 "rounded-md px-3 py-1 text-xs font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]",
-                level === l.value ? "bg-brand text-white" : "text-text-subtle hover:text-text",
+                level === l.value ? "bg-brand text-text" : "text-text-subtle hover:text-text",
               )}
             >
               {l.label}

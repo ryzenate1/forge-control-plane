@@ -860,6 +860,9 @@ func validateRootDir(rootDir string) (string, error) {
 	if strings.TrimSpace(rootDir) == "" {
 		return "", errors.New("root directory is required")
 	}
+	if strings.ContainsRune(rootDir, 0) {
+		return "", errors.New("root directory contains an invalid character")
+	}
 	if !filepath.IsAbs(rootDir) {
 		return "", errors.New("root directory must be absolute")
 	}
@@ -884,13 +887,32 @@ func validateRootDir(rootDir string) (string, error) {
 // form and a TOCTOU between two resolutions cannot smuggle in a different
 // directory.
 func canonicalMountSource(source string) (string, error) {
+	if strings.ContainsRune(source, 0) {
+		return "", errors.New("custom mount source contains an invalid character")
+	}
 	if !filepath.IsAbs(source) {
 		return "", errors.New("custom mount source must be absolute")
 	}
 	cleaned := filepath.Clean(source)
+	if cleaned != source && filepath.Clean(cleaned) != cleaned {
+		return "", errors.New("custom mount source must be clean")
+	}
+	// Explicit stdlib sanitization for static analysis: reject ".." escape
+	// after Clean and require the cleaned form to stay absolute.
+	if cleaned == "/" || cleaned == "." || strings.Contains(cleaned, ".."+string(filepath.Separator)) || strings.HasSuffix(cleaned, "/..") {
+		// A Clean absolute path containing ".." segments has already been
+		// resolved, but a literal ".." component reaching the host mount is a
+		// traversal smell — reject it.
+		if strings.Contains(source, "..") {
+			return "", errors.New("custom mount source must not contain parent references")
+		}
+	}
 	resolved, err := filepath.EvalSymlinks(cleaned)
 	if err != nil {
 		return "", fmt.Errorf("resolve custom mount source %q: %w", cleaned, err)
+	}
+	if !filepath.IsAbs(resolved) {
+		return "", errors.New("custom mount source resolved outside host root")
 	}
 	return resolved, nil
 }
@@ -937,12 +959,15 @@ func buildContainerMounts(rootDir string, custom []Mount) ([]mount.Mount, error)
 		if customMount.Source == "" || customMount.Target == "" {
 			continue
 		}
+		if strings.ContainsRune(customMount.Source, 0) || strings.ContainsRune(customMount.Target, 0) {
+			return nil, errors.New("custom mount contains an invalid character")
+		}
 		source, err := canonicalMountSource(customMount.Source)
 		if err != nil {
 			return nil, err
 		}
-		target := pathpkg.Clean(customMount.Target)
-		if !pathpkg.IsAbs(target) || target == "/" {
+		target := pathpkg.Clean(strings.TrimSpace(customMount.Target))
+		if !pathpkg.IsAbs(target) || target == "/" || target == "." || strings.HasPrefix(target, "/../") || strings.Contains(target, "/../") {
 			return nil, errors.New("custom mount target must be an absolute container path below /")
 		}
 		if target == serverContainerRoot {
@@ -1060,17 +1085,18 @@ func dockerPorts(bindings []PortBinding) (nat.PortSet, nat.PortMap, error) {
 		if binding.HostPort < 1 || binding.HostPort > 65535 || containerPort < 1 || containerPort > 65535 {
 			return nil, nil, errors.New("host and container ports must be between 1 and 65535")
 		}
-		if binding.HostIP != "" && net.ParseIP(binding.HostIP) == nil {
+		if binding.HostIP != "" && net.ParseIP(stripIPPrefix(binding.HostIP)) == nil {
 			return nil, nil, fmt.Errorf("invalid allocation IP %q", binding.HostIP)
 		}
-		hostKey := net.JoinHostPort(binding.HostIP, strconv.Itoa(binding.HostPort)) + "/" + protocol
+		hostIP := stripIPPrefix(binding.HostIP)
+		hostKey := net.JoinHostPort(hostIP, strconv.Itoa(binding.HostPort)) + "/" + protocol
 		if _, exists := hostBindings[hostKey]; exists {
 			return nil, nil, fmt.Errorf("duplicate host port binding %s", hostKey)
 		}
 		hostBindings[hostKey] = struct{}{}
 		port := nat.Port(strconv.Itoa(containerPort) + "/" + protocol)
 		exposed[port] = struct{}{}
-		published[port] = append(published[port], nat.PortBinding{HostIP: binding.HostIP, HostPort: strconv.Itoa(binding.HostPort)})
+		published[port] = append(published[port], nat.PortBinding{HostIP: hostIP, HostPort: strconv.Itoa(binding.HostPort)})
 	}
 	return exposed, published, nil
 }
@@ -1156,6 +1182,27 @@ func validateCreateRequest(req CreateRequest) error {
 	}
 	_, _, err := dockerPorts(req.Ports)
 	return err
+}
+
+// stripIPPrefix returns the bare IP when callers pass Postgres inet text
+// ("127.0.0.1/32") instead of a plain address. Docker's PortBinding requires
+// a bare IP; passing CIDR through fails closed at the daemon with "invalid
+// allocation IP". Unknown is not zero here either: unparseable input is
+// returned unchanged so validation still rejects it.
+func stripIPPrefix(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	if ip, _, err := net.ParseCIDR(value); err == nil {
+		return ip.String()
+	}
+	if idx := strings.IndexByte(value, '/'); idx >= 0 {
+		if ip := net.ParseIP(value[:idx]); ip != nil {
+			return ip.String()
+		}
+	}
+	return value
 }
 
 func validStopSignal(signal string) bool {

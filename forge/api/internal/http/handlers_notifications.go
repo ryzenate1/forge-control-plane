@@ -63,7 +63,7 @@ func handleCreateNotificationChannel(svc *notificationsvc.Service) fiber.Handler
 			Enabled: req.Enabled,
 		})
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(ch)
 	}
@@ -124,8 +124,11 @@ func handleTestNotificationChannel(svc *notificationsvc.Service) fiber.Handler {
 		ctx, cancel := requestContext()
 		defer cancel()
 
+		// A test delivery exercises a real downstream webhook: connection
+		// refusals and non-2xx responses are the provider's answer, not an
+		// internal failure, so they surface as 502 rather than 500.
 		if err := svc.TestChannel(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return fiber.NewError(fiber.StatusBadGateway, err.Error())
 		}
 		return c.JSON(fiber.Map{"status": "test message sent"})
 	}

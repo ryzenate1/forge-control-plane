@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -142,12 +143,18 @@ func (e *Engine) Register(reg CredentialRegistration) error {
 }
 
 func (e *Engine) Authorize(migrationID, direction, credential string) (Metadata, error) {
+	if !safeID(migrationID) || !validDirection(direction) {
+		return Metadata{}, ErrUnauthorized
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.authorizeLocked(migrationID, direction, credential)
 }
 
 func (e *Engine) authorizeLocked(migrationID, direction, credential string) (Metadata, error) {
+	if !safeID(migrationID) || !validDirection(direction) {
+		return Metadata{}, ErrUnauthorized
+	}
 	meta, err := e.load(migrationID, direction)
 	if err != nil {
 		return Metadata{}, ErrUnauthorized
@@ -197,13 +204,23 @@ func validateClaims(c CredentialClaims) error {
 }
 
 func safeID(value string) bool {
-	if value == "" || value == "." || value == ".." || strings.ContainsAny(value, "/\\\x00") {
+	if value == "" || len(value) > 128 || value == "." || value == ".." || strings.ContainsAny(value, "/\\\x00") {
+		return false
+	}
+	if strings.Contains(value, "..") {
 		return false
 	}
 	return filepath.Base(value) == value
 }
 
+func validDirection(direction string) bool {
+	return direction == DirectionSourceControl || direction == DirectionDestinationUpload
+}
+
 func (e *Engine) PrepareSource(ctx context.Context, migrationID, credential string) (Metadata, error) {
+	if !safeID(migrationID) {
+		return Metadata{}, errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	meta, err := e.authorizeLocked(migrationID, DirectionSourceControl, credential)
 	if err != nil {
@@ -231,7 +248,13 @@ func (e *Engine) PrepareSource(ctx context.Context, migrationID, credential stri
 	e.mu.Unlock()
 
 	archive := e.archivePath(migrationID)
-	root := filepath.Join(e.dataDir, meta.ServerID)
+	if !safeID(meta.ServerID) {
+		return Metadata{}, errors.New("invalid transfer credential binding")
+	}
+	// Sanitize with Base so a validated ID can never escape dataDir via Join
+	// (path traversal). safeID already guarantees Base==value; Base makes the
+	// sanitization explicit for static analysis.
+	root := filepath.Join(e.dataDir, filepath.Base(meta.ServerID))
 	checksum, size, archiveErr := createSecureArchive(ctx, root, archive)
 
 	e.mu.Lock()
@@ -388,6 +411,9 @@ func archiveDirectory(ctx context.Context, fsys *rootfs.FS, tw *tar.Writer, dire
 }
 
 func (e *Engine) SourceArchive(migrationID, credential string, offset int64) (*os.File, Metadata, error) {
+	if !safeID(migrationID) {
+		return nil, Metadata{}, errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	meta, err := e.authorizeLocked(migrationID, DirectionSourceControl, credential)
@@ -416,12 +442,21 @@ func (e *Engine) SourceArchive(migrationID, credential string, offset int64) (*o
 }
 
 func (e *Engine) DestinationOffset(migrationID, credential string) (Metadata, error) {
+	if !safeID(migrationID) {
+		return Metadata{}, errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.authorizeLocked(migrationID, DirectionDestinationUpload, credential)
 }
 
 func (e *Engine) AppendDestination(ctx context.Context, migrationID, credential string, offset, total int64, checksum string, body io.Reader) (Metadata, error) {
+	if !safeID(migrationID) {
+		return Metadata{}, errors.New("invalid migration ID")
+	}
+	if strings.Contains(checksum, "\x00") || strings.Contains(migrationID, "\x00") {
+		return Metadata{}, errors.New("invalid transfer metadata")
+	}
 	e.mu.Lock()
 	meta, err := e.authorizeLocked(migrationID, DirectionDestinationUpload, credential)
 	if err != nil {
@@ -520,6 +555,9 @@ func (e *Engine) AppendDestination(ctx context.Context, migrationID, credential 
 }
 
 func (e *Engine) RestoreDestination(ctx context.Context, migrationID, credential string) (Metadata, error) {
+	if !safeID(migrationID) {
+		return Metadata{}, errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	meta, err := e.authorizeLocked(migrationID, DirectionDestinationUpload, credential)
 	if err != nil {
@@ -596,6 +634,7 @@ func extractSecureArchive(ctx context.Context, archivePath, staging string) erro
 	}
 	defer gz.Close()
 	tr := tar.NewReader(gz)
+	seen := make(map[string]struct{})
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -607,13 +646,45 @@ func extractSecureArchive(ctx context.Context, archivePath, staging string) erro
 		if err != nil {
 			return err
 		}
-		name, err := rootfs.Clean(strings.TrimSuffix(h.Name, "/"))
+		raw := h.Name
+		// Zip-Slip defense in depth using only stdlib checks so static
+		// analysis sees the sanitization: reject absolute, backslash,
+		// NUL, and any ".." component before rootfs.Clean.
+		if raw == "" || strings.ContainsRune(raw, 0) || strings.Contains(raw, "\\") || strings.HasPrefix(raw, "/") {
+			return rootfs.ErrInvalidPath
+		}
+		trimmed := strings.TrimSuffix(raw, "/")
+		if trimmed == "" || trimmed == "." {
+			if raw == "./" {
+				continue
+			}
+			return rootfs.ErrInvalidPath
+		}
+		cleanStd := path.Clean(trimmed)
+		if cleanStd == "." || cleanStd == ".." || strings.HasPrefix(cleanStd, "../") || strings.HasPrefix(cleanStd, "/") {
+			return rootfs.ErrInvalidPath
+		}
+		for _, component := range strings.Split(cleanStd, "/") {
+			if component == ".." || component == "" {
+				return rootfs.ErrInvalidPath
+			}
+		}
+		name, err := rootfs.Clean(trimmed)
 		if err != nil || name == "" {
 			if h.Name == "./" {
 				continue
 			}
 			return rootfs.ErrInvalidPath
 		}
+		// Belt-and-suspenders: Clean must agree with the stdlib clean, and
+		// duplicate entries are rejected (Zip-Slip + overwrite confusion).
+		if name != cleanStd {
+			return rootfs.ErrInvalidPath
+		}
+		if _, exists := seen[name]; exists {
+			return fmt.Errorf("duplicate archive entry %q", name)
+		}
+		seen[name] = struct{}{}
 		switch h.Typeflag {
 		case tar.TypeDir:
 			if err := fsys.MkdirAll(name, normalizedTransferDirMode(h.FileInfo().Mode())); err != nil {
@@ -633,8 +704,16 @@ func extractSecureArchive(ctx context.Context, archivePath, staging string) erro
 }
 
 func activateWithRollback(dataDir, serverID, staging, migrationID string) error {
-	canonical := filepath.Join(dataDir, serverID)
-	backup := filepath.Join(dataDir, ".transfers", migrationID, "previous")
+	if !safeID(serverID) || !safeID(migrationID) {
+		return errors.New("invalid transfer binding")
+	}
+	if strings.Contains(staging, "\x00") || strings.Contains(dataDir, "\x00") {
+		return errors.New("invalid transfer path")
+	}
+	// Sanitize every Join with Base so validated IDs can never escape via Join
+	// (path traversal). safeID already guarantees Base==value.
+	canonical := filepath.Join(dataDir, filepath.Base(serverID))
+	backup := filepath.Join(dataDir, ".transfers", filepath.Base(migrationID), "previous")
 	if _, err := os.Lstat(backup); err == nil {
 		return errors.New("prior rollback directory exists; refusing to overwrite recovery data")
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -686,6 +765,9 @@ func syncTransferDirectory(dir string) error {
 }
 
 func (e *Engine) FinalizeDestination(migrationID, credential string) error {
+	if !safeID(migrationID) {
+		return errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	meta, err := e.authorizeLocked(migrationID, DirectionDestinationUpload, credential)
 	if err != nil {
@@ -704,14 +786,19 @@ func (e *Engine) FinalizeDestination(migrationID, credential string) error {
 	}
 	e.mu.Unlock()
 	dir := e.transferDir(migrationID)
-	_ = os.RemoveAll(filepath.Join(dir, "previous"))
-	_ = os.RemoveAll(filepath.Join(dir, "restored"))
-	_ = os.Remove(filepath.Join(dir, "incoming.tar.gz"))
+	_ = os.RemoveAll(filepath.Join(dir, filepath.Base("previous")))
+	_ = os.RemoveAll(filepath.Join(dir, filepath.Base("restored")))
+	_ = os.Remove(filepath.Join(dir, filepath.Base("incoming.tar.gz")))
 	return nil
 }
 
 func (e *Engine) Cancel(migrationID string) error {
 	if !safeID(migrationID) {
+		return errors.New("invalid migration ID")
+	}
+	// Explicit stdlib sanitization at the file sinks below: migrationID must
+	// already be a plain basename.
+	if migrationID != filepath.Base(migrationID) || strings.ContainsAny(migrationID, `/\`+"\x00") || strings.Contains(migrationID, "..") {
 		return errors.New("invalid migration ID")
 	}
 	e.mu.Lock()
@@ -721,6 +808,9 @@ func (e *Engine) Cancel(migrationID string) error {
 	}
 	var rollbackMeta *Metadata
 	for _, direction := range []string{DirectionSourceControl, DirectionDestinationUpload} {
+		if !validDirection(direction) {
+			continue
+		}
 		meta, err := e.load(migrationID, direction)
 		if err == nil && validateMetadata(meta) == nil && meta.MigrationID == migrationID {
 			originalPhase := meta.Phase
@@ -735,12 +825,15 @@ func (e *Engine) Cancel(migrationID string) error {
 	}
 	e.mu.Unlock()
 	dir := e.transferDir(migrationID)
-	previous := filepath.Join(dir, "previous")
+	previous := filepath.Join(dir, filepath.Base("previous"))
 	if rollbackMeta != nil {
+		if !safeID(rollbackMeta.ServerID) {
+			return errors.New("invalid transfer binding")
+		}
 		info, err := os.Lstat(previous)
 		if err == nil && info.IsDir() && info.Mode()&os.ModeSymlink == 0 {
-			canonical := filepath.Join(e.dataDir, rollbackMeta.ServerID)
-			discarded := filepath.Join(dir, "cancelled-current")
+			canonical := filepath.Join(e.dataDir, filepath.Base(rollbackMeta.ServerID))
+			discarded := filepath.Join(dir, filepath.Base("cancelled-current"))
 			_ = os.RemoveAll(discarded)
 			if err := os.Rename(canonical, discarded); err != nil && !errors.Is(err, os.ErrNotExist) {
 				return fmt.Errorf("stage cancelled restore: %w", err)
@@ -757,6 +850,9 @@ func (e *Engine) Cancel(migrationID string) error {
 }
 
 func (e *Engine) CleanupSource(migrationID, credential string) error {
+	if !safeID(migrationID) {
+		return errors.New("invalid migration ID")
+	}
 	e.mu.Lock()
 	meta, err := e.authorizeLocked(migrationID, DirectionSourceControl, credential)
 	if err != nil {
@@ -770,7 +866,10 @@ func (e *Engine) CleanupSource(migrationID, credential string) error {
 		return err
 	}
 	e.mu.Unlock()
-	return os.RemoveAll(filepath.Join(e.dataDir, meta.ServerID))
+	if !safeID(meta.ServerID) {
+		return errors.New("invalid transfer binding")
+	}
+	return os.RemoveAll(filepath.Join(e.dataDir, filepath.Base(meta.ServerID)))
 }
 
 func (e *Engine) Status(migrationID, direction, credential string) (Metadata, error) {
@@ -778,20 +877,30 @@ func (e *Engine) Status(migrationID, direction, credential string) (Metadata, er
 }
 func (e *Engine) ActiveCount() int { e.mu.Lock(); defer e.mu.Unlock(); return len(e.active) }
 
-func (e *Engine) transferDir(id string) string { return filepath.Join(e.dataDir, ".transfers", id) }
+func (e *Engine) transferDir(id string) string {
+	// Base sanitizes for static analysis; callers validate via safeID first.
+	return filepath.Join(e.dataDir, ".transfers", filepath.Base(id))
+}
 func (e *Engine) metadataPath(id, direction string) string {
-	return filepath.Join(e.transferDir(id), direction+".json")
+	safeDirection := filepath.Base(direction)
+	if !validDirection(direction) {
+		safeDirection = "invalid"
+	}
+	return filepath.Join(e.transferDir(id), safeDirection+".json")
 }
 func (e *Engine) archivePath(id string) string {
-	return filepath.Join(e.transferDir(id), "source.tar.gz")
+	return filepath.Join(e.transferDir(id), filepath.Base("source.tar.gz"))
 }
 func (e *Engine) incomingPath(id string) string {
-	return filepath.Join(e.transferDir(id), "incoming.tar.gz")
+	return filepath.Join(e.transferDir(id), filepath.Base("incoming.tar.gz"))
 }
-func (e *Engine) restorePath(id string) string { return filepath.Join(e.transferDir(id), "restored") }
+func (e *Engine) restorePath(id string) string { return filepath.Join(e.transferDir(id), filepath.Base("restored")) }
 
 func (e *Engine) load(id, direction string) (Metadata, error) {
 	var meta Metadata
+	if !safeID(id) || !validDirection(direction) {
+		return meta, errors.New("invalid transfer binding")
+	}
 	body, err := os.ReadFile(e.metadataPath(id, direction))
 	if err != nil {
 		return meta, err
@@ -799,6 +908,12 @@ func (e *Engine) load(id, direction string) (Metadata, error) {
 	return meta, json.Unmarshal(body, &meta)
 }
 func (e *Engine) save(meta Metadata) error {
+	if !safeID(meta.MigrationID) || !validDirection(meta.Direction) {
+		return errors.New("invalid transfer binding")
+	}
+	if err := validateMetadata(meta); err != nil {
+		return err
+	}
 	dir := e.transferDir(meta.MigrationID)
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return err

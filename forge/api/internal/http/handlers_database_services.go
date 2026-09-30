@@ -70,7 +70,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		svc, err := ds.ProvisionService(ctx, req.Name, req.Type, req.Version, req.MemoryMB, req.CPUShares)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(svc)
 	})
@@ -108,7 +108,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := ds.DeleteService(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -120,10 +120,10 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := ds.StopService(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		if err := ds.StartService(ctx, c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -136,7 +136,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		backup, err := ds.CreateBackup(ctx, c.Params("id"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(backup)
 	})
@@ -149,7 +149,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		backups, err := ds.ListBackups(ctx, c.Params("id"))
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(backups)
 	})
@@ -161,7 +161,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := ds.RestoreBackup(ctx, c.Params("id"), c.Params("backupId")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -174,7 +174,7 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		logs, err := ds.GetServiceLogs(ctx, c.Params("id"), 50)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"logs": logs})
 	})
@@ -198,11 +198,11 @@ func registerDatabaseServiceRoutes(protected fiber.Router, cfg Config, mutationL
 		defer cancel()
 		cred, err := ds.CreateUser(ctx, c.Params("id"), req.Username, req.Password, perms)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		if req.Database != "" {
 			if err := ds.GrantPermissions(ctx, c.Params("id"), req.Username, req.Database, perms); err != nil {
-				return respondInternalError(c, err)
+				return respondDBProvisionError(c, err)
 			}
 		}
 		return c.Status(fiber.StatusCreated).JSON(cred)

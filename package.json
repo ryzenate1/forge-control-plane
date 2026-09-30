@@ -10,7 +10,7 @@
     "dev:logs": "./scripts/diagnostics/logs.sh",
     "dev": "npm --workspace @forge/web run dev",
     "build:packages": "npm --workspace @forge/shared-types run build && npm --workspace @forge/sdk run build && npm --workspace @forge/ui run build && npm --workspace @forge/game-templates run build",
-    "build": "npm run build:packages && npm --workspace @forge/web run build",
+    "build": "npm --workspace @forge/web run build",
     "lint": "npm --workspace @forge/web run lint",
     "typecheck": "npm run build:packages && npm --workspace @forge/web run typecheck",
     "test": "npm --workspace @forge/web test"

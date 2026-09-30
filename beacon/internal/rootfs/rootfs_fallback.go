@@ -59,6 +59,9 @@ func (f *fallbackFS) close() error {
 }
 
 func (f *fallbackFS) checked(name string, allowMissingFinal bool) (string, error) {
+	if err := validateFallbackPath(name); err != nil {
+		return "", err
+	}
 	parts := strings.Split(name, "/")
 	current := f.root
 	for index, part := range parts {
@@ -95,6 +98,9 @@ func (f *fallbackFS) open(name string, flags int, perm os.FileMode) (*os.File, e
 }
 
 func (f *fallbackFS) mkdirAll(name string, perm os.FileMode) error {
+	if err := validateFallbackPath(name); err != nil {
+		return err
+	}
 	f.lock.mu.Lock()
 	defer f.lock.mu.Unlock()
 	current := f.root
@@ -165,4 +171,34 @@ func (f *fallbackFS) chmod(name string, mode os.FileMode) error {
 		return err
 	}
 	return os.Chmod(target, mode)
+}
+
+// validateFallbackPath mirrors the Linux validateRelativePath contract with
+// stdlib checks so path-traversal sanitization is visible at the
+// filepath.Join/os.* sinks on non-Linux builds.
+func validateFallbackPath(name string) error {
+	if name == "" {
+		// Empty means the filesystem root (FS.Open("") for fsync).
+		return nil
+	}
+	if strings.ContainsRune(name, 0) {
+		return errors.New("invalid path")
+	}
+	if strings.Contains(name, "\\") {
+		return errors.New("invalid path")
+	}
+	if strings.HasPrefix(name, "/") {
+		return errors.New("invalid path")
+	}
+	clean := filepath.Clean(filepath.ToSlash(name))
+	// filepath.Join on darwin/windows accepts both separators; normalize first.
+	if clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") {
+		return errors.New("invalid path")
+	}
+	for _, component := range strings.Split(clean, "/") {
+		if component == ".." || component == "" {
+			return errors.New("invalid path")
+		}
+	}
+	return nil
 }

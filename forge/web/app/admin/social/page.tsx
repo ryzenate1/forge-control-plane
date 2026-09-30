@@ -2,9 +2,9 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Fingerprint, Eye, EyeOff, Save, MessageCircle, Gamepad2, KeyRound, Plug } from 'lucide-react';
+import { Globe, Eye, EyeOff, Save } from 'lucide-react';
 import { fetchJSON, putJSON, type SocialProvider } from '@/lib/api';
-import { AdminErrorState, AdminLoadingState, AdminPageHeader, AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input } from '@/components/admin/admin-ui';
+import { AdminPageLayout, Btn, Card, CardHeader, EmptyState, Input, SectionHeader, AdminLoadingState, AdminErrorState } from '@/components/admin/admin-ui';
 import { Alert } from '@/components/ui/primitives';
 import { useToast } from '@/components/ui/toast';
 
@@ -67,22 +67,15 @@ export default function SocialProvidersPage() {
 
   return (
     <AdminPageLayout>
-      {/* Title, subtitle and the Fingerprint glyph come from admin-registry.ts:213.
-          The page used to restate the registry sentence and append its own
-          provider list + disclaimer; the disclaimer is now stated where it
-          matters — next to the action it qualifies. */}
-      <AdminPageHeader />
+      <SectionHeader title="Single Sign-On" sub="Social and enterprise SSO providers." />
       <Card>
-        <CardHeader title={query.isSuccess ? `${providers.length} providers` : "Providers"} icon={Fingerprint} />
-        <p className="ui-hint border-b border-line px-4 pb-3">
-          Saving writes the credentials you enter. It does not contact the provider, so nothing here claims a working sign-in until a user completes that flow.
-        </p>
+        <CardHeader title={`${providers.length} providers`} icon={Globe} />
         {query.isLoading ? (
-          <div className="p-4"><AdminLoadingState label="Loading providers…" /></div>
+          <AdminLoadingState label="Loading providers…" />
         ) : query.isError ? (
-          <div className="p-4"><AdminErrorState message={query.error instanceof Error ? query.error.message : 'Social providers could not be loaded.'} retry={() => void query.refetch()} /></div>
+          <div className="p-4"><AdminErrorState message={query.error instanceof Error ? query.error.message : "Failed to load social providers."} retry={() => void query.refetch()} /></div>
         ) : providers.length === 0 ? (
-          <EmptyState icon={Fingerprint} title="No providers" message="No social providers are configured. Enable one below to offer SSO sign-in." />
+          <EmptyState icon={Globe} message="No social providers configured." />
         ) : (
           <div className="divide-y divide-line">
             {providers.map((provider) => {
@@ -123,7 +116,7 @@ function ProviderRow({
   saving: boolean;
 }) {
   const [showSecret, setShowSecret] = useState(false);
-  const IconMap: Record<string, typeof Fingerprint> = { discord: MessageCircle, steam: Gamepad2, authentik: KeyRound };
+  const iconMap: Record<string, string> = { discord: '💬', steam: '🎮', authentik: '🔑' };
   const isAuthentik = provider.name === 'authentik';
   const isSteam = provider.name === 'steam';
   const secretLabel = isSteam ? 'Steam Web API Key' : 'Client Secret';
@@ -131,17 +124,17 @@ function ProviderRow({
   return (
     <div className="p-4">
       <div className="mb-3 flex items-center gap-3">
-        {(() => { const ProviderIcon = IconMap[provider.name] ?? Plug; return <ProviderIcon size={18} className="text-text-subtle" />; })()}
+        <span className="text-lg">{iconMap[provider.name] ?? '🔌'}</span>
         <div className="flex-1">
           <p className="font-semibold text-text">{provider.displayName}</p>
-          <p className="t-meta">Provider key: {provider.name}</p>
+          <p className="text-xs text-text-muted">Provider key: {provider.name}</p>
         </div>
         <label className="flex cursor-pointer items-center gap-2 text-sm">
           <input type="checkbox" checked={enabled} onChange={(event) => onChange({ enabled: event.target.checked })} className="accent-[var(--brand)]" />
           <span className="text-text">Enabled</span>
         </label>
       </div>
-      <p className="ui-hint mb-3">
+      <p className="mb-3 text-xs text-text-muted">
         {isSteam
           ? 'Steam uses OpenID for sign-in and the Web API key only to retrieve the signed-in player profile.'
           : isAuthentik

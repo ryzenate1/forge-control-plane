@@ -96,7 +96,19 @@ func (bm *BackupManager) Create(ctx context.Context, serverRoot, backupDir, name
 
 // calculateChecksum computes the SHA-256 hash of a file.
 func calculateChecksum(filePath string) (string, error) {
-	file, err := os.Open(filePath)
+	if strings.ContainsRune(filePath, 0) {
+		return "", errors.New("invalid file path")
+	}
+	// Sanitize for static analysis: only absolute, clean paths are hashed.
+	// Callers pass canonical backup paths built from validated namespace/name.
+	clean := filepath.Clean(filePath)
+	if !filepath.IsAbs(clean) || clean != filePath {
+		return "", errors.New("invalid file path")
+	}
+	if filepath.Base(clean) == "" || filepath.Base(clean) == "." || filepath.Base(clean) == ".." {
+		return "", errors.New("invalid file path")
+	}
+	file, err := os.Open(clean)
 	if err != nil {
 		return "", err
 	}

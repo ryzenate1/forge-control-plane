@@ -74,6 +74,29 @@ type ReconnectClient struct {
 	newClient  func() Client
 	// Circuit breaker: consecutive failed round-trips. Reset on any success.
 	consecutiveFails int
+	// lastErr is the panel's own explanation for the most recent failed
+	// round-trip. It is kept so the reason survives into Stats(): a node whose
+	// credential was deleted fails for one specific reason, and an operator
+	// reading "state: reconnecting" with no cause cannot tell that apart from a
+	// network fault.
+	lastErr    string
+	permanent  bool
+	permanentSince time.Time
+}
+
+// idleCloser is implemented by the concrete panel clients. The reconnect loop
+// replaces the whole client on every successful reconnect and throws the
+// candidate away on every failed one; each of them owns an http.Transport with
+// its own idle connection pool and read-loop goroutines. Retiring them without
+// releasing those connections leaks a pool per reconnect until the idle timeout
+// happens to expire. It is deliberately not part of the Client interface — the
+// loop must keep working for clients that do not implement it.
+type idleCloser interface{ CloseIdle() }
+
+func closeIdle(client Client) {
+	if closer, ok := client.(idleCloser); ok {
+		closer.CloseIdle()
+	}
 }
 
 func NewReconnectClient(panelURL, token string, offlineTimeout time.Duration) *ReconnectClient {

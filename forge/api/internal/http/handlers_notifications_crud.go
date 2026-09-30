@@ -49,8 +49,10 @@ func engineViewer(c *fiber.Ctx) (notifengine.Viewer, error) {
 	return notifengine.Viewer{UserID: claims.Sub, IsAdmin: claims.Role == RoleAdmin}, nil
 }
 
-// engineError maps engine sentinel errors onto HTTP statuses; anything else is
-// treated as an internal failure and answered honestly via respondInternalError.
+// engineError maps engine sentinel errors onto HTTP statuses; validation
+// failures (bad URLs, missing fields) are the caller's fault and answer 400.
+// Anything else is treated as an internal failure and answered honestly via
+// respondInternalError.
 func engineError(c *fiber.Ctx, err error) error {
 	switch {
 	case err == nil:
@@ -62,7 +64,7 @@ func engineError(c *fiber.Ctx, err error) error {
 	case errors.Is(err, notifengine.ErrForbidden):
 		return fiber.NewError(fiber.StatusForbidden, err.Error())
 	default:
-		return respondInternalError(c, err)
+		return respondStoreError(c, err)
 	}
 }
 

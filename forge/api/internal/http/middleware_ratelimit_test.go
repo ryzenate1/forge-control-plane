@@ -65,6 +65,23 @@ func TestGetRateLimitForEndpointCarriesFailClosedFlag(t *testing.T) {
 	}
 }
 
+func TestGetRateLimitForEndpointUsesDistinctKeyPrefixes(t *testing.T) {
+	// Every limiter tier shares the key shape "<prefix>:ratelimit:<clientIP>".
+	// If two tiers share a prefix they share one Redis counter, so reads burn
+	// the login budget (5/min) and mutations inherit read traffic: a user who
+	// browses a few pages can no longer log in, and parallel smoke tracks
+	// permanently 429 each other on loopback. Distinct prefixes keep each
+	// tier's budget independent.
+	seen := map[string]string{}
+	for _, tier := range []string{"auth", "mutation", "read", "other"} {
+		prefix := GetRateLimitForEndpoint(tier, nil, false).KeyPrefix
+		if prev, dup := seen[prefix]; dup {
+			t.Fatalf("tiers %q and %q share rate-limit key prefix %q", prev, tier, prefix)
+		}
+		seen[prefix] = tier
+	}
+}
+
 func TestExtractClientIPUsesRightmostForwardedAddress(t *testing.T) {
 	// The trust decision is resolved against an explicit peer rather than through
 	// app.Test: Fiber's test harness serves from a synthetic connection, so there

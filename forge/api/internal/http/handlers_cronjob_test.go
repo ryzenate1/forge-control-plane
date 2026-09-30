@@ -11,9 +11,19 @@ import (
 	"github.com/gofiber/fiber/v2"
 )
 
+// cronAdminAuth mirrors a real admin cookie session, which carries the
+// wildcard scope (see authMiddleware): the cron endpoints additionally
+// require scheduler.read/scheduler.write, and the shared adminAuth helper
+// does not grant those.
+func cronAdminAuth(c *fiber.Ctx) error {
+	c.Locals("user", tokenClaims{Sub: "test-user", Role: "admin"})
+	c.Locals("apiScopes", []string{"*"})
+	return c.Next()
+}
+
 func TestCronJobs_NilStore(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	protected := app.Group("/api/v1", adminAuth)
+	protected := app.Group("/api/v1", cronAdminAuth)
 	noop := func(c *fiber.Ctx) error { return c.Next() }
 	registerCronJobRoutes(protected, Config{Store: nil}, nil, noop)
 
@@ -54,7 +64,7 @@ func TestCronJobs_NilStore(t *testing.T) {
 
 func TestCronJobs_List(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	protected := app.Group("/api/v1", adminAuth)
+	protected := app.Group("/api/v1", cronAdminAuth)
 	noop := func(c *fiber.Ctx) error { return c.Next() }
 	registerCronJobRoutes(protected, Config{Store: nil}, nil, noop)
 
@@ -70,7 +80,7 @@ func TestCronJobs_List(t *testing.T) {
 
 func TestCronJobs_Create(t *testing.T) {
 	app := fiber.New(fiber.Config{DisableStartupMessage: true})
-	protected := app.Group("/api/v1", adminAuth)
+	protected := app.Group("/api/v1", cronAdminAuth)
 	noop := func(c *fiber.Ctx) error { return c.Next() }
 	registerCronJobRoutes(protected, Config{Store: &store.Store{}}, nil, noop)
 

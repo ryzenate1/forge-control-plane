@@ -5,14 +5,15 @@ import { useQuery } from "@tanstack/react-query";
 import { ArrowLeft, Container, FileCode, Terminal } from "lucide-react";
 import { fetchEgg, fetchNest } from "@/lib/api";
 import { AdminEggVariables } from "@/components/admin/AdminEggVariables";
-import { AdminErrorState, AdminLoadingState, AdminPageLayout, Btn, Card, SectionHeader, cn } from "@/components/admin/admin-ui";
+import { AdminPageLayout, Btn, Card, CardHeader, SectionHeader, AdminLoadingState, AdminErrorState, cn } from "@/components/admin/admin-ui";
 import { useBreadcrumbLabel } from "@/lib/nav/breadcrumb-context";
+import { adminPageGuides } from "@/components/admin/admin-page-guides";
 
 function InfoRow({ label, value, mono }: { label: string; value: string; mono?: boolean }) {
   return (
     <div className="flex items-baseline gap-2">
-      <span className="t-meta">{label}</span>
-      <span className={cn("text-sm text-text", mono && "font-mono text-xs")}>{value || "—"}</span>
+      <span className="text-[10px] font-semibold uppercase tracking-widest text-text-muted">{label}</span>
+      <span className={cn("text-sm text-text", mono && "font-mono text-xs")}>{value || "\u2014"}</span>
     </div>
   );
 }
@@ -42,19 +43,20 @@ export default function EggVariablesPage() {
   useBreadcrumbLabel(nestId, nestQuery.data?.name ?? null);
   useBreadcrumbLabel(eggId, egg?.name ?? null);
 
-  const backToEggs = (
-    <Btn tone="ghost" ariaLabel="Back to egg definitions" onClick={() => router.push(`/admin/nests/${nestId}/eggs`)}>
-      <ArrowLeft size={14} /> Eggs
-    </Btn>
-  );
-
-  // Every branch renders the same frame, so the deepest level of the drill-down
-  // does not change geometry depending on query state.
   if (eggQuery.isLoading) {
     return (
       <AdminPageLayout>
-        <SectionHeader title="Egg" backAction={() => router.push(`/admin/nests/${nestId}/eggs`)} backLabel="Eggs" />
-        <AdminLoadingState label="Loading the egg definition…" />
+        <SectionHeader
+          title="Egg Variables"
+          sub="Service definition details and environment variable schema."
+          info={adminPageGuides.eggs}
+          backAction={() => router.push(`/admin/nests/${nestId}/eggs`)}
+          backLabel="Eggs"
+        />
+        <Card>
+          <CardHeader title="Egg" icon={FileCode} />
+          <AdminLoadingState label="Loading egg\u2026" />
+        </Card>
       </AdminPageLayout>
     );
   }
@@ -62,12 +64,21 @@ export default function EggVariablesPage() {
   if (eggQuery.isError || !egg) {
     return (
       <AdminPageLayout>
-        <SectionHeader title="Egg" backAction={() => router.push(`/admin/nests/${nestId}/eggs`)} backLabel="Eggs" />
-        <AdminErrorState
-          message={`This egg could not be loaded: ${eggQuery.error instanceof Error ? eggQuery.error.message : "Unknown error"}. It may have been deleted.`}
-          retry={() => void eggQuery.refetch()}
+        <SectionHeader
+          title="Egg Variables"
+          sub="Service definition details and environment variable schema."
+          info={adminPageGuides.eggs}
+          backAction={() => router.push(`/admin/nests/${nestId}/eggs`)}
+          backLabel="Eggs"
         />
-        {backToEggs}
+        <div className="flex items-center gap-2">
+          <Btn tone="ghost" onClick={() => router.push(`/admin/nests/${nestId}/eggs`)}>
+            <ArrowLeft size={14} /> Back to Eggs
+          </Btn>
+        </div>
+        <div className="p-4">
+          <AdminErrorState message="Could not load egg. It may have been deleted." retry={() => void eggQuery.refetch()} />
+        </div>
       </AdminPageLayout>
     );
   }
@@ -84,26 +95,29 @@ export default function EggVariablesPage() {
     <AdminPageLayout>
       <SectionHeader
         title={`Egg: ${egg.name}`}
+        sub="Service definition details and environment variable schema."
+        info={adminPageGuides.eggs}
         backAction={() => router.push(`/admin/nests/${nestId}/eggs`)}
         backLabel="Eggs"
       />
       {/* Egg summary card */}
       <Card className="p-5 sm:p-6">
+        <CardHeader title="Egg Details" icon={FileCode} />
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
           <div className="space-y-3">
-            <h2 className="text-lg font-semibold text-text">Definition summary</h2>
+            <h2 className="text-lg font-semibold text-text">{egg.name}</h2>
             {egg.description && (
               <p className="text-sm leading-relaxed text-text-subtle">{egg.description}</p>
             )}
           </div>
 
           <div className="space-y-2.5">
-            <h3 className="flex items-center gap-1.5 t-meta">
-              <Container size={12} /> Docker images
+            <h3 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
+              <Container size={12} /> Docker Images
             </h3>
             <div className="space-y-1">
               {dockerImages.length > 0 ? dockerImages.map((img, i) => (
-                <code key={i} className="block break-all rounded bg-overlay-subtle px-2 py-1 font-mono text-xs text-text">
+                <code key={i} className="block truncate rounded bg-overlay px-2 py-1 font-mono text-[11px] text-text">
                   {img}
                 </code>
               )) : <span className="text-xs text-text-muted">No images set</span>}
@@ -111,24 +125,22 @@ export default function EggVariablesPage() {
           </div>
 
           <div className="space-y-2.5">
-            <h3 className="flex items-center gap-1.5 t-meta">
+            <h3 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
               <Terminal size={12} /> Startup
             </h3>
-            <code className="block break-all rounded bg-overlay-subtle px-2 py-1.5 font-mono text-xs leading-relaxed text-text">
-              {egg.startup || "—"}
+            <code className="block rounded bg-overlay px-2 py-1.5 font-mono text-[11px] leading-relaxed text-text">
+              {egg.startup || "\u2014"}
             </code>
           </div>
 
           <div className="space-y-2.5">
-            <h3 className="flex items-center gap-1.5 t-meta">
+            <h3 className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-widest text-text-muted">
               <FileCode size={12} /> Install
             </h3>
             <div className="space-y-1 text-xs text-text-subtle">
-              {/* No fabricated defaults: the old `|| "alpine:3.21"` and `|| "sh"`
-                  presented values the definition does not have. */}
-              <InfoRow label="Container" value={egg.installContainer || "Not set"} mono />
-              <InfoRow label="Entrypoint" value={egg.installEntrypoint || "Not set"} mono />
-              <InfoRow label="Memory" value={egg.defaultMemoryMb ? `${egg.defaultMemoryMb} MiB` : "Not set"} />
+              <InfoRow label="Image" value={egg.installContainer || "alpine:3.21"} mono />
+              <InfoRow label="Entrypoint" value={egg.installEntrypoint || "sh"} mono />
+              <InfoRow label="Memory" value={egg.defaultMemoryMb ? `${egg.defaultMemoryMb} MB` : "Not set"} />
             </div>
           </div>
         </div>

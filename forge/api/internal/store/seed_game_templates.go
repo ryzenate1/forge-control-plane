@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"github.com/google/uuid"
 )
@@ -41,6 +42,21 @@ type gameTemplate struct {
 	InstallSteps json.RawMessage `json:"install_steps"`
 	FileDenylist []string        `json:"file_denylist"`
 	Features     []string        `json:"features"`
+}
+
+// secretSeedVar reports whether an env variable holds a credential that must
+// never ship a shared default. It mirrors the SECRET_VAR_RE exemption in
+// packages/game-templates/scripts/validate-templates.mjs: an empty default
+// for such a variable is valid at seed time (the value is supplied when the
+// server is created), while a weak non-empty default would give every
+// deployment the same guessable credential.
+func secretSeedVar(envVariable string) bool {
+	for _, suffix := range []string{"PASSWORD", "PASSWD", "PASS", "SECRET", "TOKEN", "PRIVATE_KEY"} {
+		if strings.HasSuffix(envVariable, suffix) {
+			return true
+		}
+	}
+	return false
 }
 
 // fallbackGameTemplates is used when the embedded FS is empty (e.g. packages deleted).
@@ -154,7 +170,7 @@ var fallbackGameTemplates = []gameTemplate{
 		}{
 			{Name: "Server Name", EnvVariable: "SERVER_NAME", Description: "Name of the Palworld server.", DefaultValue: "GamePanel Palworld Server", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
 			{Name: "Max Players", EnvVariable: "MAX_PLAYERS", Description: "Maximum players.", DefaultValue: "16", UserViewable: true, UserEditable: true, Rules: "required|integer|min:1|max:32"},
-			{Name: "Admin Password", EnvVariable: "ADMIN_PASSWORD", Description: "Administrator password.", DefaultValue: "changeme", UserViewable: false, UserEditable: true, Rules: "required|string|min:8|max:32"},
+			{Name: "Admin Password", EnvVariable: "ADMIN_PASSWORD", Description: "Administrator password. No default is shipped — set a value when creating the server.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "required|string|min:8|max:32"},
 			{Name: "Daytime Speed", EnvVariable: "PALWORLD_DAYTIME_SPEED", Description: "Daytime cycle speed.", DefaultValue: "1.000000", UserViewable: true, UserEditable: true, Rules: "required|regex:/^\\d+\\.\\d+$/"},
 			{Name: "Nighttime Speed", EnvVariable: "PALWORLD_NIGHTTIME_SPEED", Description: "Nighttime cycle speed.", DefaultValue: "1.000000", UserViewable: true, UserEditable: true, Rules: "required|regex:/^\\d+\\.\\d+$/"},
 			{Name: "EXP Rate", EnvVariable: "PALWORLD_EXP_RATE", Description: "Experience gain multiplier.", DefaultValue: "1.000000", UserViewable: true, UserEditable: true, Rules: "required|regex:/^\\d+\\.\\d+$/"},
@@ -183,7 +199,7 @@ var fallbackGameTemplates = []gameTemplate{
 			Rules        string `json:"rules"`
 		}{
 			{Name: "Server Name", EnvVariable: "SERVER_NAME", Description: "Name of the Valheim server.", DefaultValue: "Valheim Server", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
-			{Name: "Server Password", EnvVariable: "SERVER_PASSWORD", Description: "Server password.", DefaultValue: "gamepanel", UserViewable: false, UserEditable: true, Rules: "required|string|min:5|max:32"},
+			{Name: "Server Password", EnvVariable: "SERVER_PASSWORD", Description: "Server password. No default is shipped — set a value when creating the server.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "required|string|min:5|max:32"},
 			{Name: "World Name", EnvVariable: "WORLD_NAME", Description: "World save name.", DefaultValue: "Dedicated", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
 		},
 	},
@@ -287,7 +303,7 @@ var fallbackGameTemplates = []gameTemplate{
 			{Name: "Max Players", EnvVariable: "MAX_PLAYERS", Description: "Maximum players.", DefaultValue: "50", UserViewable: true, UserEditable: true, Rules: "required|integer|min:1|max:500"},
 			{Name: "Server Level", EnvVariable: "SERVER_LEVEL", Description: "Map type.", DefaultValue: "Procedural Map", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
 			{Name: "Server Seed", EnvVariable: "SERVER_SEED", Description: "Seed value for procedural map generation.", DefaultValue: "1234", UserViewable: true, UserEditable: true, Rules: "required|integer"},
-			{Name: "RCON Password", EnvVariable: "RCON_PASSWORD", Description: "Password for RCON access.", DefaultValue: "changeme", UserViewable: false, UserEditable: true, Rules: "required|string|min:8|max:64"},
+			{Name: "RCON Password", EnvVariable: "RCON_PASSWORD", Description: "Password for RCON access. No default is shipped — set a value when creating the server.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "required|string|min:8|max:64"},
 		},
 	},
 	{
@@ -315,7 +331,7 @@ var fallbackGameTemplates = []gameTemplate{
 			{Name: "Game Mode", EnvVariable: "GAME_MODE", Description: "0=casual, 1=competitive, etc.", DefaultValue: "0", UserViewable: true, UserEditable: true, Rules: "required|integer|in:0,1,2,3,4,5,6"},
 			{Name: "Map Group", EnvVariable: "MAP_GROUP", Description: "Map group to use.", DefaultValue: "mg_active", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
 			{Name: "Map", EnvVariable: "MAP", Description: "Starting map.", DefaultValue: "de_dust2", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
-			{Name: "Steam Account Token", EnvVariable: "STEAM_ACCOUNT", Description: "Steam game server login token.", DefaultValue: "changeme", UserViewable: false, UserEditable: true, Rules: "required|string|max:64"},
+			{Name: "Steam Account Token", EnvVariable: "STEAM_ACCOUNT", Description: "Steam game server login token. May be left empty for LAN-only play.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "nullable|string|max:64"},
 		},
 	},
 	{
@@ -396,7 +412,7 @@ var fallbackGameTemplates = []gameTemplate{
 		},
 	},
 	{
-		ID: "zomboid", Name: "Project Zomboid", Description: "Project Zomboid dedicated server. The ultimate zombie survival simulation game.", Author: "GamePanel", Image: "ghcr.io/pterodactyl/yolks:steamcmd", Startup: "./start-server.sh -servername {{SERVER_NAME}} -adminpassword {{ADMIN_PASSWORD}}",
+		ID: "zomboid", Name: "Project Zomboid", Description: "Project Zomboid dedicated server. The ultimate zombie survival simulation game.", Author: "GamePanel", Image: "ghcr.io/pterodactyl/yolks:steamcmd", Startup: "./start-server.sh -servername \"{{SERVER_NAME}}\" -adminpassword \"{{ADMIN_PASSWORD}}\"",
 		Images: map[string]string{"SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"}, Config: json.RawMessage(`{"startup":{"done":"SERVER STARTED"},"stop":"quit"}`),
 		Resources: struct {
 			MemoryMB int `json:"memory_mb"`
@@ -416,7 +432,7 @@ var fallbackGameTemplates = []gameTemplate{
 			Rules        string `json:"rules"`
 		}{
 			{Name: "Server Name", EnvVariable: "SERVER_NAME", Description: "Name of the Zomboid server.", DefaultValue: "Zomboid Server", UserViewable: true, UserEditable: true, Rules: "required|string|max:64"},
-			{Name: "Admin Password", EnvVariable: "ADMIN_PASSWORD", Description: "Admin password.", DefaultValue: "changeme", UserViewable: false, UserEditable: true, Rules: "required|string|min:4|max:32"},
+			{Name: "Admin Password", EnvVariable: "ADMIN_PASSWORD", Description: "Admin password. No default is shipped — set a value when creating the server.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "required|string|min:4|max:32"},
 			{Name: "Max Players", EnvVariable: "MAX_PLAYERS", Description: "Maximum players.", DefaultValue: "16", UserViewable: true, UserEditable: true, Rules: "required|integer|min:1|max:100"},
 			{Name: "Server Password", EnvVariable: "SERVER_PASSWORD", Description: "Server password.", DefaultValue: "", UserViewable: false, UserEditable: true, Rules: "nullable|string|max:32"},
 		},
@@ -502,8 +518,12 @@ func (s *Store) SeedGameTemplates(ctx context.Context) error {
 				return fmt.Errorf("seed variable %s for %s: %w", v.EnvVariable, tpl.Name, err)
 			}
 			// Validate seeding succeeded with fixed regex validator (PTDL imports).
+			// Empty secret variables are exempt: no shared default is shipped and
+			// the value is supplied at server creation (see secretSeedVar).
 			if err := validateVariableValue(v.DefaultValue, v.Rules); err != nil {
-				return fmt.Errorf("seed validation failed for %s %s: %w", tpl.Name, v.EnvVariable, err)
+				if v.DefaultValue != "" || !secretSeedVar(v.EnvVariable) {
+					return fmt.Errorf("seed validation failed for %s %s: %w", tpl.Name, v.EnvVariable, err)
+				}
 			}
 		}
 	}

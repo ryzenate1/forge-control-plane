@@ -99,10 +99,10 @@ func (s *Store) UpdatePanelSettings(ctx context.Context, ps PanelSettings) error
 			recaptcha_enabled, recaptcha_site_key, recaptcha_secret_key, recaptcha_secret_key_encrypted,
 			connection_timeout, request_timeout,
 			auto_alloc_enabled, auto_alloc_start_port, auto_alloc_end_port,
-			s3_backup_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key_id, s3_secret_access_key, s3_secret_access_key_encrypted, s3_prefix, s3_use_path_style,
+			s3_backup_enabled, s3_endpoint, s3_region, s3_bucket, s3_access_key_id, s3_secret_access_key_encrypted, s3_prefix, s3_use_path_style,
 			updated_at
 		) VALUES (
-			TRUE, $1, $2, $3, $4, $5, $6, $7, '', $8, $9, $10, $11, $12, '', $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, now()
+			TRUE, $1, $2, $3, $4, $5, $6, $7, '', $8, $9, $10, $11, $12, '', $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, now()
 		)
 		ON CONFLICT (id) DO UPDATE SET
 			company_name = EXCLUDED.company_name,
@@ -130,7 +130,6 @@ func (s *Store) UpdatePanelSettings(ctx context.Context, ps PanelSettings) error
 			s3_region = EXCLUDED.s3_region,
 			s3_bucket = EXCLUDED.s3_bucket,
 			s3_access_key_id = EXCLUDED.s3_access_key_id,
-			s3_secret_access_key = '',
 			s3_secret_access_key_encrypted = EXCLUDED.s3_secret_access_key_encrypted,
 			s3_prefix = EXCLUDED.s3_prefix,
 			s3_use_path_style = EXCLUDED.s3_use_path_style,

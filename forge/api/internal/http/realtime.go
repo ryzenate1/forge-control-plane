@@ -3,10 +3,12 @@ package http
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
 
+	"gamepanel/forge/internal/daemon"
 	"gamepanel/forge/internal/store"
 
 	fiberws "github.com/gofiber/contrib/websocket"
@@ -341,6 +343,22 @@ func realtimeProxy(cfg Config, ticketStore *wsTicketStore, stream string) func(*
 			return
 		}
 		upstreamURL, requestURI := cfg.Daemon.WebSocketURL(target.NodeURL, target.ServerID, stream)
+		// The panel→beacon hop carries least-privilege stream credentials, not
+		// the browser ticket: Beacon authenticates WS upgrades with its own
+		// scope-bound tokens, and an upstream dial without ?token= is refused
+		// before the handshake ("missing token"). Install progress requires
+		// the admin scope; every other stream takes the websocket scope.
+		var upstreamToken string
+		if stream == "install" {
+			upstreamToken, err = daemon.MintAdminToken(target.NodeToken, target.ServerID, userID)
+		} else {
+			upstreamToken, err = daemon.MintWebsocketToken(target.NodeToken, target.ServerID, userID)
+		}
+		if err != nil {
+			_ = client.WriteJSON(map[string]any{"error": err.Error()})
+			return
+		}
+		upstreamURL += "?token=" + url.QueryEscape(upstreamToken)
 		headers, err := cfg.Daemon.SignedHeaders(target.NodeToken, http.MethodGet, requestURI, nil)
 		if err != nil {
 			_ = client.WriteJSON(map[string]any{"error": err.Error()})

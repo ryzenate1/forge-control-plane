@@ -116,7 +116,7 @@ func TestPower_TransferIdle(t *testing.T) {
 		t.Fatal("ensureTransferIdle should return 409 Conflict for blocked transfer")
 	}
 
-	t.Run("nil store does not block", func(t *testing.T) {
+	t.Run("nil store fails closed", func(t *testing.T) {
 		app := fiber.New(fiber.Config{DisableStartupMessage: true})
 		app.Get("/test/:id", func(c *fiber.Ctx) error {
 			if err := ensureTransferIdle(c, Config{Store: nil}, c.Params("id")); err != nil {
@@ -129,8 +129,10 @@ func TestPower_TransferIdle(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Fatalf("nil store should not block transfer, got %d", resp.StatusCode)
+		// Fail closed: without a store the transfer state is unknown, and
+		// unknown is not idle — the check must refuse, not wave through.
+		if resp.StatusCode != 503 {
+			t.Fatalf("nil store should fail closed with 503, got %d", resp.StatusCode)
 		}
 	})
 

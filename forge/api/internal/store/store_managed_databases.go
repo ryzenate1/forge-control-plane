@@ -109,12 +109,18 @@ func (s *Store) CreateManagedDatabase(ctx context.Context, req CreateManagedData
 	dockerImage := fmt.Sprintf("%s:%s", image, version)
 	dbName := "db_" + strings.ReplaceAll(id, "-", "")[:12]
 	username := "u_" + strings.ReplaceAll(id, "-", "")[:8]
+	serverID := strings.TrimSpace(req.ServerID)
+	if serverID != "" {
+		if _, err := uuid.Parse(serverID); err != nil {
+			return ManagedDatabase{}, fmt.Errorf("invalid server id %q: must be a UUID", req.ServerID)
+		}
+	}
 
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO managed_databases
 		    (id, server_id, name, engine, version, docker_image, status, port, username, database_name, memory_mb, cpu_shares)
-		VALUES ($1, NULLIF($2, ''), $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-	`, id, req.ServerID, req.Name, engine, version, dockerImage, ManagedDBStatusCreating, port, username, dbName, req.MemoryMB, req.CPUShares)
+		VALUES ($1, NULLIF($2, '')::uuid, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+	`, id, serverID, req.Name, engine, version, dockerImage, ManagedDBStatusCreating, port, username, dbName, req.MemoryMB, req.CPUShares)
 	if err != nil {
 		return ManagedDatabase{}, err
 	}
@@ -348,7 +354,7 @@ func (s *Store) CreateManagedDatabaseRestore(ctx context.Context, dbID, backupID
 	id := uuid.NewString()
 	_, err := s.db.Exec(ctx, `
 		INSERT INTO managed_database_restores (id, managed_database_id, backup_id, status)
-		VALUES ($1, $2, NULLIF($3, ''), $4)
+		VALUES ($1, $2, NULLIF($3, '')::uuid, $4)
 	`, id, dbID, backupID, ManagedDBRestorePending)
 	if err != nil {
 		return ManagedDatabaseRestore{}, err

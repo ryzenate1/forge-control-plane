@@ -989,8 +989,22 @@ func TestGetAllHealthIsDeterministic(t *testing.T) {
 			t.Fatalf("ordering differs at %d: %+v vs %+v", i, first, second)
 		}
 	}
-	if first[0].Host != "10.0.0.1" || first[1].Port != 8080 {
+	if first[0].Host != "10.0.0.1" || first[0].Port != 8080 {
 		t.Fatalf("expected host-then-port ordering, got %+v", first)
+	}
+	want := []struct {
+		host string
+		port int
+	}{
+		{"10.0.0.1", 8080},
+		{"10.0.0.1", 9090},
+		{"10.0.0.2", 8080},
+		{"10.0.0.3", 8080},
+	}
+	for i, w := range want {
+		if first[i].Host != w.host || first[i].Port != w.port {
+			t.Fatalf("expected host-then-port ordering %v, got %+v", want, first)
+		}
 	}
 	if health.Count() != 4 {
 		t.Fatalf("expected Count of 4, got %d", health.Count())

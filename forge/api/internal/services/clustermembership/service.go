@@ -25,6 +25,7 @@ type Metrics struct {
 type membershipStore interface {
 	GetNode(ctx context.Context, nodeID string) (store.Node, error)
 	UpdateNode(ctx context.Context, nodeID string, req store.UpdateNodeRequest, actorID *string) (store.Node, error)
+	PatchNodeLifecycle(ctx context.Context, nodeID string, patch store.NodeLifecyclePatch, actorID *string) (store.Node, error)
 	ListServersForNode(ctx context.Context, nodeID string) ([]store.Server, error)
 }
 
@@ -45,7 +46,26 @@ type Service struct {
 	trafficMgr TrafficManager
 	mu         sync.Mutex
 	metrics    Metrics
-	draining   map[string]chan struct{}
+	draining   map[string]*drainTracker
+}
+
+// drainTracker guards the completion signal of one in-flight drain. Three
+// parties can end a drain — CancelDrain, completeDrain, and the drain
+// goroutine's deferred cleanup — and any two of them can race (a cancel
+// landing just as the evacuation finishes, or a fast-completing evacuation
+// reaching completeDrain before the spawning goroutine returns). A bare
+// channel close panics on the second close and takes down the API process, so
+// every closer goes through close(), which fires exactly once.
+type drainTracker struct {
+	ch   chan struct{}
+	once sync.Once
+}
+
+func (t *drainTracker) close() {
+	if t == nil {
+		return
+	}
+	t.once.Do(func() { close(t.ch) })
 }
 
 func New(store *store.Store, publishers ...events.Publisher) *Service {
@@ -56,7 +76,7 @@ func New(store *store.Store, publishers ...events.Publisher) *Service {
 	return &Service{
 		store:     store,
 		publisher: publisher,
-		draining:  make(map[string]chan struct{}),
+		draining:  make(map[string]*drainTracker),
 	}
 }
 
@@ -99,6 +119,14 @@ func (s *Service) Metrics() Metrics {
 	return s.metrics
 }
 
+func lifecycleBool(value bool) *bool { return &value }
+
+func lifecycleDesiredState(value store.NodeDesiredState) *store.NodeDesiredState {
+	return &value
+}
+
+func lifecycleString(value string) *string { return &value }
+
 func (s *Service) Join(ctx context.Context, nodeID string) error {
 	if s == nil || s.store == nil {
 		return errors.New("membership service unavailable")
@@ -110,8 +138,13 @@ func (s *Service) Join(ctx context.Context, nodeID string) error {
 	if node.HeartbeatState != string(store.NodeHeartbeatStateOffline) && node.DesiredState != "" {
 		return errors.New("node is already active in the cluster")
 	}
-	req := store.UpdateNodeRequest{DesiredState: store.NodeDesiredStateActive, Status: "online"}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	// Lifecycle-only patch: Join must not rewrite the stored endpoint
+	// identity through the full-row UpdateNode path.
+	patch := store.NodeLifecyclePatch{
+		DesiredState: lifecycleDesiredState(store.NodeDesiredStateActive),
+		Status:       lifecycleString("online"),
+	}
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, patch, nil); err != nil {
 		return fmt.Errorf("activate node: %w", err)
 	}
 	s.increment(func(m *Metrics) { m.NodesJoinedTotal++ })
@@ -137,13 +170,13 @@ func (s *Service) Leave(ctx context.Context, nodeID string) error {
 	if len(servers) > 0 {
 		return fmt.Errorf("node has %d active workloads; drain before leaving", len(servers))
 	}
-	req := store.UpdateNodeRequest{
-		DesiredState: store.NodeDesiredStateActive,
-		Status:       "offline",
-		Draining:     false,
-		Maintenance:  false,
+	req := store.NodeLifecyclePatch{
+		DesiredState: lifecycleDesiredState(store.NodeDesiredStateActive),
+		Status:       lifecycleString("offline"),
+		Draining:     lifecycleBool(false),
+		Maintenance:  lifecycleBool(false),
 	}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, req, nil); err != nil {
 		return fmt.Errorf("deactivate node: %w", err)
 	}
 	s.increment(func(m *Metrics) { m.NodesLeftTotal++ })
@@ -168,11 +201,11 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 	if s.evacuationPlanner() == nil {
 		return errors.New("evacuation planner unavailable")
 	}
-	req := store.UpdateNodeRequest{
-		Draining:     true,
-		DesiredState: store.NodeDesiredStateDraining,
+	req := store.NodeLifecyclePatch{
+		Draining:     lifecycleBool(true),
+		DesiredState: lifecycleDesiredState(store.NodeDesiredStateDraining),
 	}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, req, nil); err != nil {
 		return fmt.Errorf("set draining: %w", err)
 	}
 
@@ -182,7 +215,7 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 			slog.Warn("failed to withdraw node targets during drain", "nodeID", nodeID, "error", err)
 		}
 	}
-	done := make(chan struct{})
+	done := &drainTracker{ch: make(chan struct{})}
 	s.mu.Lock()
 	s.draining[nodeID] = done
 	s.mu.Unlock()
@@ -191,7 +224,7 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 	s.publish(ctx, events.EventNodeDrainingStarted, "node", nodeID, map[string]any{})
 
 	go func() {
-		defer close(done)
+		defer done.close()
 		defer func() {
 			if r := recover(); r != nil {
 				buf := make([]byte, 4096)
@@ -203,15 +236,13 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 		if err != nil {
 			s.publish(ctx, events.EventEvacuationPlanFailed, "node", nodeID, map[string]any{"error": err.Error()})
 			// Update node state back to active on failure
-			req := store.UpdateNodeRequest{Draining: false, DesiredState: store.NodeDesiredStateActive}
-			_, _ = s.store.UpdateNode(ctx, nodeID, req, nil)
+			_, _ = s.store.PatchNodeLifecycle(ctx, nodeID, resetDrainPatch(), nil)
 			return
 		}
 		if result.Plan.ID == "" || result.Plan.Status == store.EvacuationPlanStatusFailed {
 			s.publish(ctx, events.EventEvacuationPlanFailed, "node", nodeID, map[string]any{"error": "evacuation plan failed"})
 			// Update node state back to active on failure
-			req := store.UpdateNodeRequest{Draining: false, DesiredState: store.NodeDesiredStateActive}
-			_, _ = s.store.UpdateNode(ctx, nodeID, req, nil)
+			_, _ = s.store.PatchNodeLifecycle(ctx, nodeID, resetDrainPatch(), nil)
 			return
 		}
 		if result.Plan.Status == store.EvacuationPlanStatusCompleted {
@@ -221,8 +252,7 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 		if _, err := s.evacuationPlanner().ExecutePlan(ctx, result.Plan.ID); err != nil {
 			s.publish(ctx, events.EventEvacuationPlanFailed, "node", nodeID, map[string]any{"error": err.Error()})
 			// Update node state back to active on failure
-			req := store.UpdateNodeRequest{Draining: false, DesiredState: store.NodeDesiredStateActive}
-			_, _ = s.store.UpdateNode(ctx, nodeID, req, nil)
+			_, _ = s.store.PatchNodeLifecycle(ctx, nodeID, resetDrainPatch(), nil)
 			return
 		}
 		s.completeDrain(ctx, nodeID)
@@ -231,24 +261,25 @@ func (s *Service) StartDrain(ctx context.Context, nodeID string) error {
 	return nil
 }
 
+// resetDrainPatch returns the lifecycle patch that returns a node to the
+// active, non-draining state after a drain completes, is cancelled, or fails.
+func resetDrainPatch() store.NodeLifecyclePatch {
+	return store.NodeLifecyclePatch{
+		Draining:     lifecycleBool(false),
+		DesiredState: lifecycleDesiredState(store.NodeDesiredStateActive),
+	}
+}
+
 func (s *Service) completeDrain(ctx context.Context, nodeID string) {
 	s.mu.Lock()
-	if ch, ok := s.draining[nodeID]; ok {
-		select {
-		case <-ch:
-		default:
-			close(ch)
-		}
+	if tracker, ok := s.draining[nodeID]; ok {
+		tracker.close()
 		delete(s.draining, nodeID)
 	}
 	s.mu.Unlock()
 
 	// Update node state to mark drain as complete
-	req := store.UpdateNodeRequest{
-		Draining:     false,
-		DesiredState: store.NodeDesiredStateActive,
-	}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, resetDrainPatch(), nil); err != nil {
 		slog.Error("failed to update node state after drain completion", "nodeID", nodeID, "error", err)
 	} else {
 		// Reinstate gateway targets for the node
@@ -268,8 +299,8 @@ func (s *Service) CancelDrain(ctx context.Context, nodeID string) error {
 		return errors.New("membership service unavailable")
 	}
 	s.mu.Lock()
-	if ch, ok := s.draining[nodeID]; ok {
-		close(ch)
+	if tracker, ok := s.draining[nodeID]; ok {
+		tracker.close()
 		delete(s.draining, nodeID)
 	}
 	s.mu.Unlock()
@@ -281,8 +312,8 @@ func (s *Service) CancelDrain(ctx context.Context, nodeID string) error {
 		}
 	}
 
-	req := store.UpdateNodeRequest{Draining: false, DesiredState: store.NodeDesiredStateActive}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	req := resetDrainPatch()
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, req, nil); err != nil {
 		return fmt.Errorf("cancel drain: %w", err)
 	}
 	s.publish(ctx, events.EventActualStateChanged, "node", nodeID, map[string]any{
@@ -322,12 +353,12 @@ func (s *Service) EnableMaintenance(ctx context.Context, nodeID, message string)
 	if node.Draining {
 		return errors.New("node is draining; wait for drain to complete")
 	}
-	req := store.UpdateNodeRequest{
-		Maintenance:        true,
-		DesiredState:       store.NodeDesiredStateMaintenance,
-		MaintenanceMessage: message,
+	req := store.NodeLifecyclePatch{
+		Maintenance:        lifecycleBool(true),
+		DesiredState:       lifecycleDesiredState(store.NodeDesiredStateMaintenance),
+		MaintenanceMessage: lifecycleString(message),
 	}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, req, nil); err != nil {
 		return fmt.Errorf("enable maintenance: %w", err)
 	}
 	s.increment(func(m *Metrics) { m.MaintStartedTotal++ })
@@ -341,12 +372,12 @@ func (s *Service) DisableMaintenance(ctx context.Context, nodeID string) error {
 	if s == nil || s.store == nil {
 		return errors.New("membership service unavailable")
 	}
-	req := store.UpdateNodeRequest{
-		Maintenance:        false,
-		DesiredState:       store.NodeDesiredStateActive,
-		MaintenanceMessage: "",
+	req := store.NodeLifecyclePatch{
+		Maintenance:        lifecycleBool(false),
+		DesiredState:       lifecycleDesiredState(store.NodeDesiredStateActive),
+		MaintenanceMessage: lifecycleString(""),
 	}
-	if _, err := s.store.UpdateNode(ctx, nodeID, req, nil); err != nil {
+	if _, err := s.store.PatchNodeLifecycle(ctx, nodeID, req, nil); err != nil {
 		return fmt.Errorf("disable maintenance: %w", err)
 	}
 	s.increment(func(m *Metrics) { m.MaintEndedTotal++ })

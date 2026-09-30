@@ -144,7 +144,7 @@ export function NodeAutoscalerManager() {
 
   useEffect(() => {
     void loadEvents(selected || undefined);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [selected]);
 
   /** True when a policy with the given id is the one currently selected. */

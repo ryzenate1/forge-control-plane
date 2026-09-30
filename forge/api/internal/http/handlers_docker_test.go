@@ -3,7 +3,11 @@ package http
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"gamepanel/forge/internal/daemon"
+	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
 )
@@ -63,5 +67,25 @@ func TestDockerRoutes_NonAdmin(t *testing.T) {
 		if resp.StatusCode != http.StatusNotFound {
 			t.Errorf("%s %s: expected 404 (nil store), got %d", e.method, e.path, resp.StatusCode)
 		}
+	}
+}
+
+func TestDockerCreateContainerRejectsInvalidImage(t *testing.T) {
+	app := fiber.New(fiber.Config{DisableStartupMessage: true})
+	noop := func(c *fiber.Ctx) error { return c.Next() }
+	protected := app.Group("/api/v1", adminAuth)
+	registerDockerRoutes(protected, Config{Store: &store.Store{}, Daemon: &daemon.Client{}}, noop, noop)
+
+	// Image validation runs before node resolution and before any daemon
+	// round-trip: garbage must be a 400 here, not a 502 from Beacon.
+	body := `{"image":"::::bad image!!!!"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/docker/containers?node=22222222-2222-2222-2222-222222222222", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid image reference, got %d", resp.StatusCode)
 	}
 }

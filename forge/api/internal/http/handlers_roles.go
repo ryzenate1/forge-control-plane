@@ -6,6 +6,7 @@ import (
 	"gamepanel/forge/internal/store"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 )
 
 // ---- Roles ----
@@ -198,6 +199,9 @@ func ListUserRoles(cfg Config) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if cfg.Store == nil {
 			return fiber.NewError(fiber.StatusServiceUnavailable, "postgres is required")
+		}
+		if _, err := uuid.Parse(c.Params("id")); err != nil {
+			return fiber.NewError(fiber.StatusBadRequest, "invalid user id")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()

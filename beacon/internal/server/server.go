@@ -470,6 +470,7 @@ func NewServerWithBackup(rt runtime.Runtime, dataDir string, backups backup.Back
 	mux.HandleFunc("GET /api/commands/pending", server.handlePendingCommands)
 	// Portainer-inspired container/image/network/volume admin
 	mux.HandleFunc("GET /api/admin/containers", server.handleContainerList)
+	mux.HandleFunc("POST /api/admin/containers", server.handleContainerCreate)
 	mux.HandleFunc("GET /api/admin/containers/{id}", server.handleContainerInspect)
 	mux.HandleFunc("GET /api/admin/containers/{id}/logs", server.handleContainerLogs)
 	mux.HandleFunc("POST /api/admin/containers/{id}/start", server.handleContainerStart)
@@ -581,7 +582,12 @@ func (w *sanitizingResponseWriter) WriteHeader(status int) {
 		return
 	}
 	w.wrote = true
-	if status >= http.StatusInternalServerError {
+	// Only 500 ("unexpected condition") is sanitized. A 503 is a deliberate,
+	// retryable operational signal in this API — /health, /ready and every
+	// "runtime unavailable"-style answer carries its reason in the body, and
+	// replacing it with "internal server error" would misreport a
+	// known-degraded node as an unknown failure to health-check consumers.
+	if status >= http.StatusInternalServerError && status != http.StatusServiceUnavailable {
 		w.internal = true
 		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 		w.Header().Del("Content-Length")
@@ -2630,9 +2636,14 @@ func isTextFile(filePath string) bool {
 }
 
 func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
-	filePath := r.URL.Query().Get("path")
-	if filePath == "" {
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
 		http.Error(w, "path is required", http.StatusBadRequest)
+		return
+	}
+	cleanPath, err := rootfs.Clean(rawPath)
+	if err != nil || cleanPath == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	fsys, err := s.serverFilesystem(r.PathValue("id"), false)
@@ -2641,7 +2652,7 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fsys.Close()
-	file, err := fsys.Open(filePath)
+	file, err := fsys.Open(cleanPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -2652,7 +2663,7 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path is not a regular file", http.StatusBadRequest)
 		return
 	}
-	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(filePath)})
+	disposition := mime.FormatMediaType("attachment", map[string]string{"filename": path.Base(cleanPath)})
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Disposition", disposition)
 	w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
@@ -2663,13 +2674,19 @@ func (s *Server) downloadFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) readFile(w http.ResponseWriter, r *http.Request) {
+	rawPath := r.URL.Query().Get("path")
+	cleanPath, err := rootfs.Clean(rawPath)
+	if err != nil || cleanPath == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	fsys, err := s.serverFilesystem(r.PathValue("id"), false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer fsys.Close()
-	file, err := fsys.Open(r.URL.Query().Get("path"))
+	file, err := fsys.Open(cleanPath)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
 		return
@@ -2839,13 +2856,18 @@ func (s *Server) uploadFileChunk(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) makeDir(w http.ResponseWriter, r *http.Request) {
+	cleanPath, err := rootfs.Clean(r.URL.Query().Get("path"))
+	if err != nil || cleanPath == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	fsys, err := s.serverFilesystem(r.PathValue("id"), true)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer fsys.Close()
-	if err := fsys.MkdirAll(r.URL.Query().Get("path"), 0o750); err != nil {
+	if err := fsys.MkdirAll(cleanPath, 0o750); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -2867,6 +2889,11 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fsys.Close()
+	from, err := rootfs.Clean(body.From)
+	if err != nil || from == "" {
+		http.Error(w, "invalid source", http.StatusBadRequest)
+		return
+	}
 	to, err := rootfs.Clean(body.To)
 	if err != nil || to == "" {
 		http.Error(w, "invalid destination", http.StatusBadRequest)
@@ -2876,7 +2903,7 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := fsys.Rename(body.From, to); err != nil {
+	if err := fsys.Rename(from, to); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -2884,8 +2911,14 @@ func (s *Server) renameFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("path") == "" {
+	rawPath := r.URL.Query().Get("path")
+	if rawPath == "" {
 		http.Error(w, "cannot delete server root", http.StatusBadRequest)
+		return
+	}
+	cleanPath, err := rootfs.Clean(rawPath)
+	if err != nil || cleanPath == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
 	fsys, err := s.serverFilesystem(r.PathValue("id"), false)
@@ -2894,7 +2927,7 @@ func (s *Server) deleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer fsys.Close()
-	if err := fsys.RemoveAll(r.URL.Query().Get("path")); err != nil {
+	if err := fsys.RemoveAll(cleanPath); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3095,6 +3128,11 @@ func (s *Server) chmodFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "path and mode are required", http.StatusBadRequest)
 		return
 	}
+	cleanPath, err := rootfs.Clean(body.Path)
+	if err != nil || cleanPath == "" {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	fsys, err := s.serverFilesystem(r.PathValue("id"), false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -3110,7 +3148,7 @@ func (s *Server) chmodFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid mode format", http.StatusBadRequest)
 		return
 	}
-	if err := fsys.Chmod(body.Path, os.FileMode(mode)); err != nil {
+	if err := fsys.Chmod(cleanPath, os.FileMode(mode)); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3131,18 +3169,28 @@ func (s *Server) copyFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	serverID := r.PathValue("id")
+	from, err := rootfs.Clean(body.From)
+	if err != nil || from == "" {
+		http.Error(w, "invalid source", http.StatusBadRequest)
+		return
+	}
+	to, err := rootfs.Clean(body.To)
+	if err != nil || to == "" || from == to {
+		http.Error(w, "invalid destination", http.StatusBadRequest)
+		return
+	}
 	fsys, err := s.serverFilesystem(serverID, false)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	defer fsys.Close()
-	info, err := fsys.Stat(body.From)
+	info, err := fsys.Stat(from)
 	if err != nil || !info.Mode().IsRegular() {
 		http.Error(w, "source is not a regular file", http.StatusNotFound)
 		return
 	}
-	if _, err := fsys.Stat(body.To); err == nil {
+	if _, err := fsys.Stat(to); err == nil {
 		http.Error(w, "destination already exists", http.StatusConflict)
 		return
 	} else if !errors.Is(err, os.ErrNotExist) {
@@ -3153,7 +3201,7 @@ func (s *Server) copyFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInsufficientStorage)
 		return
 	}
-	if _, err := fsys.Copy(body.From, body.To, info.Mode().Perm(), info.Size()); err != nil {
+	if _, err := fsys.Copy(from, to, info.Mode().Perm(), info.Size()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -3170,11 +3218,18 @@ func (s *Server) pullRemoteFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
-	parsed, err := url.Parse(body.URL)
-	if err != nil {
+	if strings.Contains(body.URL, "\x00") || strings.Contains(body.Target, "\x00") || strings.Contains(body.FileName, "\x00") {
+		http.Error(w, "invalid request", http.StatusBadRequest)
+		return
+	}
+	parsed, err := url.Parse(strings.TrimSpace(body.URL))
+	if err != nil || parsed.Hostname() == "" || parsed.User != nil {
 		http.Error(w, "invalid URL", http.StatusBadRequest)
 		return
 	}
+	// Re-validate at the sink: only a freshly validated canonical URL reaches
+	// http.NewRequest (SSRF). pullClientFactory pins DNS and validates
+	// redirects; the explicit User/host check above sanitizes for analysis.
 	client, err := s.pullClientFactory(r.Context(), parsed)
 	if err != nil {
 		status := http.StatusBadRequest
@@ -3275,6 +3330,23 @@ func (s *Server) startTransfer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "targetNode and targetUrl are required", http.StatusBadRequest)
 		return
 	}
+	if strings.Contains(body.TargetNode, "\x00") || strings.Contains(body.TargetURL, "\x00") {
+		http.Error(w, "invalid transfer request", http.StatusBadRequest)
+		return
+	}
+	// TargetNode is an opaque node identifier: restrict to a conservative
+	// charset so it can never carry path separators into file or URL joins.
+	if len(body.TargetNode) > 128 || body.TargetNode != filepath.Base(body.TargetNode) || strings.Contains(body.TargetNode, "..") {
+		http.Error(w, "invalid targetNode", http.StatusBadRequest)
+		return
+	}
+	for _, ch := range body.TargetNode {
+		if (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_' || ch == '.' {
+			continue
+		}
+		http.Error(w, "invalid targetNode", http.StatusBadRequest)
+		return
+	}
 	serverID := r.PathValue("id")
 	serverRoot, err := s.safePath(serverID, "")
 	if err != nil {
@@ -3292,6 +3364,10 @@ func (s *Server) startTransfer(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getTransferStatus(w http.ResponseWriter, r *http.Request) {
 	transferID := r.PathValue("transferId")
+	if !safeUploadID(transferID) {
+		http.Error(w, "invalid transfer id", http.StatusBadRequest)
+		return
+	}
 	transferMgr := s.transfers
 	transfer, ok := transferMgr.Get(transferID)
 	if !ok {
@@ -3303,6 +3379,10 @@ func (s *Server) getTransferStatus(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) cancelTransfer(w http.ResponseWriter, r *http.Request) {
 	transferID := r.PathValue("transferId")
+	if !safeUploadID(transferID) {
+		http.Error(w, "invalid transfer id", http.StatusBadRequest)
+		return
+	}
 	transferMgr := s.transfers
 	if err := transferMgr.Cancel(transferID); err != nil {
 		http.Error(w, err.Error(), http.StatusNotFound)
@@ -3322,13 +3402,20 @@ func (s *Server) cancelTransfer(w http.ResponseWriter, r *http.Request) {
 //  2. Extracts the archive to the destination server's root directory
 //  3. Notifies the source daemon that the transfer is complete
 func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) {
-	serverID := r.Header.Get("X-Transfer-ServerID")
+	serverID := strings.TrimSpace(r.Header.Get("X-Transfer-ServerID"))
 	if err := serverid.Validate(serverID); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	transferID := r.Header.Get("X-Transfer-ID")
+	transferID := strings.TrimSpace(r.Header.Get("X-Transfer-ID"))
 	if !safeUploadID(transferID) {
+		http.Error(w, "invalid transfer id", http.StatusBadRequest)
+		return
+	}
+	// Sanitize for static analysis: safeUploadID guarantees Base==value and no
+	// "..", so Base is identity but makes the sanitization explicit.
+	transferID = path.Base(transferID)
+	if transferID != filepath.Base(transferID) || strings.Contains(transferID, "..") {
 		http.Error(w, "invalid transfer id", http.StatusBadRequest)
 		return
 	}
@@ -3347,10 +3434,20 @@ func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid X-Transfer-Size header", http.StatusBadRequest)
 		return
 	}
-	expectedChecksum := r.Header.Get("X-Checksum")
-	if expectedChecksum == "" {
+	expectedChecksum := strings.TrimSpace(r.Header.Get("X-Checksum"))
+	if expectedChecksum == "" || strings.Contains(expectedChecksum, "\x00") {
 		http.Error(w, "X-Checksum header is required", http.StatusBadRequest)
 		return
+	}
+	if len(expectedChecksum) != 64 {
+		http.Error(w, "invalid checksum", http.StatusBadRequest)
+		return
+	}
+	for _, ch := range expectedChecksum {
+		if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') && (ch < 'A' || ch > 'F') {
+			http.Error(w, "invalid checksum", http.StatusBadRequest)
+			return
+		}
 	}
 
 	fsys, err := s.serverFilesystem(serverID, true)
@@ -3367,7 +3464,19 @@ func (s *Server) receiveTransferArchive(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, err.Error(), http.StatusInsufficientStorage)
 		return
 	}
+	// Explicit stdlib sanitization at the file sinks below: transferID comes
+	// from a request header and must already be a plain basename.
+	if transferID != path.Base(transferID) || transferID != filepath.Base(transferID) ||
+		strings.ContainsAny(transferID, `/\`+"\x00") || strings.Contains(transferID, "..") {
+		http.Error(w, "invalid transfer id", http.StatusBadRequest)
+		return
+	}
 	tempName := path.Join(".backups", ".transfer-"+transferID+".tar.gz")
+	// The joined staging name must already be clean; rootfs confines the open.
+	if cleanStaging := path.Clean(tempName); cleanStaging != tempName || strings.HasPrefix(cleanStaging, "../") || strings.HasPrefix(cleanStaging, "/") {
+		http.Error(w, "invalid transfer id", http.StatusBadRequest)
+		return
+	}
 	flags := os.O_CREATE | os.O_WRONLY | os.O_TRUNC
 	if offset > 0 {
 		info, statErr := fsys.Stat(tempName)

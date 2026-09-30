@@ -926,8 +926,7 @@ func (r *FirecrackerRuntime) LogsStream(ctx context.Context, serverID string, ta
 }
 
 func (r *FirecrackerRuntime) StatsStream(ctx context.Context, serverID string) (io.ReadCloser, error) {
-	inst, ok := r.getInstance(serverID)
-	if !ok {
+	if _, ok := r.getInstance(serverID); !ok {
 		return nil, fmt.Errorf("instance %s not found", serverID)
 	}
 

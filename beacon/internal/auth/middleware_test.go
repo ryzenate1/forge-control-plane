@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -210,11 +211,16 @@ func TestNewAuthMiddleware_NonBearerHeader(t *testing.T) {
 func TestRequireScopes_MatchingScope(t *testing.T) {
 	gen := tokens.NewGenerator([]byte("test-secret"))
 	mw := NewAuthMiddleware(gen)
-	requireMw := RequireScopes(ScopeServerRead)
+	requireMw := RequireScopes(Scope("websocket"))
 
+	// The token minter only issues its own vocabulary (admin, websocket,
+	// file-*, transfer, backup-download): mint a websocket ticket rather than
+	// an unmintable "server:read" so the test exercises the matcher instead
+	// of the minter's scope gate.
 	claims := tokens.Claims{
-		Scope:     tokens.Scope("server:read"),
+		Scope:     tokens.ScopeWebsocket,
 		ServerID:  "srv-1",
+		User:      "user-1",
 		IssuedAt:  time.Now(),
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -249,9 +255,12 @@ func TestRequireScopes_NoMatchingScope(t *testing.T) {
 	mw := NewAuthMiddleware(gen)
 	requireMw := RequireScopes(ScopeAdmin)
 
+	// Mint a real ticket in another scope: the requirement must fail on
+	// mismatch, not on mint.
 	claims := tokens.Claims{
-		Scope:     tokens.Scope("server:read"),
+		Scope:     tokens.ScopeWebsocket,
 		ServerID:  "srv-1",
+		User:      "user-1",
 		IssuedAt:  time.Now(),
 		ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -320,32 +329,28 @@ func TestRequireScopes_AdminScopePasses(t *testing.T) {
 }
 
 func TestRequireScopesRequiresEveryScope(t *testing.T) {
-	gen := tokens.NewGenerator([]byte("test-secret"))
-	mw := NewAuthMiddleware(gen)
-
-	claims := tokens.Claims{
-		Scope:     tokens.Scope("server:read,backup:read"),
-		ServerID:  "srv-1",
-		IssuedAt:  time.Now(),
-		ExpiresAt: time.Now().Add(time.Hour),
-	}
-	tokenStr, err := gen.Generate(claims)
-	if err != nil {
-		t.Fatalf("generate failed: %v", err)
-	}
-
-	testHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// A minted token carries exactly one scope from the minter's vocabulary,
+	// so a multi-grant requirement cannot be set up through Generate. The
+	// middleware's contract is "claims in context", so install the claims
+	// directly and exercise the every-scope matcher in isolation.
+	requireMw := RequireScopes(ScopeServerRead, ScopeBackupRead)(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 
-	req := httptest.NewRequest("GET", "/backups", nil)
-	req.Header.Set("Authorization", "Bearer "+tokenStr)
+	withClaims := func(scopes string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest("GET", "/backups", nil)
+		claims := &tokens.Claims{Scope: tokens.Scope(scopes), ServerID: "srv-1"}
+		ctx := context.WithValue(req.Context(), claimsKey, claims)
+		w := httptest.NewRecorder()
+		requireMw.ServeHTTP(w, req.WithContext(ctx))
+		return w
+	}
 
-	w := httptest.NewRecorder()
-	mw(RequireScopes(ScopeServerRead, ScopeBackupRead)(testHandler)).ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
+	if w := withClaims("server:read,backup:read"); w.Code != http.StatusOK {
 		t.Errorf("expected 200 when every required scope matches, got %d", w.Code)
+	}
+	if w := withClaims("server:read"); w.Code != http.StatusForbidden {
+		t.Errorf("expected 403 when one required scope is missing, got %d", w.Code)
 	}
 }
 

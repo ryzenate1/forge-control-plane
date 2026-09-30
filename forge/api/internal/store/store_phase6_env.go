@@ -72,9 +72,11 @@ func (s *Store) SetNodeEnvGroups(ctx context.Context, nodeID string, envGroups [
 }
 
 // ListNodeEnvGroups returns all nodes with at least one environment group.
+// NOTE: nodes has no updated_at column (only created_at/last_seen_at), so the
+// recency field coalesces those two; it is informational metadata only.
 func (s *Store) ListNodeEnvGroups(ctx context.Context) ([]NodeEnvGroup, error) {
 	rows, err := s.db.Query(ctx, `
-		SELECT n.id::text, n.name, COALESCE(n.env_groups, '{}'), COALESCE(n.labels, '[]'), n.updated_at
+		SELECT n.id::text, n.name, COALESCE(n.env_groups, '{}'), COALESCE(n.labels, '[]'), COALESCE(n.last_seen_at, n.created_at)
 		FROM nodes n
 		WHERE cardinality(COALESCE(n.env_groups, '{}')) > 0
 		ORDER BY n.name

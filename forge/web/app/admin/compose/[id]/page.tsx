@@ -347,7 +347,7 @@ function ComposeStackDetailContent() {
       {/* One visible line covering the disabled controls in the cluster above. */}
       {!canStart || !canStop || !canRestart || !canRedeploy ? (
         <p className="text-meta text-text-subtle">
-          Start, Stop, Restart and Redeploy are gated on the stack's reported state
+          Start, Stop, Restart and Redeploy are gated on the stack&apos;s reported state
           {` (“${humanToken(stack.status)}”). `}
           They re-enable as the agent reports a state that allows them.
         </p>

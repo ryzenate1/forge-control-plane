@@ -14,7 +14,11 @@ func TestReconnectClientInitialState(t *testing.T) {
 }
 
 func TestReconnectClientStartStop(t *testing.T) {
-	rc := NewReconnectClient("http://panel:8080", "test-token", 30*time.Second)
+	// Start only reports connected after a round-trip proves the link, so a
+	// fake unreachable panel URL can never satisfy this test. Inject a stub
+	// client whose probe succeeds instead.
+	stub := &stubPanelClient{}
+	rc := NewReconnectClientWithClient(stub, nil, 30*time.Second)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -57,4 +61,21 @@ func TestReconnectClientStats(t *testing.T) {
 	if _, ok := stats["attempts"]; !ok {
 		t.Fatal("expected attempts in stats")
 	}
+}
+
+// stubPanelClient proves the link for Start: its probe round-trip succeeds
+// without a real panel. Only GetServers is overridden; every other Client
+// method embeds the nil interface and would panic if called, so a test that
+// starts probing new ground fails loudly instead of passing quietly.
+type stubPanelClient struct {
+	Client
+	servers []RawServerData
+	err     error
+}
+
+func (s *stubPanelClient) GetServers(ctx context.Context, perPage int) ([]RawServerData, error) {
+	if s == nil {
+		return nil, context.Canceled
+	}
+	return s.servers, s.err
 }

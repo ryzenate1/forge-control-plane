@@ -36,9 +36,18 @@ branches.
 npm run build:packages   # shared-types → sdk → ui → game-templates, in dependency order
 ```
 
-`build:packages` is mandatory before `forge/web` typecheck/build, and the root
-`typecheck`/`build` scripts already run it as a pre-step (pre-typecheck hook).
-If you add a `paths` fallback that maps `@forge/*` to `src/`, keep the hook:
+`build:packages` is mandatory before `forge/web` typecheck/build, and it runs
+exactly once per flow:
+
+- `next build` triggers the web workspace's `prebuild` hook, so the root
+  `build` script and `make build` delegate to it — do not add an explicit
+  `build:packages` call to either or every build compiles the packages twice.
+- `tsc --noEmit` has no working hook: npm runs `prebuild` but does NOT run
+  `prestypecheck` (verified on npm 11 — the hook is dead weight, so it was
+  removed), so the root `typecheck` script and `scripts/dev/lint.sh` build the
+  packages with an explicit call. That call cannot double-build precisely
+  because the hook never fires.
+If you add a `paths` fallback that maps `@forge/*` to `src/`, keep the hooks:
 `src/` fallback without a staleness check just moves the same hazard.
 
 Intra-workspace dependencies use the `"*"` pin (e.g.

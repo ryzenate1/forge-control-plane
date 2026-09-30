@@ -10,7 +10,7 @@
   "images": {
     "Ubuntu": "ghcr.io/pterodactyl/yolks:ubuntu"
   },
-  "startup": "./factorio/bin/x64/factorio --start-server {{SAVE_NAME}} --port {{SERVER_PORT}} --server-settings ./data/server-settings.json",
+  "startup": "./factorio/bin/x64/factorio --start-server \"{{SAVE_NAME}}\" --port {{SERVER_PORT}} --server-settings ./data/server-settings.json",
   "config": {
     "files": {},
     "startup": {
@@ -35,7 +35,7 @@
       "default_value": "factorio",
       "user_viewable": true,
       "user_editable": true,
-      "rules": "required|string|max:64"
+      "rules": "required|string|max:64|regex:/^[A-Za-z0-9._-]+$/"
     },
     {
       "name": "Max Players",

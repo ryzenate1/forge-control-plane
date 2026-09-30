@@ -146,14 +146,14 @@ describe('request()', () => {
     expect(calls).toBe(3);
   });
 
-  it('returns {} for 204 responses', async () => {
+  it('resolves undefined for 204 responses (void endpoints carry no body)', async () => {
     const fetchMock = vi.fn(async () => new Response(null, { status: 204 }));
     const client = new ForgeApiClient({
       baseUrl: 'https://panel.example.com/api/v1',
       fetch: fetchMock as unknown as typeof fetch,
     });
 
-    await expect(client.deleteServer('s1')).resolves.toEqual({});
+    await expect(client.deleteServer('s1')).resolves.toBeUndefined();
   });
 
   it('guards against null/empty bodies on 200s', async () => {
@@ -163,7 +163,7 @@ describe('request()', () => {
       fetch: fetchMock as unknown as typeof fetch,
     });
 
-    await expect(client.refreshSession()).resolves.toEqual({});
+    await expect(client.refreshSession()).resolves.toBeUndefined();
   });
 
   it('returns raw text for raw responses (readFile)', async () => {

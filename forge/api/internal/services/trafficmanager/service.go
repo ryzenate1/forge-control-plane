@@ -224,13 +224,23 @@ func policyRowToPolicy(r store.TrafficPolicyRow) *TrafficPolicy {
 }
 
 func trafficPolicyToRow(policy *TrafficPolicy, createdAt time.Time) store.TrafficPolicyRow {
+	// ip_whitelist/ip_blacklist are NOT NULL columns: a nil slice would persist
+	// as JSON null and violate the constraint, so normalize to empty arrays.
+	whitelist := policy.IPWhitelist
+	if whitelist == nil {
+		whitelist = []string{}
+	}
+	blacklist := policy.IPBlacklist
+	if blacklist == nil {
+		blacklist = []string{}
+	}
 	return store.TrafficPolicyRow{
 		ID:                      policy.ID,
 		Name:                    policy.Name,
 		RateLimit:               policy.RateLimit,
 		RateLimitBurst:          policy.RateLimitBurst,
-		IPWhitelist:             policy.IPWhitelist,
-		IPBlacklist:             policy.IPBlacklist,
+		IPWhitelist:             whitelist,
+		IPBlacklist:             blacklist,
 		TLSEnabled:              policy.TLSEnabled,
 		TLSCertFile:             policy.TLSCertFile,
 		TLSKeyFile:              policy.TLSKeyFile,

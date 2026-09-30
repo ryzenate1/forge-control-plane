@@ -99,10 +99,15 @@ function diff(a, b) {
 function resolve(obj, path) {
   let current = obj;
   for (const segment of path.split(".")) {
+    if (!isSafeKey(segment)) return undefined;
     if (!current || typeof current !== "object" || !(segment in current)) return undefined;
     current = current[segment];
   }
   return current;
+}
+
+function isSafeKey(segment) {
+  return segment !== '__proto__' && segment !== 'constructor' && segment !== 'prototype';
 }
 
 /**
@@ -114,15 +119,21 @@ function resolve(obj, path) {
  */
 function setPath(obj, path, value) {
   const segments = path.split(".");
+  for (const segment of segments) {
+    if (!isSafeKey(segment)) return;
+  }
   let current = obj;
   for (let i = 0; i < segments.length - 1; i++) {
     const segment = segments[i];
-    if (!current[segment] || typeof current[segment] !== "object" || Array.isArray(current[segment])) {
+    const next = current[segment];
+    if (!next || typeof next !== "object" || Array.isArray(next) || Object.getPrototypeOf(next) !== Object.prototype) {
       current[segment] = {};
     }
     current = current[segment];
   }
-  current[segments[segments.length - 1]] = value;
+  const leaf = segments[segments.length - 1];
+  if (!isSafeKey(leaf)) return;
+  current[leaf] = value;
 }
 
 function readSupportedLocales() {

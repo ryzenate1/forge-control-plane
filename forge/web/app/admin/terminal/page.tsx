@@ -3,56 +3,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Terminal as XTerm } from "@xterm/xterm";
 import type { FitAddon } from "@xterm/addon-fit";
-import { Cable, CircleSlash, Radio, RefreshCw, Server, ShieldAlert, ShieldCheck, Unplug } from "lucide-react";
-import { buildWebSocketUrl, checkApiReachable, getApiBaseUrl } from "@/lib/api/http";
-import {
-  AdminErrorState,
-  AdminLoadingState,
-  AdminPageHeader,
-  AdminPageLayout,
-  AdminSelect,
-  Btn,
-  Card,
-  EmptyState,
-  Pill,
-} from "@/components/admin/admin-ui";
-import { useNodesQuery } from "@/lib/admin/telemetry";
+import { Terminal as TerminalIcon, RefreshCw, Wifi, WifiOff } from "lucide-react";
+import { getApiBaseUrl, buildWebSocketUrl, checkApiReachable } from "@/lib/api/http";
+import { Card, CardHeader, Btn, AdminToolbar, AdminLoadingState, AdminPageLayout, SectionHeader } from "@/components/admin/admin-ui";
+import { NodeSelect } from "@/components/admin/node-select";
+import { cn } from "@/lib/utils";
 import { terminalTheme } from "@/lib/design-tokens";
-import { errorMessage } from "@/lib/utils";
 import "@xterm/xterm/css/xterm.css";
 
 // xterm needs literal colors (not a CSS context) — shared with components/server/console
 const TERMINAL_THEME = terminalTheme;
 
 const TERMINAL_MAX_RETRIES = 15;
-
-/**
- * The session states this page can actually observe. `open-awaiting-host` exists
- * because the panel upgrades the browser socket before it has proved it could
- * dial Beacon — claiming "Connected" at that moment reported success for work
- * the system had not done. Only `attached` (host bytes, or an explicit status
- * frame, reached us) is allowed to read as a live shell.
- */
-type Session =
-  | { kind: "unattached" }
-  | { kind: "checking"; node: string }
-  | { kind: "opening"; node: string }
-  | { kind: "open-awaiting-host"; node: string }
-  | { kind: "attached"; node: string }
-  | { kind: "retrying"; node: string; attempt: number }
-  | { kind: "closed"; node: string }
-  | { kind: "failed"; node?: string; reason: string };
-
-const SESSION_VIEW: Record<Session["kind"], { label: string; tone: "ok" | "pending" | "info" | "warn" | "danger" | "neutral" | "unknown" }> = {
-  unattached: { label: "No shell", tone: "neutral" },
-  checking: { label: "Checking API…", tone: "pending" },
-  opening: { label: "Opening socket…", tone: "pending" },
-  "open-awaiting-host": { label: "Socket open · host not confirmed", tone: "info" },
-  attached: { label: "Attached", tone: "ok" },
-  retrying: { label: "Reconnecting…", tone: "warn" },
-  closed: { label: "Disconnected", tone: "warn" },
-  failed: { label: "Failed", tone: "danger" },
-};
 
 function useFit(terminal: XTerm | null, fitAddon: FitAddon | null, wrapper: HTMLDivElement | null) {
   useEffect(() => {
@@ -83,41 +45,21 @@ export default function AdminTerminalPage() {
   const xtermRef = useRef<XTerm | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const reconnectAttempt = useRef(0);
   const reconnectTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
-  const attemptRef = useRef(0);
-
   const [terminalReady, setTerminalReady] = useState(false);
-  const [runtimeError, setRuntimeError] = useState("");
+  const [connected, setConnected] = useState(false);
   const [nonce, setNonce] = useState(0);
+  const [error, setError] = useState("");
   const [nodeId, setNodeId] = useState("");
-  /** The node a socket is bound to. Only an explicit Attach sets it. */
-  const [attachTarget, setAttachTarget] = useState("");
-  const [session, setSession] = useState<Session>({ kind: "unattached" });
-  const [attempts, setAttempts] = useState(0);
   const [wrapperEl, setWrapperEl] = useState<HTMLDivElement | null>(null);
 
-  const nodesQuery = useNodesQuery();
-  const nodes = useMemo(() => nodesQuery.data ?? [], [nodesQuery.data]);
-  const nodeOptions = useMemo(
-    () => nodes.map((node) => ({ value: node.id, label: node.status === "active" ? node.name : `${node.name} · ${node.status}` })),
-    [nodes],
-  );
-
-  // A `?nodeId=` in the URL names the machine explicitly (it is how Host Files
-  // hands over), so it seeds the selector — it does not attach a shell by itself.
+  // Hydrate initial nodeId from ?nodeId= query (e.g. host-files-view Terminal button)
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const fromUrl = new URLSearchParams(window.location.search).get("nodeId");
-    if (fromUrl) setNodeId(fromUrl);
+    const q = new URLSearchParams(window.location.search).get("nodeId");
+    if (q) setNodeId(q);
   }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const url = new URL(window.location.href);
-    if (nodeId) url.searchParams.set("nodeId", nodeId);
-    else url.searchParams.delete("nodeId");
-    window.history.replaceState(null, "", url.toString());
-  }, [nodeId]);
 
   useEffect(() => {
     setWrapperEl(terminalRef.current);
@@ -152,7 +94,6 @@ export default function AdminTerminalPage() {
 
       xtermRef.current = terminal;
       fitAddonRef.current = fitAddon;
-      setRuntimeError("");
       setTerminalReady(true);
       // Fit after open
       try {
@@ -161,8 +102,8 @@ export default function AdminTerminalPage() {
         /* layout not ready */
       }
 
-      terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
-        if ((event.ctrlKey || event.metaKey) && event.key === "c") {
+      terminal.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === "c") {
           const selection = terminal.getSelection();
           if (selection) navigator.clipboard.writeText(selection).catch(() => {});
           return false;
@@ -177,7 +118,7 @@ export default function AdminTerminalPage() {
       });
     }).catch(() => {
       if (!disposed) {
-        setRuntimeError("The terminal runtime (xterm) could not be loaded. Reload this page to try again.");
+        setError("Terminal runtime failed to load");
       }
     });
 
@@ -192,290 +133,198 @@ export default function AdminTerminalPage() {
 
   useFit(xtermRef.current, fitAddonRef.current, wrapperEl);
 
-  const nodeName = nodes.find((node) => node.id === (attachTarget || nodeId))?.name
-    ?? ((attachTarget || nodeId) ? `${(attachTarget || nodeId).slice(0, 12)}…` : "");
-
-  // Names are read through a ref so a node-list refetch cannot re-run the socket
-  // effect and drop a live shell.
-  const nodeNameById = useRef<Map<string, string>>(new Map());
   useEffect(() => {
-    nodeNameById.current = new Map(nodes.map((node) => [node.id, node.name]));
-  }, [nodes]);
+    if (!xtermRef.current) return;
 
-  useEffect(() => {
-    // No socket is ever constructed without a named node: `/host/terminal/ws`
-    // resolves the target before upgrading, so an untargeted connect is a 400
-    // that used to surface here as a bogus "your session may have expired".
-    if (!attachTarget || !terminalReady) return;
     const terminal = xtermRef.current;
-    if (!terminal) return;
+    setConnected(false);
+    setError("");
 
-    const node = attachTarget;
-    const targetName = nodeNameById.current.get(node) ?? `${node.slice(0, 12)}…`;
     let aborted = false;
-    let socket: WebSocket | null = null;
-    setSession({ kind: "checking", node });
+
+    // /host/terminal/ws is a session-cookie-protected route with no ticket
+    // flow, so it only works same-origin (cookies are not sent cross-origin).
+    const wsUrl = buildWebSocketUrl("/host/terminal/ws")
+      + (nodeId ? `?nodeId=${encodeURIComponent(nodeId)}` : "");
 
     void (async () => {
-      const reachable = await checkApiReachable();
       if (aborted) return;
-      if (!reachable) {
-        setSession({
-          kind: "failed",
-          node,
-          reason: "The panel API is not reachable or your session has expired. Check that the API is running and that you are signed in — no shell was opened.",
-        });
-        terminal.writeln("\x1b[1;31mAPI unreachable — no shell opened\x1b[0m");
+      const reachable = await checkApiReachable();
+      if (!reachable && !aborted) {
+        setError("API unreachable or session expired — make sure the Go backend is running and you are signed in");
+        terminal.writeln("\x1b[1;31mAPI unreachable\x1b[0m");
         return;
       }
-
-      setSession({ kind: "opening", node });
-      // /host/terminal/ws is a session-cookie-protected route with no ticket
-      // flow, so it only works same-origin (cookies are not sent cross-origin).
-      const wsUrl = buildWebSocketUrl("/host/terminal/ws") + `?nodeId=${encodeURIComponent(node)}`;
-      const ws = new WebSocket(wsUrl);
-      socket = ws;
-      wsRef.current = ws;
-
-      const markAttached = () => {
-        attemptRef.current = 0;
-        setAttempts(0);
-        setSession((prev) => (prev.kind === "attached" ? prev : { kind: "attached", node }));
-      };
-
-      ws.onopen = () => {
-        if (aborted) { ws.close(); return; }
-        // The browser↔panel hop is up. Whether Beacon was dialled is not known
-        // yet, so this is deliberately not called "Connected".
-        setSession({ kind: "open-awaiting-host", node });
-        try {
-          fitAddonRef.current?.fit();
-        } catch {
-          /* layout not ready */
-        }
-        terminal.focus();
-      };
-
-      ws.onmessage = (event) => {
-        if (aborted) return;
-        if (typeof event.data === "string") {
-          try {
-            const parsed = JSON.parse(event.data) as { status?: string; error?: string; message?: string };
-            if (parsed && typeof parsed === "object") {
-              if (parsed.status === "connected") {
-                markAttached();
-                return;
-              }
-              if (parsed.status === "error" || parsed.status === "offline" || typeof parsed.error === "string") {
-                const reason = parsed.error ?? parsed.message ?? `The panel could not open a shell on ${targetName}.`;
-                terminal.writeln(`\x1b[1;31m${reason}\x1b[0m`);
-                setSession({ kind: "failed", node, reason });
-                return;
-              }
-            }
-          } catch {
-            // not JSON — terminal stream from the host
-          }
-          markAttached();
-          terminal.write(event.data);
-          return;
-        }
-        if (event.data instanceof Blob) {
-          event.data.arrayBuffer().then((buf) => {
-            if (aborted) return;
-            markAttached();
-            terminal.write(new Uint8Array(buf));
-          }).catch((err) => console.error("[Terminal] arrayBuffer error:", err));
-          return;
-        }
-        markAttached();
-        terminal.write(event.data);
-      };
-
-      ws.onerror = () => {
-        if (aborted) return;
-        setSession({
-          kind: "failed",
-          node,
-          reason: `No shell on ${targetName}: the WebSocket to ${getApiBaseUrl()}/host/terminal/ws failed. The node may be offline, or the panel may lack a credential for it.`,
-        });
-        terminal.writeln("\x1b[1;31mShell socket failed\x1b[0m");
-      };
-
-      ws.onclose = () => {
-        if (aborted) return;
-        if (wsRef.current === ws) wsRef.current = null;
-        const next = attemptRef.current + 1;
-        attemptRef.current = next;
-        setAttempts(next);
-        if (next > TERMINAL_MAX_RETRIES) {
-          setSession({
-            kind: "failed",
-            node,
-            reason: `The shell on ${targetName} dropped and was not re-established after ${TERMINAL_MAX_RETRIES} attempts. Use Reconnect to start a new one.`,
-          });
-          terminal.writeln("\x1b[1;31mAuto-reconnect exhausted; press Reconnect\x1b[0m");
-          return;
-        }
-        setSession({ kind: "retrying", node, attempt: next });
-        reconnectTimer.current = setTimeout(() => {
-          if (!aborted) setNonce((value) => value + 1);
-        }, Math.min(1000 * 2 ** (next - 1), 30_000));
-      };
     })();
+
+    terminal.writeln("\x1b[1;33mConnecting to host terminal...\x1b[0m");
+
+    const ws = new WebSocket(wsUrl);
+
+    ws.onopen = () => {
+      if (aborted) { ws.close(); return; }
+      wsRef.current = ws;
+      setConnected(true);
+      reconnectAttempt.current = 0;
+      terminal.writeln("\x1b[1;32mConnected\x1b[0m");
+      terminal.focus();
+      try { fitAddonRef.current?.fit(); } catch { /* layout not ready */ }
+    };
+
+    ws.onmessage = (event) => {
+      if (aborted) return;
+      // Status JSON: ignore structured ping, handle blob/text
+      if (typeof event.data === "string") {
+        // Try parse status JSON — e.g. {"status":"connected"} — don't render as terminal noise
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed && typeof parsed === "object" && "status" in parsed) {
+            const s = (parsed as { status?: string }).status;
+            if (s === "connected") {
+              // already handled via onopen, no need to write
+              return;
+            }
+            if (s === "error" || s === "offline") {
+              const msg = (parsed as { error?: string; message?: string }).error ?? (parsed as { message?: string }).message ?? "host error";
+              terminal.writeln(`\x1b[1;31m${msg}\x1b[0m`);
+              setError(String(msg));
+              return;
+            }
+          }
+        } catch {
+          // not JSON, treat as terminal stream
+        }
+        terminal.write(event.data);
+        return;
+      }
+      if (event.data instanceof Blob) {
+        event.data.arrayBuffer().then((buf) => {
+          if (aborted) return;
+          terminal.write(new Uint8Array(buf));
+        }).catch((err) => console.error("[Terminal] arrayBuffer error:", err));
+        return;
+      }
+      terminal.write(event.data);
+    };
+
+    ws.onerror = () => {
+      if (aborted) return;
+      setError(`WebSocket connection failed — ${getApiBaseUrl()}/host/terminal/ws not reachable. If the API is up, your session may have expired — sign in again.`);
+      terminal.writeln("\x1b[1;31mConnection failed\x1b[0m");
+    };
+
+    ws.onclose = () => {
+      if (aborted) return;
+      setConnected(false);
+      terminal.writeln("\x1b[1;31mDisconnected\x1b[0m");
+      if (reconnectAttempt.current >= TERMINAL_MAX_RETRIES) {
+        setError(`Connection dropped after ${TERMINAL_MAX_RETRIES} retries — use Reconnect to try again`);
+        terminal.writeln("\x1b[1;31mAuto-reconnect exhausted; press Reconnect to retry\x1b[0m");
+        return;
+      }
+      const delay = Math.min(1000 * Math.pow(2, reconnectAttempt.current), 30000);
+      reconnectAttempt.current += 1;
+      reconnectTimer.current = setTimeout(() => {
+        if (!aborted) setNonce((v) => v + 1);
+      }, delay);
+    };
 
     return () => {
       aborted = true;
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
-      socket?.close();
-      if (wsRef.current === socket) wsRef.current = null;
+      ws.close();
+      if (wsRef.current === ws) wsRef.current = null;
     };
-    // The node names used in messages come from `nodeNameById`, deliberately not
-    // a dependency: re-running this effect would tear down a live shell.
-  }, [nonce, attachTarget, terminalReady]);
+  }, [nonce, nodeId, terminalReady]);
 
-  const attach = useCallback(() => {
-    if (!nodeId) return;
-    attemptRef.current = 0;
-    setAttempts(0);
-    setAttachTarget(nodeId);
-    setNonce((value) => value + 1);
-  }, [nodeId]);
-
-  const detach = useCallback(() => {
-    setAttachTarget("");
-    attemptRef.current = 0;
-    setAttempts(0);
-    setSession({ kind: "unattached" });
+  const handleRetry = useCallback(() => {
+    reconnectAttempt.current = 0;
+    setError("");
+    setNonce((v) => v + 1);
   }, []);
 
+  // Switching nodes resets the reconnect backoff and re-runs the WS effect.
   const handleNodeChange = useCallback((next: string) => {
-    // A shell is node-local: changing the target detaches rather than silently
-    // re-pointing a live root session at another machine.
-    if (next !== attachTarget) {
-      setAttachTarget("");
-      attemptRef.current = 0;
-      setAttempts(0);
-      setSession({ kind: "unattached" });
-    }
+    reconnectAttempt.current = 0;
     setNodeId(next);
-  }, [attachTarget]);
+  }, []);
 
-  const view = SESSION_VIEW[session.kind];
+  const statusJson = useMemo(() => {
+    return JSON.stringify(
+      {
+        connected,
+        nodeId: nodeId || null,
+        apiBase: getApiBaseUrl(),
+        retries: reconnectAttempt.current,
+        maxRetries: TERMINAL_MAX_RETRIES,
+        ready: terminalReady,
+      },
+      null,
+      2,
+    );
+  }, [connected, nodeId, terminalReady]);
 
   return (
     <AdminPageLayout>
-      <AdminPageHeader
-        info={{
-          description: "Opens an interactive shell on one named Beacon node over a session-authenticated WebSocket. Output streams as terminal bytes; structured status frames are consumed, never rendered.",
-          eyebrow: "Architecture & Semantics",
-          sections: [
-            {
-              content:
-                "Nothing connects until you pick a node and press Attach, and changing the node detaches the shell. The route rejects a request that does not name a Beacon, so an untargeted socket would only ever fail.",
-              icon: Server,
-              title: "Explicit target",
-            },
-            {
-              content:
-                "The browser↔panel socket and the host session are two different things. The badge stays amber until bytes arrive from the host; only then does it read Attached. A failure frame from the panel is shown as the reason, never as a green light.",
-              icon: Radio,
-              title: "What the badge means",
-            },
-            {
-              content:
-                "The route requires a signed-in admin session on the same origin — cookies do not cross origins. Treat every keystroke as a privileged host action: this shell runs with whatever rights the Beacon daemon has, typically root.",
-              icon: ShieldCheck,
-              title: "Access and audit",
-            },
-          ],
-          title: "Host terminal",
-          triggerLabel: "About Host Terminal",
-        }}
-        status={<Pill tone={view.tone}>{view.label}</Pill>}
-      />
-
+      <SectionHeader title="Host Terminal" sub="Secure host shell and console access" />
       <Card>
-        <div className="flex flex-wrap items-end justify-between gap-3 border-b border-line pb-4">
-          <div className="min-w-56">
-            <AdminSelect
-              disabled={nodesQuery.isPending || nodeOptions.length === 0}
-              label="Target node"
-              onChange={handleNodeChange}
-              options={nodeOptions}
-              placeholder={nodesQuery.isPending ? "Loading nodes…" : nodeOptions.length === 0 ? "No nodes registered" : "Select a node…"}
-              value={nodeId}
-            />
-          </div>
-          <div className="flex flex-wrap items-center gap-2">
-            {attachTarget ? (
-              <>
-                <Btn disabled={session.kind === "checking" || session.kind === "opening"} onClick={() => { attemptRef.current = 0; setAttempts(0); setNonce((value) => value + 1); }} size="sm" tone="subtle">
-                  <RefreshCw aria-hidden="true" size={14} /> Reconnect
-                </Btn>
-                <Btn onClick={detach} size="sm" tone="ghost">
-                  <Unplug aria-hidden="true" size={14} /> Detach
-                </Btn>
-              </>
-            ) : (
-              <Btn
-                disabled={!nodeId || nodesQuery.isPending}
-                onClick={attach}
-                size="sm"
-                tone="primary"
-                title={nodeId ? `Open a privileged shell on ${nodeName}` : "Select a node first"}
+        <CardHeader
+          title="Terminal"
+          icon={TerminalIcon}
+          action={
+            <AdminToolbar className="border-0 bg-transparent p-0">
+              <NodeSelect value={nodeId} onChange={handleNodeChange} />
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-[11px] font-bold uppercase tracking-wider border",
+                  connected
+                    ? "border-ok-line bg-ok-subtle text-ok"
+                    : "border-danger-line bg-danger-subtle text-danger",
+                )}
               >
-                <Cable aria-hidden="true" size={14} /> Attach shell
+                {connected ? <Wifi size={11} /> : <WifiOff size={11} />}
+                {connected ? "Connected" : "Disconnected"}
+              </span>
+              <Btn onClick={handleRetry} size="sm" tone="subtle">
+                <RefreshCw size={12} />
+                Reconnect
               </Btn>
-            )}
-          </div>
-        </div>
-
-        <div className="space-y-3 pt-4">
-          {nodesQuery.isPending ? (
-            <AdminLoadingState label="Loading nodes…" />
-          ) : nodesQuery.isError ? (
-            <AdminErrorState message={errorMessage(nodesQuery.error, "The node list could not be loaded.")} retry={() => void nodesQuery.refetch()} />
-          ) : nodesQuery.isSuccess && nodes.length === 0 ? (
-            <EmptyState
-              icon={CircleSlash}
-              message="No Beacon node is registered, so there is no host to open a shell on. Add one under Infrastructure → Nodes."
-              title="No nodes available"
-            />
-          ) : runtimeError ? (
-            <AdminErrorState message={runtimeError} />
-          ) : !terminalReady ? (
-            <AdminLoadingState label="Loading terminal runtime…" />
-          ) : !attachTarget ? (
-            <EmptyState
-              icon={Server}
-              message="Pick a node and press Attach. A shell runs with the Beacon daemon's privileges on that one machine, so nothing connects until you name it."
-              title="No shell attached"
-            />
+            </AdminToolbar>
+          }
+        />
+        <div className="p-0">
+          {error ? (
+            <div className="mx-4 mt-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger" role="alert">
+              <span className="flex-1">{error}</span>
+              <button
+                className="inline-flex h-8 items-center justify-center rounded-lg bg-[var(--brand)] px-3 text-xs font-bold text-text hover:bg-[var(--brand-hover)] disabled:opacity-40 transition-colors"
+                onClick={handleRetry}
+                type="button"
+              >
+                Retry
+              </button>
+            </div>
           ) : null}
-
-          {session.kind === "failed" ? (
-            <AdminErrorState
-              message={session.reason}
-              retry={() => { attemptRef.current = 0; setAttempts(0); setNonce((value) => value + 1); }}
-            />
+          {!terminalReady && !error ? (
+            <div className="mx-4 mt-4">
+              <AdminLoadingState label="Initializing terminal..." />
+            </div>
           ) : null}
-
-          {attachTarget ? (
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 font-mono text-meta text-text-subtle">
-              <ShieldAlert aria-hidden="true" className="text-warn" size={13} />
-              <span>Shell target: {nodeName}</span>
-              <span>· privileged host actions</span>
-              <span>· reconnect attempt {attempts}/{TERMINAL_MAX_RETRIES}</span>
-            </p>
-          ) : null}
-
           <div
-            aria-label={`Host terminal session${attachTarget ? ` on ${nodeName}` : ""}`}
-            className="h-[60vh] min-h-[320px] w-full overflow-hidden rounded-lg border border-line bg-[var(--canvas)]"
             ref={terminalRef}
-            role="region"
+            className={cn("h-[calc(100vh-20rem)] min-h-[300px] w-full bg-[var(--canvas)] /* intentional terminal chrome, not surface */", !terminalReady && "hidden")}
           />
+          {/* Status JSON — tokenized */}
+          <div className="mx-4 mb-4 mt-3 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] p-3">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-subtle)]">Terminal status</span>
+              <span className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider border", connected ? "border-ok-line bg-ok-subtle text-ok" : "border-warn-line bg-warn-subtle text-warn")}>
+                {connected ? "live" : "idle"} · {reconnectAttempt.current}/{TERMINAL_MAX_RETRIES}
+              </span>
+            </div>
+            <pre className="overflow-auto rounded bg-well p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{statusJson}</pre>
+            <p className="mt-1.5 text-xs text-[var(--text-subtle)]">FitAddon auto-fits on resize · {connected ? "WebSocket live" : "disconnected"} · use Retry to reset backoff.</p>
+          </div>
         </div>
       </Card>
     </AdminPageLayout>

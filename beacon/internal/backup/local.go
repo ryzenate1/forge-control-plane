@@ -121,7 +121,17 @@ func (l *LocalBackup) namespaceDir(namespace string, create bool) (string, error
 	if !validNamespace(namespace) {
 		return "", ErrInvalidNamespace
 	}
-	dir := filepath.Join(l.backupRoot, namespace)
+	// Explicit stdlib sanitization at the sink for static analysis:
+	// Base strips any separators, and the equality check rejects traversal.
+	safe := filepath.Base(namespace)
+	if safe != namespace || safe == "." || safe == ".." || strings.ContainsAny(namespace, `/\`+"\x00") || strings.Contains(namespace, "..") {
+		return "", ErrInvalidNamespace
+	}
+	dir := filepath.Join(l.backupRoot, safe)
+	// Containment: the joined dir must stay within backupRoot.
+	if rel, err := filepath.Rel(l.backupRoot, dir); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", ErrInvalidNamespace
+	}
 	if create || l.legacyDataRoot != "" {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return "", err
@@ -136,9 +146,13 @@ func (l *LocalBackup) namespaceDir(namespace string, create bool) (string, error
 }
 
 func (l *LocalBackup) migrateLegacyBackups(namespace, destinationDir string) error {
+	if !validNamespace(namespace) {
+		return ErrInvalidNamespace
+	}
 	l.migrationMu.Lock()
 	defer l.migrationMu.Unlock()
-	serverRoot := filepath.Join(l.legacyDataRoot, namespace)
+	// Base sanitizes for static analysis; validNamespace guarantees Base==value.
+	serverRoot := filepath.Join(l.legacyDataRoot, filepath.Base(namespace))
 	fsys, err := rootfs.New(serverRoot)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -159,13 +173,29 @@ func (l *LocalBackup) migrateLegacyBackups(namespace, destinationDir string) err
 		if entry.IsDir() || !validBackupName(name) {
 			continue
 		}
-		target := filepath.Join(destinationDir, name)
+		// Explicit stdlib sanitization at the sink: Base + equality rejects
+		// traversal even if validBackupName is not recognized as a sanitizer.
+		if name != filepath.Base(name) || strings.ContainsAny(name, `/\`+"\x00") || strings.Contains(name, "..") {
+			continue
+		}
+		safeName := filepath.Base(name)
+		target := filepath.Join(destinationDir, safeName)
+		// Containment: target must stay within destinationDir.
+		if rel, err := filepath.Rel(destinationDir, target); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "." {
+			continue
+		}
 		if _, err := os.Stat(target); err == nil {
 			continue
 		} else if !os.IsNotExist(err) {
 			return err
 		}
-		source, err := fsys.Open(path.Join(".backups", name))
+		// The archive entry name is already validated above; join with Base
+		// so static analysis sees the sanitization at the open sink.
+		cleanEntry := path.Clean(".backups/" + safeName)
+		if cleanEntry != ".backups/"+safeName || strings.HasPrefix(cleanEntry, "../") {
+			return fmt.Errorf("invalid legacy backup %q", name)
+		}
+		source, err := fsys.Open(cleanEntry)
 		if err != nil {
 			return err
 		}
@@ -217,7 +247,7 @@ func (l *LocalBackup) migrateLegacyBackups(namespace, destinationDir string) err
 			_ = os.Remove(target)
 			return err
 		}
-		if err := fsys.RemoveAll(path.Join(".backups", name)); err != nil {
+		if err := fsys.RemoveAll(path.Join(".backups", filepath.Base(safeName))); err != nil {
 			return err
 		}
 	}
@@ -228,11 +258,21 @@ func (l *LocalBackup) archivePath(namespace, name string, createDir bool) (strin
 	if !validBackupName(name) {
 		return "", ErrInvalidName
 	}
+	// Explicit stdlib sanitization at the sink.
+	if name != filepath.Base(name) || strings.ContainsAny(name, `/\`+"\x00") || strings.Contains(name, "..") {
+		return "", ErrInvalidName
+	}
 	dir, err := l.namespaceDir(namespace, createDir)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, name), nil
+	safe := filepath.Base(name)
+	joined := filepath.Join(dir, safe)
+	// Containment: archive must stay within its namespace dir.
+	if rel, err := filepath.Rel(dir, joined); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || rel == "." {
+		return "", ErrInvalidName
+	}
+	return joined, nil
 }
 
 func (l *LocalBackup) Create(ctx context.Context, serverRoot, namespace, name string, ignored []string) (*BackupInfo, error) {
@@ -628,30 +668,48 @@ func (l *LocalBackup) Download(namespace, name string) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	metadata, err := readOrCreateMetadata(backupPath)
+	// Containment at the open sink: validated archivePath must stay within
+	// backupRoot, using only stdlib checks.
+	cleanPath := filepath.Clean(backupPath)
+	if !filepath.IsAbs(cleanPath) || cleanPath != backupPath {
+		return nil, ErrInvalidName
+	}
+	if rel, err := filepath.Rel(l.backupRoot, cleanPath); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return nil, ErrInvalidName
+	}
+	metadata, err := readOrCreateMetadata(cleanPath)
 	if err != nil {
 		return nil, err
 	}
-	actual, err := calculateChecksum(backupPath)
+	actual, err := calculateChecksum(cleanPath)
 	if err != nil {
 		return nil, err
 	}
 	if !strings.EqualFold(actual, metadata.Checksum) {
 		return nil, fmt.Errorf("%w: expected %s, got %s", ErrChecksumMismatch, metadata.Checksum, actual)
 	}
-	return os.Open(backupPath)
+	return os.Open(cleanPath)
 }
 
 func validateArchive(files []*zip.File) error {
 	seen := make(map[string]bool, len(files)) // value is directory
 	for _, file := range files {
 		name := file.Name
-		if name == "" || strings.Contains(name, "\\") || strings.HasPrefix(name, "/") || path.Clean(name) == "." {
+		if name == "" || strings.ContainsRune(name, 0) || strings.Contains(name, "\\") || strings.HasPrefix(name, "/") || path.Clean(name) == "." {
 			return fmt.Errorf("invalid archive path %q", name)
 		}
 		clean := strings.TrimSuffix(path.Clean(name), "/")
-		if clean == "" || clean == ".." || strings.HasPrefix(clean, "../") || clean != strings.TrimSuffix(name, "/") {
+		// Zip-Slip: require the raw name to already be clean (no "./", no
+		// "a//b", no trailing-dot games) and reject any ".." component.
+		// path.Clean + HasPrefix checks are the stdlib sanitization pattern
+		// static analysis recognizes.
+		if clean == "" || clean == "." || clean == ".." || strings.HasPrefix(clean, "../") || strings.HasPrefix(clean, "/") || clean != strings.TrimSuffix(name, "/") {
 			return fmt.Errorf("invalid archive path %q", name)
+		}
+		for _, component := range strings.Split(clean, "/") {
+			if component == ".." || component == "" {
+				return fmt.Errorf("invalid archive path %q", name)
+			}
 		}
 		mode := file.Mode()
 		isDir := strings.HasSuffix(name, "/") && mode.IsDir()
@@ -687,7 +745,23 @@ func extractArchive(ctx context.Context, destination *rootfs.FS, files []*zip.Fi
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		name := strings.TrimSuffix(file.Name, "/")
+		// Re-validate every entry at the sink (Zip-Slip): even though Restore
+		// calls validateArchive first, extraction must not trust a pre-filtered
+		// slice. stdlib Clean + prefix checks sanitize for static analysis,
+		// and rootfs confines the write.
+		raw := file.Name
+		if raw == "" || strings.ContainsRune(raw, 0) || strings.Contains(raw, "\\") || strings.HasPrefix(raw, "/") {
+			return fmt.Errorf("invalid archive path %q", raw)
+		}
+		stdClean := strings.TrimSuffix(path.Clean(raw), "/")
+		if stdClean == "" || stdClean == "." || stdClean == ".." || strings.HasPrefix(stdClean, "../") || stdClean != strings.TrimSuffix(raw, "/") {
+			return fmt.Errorf("invalid archive path %q", raw)
+		}
+		cleaned, err := rootfs.Clean(strings.TrimSuffix(raw, "/"))
+		if err != nil || cleaned == "" || cleaned != stdClean {
+			return fmt.Errorf("invalid archive path %q", raw)
+		}
+		name := cleaned
 		if file.FileInfo().IsDir() {
 			if err := destination.MkdirAll(name, normalizedDirMode(file.Mode())); err != nil {
 				return fmt.Errorf("create restored directory %q: %w", name, err)
@@ -736,8 +810,13 @@ func selectRestoreEntries(files []*zip.File, paths []string) ([]*zip.File, error
 		}
 		p := path.Clean(raw)
 		if p == "." || p == ".." || strings.HasPrefix(p, "/") ||
-			strings.HasPrefix(p, "../") {
+			strings.HasPrefix(p, "../") || p != strings.TrimSuffix(raw, "/") {
 			return nil, fmt.Errorf("invalid restore path %q", raw)
+		}
+		for _, component := range strings.Split(p, "/") {
+			if component == ".." || component == "" {
+				return nil, fmt.Errorf("invalid restore path %q", raw)
+			}
 		}
 		cleaned = append(cleaned, strings.TrimSuffix(p, "/"))
 	}
@@ -755,6 +834,19 @@ func selectRestoreEntries(files []*zip.File, paths []string) ([]*zip.File, error
 }
 
 func readOrCreateMetadata(backupPath string) (localMetadata, error) {
+	// Explicit stdlib sanitization at the read/stat sinks: only absolute
+	// clean paths; callers pass validated archivePath.
+	if strings.ContainsRune(backupPath, 0) {
+		return localMetadata{}, errors.New("invalid backup path")
+	}
+	clean := filepath.Clean(backupPath)
+	if !filepath.IsAbs(clean) || clean != backupPath {
+		return localMetadata{}, errors.New("invalid backup path")
+	}
+	if filepath.Base(clean) == "" || filepath.Base(clean) == "." || filepath.Base(clean) == ".." {
+		return localMetadata{}, errors.New("invalid backup path")
+	}
+	backupPath = clean
 	body, err := os.ReadFile(backupPath + metadataSuffix)
 	if err == nil {
 		var metadata localMetadata

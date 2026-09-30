@@ -3,13 +3,10 @@
 import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useToast } from "@/components/ui/toast";
-import { Globe, Plus, Trash2, ShieldCheck, ShieldAlert, RotateCw, Network, CircleAlert } from "lucide-react";
+import { Globe, Plus, Trash2, ShieldCheck, ShieldAlert, RotateCw, Network } from "lucide-react";
 import { fetchServers } from "@/lib/api/servers";
 import { fetchServerDomains, addServerDomain, removeServerDomain, verifyDomain, checkDNS as checkDNSApi } from "@/lib/api/domains";
-import { AdminPageLayout, AdminSelect, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
-import { FreshnessBadge } from "@/components/admin/telemetry-ui";
-import { sourceState } from "@/lib/admin/telemetry";
-import { formatDate } from "@/lib/utils";
+import { AdminPageLayout, AdminSelect, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, Pill, SectionHeader, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import Link from "next/link";
 
@@ -23,11 +20,6 @@ type DomainRecord = {
   verificationToken?: string;
   createdAt: string;
 };
-
-/** A hostname goes into gateway config, so it is checked before submit rather
- *  than rejected by the backend one click later. A wildcard is only meaningful
- *  as the leading label, which is what a TLS SAN can express. */
-const HOSTNAME = /^(\*\.)?([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/i;
 
 type DNSResult = {
   domain: string;
@@ -67,11 +59,6 @@ export default function AdminDomainsPage() {
   const filteredDomains = domains.filter((d) =>
     !search || d.domain.toLowerCase().includes(search.toLowerCase())
   );
-
-  const selectedServer = servers.find((s) => s.id === serverFilter);
-  const addDomainError = addForm.domain && !HOSTNAME.test(addForm.domain.trim())
-    ? "Enter a hostname such as example.com or *.example.com."
-    : "";
 
   const addMutation = useMutation({
     mutationFn: () => addServerDomain(addForm.serverId, addForm.domain),
@@ -135,14 +122,16 @@ export default function AdminDomainsPage() {
   return (
     <AdminPageLayout>
       <SectionHeader
-        status={<FreshnessBadge state={sourceState(domainsQuery)} />}
+        title="Domains"
+        sub="Custom domains with DNS and TLS status."
         action={
           <div className="flex gap-2">
             <Link href="/admin/dns"><Btn tone="ghost" className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]"><ShieldCheck size={12} /> DNS Providers</Btn></Link>
+            <Link href="/admin/security"><Btn tone="ghost" className="border border-[color-mix(in_srgb,var(--brand)_20%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_10%,transparent)]">Security Headers</Btn></Link>
             <Btn tone="ghost" onClick={() => setShowDNSModal(true)}>
               <Network size={14} /> Check DNS
             </Btn>
-            <Btn size="sm" tone="primary" onClick={() => setShowAddModal(true)}>
+            <Btn size="sm" tone="primary" onClick={() => setShowAddModal(true)} className="bg-[var(--brand)] hover:bg-[color-mix(in_srgb,var(--brand)_90%,transparent)] text-white">
               <Plus size={12} /> Add Domain
             </Btn>
           </div>
@@ -150,74 +139,80 @@ export default function AdminDomainsPage() {
       />
 
       <Card>
-        <CardHeader
-          action={selectedServer ? <Link className="text-xs text-text-subtle underline hover:text-text" href={`/admin/servers/${selectedServer.id}`}>{selectedServer.name}</Link> : undefined}
-          icon={Globe}
-          title={selectedServer ? `Domains · ${selectedServer.name}` : "Domains"}
-        />
+        <CardHeader title="Domains" icon={Globe} />
         <div className="flex items-center gap-3 p-4">
-          <div className="w-64"><AdminSelect label="Server" value={serverFilter} onChange={setServerFilter} placeholder="Select a server…" options={Array.isArray(servers) ? servers.map((s) => ({ value: s.id, label: `${s.name} (${s.id})` })) : []} /></div>
-          <Input label="Search" placeholder="Search domains…" value={search} onChange={setSearch} />
+          <div className="w-64"><AdminSelect value={serverFilter} onChange={setServerFilter} placeholder="Select a server..." options={Array.isArray(servers) ? servers.map((s) => ({ value: s.id, label: `${s.name} (${s.id})` })) : []} /></div>
+          <Input placeholder="Search domains..." value={search} onChange={setSearch} />
         </div>
 
         {!serverFilter ? (
-          <EmptyState icon={Globe} title="No server selected" message="Domains are stored per server, so pick a server above to list its domains. A fleet-wide domain view needs a server-less list endpoint." />
+          <EmptyState icon={Globe} message="Select a server to view its domains." />
         ) : domainsQuery.isLoading ? (
-          <div className="p-4"><AdminLoadingState label="Loading domains…" /></div>
+          <AdminLoadingState label="Loading domains…" />
         ) : domainsQuery.isError ? (
-          <div className="p-4"><AdminErrorState message={domainsQuery.error instanceof Error ? domainsQuery.error.message : "Failed to load domains"} retry={() => void domainsQuery.refetch()} /></div>
+          <div className="p-4">
+            <AdminErrorState
+              message={domainsQuery.error instanceof Error ? domainsQuery.error.message : "Failed to load domains"}
+              retry={() => void domainsQuery.refetch()}
+            />
+          </div>
         ) : filteredDomains.length === 0 ? (
-          <EmptyState icon={Globe} title={search ? "No domains match the search" : "No domains"} message={search ? `No domain on ${selectedServer?.name ?? "this server"} contains “${search}”.` : "This server has no custom domains configured."} />
+          <EmptyState icon={Globe} message="No domains configured for this server." />
         ) : (
-          <AdminTable label={`Domains for ${selectedServer?.name ?? serverFilter}`}>
-            <AdminTHead><AdminTh>Domain</AdminTh><AdminTh>Type</AdminTh><AdminTh>Status</AdminTh><AdminTh>Verified At</AdminTh><AdminTh></AdminTh></AdminTHead>
-            <AdminTBody>
-                {filteredDomains.map((d) => (
-                  <AdminTr key={d.id}>
-                    <AdminTd className="font-mono text-xs font-medium text-text">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-muted">
+                  <th className="px-4 py-3">Domain</th>
+                  <th className="px-4 py-3">Type</th>
+                  <th className="px-4 py-3">Status</th>
+                  <th className="px-4 py-3">Verified At</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-line">
+                {Array.isArray(filteredDomains) && filteredDomains.map((d) => (
+                  <tr key={d.id} className="hover:bg-overlay-subtle">
+                    <td className="px-4 py-3 font-mono text-xs font-medium text-text">
                       {d.domain}
-                    </AdminTd>
-                    <AdminTd>
+                    </td>
+                    <td className="px-4 py-3">
                       <Pill tone={d.wildcard ? "blue" : "neutral"}>
                         {d.wildcard ? "Wildcard" : "Standard"}
                       </Pill>
-                    </AdminTd>
-                    <AdminTd>
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex items-center gap-1.5">
                         {d.verified ? (
-                          <ShieldCheck aria-hidden="true" className="text-ok" size={14} />
+                          <ShieldCheck size={14} className="text-ok" />
                         ) : (
-                          <ShieldAlert aria-hidden="true" className="text-warn" size={14} />
+                          <ShieldAlert size={14} className="text-warn" />
                         )}
                         <Pill tone={d.verified ? "green" : "yellow"}>
-                          {d.verified ? "Verified" : "Not verified"}
+                          {d.verified ? "Verified" : "Unverified"}
                         </Pill>
                       </div>
-                    </AdminTd>
-                    <AdminTd className="text-xs text-text-subtle">
-                      {d.verified ? (d.verifiedAt ? formatDate(d.verifiedAt) : "Verified — time not reported") : "Never verified"}
-                    </AdminTd>
-                    <AdminTd>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-text-subtle">
+                      {d.verifiedAt ? new Date(d.verifiedAt).toLocaleString() : "—"}
+                    </td>
+                    <td className="px-4 py-3">
                       <div className="flex gap-1">
                         {!d.verified && (
                           <Btn
                             size="sm"
                             tone="ghost"
-                            loading={verifyMutation.isPending && verifyMutation.variables === d.id}
                             onClick={() => verifyMutation.mutate(d.id)}
-                            disabled={verifyMutation.isPending && verifyMutation.variables !== d.id}
+                            disabled={verifyMutation.isPending}
                           >
                             <RotateCw size={12} /> Verify
                           </Btn>
                         )}
                         <Btn
-                          ariaLabel={`Remove domain ${d.domain}`}
                           size="sm"
                           tone="danger"
-                          disabled={deleteMutation.isPending && deleteMutation.variables?.id !== d.id}
-                          loading={deleteMutation.isPending && deleteMutation.variables?.id === d.id}
                           onClick={() => {
-                            void (async () => { if (await confirm({ title: `Remove domain ${d.domain}?`, description: `${selectedServer?.name ?? d.serverId} stops serving ${d.domain}, and any gateway route, certificate or header override attached to it stops matching. This cannot be undone.`, danger: true, confirmLabel: "Remove" })) {
+                            void (async () => { if (await confirm({ title: `Remove domain ${d.domain}?`, description: "The domain mapping will be removed. This cannot be undone.", danger: true, confirmLabel: "Remove" })) {
                               deleteMutation.mutate({ serverId: d.serverId, id: d.id });
                             } })();
                           }}
@@ -225,92 +220,89 @@ export default function AdminDomainsPage() {
                           <Trash2 size={12} />
                         </Btn>
                       </div>
-                    </AdminTd>
-                  </AdminTr>
+                    </td>
+                  </tr>
                 ))}
-            </AdminTBody>
-          </AdminTable>
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
       {showAddModal && (
-        <Modal onClose={() => setShowAddModal(false)} title="Add Domain">
+        <Modal title="Add Domain" onClose={() => setShowAddModal(false)}>
           <div className="space-y-4">
-            <AdminSelect
-              disabled={!Array.isArray(servers) || servers.length === 0}
-              label="Server"
-              onChange={(v) => setAddForm({ ...addForm, serverId: v })}
-              options={Array.isArray(servers) ? servers.map((s) => ({ value: s.id, label: s.name })) : []}
-              placeholder="Select server…"
-              value={addForm.serverId}
-            />
+            <div>
+              <label className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Server</label>
+              <select
+                className="h-9 w-full rounded-lg border border-line bg-[var(--surface-input)] px-3 text-sm text-text outline-none focus:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] focus:ring-1 focus:ring-[color-mix(in_srgb,var(--brand)_30%,transparent)]"
+                value={addForm.serverId}
+                onChange={(e) => setAddForm({ ...addForm, serverId: e.target.value })}
+              >
+                <option value="">Select server...</option>
+                {Array.isArray(servers) && servers.map((s) => (
+                  <option key={s.id} value={s.id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+            </div>
             <Input
               label="Domain"
-              mono
+              value={addForm.domain}
               onChange={(v) => setAddForm({ ...addForm, domain: v })}
               placeholder="example.com or *.example.com"
-              value={addForm.domain}
             />
-            {addDomainError ? <p className="text-xs text-danger">{addDomainError}</p> : null}
-            {addForm.domain.startsWith("*.") && !addDomainError ? (
-              <p className="ui-hint">A wildcard covers one label below {addForm.domain.replace("*.", "the apex ")}; verify it by resolving {addForm.domain.replace("*.", "test.")}.</p>
-            ) : null}
+            {addForm.domain?.startsWith("*.") && (
+              <p className="text-xs text-text-subtle">Wildcard domain detected. DNS verification will use test.{addForm.domain.replace("*.", "")}</p>
+            )}
           </div>
           <ModalFooter
-            confirmLabel={addMutation.isPending ? "Adding…" : "Add Domain"}
-            disabled={addMutation.isPending || !addForm.serverId || !addForm.domain.trim() || !!addDomainError}
             onCancel={() => setShowAddModal(false)}
             onConfirm={() => addMutation.mutate()}
+            confirmLabel={addMutation.isPending ? "Adding..." : "Add Domain"}
+            disabled={addMutation.isPending || !addForm.serverId || !addForm.domain}
           />
         </Modal>
       )}
 
       {showDNSModal && (
-        <Modal onClose={() => { setShowDNSModal(false); setDnsResult(null); }} title="Check DNS Resolution">
+        <Modal title="Check DNS Resolution" onClose={() => { setShowDNSModal(false); setDnsResult(null); }}>
           <div className="space-y-4">
             <Input
               label="Domain"
-              mono
+              value={dnsForm.domain}
               onChange={(v) => setDnsForm({ ...dnsForm, domain: v })}
               placeholder="example.com"
-              value={dnsForm.domain}
             />
             <Input
               label="Expected IP (optional)"
-              mono
+              value={dnsForm.expectedIp}
               onChange={(v) => setDnsForm({ ...dnsForm, expectedIp: v })}
               placeholder="1.2.3.4"
-              value={dnsForm.expectedIp}
             />
-            {dnsResult && (() => {
-              // Four outcomes, four different colours: a failed probe is not a
-              // warning about the domain, and an unmatched IP is not an error.
-              const verdict = dnsResult.error
-                ? { tone: "danger", text: `The lookup failed: ${dnsResult.error}`, className: "ui-alert ui-alert-danger" }
-                : !dnsResult.resolved || !dnsResult.ips || dnsResult.ips.length === 0
-                  ? { tone: "warn", text: "No address was returned for this hostname — it does not resolve yet.", className: "ui-alert ui-alert-warning" }
-                  : dnsResult.expectedIp && !dnsResult.match
-                    ? { tone: "warn", text: "It resolves, but not to the expected address.", className: "ui-alert ui-alert-warning" }
-                    : { tone: "ok", text: "DNS matches the expected address.", className: "ui-alert ui-alert-success" };
-              return (
-                <div className={verdict.className}>
-                  <p className="flex items-center gap-2 text-sm font-medium">
-                    {verdict.tone === "danger" ? <CircleAlert aria-hidden="true" size={14} /> : verdict.tone === "ok" ? <ShieldCheck aria-hidden="true" size={14} /> : <ShieldAlert aria-hidden="true" size={14} />}
-                    {verdict.text}
+            {dnsResult && (
+              <div className={`p-4 rounded-lg border ${dnsResult.match ? "border-ok-line bg-ok-subtle" : "border-warn-line bg-warn-subtle"}`}>
+                <p className={`text-sm font-medium ${dnsResult.match ? "text-ok" : "text-warn"}`}>
+                  {dnsResult.match ? "DNS matches expected IP" : "DNS mismatch or not verified"}
+                </p>
+                {dnsResult.error && <p className="text-sm text-danger">{dnsResult.error}</p>}
+                {dnsResult.ips && dnsResult.ips.length > 0 && (
+                  <p className="text-xs text-text-subtle mt-1">
+                    Resolved IPs: {dnsResult.ips.join(", ")}
                   </p>
-                  {dnsResult.ips && dnsResult.ips.length > 0 ? (
-                    <p className="mt-1 font-mono text-xs">Resolved: {dnsResult.ips.join(", ")}</p>
-                  ) : null}
-                  {dnsResult.expectedIp ? <p className="mt-1 text-xs">Expected: {dnsResult.expectedIp}</p> : null}
-                </div>
-              );
-            })()}
+                )}
+                {dnsResult.expectedIp && (
+                  <p className="text-xs text-text-muted mt-1">Expected: {dnsResult.expectedIp}</p>
+                )}
+              </div>
+            )}
           </div>
           <ModalFooter
-            confirmLabel={checkDNSMutation.isPending ? "Checking…" : "Check DNS"}
-            disabled={checkDNSMutation.isPending || !dnsForm.domain.trim() || !HOSTNAME.test(dnsForm.domain.trim())}
             onCancel={() => { setShowDNSModal(false); setDnsResult(null); }}
             onConfirm={() => checkDNSMutation.mutate(dnsForm)}
+            confirmLabel={checkDNSMutation.isPending ? "Checking..." : "Check DNS"}
+            disabled={checkDNSMutation.isPending || !dnsForm.domain}
           />
         </Modal>
       )}

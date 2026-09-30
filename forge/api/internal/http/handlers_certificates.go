@@ -1,6 +1,8 @@
 package http
 
 import (
+	"strings"
+
 	"gamepanel/forge/internal/services/acme"
 	"gamepanel/forge/internal/store"
 
@@ -70,7 +72,14 @@ func registerCertificateRoutes(protected fiber.Router, cfg Config, svc *acme.Ser
 	certs.Post("/:id/renew", mutationLimiter, requireRole("admin"), requireAdminScope("certificates.write"), func(c *fiber.Ctx) error {
 		cert, err := svc.RenewCertificate(c.Context(), c.Params("id"))
 		if err != nil {
-			return respondInternalError(c, err)
+			// A stored non-ACME certificate (or one without a private key) can
+			// never be renewed through ACME: that is a client-side precondition
+			// failure, not an internal error.
+			lower := strings.ToLower(err.Error())
+			if strings.Contains(lower, "cannot be renewed") || strings.Contains(lower, "not available for renewal") {
+				return fiber.NewError(fiber.StatusBadRequest, err.Error())
+			}
+			return respondStoreError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": cert})
 	})

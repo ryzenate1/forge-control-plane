@@ -59,6 +59,12 @@ type InstallRequest struct {
 }
 
 func (s *Service) InstallApp(ctx context.Context, req *InstallRequest) (*store.AppStoreInstall, error) {
+	if strings.TrimSpace(req.NodeID) == "" {
+		return nil, errors.New("target node is required")
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return nil, errors.New("installation name is required")
+	}
 	app, err := s.store.GetAppStoreApp(ctx, req.AppKey)
 	if err != nil {
 		return nil, fmt.Errorf("app not found: %w", err)

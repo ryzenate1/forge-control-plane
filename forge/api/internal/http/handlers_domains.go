@@ -50,7 +50,7 @@ func registerDomainRoutes(protected fiber.Router, cfg Config, svc *domains.Servi
 	protected.Delete("/servers/:id/domains/:domainId", mutationLimiter, requireRole("admin"), requireAdminScope("domains.write"), func(c *fiber.Ctx) error {
 		domainID := c.Params("domainId")
 		if err := svc.RemoveDomain(c.Context(), domainID); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.SendStatus(204)
 	})
@@ -68,7 +68,7 @@ func registerDomainRoutes(protected fiber.Router, cfg Config, svc *domains.Servi
 
 		result, err := svc.VerifyOwnership(c.Context(), req.ID)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": result})
 	})

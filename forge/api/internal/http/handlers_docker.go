@@ -186,6 +186,13 @@ func dockerCreateContainer(cfg Config) fiber.Handler {
 		if err := c.BodyParser(&body); err != nil {
 			return fiber.NewError(fiber.StatusBadRequest, "invalid request body")
 		}
+		// Reject a malformed image at the edge like the image pull/tag/build
+		// endpoints do: without this the request takes a full daemon round-trip
+		// and comes back as a 502 instead of a 400.
+		image, _ := body["image"].(string)
+		if err := validateContainerImageReference(strings.TrimSpace(image)); err != nil {
+			return err
+		}
 		target, err := requireDockerNode(cfg, c)
 		if err != nil {
 			return err

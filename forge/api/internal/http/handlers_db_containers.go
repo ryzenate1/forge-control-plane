@@ -52,14 +52,14 @@ func registerDBContainerRoutes(protected fiber.Router, cfg Config, mutationLimit
 			req.MemoryMB = 256
 		}
 		serverID := c.Query("serverId")
-		if serverID == "" {
-			serverID = "standalone"
+		if strings.TrimSpace(serverID) == "" {
+			return fiber.NewError(fiber.StatusBadRequest, "serverId is required: standalone database containers are not supported (server_id is a required foreign key)")
 		}
 		ctx, cancel := requestContext()
 		defer cancel()
 		db, err := dbProvisioner.Provision(ctx, serverID, req.Engine, req.Version, req.MemoryMB, req.CPUShares)
 		if err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(db)
 	})
@@ -107,7 +107,7 @@ func registerDBContainerRoutes(protected fiber.Router, cfg Config, mutationLimit
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := dbProvisioner.Deprovision(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -119,7 +119,7 @@ func registerDBContainerRoutes(protected fiber.Router, cfg Config, mutationLimit
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := dbProvisioner.Backup(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})
@@ -131,7 +131,7 @@ func registerDBContainerRoutes(protected fiber.Router, cfg Config, mutationLimit
 		ctx, cancel := requestContext()
 		defer cancel()
 		if err := dbProvisioner.Restart(ctx, c.Params("id")); err != nil {
-			return fiber.NewError(fiber.StatusInternalServerError, err.Error())
+			return respondDBProvisionError(c, err)
 		}
 		return c.JSON(fiber.Map{"ok": true})
 	})

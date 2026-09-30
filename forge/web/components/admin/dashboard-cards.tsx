@@ -3,8 +3,10 @@
 import { useId, type ReactNode } from "react";
 import type { LucideIcon } from "lucide-react";
 import { Pill, cn } from "./admin-ui";
-import { toneStyles } from "@/components/ui/forge/status";
 import { chart } from "@/lib/design-tokens";
+import { PageInfoDisclosure } from "@/components/ui/page-info-disclosure";
+import { usePathname } from "next/navigation";
+import { findAdminPage } from "./admin-registry";
 
 export type PillTone = "neutral" | "green" | "red" | "yellow" | "blue";
 
@@ -28,23 +30,35 @@ export function DashHeader({ icon: Icon, eyebrow, title, pill, description, tags
   meta?: DashMetaItem[];
   actions?: ReactNode;
 }) {
+  const pathname = usePathname() ?? "";
+  const page = findAdminPage(pathname);
   return (
     <div className="overflow-hidden rounded-2xl border border-line bg-overlay-subtle">
       <div className="flex flex-wrap items-start gap-4 p-5">
-        <span aria-hidden="true" className="grid h-14 w-14 shrink-0 place-items-center rounded-xl border border-line bg-overlay-strong text-text-subtle">
+        <span className="grid h-14 w-14 shrink-0 place-items-center rounded-xl border border-line bg-overlay text-text">
           <Icon size={26} />
         </span>
         <div className="min-w-0 flex-1">
-          <p className="t-meta font-bold uppercase tracking-[0.14em] text-text-subtle">{eyebrow}</p>
+          <p className="text-[10px] font-bold uppercase tracking-[0.14em] text-danger">{eyebrow}</p>
           <div className="mt-1 flex flex-wrap items-center gap-2">
-            <h2 className="text-xl font-bold tracking-tight text-text">{title}</h2>
+            <h2 className="flex items-center gap-2 text-xl font-bold tracking-tight text-text">
+              {title}
+              {page ? (
+                <PageInfoDisclosure
+                  description={page.description}
+                  sections={[{ title: "This section", content: page.description }]}
+                  title={page.label}
+                  triggerLabel={`About ${page.label}`}
+                />
+              ) : null}
+            </h2>
             {pill ? <Pill tone={pill.tone}>{pill.label}</Pill> : null}
           </div>
-          {description ? <p className="mt-1 max-w-2xl text-xs leading-5 text-text-subtle">{description}</p> : null}
+          {description ? <p className="mt-1 max-w-2xl truncate text-xs text-text-subtle" title={description}>{description}</p> : null}
           {tags && tags.length > 0 ? (
             <div className="mt-2 flex flex-wrap gap-1.5">
               {tags.map((t) => (
-                <span key={t} className="rounded-md border border-line bg-overlay-subtle px-2 py-0.5 font-mono text-[10px] text-text-subtle" title={t}>{t}</span>
+                <span key={t} className="rounded-md border border-line bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-subtle" title={t}>{t}</span>
               ))}
             </div>
           ) : null}
@@ -78,7 +92,7 @@ export function DashActionButton({ label, icon: Icon, onClick, disabled, pending
     "inline-flex items-center gap-1.5 rounded-lg border px-3 py-2 text-[11px] font-bold transition disabled:cursor-not-allowed disabled:opacity-40",
     tone === "brand"
       ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] text-text hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)] hover:bg-[color-mix(in_srgb,var(--brand)_12%,transparent)]"
-      : "border-line bg-overlay-subtle text-text hover:bg-[var(--surface-hover)]"
+      : "border-line bg-overlay text-text hover:bg-overlay-strong"
   );
   const inner = <><Icon size={12} />{pending ? "…" : label}</>;
   if (href) return <a className={cls} href={href} target="_blank" rel="noreferrer">{inner}</a>;
@@ -106,13 +120,17 @@ export interface KpiDatum {
 export function Sparkline({ data, color }: { data: number[]; color: string }) {
   const uid = useId().replace(/[^a-zA-Z0-9]/g, "");
   const gid = `dash-${uid}`;
-  // A series needs two points before it has a shape. Draw a flat rule rather
-  // than a curve: an earlier version emitted a hardcoded rising path here, so
-  // every KPI with no history looked like it was climbing.
   if (data.length < 2) {
     return (
       <svg viewBox="0 0 120 34" className="h-full w-full" aria-hidden="true">
-        <line x1="0" y1="26" x2="120" y2="26" stroke={color} strokeWidth={1.5} strokeDasharray="4 4" opacity={0.35} />
+        <defs>
+          <linearGradient id={`${gid}-g`} x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stopColor={color} stopOpacity={0.22} />
+            <stop offset="100%" stopColor={color} stopOpacity={0} />
+          </linearGradient>
+        </defs>
+        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6 L 120,34 L 0,34 Z" fill={`url(#${gid}-g)`} />
+        <path d="M 0,26 L 20,22 L 40,23 L 60,16 L 80,14 L 100,8 L 120,6" fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" opacity={0.5} />
       </svg>
     );
   }
@@ -148,14 +166,14 @@ export function KpiCard({ kpi }: { kpi: KpiDatum }) {
         <kpi.icon size={15} className={kpi.iconClass} />
         <span>{kpi.title}</span>
         {kpi.live ? (
-          <span className={cn("ml-auto flex items-center gap-1 font-mono text-[10px] font-normal", toneStyles.ok.fg)}>
-            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", toneStyles.ok.dot)} />live
+          <span className="ml-auto flex items-center gap-1 font-mono text-[10px] font-normal text-ok">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ok" />live
           </span>
         ) : null}
       </div>
       <div className="mt-2 flex items-end justify-between gap-2">
         <div className="min-w-0">
-          <p className={cn("font-mono text-xl font-bold", kpi.value ? (kpi.valueClass ?? "text-text") : toneStyles.unknown.fg)}>{kpi.value ?? "Not reported"}</p>
+          <p className={cn("font-mono text-xl font-bold", kpi.value ? (kpi.valueClass ?? "text-text") : "text-text")}>{kpi.value ?? "— —"}</p>
           <p className="mt-0.5 max-w-36 truncate text-[11px] text-text-muted" title={kpi.sub}>{kpi.sub}</p>
         </div>
         {kpi.trend ? (
@@ -239,13 +257,13 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
               key={label}
               href={href}
               className={cn(
-                "group flex items-center gap-2.5 rounded-xl border p-3 transition hover:bg-[var(--surface-hover)]",
+                "group flex items-center gap-2.5 rounded-xl border p-3 transition hover:bg-overlay",
                 highlight
                   ? "border-[color-mix(in_srgb,var(--brand)_40%,transparent)] bg-[color-mix(in_srgb,var(--brand)_7%,transparent)] hover:border-[color-mix(in_srgb,var(--brand)_60%,transparent)]"
                   : "border-line bg-overlay-subtle hover:border-line-strong"
               )}
             >
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition group-hover:text-text">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay text-text transition group-hover:text-text">
                 <ActionIcon size={15} />
               </span>
               <span className="min-w-0">
@@ -258,9 +276,9 @@ export function QuickActionsCard({ icon: Icon, title, actions, wide }: {
               key={label}
               type="button"
               onClick={onSelect}
-              className="group flex items-center gap-2.5 rounded-xl border border-line bg-overlay-subtle p-3 text-left transition hover:border-line-strong hover:bg-[var(--surface-hover)]"
+              className="group flex items-center gap-2.5 rounded-xl border border-line bg-overlay-subtle p-3 text-left transition hover:border-line-strong hover:bg-overlay"
             >
-              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay-subtle text-text-subtle transition group-hover:text-text">
+              <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg border border-line bg-overlay text-text transition group-hover:text-text">
                 <ActionIcon size={15} />
               </span>
               <span className="min-w-0">
@@ -304,8 +322,8 @@ export function TrendChart({ icon: Icon, title, subtitle, live, series, emptyHin
         <Icon size={15} className="text-text-subtle" /> {title}
         {subtitle ? <span className="font-normal text-text-muted">{subtitle}</span> : null}
         {live ? (
-          <span className={cn("ml-auto flex items-center gap-1 font-mono text-[10px] font-normal", toneStyles.ok.fg)}>
-            <span className={cn("h-1.5 w-1.5 animate-pulse rounded-full", toneStyles.ok.dot)} />live
+          <span className="ml-auto flex items-center gap-1 font-mono text-[10px] font-normal text-ok">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-ok" />live
           </span>
         ) : null}
       </h3>
@@ -322,14 +340,14 @@ export function TrendChart({ icon: Icon, title, subtitle, live, series, emptyHin
           </svg>
           <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 font-mono text-[11px]">
             {series.map((s) => (
-              <span key={s.key} className="flex items-center gap-1.5 text-text-subtle">
+              <span key={s.key} className="flex items-center gap-1.5 text-text">
                 <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: s.color }} />{s.label} {s.display}
               </span>
             ))}
           </div>
         </div>
       ) : (
-        <p className="mt-3 rounded-lg border border-dashed border-line bg-overlay-subtle p-6 text-center text-xs text-text-muted">
+        <p className="mt-3 rounded-lg border border-dashed border-line bg-well p-6 text-center text-xs text-text-muted">
           {loading ? "Connecting to live telemetry…" : emptyHint}
         </p>
       )}

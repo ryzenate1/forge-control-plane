@@ -120,6 +120,12 @@ func TestHealth(t *testing.T) {
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected status 503, got %d", rec.Code)
 	}
+	// The 503 carries the machine-readable reason through the full middleware
+	// chain: the 5xx sanitizer must not replace this deliberate operational
+	// signal with "internal server error".
+	if body := rec.Body.String(); !strings.Contains(body, "container runtime unavailable") {
+		t.Fatalf("expected 503 reason in body, got %q", body)
+	}
 }
 
 func TestReadyIsPublicProbe(t *testing.T) {
@@ -136,6 +142,32 @@ func TestReadyIsPublicProbe(t *testing.T) {
 	}
 	if rec.Code != http.StatusServiceUnavailable {
 		t.Fatalf("expected runtime-unavailable 503 for nil runtime, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if body := rec.Body.String(); !strings.Contains(body, "runtime unavailable") {
+		t.Fatalf("expected 503 reason in body, got %q", body)
+	}
+}
+
+func TestSanitizeInternalErrorsPreservesServiceUnavailable(t *testing.T) {
+	serve := func(status int, body string) *httptest.ResponseRecorder {
+		inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(status)
+			_, _ = w.Write([]byte(body))
+		})
+		rec := httptest.NewRecorder()
+		sanitizeInternalErrors(inner).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/", nil))
+		return rec
+	}
+
+	if rec := serve(http.StatusServiceUnavailable, `{"ready":false,"reason":"runtime unavailable"}`); rec.Body.String() != `{"ready":false,"reason":"runtime unavailable"}` {
+		t.Fatalf("503 body must pass through unmodified, got %q", rec.Body.String())
+	}
+	if rec := serve(http.StatusInternalServerError, `{"error":"boom"}`); rec.Body.String() != "internal server error\n" {
+		t.Fatalf("500 body must be sanitized, got %q", rec.Body.String())
+	}
+	if rec := serve(http.StatusBadGateway, "raw engine text"); rec.Body.String() != "internal server error\n" {
+		t.Fatalf("502 body must be sanitized, got %q", rec.Body.String())
 	}
 }
 

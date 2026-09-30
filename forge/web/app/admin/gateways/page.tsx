@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
 import { useQuery } from "@tanstack/react-query";
 import {
   Globe,
@@ -27,12 +26,6 @@ import {
   AdminPageLayout,
   AdminTabs,
   type AdminTab,
-  AdminTable,
-  AdminTHead,
-  AdminTh,
-  AdminTBody,
-  AdminTr,
-  AdminTd,
   Btn,
   Card,
   CardHeader,
@@ -166,7 +159,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           {/* Services lane */}
           <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
             <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
-              <Layers size={12} className="text-blue-400" aria-hidden />
+              <Layers size={12} className="text-info" aria-hidden />
               Services
               <Pill tone="blue" className="ml-auto font-mono text-[10px] tracking-wide">
                 {serviceCount}
@@ -183,7 +176,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
                     key={s.id}
                     className="flex items-center gap-2 rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2"
                   >
-                    <Server size={12} className="shrink-0 text-blue-300" aria-hidden />
+                    <Server size={12} className="shrink-0 text-info" aria-hidden />
                     <span className="truncate text-xs font-medium text-[var(--text)]">{s.name}</span>
                     <Pill tone="neutral" className="ml-auto font-mono text-[10px] capitalize tracking-wide">
                       {s.algorithm.replaceAll("_", " ")}
@@ -201,7 +194,7 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           <div className="hidden place-items-center md:grid">
             <div className="flex flex-col items-center gap-1 text-[var(--text-subtle)]">
               <div className="h-px w-12 bg-[var(--line)]" />
-              <ArrowRight size={14} className="text-emerald-400" aria-hidden />
+              <ArrowRight size={14} className="text-ok" aria-hidden />
               <div className="h-px w-12 bg-[var(--line)]" />
               <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-[var(--text-subtle)]">LB</span>
             </div>
@@ -210,30 +203,30 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
           {/* Targets lane */}
           <div className="rounded-xl border border-[var(--line)] bg-[var(--surface)] p-4">
             <div className="mb-3 flex items-center gap-2 text-[10px] font-bold uppercase tracking-[0.12em] text-[var(--text-subtle)]">
-              <Container size={12} className="text-emerald-400" aria-hidden />
+              <Container size={12} className="text-ok" aria-hidden />
               Targets
               <Pill tone="green" className="ml-auto font-mono text-[10px] tracking-wide">
                 {targetCount}
               </Pill>
             </div>
             <div className="grid grid-cols-3 gap-2 text-center">
-              <div className="rounded-lg border border-emerald-500/20 bg-emerald-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-emerald-400">
+              <div className="rounded-lg border border-ok-line bg-ok-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-ok">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "healthy").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-emerald-300/80">healthy</div>
+                <div className="text-[10px] uppercase tracking-widest text-ok">healthy</div>
               </div>
-              <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-amber-400">
+              <div className="rounded-lg border border-warn-line bg-warn-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-warn">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "draining").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-amber-300/80">draining</div>
+                <div className="text-[10px] uppercase tracking-widest text-warn">draining</div>
               </div>
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-2 py-3">
-                <div className="font-mono text-lg font-bold text-red-400">
+              <div className="rounded-lg border border-danger-line bg-danger-subtle px-2 py-3">
+                <div className="font-mono text-lg font-bold text-danger">
                   {services.flatMap((s) => s.targets ?? []).filter((t) => t.status === "unhealthy").length}
                 </div>
-                <div className="text-[10px] uppercase tracking-widest text-red-300/80">unhealthy</div>
+                <div className="text-[10px] uppercase tracking-widest text-danger">unhealthy</div>
               </div>
             </div>
             <p className="mt-3 text-center font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
@@ -257,7 +250,6 @@ function GatewayTopology({ routers, services }: { routers: RoutingRule[]; servic
 }
 
 export default function AdminGatewaysPage() {
-  const router = useRouter();
   const [tab, setTab] = useState<GatewayTab>("routers");
 
   const routersQuery = useQuery({
@@ -316,16 +308,16 @@ export default function AdminGatewaysPage() {
         sub="Edge gateway routers, services and middlewares."
         action={
           <div className="flex gap-2">
-            <Btn tone="ghost" onClick={() => router.push("/admin/traffic")}>
+            <Btn tone="ghost" onClick={() => window.location.assign("/admin/traffic")}>
               <Route size={14} /> Traffic
             </Btn>
-            <Btn tone="ghost" onClick={() => router.push("/admin/load-balancer")}>
+            <Btn tone="ghost" onClick={() => window.location.assign("/admin/load-balancer")}>
               <Network size={14} /> Load Balancer
             </Btn>
-            <Btn tone="ghost" onClick={() => router.push("/admin/domains")}>
+            <Btn tone="ghost" onClick={() => window.location.assign("/admin/domains")}>
               <Globe size={14} /> Domains
             </Btn>
-            <Btn tone="primary" onClick={() => router.push("/admin/certificates")}>
+            <Btn tone="primary" onClick={() => window.location.assign("/admin/certificates")}>
               <Lock size={14} /> Certificates
             </Btn>
           </div>
@@ -338,7 +330,7 @@ export default function AdminGatewaysPage() {
         <Btn
           size="sm"
           tone="ghost"
-          onClick={() => router.push("/admin/firewall")}
+          onClick={() => window.location.assign("/admin/firewall")}
           className="gap-1.5"
         >
           <Shield size={12} /> Firewall
@@ -346,7 +338,15 @@ export default function AdminGatewaysPage() {
         <Btn
           size="sm"
           tone="ghost"
-          onClick={() => router.push("/admin/endpoints")}
+          onClick={() => window.location.assign("/admin/security")}
+          className="gap-1.5"
+        >
+          <Lock size={12} /> Security Headers
+        </Btn>
+        <Btn
+          size="sm"
+          tone="ghost"
+          onClick={() => window.location.assign("/admin/endpoints")}
           className="gap-1.5"
         >
           <Box size={12} /> Endpoints
@@ -371,37 +371,48 @@ export default function AdminGatewaysPage() {
             <EmptyState
               icon={Route}
               title="No routers"
-              message="No routing rules yet. Create a route from Traffic Policies to get started."
+              message="No routing rules yet. Create via Traffic → Create Route (requires domain) or directly in the TrafficManager service."
             />
           ) : (
-            <AdminTable label="Routers">
-              <AdminTHead><AdminTh>Host</AdminTh><AdminTh>Path</AdminTh><AdminTh>Target</AdminTh><AdminTh>Strategy</AdminTh><AdminTh>Service →</AdminTh><AdminTh>Status</AdminTh></AdminTHead>
-              <AdminTBody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)] bg-[var(--surface-raised)] text-left text-[10px] uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+                    <th className="px-4 py-3">Host</th>
+                    <th className="px-4 py-3">Path</th>
+                    <th className="px-4 py-3">Target</th>
+                    <th className="px-4 py-3">Strategy</th>
+                    <th className="px-4 py-3">Service →</th>
+                    <th className="px-4 py-3">Status</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--line)]">
                   {routers.map((r) => (
-                    <AdminTr key={r.id}>
-                      <AdminTd className="font-mono text-xs font-medium">{r.domain || "—"}</AdminTd>
-                      <AdminTd className="font-mono text-xs">{r.path}</AdminTd>
-                      <AdminTd className="font-mono text-xs">
+                    <tr key={r.id} className="hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none">
+                      <td className="px-4 py-3 font-mono text-xs font-medium text-[var(--text)]">{r.domain || "—"}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--text)]">{r.path}</td>
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--text-subtle)]">
                         {r.targetHost ? `${r.targetHost}:${r.targetPort}` : `:${r.targetPort}`}
-                      </AdminTd>
-                      <AdminTd>
+                      </td>
+                      <td className="px-4 py-3">
                         <Pill tone="neutral" className="font-mono text-[11px] capitalize tracking-wide">
                           {r.strategy || "round_robin"}
                         </Pill>
-                      </AdminTd>
-                      <AdminTd>
+                      </td>
+                      <td className="px-4 py-3">
                         <span className="inline-flex items-center gap-1 text-xs text-[var(--text-subtle)]">
                           <ArrowRight size={12} className="text-[var(--brand)]" aria-hidden />
                           {matchServiceName(r.domain, services)}
                         </span>
-                      </AdminTd>
-                      <AdminTd>
-                        <Pill tone={r.enabled ? "green" : "neutral"}>{r.enabled ? "enabled" : "disabled"}</Pill>
-                      </AdminTd>
-                    </AdminTr>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Pill tone={r.enabled ? "green" : "neutral"} className="tracking-wide">{r.enabled ? "enabled" : "disabled"}</Pill>
+                      </td>
+                    </tr>
                   ))}
-              </AdminTBody>
-            </AdminTable>
+                </tbody>
+              </table>
+            </div>
           )}
         </Card>
       )}
@@ -451,12 +462,16 @@ export default function AdminGatewaysPage() {
                     {s.targets.map((t) => (
                       <div key={t.id} className="flex items-center justify-between px-4 py-3 hover:bg-[color-mix(in_srgb,var(--surface-hover)_50%,transparent)] motion-safe:transition-colors motion-reduce:transition-none">
                         <div className="flex items-center gap-3">
+                          <span
+                            className={`h-2 w-2 rounded-full ${t.status === "healthy" ? "bg-[var(--success)]" : t.status === "draining" ? "bg-[var(--warning)]" : "bg-[var(--danger)]"}`}
+                            aria-hidden
+                          />
                           <span className="font-mono text-sm text-[var(--text)]">
                             {t.ip}:{t.port}
                           </span>
                           <span className="text-xs text-[var(--text-subtle)]">weight {t.weight}</span>
                         </div>
-                        <Pill tone={t.status === "healthy" ? "green" : t.status === "draining" ? "yellow" : "red"}>{t.status}</Pill>
+                        <Pill tone={t.status === "healthy" ? "green" : t.status === "draining" ? "yellow" : "red"} className="tracking-wide">{t.status}</Pill>
                       </div>
                     ))}
                   </div>
@@ -472,7 +487,7 @@ export default function AdminGatewaysPage() {
           <CardHeader title="Middlewares" icon={Shield} />
           <div className="p-4">
             <div className="rounded-lg border border-[color-mix(in_srgb,var(--warning)_20%,transparent)] bg-[var(--warning-subtle)] px-4 py-3 text-sm leading-6 text-[var(--text)]">
-              Middlewares (rate-limit, IP allow/deny, circuit-breaker, headers, redirect) are currently applied to all routes. Manage them from Traffic Policies.
+              Middlewares (rate-limit, IP allow/deny, circuit-breaker, headers, redirect) are not yet exposed as a list — backend has no <code className="rounded bg-[var(--surface-raised)] px-1 py-0.5 font-mono text-xs border border-[var(--line)]">GET /policies</code> (only <code className="font-mono text-xs">GET /policies/:id</code>). They are currently applied as <span className="font-semibold">all-policies → all-routes</span> (see audit F-NET-05). The intended fix is a <code className="font-mono text-xs">gateway_middlewares</code> table referenced by routers (Traefik model).
             </div>
             <div className="mt-4 grid gap-3 sm:grid-cols-2">
               {[
@@ -498,7 +513,8 @@ export default function AdminGatewaysPage() {
             <div className="mt-4 rounded-lg border border-[var(--line)] bg-[var(--surface)] p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-[var(--text-subtle)]">Traffic → Policies tab</p>
               <p className="mt-1 text-sm leading-6 text-[var(--text-subtle)]">
-                Middlewares are applied to all routes. Create policies from Traffic Policies and they will be rendered here.
+                The legacy Traffic page’s <span className="font-mono text-xs">POST /policies</span> shape (<code className="font-mono text-xs">type + config JSON</code>) differs from backend’s typed fields (
+                <code className="font-mono text-xs">rateLimit, ipWhitelist</code> etc.). Until the middleware table lands, create policies via API and they will be rendered here.
               </p>
             </div>
           </div>
@@ -521,28 +537,37 @@ export default function AdminGatewaysPage() {
             <EmptyState
               icon={Lock}
               title="No certificates"
-              message="No certificates yet. Upload one from Certificates or issue one via ACME."
+              message="No certs yet. Upload via Certificates page (POST /certificates/upload or /custom-certificates) or issue via ACME."
             />
           ) : (
-            <AdminTable label="Certificates">
-              <AdminTHead><AdminTh>Domains</AdminTh><AdminTh>Provider</AdminTh><AdminTh>Expiry</AdminTh><AdminTh>Auto-Renew</AdminTh></AdminTHead>
-              <AdminTBody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-[var(--line)] bg-[var(--surface-raised)] text-left text-[10px] uppercase tracking-[0.12em] text-[var(--text-subtle)]">
+                    <th className="px-4 py-3">Domains</th>
+                    <th className="px-4 py-3">Provider</th>
+                    <th className="px-4 py-3">Expiry</th>
+                    <th className="px-4 py-3">Auto-Renew</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-[var(--line)]">
                   {certs.map((c) => (
-                    <AdminTr key={c.id}>
-                      <AdminTd className="font-mono text-xs">{c.domains?.join(", ") ?? "—"}</AdminTd>
-                      <AdminTd>
-                        <Pill tone={c.provider === "letsencrypt" ? "blue" : "neutral"}>{c.provider}</Pill>
-                      </AdminTd>
-                      <AdminTd className="text-xs">
+                    <tr key={c.id} className="hover:bg-[var(--surface-hover)] motion-safe:transition-colors motion-reduce:transition-none">
+                      <td className="px-4 py-3 font-mono text-xs text-[var(--text)]">{c.domains?.join(", ") ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <Pill tone={c.provider === "letsencrypt" ? "blue" : "neutral"} className="tracking-wide">{c.provider}</Pill>
+                      </td>
+                      <td className="px-4 py-3 text-xs text-[var(--text-subtle)]">
                         {c.expiresAt ? new Date(c.expiresAt).toLocaleDateString() : "—"}
-                      </AdminTd>
-                      <AdminTd>
-                        <Pill tone={c.autoRenew ? "green" : "neutral"}>{c.autoRenew ? "Enabled" : "Disabled"}</Pill>
-                      </AdminTd>
-                    </AdminTr>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Pill tone={c.autoRenew ? "green" : "neutral"} className="tracking-wide">{c.autoRenew ? "Enabled" : "Disabled"}</Pill>
+                      </td>
+                    </tr>
                   ))}
-              </AdminTBody>
-            </AdminTable>
+                </tbody>
+              </table>
+            </div>
           )}
           <div className="border-t border-[var(--line)] p-4">
             <p className="text-xs leading-5 text-[var(--text-subtle)]">

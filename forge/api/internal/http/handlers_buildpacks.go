@@ -30,9 +30,16 @@ func registerBuildpackRoutes(protected fiber.Router, cfg Config, buildpackSvc *b
 		if req.Name == "" {
 			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "name is required"})
 		}
+		// builder_type is a CHECK-constrained column; reject unknown values as
+		// 400 instead of leaking the SQLSTATE 23514 violation as a 500.
+		switch req.BuilderType {
+		case "herokuish", "cnb", "nixpacks", "railpack":
+		default:
+			return c.Status(fiber.StatusBadRequest).JSON(fiber.Map{"error": "builderType must be one of: herokuish, cnb, nixpacks, railpack"})
+		}
 		bp, err := cfg.Store.CreateBuildpack(c.Context(), req)
 		if err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.Status(fiber.StatusCreated).JSON(fiber.Map{"data": bp})
 	})

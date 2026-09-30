@@ -11,7 +11,7 @@
   "images": {
     "SteamCMD": "ghcr.io/pterodactyl/yolks:steamcmd"
   },
-  "startup": "./RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.level '{{SERVER_LEVEL}}' +server.seed {{SERVER_SEED}} +server.name '{{SERVER_NAME}}' +server.description '{{SERVER_DESC}}' +server.maxplayers {{MAX_PLAYERS}} +server.identity '{{SERVER_IDENTITY}}' +rcon.port {{RCON_PORT}} +rcon.password {{RCON_PASSWORD}} +server.ip 0.0.0.0",
+  "startup": "./RustDedicated -batchmode +server.port {{SERVER_PORT}} +server.level '{{SERVER_LEVEL}}' +server.seed {{SERVER_SEED}} +server.name '{{SERVER_NAME}}' +server.description '{{SERVER_DESC}}' +server.maxplayers {{MAX_PLAYERS}} +server.identity '{{SERVER_IDENTITY}}' +rcon.port {{RCON_PORT}} +rcon.password \"{{RCON_PASSWORD}}\" +server.ip 0.0.0.0",
   "config": {
     "files": {},
     "startup": {
@@ -101,8 +101,8 @@
     {
       "name": "RCON Password",
       "env_variable": "RCON_PASSWORD",
-      "description": "Password for RCON access.",
-      "default_value": "changeme",
+      "description": "RCON password for remote administration. Left empty, the server generates a random password at deploy time.",
+      "default_value": "",
       "user_viewable": false,
       "user_editable": true,
       "rules": "required|string|min:8|max:64"

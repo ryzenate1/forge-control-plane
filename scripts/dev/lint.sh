@@ -16,7 +16,11 @@ fi
 echo "=== Running TypeScript checks ==="
 (cd "$ROOT/forge/web" && npm run lint)
 # Web typecheck resolves workspace packages from their dist output, so build
-# them first (same ordering as `npm run typecheck` at the repo root).
+# them first (same ordering as `npm run typecheck` at the repo root). This
+# explicit call is load-bearing: npm runs `prebuild` before `build`, but it
+# does NOT run `prestypecheck` before `typecheck` (verified on npm 11), so
+# there is no hook to delegate to here — and because the hook never fires,
+# this call cannot double-build either.
 (cd "$ROOT" && npm run build:packages)
 (cd "$ROOT/forge/web" && npm run typecheck)
 if [ -d "$ROOT/packages/sdk" ] && grep -q '"lint"' "$ROOT/packages/sdk/package.json" 2>/dev/null; then (cd "$ROOT/packages/sdk" && npm run lint); fi

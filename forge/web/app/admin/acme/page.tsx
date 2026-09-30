@@ -2,25 +2,11 @@
 
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { KeyRound, Plus, Trash2 } from "lucide-react";
+import { Shield, Plus, Trash2 } from "lucide-react";
 import { listAcmeAccounts, createAcmeAccount, deleteAcmeAccount, listDNSAccounts } from "@/lib/api/acme";
-import { AdminPageLayout, SectionHeader, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, Pill, AdminLoadingState, AdminErrorState, AdminTable, AdminTHead, AdminTh, AdminTBody, AdminTr, AdminTd } from "@/components/admin/admin-ui";
-import { FreshnessBadge } from "@/components/admin/telemetry-ui";
-import { sourceState } from "@/lib/admin/telemetry";
-import { formatDate } from "@/lib/utils";
+import { AdminPageLayout, SectionHeader, Card, CardHeader, Btn, Input, Modal, ModalFooter, EmptyState, Pill, AdminLoadingState, AdminErrorState } from "@/components/admin/admin-ui";
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
-
-const EMAIL = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
-
-function isHttpUrl(value: string): boolean {
-  try {
-    const u = new URL(value);
-    return u.protocol === "https:" || u.protocol === "http:";
-  } catch {
-    return false;
-  }
-}
 
 export default function AdminAcmePage() {
   const qc = useQueryClient();
@@ -34,7 +20,7 @@ export default function AdminAcmePage() {
   const dnsQuery = useQuery({ queryKey: ["acme", "dns-accounts"], queryFn: () => listDNSAccounts(), retry: false });
 
   const createMut = useMutation({
-    mutationFn: () => createAcmeAccount({ email: email.trim(), caUrl: caUrl.trim() || undefined }),
+    mutationFn: () => createAcmeAccount({ email, caUrl: caUrl || undefined }),
     onSuccess: () => { qc.invalidateQueries({ queryKey: ["acme", "accounts"] }); setShowCreate(false); setEmail(""); setCaUrl(""); toast({ tone: "success", title: "ACME account created" }); },
     onError: (e: Error) => toast({ tone: "error", title: "Creation failed", message: e.message }),
   });
@@ -44,72 +30,61 @@ export default function AdminAcmePage() {
     onError: (e: Error) => toast({ tone: "error", title: "Delete failed", message: e.message }),
   });
 
-  // A typo in either field produces an account that cannot be diagnosed from
-  // this page (there is no verify action), so both are checked before submit.
-  const emailError = email && !EMAIL.test(email.trim()) ? "Enter an email address the CA can reach." : "";
-  const caUrlError = caUrl && !isHttpUrl(caUrl.trim()) ? "Enter an absolute http(s) directory URL, for example https://acme-v02.api.letsencrypt.org/directory." : "";
-
-  const accountCount = Array.isArray(accountsQuery.data) ? accountsQuery.data.length : null;
-
   return (
     <AdminPageLayout>
       <SectionHeader
-        status={<FreshnessBadge state={sourceState(accountsQuery)} />}
+        title="ACME Accounts"
+        sub="ACME accounts for automatic certificate issuance."
         action={<Btn tone="primary" onClick={() => setShowCreate(true)}><Plus size={12} /> New ACME Account</Btn>}
       />
       <Card>
-        <CardHeader
-          action={<span className="text-xs text-text-subtle">{accountsQuery.isPending ? "Counting…" : accountCount === null ? "Count not available" : `${accountCount} account${accountCount === 1 ? "" : "s"}`}</span>}
-          icon={KeyRound}
-          title="ACME Accounts"
-        />
-        {accountsQuery.isPending ? <div className="p-4"><AdminLoadingState label="Loading ACME accounts…" /></div>
-          : accountsQuery.isError ? <div className="p-4"><AdminErrorState message={accountsQuery.error instanceof Error ? accountsQuery.error.message : "ACME accounts could not be loaded"} retry={() => void accountsQuery.refetch()} /></div>
-          : accountCount === 0 ? <EmptyState icon={KeyRound} title="No ACME accounts" message="No ACME account is registered. Certificate issuance needs one, with a contact email and optionally its own CA directory." />
+        <CardHeader title="ACME Accounts" icon={Shield} action={<span className="text-xs text-text-subtle">{accountsQuery.data?.length ?? 0} accounts</span>} />
+        {accountsQuery.isLoading ? <AdminLoadingState label="Loading ACME accounts…" />
+          : accountsQuery.isError ? <div className="p-4"><AdminErrorState message={accountsQuery.error instanceof Error ? accountsQuery.error.message : "Failed"} retry={() => accountsQuery.refetch()} /></div>
+          : (accountsQuery.data?.length ?? 0) === 0 ? <EmptyState icon={Shield} message="No ACME accounts. Create one with email and optional CA URL." />
           : (
-            <AdminTable label="ACME accounts">
-              <AdminTHead><AdminTh>Email</AdminTh><AdminTh>CA directory</AdminTh><AdminTh>Default</AdminTh><AdminTh>Created</AdminTh><AdminTh></AdminTh></AdminTHead>
-              <AdminTBody>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead><tr className="border-b border-line text-left text-[10px] uppercase tracking-widest text-text-subtle"><th className="px-4 py-3">Email</th><th className="px-4 py-3">CA</th><th className="px-4 py-3">Default</th><th className="px-4 py-3">Created</th><th className="px-4 py-3"></th></tr></thead>
+                <tbody className="divide-y divide-line">
                   {accountsQuery.data?.map((a) => (
-                    <AdminTr key={a.id}>
-                      <AdminTd className="font-mono text-xs text-text">{a.email}</AdminTd>
-                      <AdminTd className="max-w-xs truncate font-mono text-xs text-text-subtle" title={a.caUrl ?? undefined}>{a.caUrl || "Provider default"}</AdminTd>
-                      <AdminTd>{a.isDefault ? <Pill tone="green">Default</Pill> : <Pill tone="neutral">Not default</Pill>}</AdminTd>
-                      <AdminTd className="text-xs text-text-subtle">{formatDate(a.createdAt, "Not reported")}</AdminTd>
-                      <AdminTd><div className="flex justify-end"><Btn ariaLabel={`Delete ACME account ${a.email}`} disabled={deleteMut.isPending && deleteMut.variables === a.id} loading={deleteMut.isPending && deleteMut.variables === a.id} onClick={() => { void (async () => { if (await confirm({ title: `Delete ACME account ${a.email}?`, description: "Certificates already issued under this account stay valid, but issuance and renewal needs an account — with none left, Request Certificate on the Certificates page will fail.", danger: true, confirmLabel: "Delete" })) deleteMut.mutate(a.id); })(); }} size="sm" tone="danger"><Trash2 size={12} /></Btn></div></AdminTd>
-                    </AdminTr>
+                    <tr key={a.id} className="hover:bg-overlay-subtle">
+                      <td className="px-4 py-3 font-mono text-xs text-text">{a.email}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle truncate max-w-[200px]">{a.caUrl}</td>
+                      <td className="px-4 py-3">{a.isDefault ? <Pill tone="green">default</Pill> : <Pill>—</Pill>}</td>
+                      <td className="px-4 py-3 text-xs text-text-subtle">{a.createdAt ? new Date(a.createdAt).toLocaleDateString() : "—"}</td>
+                      <td className="px-4 py-3 text-right"><Btn size="sm" tone="danger" onClick={() => { void (async () => { if (await confirm({ title: `Delete ACME account ${a.email}?`, danger: true, confirmLabel: "Delete" })) deleteMut.mutate(a.id); })(); }}><Trash2 size={12} /></Btn></td>
+                    </tr>
                   ))}
-              </AdminTBody>
-            </AdminTable>
+                </tbody>
+              </table>
+            </div>
           )}
-        <div className="mt-4 border-t border-line px-4 py-2 text-xs text-text-subtle">
-          DNS provider accounts used for DNS-01 challenges are listed below; they are managed on the
-          DNS Providers page.
+        <div className="border-t border-line bg-overlay-subtle px-4 py-2 text-[11px] text-text-subtle">
+          DNS provider accounts for DNS-01 challenges are listed below.
         </div>
       </Card>
 
       <Card>
-        <CardHeader title="DNS Provider Accounts" icon={KeyRound} />
-        {dnsQuery.isPending ? <div className="p-4"><AdminLoadingState label="Loading DNS accounts…" /></div>
-          : dnsQuery.isError ? <div className="p-4"><AdminErrorState message={dnsQuery.error instanceof Error ? dnsQuery.error.message : "DNS accounts could not be loaded"} retry={() => void dnsQuery.refetch()} /></div>
+        <CardHeader title="DNS Provider Accounts" icon={Shield} />
+        {dnsQuery.isLoading ? <AdminLoadingState label="Loading DNS accounts…" />
+          : dnsQuery.isError ? <div className="p-4"><AdminErrorState message={dnsQuery.error instanceof Error ? dnsQuery.error.message : "Failed to load DNS accounts"} retry={() => dnsQuery.refetch()} /></div>
           : (
             <div className="p-4">
-              {(dnsQuery.data?.length ?? 0) === 0 ? <EmptyState icon={KeyRound} title="No DNS accounts" message="No DNS provider account is configured. Add one from DNS Providers to issue certificates over DNS-01." />
-                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="flex justify-between rounded border border-line px-3 py-2 text-xs"><span className="font-mono text-text">{d.name} · {d.provider || "Provider not recorded"}</span><span className="text-text-subtle">{formatDate(d.createdAt, "Date not reported")}</span></div>)}</div>}
+              {(dnsQuery.data?.length ?? 0) === 0 ? <p className="text-sm text-text-subtle">No DNS accounts yet. Add one from DNS Providers.</p>
+                : <div className="space-y-2">{dnsQuery.data?.map((d) => <div key={d.id} className="rounded border border-line px-3 py-2 text-xs flex justify-between"><span className="font-mono text-text">{d.name} · {d.provider}</span><span className="text-text-subtle">{new Date(d.createdAt).toLocaleDateString()}</span></div>)}</div>}
             </div>
           )}
       </Card>
 
       {showCreate && (
-        <Modal description="The account identity a CA issues certificates against." onClose={() => setShowCreate(false)} title="New ACME Account">
+        <Modal title="Create ACME Account" onClose={() => setShowCreate(false)}>
           <div className="space-y-4">
-            <Input autoComplete="off" label="Email" onChange={setEmail} placeholder="admin@example.com" type="email" value={email} />
-            {emailError ? <p className="text-xs text-danger">{emailError}</p> : null}
-            <Input autoComplete="off" label="CA directory URL (optional)" mono onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" value={caUrl} />
-            {caUrlError ? <p className="text-xs text-danger">{caUrlError}</p> : null}
-            <p className="ui-hint">Leave the CA directory empty to use the configured default authority.</p>
+            <Input label="Email *" value={email} onChange={setEmail} placeholder="admin@example.com" />
+            <Input label="CA URL (optional)" value={caUrl} onChange={setCaUrl} placeholder="https://acme-v02.api.letsencrypt.org/directory" />
+            <p className="text-xs text-text-subtle">Defaults to Let&apos;s Encrypt when no CA URL is given.</p>
           </div>
-          <ModalFooter confirmLabel={createMut.isPending ? "Creating…" : "Create"} disabled={createMut.isPending || !email.trim() || !!emailError || !!caUrlError} onCancel={() => setShowCreate(false)} onConfirm={() => createMut.mutate()} />
+          <ModalFooter onCancel={() => setShowCreate(false)} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create"} disabled={!email || createMut.isPending} />
         </Modal>
       )}
       {renderConfirm()}

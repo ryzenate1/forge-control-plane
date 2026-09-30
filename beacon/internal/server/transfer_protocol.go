@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -45,6 +46,10 @@ func (s *Server) prepareTransferSource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
 	claims, err := s.transferProtocol.Authorize(migrationID, transfer.DirectionSourceControl, credential)
 	if err != nil {
 		writeTransferError(w, err)
@@ -87,11 +92,20 @@ func (s *Server) pushTransferSource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "destinationUrl and destinationCredential are required", http.StatusBadRequest)
 		return
 	}
-	if err := validateTransferDestination(body.DestinationURL); err != nil {
+	if strings.Contains(body.DestinationURL, "\x00") || strings.Contains(body.DestinationCredential, "\x00") || strings.Contains(body.IdempotencyKey, "\x00") {
+		http.Error(w, "invalid transfer request", http.StatusBadRequest)
+		return
+	}
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	if _, err := validatedTransferDestination(body.DestinationURL); err != nil {
 		http.Error(w, "invalid destinationUrl", http.StatusBadRequest)
 		return
 	}
-	meta, err := s.pushArchive(r.Context(), r.PathValue("id"), credential, body)
+	meta, err := s.pushArchive(r.Context(), migrationID, credential, body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
@@ -99,8 +113,67 @@ func (s *Server) pushTransferSource(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, meta)
 }
 
+func isSafeMigrationID(value string) bool {
+	if value == "" || len(value) > 128 || value == "." || value == ".." {
+		return false
+	}
+	if strings.ContainsAny(value, "/\\\x00") || strings.Contains(value, "..") {
+		return false
+	}
+	return filepath.Base(value) == value
+}
+
+// validatedTransferDestination parses raw, validates it as a transfer
+// destination, and returns the canonical URL. Only the returned value may be
+// used to build the outgoing request (SSRF).
+func validatedTransferDestination(raw string) (*url.URL, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.Contains(trimmed, "\x00") {
+		return nil, errors.New("invalid transfer destination URL")
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil {
+		return nil, errors.New("invalid transfer destination URL")
+	}
+	if err := validateTransferDestination(trimmed); err != nil {
+		return nil, err
+	}
+	return &url.URL{Scheme: parsed.Scheme, Host: parsed.Host}, nil
+}
+
+// buildTransferEndpoint combines a validated destination base with a validated
+// migration ID into the fixed destination path. The path is fixed — user input
+// contributes only the validated host and the validated ID segment.
+func buildTransferEndpoint(base *url.URL, migrationID string) (string, error) {
+	if base == nil || base.Hostname() == "" {
+		return "", errors.New("invalid transfer destination URL")
+	}
+	if !isSafeMigrationID(migrationID) {
+		return "", errors.New("invalid migration ID")
+	}
+	endpoint := &url.URL{
+		Scheme: base.Scheme,
+		Host:   base.Host,
+		Path:   "/api/v1/transfers/" + migrationID + "/destination/archive",
+	}
+	if err := validateTransferDestination(endpoint.String()); err != nil {
+		return "", err
+	}
+	return endpoint.String(), nil
+}
+
 func (s *Server) pushArchive(ctx context.Context, migrationID, sourceCredential string, request sourcePushRequest) (transfer.Metadata, error) {
-	endpoint := strings.TrimRight(request.DestinationURL, "/") + "/api/v1/transfers/" + migrationID + "/destination/archive"
+	if !isSafeMigrationID(migrationID) {
+		return transfer.Metadata{}, errors.New("invalid migration ID")
+	}
+	base, err := validatedTransferDestination(request.DestinationURL)
+	if err != nil {
+		return transfer.Metadata{}, err
+	}
+	endpoint, err := buildTransferEndpoint(base, migrationID)
+	if err != nil {
+		return transfer.Metadata{}, err
+	}
 	client := &http.Client{
 		Timeout: 30 * time.Minute,
 		CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -172,8 +245,15 @@ func (s *Server) pushArchive(ctx context.Context, migrationID, sourceCredential 
 }
 
 func validateTransferDestination(raw string) error {
-	parsed, err := url.Parse(strings.TrimSpace(raw))
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.Contains(trimmed, "\x00") {
+		return errors.New("invalid transfer destination URL")
+	}
+	parsed, err := url.Parse(trimmed)
 	if err != nil || parsed.Hostname() == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return errors.New("invalid transfer destination URL")
+	}
+	if strings.Contains(parsed.Host, "\\") || strings.Contains(parsed.Host, " ") {
 		return errors.New("invalid transfer destination URL")
 	}
 	// The source daemon pushes the archive (carrying the destination credential)
@@ -200,7 +280,12 @@ func (s *Server) sourceTransferStatus(w http.ResponseWriter, r *http.Request) {
 	if !ok || s.transferProtocol == nil {
 		return
 	}
-	meta, err := s.transferProtocol.Status(r.PathValue("id"), transfer.DirectionSourceControl, credential)
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.transferProtocol.Status(migrationID, transfer.DirectionSourceControl, credential)
 	if err != nil {
 		writeTransferError(w, err)
 		return
@@ -213,7 +298,12 @@ func (s *Server) cleanupTransferSource(w http.ResponseWriter, r *http.Request) {
 	if !ok || s.transferProtocol == nil {
 		return
 	}
-	meta, err := s.transferProtocol.Authorize(r.PathValue("id"), transfer.DirectionSourceControl, credential)
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.transferProtocol.Authorize(migrationID, transfer.DirectionSourceControl, credential)
 	if err != nil {
 		writeTransferError(w, err)
 		return
@@ -226,7 +316,7 @@ func (s *Server) cleanupTransferSource(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "delete source container: "+err.Error(), http.StatusConflict)
 		return
 	}
-	if err := s.transferProtocol.CleanupSource(r.PathValue("id"), credential); err != nil {
+	if err := s.transferProtocol.CleanupSource(migrationID, credential); err != nil {
 		writeTransferError(w, err)
 		return
 	}
@@ -239,7 +329,12 @@ func (s *Server) destinationTransferOffset(w http.ResponseWriter, r *http.Reques
 	if !ok || s.transferProtocol == nil {
 		return
 	}
-	meta, err := s.transferProtocol.DestinationOffset(r.PathValue("id"), credential)
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.transferProtocol.DestinationOffset(migrationID, credential)
 	if err != nil {
 		writeTransferError(w, err)
 		return
@@ -257,6 +352,11 @@ func (s *Server) receiveTransferChunk(w http.ResponseWriter, r *http.Request) {
 	if !ok || s.transferProtocol == nil {
 		return
 	}
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
 	offset, offsetErr := strconv.ParseInt(r.Header.Get("Upload-Offset"), 10, 64)
 	total, totalErr := strconv.ParseInt(r.Header.Get("Upload-Length"), 10, 64)
 	checksum := strings.TrimSpace(strings.TrimPrefix(r.Header.Get("Upload-Checksum"), "sha256 "))
@@ -264,7 +364,11 @@ func (s *Server) receiveTransferChunk(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid upload metadata", http.StatusBadRequest)
 		return
 	}
-	meta, err := s.transferProtocol.AppendDestination(r.Context(), r.PathValue("id"), credential, offset, total, checksum, r.Body)
+	if strings.Contains(checksum, "\x00") || strings.Contains(migrationID, "\x00") {
+		http.Error(w, "invalid upload metadata", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.transferProtocol.AppendDestination(r.Context(), migrationID, credential, offset, total, checksum, r.Body)
 	if err != nil {
 		writeTransferError(w, err)
 		return
@@ -278,7 +382,12 @@ func (s *Server) restoreTransferDestination(w http.ResponseWriter, r *http.Reque
 	if !ok || s.transferProtocol == nil {
 		return
 	}
-	meta, err := s.transferProtocol.RestoreDestination(r.Context(), r.PathValue("id"), credential)
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	meta, err := s.transferProtocol.RestoreDestination(r.Context(), migrationID, credential)
 	if err != nil {
 		writeTransferError(w, err)
 		return
@@ -291,7 +400,12 @@ func (s *Server) finalizeTransferDestination(w http.ResponseWriter, r *http.Requ
 	if !ok || s.transferProtocol == nil {
 		return
 	}
-	if err := s.transferProtocol.FinalizeDestination(r.PathValue("id"), credential); err != nil {
+	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
+	if err := s.transferProtocol.FinalizeDestination(migrationID, credential); err != nil {
 		writeTransferError(w, err)
 		return
 	}
@@ -304,6 +418,10 @@ func (s *Server) cancelProtocolTransfer(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	migrationID := r.PathValue("id")
+	if !isSafeMigrationID(migrationID) {
+		http.Error(w, "invalid migration ID", http.StatusBadRequest)
+		return
+	}
 	if _, err := s.transferProtocol.Authorize(migrationID, transfer.DirectionSourceControl, credential); err != nil {
 		if _, uploadErr := s.transferProtocol.Authorize(migrationID, transfer.DirectionDestinationUpload, credential); uploadErr != nil {
 			writeTransferError(w, err)

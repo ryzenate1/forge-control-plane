@@ -1,11 +1,11 @@
 "use client";
-import { REFRESH, hasDrift, mbLabel, nodeStatus, relativeTime, sourceState, useNodesQuery } from "@/lib/admin/telemetry";
+import { useNodesQuery } from "@/lib/admin/telemetry";
 
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  Activity, AlertTriangle, ArrowDownUp, ChevronRight, Cpu, Database, Eye, EyeOff, Globe, HardDrive, History, Layers, GitCompare, KeyRound, Lock, Mail,
-  MemoryStick, Network, Plus, Server, Settings as SettingsIcon, Shield, Trash2, Unlock, Wrench, Zap,
+  Activity, AlertCircle, AlertTriangle, ChevronRight, Cpu, Database, Eye, EyeOff, Globe, HardDrive, History, Layers, GitCompare, KeyRound, Lock, Mail,
+  MemoryStick, Network, Plus, Search, Server, Settings as SettingsIcon, Shield, Trash2, Unlock, Wrench, Zap,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import {
@@ -19,11 +19,8 @@ import { fetchCapability, fetchCapabilityDelta, fetchCapabilityHistory, probeCap
 import { useToast } from "@/components/ui/toast";
 import { useConfirm } from "@/components/ui/confirm-dialog";
 import { copySecret } from "@/lib/clipboard";
-import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn, Pill, AdminLoadingState, AdminErrorState, AdminPageLayout, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr } from "./admin-ui";
-import { FreshnessBadge, NotReported } from "./telemetry-ui";
-import { toneStyles } from "@/components/ui/forge/status";
-import { InfoCard, KpiGrid, QuickActionsCard, type KpiDatum, type QuickAction } from "./dashboard-cards";
-import { formatDate } from "@/lib/utils";
+import { AdminTabs, Btn, Card, CardHeader, EmptyState, Input, Modal, ModalFooter, SectionHeader, Textarea, cn, Pill, AdminLoadingState, AdminErrorState } from "./admin-ui";
+import { DashHeader, InfoCard, KpiGrid, QuickActionsCard, type KpiDatum, type QuickAction } from "./dashboard-cards";
 import { chart } from "@/lib/design-tokens";
 
 type Tab = "about" | "settings" | "configuration" | "allocation" | "servers" | "capabilities";
@@ -54,22 +51,6 @@ function validateNodeForm(name: string, locationId: string, fqdn: string, scheme
   return null;
 }
 
-/**
- * Total capacity from a reported allocated/available pair.
- *
- * Returns `undefined` unless **both** halves are real numbers. Summing with
- * `?? 0` turned "the node never reported" into a plausible-looking total, which
- * is how an unmeasured value ends up rendered as a measured one. This mirrors
- * the same rule `beacon-workspace.tsx` applies to a single host.
- */
-function capacityTotal(allocated: number | undefined | null, available: number | undefined | null): number | undefined {
-  if (typeof allocated !== "number" || !Number.isFinite(allocated)) return undefined;
-  if (typeof available !== "number" || !Number.isFinite(available)) return undefined;
-  return allocated + available;
-}
-
-type NodeSortKey = "name" | "state" | "heartbeat" | "location" | "memory" | "disk" | "servers";
-
 export function AdminNodes() {
   const nodesQuery = useNodesQuery();
   const nodes = useMemo(() => Array.isArray(nodesQuery.data) ? nodesQuery.data : [], [nodesQuery.data]);
@@ -82,126 +63,79 @@ export function AdminNodes() {
   const [search, setSearch] = useState("");
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [showCreate, setShowCreate] = useState(false);
-  const [sortKey, setSortKey] = useState<NodeSortKey>("name");
-  const [sortDir, setSortDir] = useState<"asc" | "desc">("asc");
 
   const router = useRouter();
-
-  // Real freshness for the frame's `status` slot. Every claim on this page that
-  // says "current" is derived from this, not from "a response arrived".
-  const nodesSource = sourceState(nodesQuery, REFRESH.inventory);
-  const serversSource = sourceState(serversQuery, REFRESH.inventory);
-
-  // Servers per node, resolved once for the whole table. Servers may reference
-  // their host by id *or* by name, so a row counts either form — but a single
-  // pass, so a node is never counted twice. The map backs both the cell and the
-  // sort, so the two can never disagree.
-  const serverCountByNode = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const node of nodes) {
-      let total = 0;
-      for (const server of servers) {
-        if (server.nodeId === node.id || server.node === node.id || (node.name ? server.node === node.name : false)) total += 1;
-      }
-      counts.set(node.id, total);
-    }
-    return counts;
-  }, [nodes, servers]);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const list = nodes.filter((n) => !q
-      || n.name.toLowerCase().includes(q)
-      || (n.fqdn ?? "").toLowerCase().includes(q)
-      || (n.displayName ?? "").toLowerCase().includes(q));
-    const dir = sortDir === "asc" ? 1 : -1;
-    const locationName = (node: ApiNode) => locations.find((l) => l.id === node.locationId)?.short ?? "";
-    return [...list].sort((a, b) => {
-      switch (sortKey) {
-        case "state": return dir * nodeStatus(a).label.localeCompare(nodeStatus(b).label);
-        case "heartbeat": return dir * (a.heartbeatState ?? "").localeCompare(b.heartbeatState ?? "");
-        case "location": return dir * locationName(a).localeCompare(locationName(b));
-        case "memory": return dir * ((a.memoryMb ?? 0) - (b.memoryMb ?? 0));
-        case "disk": return dir * ((a.diskMb ?? 0) - (b.diskMb ?? 0));
-        case "servers": return dir * ((serverCountByNode.get(a.id) ?? 0) - (serverCountByNode.get(b.id) ?? 0));
-        default: return dir * a.name.localeCompare(b.name);
-      }
-    });
-  }, [nodes, search, sortKey, sortDir, locations, serverCountByNode]);
-
-  const toggleSort = (key: NodeSortKey) => {
-    if (sortKey === key) setSortDir((d) => (d === "asc" ? "desc" : "asc"));
-    else { setSortKey(key); setSortDir("asc"); }
-  };
+  const filtered = useMemo(() =>
+    nodes.filter((n) => !search || n.name.toLowerCase().includes(search.toLowerCase()) || (n.fqdn ?? "").toLowerCase().includes(search.toLowerCase())),
+    [nodes, search],
+  );
+  const healthy = nodes.filter((n) => n.heartbeatState === "healthy").length;
 
   return (
-    <AdminPageLayout>
+    <div className="space-y-6">
       <SectionHeader
-        status={<FreshnessBadge state={nodesSource} />}
-        info={{
-          title: "Nodes",
-          triggerLabel: "About Nodes",
-          eyebrow: "Architecture & Semantics",
-          description: "Beacon hosts, heartbeat status and capacity across the fleet.",
-          sections: [
-            { title: "Beacon heartbeat & state", content: "Each node runs the Beacon agent. Operational state and persisted heartbeat are shown separately: state is what the node reports, heartbeat is the monitoring evidence. A node we cannot reach reads Unknown, never Offline or Healthy." },
-            { title: "Desired vs reported", content: "Memory and Disk in this list are the capacity an operator declared; the node detail workspace shows what the host actually reports. Where the two disagree, the detail view is the measurement and this column is the intent." },
-            { title: "Placement", content: "Declared capacity and server counts feed placement scoring. Open a row for the detail workspace (overview, allocations, servers, capabilities)." },
-          ],
-        }}
+        title="Nodes"
+        sub="Daemon hosts that run workloads across your infrastructure. Each node runs the Beacon agent and reports health, capacity, runtime and capabilities."
         action={
           <Btn tone="primary" onClick={() => setShowCreate(true)}>
             <Plus size={14} /> Create Node
           </Btn>
         }
       />
+      <div className="rounded-xl border border-line bg-overlay-subtle px-4 py-2 text-xs leading-5 text-text-subtle">
+        <span className="font-semibold text-text">Beacons</span> is the product term for <span className="font-mono text-[11px]">store.go:129 Node</span> — API alias <code className="font-mono">GET /beacons</code> → <code className="font-mono">GET /nodes</code> compat kept. Click a row for the 8-tab workspace (Overview/Metrics/Workloads/Networking/Storage/Capabilities/Placement/Config).
+        <span className="ml-2 font-mono text-[11px] text-text-muted">{nodes.length} total · {healthy} healthy · 8-tab detail → /admin/nodes/[id]</span>
+      </div>
+
       {locationsQuery.isError ? (
-        <AdminErrorState message={`Could not load locations: ${locationsQuery.error.message}`} retry={() => void locationsQuery.refetch()} />
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+          <span>Could not load locations: {locationsQuery.error.message}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void locationsQuery.refetch()}>Retry</Btn>
+        </div>
       ) : null}
       {serversQuery.isError ? (
-        <AdminErrorState message={`Could not load server counts: ${serversQuery.error.message}`} retry={() => void serversQuery.refetch()} />
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+          <span>Could not load server counts: {serversQuery.error.message}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
+        </div>
       ) : null}
 
       <Card>
-        <div className="flex flex-wrap items-end gap-3 p-4">
-          <div className="min-w-[220px] flex-1">
-            <Input label="Search nodes" placeholder="Name, display name or FQDN" value={search} onChange={setSearch} />
-          </div>
-          {/* The count is withheld until the query has actually answered, so a
-              fleet that has not been read yet cannot read as "0 / 0". */}
-          {nodesSource.status === "ready" ? (
-            <span className="pb-2 text-xs text-text-subtle" role="status">
-              {filtered.length} of {nodes.length} nodes
-            </span>
-          ) : (
-            <span className="pb-2 text-xs text-text-subtle">{nodesSource.status === "error" ? "Count unavailable" : "Count pending"}</span>
-          )}
+        <div className="flex items-center gap-3 p-4">
+          <Search size={14} className="text-text-muted" />
+          <Input placeholder="Search beacons — name or FQDN (alias: Nodes)" value={search} onChange={setSearch} />
+          <span className="hidden sm:inline text-xs text-text-muted">{filtered.length} / {nodes.length}</span>
         </div>
         {nodesQuery.isLoading ? (
-          <div className="p-4"><AdminLoadingState label="Loading nodes…" /></div>
+          <div className="p-8 text-center text-sm text-text-muted">Loading nodes…</div>
         ) : nodesQuery.isError ? (
-          <div className="p-4">
-            <AdminErrorState message="Nodes could not be loaded from the API." retry={() => void nodesQuery.refetch()} />
+          <div className="p-8 text-center text-sm text-danger">
+            <AlertCircle className="mx-auto mb-2" size={20} />
+            <p>Nodes could not be loaded from the API.</p>
+            <div className="mt-3"><Btn size="sm" onClick={() => void nodesQuery.refetch()}>Retry</Btn></div>
           </div>
         ) : filtered.length === 0 ? (
-          <EmptyState icon={Network} title="No nodes" message={search ? "No nodes match your search." : "Setup required — create a node before hosting workloads."} />
+          <EmptyState icon={Network} message={search ? "No nodes match your search." : "Setup required — create a node before hosting workloads."} />
         ) : (
-          <AdminTable label="Nodes">
-            <AdminTHead>
-              <AdminTh><span className="sr-only">Status</span></AdminTh>
-              <SortableTh active={sortKey === "name"} dir={sortDir} onClick={() => toggleSort("name")}>Name</SortableTh>
-              <SortableTh active={sortKey === "state"} dir={sortDir} onClick={() => toggleSort("state")}>State</SortableTh>
-              <SortableTh active={sortKey === "heartbeat"} dir={sortDir} onClick={() => toggleSort("heartbeat")}>Heartbeat</SortableTh>
-              <SortableTh active={sortKey === "location"} dir={sortDir} onClick={() => toggleSort("location")}>Location</SortableTh>
-              <AdminTh>Region</AdminTh>
-              <SortableTh active={sortKey === "memory"} dir={sortDir} onClick={() => toggleSort("memory")}>Memory</SortableTh>
-              <SortableTh active={sortKey === "disk"} dir={sortDir} onClick={() => toggleSort("disk")}>Disk</SortableTh>
-              <SortableTh active={sortKey === "servers"} dir={sortDir} onClick={() => toggleSort("servers")}>Servers</SortableTh>
-              <AdminTh>SSL</AdminTh>
-              <AdminTh>Public</AdminTh>
-              <AdminTh><span className="sr-only">Open</span></AdminTh>
-            </AdminTHead>
-            <AdminTBody>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm text-text">
+              <thead>
+                <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
+                  <th className="px-4 py-3"></th>
+                  <th className="px-4 py-3">Name</th>
+                  <th className="px-4 py-3">State</th>
+                  <th className="px-4 py-3">Heartbeat</th>
+                  <th className="px-4 py-3">Location</th>
+                  <th className="px-4 py-3">Region</th>
+                  <th className="px-4 py-3">Memory</th>
+                  <th className="px-4 py-3">Disk</th>
+                  <th className="px-4 py-3">Servers</th>
+                  <th className="px-4 py-3">SSL</th>
+                  <th className="px-4 py-3">Public</th>
+                  <th className="px-4 py-3"></th>
+                </tr>
+              </thead>
+              <tbody>
                 {filtered.map((node) => (
                   <NodeRow
                     key={node.id}
@@ -210,11 +144,12 @@ export function AdminNodes() {
                     regions={regions}
                     onClick={() => router.push(`/admin/nodes/${encodeURIComponent(node.id)}`)}
                     onQuick={() => setSelectedNodeId(node.id)}
-                    serverCount={serversSource.status === "ready" ? serverCountByNode.get(node.id) ?? 0 : null}
+                    serverCount={servers.filter((server) => server.nodeId === node.id || server.node === node.id || server.node === node.name).length}
                   />
                 ))}
-            </AdminTBody>
-          </AdminTable>
+              </tbody>
+            </table>
+          </div>
         )}
       </Card>
 
@@ -229,36 +164,10 @@ export function AdminNodes() {
         open={showCreate}
         onClose={() => setShowCreate(false)}
         locations={locations}
-        regions={regions}
         locationsError={locationsQuery.isError ? locationsQuery.error : null}
         onRetryLocations={() => void locationsQuery.refetch()}
       />
-    </AdminPageLayout>
-  );
-}
-
-/** Header cell that sorts. The direction is spoken, not just drawn. */
-function SortableTh({ children, active, dir, onClick }: {
-  children: React.ReactNode;
-  active: boolean;
-  dir: "asc" | "desc";
-  onClick: () => void;
-}) {
-  return (
-    <AdminTh>
-      <button
-        className="inline-flex items-center gap-1 text-left font-semibold uppercase tracking-wider focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]"
-        onClick={onClick}
-        type="button"
-      >
-        {children}
-        <ArrowDownUp
-          aria-label={active ? (dir === "asc" ? "sorted ascending" : "sorted descending") : "not sorted"}
-          className={active ? "text-brand" : "opacity-30"}
-          size={11}
-        />
-      </button>
-    </AdminTh>
+    </div>
   );
 }
 
@@ -268,105 +177,54 @@ function NodeRow({ node, locations, regions, onClick, onQuick, serverCount }: {
   regions: ApiRegion[];
   onClick: () => void;
   onQuick?: () => void;
-  /** `null` when the server inventory has not answered — unknown, not zero. */
-  serverCount: number | null;
+  serverCount: number;
 }) {
-  // One verdict from the canonical reader, so the dot, the pill and every other
-  // surface in the product say the same word about the same node.
-  const verdict = nodeStatus(node);
   // `actualState` is the backend's canonical operational state. Heartbeat is
   // shown separately because it is persisted monitoring evidence, not a probe.
   const actualState = node.actualState ?? "unknown";
   const heartbeatState = node.heartbeatState ?? "unknown";
-  const drifted = hasDrift(node);
+  const isOnline = actualState === "online";
+  const isDegraded = actualState === "degraded";
   const location = locations.find((candidate) => candidate.id === node.locationId);
   const region = regions.find((candidate) => candidate.id === node.regionId);
-  // An unset scheme is unknown, not https: defaulting it drew a green lock on a
-  // node whose transport nobody had actually chosen.
-  const scheme = node.scheme?.trim().toLowerCase() || "";
-  const isPublic = node.public ?? node.isPublic;
+  const ssl = (node.scheme ?? "https") === "https";
   return (
-    <AdminTr>
-      <AdminTd>
-        <span className="flex items-center gap-1.5">
-          <span
-            aria-hidden="true"
-            className={cn(
-              "inline-block h-2.5 w-2.5 shrink-0 rounded-full",
-              toneStyles[verdict.tone].dot,
-              verdict.tone === "unknown" && "rounded-full border border-dashed border-unknown-line bg-transparent",
-            )}
-          />
-          <span className="sr-only">{verdict.label}</span>
-          {drifted ? (
-            <span title={`Desired ${node.desiredState ?? "unknown"}, observed ${node.actualState ?? "unknown"} — the node has not reconciled`}>
-              <AlertTriangle aria-hidden="true" className={toneStyles.warn.fg} size={12} />
-              <span className="sr-only">Desired and observed state disagree</span>
-            </span>
-          ) : null}
-        </span>
-      </AdminTd>
-      <AdminTd>
+    <tr className="border-b border-line transition hover:bg-overlay-subtle">
+      <td className="px-4 py-3">
+        <span
+          className={cn(
+            "inline-block h-2.5 w-2.5 rounded-full",
+            isOnline ? "bg-ok" : isDegraded ? "bg-warn" : actualState === "offline" ? "bg-danger" : "bg-text-muted"
+          )}
+          title={`Actual state: ${actualState}; heartbeat: ${heartbeatState}`}
+        />
+      </td>
+      <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          {node.maintenanceMode ? <Wrench aria-hidden="true" size={12} className={toneStyles.info.fg} /> : null}
-          <button type="button" className="text-left font-semibold hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" onClick={onClick}>{node.name}</button>
+          {node.maintenanceMode && <Wrench size={12} className="text-warn" />}
+          <button type="button" className="font-semibold text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--brand)]" onClick={onClick}>{node.name}</button>
         </div>
-        {node.fqdn ? <div className="truncate font-mono text-[11px] text-text-muted">{node.fqdn}</div> : null}
-      </AdminTd>
-      {/* Observed state stays the raw word; the verdict pill above is the
-          interpretation. Showing both is the point — they are different
-          measurements and merging them into "Healthy" would hide drift. */}
-      <AdminTd className="font-mono text-xs capitalize">
-        <Pill tone={verdict.tone}>{actualState}</Pill>
-      </AdminTd>
-      <AdminTd className="font-mono text-xs capitalize text-text-subtle">
-        {node.heartbeatState ? heartbeatState : <NotReported reason="No heartbeat recorded for this node" />}
-      </AdminTd>
-      <AdminTd className="text-text-subtle">
-        {location ? <><div>{location.short}</div><div className="text-xs text-text-subtle">{location.long}</div></> : <NotReported reason="No location assigned" />}
-      </AdminTd>
-      <AdminTd className="text-text-subtle">
-        {region ? (
-          <><div>{region.name}</div><div className="font-mono text-xs text-text-subtle">{region.slug}</div></>
-        ) : node.region ? (
-          // A declared region name with no foreign key is what the Regions page
-          // cannot count, so it is labelled as the legacy string it is.
-          <span title="Free-text region recorded at creation; this node is not linked to a Regions entry, so Regions does not count it.">
-            <div>{node.region}</div>
-            <div className="text-xs text-text-muted">not linked</div>
-          </span>
-        ) : <NotReported reason="No region assigned" />}
-      </AdminTd>
-      <AdminTd className="font-mono text-xs">{mbLabel(node.memoryMb) ?? <NotReported reason="Memory limit not set on this node" />}</AdminTd>
-      <AdminTd className="font-mono text-xs">{mbLabel(node.diskMb) ?? <NotReported reason="Disk limit not set on this node" />}</AdminTd>
-      <AdminTd className="text-text-subtle">
-        {serverCount === null ? <NotReported reason="Server inventory not loaded" /> : serverCount}
-      </AdminTd>
-      <AdminTd>
-        {scheme === "https" ? (
-          <span className="flex items-center gap-1.5"><Lock aria-hidden="true" size={14} className={toneStyles.ok.fg} /><span className="sr-only">TLS enabled</span></span>
-        ) : scheme === "http" ? (
-          <span className="flex items-center gap-1.5"><Unlock aria-hidden="true" size={14} className={toneStyles.warn.fg} /><span className="sr-only">No TLS — plain HTTP</span></span>
-        ) : (
-          <NotReported reason="No scheme recorded on this node" />
-        )}
-      </AdminTd>
-      <AdminTd>
-        {isPublic === undefined ? (
-          <NotReported reason="Visibility not reported" />
-        ) : isPublic ? (
-          <span className="flex items-center gap-1.5"><Eye aria-hidden="true" size={14} className="text-info" /><span className="sr-only">Public</span></span>
-        ) : (
-          <span className="flex items-center gap-1.5"><EyeOff aria-hidden="true" size={14} className={toneStyles.neutral.fg} /><span className="sr-only">Private</span></span>
-        )}
-      </AdminTd>
-      <AdminTd className="text-right">
+      </td>
+      <td className="px-4 py-3 font-mono text-xs capitalize">{actualState}</td>
+      <td className="px-4 py-3 font-mono text-xs capitalize text-text-subtle">{heartbeatState}</td>
+      <td className="px-4 py-3 text-text-subtle">
+        {location ? <><div>{location.short}</div><div className="text-xs text-text-muted">{location.long}</div></> : "—"}
+      </td>
+      <td className="px-4 py-3 text-text-subtle">
+        {region ? <><div>{region.name}</div><div className="text-xs text-text-muted">{region.slug}</div></> : node.region || "—"}
+      </td>
+      <td className="px-4 py-3 font-mono text-xs">{node.memoryMb} MiB</td>
+      <td className="px-4 py-3 font-mono text-xs">{node.diskMb} MiB</td>
+      <td className="px-4 py-3 text-text-subtle">{serverCount}</td>
+      <td className="px-4 py-3">{ssl ? <Lock size={14} className="text-ok" /> : <Unlock size={14} className="text-danger" />}</td>
+      <td className="px-4 py-3">{node.public ?? node.isPublic ? <Eye size={14} className="text-info" /> : <EyeOff size={14} className="text-text-muted" />}</td>
+      <td className="px-4 py-3 text-right">
         <div className="flex items-center justify-end gap-1">
-          {onQuick ? <button type="button" onClick={(e) => { e.stopPropagation(); onQuick(); }} className="rounded px-2 py-1 text-xs text-text-subtle hover:bg-overlay hover:text-text focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]">Quick</button> : null}
-          <ChevronRight aria-hidden="true" size={14} className="text-text-subtle" />
+          {onQuick ? <button type="button" onClick={(e) => { e.stopPropagation(); onQuick(); }} className="rounded px-2 py-1 text-xs text-text-muted hover:bg-overlay-strong hover:text-text">Quick</button> : null}
+          <ChevronRight size={14} className="text-text-muted" />
         </div>
-      </AdminTd>
-    </AdminTr>
+      </td>
+    </tr>
   );
 }
 
@@ -395,63 +253,46 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
   };
 
   if (isLoading) {
-    return <Modal title="Node" onClose={onClose}><div className="p-4"><AdminLoadingState label="Loading node…" /></div></Modal>;
+    return <Modal title="Node" onClose={onClose}><div className="p-8 text-center text-sm text-text-muted">Loading…</div></Modal>;
   }
 
   if (nodeQuery.isError || !node) {
     return (
       <Modal title="Node" onClose={onClose}>
-        <div className="p-4">
-          <AdminErrorState message={nodeQuery.isError ? `Could not load this node: ${nodeQuery.error.message}` : "This node is no longer available."} retry={() => void nodeQuery.refetch()} />
+        <div className="space-y-3 p-8 text-center text-sm text-danger">
+          <AlertCircle className="mx-auto" size={20} />
+          <p>{nodeQuery.isError ? `Could not load this node: ${nodeQuery.error.message}` : "This node is no longer available."}</p>
+          <div><Btn size="sm" onClick={() => void nodeQuery.refetch()}>Retry</Btn></div>
         </div>
       </Modal>
     );
   }
 
-  // The canonical verdict, shared with the list row: maintenance/draining win
-  // the label, and a node we have not observed stays Unknown rather than
-  // reading "Active" the way this modal's own three-way branch used to.
-  const verdict = nodeStatus(node);
-  const drifted = hasDrift(node);
+  const nodeState: { tone: "neutral" | "yellow"; label: string } =
+    node.maintenanceMode ? { tone: "yellow", label: "Maintenance" }
+    : node.desiredState === "draining" || node.draining ? { tone: "yellow", label: "Draining" }
+    : { tone: "neutral", label: "Active" };
 
   return (
-    <Modal title={node.name} description="Heartbeat status, capacity and settings for this host." onClose={onClose} wide className="max-w-6xl">
+    <Modal title={node.name} description="Inspect capacity and manage this host." onClose={onClose} wide className="max-w-6xl">
       <div className="space-y-4">
-        {/* Replaces the `DashHeader` hero this modal used to render: that
-            component is a sub-heading primitive that also emitted an
-            unmeasured pulsing "live" badge and an <h2> competing with the
-            dialog title. Same information, no fabricated claim. */}
-        <div className="rounded-xl border border-line bg-overlay-subtle p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <Server aria-hidden="true" size={16} className="shrink-0 text-text-subtle" />
-                <span className="truncate text-sm font-bold text-text">{node.name}</span>
-                <Pill tone={verdict.tone}>{verdict.label}</Pill>
-                {drifted ? (
-                  <span title={`Desired ${node.desiredState ?? "unknown"}, observed ${node.actualState ?? "unknown"}`}>
-                    <Pill tone="warn">Not reconciled</Pill>
-                  </span>
-                ) : null}
-              </div>
-              {node.description ? <p className="mt-1 max-w-prose text-xs leading-5 text-text-muted">{node.description}</p> : null}
-              <div className="mt-2 flex flex-wrap gap-1.5">
-                {[node.schedulerType ?? "docker", node.runtimeProvider].filter((t): t is string => Boolean(t)).map((tag) => (
-                  <span className="rounded-md border border-line bg-overlay px-2 py-0.5 font-mono text-[10px] text-text-muted" key={tag}>{tag}</span>
-                ))}
-              </div>
-            </div>
-            <Btn tone="danger" size="sm" type="button" disabled={deleteMut.isPending} onClick={requestDelete}>
-              <Trash2 size={14} /> {deleteMut.isPending ? "Deleting…" : "Delete Node"}
-            </Btn>
-          </div>
-          <dl className="mt-3 grid grid-cols-2 gap-x-6 gap-y-1.5 text-[11px] sm:grid-cols-4">
-            <div className="flex items-center gap-1.5"><dt className="text-text-muted">FQDN</dt><dd className="truncate font-mono font-semibold text-text">{node.fqdn || "not reported"}</dd></div>
-            <div className="flex items-center gap-1.5"><dt className="text-text-muted">Daemon ports</dt><dd className="font-mono font-semibold text-text">{node.daemonListen ?? 9090} / {node.daemonSftp ?? 2022}</dd></div>
-            <div className="flex items-center gap-1.5"><dt className="text-text-muted">Visibility</dt><dd className="font-semibold text-text">{node.public ?? node.isPublic ? "Public" : "Private"}</dd></div>
-            <div className="flex items-center gap-1.5"><dt className="text-text-muted">Declared memory</dt><dd className="font-mono font-semibold text-text">{mbLabel(node.memoryMb) ?? "not set"}</dd></div>
-          </dl>
-        </div>
+        <DashHeader
+          icon={Server}
+          eyebrow="Compute node"
+          title={node.name}
+          pill={nodeState}
+          description={node.description ?? undefined}
+          tags={[node.schedulerType ?? "docker", node.runtimeProvider].filter((t): t is string => Boolean(t))}
+          meta={[
+            { label: "FQDN", value: <span key="fqdn" className="font-mono">{node.fqdn ?? "—"}</span> },
+            { label: "Daemon", value: <span key="daemon" className="font-mono">{node.daemonListen ?? "9090"} / {node.daemonSftp ?? "2022"}</span> },
+            { label: "Visibility", value: node.public ?? node.isPublic ? "Public" : "Private" },
+            { label: "Memory cap", value: <span key="mem" className="font-mono">{node.memoryMb != null ? `${node.memoryMb.toLocaleString()} MiB` : "—"}</span> },
+          ]}
+          actions={(
+            <Btn tone="danger" size="sm" type="button" disabled={deleteMut.isPending} onClick={requestDelete}><Trash2 size={14} /> {deleteMut.isPending ? "Deleting…" : "Delete Node"}</Btn>
+          )}
+        />
         <AdminTabs tabs={ADMIN_TABS} active={tab} onChange={(id) => setTab(id as Tab)} label="Node sections" />
         {tab === "about" && <NodeAboutTab nodeId={nodeId} setTab={setTab} />}
         {tab === "settings" && <NodeSettingsTab node={node} />}
@@ -466,75 +307,46 @@ export function NodeDetailView({ nodeId, onClose }: { nodeId: string; onClose: (
 }
 
 function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => void }) {
-  const lifecycleQuery = useQuery({
+  const { data: lifecycle, isError: isLifecycleError, isLoading: isLifecycleLoading } = useQuery({
     queryKey: ["node-lifecycle", nodeId],
     queryFn: () => fetchNodeLifecycle(nodeId),
     refetchInterval: 10_000,
   });
-  const sysQuery = useQuery({
+  const { data: sys, isError } = useQuery({
     queryKey: ["node-sysinfo", nodeId],
     queryFn: () => fetchNodeSystemInformation(nodeId),
     refetchInterval: 10_000,
   });
-  const nodeQuery = useQuery({ queryKey: ["node", nodeId], queryFn: () => fetchNode(nodeId) });
+  const { data: node } = useQuery({ queryKey: ["node", nodeId], queryFn: () => fetchNode(nodeId) });
   const serversQuery = useQuery<ApiServer[]>({
     queryKey: ["node-servers", nodeId],
     queryFn: () => fetchNodeServers(nodeId),
   });
-  const lifecycle = lifecycleQuery.data;
-  const sys = sysQuery.data;
-  const node = nodeQuery.data;
-  const isLifecycleError = lifecycleQuery.isError;
-  const isLifecycleLoading = lifecycleQuery.isLoading;
   const filteredServers = useMemo(() => Array.isArray(serversQuery.data) ? serversQuery.data : [], [serversQuery.data]);
 
-  // Freshness, per source. A tile's pulsing "live" marker is now derived from
-  // this rather than from `Boolean(cap)` — an object that merely arrived is not
-  // a reading that is current, and a stale one must not claim to be.
-  const lifecycleSource = sourceState(lifecycleQuery, 10_000);
-  const sysSource = sourceState(sysQuery, 10_000);
-  const serversSource = sourceState(serversQuery, REFRESH.inventory);
-  const lifecycleLive = lifecycleSource.status === "ready" && !lifecycleSource.stale;
-
   const cap = lifecycle?.capacity;
-  // Both halves must be reported before a total exists; see `capacityTotal`.
-  const memTotal = capacityTotal(cap?.allocated_memory, cap?.available_memory);
-  const memPct = cap && memTotal && typeof cap.allocated_memory === "number" && memTotal > 0
-    ? (cap.allocated_memory / memTotal) * 100
-    : null;
-  const diskTotal = capacityTotal(cap?.allocated_disk, cap?.available_disk);
-  const diskPct = cap && diskTotal && typeof cap.allocated_disk === "number" && diskTotal > 0
-    ? (cap.allocated_disk / diskTotal) * 100
-    : null;
+  const memTotal = (cap?.allocated_memory ?? 0) + (cap?.available_memory ?? 0);
+  const memPct = cap && memTotal > 0 ? (cap.allocated_memory / memTotal) * 100 : null;
+  const diskTotal = (cap?.allocated_disk ?? 0) + (cap?.available_disk ?? 0);
+  const diskPct = cap && diskTotal > 0 ? (cap.allocated_disk / diskTotal) * 100 : null;
   const score = lifecycle?.healthScore.total;
 
-  const capAge = relativeTime(lifecycleSource.updatedAt);
-  const serversLive = serversSource.status === "ready" && !serversSource.stale;
   const kpis: KpiDatum[] = [
-    { key: "servers", title: "Servers", icon: Layers, color: chart.sky, iconClass: "text-info", valueClass: "text-info",
-      value: serversSource.status === "ready" ? String(filteredServers.length) : null,
-      sub: serversSource.status === "loading" ? "Reading inventory…"
-        : serversSource.status === "error" ? "Inventory unavailable"
-        : `on this node · read ${capAge ?? "just now"}`,
-      live: serversLive },
-    { key: "memory", title: "Memory allocated", icon: MemoryStick, color: chart.violet, iconClass: "text-text-muted", valueClass: "text-text",
+    { key: "servers", title: "Servers", icon: Layers, color: chart.sky, iconClass: "text-sky-400", valueClass: "text-sky-300",
+      value: serversQuery.isLoading ? null : String(filteredServers.length),
+      sub: serversQuery.isLoading ? "…" : "on this node" },
+    { key: "memory", title: "Memory allocated", icon: MemoryStick, color: chart.violet, iconClass: "text-purple-400", valueClass: "text-purple-300",
       value: memPct != null ? `${memPct.toFixed(1)}%` : null,
-      sub: memPct == null
-        ? (isLifecycleLoading ? "Reading capacity…" : "Capacity not reported")
-        : `${mbLabel(cap?.allocated_memory) ?? "—"} of ${mbLabel(memTotal) ?? "an unreported total"} · ${lifecycleLive ? `read ${capAge ?? "just now"}` : "read at an unknown time"}`,
-      live: lifecycleLive, bar: memPct },
-    { key: "disk", title: "Disk allocated", icon: HardDrive, color: chart.lightOrange, iconClass: "text-text-muted", valueClass: "text-text",
+      sub: cap ? `${cap.allocated_memory} / ${memTotal} MiB` : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(cap), bar: memPct },
+    { key: "disk", title: "Disk allocated", icon: HardDrive, color: chart.lightOrange, iconClass: "text-orange-400", valueClass: "text-orange-300",
       value: diskPct != null ? `${diskPct.toFixed(1)}%` : null,
-      sub: diskPct == null
-        ? (isLifecycleLoading ? "Reading capacity…" : "Capacity not reported")
-        : `${mbLabel(cap?.allocated_disk) ?? "—"} of ${mbLabel(diskTotal) ?? "an unreported total"} · ${lifecycleLive ? `read ${capAge ?? "just now"}` : "read at an unknown time"}`,
-      live: lifecycleLive, bar: diskPct },
-    { key: "readiness", title: "Readiness", icon: Activity, color: chart.lightEmerald, iconClass: "text-text-muted", valueClass: "text-text",
+      sub: cap ? `${cap.allocated_disk} / ${diskTotal} MiB` : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(cap), bar: diskPct },
+    { key: "readiness", title: "Readiness", icon: Activity, color: chart.lightEmerald, iconClass: "text-ok", valueClass: "text-ok",
       value: typeof score === "number" ? `${score}/100` : null,
-      sub: lifecycle ? (lifecycle.placementEligible ? "Eligible for placement" : lifecycle.placementBlockedReason ?? "Not eligible")
-        : isLifecycleError ? "Lifecycle unavailable"
-        : "Reading lifecycle…",
-      live: lifecycleLive, bar: typeof score === "number" ? score : null },
+      sub: lifecycle ? (lifecycle.placementEligible ? "Eligible" : lifecycle.placementBlockedReason ?? "Not eligible") : isLifecycleLoading ? "…" : "Unavailable",
+      live: Boolean(lifecycle), bar: typeof score === "number" ? score : null },
   ];
 
   const quickActions: QuickAction[] = [
@@ -547,84 +359,73 @@ function NodeAboutTab({ nodeId, setTab }: { nodeId: string; setTab: (t: Tab) => 
   return (
     <div className="space-y-4">
       {serversQuery.isError ? (
-        <AdminErrorState message={`Could not load servers on this node: ${serversQuery.error.message}`} retry={() => void serversQuery.refetch()} />
+        <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+          <span>Could not load servers on this node: {serversQuery.error.message}</span>
+          <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
+        </div>
       ) : null}
       <KpiGrid kpis={kpis} />
 
       <div className="grid gap-4 xl:grid-cols-5">
         <InfoCard wide icon={Activity} title="Information" rows={[
-          /* A failed read names itself as a failed read. It used to answer
-             "Offline", which is a statement about the machine that nothing on
-             this page has actually measured. */
-          ["Daemon version", sys?.version ? <span className="font-mono text-text" key="v">{sys.version}</span> : <NotReported key="v" reason={sysSource.status === "error" ? `Host report unavailable: ${sysSource.message ?? "the request failed"}` : sysSource.status === "restricted" ? "Not visible to your account" : "Not read yet"} />],
-          ["System", sys?.os || sys?.architecture ? <span className="font-mono text-text" key="sys">{`${sys.os ?? "unknown"} (${sys.architecture ?? "unknown"})`}</span> : <NotReported key="sys" reason="Host has not reported its OS or architecture" />],
-          ["CPU threads", <span className="font-mono text-text" key="cpu">{sys?.cpuThreads ?? <NotReported reason="Host has not reported its CPU" />}</span>],
-          ["Docker", <span className={cn("font-mono", sys ? (sys.dockerAvailable ? toneStyles.ok.fg : toneStyles.danger.fg) : toneStyles.unknown.fg)} key="docker">{sys ? (sys.dockerAvailable ? "Available" : "Unavailable") : <NotReported reason={sysSource.status === "error" ? "Runtime report unavailable" : "Not read yet"} />}</span>],
-          ["FQDN", <span className="font-mono text-text" key="fqdn">{node?.fqdn ?? <NotReported reason="No FQDN recorded" />}</span>],
-          ["Runtime / scheduler", <span className="font-mono text-text" key="rt">{node?.runtimeProvider ?? node?.schedulerType ?? <NotReported reason="Neither the host nor the panel has reported a runtime" />}</span>],
-          ["Beacon version", <span className="font-mono text-text" key="bv">{sys?.version ?? node?.version ?? <NotReported reason="Not reported" />}</span>],
-          ["Last seen", <span className="font-mono text-text" key="seen">{node?.lastSeenAt ? formatDate(node.lastSeenAt) : <NotReported reason="No heartbeat observed yet" />}</span>],
-          ["Labels", <span className="font-mono text-xs text-text" key="labels">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : <span className="text-text-muted">none attached</span>}</span>],
-          /* `desiredState ?? draining ? … : …` parsed as `(desiredState ??
-             draining) ? …` — any non-empty state, including "active", was
-             truthy, so every healthy node in this panel read "draining". */
-          ["Desired state", <span className="font-mono text-text" key="ds">{node ? nodeStatus(node).label : <NotReported reason="Node record not loaded" />}</span>],
-          ["Observed state", <span className="font-mono text-text" key="os2">{node?.actualState ? <span className="capitalize">{node.actualState}</span> : <NotReported reason="Not observed" />}</span>],
-          ["Daemon ports", <span className="font-mono text-text" key="ports">{node?.daemonListen ?? 9090} / {node?.daemonSftp ?? 2022}</span>],
-          ["Behind proxy", <span className="font-mono text-text" key="proxy">{node ? (node.behindProxy ? "Yes" : "No") : <NotReported reason="Node record not loaded" />}</span>],
-          ["Public", <span className="font-mono text-text" key="pub">{node?.public ?? node?.isPublic ? "Yes" : node ? "No" : <NotReported reason="Node record not loaded" />}</span>],
-          ["Public hostname", <span className="font-mono text-text" key="ph">{node?.publicHostname || <NotReported reason="No public hostname set" />}</span>],
-          ["Display name", <span className="font-mono text-text" key="dn">{node?.displayName || <NotReported reason="No display name set" />}</span>],
-          ["Scheduler", <span className="font-mono capitalize text-text" key="sched">{node?.schedulerType ? node.schedulerType : <NotReported reason="Not reported" />}</span>],
-          ["Upload limit", <span className="font-mono text-text" key="ul">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : <span className="text-text-muted">panel default</span>}</span>],
-          ["Memory overallocation", <span className="font-mono text-text" key="mo">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : <NotReported reason="Not recorded on this node" />}</span>],
-          ["Disk overallocation", <span className="font-mono text-text" key="do">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : <NotReported reason="Not recorded on this node" />}</span>],
-          ["CPU overallocation", <span className="font-mono text-text" key="co">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : <NotReported reason="Not recorded on this node" />}</span>],
-          ["Tags", <span className="font-mono text-xs text-text" key="tags">{node?.tags?.length ? node.tags.join(", ") : <span className="text-text-muted">none</span>}</span>],
+          ["Daemon Version", <span key="v" className="font-mono text-text">{sys?.version ?? (isError ? "Offline" : "Probing…")}</span>],
+          ["System", <span key="sys" className="font-mono text-text">{sys ? `${sys.os ?? "?"} (${sys.architecture ?? "?"})` : "—"}</span>],
+          ["CPU Threads", <span key="cpu" className="font-mono text-text">{sys?.cpuThreads ?? "—"}</span>],
+          ["Docker", <span key="docker" className={cn("font-mono", sys?.dockerAvailable ? "text-ok" : "text-danger")}>{sys?.dockerStatus ?? "unknown"}</span>],
+          ["FQDN", <span key="fqdn" className="font-mono text-text">{node?.fqdn ?? "—"}</span>],
+          ["Runtime / scheduler", <span key="rt" className="font-mono text-text">{node?.runtimeProvider ?? node?.schedulerType ?? "Docker"}</span>],
+          ["Beacon version", <span key="bv" className="font-mono text-text">{sys?.version ?? node?.version ?? "Not reported"}</span>],
+          ["Last seen", <span key="seen" className="font-mono text-text">{node?.lastSeenAt ? new Date(node.lastSeenAt).toLocaleString() : "Not reported"}</span>],
+          ["Labels", <span key="labels" className="font-mono text-xs text-text">{node?.labels?.length ? node.labels.map((label) => `${label.key}=${label.value}`).join(", ") : "None"}</span>],
+          ["Desired state", <span key="ds" className="font-mono capitalize text-text">{node?.desiredState ?? node?.draining ? "draining" : node?.maintenanceMode ? "maintenance" : "active"}</span>],
+          ["Daemon ports", <span key="ports" className="font-mono text-text">{node?.daemonListen ?? "9090"} / {node?.daemonSftp ?? "2022"}</span>],
+          ["Behind proxy", <span key="proxy" className="font-mono text-text">{node?.behindProxy ? "Yes" : "No"}</span>],
+          ["Public", <span key="pub" className="font-mono text-text">{node?.public ?? node?.isPublic ? "Yes" : "No"}</span>],
+          ["Public hostname", <span key="ph" className="font-mono text-text">{node?.publicHostname || "—"}</span>],
+          ["Display name", <span key="dn" className="font-mono text-text">{node?.displayName || "—"}</span>],
+          ["Scheduler", <span key="sched" className="font-mono capitalize text-text">{node?.schedulerType ?? "docker"}</span>],
+          ["Upload limit", <span key="ul" className="font-mono text-text">{node?.uploadSizeMb ? `${node.uploadSizeMb} MiB` : "Default"}</span>],
+          ["Memory overallocation", <span key="mo" className="font-mono text-text">{node?.memoryOverallocate != null ? `${node.memoryOverallocate}%` : "0%"}</span>],
+          ["Disk overallocation", <span key="do" className="font-mono text-text">{node?.diskOverallocate != null ? `${node.diskOverallocate}%` : "0%"}</span>],
+          ["CPU overallocation", <span key="co" className="font-mono text-text">{node?.cpuOverallocate != null ? `${node.cpuOverallocate}%` : "0%"}</span>],
+          ["Tags", <span key="tags" className="font-mono text-xs text-text">{node?.tags?.length ? node.tags.join(", ") : "None"}</span>],
         ]} />
 
-        <div className="rounded-xl border border-line bg-overlay-subtle p-5 xl:col-span-2">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <h3 className="flex items-center gap-2 text-sm font-bold text-text"><Activity aria-hidden="true" size={15} className="text-text-subtle" /> Lifecycle</h3>
-            <FreshnessBadge state={lifecycleSource} />
-          </div>
-          <div className={cn("mt-3 rounded-lg border p-3", !lifecycle ? toneStyles.unknown.border : lifecycle.placementEligible ? toneStyles.ok.border : toneStyles.warn.border, !lifecycle ? toneStyles.unknown.bg : lifecycle.placementEligible ? toneStyles.ok.bg : toneStyles.warn.bg)}>
-            <p className="flex items-center gap-1.5 text-sm font-bold text-text">
-              <span aria-hidden="true" className={cn("h-2 w-2 rounded-full", !lifecycle ? toneStyles.unknown.dot : lifecycle.placementEligible ? toneStyles.ok.dot : toneStyles.warn.dot)} />
-              {lifecycle ? (lifecycle.placementEligible ? "Eligible for placement" : "Not eligible") : isLifecycleError ? "Lifecycle unavailable" : "Reading lifecycle…"}
+        <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
+          <h3 className="flex items-center gap-2 text-sm font-bold text-text"><Activity size={15} className="text-text-subtle" /> Lifecycle</h3>
+          <div className={cn("mt-3 rounded-lg border p-3", lifecycle?.placementEligible ? "border-ok-line bg-ok-subtle" : "border-line bg-well")}>
+            <p className={cn("flex items-center gap-1.5 text-sm font-bold", lifecycle?.placementEligible ? "text-ok" : "text-text")}>
+              <span className={cn("h-2 w-2 rounded-full", lifecycle ? (lifecycle.placementEligible ? "bg-ok" : "bg-warn") : "bg-text-muted")} />
+              {lifecycle ? (lifecycle.placementEligible ? "Eligible for placement" : "Not eligible") : isLifecycleError ? "Lifecycle unavailable" : "Loading…"}
             </p>
             <p className="mt-0.5 font-mono text-[11px] text-text-subtle">
               {lifecycle
                 ? (!lifecycle.placementEligible && lifecycle.placementBlockedReason
                     ? lifecycle.placementBlockedReason
-                    : typeof lifecycle.healthScore.total === "number" ? `Readiness ${lifecycle.healthScore.total}/100` : "Readiness not scored")
-                : isLifecycleError ? (lifecycleSource.message ?? "The host did not answer") : ""}
+                    : `Readiness ${lifecycle.healthScore.total}/100`)
+                : ""}
             </p>
           </div>
           <dl className="mt-2 divide-y divide-line text-xs">
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-text-subtle">Actual state / heartbeat</dt>
-              <dd className="font-mono capitalize text-text">{lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : <NotReported reason="Lifecycle not read" />}</dd>
+              <dt className="text-text-muted">Actual state / heartbeat</dt>
+              <dd className="font-mono capitalize text-text">{lifecycle ? `${lifecycle.node.actualState ?? "unknown"} / ${lifecycle.node.heartbeatState ?? "unknown"}` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-text-subtle">Placement</dt>
-              <dd className={cn("font-mono", lifecycle ? (lifecycle.placementEligible ? toneStyles.ok.fg : toneStyles.warn.fg) : toneStyles.unknown.fg)}>
-                {lifecycle ? (lifecycle.placementEligible ? "Eligible" : lifecycle.placementBlockedReason ?? "Not eligible") : "Not reported"}
-              </dd>
+              <dt className="text-text-muted">Placement</dt>
+              <dd className={cn("font-mono", lifecycle?.placementEligible ? "text-ok" : "text-warn")}>{lifecycle?.placementEligible ? "Eligible" : lifecycle?.placementBlockedReason ?? "Not eligible"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-text-subtle">Memory allocated / free</dt>
-              <dd className="font-mono text-text">{lifecycle ? `${mbLabel(lifecycle.capacity?.allocated_memory) ?? "not reported"} / ${mbLabel(lifecycle.capacity?.available_memory) ?? "not reported"}` : <NotReported reason="Lifecycle not read" />}</dd>
+              <dt className="text-text-muted">Memory</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_memory} / ${lifecycle.capacity.available_memory} MiB` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-text-subtle">Disk allocated / free</dt>
-              <dd className="font-mono text-text">{lifecycle ? `${mbLabel(lifecycle.capacity?.allocated_disk) ?? "not reported"} / ${mbLabel(lifecycle.capacity?.available_disk) ?? "not reported"}` : <NotReported reason="Lifecycle not read" />}</dd>
+              <dt className="text-text-muted">Disk</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_disk} / ${lifecycle.capacity.available_disk} MiB` : "—"}</dd>
             </div>
             <div className="flex items-center justify-between gap-3 py-2">
-              <dt className="text-text-subtle">CPU / servers</dt>
-              <dd className="font-mono text-text">
-                {lifecycle?.capacity ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} · ${lifecycle.capacity.server_count ?? "an unreported number"} servers` : <NotReported reason="Lifecycle not read" />}
-              </dd>
+              <dt className="text-text-muted">CPU / servers</dt>
+              <dd className="font-mono text-text">{lifecycle ? `${lifecycle.capacity.allocated_cpu} / ${lifecycle.capacity.available_cpu} · ${lifecycle.capacity.server_count} servers` : "—"}</dd>
             </div>
           </dl>
         </div>
@@ -646,14 +447,6 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
   const qc = useQueryClient();
   const locationsQuery = useQuery({ queryKey: ["locations"], queryFn: fetchLocations });
   const locations = useMemo(() => Array.isArray(locationsQuery.data) ? locationsQuery.data : [], [locationsQuery.data]);
-  const regionsQuery = useQuery({ queryKey: ["regions"], queryFn: fetchRegions });
-  const regions = useMemo(() => Array.isArray(regionsQuery.data) ? regionsQuery.data : [], [regionsQuery.data]);
-  const region = regions.find((candidate) => candidate.id === node.regionId);
-  /** Marks the backend this host actually reported, inside the option itself. */
-  const reported = (backend: string) => {
-    const actual = (node.runtimeProvider ?? node.schedulerType ?? "").toLowerCase();
-    return actual === backend ? " — reported by this host" : "";
-  };
   const [name, setName] = useState(node.name);
   const [description, setDescription] = useState(node.description ?? "");
   const [locationId, setLocationId] = useState(node.locationId ?? "");
@@ -733,13 +526,13 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           <Input label="Name" value={name} onChange={setName} />
           <Textarea label="Description" value={description} onChange={setDescription} rows={3} />
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Location</span>
-            <select className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-[var(--text)]" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locationsQuery.isPending || locationsQuery.isError}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Location</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locationsQuery.isPending || locationsQuery.isError}>
               <option value="">Select…</option>
               {locations.map((location) => <option key={location.id} value={location.id}>{location.short} — {location.long}</option>)}
             </select>
             {locationsQuery.isError ? (
-              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-red-500/20 bg-red-950/10 p-3 text-xs text-red-200">
+              <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
                 <span>Could not load locations: {locationsQuery.error.message}</span>
                 <Btn size="sm" tone="ghost" type="button" onClick={() => void locationsQuery.refetch()}>Retry</Btn>
               </div>
@@ -747,8 +540,8 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           </label>
           <Input label="FQDN" value={fqdn} onChange={setFqdn} />
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">SSL</span>
-            <select className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-[var(--text)]" value={scheme} onChange={(e) => setScheme(e.target.value)}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">SSL</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={scheme} onChange={(e) => setScheme(e.target.value)}>
               <option value="https">https (SSL)</option>
               <option value="http">http (no SSL)</option>
             </select>
@@ -758,41 +551,21 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
             <span>Behind Proxy</span>
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-[var(--text-subtle)]">Lifecycle state</span>
-            <select className="h-10 w-full rounded-lg border border-[var(--line)] bg-[var(--surface)] px-3 text-[var(--text)]" value={desiredState} onChange={(e) => setDesiredState(e.target.value as "active" | "draining" | "maintenance")}>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Lifecycle state</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={desiredState} onChange={(e) => setDesiredState(e.target.value as "active" | "draining" | "maintenance")}>
               <option value="active">Active — eligible when healthy</option>
               <option value="draining">Draining — exclude from placement</option>
               <option value="maintenance">Maintenance — exclude from placement</option>
             </select>
           </label>
           <label className="block text-sm">
-            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Scheduler backend</span>
-            <select className="ui-input w-full cursor-pointer" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
-              <option value="docker">Docker{reported("docker")}</option>
-              <option value="k3s">K3s (Kubernetes){reported("k3s")}</option>
-              <option value="nomad">Nomad (HashiCorp){reported("nomad")}</option>
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-wide text-text-subtle">Scheduler Backend</span>
+            <select className="h-10 w-full rounded-lg border border-line bg-[var(--surface)] px-3 text-text" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
+              <option value="docker">Docker (default)</option>
+              <option value="k3s">K3s (Kubernetes)</option>
+              <option value="nomad">Nomad (HashiCorp)</option>
             </select>
-            {/* Capability gating as stated in the product rules: the option is
-                never hidden and never silently offered. The node's own reported
-                runtime is named beside it, so choosing Nomad on a host that has
-                never reported Nomad is a visible decision rather than a default. */}
-            <span className="mt-1.5 block text-xs leading-5 text-text-muted">
-              {node.runtimeProvider
-                ? `This host currently reports the "${node.runtimeProvider}" runtime. Anything else is unverified until the next capability probe.`
-                : "This host has not reported a runtime, so no backend choice here is verified against it."}
-            </span>
           </label>
-          <div className="rounded-lg border border-line bg-overlay-subtle p-3 text-xs leading-5 text-text-muted">
-            <p className="font-semibold uppercase tracking-wide text-text-subtle">Region</p>
-            <p className="mt-1 text-text">
-                {region ? `${region.name} (${region.slug})` : node.region ? `${node.region} — free text, not linked to a region` : "No region assigned"}
-            </p>
-            <p className="mt-1">
-              A node&apos;s region is chosen when it is created and cannot be reassigned from this
-              panel; the API has no field for it on update. Create the node again, or change it
-              where the control plane supports it.
-            </p>
-          </div>
 
         </div>
       </Card>
@@ -820,7 +593,7 @@ function NodeSettingsTab({ node }: { node: ApiNode }) {
           </Btn>
         </div>
       </div>
-      {rotatedToken ? <div className={cn("md:col-span-2 rounded-lg border p-4", toneStyles.warn.border, toneStyles.warn.bg)}><p className={cn("text-sm font-semibold", toneStyles.warn.fg)}>New complete credential — shown once</p><pre className="mt-2 overflow-auto rounded bg-overlay-strong p-3 font-mono text-xs text-text">{credentialMasked ? "••••••••••••••••••••••••" : rotatedToken}</pre><div className="mt-3 flex gap-2"><Btn size="sm" tone="ghost" type="button" onClick={() => setCredentialMasked((masked) => !masked)}>{credentialMasked ? <><Eye size={14} /> Reveal credential</> : <><EyeOff size={14} /> Hide credential</>}</Btn><Btn size="sm" tone="ghost" type="button" onClick={async () => { if (await copySecret(rotatedToken)) { setCredentialCopied(true); setTimeout(() => setCredentialCopied(false), 2000); } }}>{credentialCopied ? "Credential copied" : "Copy credential"}</Btn><Btn size="sm" tone="ghost" type="button" onClick={() => setRotatedToken(null)}>I stored it</Btn></div><p className="mt-2 text-xs text-text-muted">Copied credentials are wiped from the clipboard 15s after copying and when this window loses focus.</p></div> : null}
+      {rotatedToken ? <div className="md:col-span-2 rounded-lg border border-warn-line bg-warn-subtle p-4"><p className="text-sm font-semibold text-warn">New complete credential — shown once</p><pre className="mt-2 overflow-auto rounded bg-well p-3 text-xs text-ok">{credentialMasked ? "••••••••••••••••••••••••" : rotatedToken}</pre><div className="mt-3 flex gap-2"><Btn size="sm" tone="ghost" type="button" onClick={() => setCredentialMasked((masked) => !masked)}>{credentialMasked ? <><Eye size={14} /> Reveal credential</> : <><EyeOff size={14} /> Hide credential</>}</Btn><Btn size="sm" tone="ghost" type="button" onClick={async () => { if (await copySecret(rotatedToken)) { setCredentialCopied(true); setTimeout(() => setCredentialCopied(false), 2000); } }}>{credentialCopied ? "Credential copied" : "Copy credential"}</Btn><Btn size="sm" tone="ghost" type="button" onClick={() => setRotatedToken(null)}>I stored it</Btn></div><p className="mt-2 text-xs text-warn">Copied credentials are wiped from the clipboard 15s after copying and when this window loses focus.</p></div> : null}
       {renderConfirm()}
     </form>
   );
@@ -832,10 +605,10 @@ function NodeConfigurationTab({ node }: { node: ApiNode }) {
     <div className="space-y-4">
       <Card>
         <CardHeader title="Beacon environment" icon={Globe} />
-        <div className="space-y-3 p-4 text-sm text-[var(--text)]">
+        <div className="space-y-3 p-4 text-sm text-text">
           <p>Beacon reads its panel connection from environment variables. It does not load the legacy YAML file or support <code>beacon configure</code>.</p>
           <p>Use the full credential shown when this node was created or when its token was rotated. If it was not retained, rotate the token in Settings.</p>
-          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-[11px] leading-relaxed text-[var(--text)]">{`# /etc/forge/beacon.env (mode 0600)
+          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-[11px] leading-relaxed text-text">{`# /etc/forge/beacon.env (mode 0600)
 APP_ENV=production
 DAEMON_NODE_ID=${node.id}
 DAEMON_NODE_TOKEN=<token-id>.<secret>
@@ -914,26 +687,28 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
         )}
       </div>
       <Card>
-        <AdminTable label="Allocations">
-          <AdminTHead>
-            <AdminTh>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
+              <th className="px-4 py-2">
                 <input type="checkbox" checked={allFiltered} onChange={toggleAll} disabled={deletable.length === 0 || deleteBulkMut.isPending} className="accent-[var(--brand)]" />
-              </AdminTh>
-              <AdminTh>IP</AdminTh>
-              <AdminTh>Alias</AdminTh>
-              <AdminTh>Port</AdminTh>
-              <AdminTh>Server</AdminTh>
-          </AdminTHead>
-          <AdminTBody>
+              </th>
+              <th className="px-4 py-2">IP</th>
+              <th className="px-4 py-2">Alias</th>
+              <th className="px-4 py-2">Port</th>
+              <th className="px-4 py-2">Server</th>
+            </tr>
+          </thead>
+          <tbody>
             {filtered.map((a) => (
-              <AdminTr key={a.id}>
-                <AdminTd>
+              <tr key={a.id} className="border-b border-line">
+                <td className="px-4 py-2">
                   <input type="checkbox" disabled={!!a.server || deleteBulkMut.isPending} checked={selected.has(a.id)} onChange={() => toggle(a.id)} className="accent-[var(--brand)]" />
-                </AdminTd>
-                <AdminTd className="font-mono text-xs">{a.ip}</AdminTd>
-                <AdminTd>
+                </td>
+                <td className="px-4 py-2 font-mono text-xs">{a.ip}</td>
+                <td className="px-4 py-2">
                   <input
-                    className="h-8 w-32 rounded border border-[var(--line)] bg-[var(--surface)] px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
+                    className="h-8 w-32 rounded border border-line bg-[var(--surface)] px-2 text-xs disabled:cursor-not-allowed disabled:opacity-60"
                     value={aliases[a.id] ?? a.alias ?? ""}
                     disabled={setAliasMut.isPending}
                     onChange={(e) => setAliases((current) => ({ ...current, [a.id]: e.target.value }))}
@@ -942,13 +717,13 @@ function NodeAllocationTab({ node, allocations }: { node: ApiNode; allocations: 
                       if ((a.alias ?? "") !== alias) setAliasMut.mutate({ id: a.id, alias });
                     }}
                   />
-                </AdminTd>
-                <AdminTd className="font-mono text-xs">{a.port}</AdminTd>
-                <AdminTd className="text-[var(--text-subtle)]">{a.server ?? "—"}</AdminTd>
-              </AdminTr>
+                </td>
+                <td className="px-4 py-2 font-mono text-xs">{a.port}</td>
+                <td className="px-4 py-2 text-text-subtle">{a.server ?? "—"}</td>
+              </tr>
             ))}
-          </AdminTBody>
-        </AdminTable>
+          </tbody>
+        </table>
       </Card>
       {renderConfirm()}
     </div>
@@ -966,27 +741,32 @@ function NodeServersTab({ nodeId }: { nodeId: string }) {
       <CardHeader title={`Servers (${filtered.length})`} icon={Database} />
       {serversQuery.isError ? (
         <div className="p-4">
-          <AdminErrorState message={`Could not load servers on this node: ${serversQuery.error.message}`} retry={() => void serversQuery.refetch()} />
+          <div className="flex items-start justify-between gap-4 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+            <span>Could not load servers on this node: {serversQuery.error.message}</span>
+            <Btn size="sm" tone="ghost" onClick={() => void serversQuery.refetch()}>Retry</Btn>
+          </div>
         </div>
       ) : filtered.length === 0 ? (
-        <EmptyState icon={Database} title="No servers" message="No servers on this node." />
+        <EmptyState icon={Database} message="No servers on this node." />
       ) : (
-        <AdminTable label="Node servers">
-          <AdminTHead>
-            <AdminTh>Name</AdminTh>
-            <AdminTh>UUID</AdminTh>
-            <AdminTh>Status</AdminTh>
-          </AdminTHead>
-          <AdminTBody>
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-line bg-[var(--surface-input)] text-left text-[10px] uppercase tracking-widest text-text-muted">
+              <th className="px-4 py-2">Name</th>
+              <th className="px-4 py-2">UUID</th>
+              <th className="px-4 py-2">Status</th>
+            </tr>
+          </thead>
+          <tbody>
             {filtered.map((s) => (
-              <AdminTr key={s.id}>
-                <AdminTd className="font-semibold">{s.name}</AdminTd>
-                <AdminTd className="font-mono text-xs text-[var(--text-subtle)]">{s.id.slice(0, 8)}…</AdminTd>
-                <AdminTd>{s.status}</AdminTd>
-              </AdminTr>
+              <tr key={s.id} className="border-b border-line">
+                <td className="px-4 py-2 font-semibold">{s.name}</td>
+                <td className="px-4 py-2 font-mono text-xs text-text-subtle">{s.id.slice(0, 8)}…</td>
+                <td className="px-4 py-2">{s.status}</td>
+              </tr>
             ))}
-          </AdminTBody>
-        </AdminTable>
+          </tbody>
+        </table>
       )}
     </Card>
   );
@@ -1026,22 +806,19 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
     onError: (e: Error) => toast({ tone: "error", title: "Probe failed", message: e.message }),
   });
   const d = deltaQ.data;
-  const drifted = d ? d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0 : false;
-  /* The server returns three empty buckets when the two newest snapshots both
-     unmarshal to no entries at all, so "stable" requires a positive reading —
-     an empty comparison is unknown, not an all-clear. */
-  const stable = drifted === false && (d?.unchanged.length ?? 0) > 0;
+  const hasDrift = d ? d.added.length > 0 || d.removed.length > 0 || d.changed.length > 0 : false;
 
   return (
     <div className="space-y-4">
-      {drifted ? (
-        <div className={cn("flex items-start gap-2 rounded-lg border p-3 text-sm", toneStyles.warn.chip)} role="alert">
-          <AlertTriangle size={14} className={cn("mt-0.5 shrink-0", toneStyles.warn.fg)} />
-          <span>Capability drift detected — {d?.added.length ?? 0} added · {d?.removed.length ?? 0} removed · {d?.changed.length ?? 0} changed since last snapshot. Use Probe to refresh or compare the two newest history rows.</span>
+      {/* Amber drift banner — visible when delta shows drift */}
+      {hasDrift ? (
+        <div className="flex items-start gap-2 rounded-lg border border-warn-line bg-warn-subtle p-3 text-sm text-warn" role="alert">
+          <AlertTriangle size={14} className="mt-0.5 shrink-0 text-warn" />
+          <span>Capability drift detected — {d!.added.length} added · {d!.removed.length} removed · {d!.changed.length} changed since last snapshot. Use Probe to refresh or compare the two newest history rows.</span>
         </div>
       ) : null}
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <p className="text-xs text-text-subtle">Per-node capability detail, history and drift for this host.</p>
+        <p className="text-xs text-[var(--text-subtle)]">GET /capabilities/:nodeId · history · delta · probe — per-node view of the global capabilities inventory.</p>
         <Btn size="sm" tone="primary" loading={probeMut.isPending} onClick={() => probeMut.mutate()}>
           <Zap size={12} /> Probe live
         </Btn>
@@ -1049,7 +826,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Card className="border border-[var(--line)] bg-[var(--surface)]">
-          <CardHeader title="Current snapshot" icon={Layers} action={<Btn size="sm" tone="ghost" onClick={() => void capQ.refetch()}>Reload</Btn>} />
+          <CardHeader title="Current snapshot — GET /capabilities/:nodeId" icon={Layers} action={<Btn size="sm" tone="ghost" onClick={() => void capQ.refetch()}>Reload</Btn>} />
           {capQ.isLoading ? (
             <div className="p-4"><AdminLoadingState label="Loading capability…" /></div>
           ) : capQ.isError ? (
@@ -1060,8 +837,8 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Beacon</span><span className="font-mono text-[var(--text)]">{capQ.data.beaconVersion || "—"}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">OS / Arch</span><span className="font-mono text-[var(--text)]">{capQ.data.os} / {capQ.data.architecture}</span></div>
                 <div className="flex justify-between"><span className="text-[var(--text-subtle)]">CPU / Memory</span><span className="font-mono text-[var(--text)]">{capQ.data.cpuThreads} threads · {capQ.data.memoryMb} MiB</span></div>
-                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Runtime</span><span className={cn("font-mono", capQ.data.runtimeAvailable ? toneStyles.ok.fg : toneStyles.danger.fg)}>{capQ.data.runtimeAvailable ? capQ.data.runtimeStatus || "available" : "unavailable"}</span></div>
-                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Fetched</span><span className="font-mono text-[var(--text)]">{capQ.data.fetchedAt ? `${formatDate(capQ.data.fetchedAt)} · ${relativeTime(Date.parse(capQ.data.fetchedAt)) ?? "age unknown"}` : <NotReported reason="Snapshot has no timestamp" />}</span></div>
+                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Runtime</span><span className={capQ.data.runtimeAvailable ? "font-mono text-ok" : "font-mono text-danger"}>{capQ.data.runtimeAvailable ? capQ.data.runtimeStatus || "available" : "unavailable"}</span></div>
+                <div className="flex justify-between"><span className="text-[var(--text-subtle)]">Fetched</span><span className="font-mono text-[var(--text)]">{capQ.data.fetchedAt ? new Date(capQ.data.fetchedAt).toLocaleString() : "—"}</span></div>
               </div>
               <div className="flex flex-wrap gap-1">
                 <Pill tone={capQ.data.dockerBuildEnabled ? "green" : "neutral"}>dockerBuild</Pill>
@@ -1075,8 +852,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <Pill tone={capQ.data.consoleEnabled ? "blue" : "neutral"}>console</Pill>
                 <Pill tone={capQ.data.databaseProvisioningEnabled ? "green" : "neutral"}>dbProvisioning</Pill>
               </div>
-              <p className="text-[11px] font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Raw report (diagnostic)</p>
-              <pre className="max-h-40 overflow-auto rounded bg-overlay-subtle p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(capQ.data.rawReport ?? capQ.data, null, 2)}</pre>
+              <pre className="max-h-40 overflow-auto rounded bg-well p-2 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(capQ.data.rawReport ?? capQ.data, null, 2)}</pre>
             </div>
           ) : (
             <div className="p-4 text-sm text-[var(--text-subtle)]">No capability snapshot yet — probe the node or wait for heartbeat.</div>
@@ -1084,7 +860,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
         </Card>
 
         <Card className="border border-[var(--line)] bg-[var(--surface)]">
-          <CardHeader title="Delta" icon={GitCompare} action={<Btn size="sm" tone="ghost" onClick={() => void deltaQ.refetch()}>Recompute</Btn>} />
+          <CardHeader title="Delta — GET /capabilities/:nodeId/delta" icon={GitCompare} action={<Btn size="sm" tone="ghost" onClick={() => void deltaQ.refetch()}>Recompute</Btn>} />
           {deltaQ.isLoading ? (
             <div className="p-4"><AdminLoadingState label="Computing delta…" /></div>
           ) : deltaQ.isError ? (
@@ -1098,13 +874,7 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
                 <Pill tone="neutral">= {d.unchanged.length} unchanged</Pill>
                 <span className="ml-auto font-mono text-[11px] text-[var(--text-subtle)]">fetchedAt {d.fetchedAt ? new Date(d.fetchedAt).toLocaleString() : "—"}</span>
               </div>
-              {drifted ? null : stable ? (
-                <div className={cn("rounded-lg border p-3 text-sm", toneStyles.ok.chip)}>No drift — {d?.unchanged.length} capabilities match the previous snapshot.</div>
-              ) : (
-                <div className={cn("rounded-lg border border-dashed p-3 text-sm", toneStyles.unknown.chip)}>
-                  Nothing to compare — neither snapshot carried capability entries, so stability is unknown rather than confirmed.
-                </div>
-              )}
+              {!hasDrift ? <div className="rounded-lg border border-ok-line bg-ok-subtle p-3 text-sm text-ok">No drift — capability snapshot is stable.</div> : null}
               <div className="grid gap-2">
                 <DeltaSection title="Added" items={d.added} tone="green" />
                 <DeltaSection title="Removed" items={d.removed} tone="red" />
@@ -1122,28 +892,24 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
       </div>
 
       <Card className="border border-[var(--line)] bg-[var(--surface)]">
-        <CardHeader title="History" icon={History} action={<Btn size="sm" tone="ghost" onClick={() => void histQ.refetch()}>Reload</Btn>} />
+        <CardHeader title="History — GET /capabilities/:nodeId/history" icon={History} action={<Btn size="sm" tone="ghost" onClick={() => void histQ.refetch()}>Reload</Btn>} />
         {histQ.isLoading ? (
-          <div className="p-4"><AdminLoadingState label="Loading history…" /></div>
+          <div className="p-4 text-xs text-[var(--text-subtle)]">Loading history…</div>
         ) : histQ.isError ? (
           <div className="p-4"><AdminErrorState message={(histQ.error as Error).message} retry={() => void histQ.refetch()} /></div>
         ) : (histQ.data?.length ?? 0) === 0 ? (
           <div className="p-4 text-sm text-[var(--text-subtle)]">No history — probe or wait for heartbeat to generate snapshots.</div>
         ) : (
           <ol className="space-y-2 p-4">
-            {(histQ.data ?? []).map((h) => {
-              const text = JSON.stringify(h.capabilities, null, 2) ?? "";
-              const shown = text.slice(0, 600);
-              return (
-                <li className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2" key={h.id}>
-                  <div className="flex items-center gap-2 font-mono text-xs">
-                    <span className="font-medium text-[var(--text)]">{formatDate(h.observedAt)}</span>
-                    <span className="text-[var(--text-subtle)]">· {h.beaconVersion || "no version"}</span>
-                  </div>
-                  <pre className="mt-1 overflow-auto font-mono text-[11px] leading-5 text-[var(--text-subtle)]">{shown}{shown.length < text.length ? `\n… truncated, ${text.length - shown.length} characters not shown` : ""}</pre>
-                </li>
-              );
-            })}
+            {(histQ.data ?? []).map((h) => (
+              <li key={h.id} className="rounded-lg border border-[var(--line)] bg-[var(--surface-raised)] px-3 py-2">
+                <div className="flex items-center gap-2 font-mono text-xs">
+                  <span className="font-medium text-[var(--text)]">{new Date(h.observedAt).toLocaleString()}</span>
+                  <span className="text-[var(--text-subtle)]">· {h.beaconVersion}</span>
+                </div>
+                <pre className="mt-1 overflow-auto text-[11px] leading-5 text-[var(--text-subtle)]">{JSON.stringify(h.capabilities, null, 2)?.slice(0, 600)}</pre>
+              </li>
+            ))}
           </ol>
         )}
       </Card>
@@ -1152,40 +918,27 @@ function NodeCapabilitiesTab({ nodeId }: { nodeId: string }) {
 }
 
 function DeltaSection({ title, items, tone }: { title: string; items: unknown[]; tone: "green" | "red" | "yellow" | "neutral" }) {
-  const map: Record<string, string> = {
-    green: cn(toneStyles.ok.border, toneStyles.ok.bg),
-    red: cn(toneStyles.danger.border, toneStyles.danger.bg),
-    yellow: cn(toneStyles.warn.border, toneStyles.warn.bg),
-    neutral: "border-line bg-overlay-subtle",
-  };
+  const map: Record<string, string> = { green: "border-ok-line bg-ok-subtle", red: "border-danger-line bg-danger-subtle", yellow: "border-warn-line bg-warn-subtle", neutral: "border-[var(--line)] bg-[var(--surface-raised)]" };
   return (
     <div className={`rounded-xl border p-3 ${map[tone]}`}>
       <div className="text-[11px] font-bold uppercase tracking-widest text-[var(--text-subtle)]">{title} · {items.length}</div>
-      {items.length === 0 ? <div className="mt-2 text-xs text-[var(--text-subtle)]">none in this bucket</div> : (
+      {items.length === 0 ? <div className="mt-2 text-xs text-[var(--text-subtle)]">—</div> : (
         <ul className="mt-2 space-y-1">
-          {items.map((it, i) => {
-            const text = JSON.stringify(it, null, 2);
-            const shown = text.slice(0, 400);
-            return (
-              <li key={i} className="rounded border border-[var(--line)] bg-overlay-subtle px-2 py-1 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
-                {shown}
-                {/* Say so when the dump is cut: a truncated entry must not read
-                    as a complete one. */}
-                {shown.length < text.length ? <span className="mt-0.5 block text-info">… truncated, {text.length - shown.length} characters not shown</span> : null}
-              </li>
-            );
-          })}
+          {items.map((it, i) => (
+            <li key={i} className="rounded border border-line bg-well px-2 py-1 font-mono text-[11px] leading-5 text-[var(--text-subtle)]">
+              {JSON.stringify(it, null, 2).slice(0, 400)}
+            </li>
+          ))}
         </ul>
       )}
     </div>
   );
 }
 
-function CreateNodeModal({ open, onClose, locations, regions, locationsError, onRetryLocations }: {
+function CreateNodeModal({ open, onClose, locations, locationsError, onRetryLocations }: {
   open: boolean;
   onClose: () => void;
   locations: ApiLocation[];
-  regions: ApiRegion[];
   locationsError: Error | null;
   onRetryLocations: () => void;
 }) {
@@ -1196,7 +949,6 @@ function CreateNodeModal({ open, onClose, locations, regions, locationsError, on
   const [description, setDescription] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [locationId, setLocationId] = useState("");
-  const [regionId, setRegionId] = useState("");
   const [publicNode, setPublicNode] = useState(true);
 
   // — Network
@@ -1274,18 +1026,11 @@ function CreateNodeModal({ open, onClose, locations, regions, locationsError, on
       if (validationError) throw new Error(validationError);
       const location = locations.find((candidate) => candidate.id === locationId);
       if (!location) throw new Error("Select a valid location before creating the node.");
-      const region = regions.find((candidate) => candidate.id === regionId);
-      if (regionId && !region) throw new Error("Select a valid region, or leave the region unset.");
       const tagsArr = tags.split(",").map((t) => t.trim()).filter(Boolean);
       const allowedIpsArr = allowedIps.split(",").map((t) => t.trim()).filter(Boolean);
       return createNode({
         name: name.trim(),
-        // `region` is the legacy free-text column the node list still shows;
-        // `regionId` is the foreign key the Regions page counts and guards
-        // deletion on. Both are written now, so the two pages stop disagreeing
-        // about where a node lives.
-        region: region ? region.name : location.short,
-        regionId: region?.id,
+        region: location.short,
         locationId: location.id,
         description: description.trim(),
         displayName: displayName.trim() || undefined,
@@ -1338,8 +1083,8 @@ function CreateNodeModal({ open, onClose, locations, regions, locationsError, on
     <Modal title="New Node" onClose={onClose} className="max-w-6xl">
       {onboarding ? (
         <div className="space-y-4">
-          <div className={cn("rounded-lg border p-4 text-sm", toneStyles.warn.chip)}>Save this credential now. Forge will not show it again; rotate the token if it is lost. Revealed values are hidden automatically when this window loses focus.</div>
-          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 font-mono text-xs leading-relaxed text-text">{`# /etc/forge/beacon.env (mode 0600)
+          <div className="rounded-lg border border-warn-line bg-warn-subtle p-4 text-sm text-warn">Save this credential now. Forge will not show it again; rotate the token if it is lost. Revealed values are hidden automatically when this window loses focus.</div>
+          <pre className="overflow-auto rounded bg-[var(--canvas)] p-4 text-xs leading-relaxed text-ok">{`# /etc/forge/beacon.env (mode 0600)
 APP_ENV=production
 DAEMON_NODE_ID=${onboarding.id}
 DAEMON_NODE_TOKEN=${credentialMasked ? "••••••••••••••••" : onboarding.token}
@@ -1368,34 +1113,19 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
               <Input label="Display Name" value={displayName} onChange={setDisplayName} placeholder="NYC Dallas Node 1" />
               <Textarea label="Description" value={description} onChange={setDescription} rows={2} placeholder="Optional description for this node" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Location</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locations.length === 0 || locationsError !== null}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Location</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={locationId} onChange={(e) => setLocationId(e.target.value)} required disabled={locations.length === 0 || locationsError !== null}>
                   <option value="">Select…</option>
                   {locations.map((location) => <option key={location.id} value={location.id}>{location.short} — {location.long}</option>)}
                 </select>
                 {locationsError ? (
-                  <div className="mt-2"><AdminErrorState message={`Could not load locations: ${locationsError.message}`} retry={onRetryLocations} /></div>
+                  <div className="mt-2 flex items-start justify-between gap-3 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger">
+                    <span>Could not load locations: {locationsError.message}</span>
+                    <Btn size="sm" tone="ghost" type="button" onClick={onRetryLocations}>Retry</Btn>
+                  </div>
                 ) : locations.length === 0 ? <p className="mt-1 text-xs text-warn">Create a location first before adding a node.</p> : null}
               </label>
-              {/* Region used to be synthesised from the location code, so the
-                  Regions page counted zero nodes for a region the Nodes page
-                  displayed, and its delete guard let a "populated" region be
-                  removed. The link is chosen explicitly here or not at all. */}
-              <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Region</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={regionId} onChange={(e) => setRegionId(e.target.value)}>
-                  <option value="">No region</option>
-                  {regions.map((region) => <option key={region.id} value={region.id}>{region.name} ({region.slug})</option>)}
-                </select>
-                <span className="mt-1.5 block text-xs leading-5 text-text-muted">
-                  {regions.length === 0
-                    ? "No regions exist yet, so this node cannot be linked to one; the Regions page will not count it."
-                    : regionId
-                      ? "Links this node to a region: it will be counted there and can only be scheduled with it."
-                      : "Without a region this node is not counted by the Regions page and cannot be placed by region."}
-                </span>
-              </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={publicNode} onChange={(e) => setPublicNode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Public node</span>
               </label>
@@ -1408,13 +1138,13 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
               <Input label="FQDN" value={fqdn} onChange={setFqdn} placeholder="node1.example.com" required />
               <Input label="Public Hostname" value={publicHostname} onChange={setPublicHostname} placeholder="Optional public-facing hostname" />
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">SSL</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={scheme} onChange={(e) => setScheme(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">SSL</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={scheme} onChange={(e) => setScheme(e.target.value)}>
                   <option value="https">https</option>
                   <option value="http">http</option>
                 </select>
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={behindProxy} onChange={(e) => setBehindProxy(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Behind Proxy</span>
               </label>
@@ -1470,7 +1200,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 <Input label="Port Min" value={allocationPortMin} onChange={setAllocationPortMin} type="number" />
                 <Input label="Port Max" value={allocationPortMax} onChange={setAllocationPortMax} type="number" />
               </div>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={autoAllocate} onChange={(e) => setAutoAllocate(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Auto-allocate ports</span>
               </label>
@@ -1481,20 +1211,12 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Scheduler" icon={SettingsIcon} />
             <div className="space-y-4 p-5">
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Backend</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Backend</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={schedulerType} onChange={(e) => setSchedulerType(e.target.value)}>
                   <option value="docker">Docker</option>
                   <option value="k3s">K3s (Kubernetes)</option>
                   <option value="nomad">Nomad (HashiCorp)</option>
                 </select>
-                {/* A node that has never reported cannot be gated on a capability
-                    it has not stated — so the choice is offered with the reason
-                    it is unverified, rather than looking authoritative. */}
-                <span className="mt-1.5 block text-xs leading-5 text-text-muted">
-                  A new node has not reported a runtime yet, so nothing here is verified against it.
-                  Docker is the only path confirmed end to end; K3s and Nomad stay unverified until the
-                  first capability probe, which you can read in the node&apos;s Capabilities tab.
-                </span>
               </label>
             </div>
           </Card>
@@ -1503,7 +1225,7 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
             <CardHeader title="Tags" icon={Activity} />
             <div className="space-y-4 p-5">
               <Input label="Tags" value={tags} onChange={setTags} placeholder="ssd, gpu, low-latency" />
-              <p className="text-xs text-[var(--text-subtle)]">Tags let you filter and group nodes for scheduling constraints.</p>
+              <p className="text-xs text-text-subtle">Tags let you filter and group nodes for scheduling constraints.</p>
             </div>
           </Card>
         </div>
@@ -1512,44 +1234,36 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
           <Card>
             <CardHeader title="Monitoring & Alerts" icon={Activity} />
             <div className="space-y-4 p-5">
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={enableHealthChecks} onChange={(e) => setEnableHealthChecks(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable health checks</span>
               </label>
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={enableMetrics} onChange={(e) => setEnableMetrics(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Enable metrics collection</span>
               </label>
               <Input label="Prometheus Endpoint" value={prometheusEndpoint} onChange={setPrometheusEndpoint} placeholder="Optional Prometheus scrape URL" />
               <div>
-                <p className="mb-3 text-xs font-medium text-[var(--text-subtle)]">Alert thresholds (0–100%)</p>
+                <p className="mb-3 text-xs font-medium text-text-subtle">Alert thresholds (0–100%)</p>
                 <div className="grid grid-cols-3 gap-4">
                   <Input label="CPU %" value={alertThresholdCpu} onChange={setAlertThresholdCpu} type="number" />
                   <Input label="Memory %" value={alertThresholdMemory} onChange={setAlertThresholdMemory} type="number" />
                   <Input label="Disk %" value={alertThresholdDisk} onChange={setAlertThresholdDisk} type="number" />
                 </div>
               </div>
-              {/* Stated plainly rather than implied: these are stored on the
-                  node record, but the node detail views never read them back and
-                  Settings has no field for them, so nothing here can be reviewed
-                  or changed after the node exists. */}
-              <p className="text-xs leading-5 text-warn">
-                These monitoring settings are recorded with the node and cannot be shown or edited
-                anywhere in this panel afterwards — the node views do not read them back.
-              </p>
             </div>
           </Card>
 
           <Card>
             <CardHeader title="Maintenance & Security" icon={Lock} />
             <div className="space-y-4 p-5">
-              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+              <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                 <input type="checkbox" checked={maintenanceMode} onChange={(e) => setMaintenanceMode(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                 <span>Maintenance mode</span>
               </label>
               {maintenanceMode && (
-                <div className="space-y-4 rounded-lg border border-[var(--line)] bg-[var(--surface-hover)] p-4">
-                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-[var(--text)]">
+                <div className="space-y-4 rounded-lg border border-line bg-overlay-subtle p-4">
+                  <label className="flex cursor-pointer items-center gap-2.5 text-sm text-text">
                     <input type="checkbox" checked={drainBeforeMaintenance} onChange={(e) => setDrainBeforeMaintenance(e.target.checked)} className="h-4 w-4 accent-[var(--brand)]" />
                     <span>Drain before maintenance</span>
                   </label>
@@ -1557,44 +1271,25 @@ DAEMON_ALLOW_INSECURE_NO_AUTH=false
                 </div>
               )}
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">Token Rotation</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={tokenRotationPolicy} onChange={(e) => setTokenRotationPolicy(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">Token Rotation</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={tokenRotationPolicy} onChange={(e) => setTokenRotationPolicy(e.target.value)}>
                   <option value="manual">Manual</option>
                   <option value="auto">Auto</option>
                 </select>
-                {/* "Auto" here is a recorded preference, not a scheduler. The
-                    panel has no way to show that a rotation ran, so the choice
-                    says so rather than implying an active policy. */}
-                <span className="mt-1.5 block text-xs leading-5 text-warn">
-                  Recorded on the node only. This panel neither runs nor reports rotations — rotating
-                  is a manual action in Settings, and no view shows whether the policy was honoured.
-                </span>
               </label>
               <label className="block text-sm">
-                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-[var(--text-subtle)]">TLS Setting</span>
-                <select className="h-10 w-full cursor-pointer rounded-lg border border-[var(--line)] bg-[var(--surface-input)] px-3 text-sm text-[var(--text)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus)]" value={tlsSetting} onChange={(e) => setTlsSetting(e.target.value)}>
+                <span className="mb-1.5 block text-xs font-semibold uppercase tracking-wider text-text-subtle">TLS Setting</span>
+                <select className="h-10 w-full rounded-lg border border-line bg-surface-card-header px-3.5 text-sm text-text shadow-inner  outline-none transition placeholder:text-text-muted hover:border-line-strong focus:border-danger-line focus:ring-2 focus:ring-danger-line" value={tlsSetting} onChange={(e) => setTlsSetting(e.target.value)}>
                   <option value="auto">Auto</option>
                   <option value="manual">Manual</option>
                   <option value="disabled">Disabled</option>
                 </select>
               </label>
-              <p className="text-xs leading-5 text-warn">
-                Security and monitoring choices on this card and the monitoring card are stored with
-                the node but are never read back into the node views, so they cannot be reviewed or
-                changed hereafter.
-              </p>
             </div>
           </Card>
         </div>
 
-        {createError ? <div className="mt-2"><AdminErrorState message={createError} /></div> : null}
-        {/* The reason a disabled primary action cannot fire sits directly above
-            it, instead of in a note elsewhere on a 40-field form. */}
-        {!createMut.isPending && locations.length === 0 && !locationsError ? (
-          <p className="text-xs leading-5 text-warn">No locations exist yet, so this form cannot be submitted — create a location first.</p>
-        ) : !createMut.isPending && !locationId ? (
-          <p className="text-xs leading-5 text-warn">Choose a location to enable creation.</p>
-        ) : null}
+        {createError ? <div className="inline-flex items-start gap-2 rounded-lg border border-danger-line bg-danger-subtle p-3 text-sm text-danger"><AlertCircle size={14} className="mt-0.5 shrink-0" /> <span>{createError}</span></div> : null}
         <ModalFooter onCancel={onClose} onConfirm={() => createMut.mutate()} confirmLabel={createMut.isPending ? "Creating…" : "Create Node"} disabled={createMut.isPending || !locationId || locationsError !== null} />
       </form>}
     </Modal>

@@ -26,7 +26,7 @@ func registerTrafficManagerRoutes(protected fiber.Router, cfg Config, svc *traff
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 		if err := svc.CreateRoutingRule(c.Context(), &rule); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.Status(201).JSON(fiber.Map{"data": rule})
 	})
@@ -46,14 +46,14 @@ func registerTrafficManagerRoutes(protected fiber.Router, cfg Config, svc *traff
 		}
 		rule.ID = c.Params("id")
 		if err := svc.UpdateRoutingRule(c.Context(), &rule); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": rule})
 	})
 
 	tm.Delete("/rules/:id", mutationLimiter, requireRole("admin"), requireAdminScope("traffic.write"), func(c *fiber.Ctx) error {
 		if err := svc.DeleteRoutingRule(c.Context(), c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.SendStatus(204)
 	})
@@ -80,7 +80,7 @@ func registerTrafficManagerRoutes(protected fiber.Router, cfg Config, svc *traff
 			return c.Status(400).JSON(fiber.Map{"error": err.Error()})
 		}
 		if err := svc.CreateTrafficPolicy(c.Context(), &policy); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.Status(201).JSON(fiber.Map{"data": policy})
 	})
@@ -100,14 +100,14 @@ func registerTrafficManagerRoutes(protected fiber.Router, cfg Config, svc *traff
 		}
 		policy.ID = c.Params("id")
 		if err := svc.UpdateTrafficPolicy(c.Context(), &policy); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.JSON(fiber.Map{"data": policy})
 	})
 
 	tm.Delete("/policies/:id", mutationLimiter, requireRole("admin"), requireAdminScope("traffic.write"), func(c *fiber.Ctx) error {
 		if err := svc.DeleteTrafficPolicy(c.Context(), c.Params("id")); err != nil {
-			return respondInternalError(c, err)
+			return respondStoreError(c, err)
 		}
 		return c.SendStatus(204)
 	})

@@ -93,7 +93,7 @@ func TestGitHubWebhookHandler(t *testing.T) {
 
 	app.Post("/git/webhook/github", HandleGitHubWebhook(cfg))
 
-	t.Run("ping event returns ok", func(t *testing.T) {
+	t.Run("ping event without store is unavailable", func(t *testing.T) {
 		req := httptest.NewRequest("POST", "/git/webhook/github", strings.NewReader(`{"zen":"test"}`))
 		req.Header.Set("X-GitHub-Event", "ping")
 		req.Header.Set("Content-Type", "application/json")
@@ -101,12 +101,12 @@ func TestGitHubWebhookHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != 503 {
+			t.Errorf("expected 503 for nil store, got %d", resp.StatusCode)
 		}
 	})
 
-	t.Run("push event without store returns ok", func(t *testing.T) {
+	t.Run("push event without store is unavailable", func(t *testing.T) {
 		body := `{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"user/repo","clone_url":"https://github.com/user/repo.git"},"commits":[{"id":"abc123","message":"test","author":{"name":"test","email":"test@test.com"}}]}`
 		req := httptest.NewRequest("POST", "/git/webhook/github", strings.NewReader(body))
 		req.Header.Set("X-GitHub-Event", "push")
@@ -115,8 +115,8 @@ func TestGitHubWebhookHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != 503 {
+			t.Errorf("expected 503 for nil store, got %d", resp.StatusCode)
 		}
 	})
 }
@@ -127,7 +127,7 @@ func TestGitLabWebhookHandler(t *testing.T) {
 
 	app.Post("/git/webhook/gitlab", HandleGitLabWebhook(cfg))
 
-	t.Run("push event returns ok", func(t *testing.T) {
+	t.Run("push event without store is unavailable", func(t *testing.T) {
 		body := `{"object_kind":"push","ref":"refs/heads/main","project":{"git_http_url":"https://gitlab.com/user/repo.git"},"commits":[{"id":"abc123","message":"test","author":{"name":"test","email":"test@test.com"}}]}`
 		req := httptest.NewRequest("POST", "/git/webhook/gitlab", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -135,8 +135,8 @@ func TestGitLabWebhookHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != 503 {
+			t.Errorf("expected 503 for nil store, got %d", resp.StatusCode)
 		}
 	})
 }
@@ -147,7 +147,7 @@ func TestBitbucketWebhookHandler(t *testing.T) {
 
 	app.Post("/git/webhook/bitbucket", HandleBitbucketWebhook(cfg))
 
-	t.Run("repo:push event returns ok", func(t *testing.T) {
+	t.Run("repo:push event without store is unavailable", func(t *testing.T) {
 		body := `{"push":{"changes":[{"new":{"name":"main","target":{"hash":"abc123"}},"commits":[{"hash":"abc123","message":"test","author":{"user":{"display_name":"test"}}}]}]},"repository":{"full_name":"user/repo","links":{"clone":[{"name":"https","href":"https://bitbucket.org/user/repo.git"}]}}}`
 		req := httptest.NewRequest("POST", "/git/webhook/bitbucket", strings.NewReader(body))
 		req.Header.Set("X-Event-Key", "repo:push")
@@ -156,8 +156,8 @@ func TestBitbucketWebhookHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != 503 {
+			t.Errorf("expected 503 for nil store, got %d", resp.StatusCode)
 		}
 	})
 }
@@ -168,7 +168,7 @@ func TestGiteaWebhookHandler(t *testing.T) {
 
 	app.Post("/git/webhook/gitea", HandleGiteaWebhook(cfg))
 
-	t.Run("push event returns ok", func(t *testing.T) {
+	t.Run("push event without store is unavailable", func(t *testing.T) {
 		body := `{"ref":"refs/heads/main","after":"abc123","repository":{"full_name":"user/repo","clone_url":"https://gitea.com/user/repo.git"},"commits":[{"id":"abc123","message":"test","author":{"name":"test","email":"test@test.com"}}]}`
 		req := httptest.NewRequest("POST", "/git/webhook/gitea", strings.NewReader(body))
 		req.Header.Set("Content-Type", "application/json")
@@ -176,8 +176,8 @@ func TestGiteaWebhookHandler(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if resp.StatusCode != 200 {
-			t.Errorf("expected 200, got %d", resp.StatusCode)
+		if resp.StatusCode != 503 {
+			t.Errorf("expected 503 for nil store, got %d", resp.StatusCode)
 		}
 	})
 }
@@ -245,8 +245,8 @@ func TestWebhookHandlerJSONPayloads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if resp.StatusCode != 200 {
-				t.Errorf("expected 200 for %s, got %d", tt.name, resp.StatusCode)
+			if resp.StatusCode != 503 {
+				t.Errorf("expected 503 for %s with nil store, got %d", tt.name, resp.StatusCode)
 			}
 		})
 	}

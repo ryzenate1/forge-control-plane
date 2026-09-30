@@ -30,11 +30,10 @@ import {
   type NodeMetrics,
 } from "@/lib/api/monitoring";
 import {
-  REFRESH,
   checkVerdict,
   findCheck,
   isAvailable,
-  sourceState,
+  relativeTime,
   summaryIsTrustworthy,
   useActivityQuery,
   useHealthQuery,
@@ -43,11 +42,9 @@ import {
   useNodeMetricsHistoryQuery,
   useNodesQuery,
   useServersQuery,
-  worstSourceState,
 } from "@/lib/admin/telemetry";
 import { AdminPageToolbar } from "./admin-page-toolbar";
-import { AdminPageLayout, AdminTable, AdminTBody, AdminTd, AdminTh, AdminTHead, AdminTr, SectionHeader, Btn, Card, Pill, cn } from "@/components/admin/admin-ui";
-import { FreshnessBadge } from "./telemetry-ui";
+import { AdminPageLayout, SectionHeader, Btn, Card, Pill, cn } from "@/components/admin/admin-ui";
 import { resolveTone, toneStyles, type ToneInput } from "@/components/ui/forge/status";
 import {
   CpuKpiChipIcon,
@@ -174,12 +171,12 @@ function MainChartTooltip({
 }) {
   if (!active || !payload?.length) return null;
   return (
-    <div className="rounded-lg border border-white/10 bg-[var(--surface-raised)] p-3 shadow-xl">
-      <p className="mb-1 font-mono text-[11px] text-slate-400">
+    <div className="rounded-lg border border-line bg-[var(--surface-raised)] p-3 shadow-xl">
+      <p className="mb-1 font-mono text-[11px] text-text-subtle">
         {label ? new Date(label).toLocaleString() : ""}
       </p>
       {payload.map((entry) => (
-        <p key={entry.name} className="text-xs font-semibold text-slate-200">
+        <p key={entry.name} className="text-xs font-semibold text-text">
           <span style={{ color: entry.color ?? chart.sky }}>●</span> {entry.name}: {Number(entry.value).toFixed(1)}%
         </p>
       ))}
@@ -364,16 +361,23 @@ export function AdminMonitoring() {
     URL.revokeObjectURL(url);
   }, [history, period]);
 
-  const pageState = useMemo(
-    () =>
-      worstSourceState([
-        sourceState(nodesQuery, REFRESH.inventory),
-        sourceState(serversQuery, REFRESH.inventory),
-        sourceState(healthQuery, REFRESH.health),
-        sourceState(latestQuery, REFRESH.telemetry),
-      ]),
-    [nodesQuery, serversQuery, healthQuery, latestQuery],
-  );
+  // `note` states what the number is, not how it is trending. The pills here
+  // used to read "fleet avg" / "configured" / "allocated" / "traffic" in
+  // success green on every card, which looked like four positive deltas.
+  // Freshness of the page as a whole: the newest successful read across the
+  // queries that feed it, or the reason there isn't one.
+  const pageFresh = useMemo((): { label: string; tone: "live" | "stale" | "loading" | "error" } => {
+    const sources = [nodesQuery, serversQuery, healthQuery, latestQuery];
+    if (sources.every((q) => q.isError)) return { label: "No source responding", tone: "error" };
+    const newest = sources.reduce((max, q) => (q.dataUpdatedAt > max ? q.dataUpdatedAt : max), 0);
+    if (newest === 0) return { label: "Loading…", tone: "loading" };
+    const rel = relativeTime(newest) ?? "at an unknown time";
+    const anyError = sources.some((q) => q.isError);
+    if (anyError) return { label: `Partial · read ${rel}`, tone: "stale" };
+    // Queries refresh on a 30s interval; beyond twice that the view is stale.
+    const stale = Date.now() - newest > 75_000;
+    return { label: stale ? `Stale · read ${rel}` : `Live · read ${rel}`, tone: stale ? "stale" : "live" };
+  }, [nodesQuery, serversQuery, healthQuery, latestQuery]);
 
   const kpiCards = [
     { key: "cpu" as MetricKey, title: "CPU ALLOCATED", icon: CpuKpiChipIcon, color: chart.sky, note: "allocation" },
@@ -383,33 +387,56 @@ export function AdminMonitoring() {
 
   return (
     <AdminPageLayout>
-      <div className="flex items-center justify-end">
-        <FreshnessBadge state={pageState} />
+      {/* ========================================================================= */}
+      {/* ZONE 1: BREADCRUMB, HEADER & GLOBAL ACTIONS                                */}
+      {/* ========================================================================= */}
+      <div className="flex items-center justify-end text-xs text-text-subtle">
+
+        {/* Freshness, from the queries themselves. This badge used to read
+            "Live · updated just now" unconditionally — including while the
+            first fetch was still in flight and after one had failed. */}
+        <div className="flex items-center gap-1.5 font-mono text-[11px] text-text-muted">
+          <span className="relative flex h-1.5 w-1.5">
+            {pageFresh.tone === "live" ? (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-ok opacity-60" />
+            ) : null}
+            <span
+              className={cn(
+                "relative inline-flex h-1.5 w-1.5 rounded-full",
+                pageFresh.tone === "live" && "bg-ok",
+                pageFresh.tone === "stale" && "bg-warn",
+                pageFresh.tone === "error" && "bg-danger",
+                pageFresh.tone === "loading" && "bg-text-muted",
+              )}
+            />
+          </span>
+          <span>{pageFresh.label}</span>
+        </div>
       </div>
 
       <SectionHeader
         title="Monitoring"
-        sub="Platform, node and workload health dashboards"
         info={{
           title: "Fleet allocation over time",
           triggerLabel: "About Monitoring",
           eyebrow: "Architecture & Semantics",
           description: "Monitoring shows what happens over time. The control plane derives each node_metrics row from that node's capacity snapshot, so the CPU / memory / disk series are allocated shares of capacity, not measured host load. Charts stay empty (never zero) until rows exist for the selected window.",
           sections: [
-            {
-              title: "Where data comes from",
-              icon: BarChart3,
-              content:
-                "GET /monitoring/nodes/metrics returns per-node history (nodeId + limit + since) or the latest row per node. Fleet charts fan out across nodes and merge by timestamp, and say when a node is missing from the merge. Network byte counters are written as zero by the collector, so no network series is shown. Summary, health and activity come from /monitoring/summary, /health and /admin/activity.",
-            },
-            {
-              title: "Monitoring vs Health vs Overview",
-              icon: HeartPulse,
-              content:
-                "Monitoring = trends over time. Health = what is wrong right now. Overview = fleet snapshot and capacity. Use the time selector to adjust the telemetry window.",
-            },
-          ],
+                {
+                  title: "Where data comes from",
+                  icon: BarChart3,
+                  content:
+                    "GET /monitoring/nodes/metrics returns per-node history (nodeId + limit + since) or the latest row per node. Fleet charts fan out across nodes and merge by timestamp, and say when a node is missing from the merge. Network byte counters are written as zero by the collector, so no network series is shown. Summary, health and activity come from /monitoring/summary, /health and /admin/activity.",
+                },
+                {
+                  title: "Monitoring vs Health vs Overview",
+                  icon: HeartPulse,
+                  content:
+                    "Monitoring = trends over time. Health = what is wrong right now. Overview = fleet snapshot and capacity. Use the time selector to adjust the telemetry window.",
+                },
+              ],
         }}
+        sub="Platform, node and workload health dashboards."
         action={<AdminPageToolbar range={{ value: period, onChange: (value) => setPeriod(value as MetricPeriod), options: PERIODS.map((item) => ({ value: item.value, label: `Last ${item.label}` })) }} onRefresh={handleRefresh} refreshing={isRefreshing} refreshLabel="Refresh monitoring data">
             <Btn size="sm" onClick={handleExport} disabled={!hasTelemetry}><Download size={14} /> Export</Btn>
           </AdminPageToolbar>}
@@ -418,25 +445,6 @@ export function AdminMonitoring() {
       {/* Filter toolbar */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
-          {/* Quick period presets */}
-          <div className="flex items-center gap-1 rounded-md border border-[var(--line)] bg-[var(--surface)] p-0.5">
-            {PERIODS.map((p) => (
-              <button
-                key={p.value}
-                type="button"
-                onClick={() => setPeriod(p.value)}
-                className={cn(
-                  "rounded px-2.5 py-1 text-xs font-medium transition",
-                  period === p.value
-                    ? "bg-white/[0.1] text-white shadow-sm font-semibold"
-                    : "text-slate-400 hover:text-slate-200"
-                )}
-              >
-                {p.label}
-              </button>
-            ))}
-          </div>
-
           <div className="relative">
             <select
               aria-label="Filter by node"
@@ -445,7 +453,7 @@ export function AdminMonitoring() {
                 setSelectedNode(e.target.value || null);
                 setCompare(false);
               }}
-              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-slate-200 shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
+              className="h-8 rounded-md border border-[var(--line)] bg-[var(--surface)] pl-2.5 pr-7 text-xs font-medium text-text shadow-sm transition hover:border-[var(--line-strong)] focus:outline-none focus:ring-1 focus:ring-[var(--brand)] appearance-none cursor-pointer"
             >
               <option value="">All Nodes</option>
               {nodes.map((n) => (
@@ -454,7 +462,7 @@ export function AdminMonitoring() {
                 </option>
               ))}
             </select>
-            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
+            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-text-subtle" />
           </div>
 
           <div className="relative">
@@ -462,7 +470,7 @@ export function AdminMonitoring() {
               aria-label="Filter by workload"
               value={selectedWorkload ?? ""}
               onChange={(e) => setSelectedWorkload(e.target.value || null)}
-              className="h-8 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-2.5 pr-7 text-xs font-medium text-slate-200 outline-none focus:border-[var(--focus)] appearance-none cursor-pointer hover:border-white/20"
+              className="h-8 rounded-lg border border-[var(--line)] bg-[var(--surface-input)] pl-2.5 pr-7 text-xs font-medium text-text outline-none focus:border-[var(--focus)] appearance-none cursor-pointer hover:border-line-strong"
             >
               <option value="">All Workloads</option>
               {servers.map((s) => (
@@ -471,7 +479,7 @@ export function AdminMonitoring() {
                 </option>
               ))}
             </select>
-            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-slate-400" />
+            <ChevronDown size={12} className="absolute right-2 top-2.5 pointer-events-none text-text-subtle" />
           </div>
 
           <button
@@ -481,8 +489,8 @@ export function AdminMonitoring() {
             className={cn(
               "flex h-8 items-center gap-1.5 rounded-lg border px-3 text-xs font-semibold transition",
               compare
-                ? "border-sky-500/40 bg-sky-500/10 text-sky-300"
-                : "border-white/[0.08] bg-white/[0.02] text-slate-300 hover:border-white/20 hover:text-white",
+                ? "border-info-line bg-info-subtle text-info"
+                : "border-line bg-overlay-subtle text-text hover:border-line-strong hover:text-text",
               (!!selectedNode || !hasTelemetry) && "cursor-not-allowed opacity-40",
             )}
           >
@@ -492,12 +500,12 @@ export function AdminMonitoring() {
         </div>
 
         {(selectedNode || selectedWorkload) && (
-          <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+          <div className="flex flex-wrap items-center gap-2 text-xs text-text-subtle">
             {selectedNode && nodeById.get(selectedNode) && (
               <button
                 type="button"
                 onClick={() => setSelectedNode(null)}
-                className="rounded-lg border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 font-semibold text-sky-300 transition hover:bg-sky-500/20"
+                className="rounded-lg border border-info-line bg-info-subtle px-2.5 py-1 font-semibold text-info transition hover:bg-info-subtle"
               >
                 Node: {nodeById.get(selectedNode)!.name} ✕
               </button>
@@ -506,7 +514,7 @@ export function AdminMonitoring() {
               <button
                 type="button"
                 onClick={() => setSelectedWorkload(null)}
-                className="rounded-lg border border-purple-500/30 bg-purple-500/10 px-2.5 py-1 font-semibold text-purple-300 transition hover:bg-purple-500/20"
+                className="rounded-lg border border-line bg-overlay px-2.5 py-1 font-semibold text-text transition hover:bg-overlay-strong"
               >
                 Workload: {servers.find((s) => s.id === selectedWorkload)?.name ?? "selected"} ✕
               </button>
@@ -516,16 +524,16 @@ export function AdminMonitoring() {
       </div>
 
       {!historyLoading && !hasTelemetry && !historyQuery.isError ? (
-        <div className="flex flex-col gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.05] p-4 sm:flex-row sm:items-center">
-          <AlertTriangle size={18} className="shrink-0 text-amber-400" />
+        <div className="flex flex-col gap-3 rounded-xl border border-warn-line bg-warn/[0.05] p-4 sm:flex-row sm:items-center">
+          <AlertTriangle size={18} className="shrink-0 text-warn" />
           <div className="min-w-0 flex-1">
-            <p className="text-sm font-semibold text-amber-300">No samples recorded for {periodLabel}</p>
-            <p className="mt-0.5 text-xs leading-5 text-amber-200/80">
+            <p className="text-sm font-semibold text-warn">No samples recorded for {periodLabel}</p>
+            <p className="mt-0.5 text-xs leading-5 text-warn">
               Charts stay empty rather than flat at zero. The control plane&apos;s observability collector writes one{" "}
-              <code className="rounded bg-black/30 px-1 font-mono">node_metrics</code> row per node from that node&apos;s
+              <code className="rounded bg-well px-1 font-mono">node_metrics</code> row per node from that node&apos;s
               capacity snapshot, so a window with no rows means the collector did not run or the nodes were not
               reachable — check that nodes are heartbeating in{" "}
-              <button type="button" onClick={() => router.push("/admin/nodes")} className="underline hover:text-amber-100">
+              <button type="button" onClick={() => router.push("/admin/nodes")} className="underline hover:text-warn">
                 Nodes
               </button>
               .
@@ -534,16 +542,15 @@ export function AdminMonitoring() {
           <button
             type="button"
             onClick={() => router.push("/admin/health")}
-            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.06]"
+            className="flex shrink-0 items-center gap-1.5 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-text transition hover:bg-overlay-strong"
           >
             View Health <ArrowUpRight size={13} />
           </button>
         </div>
       ) : null}
       {historyQuery.isError ? (
-        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-500/25 bg-red-950/20 p-3 text-xs text-red-200" role="alert">
-          <span>Telemetry query failed: {(historyQuery.error as Error)?.message ?? "unknown error"} — latest state below still loads from its own queries.</span>
-          <Btn size="sm" tone="ghost" onClick={() => void historyQuery.refetch()}>Retry</Btn>
+        <div className="rounded-xl border border-danger-line bg-danger-subtle p-3 text-xs text-danger">
+          Telemetry query failed: {(historyQuery.error as Error)?.message ?? "unknown error"} — latest state below still loads from its own queries.
         </div>
       ) : null}
 
@@ -553,22 +560,22 @@ export function AdminMonitoring() {
           const Icon = card.icon;
           const value = kpis ? kpis[card.key] : null;
           return (
-            <div key={card.key} className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-4 shadow-sm">
+            <div key={card.key} className="rounded-xl border border-line bg-[var(--surface)] p-4 shadow-sm">
               <div className="flex items-center justify-between">
-                <span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold text-slate-400 tracking-wider">
-                  <Icon size={14} className="text-slate-400" />
+                <span className="flex items-center gap-1.5 font-mono text-[11px] font-semibold text-text-subtle tracking-wider">
+                  <Icon size={14} className="text-text-subtle" />
                   {card.title}
                 </span>
-                <span className="rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 font-mono text-[11px] text-slate-400">
+                <span className="rounded border border-line bg-overlay px-1.5 py-0.5 font-mono text-[11px] text-text-subtle">
                   {card.note}
                 </span>
               </div>
               <div className="mt-2 flex items-baseline justify-between gap-2">
                 <div>
-                  <p className="font-mono text-2xl font-bold tracking-tight text-slate-100">
+                  <p className="font-mono text-2xl font-bold tracking-tight text-text">
                     {value != null ? `${value.toFixed(1)}%` : "—"}
                   </p>
-                  <p className="mt-0.5 font-mono text-xs text-slate-400">
+                  <p className="mt-0.5 font-mono text-xs text-text-subtle">
                     {value != null
                       ? `${periodLabel} aggregate`
                       : historyQuery.isError
@@ -589,19 +596,19 @@ export function AdminMonitoring() {
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
-        <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
+        <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm xl:col-span-2">
           <div className="flex flex-wrap items-start justify-between gap-3">
             <div className="flex items-center gap-2">
-              <BarChart3 size={16} className="text-sky-400" />
+              <BarChart3 size={16} className="text-text-subtle" />
               <div>
-                <h3 className="text-sm font-bold text-slate-100">Allocation Over Time</h3>
-                <p className="text-[11px] text-slate-400">
+                <h3 className="text-sm font-bold text-text">Allocation Over Time</h3>
+                <p className="text-[11px] text-text-subtle">
                   Allocated share of node capacity, averaged across the nodes that reported — not measured host load
                 </p>
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <div className="flex gap-1 rounded-lg border border-white/[0.07] bg-black/20 p-0.5">
+              <div className="flex gap-1 rounded-lg border border-line bg-well p-0.5">
                 {METRIC_TABS.map((t) => (
                   <button
                     key={t.value}
@@ -609,7 +616,7 @@ export function AdminMonitoring() {
                     onClick={() => setMetric(t.value)}
                     className={cn(
                       "rounded-md px-3 py-1 text-[11px] font-semibold transition",
-                      metric === t.value ? "bg-[var(--brand)] text-white" : "text-slate-400 hover:text-slate-200",
+                      metric === t.value ? "bg-[var(--brand)] text-white" : "text-text-subtle hover:text-text",
                     )}
                   >
                     {t.label}
@@ -619,7 +626,7 @@ export function AdminMonitoring() {
               <button
                 type="button"
                 onClick={() => setStacked((v) => !v)}
-                className="flex items-center gap-1.5 rounded-lg border border-white/[0.08] bg-white/[0.02] px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-white/20"
+                className="flex items-center gap-1.5 rounded-lg border border-line bg-overlay-subtle px-2.5 py-1 text-[11px] font-semibold text-text transition hover:border-line-strong"
               >
                 <BarChart3 size={12} />
                 {stacked ? "Stacked" : "Overlaid"}
@@ -629,7 +636,7 @@ export function AdminMonitoring() {
 
           <div className="mt-4 h-72 w-full">
             {historyLoading ? (
-              <div className="grid h-full place-items-center text-xs text-slate-500" role="status">
+              <div className="grid h-full place-items-center text-xs text-text-muted" role="status">
                 <span className="flex items-center gap-2">
                   <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-[var(--brand)] border-t-transparent" />
                   Reading allocation series…
@@ -638,16 +645,16 @@ export function AdminMonitoring() {
             ) : historyQuery.isError ? (
               <div className="grid h-full place-items-center px-6 text-center">
                 <div>
-                  <AlertTriangle size={26} className="mx-auto mb-2 text-amber-400" strokeWidth={1.5} />
-                  <p className="text-sm font-semibold text-slate-200">Allocation history unavailable</p>
-                  <p className="mx-auto mt-1 max-w-md text-xs text-slate-500">
+                  <AlertTriangle size={26} className="mx-auto mb-2 text-warn" strokeWidth={1.5} />
+                  <p className="text-sm font-semibold text-text">Allocation history unavailable</p>
+                  <p className="mx-auto mt-1 max-w-md text-xs text-text-muted">
                     {(historyQuery.error as Error)?.message ?? "The metric history query failed."} Nothing is plotted
                     here — this is not a fleet at zero.
                   </p>
                   <button
                     type="button"
                     onClick={() => void historyQuery.refetch()}
-                    className="mt-3 rounded-lg border border-white/15 px-3 py-1.5 text-xs font-semibold text-slate-200 transition hover:bg-white/[0.06]"
+                    className="mt-3 rounded-lg border border-line px-3 py-1.5 text-xs font-semibold text-text transition hover:bg-overlay-strong"
                   >
                     Retry
                   </button>
@@ -663,14 +670,14 @@ export function AdminMonitoring() {
                   </AreaChart>
                 </ResponsiveContainer>
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-                  <BarChart3 size={26} className="mb-2 text-slate-500" strokeWidth={1.5} />
+                  <BarChart3 size={26} className="mb-2 text-text-muted" strokeWidth={1.5} />
                   {/* The banner above already states that no samples exist in
                       this window; the overlay says what that means for the
                       plot rather than repeating the same sentence. */}
-                  <p className="text-sm font-semibold text-slate-200">
+                  <p className="text-sm font-semibold text-text">
                     {nodes.length === 0 ? "No nodes are registered" : "Nothing to plot in this window"}
                   </p>
-                  <p className="mx-auto mt-0.5 max-w-md text-xs text-slate-500">
+                  <p className="mx-auto mt-0.5 max-w-md text-xs text-text-muted">
                     {nodes.length === 0
                       ? "There is nothing to plot until a node is enrolled."
                       : "The control plane holds no allocation samples in this window. This is missing history, not idle hosts."}
@@ -761,7 +768,7 @@ export function AdminMonitoring() {
               fan-out: say which nodes are missing from the line above rather
               than letting a partial average pass for the whole fleet. */}
           {hasTelemetry && (historyFailedNodes.length > 0 || historySkippedNodes.length > 0) ? (
-            <p className="mt-3 text-[11px] leading-5 text-amber-300/80">
+            <p className="mt-3 text-[11px] leading-5 text-warn">
               {historyFailedNodes.length > 0
                 ? `${historyFailedNodes.length} node${historyFailedNodes.length === 1 ? "" : "s"} did not return history and ${historyFailedNodes.length === 1 ? "is" : "are"} excluded from this average. `
                 : ""}
@@ -773,35 +780,35 @@ export function AdminMonitoring() {
         </div>
 
         <div className="flex flex-col gap-4">
-          <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <HeartPulse size={15} className="text-emerald-400" />
-                <h3 className="text-sm font-bold text-slate-100">System Health</h3>
+                <HeartPulse size={15} className="text-ok" />
+                <h3 className="text-sm font-bold text-text">System Health</h3>
               </div>
               <button
                 type="button"
                 onClick={() => router.push("/admin/health")}
-                className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 transition hover:text-white"
+                className="flex items-center gap-1 text-[11px] font-semibold text-text-subtle transition hover:text-text"
               >
                 View Details <ArrowUpRight size={12} />
               </button>
             </div>
-            <div className="mt-3 rounded-lg border border-white/[0.06] bg-black/20 p-3">
+            <div className="mt-3 rounded-lg border border-line bg-well p-3">
               <p
                 className={cn(
                   "flex items-center gap-1.5 text-sm font-bold",
-                  platform.tone === "green" && "text-emerald-300",
-                  platform.tone === "yellow" && "text-amber-300",
-                  platform.tone === "red" && "text-red-300",
+                  platform.tone === "green" && "text-ok",
+                  platform.tone === "yellow" && "text-warn",
+                  platform.tone === "red" && "text-danger",
                 )}
               >
                 <span
                   className={cn(
                     "h-2 w-2 rounded-full",
-                    platform.tone === "green" && "bg-emerald-400",
-                    platform.tone === "yellow" && "bg-amber-400",
-                    platform.tone === "red" && "bg-red-400",
+                    platform.tone === "green" && "bg-ok",
+                    platform.tone === "yellow" && "bg-warn",
+                    platform.tone === "red" && "bg-danger",
                   )}
                 />
                 {platform.tone === "green"
@@ -812,7 +819,7 @@ export function AdminMonitoring() {
                       ? "Critical"
                       : "Unknown"}
               </p>
-              <p className="mt-0.5 text-[11px] text-slate-400">
+              <p className="mt-0.5 text-[11px] text-text-subtle">
                 {healthQuery.isError
                   ? "The health report could not be read, so the platform's state is unknown."
                   : nodesQuery.isError
@@ -826,7 +833,7 @@ export function AdminMonitoring() {
                 does not contain is "Not reported", never "Healthy" — the
                 Database row used to claim health while the report was still
                 loading, and Queue / Workers was hardcoded to Healthy. */}
-            <div className="mt-2 divide-y divide-white/[0.04] text-xs">
+            <div className="mt-2 divide-y divide-line text-xs">
               {(() => {
                 const healthAvailable = isAvailable(healthQuery);
                 const reported = (count: number, noun: string, query: { isError: boolean; isPending: boolean }) =>
@@ -894,16 +901,16 @@ export function AdminMonitoring() {
             </div>
           </div>
 
-          <div className="rounded-xl border border-white/[0.08] bg-[var(--surface)] p-5 shadow-sm">
+          <div className="rounded-xl border border-line bg-[var(--surface)] p-5 shadow-sm">
             <div className="flex items-center justify-between gap-2">
               <div className="flex items-center gap-2">
-                <Info size={15} className="text-slate-300" />
-                <h3 className="text-sm font-bold text-slate-100">Recent Activity</h3>
+                <Info size={15} className="text-text" />
+                <h3 className="text-sm font-bold text-text">Recent Activity</h3>
               </div>
               <button
                 type="button"
                 onClick={() => router.push("/admin/activity")}
-                className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 transition hover:text-white"
+                className="flex items-center gap-1 text-[11px] font-semibold text-text-subtle transition hover:text-text"
               >
                 View all <ArrowUpRight size={12} />
               </button>
@@ -911,24 +918,24 @@ export function AdminMonitoring() {
             <div className="mt-3 space-y-3">
               {/* An unreadable audit feed is not a quiet one. */}
               {activityQuery.isError ? (
-                <p className="text-xs text-amber-300/80">
+                <p className="text-xs text-warn">
                   The audit feed could not be read, so recent activity is unknown.
                 </p>
               ) : activityQuery.isPending ? (
-                <p className="text-xs text-slate-500">Reading audit feed…</p>
+                <p className="text-xs text-text-muted">Reading audit feed…</p>
               ) : activity.length === 0 ? (
-                <p className="text-xs text-slate-500">No audit events recorded.</p>
+                <p className="text-xs text-text-muted">No audit events recorded.</p>
               ) : (
                 activity.slice(0, 5).map((e) => (
                   <div key={e.id} className="flex items-start gap-2.5">
-                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-white/[0.08] bg-white/[0.03] text-slate-300">
+                    <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg border border-line bg-overlay text-text">
                       <ActivityWaveIcon className="w-3.5 h-3.5" />
                     </span>
                     <div className="min-w-0 flex-1">
-                      <p className="truncate text-xs font-semibold text-slate-200">{e.description || e.event || e.action || "Event"}</p>
-                      <p className="truncate font-mono text-[10px] text-slate-500">{e.actorEmail || e.userId || e.source || "system"}</p>
+                      <p className="truncate text-xs font-semibold text-text">{e.description || e.event || e.action || "Event"}</p>
+                      <p className="truncate font-mono text-[10px] text-text-muted">{e.actorEmail || e.userId || e.source || "system"}</p>
                     </div>
-                    <span className="shrink-0 font-mono text-[10px] text-slate-500">{timeAgo(e.timestamp || e.createdAt)}</span>
+                    <span className="shrink-0 font-mono text-[10px] text-text-muted">{timeAgo(e.timestamp || e.createdAt)}</span>
                   </div>
                 ))
               )}
@@ -940,30 +947,30 @@ export function AdminMonitoring() {
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
         <Card>
           <div className="mb-4 flex items-center gap-2">
-            <Server size={15} className="text-slate-300" />
+            <Server size={15} className="text-text" />
             <div>
-              <h3 className="text-sm font-bold text-slate-100">Node Allocation</h3>
-              <p className="text-[11px] text-slate-400">
+              <h3 className="text-sm font-bold text-text">Node Allocation</h3>
+              <p className="text-[11px] text-text-subtle">
                 Latest recorded sample per node · allocated share of capacity, not measured host load
               </p>
             </div>
             <button
               type="button"
               onClick={() => router.push("/admin/nodes")}
-              className="ml-auto flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-white/20 hover:text-white"
+              className="ml-auto flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-text transition hover:border-line-strong hover:text-text"
             >
               View all nodes <ArrowUpRight size={12} />
             </button>
           </div>
           {nodesQuery.isLoading ? (
-            <p className="px-1 py-8 text-center text-xs text-slate-500" role="status">Loading nodes…</p>
+            <p className="px-1 py-8 text-center text-xs text-text-muted" role="status">Loading nodes…</p>
           ) : filteredNodes.length === 0 ? (
             <div className="flex flex-col items-center py-10 text-center">
-              <Server size={26} className="mb-2 text-slate-600" strokeWidth={1.5} />
-              <p className="text-sm font-semibold text-slate-200">
+              <Server size={26} className="mb-2 text-text-muted" strokeWidth={1.5} />
+              <p className="text-sm font-semibold text-text">
                 {nodesQuery.isError ? "Node list unavailable" : "No nodes registered"}
               </p>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-text-muted">
                 {nodesQuery.isError
                   ? "The node list could not be read, so this is not a statement about the fleet."
                   : selectedWorkload
@@ -975,7 +982,7 @@ export function AdminMonitoring() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                  <tr className="border-b border-line text-left text-[10px] uppercase tracking-wider text-text-muted">
                     <th className="px-2 py-2 font-medium">Node</th>
                     <th className="px-2 py-2 font-medium">Status</th>
                     <th className="px-2 py-2 text-right font-medium">CPU</th>
@@ -984,7 +991,7 @@ export function AdminMonitoring() {
                     <th className="px-2 py-2 text-right font-medium">Last seen</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="divide-y divide-line">
                   {filteredNodes.map((n) => {
                     const st = nodeStatus(n);
                     const m = latestByNode.get(n.id);
@@ -992,18 +999,18 @@ export function AdminMonitoring() {
                       <tr
                         key={n.id}
                         onClick={() => setSelectedNode((v) => (v === n.id ? null : n.id))}
-                        className={cn("cursor-pointer transition hover:bg-white/[0.02]", selectedNode === n.id && "bg-sky-500/[0.06]")}
+                        className={cn("cursor-pointer transition hover:bg-overlay-subtle", selectedNode === n.id && "bg-info-subtle")}
                       >
-                        <td className="max-w-36 truncate px-2 py-2.5 font-semibold text-slate-200">{n.name}</td>
+                        <td className="max-w-36 truncate px-2 py-2.5 font-semibold text-text">{n.name}</td>
                         <td className="px-2 py-2.5">
                           <Pill tone={st.tone}>{st.label}</Pill>
                         </td>
-                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">{m ? `${m.cpuPercent.toFixed(1)}%` : "—"}</td>
-                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">{m ? `${m.memoryPercent.toFixed(1)}%` : "—"}</td>
-                        <td className="px-2 py-2.5 text-right font-mono text-slate-300">{m ? `${m.diskPercent.toFixed(1)}%` : "—"}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-text">{m ? `${m.cpuPercent.toFixed(1)}%` : "—"}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-text">{m ? `${m.memoryPercent.toFixed(1)}%` : "—"}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-text">{m ? `${m.diskPercent.toFixed(1)}%` : "—"}</td>
                         {/* No network column: the collector writes 0 bytes for
                             every sample, so the figure carried no information. */}
-                        <td className="px-2 py-2.5 text-right font-mono text-slate-500">{timeAgo(n.lastSeenAt || n.lastHeartbeatAt)}</td>
+                        <td className="px-2 py-2.5 text-right font-mono text-text-muted">{timeAgo(n.lastSeenAt || n.lastHeartbeatAt)}</td>
                       </tr>
                     );
                   })}
@@ -1015,32 +1022,32 @@ export function AdminMonitoring() {
 
         <Card>
           <div className="mb-4 flex items-center gap-2">
-            <Box size={15} className="text-slate-300" />
+            <Box size={15} className="text-text" />
             <div>
-              <h3 className="text-sm font-bold text-slate-100">Workloads</h3>
+              <h3 className="text-sm font-bold text-text">Workloads</h3>
               {/* Not "Top Workloads": nothing here is ranked by usage, because
                   the metrics API reports no per-workload usage at all. */}
-              <p className="text-[11px] text-slate-400">
+              <p className="text-[11px] text-text-subtle">
                 Configured limits and current status · per-workload usage is not reported
               </p>
             </div>
             <button
               type="button"
               onClick={() => router.push("/admin/servers")}
-              className="ml-auto flex items-center gap-1 rounded-lg border border-white/[0.08] px-2.5 py-1 text-[11px] font-semibold text-slate-300 transition hover:border-white/20 hover:text-white"
+              className="ml-auto flex items-center gap-1 rounded-lg border border-line px-2.5 py-1 text-[11px] font-semibold text-text transition hover:border-line-strong hover:text-text"
             >
               View all workloads <ArrowUpRight size={12} />
             </button>
           </div>
           {serversQuery.isLoading ? (
-            <p className="px-1 py-8 text-center text-xs text-slate-500" role="status">Loading workloads…</p>
+            <p className="px-1 py-8 text-center text-xs text-text-muted" role="status">Loading workloads…</p>
           ) : filteredServers.length === 0 ? (
             <div className="flex flex-col items-center py-10 text-center">
-              <Box size={26} className="mb-2 text-slate-600" strokeWidth={1.5} />
-              <p className="text-sm font-semibold text-slate-200">
+              <Box size={26} className="mb-2 text-text-muted" strokeWidth={1.5} />
+              <p className="text-sm font-semibold text-text">
                 {serversQuery.isError ? "Workload list unavailable" : "No workloads"}
               </p>
-              <p className="mt-0.5 text-xs text-slate-500">
+              <p className="mt-0.5 text-xs text-text-muted">
                 {serversQuery.isError
                   ? "The workload list could not be read, so this is not a statement about what is deployed."
                   : selectedNode || selectedWorkload
@@ -1052,7 +1059,7 @@ export function AdminMonitoring() {
             <div className="overflow-x-auto">
               <table className="w-full text-xs">
                 <thead>
-                  <tr className="border-b border-white/[0.06] text-left text-[10px] uppercase tracking-wider text-slate-500">
+                  <tr className="border-b border-line text-left text-[10px] uppercase tracking-wider text-text-muted">
                     <th className="px-2 py-2 font-medium">Name</th>
                     <th className="px-2 py-2 font-medium">Type</th>
                     <th className="px-2 py-2 text-right font-medium">CPU used</th>
@@ -1061,19 +1068,19 @@ export function AdminMonitoring() {
                     <th className="px-2 py-2 text-right font-medium">Status</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-white/[0.04]">
+                <tbody className="divide-y divide-line">
                   {filteredServers.slice(0, 8).map((s) => (
                     <tr
                       key={s.id}
                       onClick={() => router.push(`/server/${s.id}`)}
-                      className="cursor-pointer transition hover:bg-white/[0.02]"
+                      className="cursor-pointer transition hover:bg-overlay-subtle"
                       title="Per-workload live telemetry is not reported by the metrics API — memory/disk show configured limits"
                     >
-                      <td className="max-w-36 truncate px-2 py-2.5 font-semibold text-slate-200">{s.name}</td>
-                      <td className="px-2 py-2.5 text-slate-400">{s.dockerImage ? "container" : "game"}</td>
-                      <td className="px-2 py-2.5 text-right font-mono text-slate-500" title="No per-workload CPU telemetry reported">—</td>
-                      <td className="px-2 py-2.5 text-right font-mono text-slate-300">{formatMiB(s.memoryMb)}</td>
-                      <td className="px-2 py-2.5 text-right font-mono text-slate-300">{formatMiB(s.diskMb)}</td>
+                      <td className="max-w-36 truncate px-2 py-2.5 font-semibold text-text">{s.name}</td>
+                      <td className="px-2 py-2.5 text-text-subtle">{s.dockerImage ? "container" : "game"}</td>
+                      <td className="px-2 py-2.5 text-right font-mono text-text-muted" title="No per-workload CPU telemetry reported">—</td>
+                      <td className="px-2 py-2.5 text-right font-mono text-text">{formatMiB(s.memoryMb)}</td>
+                      <td className="px-2 py-2.5 text-right font-mono text-text">{formatMiB(s.diskMb)}</td>
                       <td className="px-2 py-2.5 text-right">
                         <Pill tone={s.status === "running" ? "green" : s.status === "crashed" ? "red" : "neutral"}>{s.status}</Pill>
                       </td>
@@ -1086,19 +1093,19 @@ export function AdminMonitoring() {
         </Card>
       </div>
 
-      <p className="text-[11px] text-slate-600">
+      <p className="text-[11px] text-text-muted">
         Every series on this page comes from <code className="font-mono">node_metrics</code>, which the control-plane
         collector derives from each node&apos;s capacity snapshot — it is allocation, not measured host load. Live host
         CPU and network series are not reported by beacons today, so no such series is shown. Point-in-time failures
         live in{" "}
-        <button type="button" onClick={() => router.push("/admin/health")} className="underline hover:text-slate-400">
+        <button type="button" onClick={() => router.push("/admin/health")} className="underline hover:text-text-subtle">
           Health
         </button>
         .
       </p>
 
       {summaryTrustworthy && summaryQuery.data?.unacknowledgedAlerts ? (
-        <p className="text-[11px] text-amber-400/80">
+        <p className="text-[11px] text-warn">
           {summaryQuery.data.unacknowledgedAlerts} unacknowledged alert{(summaryQuery.data.unacknowledgedAlerts ?? 0) > 1 ? "s" : ""} in the alert pipeline.
         </p>
       ) : null}

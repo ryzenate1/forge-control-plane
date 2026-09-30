@@ -194,7 +194,10 @@ func RateLimiter(cfg RateLimitConfig) fiber.Handler {
 			return c.Next()
 		}
 
-		// Build rate limit key based on IP address and path
+		// Build rate limit key based on IP address and path. The tier is part of
+		// the key via cfg.KeyPrefix (see GetRateLimitForEndpoint): tiers must
+		// NOT share a prefix, otherwise every tier draws from one counter and
+		// read traffic burns the auth budget (5/min) and the mutation budget.
 		key := fmt.Sprintf("%s:ratelimit:%s", cfg.KeyPrefix, clientIP)
 		window := time.Duration(cfg.WindowSeconds) * time.Second
 
@@ -276,7 +279,7 @@ func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClose
 			Redis:                  redis,
 			WindowSeconds:          60,
 			MaxRequests:            5,
-			KeyPrefix:              "api",
+			KeyPrefix:              "api:auth",
 			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "mutation":
@@ -285,7 +288,7 @@ func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClose
 			Redis:                  redis,
 			WindowSeconds:          60,
 			MaxRequests:            30,
-			KeyPrefix:              "api",
+			KeyPrefix:              "api:mutation",
 			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	case "read":
@@ -294,7 +297,7 @@ func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClose
 			Redis:                  redis,
 			WindowSeconds:          60,
 			MaxRequests:            120,
-			KeyPrefix:              "api",
+			KeyPrefix:              "api:read",
 			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	default:
@@ -303,7 +306,7 @@ func GetRateLimitForEndpoint(endpointType string, redis *redis.Client, failClose
 			Redis:                  redis,
 			WindowSeconds:          60,
 			MaxRequests:            60,
-			KeyPrefix:              "api",
+			KeyPrefix:              "api:default",
 			FailClosedOnRedisError: failClosedOnRedisError,
 		}
 	}

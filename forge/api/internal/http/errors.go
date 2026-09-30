@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"errors"
 	"strings"
 
 	"github.com/gofiber/fiber/v2"
@@ -84,7 +86,50 @@ func respondStoreError(c *fiber.Ctx, err error) error {
 		strings.Contains(lower, "still has"),
 		strings.Contains(lower, "foreign key"):
 		return fiber.NewError(fiber.StatusConflict, msg)
-	case strings.Contains(lower, "invalid"), strings.Contains(lower, "required"):
+	case strings.Contains(lower, "invalid"), strings.Contains(lower, "required"),
+		strings.Contains(lower, "must be"), strings.Contains(lower, "out of range"),
+		strings.Contains(lower, "unsupported"):
+		return fiber.NewError(fiber.StatusBadRequest, msg)
+	}
+	return respondInternalError(c, err)
+}
+
+// respondDBProvisionError maps database provisioner/beacon failures onto the
+// status that describes them. Client mistakes (unsupported engine, bad input)
+// go out as 400; a beacon call that outlives the request goes out as 504 so
+// callers can distinguish "timed out, may still complete" from "crashed";
+// refused/unreachable beacon connections go out as 503; genuine server-side
+// failures keep the previous 500 behaviour.
+func respondDBProvisionError(c *fiber.Ctx, err error) error {
+	if err == nil {
+		return nil
+	}
+	msg := err.Error()
+	lower := strings.ToLower(msg)
+	switch {
+	case errors.Is(err, context.DeadlineExceeded) || strings.Contains(lower, "context deadline exceeded"):
+		return fiber.NewError(fiber.StatusGatewayTimeout, "database provisioner timed out; the operation may still complete in the background")
+	case errors.Is(err, context.Canceled) || strings.Contains(lower, "context canceled"):
+		return fiber.NewError(fiber.StatusServiceUnavailable, "database operation was interrupted; retry the request")
+	case strings.Contains(lower, "connection refused"),
+		strings.Contains(lower, "no such host"),
+		strings.Contains(lower, "connection reset"),
+		strings.Contains(lower, "is not available"),
+		strings.Contains(lower, "not reachable"):
+		return fiber.NewError(fiber.StatusServiceUnavailable, msg)
+	case strings.Contains(lower, "not found"), strings.Contains(lower, "no rows"):
+		return fiber.NewError(fiber.StatusNotFound, msg)
+	case strings.Contains(lower, "not yet implemented"), strings.Contains(lower, "not implemented"):
+		return fiber.NewError(fiber.StatusNotImplemented, msg)
+	case strings.Contains(lower, "not running"),
+		strings.Contains(lower, "not provisioned"),
+		strings.Contains(lower, "not yet provisioned"),
+		strings.Contains(lower, "not in completed state"),
+		strings.Contains(lower, "is unavailable"):
+		return fiber.NewError(fiber.StatusConflict, msg)
+	case strings.Contains(lower, "unsupported"),
+		strings.Contains(lower, "invalid"),
+		strings.Contains(lower, "required"):
 		return fiber.NewError(fiber.StatusBadRequest, msg)
 	}
 	return respondInternalError(c, err)

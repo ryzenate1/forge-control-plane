@@ -2,44 +2,45 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"time"
 )
 
 type AppStoreApp struct {
-	ID             string    `json:"id"`
-	Key            string    `json:"key"`
-	Name           string    `json:"name"`
-	ShortDesc      string    `json:"shortDesc"`
-	Description    string    `json:"description"`
-	Icon           string    `json:"icon"`
-	Category       string    `json:"category"`
-	Tags           []string  `json:"tags"`
-	Version        string    `json:"version"`
-	ComposeContent string    `json:"composeContent"`
-	Params         []byte    `json:"params,omitempty"`
-	MinMemoryMB    int       `json:"minMemoryMb"`
-	MinDiskMB      int       `json:"minDiskMb"`
-	Maintainer     string    `json:"maintainer"`
-	SourceURL      string    `json:"sourceUrl"`
-	CreatedAt      time.Time `json:"createdAt"`
-	UpdatedAt      time.Time `json:"updatedAt"`
+	ID             string          `json:"id"`
+	Key            string          `json:"key"`
+	Name           string          `json:"name"`
+	ShortDesc      string          `json:"shortDesc"`
+	Description    string          `json:"description"`
+	Icon           string          `json:"icon"`
+	Category       string          `json:"category"`
+	Tags           []string        `json:"tags"`
+	Version        string          `json:"version"`
+	ComposeContent string          `json:"composeContent"`
+	Params         json.RawMessage `json:"params,omitempty"`
+	MinMemoryMB    int             `json:"minMemoryMb"`
+	MinDiskMB      int             `json:"minDiskMb"`
+	Maintainer     string          `json:"maintainer"`
+	SourceURL      string          `json:"sourceUrl"`
+	CreatedAt      time.Time       `json:"createdAt"`
+	UpdatedAt      time.Time       `json:"updatedAt"`
 }
 
 type AppStoreInstall struct {
-	ID               string    `json:"id"`
-	AppKey           string    `json:"appKey"`
-	AppVersion       string    `json:"appVersion"`
-	ProjectID        string    `json:"projectId"`
-	EnvironmentID    string    `json:"environmentId"`
-	Name             string    `json:"name"`
-	Status           string    `json:"status"`
-	Params           []byte    `json:"params,omitempty"`
-	ComposeContent   string    `json:"composeContent"`
-	ComposeProjectID string    `json:"composeProjectId"`
-	ErrorMessage     string    `json:"errorMessage"`
-	CreatedAt        time.Time `json:"createdAt"`
-	UpdatedAt        time.Time `json:"updatedAt"`
+	ID               string          `json:"id"`
+	AppKey           string          `json:"appKey"`
+	AppVersion       string          `json:"appVersion"`
+	ProjectID        string          `json:"projectId"`
+	EnvironmentID    string          `json:"environmentId"`
+	Name             string          `json:"name"`
+	Status           string          `json:"status"`
+	Params           json.RawMessage `json:"params,omitempty"`
+	ComposeContent   string          `json:"composeContent"`
+	ComposeProjectID string          `json:"composeProjectId"`
+	ErrorMessage     string          `json:"errorMessage"`
+	CreatedAt        time.Time       `json:"createdAt"`
+	UpdatedAt        time.Time       `json:"updatedAt"`
 }
 
 func (s *Store) ListAppStoreApps(ctx context.Context, category, search string) ([]AppStoreApp, error) {

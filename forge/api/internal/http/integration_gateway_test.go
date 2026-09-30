@@ -967,7 +967,7 @@ func TestIntegrationGateway_SourceChanges_ObservationFollowsWithoutWriting(t *te
 	if res.Observed != 1 || len(records) != 1 {
 		t.Fatalf("expected 1 rule and 1 group after removal, got %+v / %+v", res, records)
 	}
-	if records[0].GroupID != "b.example.com//http" {
+	if records[0].GroupID != "b.example.com///http" {
 		t.Fatalf("the surviving route should be b.example.com, got %q", records[0].GroupID)
 	}
 
@@ -1144,7 +1144,9 @@ func TestIntegrationGateway_RouteGenerationTracked(t *testing.T) {
 	if rec := byID["track2.example.com//api/http"]; !rec.HasWebSocket || rec.Strategy != "ip_hash" {
 		t.Fatalf("the websocket/ip_hash route lost its attributes: %+v", rec)
 	}
-	if rec := byID["track.example.com//http"]; rec.HasWebSocket || rec.Strategy != "round_robin" {
+	// GroupID is domain/path/protocol with no path normalization, so a root
+	// path keeps its slash: track.example.com + / + / + /http.
+	if rec := byID["track.example.com///http"]; rec.HasWebSocket || rec.Strategy != "round_robin" {
 		t.Fatalf("the plain route inherited attributes: %+v", rec)
 	}
 
