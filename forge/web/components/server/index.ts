@@ -10,3 +10,5 @@ export { DatabasesView } from "./databases-view";
 export { ServerUsersView } from "./users-view";
 export { ServerSettingsView } from "./settings-view";
 export { ActivityView } from "./activity-view";
+export { ServerDomainsView } from "./domains-view";
+export { ContainerFilesView } from "./container-files-view";

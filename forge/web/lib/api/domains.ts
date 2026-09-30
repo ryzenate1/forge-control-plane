@@ -4,22 +4,31 @@ export interface ServerDomain {
   id: string;
   serverId: string;
   domain: string;
+  wildcard?: boolean;
   verified: boolean;
+  verifiedAt?: string;
   verificationToken?: string;
-  dnsConfigured?: boolean;
   createdAt: string;
-  updatedAt: string;
+  updatedAt?: string;
 }
 
 export interface VerifyDomainResult {
+  domain?: string;
   verified: boolean;
+  dnsResolved?: boolean;
+  expectedIp?: string;
+  resolvedIps?: string[];
+  error?: string;
   message?: string;
 }
 
 export interface CheckDNSResult {
-  configured: boolean;
-  currentIp?: string;
+  domain?: string;
+  resolved: boolean;
+  ips?: string[];
   expectedIp?: string;
+  match: boolean;
+  error?: string;
   message?: string;
 }
 

@@ -61,7 +61,7 @@ export function ServerNav({ serverId, server, access, activeTab }: ServerNavProp
   useNavDrawer({ open, close, containerRef: drawerRef, initialFocusRef: closeButtonRef });
 
   const tr = (key: string, fallback: string) => { const value = t(key); return value === key ? fallback : value; };
-  const visibleTabs = workloadTabs.filter((tab) => hasServerPermission(access, tab.permissions));
+  const visibleTabs = workloadTabs.filter((tab) => (!tab.adminOnly || access.isAdmin) && hasServerPermission(access, tab.permissions));
 
   // Longest match wins, so /files/sub/dir still highlights Files and
   // /databases/services highlights Managed Services rather than Databases.

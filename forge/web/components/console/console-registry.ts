@@ -23,6 +23,7 @@ import {
   Folder,
   Gauge,
   GitBranch,
+  Globe,
   HardDrive,
   HeartPulse,
   History,
@@ -80,7 +81,8 @@ export type WorkloadTabId =
   | "git"
   | "processes"
   | "activity"
-  | "transfer";
+  | "transfer"
+  | "domains";
 
 export type WorkloadTabConfig = {
   id: WorkloadTabId;
@@ -88,6 +90,12 @@ export type WorkloadTabConfig = {
   fallback: string;
   icon: LucideIcon;
   permissions: string[];
+  /**
+   * When true the tab is visible to admins only, regardless of server
+   * permissions. Used for tabs whose backend routes are admin-gated
+   * (e.g. per-server domains: list/remove require the admin role).
+   */
+  adminOnly?: boolean;
 };
 
 /**
@@ -116,11 +124,12 @@ export const workloadTabs: WorkloadTabConfig[] = [
   { id: "processes", labelKey: "server.processes", fallback: "Processes", icon: Cpu, permissions: ["control.start"] },
   { id: "activity", labelKey: "admin.activity", fallback: "Activity", icon: History, permissions: ["activity.read"] },
   { id: "transfer", labelKey: "server.transfer", fallback: "Transfer", icon: ArrowLeftRight, permissions: ["settings.rename"] },
+  { id: "domains", labelKey: "server.domains", fallback: "Domains", icon: Globe, permissions: [], adminOnly: true },
 ];
 
 export const workloadTabGroups: Array<{ title: string; tabs: WorkloadTabId[] }> = [
   { title: "Daily", tabs: ["overview", "terminal", "files", "databases", "database-services", "schedules", "tasks", "backups"] },
-  { title: "Configuration", tabs: ["startup", "network", "mounts", "users", "resource-limits", "settings"] },
+  { title: "Configuration", tabs: ["startup", "network", "mounts", "users", "resource-limits", "settings", "domains"] },
   { title: "Deploy & Ops", tabs: ["deployments", "builds", "git", "processes", "activity", "transfer"] },
 ];
 

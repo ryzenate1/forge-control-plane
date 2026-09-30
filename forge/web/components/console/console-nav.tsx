@@ -91,7 +91,7 @@ function ServerSection({ activeHref, onNavigate }: { activeHref?: string; onNavi
   const access = server ? computeServerAccess(server, user) : null;
   const tr = (key: string, fallback: string) => { const value = t(key); return value === key ? fallback : value; };
   const visibleTabs = access
-    ? workloadTabs.filter((tab) => hasServerPermission(access, tab.permissions))
+    ? workloadTabs.filter((tab) => (!tab.adminOnly || access.isAdmin) && hasServerPermission(access, tab.permissions))
     : [];
   const state = server
     ? (server.suspended ? tr("server.nav.suspended", "Suspended")
